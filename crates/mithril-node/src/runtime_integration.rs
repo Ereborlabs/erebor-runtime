@@ -3,20 +3,17 @@ use std::io::{self, Read as _, Write as _};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
-use serde_json::{Map, Value};
-use sha2::{Digest as _, Sha256};
-
 use crate::runtime_gate::{
-    RuntimeRecoveryEntryV1, RuntimeRecoveryManifestV1, RuntimeRecoveryMountV1,
-    MAXIMUM_RECOVERY_ARGUMENTS,
+    RuntimeControlRecoveryEntryV1, RuntimeRecoveryEntryV1, RuntimeRecoveryManifestV1,
+    RuntimeRecoveryMountDestinationV1, RuntimeRecoveryMountV1, MAXIMUM_RECOVERY_ARGUMENTS,
 };
+use serde_json::{Map, Value};
 
 const MAXIMUM_OWNED_FILE_BYTES: u64 = 536_870_912;
 
 pub struct RuntimeIntegrationInstallV1 {
     pub owner: String,
     pub hook_source: PathBuf,
-    pub node_source: PathBuf,
     pub hook_mount_directory: PathBuf,
     pub hook_host_directory: PathBuf,
     pub containerd_mount_directory: PathBuf,
@@ -29,6 +26,9 @@ pub struct RuntimeIntegrationInstallV1 {
     pub installer_executable: PathBuf,
     pub installer_args: Vec<String>,
     pub node_mounts: Vec<RuntimeRecoveryMountInputV1>,
+    pub control_uid: u32,
+    pub control_gid: u32,
+    pub control_mounts: Vec<RuntimeControlRecoveryMountInputV1>,
     pub socket: PathBuf,
     pub timeout_ms: u64,
     pub runtime_timeout_seconds: u64,
@@ -38,6 +38,12 @@ pub struct RuntimeIntegrationInstallV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeRecoveryMountInputV1 {
     pub source: PathBuf,
+    pub destination: PathBuf,
+    pub read_only: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeControlRecoveryMountInputV1 {
     pub destination: PathBuf,
     pub read_only: bool,
 }
@@ -68,7 +74,6 @@ impl RuntimeIntegrationOwner {
             (1..=253).contains(&install.owner.len()) && !install.owner.contains(['\r', '\n']);
         let paths_are_valid = [
             &install.hook_source,
-            &install.node_source,
             &install.hook_mount_directory,
             &install.hook_host_directory,
             &install.containerd_mount_directory,
@@ -94,10 +99,19 @@ impl RuntimeIntegrationOwner {
             && install.node_mounts.iter().all(|mount| {
                 Self::clean_absolute(&mount.source) && Self::clean_absolute(&mount.destination)
             });
+        let mut control_destinations = std::collections::BTreeSet::new();
+        let control_mounts_are_valid = (1..=32).contains(&install.control_mounts.len())
+            && install.control_mounts.iter().all(|mount| {
+                Self::clean_absolute(&mount.destination)
+                    && control_destinations.insert(mount.destination.clone())
+            });
         if !owner_is_valid
             || !paths_are_valid
             || !args_are_valid
             || !mounts_are_valid
+            || install.control_uid == 0
+            || install.control_gid == 0
+            || !control_mounts_are_valid
             || !Self::valid_drop_in_directory(&install.containerd_drop_in_directory)
             || install.runtime_cli_args.is_empty()
             || install.runtime_cli_args.len() > 8
@@ -454,18 +468,25 @@ impl RuntimeIntegrationOwner {
                 read_only: mount.read_only,
             })
             .collect();
+        let control_mounts = self
+            .install
+            .control_mounts
+            .iter()
+            .map(|mount| RuntimeRecoveryMountDestinationV1 {
+                destination: mount.destination.clone(),
+                read_only: mount.read_only,
+            })
+            .collect();
         Ok(RuntimeRecoveryManifestV1 {
             version: 1,
             entries: vec![
                 RuntimeRecoveryEntryV1 {
                     executable: self.install.installer_executable.clone(),
-                    executable_sha256: Self::sha256(&self.install.hook_source)?,
                     args: self.install.installer_args.clone(),
                     required_mounts: installer_mounts,
                 },
                 RuntimeRecoveryEntryV1 {
                     executable: PathBuf::from("/usr/local/bin/mithril-node"),
-                    executable_sha256: Self::sha256(&self.install.node_source)?,
                     args: vec![
                         "/usr/local/bin/mithril-node".to_owned(),
                         "--config".to_owned(),
@@ -474,6 +495,17 @@ impl RuntimeIntegrationOwner {
                     required_mounts: node_mounts,
                 },
             ],
+            control_entries: vec![RuntimeControlRecoveryEntryV1 {
+                executable: PathBuf::from("/usr/local/bin/mithril-control"),
+                args: vec![
+                    "/usr/local/bin/mithril-control".to_owned(),
+                    "--config".to_owned(),
+                    "/etc/mithril/control.json".to_owned(),
+                ],
+                uid: self.install.control_uid,
+                gid: self.install.control_gid,
+                required_mounts: control_mounts,
+            }],
         })
     }
 
@@ -610,10 +642,6 @@ impl RuntimeIntegrationOwner {
             "version = 3\n\n[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc]\nbase_runtime_spec = \"{}\"\npod_annotations = [\"mithril.erebor.dev/*\"]\ncontainer_annotations = [\"mithril.erebor.dev/*\"]\n",
             self.base_spec_host_path().display()
         )
-    }
-
-    fn sha256(path: &Path) -> io::Result<String> {
-        Ok(format!("{:x}", Sha256::digest(Self::read_bounded(path)?)))
     }
 
     fn read_bounded(path: &Path) -> io::Result<Vec<u8>> {
@@ -806,8 +834,8 @@ mod tests {
     use crate::runtime_gate::RetainedRuntimeGate;
 
     use super::{
-        RuntimeIntegrationDecommissionV1, RuntimeIntegrationInstallV1, RuntimeIntegrationOwner,
-        RuntimeRecoveryMountInputV1,
+        RuntimeControlRecoveryMountInputV1, RuntimeIntegrationDecommissionV1,
+        RuntimeIntegrationInstallV1, RuntimeIntegrationOwner, RuntimeRecoveryMountInputV1,
     };
 
     #[test]
@@ -817,10 +845,8 @@ mod tests {
         let hook_mount = directory.path().join("hook");
         let containerd_mount = directory.path().join("containerd");
         let hook_source = directory.path().join("mithril-oci-hook-source");
-        let node_source = directory.path().join("mithril-node-source");
         let runtime_cli = directory.path().join("ctr");
         fs::write(&hook_source, b"hook")?;
-        fs::write(&node_source, b"node")?;
         fs::write(&runtime_cli, b"ctr")?;
         fs::create_dir_all(&containerd_mount)?;
         fs::write(
@@ -835,7 +861,6 @@ mod tests {
         let install = RuntimeIntegrationInstallV1 {
             owner: "mithril-system/mithril".to_owned(),
             hook_source,
-            node_source,
             hook_mount_directory: hook_mount.clone(),
             hook_host_directory: "/usr/libexec/oci/hooks.d".into(),
             containerd_mount_directory: containerd_mount.clone(),
@@ -852,6 +877,18 @@ mod tests {
                 destination: "/etc/mithril/node.json".into(),
                 read_only: true,
             }],
+            control_uid: 65_532,
+            control_gid: 65_532,
+            control_mounts: vec![
+                RuntimeControlRecoveryMountInputV1 {
+                    destination: "/etc/mithril".into(),
+                    read_only: true,
+                },
+                RuntimeControlRecoveryMountInputV1 {
+                    destination: "/var/lib/mithril-control".into(),
+                    read_only: false,
+                },
+            ],
             socket: "/run/mithril/runtime-admission.sock".into(),
             timeout_ms: 4_000,
             runtime_timeout_seconds: 5,
@@ -874,6 +911,12 @@ mod tests {
         let recovery: Value =
             serde_json::from_slice(&fs::read(containerd_mount.join("mithril-recovery.json"))?)?;
         assert_eq!(recovery["entries"].as_array().map(Vec::len), Some(2));
+        assert_eq!(recovery["controlEntries"].as_array().map(Vec::len), Some(1));
+        assert!(recovery["entries"][0].get("executableSha256").is_none());
+        assert!(recovery["entries"][1].get("executableSha256").is_none());
+        assert!(recovery["controlEntries"][0]
+            .get("executableSha256")
+            .is_none());
         assert_eq!(
             recovery["entries"][0]["args"].as_array().map(Vec::len),
             Some(38)

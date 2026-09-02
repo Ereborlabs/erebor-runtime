@@ -20,9 +20,10 @@ use erebor_interceptor_abi::{
     PathGraphTerminalV1, PathGraphTransitionKeyV1, PathGraphTransitionV1, PathTreeDenyKeyV1,
     PendingAdministrativeMatchV1, PendingExecStateV1, PendingExecV1, PhysicalDecisionKindV1,
     PhysicalDecisionV1, PolicyActivationProbeMapKindV1, PolicyActivationProbeV1,
-    PolicyGenerationModeV1, PolicyGenerationStateV1, ProcessSecurityStateKindV1,
-    ProcessSecurityStateV1, ProfileGenerationDescriptorV1, ReferenceTombstoneStateV1,
-    TaskReferenceTombstoneV1, MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_CANONICAL_ROUTE_STATES_V1,
+    PolicyGenerationModeV1, PolicyGenerationStateV1, ProcessGenerationMigrationKeyV1,
+    ProcessGenerationMigrationV1, ProcessSecurityStateKindV1, ProcessSecurityStateV1,
+    ProfileGenerationDescriptorV1, ReferenceTombstoneStateV1, TaskReferenceTombstoneV1,
+    MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_CANONICAL_ROUTE_STATES_V1,
     MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
 };
 use mithril_control::{
@@ -72,6 +73,7 @@ pub struct NodePolicyGenerationOwner {
     administrative_plans: Vec<AdministrativePolicyPlanV1>,
     measured_exact_objects: Vec<MeasuredExactObjectV1>,
     measured_mount_routes: Vec<MeasuredMountRouteV1>,
+    generation_semantics: BTreeMap<u64, GenerationSemantics>,
     dynamic_rows: BTreeMap<&'static str, BTreeSet<Vec<u8>>>,
     exception_authority: Mutex<ExceptionAuthorityOwner>,
 }
@@ -146,6 +148,14 @@ struct StagedActivationTarget {
     key: Vec<u8>,
     previous: Option<Vec<u8>>,
     desired: ExecutionSetBindingStateV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GenerationSemantics {
+    profile_id: Id128V1,
+    role_handles: BTreeMap<String, u32>,
+    process_state_handles: BTreeMap<String, (u32, u64)>,
+    live_role_states: BTreeSet<(String, String)>,
 }
 
 type GenerationRows = BTreeMap<Vec<u8>, Vec<u8>>;
@@ -541,6 +551,17 @@ impl NodePolicyGenerationOwner {
         }
     }
 
+    #[cfg(feature = "test-support")]
+    pub fn apply_exception_candidate_for_test(
+        &self,
+        host: &KernelHost,
+        candidate: &ExceptionDeliveryCandidateV1,
+        grant_handle: u32,
+    ) -> Result<()> {
+        self.apply_exception_candidate(host, candidate, grant_handle)
+            .map(|_| ())
+    }
+
     pub(crate) fn observe_exception_candidate(
         &self,
         host: &KernelHost,
@@ -678,6 +699,7 @@ impl NodePolicyGenerationOwner {
             Vec::new(),
             Vec::new(),
             BTreeMap::new(),
+            BTreeMap::new(),
         )
     }
 
@@ -703,6 +725,34 @@ impl NodePolicyGenerationOwner {
             measured_exact_objects,
             measured_mount_routes,
             measured_mount_views,
+            BTreeMap::new(),
+        )
+    }
+
+    pub fn reload_and_install_for_bindings(
+        &self,
+        config: &NodeConfig,
+        host: &mut KernelHost,
+        bindings: &WorkloadBindingOwner,
+        node_boot_id: Id128V1,
+        label_epoch: u64,
+    ) -> Result<Self> {
+        let (measured_exact_objects, measured_mount_routes, measured_mount_views) =
+            Self::resolve_cri_exact_objects(
+                config,
+                host,
+                bindings.exact_object_binding_targets(),
+                None,
+            )?;
+        Self::install(
+            config,
+            host,
+            node_boot_id,
+            label_epoch,
+            measured_exact_objects,
+            measured_mount_routes,
+            measured_mount_views,
+            self.generation_semantics.clone(),
         )
     }
 
@@ -715,6 +765,7 @@ impl NodePolicyGenerationOwner {
     ) -> Result<Self> {
         let measured_exact_objects = self.measured_exact_objects;
         let measured_mount_routes = self.measured_mount_routes;
+        let generation_semantics = self.generation_semantics;
         Self::install(
             config,
             host,
@@ -723,6 +774,7 @@ impl NodePolicyGenerationOwner {
             measured_exact_objects,
             measured_mount_routes,
             self.mount_view_handles,
+            generation_semantics,
         )
     }
 
@@ -747,6 +799,7 @@ impl NodePolicyGenerationOwner {
             measured_exact_objects,
             Vec::new(),
             BTreeMap::new(),
+            BTreeMap::new(),
         )
     }
 
@@ -764,6 +817,7 @@ impl NodePolicyGenerationOwner {
         S: Into<String>,
     {
         let measured_exact_objects = Self::resolve_test_exact_objects(config, objects)?;
+        let generation_semantics = self.generation_semantics;
         Self::install(
             config,
             host,
@@ -772,9 +826,11 @@ impl NodePolicyGenerationOwner {
             measured_exact_objects,
             Vec::new(),
             self.mount_view_handles,
+            generation_semantics,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn install(
         config: &NodeConfig,
         host: &mut KernelHost,
@@ -783,6 +839,7 @@ impl NodePolicyGenerationOwner {
         measured_exact_objects: Vec<MeasuredExactObjectV1>,
         measured_mount_routes: Vec<MeasuredMountRouteV1>,
         mut retained_mount_views: BTreeMap<u32, crate::exact_object::ExactFileObjectView>,
+        mut retained_generation_semantics: BTreeMap<u64, GenerationSemantics>,
     ) -> Result<Self> {
         let platform_scope_digest = format!(
             "{:x}",
@@ -917,8 +974,26 @@ impl NodePolicyGenerationOwner {
         )?;
         for generation in generations.values() {
             generation_allocator.reserve(&generation.descriptor)?;
+            if let Some(existing) = retained_generation_semantics.insert(
+                generation.descriptor.profile_generation_ref_id,
+                generation.semantics.clone(),
+            ) {
+                ensure!(
+                    existing == generation.semantics,
+                    IdentityStateSnafu {
+                        reason: "one generation handle has different retained semantics",
+                    }
+                );
+            }
         }
-        preflight_policy_map_capacity(host, &generations, &activations)?;
+        let process_generation_migrations =
+            build_process_generation_migrations(&activations, &retained_generation_semantics)?;
+        preflight_policy_map_capacity(
+            host,
+            &generations,
+            &activations,
+            &process_generation_migrations,
+        )?;
         prepare_declared_entry_requests(host, &declared_entry_requests)?;
         let mut exception_authority =
             ExceptionAuthorityOwner::load(&config.state_directory, node_id, node_boot_id)?;
@@ -977,6 +1052,11 @@ impl NodePolicyGenerationOwner {
             generation.install(host, &mut exception_authority, now_utc_ns, now_boottime_ns)?;
             generation.probe_staged_rows(host)?;
         }
+        install_rows(
+            host,
+            "process_generation_migrations",
+            &process_generation_migrations,
+        )?;
         for (profile_id, activation) in &activations {
             activate_profile(
                 host,
@@ -990,6 +1070,16 @@ impl NodePolicyGenerationOwner {
         }
         exception_authority.reconcile(host, now_utc_ns)?;
         reconcile_generation_retirement(host, node_boot_id, label_epoch)?;
+        let mut generation_semantics = BTreeMap::new();
+        for (generation, semantics) in retained_generation_semantics {
+            if host
+                .lookup_map("profile_generation_descriptors", &generation.to_ne_bytes())
+                .context(InterceptorSnafu)?
+                .is_some()
+            {
+                generation_semantics.insert(generation, semantics);
+            }
+        }
         retire_undeclared_entry_requests(host, &declared_entry_requests)?;
         let administrative_plans = generations
             .values()
@@ -1010,6 +1100,7 @@ impl NodePolicyGenerationOwner {
             administrative_plans,
             measured_exact_objects,
             measured_mount_routes,
+            generation_semantics,
             dynamic_rows,
             exception_authority: Mutex::new(exception_authority),
         };
@@ -1114,6 +1205,7 @@ impl NodePolicyGenerationOwner {
         if let Some((_, _, view)) = oci_entry_view {
             retained_mount_views.insert(view.mount_namespace_inode()?, view);
         }
+        let retained_generation_semantics = std::mem::take(&mut self.generation_semantics);
         let next = Self::install(
             config,
             host,
@@ -1122,6 +1214,7 @@ impl NodePolicyGenerationOwner {
             measured_exact_objects,
             measured_mount_routes,
             retained_mount_views,
+            retained_generation_semantics,
         )?;
         *self = next;
         Ok(())
@@ -1818,6 +1911,7 @@ fn validate_mount_view(
 
 struct LoweredGeneration {
     descriptor: ProfileGenerationDescriptorV1,
+    semantics: GenerationSemantics,
     entry_admissions: BTreeMap<Vec<u8>, Vec<u8>>,
     decisions: BTreeMap<Vec<u8>, Vec<u8>>,
     defaults: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -1903,6 +1997,8 @@ impl LoweredGeneration {
                 .iter()
                 .map(|state| state.process_state_id.as_str()),
         );
+        let semantics =
+            generation_semantics(artifact, profile_id, &role_handles, &process_state_handles)?;
         let role_states = artifact
             .policy_document
             .roles
@@ -2545,6 +2641,7 @@ impl LoweredGeneration {
         };
         Ok(Self {
             descriptor,
+            semantics,
             entry_admissions,
             decisions,
             defaults,
@@ -2578,7 +2675,8 @@ impl LoweredGeneration {
                 && self.descriptor.profile_id == other.descriptor.profile_id
                 && self.descriptor.label_epoch == other.descriptor.label_epoch
                 && self.descriptor.owner_generation == other.descriptor.owner_generation
-                && self.descriptor.mode == other.descriptor.mode,
+                && self.descriptor.mode == other.descriptor.mode
+                && self.semantics == other.semantics,
             IdentityStateSnafu {
                 reason: "one generation handle cannot name different candidate artifacts",
             }
@@ -2943,6 +3041,7 @@ fn preflight_policy_map_capacity(
     host: &KernelHost,
     generations: &BTreeMap<u64, LoweredGeneration>,
     activations: &BTreeMap<Id128V1, ProfileActivation>,
+    process_generation_migrations: &GenerationRows,
 ) -> Result<()> {
     let mut planned = BTreeMap::<&'static str, BTreeSet<Vec<u8>>>::new();
     for map in [
@@ -2996,6 +3095,10 @@ fn preflight_policy_map_capacity(
                 );
         }
     }
+    planned
+        .entry("process_generation_migrations")
+        .or_default()
+        .extend(process_generation_migrations.keys().cloned());
     for (map, planned_keys) in planned {
         let capacity = host
             .manifest()
@@ -3160,6 +3263,61 @@ fn id_bytes(id: Id128V1) -> [u8; 16] {
     let mut bytes = [0; 16];
     bytes.copy_from_slice(id.as_bytes());
     bytes
+}
+
+fn build_process_generation_migrations(
+    activations: &BTreeMap<Id128V1, ProfileActivation>,
+    generations: &BTreeMap<u64, GenerationSemantics>,
+) -> Result<GenerationRows> {
+    let mut rows = GenerationRows::new();
+    for (profile_id, activation) in activations {
+        let target = generations
+            .get(&activation.generation)
+            .context(IdentityStateSnafu {
+                reason: "active target generation has no semantic handle map",
+            })?;
+        ensure!(
+            target.profile_id == *profile_id,
+            IdentityStateSnafu {
+                reason: "active target generation has the wrong semantic profile",
+            }
+        );
+        for (source_generation, source) in generations.iter().filter(|(generation, source)| {
+            **generation != activation.generation && source.profile_id == *profile_id
+        }) {
+            for (role_name, state_name) in &source.live_role_states {
+                let Some(target_role_id) = target.role_handles.get(role_name) else {
+                    continue;
+                };
+                let Some((target_state_id, target_state_bits)) =
+                    target.process_state_handles.get(state_name)
+                else {
+                    continue;
+                };
+                if !target
+                    .live_role_states
+                    .contains(&(role_name.clone(), state_name.clone()))
+                {
+                    continue;
+                }
+                let (source_state_id, source_state_bits) = source.process_state_handles[state_name];
+                let key = ProcessGenerationMigrationKeyV1 {
+                    source_profile_generation_ref_id: *source_generation,
+                    target_profile_generation_ref_id: activation.generation,
+                    source_state_bits,
+                    source_role_id: source.role_handles[role_name],
+                    source_process_state_vector_id: source_state_id,
+                };
+                let value = ProcessGenerationMigrationV1 {
+                    target_state_bits: *target_state_bits,
+                    target_role_id: *target_role_id,
+                    target_process_state_vector_id: *target_state_id,
+                };
+                insert_exact(&mut rows, key.as_bytes(), value.as_bytes())?;
+            }
+        }
+    }
+    Ok(rows)
 }
 
 fn add_binding_activation(
@@ -4008,6 +4166,7 @@ fn retire_generation_rows(
     ] {
         delete_generation_prefixed_rows(host, map, generation, 0)?;
     }
+    delete_process_generation_migrations(host, generation)?;
     for map in [
         "network_ipv4_destination_classes",
         "network_ipv6_destination_classes",
@@ -4069,6 +4228,25 @@ fn delete_generation_prefixed_rows(
         bytes.copy_from_slice(&key[offset..end]);
         if u64::from_ne_bytes(bytes) == generation {
             host.delete_map_entry(map, &key).context(InterceptorSnafu)?;
+        }
+    }
+    Ok(())
+}
+
+fn delete_process_generation_migrations(host: &KernelHost, generation: u64) -> Result<()> {
+    for key in host
+        .map_keys("process_generation_migrations")
+        .context(InterceptorSnafu)?
+    {
+        let migration = read_abi_value::<ProcessGenerationMigrationKeyV1>(
+            &key,
+            "process generation migration key",
+        )?;
+        if migration.source_profile_generation_ref_id == generation
+            || migration.target_profile_generation_ref_id == generation
+        {
+            host.delete_map_entry("process_generation_migrations", &key)
+                .context(InterceptorSnafu)?;
         }
     }
     Ok(())
@@ -4790,6 +4968,65 @@ fn handles<'a>(ids: impl Iterator<Item = &'a str>) -> BTreeMap<String, u32> {
         .enumerate()
         .map(|(index, id)| (id.to_owned(), index as u32 + 1))
         .collect()
+}
+
+fn generation_semantics(
+    artifact: &ProfileCandidateArtifactV1,
+    profile_id: Id128V1,
+    role_handles: &BTreeMap<String, u32>,
+    process_state_handles: &BTreeMap<String, u32>,
+) -> Result<GenerationSemantics> {
+    let process_states = artifact
+        .policy_document
+        .process_state_definitions
+        .iter()
+        .map(|state| {
+            let mut bits = 0_u64;
+            for bit in &state.state_bits {
+                bits |= 1_u64.checked_shl(u32::from(*bit)).ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "process state `{}` has an out-of-range state bit",
+                            state.process_state_id
+                        ),
+                    }
+                    .build()
+                })?;
+            }
+            Ok((
+                state.process_state_id.clone(),
+                (process_state_handles[&state.process_state_id], bits),
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let mut live_role_states = artifact
+        .policy_document
+        .roles
+        .iter()
+        .map(|role| (role.role_id.clone(), role.default_process_state_id.clone()))
+        .collect::<BTreeSet<_>>();
+    live_role_states.extend(artifact.policy_document.native_transition_rules.iter().map(
+        |transition| {
+            (
+                transition.resulting_role_id.clone(),
+                transition.resulting_process_state_id.clone(),
+            )
+        },
+    ));
+    ensure!(
+        live_role_states.iter().all(|(role, state)| {
+            role_handles.contains_key(role) && process_states.contains_key(state)
+        }),
+        IdentityStateSnafu {
+            reason: "generation semantics contain an unknown live role or process state",
+        }
+    );
+    Ok(GenerationSemantics {
+        profile_id,
+        role_handles: role_handles.clone(),
+        process_state_handles: process_states,
+        live_role_states,
+    })
 }
 
 fn physical_decision(
@@ -5534,7 +5771,8 @@ mod tests {
         ExactObjectBindingStateV1, ExactObjectBindingV1, Id128V1, KernelEffectFamilyV1,
         KernelEffectOperationV1, PathGraphStateKeyV1, PathGraphTerminalV1,
         PathGraphTransitionKeyV1, PathTreeDenyKeyV1, PendingExecStateV1, PhysicalDecisionKindV1,
-        PhysicalDecisionV1, PolicyGenerationModeV1,
+        PhysicalDecisionV1, PolicyGenerationModeV1, ProcessGenerationMigrationKeyV1,
+        ProcessGenerationMigrationV1,
     };
     use mithril_control::{
         lower_kubernetes_policy, policy_custom_resource, EffectFamilyV1,
@@ -5546,17 +5784,96 @@ mod tests {
     use zerocopy::{FromBytes as _, IntoBytes as _, TryFromBytes as _};
 
     use super::{
-        add_binding_activation, ensure_active_generation_unchanged, ensure_committed_generation,
-        ensure_map_capacity, entry_admission_path_selector_ids, exception_counter_is_consistent,
+        add_binding_activation, build_process_generation_migrations,
+        ensure_active_generation_unchanged, ensure_committed_generation, ensure_map_capacity,
+        entry_admission_path_selector_ids, exception_counter_is_consistent,
         generation_retirement_needs_tombstone, handles, parse_id,
-        pending_exec_retains_generation_authority, same_exact_file, LoweredGeneration,
-        MeasuredMountRouteV1, ProfileActivation,
+        pending_exec_retains_generation_authority, read_abi_value, same_exact_file,
+        GenerationSemantics, LoweredGeneration, MeasuredMountRouteV1, ProfileActivation,
     };
     use crate::error::IdentityStateSnafu;
     use crate::{
         ContainerKindV1, ExactDeviceConfig, ExactDeviceType, ExactFileObjectConfig,
         WorkloadBindingConfig,
     };
+
+    #[test]
+    fn live_process_migration_translates_generation_local_handles() -> crate::Result<()> {
+        let profile_id = Id128V1::new(1, 2);
+        let source = GenerationSemantics {
+            profile_id,
+            role_handles: BTreeMap::from([("worker".to_owned(), 1), ("zz-admin".to_owned(), 2)]),
+            process_state_handles: BTreeMap::from([("base".to_owned(), (1, 0))]),
+            live_role_states: BTreeSet::from([("worker".to_owned(), "base".to_owned())]),
+        };
+        let target = GenerationSemantics {
+            profile_id,
+            role_handles: BTreeMap::from([("aa-auditor".to_owned(), 1), ("worker".to_owned(), 2)]),
+            process_state_handles: BTreeMap::from([("base".to_owned(), (1, 0))]),
+            live_role_states: BTreeSet::from([("worker".to_owned(), "base".to_owned())]),
+        };
+        let rows = build_process_generation_migrations(
+            &BTreeMap::from([(
+                profile_id,
+                ProfileActivation {
+                    generation: 2,
+                    bindings: BTreeMap::new(),
+                },
+            )]),
+            &BTreeMap::from([(1, source), (2, target)]),
+        )?;
+        let key = ProcessGenerationMigrationKeyV1 {
+            source_profile_generation_ref_id: 1,
+            target_profile_generation_ref_id: 2,
+            source_state_bits: 0,
+            source_role_id: 1,
+            source_process_state_vector_id: 1,
+        };
+        let Some(value) = rows.get(key.as_bytes()) else {
+            return IdentityStateSnafu {
+                reason: "the generation migration fixture has no expected row",
+            }
+            .fail();
+        };
+        assert_eq!(
+            read_abi_value::<ProcessGenerationMigrationV1>(value, "process generation migration",)?,
+            ProcessGenerationMigrationV1 {
+                target_state_bits: 0,
+                target_role_id: 2,
+                target_process_state_vector_id: 1,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn live_process_migration_omits_removed_semantics() -> crate::Result<()> {
+        let profile_id = Id128V1::new(1, 2);
+        let source = GenerationSemantics {
+            profile_id,
+            role_handles: BTreeMap::from([("worker".to_owned(), 1)]),
+            process_state_handles: BTreeMap::from([("base".to_owned(), (1, 0))]),
+            live_role_states: BTreeSet::from([("worker".to_owned(), "base".to_owned())]),
+        };
+        let target = GenerationSemantics {
+            profile_id,
+            role_handles: BTreeMap::from([("replacement".to_owned(), 1)]),
+            process_state_handles: BTreeMap::from([("base".to_owned(), (1, 0))]),
+            live_role_states: BTreeSet::from([("replacement".to_owned(), "base".to_owned())]),
+        };
+        let rows = build_process_generation_migrations(
+            &BTreeMap::from([(
+                profile_id,
+                ProfileActivation {
+                    generation: 2,
+                    bindings: BTreeMap::new(),
+                },
+            )]),
+            &BTreeMap::from([(1, source), (2, target)]),
+        )?;
+        assert!(rows.is_empty());
+        Ok(())
+    }
 
     #[test]
     fn tombstoned_generation_resumes_row_deletion_without_a_second_transition() -> crate::Result<()>

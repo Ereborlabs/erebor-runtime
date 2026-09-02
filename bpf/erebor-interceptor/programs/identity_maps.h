@@ -188,6 +188,7 @@ struct identity_scratch_v1 {
     pending_administrative_match_v1 administrative_match;
     approved_exec_slot_key_v1 administrative_slot_key;
     entry_admission_rule_key_v1 entry_admission_key;
+    process_generation_migration_key_v1 process_generation_migration_key;
     effect_decision_key_v1 effect_key;
     effect_default_key_v1 effect_default;
     ipc_relationship_decision_key_v1 ipc_relationship_key;
@@ -448,6 +449,13 @@ struct {
     __type(key, binding_activation_target_key_v1);
     __type(value, execution_set_binding_state_v1);
 } binding_activation_targets SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, process_generation_migration_key_v1);
+    __type(value, process_generation_migration_v1);
+} process_generation_migrations SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -1461,6 +1469,94 @@ static __always_inline int snapshot_process_state(
 static __always_inline void release_transition_guard(__u64 *guard)
 {
     __sync_val_compare_and_swap(guard, 1, 0);
+}
+
+static __always_inline int migrate_process_generation(
+    identity_runtime_config_v1 *config,
+    const execution_set_binding_state_v1 *binding,
+    const task_label_v1 *label, process_security_state_v1 *process,
+    struct identity_scratch_v1 *scratch)
+{
+    execution_set_binding_state_v1 *target;
+    profile_generation_descriptor_v1 *source_generation;
+    process_state_vector_v1 *vector;
+    process_generation_migration_key_v1 *key;
+    process_generation_migration_v1 *migration;
+    __u64 *target_task_refs;
+    int result = -EACCES;
+
+    if (!config || !binding || !label || !process || !scratch)
+        return -EACCES;
+    target = binding_activation_for_new_root(binding, config);
+    if (!target)
+        return -EACCES;
+    if (process->active_profile_generation_ref_id ==
+        target->active_profile_generation_ref_id)
+        return 0;
+    if (__sync_val_compare_and_swap(&process->transition_guard, 0, 1))
+        return -EACCES;
+    if (process->state != process_security_state_kind_v1_active ||
+        !process->live_thread_refs ||
+        process->exec_guard_state != exec_guard_state_v1_none ||
+        process->exec_without_transition_task_cookie ||
+        !id128_equal(&process->process_state_id, &label->process_state_id) ||
+        !id128_equal(&process->entry_instance_id, &label->entry_instance_id))
+        goto out;
+    source_generation = bpf_map_lookup_elem(
+        &profile_generation_descriptors,
+        &process->active_profile_generation_ref_id);
+    if (!generation_allows_existing_holder(source_generation) ||
+        source_generation->label_epoch != config->label_epoch ||
+        !id128_equal(&source_generation->node_boot_id,
+                     &config->node_boot_id) ||
+        !id128_equal(&source_generation->profile_id, &binding->profile_id))
+        goto out;
+    vector = bpf_map_lookup_elem(&process_state_vectors,
+                                 &label->process_state_id);
+    if (!vector ||
+        vector->state != process_state_vector_state_v1_active ||
+        vector->process_state_vector_id != process->process_state_vector_id ||
+        vector->profile_generation_ref_id !=
+            process->active_profile_generation_ref_id ||
+        vector->label_epoch != process->label_epoch ||
+        !id128_equal(&vector->node_boot_id, &process->node_boot_id))
+        goto out;
+    key = &scratch->process_generation_migration_key;
+    __builtin_memset(key, 0, sizeof(*key));
+    key->source_profile_generation_ref_id =
+        process->active_profile_generation_ref_id;
+    key->target_profile_generation_ref_id =
+        target->active_profile_generation_ref_id;
+    key->source_state_bits = vector->state_bits;
+    key->source_role_id = process->active_role_id;
+    key->source_process_state_vector_id = process->process_state_vector_id;
+    migration = bpf_map_lookup_elem(&process_generation_migrations, key);
+    if (!migration || !migration->target_role_id ||
+        !migration->target_process_state_vector_id)
+        goto out;
+    target_task_refs = bpf_map_lookup_elem(
+        &profile_generation_task_refs,
+        &target->active_profile_generation_ref_id);
+    if (!target_task_refs)
+        goto out;
+
+    vector->state_bits = migration->target_state_bits;
+    vector->profile_generation_ref_id =
+        target->active_profile_generation_ref_id;
+    vector->process_state_vector_id =
+        migration->target_process_state_vector_id;
+    vector->transition_version++;
+    __asm__ volatile("" ::: "memory");
+    process->active_role_id = migration->target_role_id;
+    process->process_state_vector_id =
+        migration->target_process_state_vector_id;
+    process->active_profile_generation_ref_id =
+        target->active_profile_generation_ref_id;
+    process->transition_version++;
+    result = 0;
+out:
+    release_transition_guard(&process->transition_guard);
+    return result;
 }
 
 static __always_inline void zero_id(id128_v1 *id)

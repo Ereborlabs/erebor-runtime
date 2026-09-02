@@ -28,8 +28,8 @@ The 2026-08-23 amendment replaces the flattened Kubernetes policy document
 with `WorkloadProtectionPolicy` and `WorkloadProtectionException`. The public
 resources contain only qualified Kubernetes enforcement fields. Control keeps
 one explicit lowering path from the base policy to the wider internal signed
-policy document. An exception activates one precompiled grant without
-migrating the base generation.
+policy document. An exception activates one precompiled grant without creating
+another base generation.
 
 The prepared-container amendment adds one internal, typed transition to the
 node binding and BPF decision ABI. It treats the verified initial runtime entry
@@ -53,6 +53,17 @@ mount as the canonical fallback. Initial Kubernetes mounts are one baseline
 snapshot. Their creation order does not select policy authority. A later bind
 mount does not install a new route and therefore cannot rename its source for
 policy evaluation.
+
+The live-policy amendment applies a changed base policy to running processes.
+Node builds and verifies one complete immutable generation before it publishes
+that generation for a live binding. At a running process's next protected
+effect, BPF compares the process generation with the published binding
+generation. BPF migrates the process and its state vector under the existing
+process transition guard, then evaluates the effect with the new generation.
+Processes migrate independently. The system does not stop all tasks or perform
+one workload-wide migration transaction. A task's birth generation and the
+generation references of existing sockets and other long-lived objects remain
+lifetime evidence until their owners release them.
 
 Status: proposed architecture. This document does not authorize an
 implementation phase. The
@@ -1428,12 +1439,14 @@ installation. The installer replaces the Mithril binaries, runtime
 integration, and exact recovery manifest. It does not replace Control or Node
 durable state. The new Control and Node reopen their existing state, run only
 supported owner-controlled migrations, and continue the existing policy
-sequence and predecessor chain. The hook then permits only the exact Node
-recovery recorded by the new manifest. A failed or unsupported migration keeps
-admission closed and leaves the original state intact. Kubernetes metadata is
-not installer or recovery authority. Retained BPF state continues to govern
-existing bindings and denies the incident's first covered effect after a
-direct non-CRI bypass.
+sequence and predecessor chain. The hook then permits only the exact Control
+and Node recovery commands and security-sensitive OCI shapes recorded by the
+new manifest. The Control shape includes its non-root user and supplementary
+group. It does not use an executable digest for those exceptions. A failed or
+unsupported migration keeps admission closed and leaves the original
+state intact. Kubernetes metadata is not installer or recovery authority.
+Retained BPF state continues to govern existing bindings and denies the
+incident's first covered effect after a direct non-CRI bypass.
 
 Decommission uses an independent offline signing key. Kubernetes ServiceAccount
 credentials, a CRD, a label, an annotation, a Helm release, Control status, or
@@ -1833,7 +1846,7 @@ coverage, and one of four results: `PASS`, `FAIL`, `UNSUPPORTED`, or
 | `INV-EFFECT-001` | Rules are reduced to exact final decision keys. The bounded path graph in Chapter 15 may first produce a candidate selector, but exact mount/object revalidation produces the final key. Different physical results need a signed override or compilation fails. Missing required identity, generation, classifier, table, or response state denies. | An output path symlinked to a token resolves to the token object; conflicting allow/deny does not depend on “specificity” or file order. |
 | `INV-EFFECT-002` | Telemetry, WAL, ring, rate-limit, or central-service pressure cannot turn a computed local denial into allow. | Fill the event ring while repeating token reads; every read still fails and loss counters increase. |
 | `INV-POLICY-001` | Only a signed, validated, compiled, read-back generation can authorize. Learning never self-authorizes. | Observed malicious Kubernetes API use becomes a review candidate, not a new allow row. |
-| `INV-POLICY-002` | Activation is atomic; old generations stay until every typed holder has ended. | Generation 42 tasks and sockets remain valid under 42 while new entry N receives 43; 42 is removed only after task/socket/object/response refs reach verified zero. |
+| `INV-POLICY-002` | Node publishes only a complete generation. BPF migrates each live process at its next protected effect. Old generations stay until every typed holder has ended. | Generation 42 is complete and reachable until Node publishes complete generation 43. Task T migrates to 43 at its next effect. Socket S keeps its declared generation-42 lifetime. Generation 42 is removed only after task, socket, object, and response references reach verified zero. |
 | `INV-K8S-001` | Initial container roots, native descendants, separate init/sidecar/ephemeral containers, and later external roots stay distinct. Indistinguishable external purposes never receive invented roles. | An application child running `/app/healthcheck` keeps application lineage. Readiness and `kubectl exec` roots running the same bytes both receive the restricted external role unless an existing qualified interface proves more. |
 | `INV-K8S-002` | Shutdown is not a bypass. | A contained `PreStop` cannot read a Secret or send to the public Internet. |
 | `INV-IPC-001` | Independent roots remain separate. Their communication uses one bidirectional relationship or the configured unmatched result. Descriptor passing may be separate evidence, never exact represented-object provenance. | Converter and uploader may exchange bytes on their Unix socket, an unknown peer alerts, and an observed `SCM_RIGHTS` message records only that descriptor passing occurred. |
@@ -2233,7 +2246,8 @@ stored base-policy revision or offline base-policy review source
   -> write a completely inactive generation
   -> read back every descriptor, row, default, membership, and digest
   -> run controlled allow and deny probes
-  -> atomically publish the active-generation handle for new admissions
+  -> publish the active-generation handle for the live binding
+  -> BPF migrates each running process at its next protected effect
   -> authenticated node activation acknowledgement and rollout inventory
 ```
 
@@ -2317,10 +2331,13 @@ within `(node_boot_id, label_epoch)`. Every descriptor repeats that epoch.
 Losing the allocator state while protected objects survive is fatal and holds
 the workload fail-closed.
 
-New external roots pin the active generation. Existing tasks, their native
-forks and execs, sockets, files/shared objects, native authority states, VMAs,
-checkpoint state, pending entries/execs, derived kernel capabilities, and
-response plans keep their own typed generation reference.
+New external roots use the published binding generation. An existing process
+migrates from its current generation to the published generation at its next
+protected effect. Its tasks keep immutable birth-generation references for
+exit accounting and evidence. Existing sockets, files/shared objects, native
+authority states, VMAs, checkpoint state, pending entries/execs, derived
+kernel capabilities, and response plans keep their typed lifetime generation
+references.
 
 ```text
 PREPARING: no holder may use or acquire
@@ -2333,17 +2350,28 @@ Retirement requires all typed counters at zero, no owned reference tombstone
 in complete iterator/WAL reconciliation, and the BPF grace period. Table rows
 cannot disappear while a retained holder exists.
 
-Version 1 does not migrate live processes to a new generation. That abandoned
-design lacks a safe transaction across old/new generation refs, threads,
-process/native-state, sockets, and concurrent retirement. Existing processes
-stay pinned; only new external roots select the new generation. A future
-quiesced old-intersect-new migration is a separately approved capability with
-fault injection after every state/reference write.
+Node does not rewrite live task state. Node stages the semantic role and
+process-state translation for each permitted old-to-new generation move. BPF
+owns the live move. At the next protected effect, BPF acquires the process
+transition guard, verifies the binding, target generation, translation, and
+complete descriptors, updates the process state vector and active process
+generation, releases the guard, and evaluates the effect with the new
+generation. Another thread that encounters the guard denies its current effect
+and can retry. A missing translation, concurrent exec transition, incomplete
+generation, or failed validation denies without using a mixed state.
 
-**Generation test.** Task T and socket S start on generation 42. Activate 43.
-T continues through 42; S follows its declared 42 lifetime; a new root N gets
-43. Only after T exits, S closes, all typed references reconcile to zero, and
-the grace period completes may 42 be removed.
+This migration is not atomic across a container. Each process moves on its own
+next protected effect. The inactive generation can be built row by row because
+no binding can reach it. Publication uses one exact pointer update after
+readback and probes. Each process migration uses one local compare-and-swap on
+its transition guard. These local atomic operations do not form a global task
+migration transaction.
+
+**Generation test.** Task T and socket S start on generation 42. Node publishes
+complete generation 43. T's next file effect migrates T to 43 and uses the
+generation-43 rule. S follows its declared generation-42 lifetime. A new root N
+uses 43. Only after T exits, S closes, all typed references reconcile to zero,
+and the grace period completes may 42 be removed.
 
 `NATIVE-STATE-REF-LIFETIME-001` owns the Phase 2 task, process, entry, native
 state, tombstone, and task-generation reference result. Socket, file, VMA,
@@ -4558,8 +4586,9 @@ Mithril hardens this into a transaction:
 1. compile every rule and negative set into fresh inactive maps;
 2. verify counts, bounds, digests, and all expected lookups;
 3. run allow, deny, map-miss, and capacity probes;
-4. publish one generation pointer with compare-and-swap;
-5. keep old maps until every task, socket, domain, pending intent, and response
+4. publish one generation pointer after the complete generation passes;
+5. let BPF migrate each running process at its next protected effect;
+6. keep old maps until every task, socket, domain, pending intent, and response
    generation reference is released.
 
 **Example.** A profile has 400 file rules and rule 317 cannot be inserted. The
@@ -5208,7 +5237,7 @@ and no competing daemon that can assign security identity.
 | `PolicyDesiredStateOwner` | Control | Accept policy and exception source revisions, reconcile list/watch state, lower the base policy, validate bounded exception requests, and project bounded CRD status | Sign or activate a candidate, select a node, expose internal-only fields, treat status as authority, or store evidence/graph data in a CRD |
 | `PolicyCompiler` | Control | Validate/lower source policy and sign immutable artifact | Change a node's active pointer |
 | `PolicyRolloutOwner` | Control | Freeze policy target snapshots; resolve exact exception generation, grant, workload, Node, and boot targets; deliver signed candidates; and maintain exact inventory | Write node BPF maps, change exception use state, claim cluster-wide atomic activation, or accept a stale acknowledgement |
-| `PolicyActivationOwner` | `mithril-node` | Stage/read back/probe generation, pointer CAS, generation-retention counts, retirement/rollback | Own native-family membership, pending intent, or response semantics |
+| `PolicyActivationOwner` | `mithril-node` | Stage/read back/probe generation, read the expected pointer, publish the active pointer, count generation retention, and retire or roll back generations | Own native-family membership, pending intent, or response semantics |
 | `ExceptionAuthorityOwner` | `mithril-node` plus the BPF effect gate | Durable bounded exception instances, receipts, restart recovery, and atomic pre-effect use consumption | Approve an exception, select a Kubernetes target, refund an unproved use, or widen the compiled grant |
 | `KernelHostOwner` | `mithril-node` | One loader, link/map object lifecycle, ABI, capability state | Invent roles or semantic transitions |
 | `ObjectAndSocketStateOwner` | `mithril-node` effect modules | Exact object/socket identity, lifetime, peer resolution, and IPC relationship result | Mutate native-family membership or infer byte provenance |
@@ -5293,7 +5322,7 @@ listed proof.
 | --- | --- | --- | --- |
 | Shared Rust/BPF ABI, exact-type closure, closed enums, map/link manifest, capability and source registries, golden bytes | 0 / 1 | `erebor-linux-sensor-abi`; generated C header + Rust types; `erebor-linux-sensor-host::KernelHostOwner`; Phase 0 schema checker | Every active `*V1` name is exact or an exact alias; Rust/C byte equality; second loader cannot acquire pin-root lease; failed attach is `UNSUPPORTED`. |
 | Typed local and node-control gRPC services | 1 / 6.1 | `erebor-runtime-ipc` generated local services; `mithril-control` generated mTLS node services; existing Runtime, node, and Control domain owners | Descriptor closure; Unix peer and mTLS identity rejection; no custom frame, generic envelope, ptrace exception, fallback listener, false durable acknowledgement, or owner change. |
-| Offline base-policy YAML, Kubernetes policy and exception desired state, internal signed compiled artifact, rollout, rollback, dispositions | 0 / 4 / 6.2 | `mithril-control::policy_schema`, `PolicyDesiredStateOwner`, `PolicyCompiler`, `PolicyRolloutOwner`; node `PolicyActivationOwner` and `ExceptionAuthorityOwner` | `CFG-V1-GOLDEN-002`, public-spec/offline equality, public-to-internal lowering, absent-field rejection, target-bound exception activation without generation migration, bounded consumption, relist/restart, stale acknowledgement, partial rollout, rollback/replay, inactive readback, allow/deny probes, one pointer CAS. |
+| Offline base-policy YAML, Kubernetes policy and exception desired state, internal signed compiled artifact, rollout, rollback, dispositions | 0 / 4 / 6.2 | `mithril-control::policy_schema`, `PolicyDesiredStateOwner`, `PolicyCompiler`, `PolicyRolloutOwner`; node `PolicyActivationOwner` and `ExceptionAuthorityOwner` | `CFG-V1-GOLDEN-002`, public-spec/offline equality, public-to-internal lowering, absent-field rejection, target-bound exception activation with guarded live-process migration, bounded consumption, relist/restart, stale acknowledgement, partial rollout, rollback/replay, inactive readback, allow/deny probes, expected-pointer readback, and active-pointer publication. |
 | Fixture/family/claim/qualification schemas | 0 / 11 | `mithril-e2e::qualification_schema` and `QualificationOwner` | `FIXTURE-REGISTRY-COMPLETE-001`; digest splice, missing negative control, degraded-PASS, and wrong platform all reject. |
 | Task/process/exec identity and native inheritance | 0 / 2 | `mithril-node::identity::NativeSecurityStateOwner`; owned `lifecycle.bpf.c`, `exec.bpf.c` | Fork-without-exec label before token open; moved-task/non-leader exec/PID reuse/ref cleanup pass. |
 | Process/native-state/set/mm state | 0 / 2-4 | Same `NativeSecurityStateOwner`; kernel maps hold native-family restrictions, while `KernelHostOwner` only owns their lifecycle | Thread races cannot recover authority; map N+1 fails closed; Rust/BPF decision bytes agree; partial VMA snapshot never relaxes. |
@@ -8905,7 +8934,8 @@ verify signature, target, validity, replay, and anti-rollback on the node
 build a completely inactive generation
 read back every descriptor, row, default, membership, and digest
 run isolated allow and deny probes
-publish one active-generation handle for new admissions
+publish one active-generation handle for the live binding
+BPF migrates each running process at its next protected effect
 return an authenticated activation acknowledgement to Control
 ```
 
@@ -8948,6 +8978,15 @@ NodeBoundProfileGenerationV1 {
 GenerationLocalRoleHandleV1 {
   role_id: PolicyLocalIdV1
   numeric_handle: nonzero u32
+}
+
+GenerationProcessMigrationV1 {
+  source_profile_generation_ref_id: nonzero u64
+  target_profile_generation_ref_id: nonzero u64
+  source_role_numeric_handle: nonzero u32
+  source_process_state_numeric_handle: nonzero u32
+  target_role_numeric_handle: nonzero u32
+  target_process_state_numeric_handle: nonzero u32
 }
 
 GenerationLocalDestinationPolicyHandleV1 {
@@ -9000,11 +9039,15 @@ Activation reads back the complete tables before publishing the generation.
 Evidence converts a handle back to the local name and portable profile
 generation; a bare name or bare numeric handle is never durable identity.
 
-Existing tasks, sockets, files, mappings, domains, pending entries, and
-responses retain typed references to their old immutable generation. New roots
-use the active generation. Version 1 does not migrate live processes. A
-retiring generation is deleted only after every typed reference is zero,
-iterator/WAL reconciliation agrees, and the BPF grace period passes.
+Node compiles a migration row only when the source role and process state have
+an exact semantic target in the new generation. BPF uses that row to migrate a
+running process under its transition guard at the next protected effect. A
+missing row denies the effect and leaves the process on its complete old
+generation. Existing tasks keep their birth-generation references. Existing
+sockets, files, mappings, domains, pending entries, and responses retain their
+typed lifetime references. A retiring generation is deleted only after every
+typed reference is zero, iterator/WAL reconciliation agrees, and the BPF grace
+period passes.
 
 Control freezes selection and delivery in these records:
 
@@ -11518,7 +11561,7 @@ accidentally revive them. They are history, not a second normative contract.
 | Exact attribution implies narrow actuation | A precise task may share a socket/domain/cgroup with others | Response reports and verifies actual blast radius (Chapters 18-19, 24) |
 | Infer machine evidence behavior from a display `Kind` | Boundary nature and Mithril relationship are independent fields | `SourceEvidenceClaimV1` stores both (Appendix A.3) |
 | One network key requires both current actor and final post-rewrite destination | Sender hooks know the actor; final packet hooks may know the rewritten destination but have no meaningful current task | `ActorSocketDecisionKeyV1` installs `SocketFlowAuthorizationV1`; `FinalFlowDecisionKeyV1` enforces the final destination (Appendix A.13.4) |
-| KubeArmor map-of-maps already equals immutable policy generations | Checked updates mutate rows over time and may partially diverge | Build/readback/probe a fresh generation, then one pointer CAS (Chapter 12, §28.3) |
+| KubeArmor map-of-maps already equals immutable policy generations | Checked updates mutate rows over time and may partially diverge | Build, read back, and probe a fresh generation. Read the expected pointer, then publish the active pointer (Chapter 12, §28.3) |
 | Treat a static LSM denial as a BPF `prior_ret` value | Hook signatures and LSM stacking differ; some programs never run after another LSM denies | Qualify exact hook order/signature/result composition per platform (§13, §28.8) |
 | Express `INV-EFFECT-001` with prose specificity | “More specific” is not a deterministic authority order | Closed exact decision keys and explicit override edges (Chapters 10-13) |
 
@@ -11559,9 +11602,9 @@ accidentally revive them. They are history, not a second normative contract.
 | Cgroup lookup before existing task label | Moving a task can escape policy | Task-first lookup everywhere (§13) |
 | Prose specificity, YAML order, priority, or “deny wins” resolves source conflict | These rules are ambiguous before exact lowering | Expand exact cell; identical physical results merge; differing results need explicit signed override (§12) |
 | Owner-local generation number, digest-only defaults, or cached final allow | Generation `42` can collide across profiles; digest/default without owner and state is incomplete; response can change | Portable generation plus node ref; every cell has explicit default; label never stores final allow (§12, Appendix A.1) |
-| Mutable active generation or “current socket owner” shorthand | Partial policy and passed/shared sockets break authority | Immutable generation plus creator, current actor, peer relationship, and socket floor (§12, §19) |
-| Migrate live processes to new generation in V1 | Cross-thread/socket/native-state/reference transaction is not proved | Existing holders stay pinned; new roots use new generation (§12) |
-| Label generation must equal active generation | Existing protected objects intentionally retain older valid generation | Validate retained typed generation reference, not current pointer (§12) |
+| Rewrite one active generation in place or use “current socket owner” shorthand | Partial policy and passed/shared sockets break authority | Build a complete immutable generation, publish its binding pointer, and keep creator, current actor, peer relationship, and socket floor identity (§12, §19) |
+| Migrate every live process in one workload-wide transaction | Cross-thread, socket, native-state, and reference coordination adds a global stop point | BPF migrates each process under its local transition guard at its next protected effect (§12) |
+| Label birth generation must equal the published generation | Birth evidence and existing protected objects intentionally retain older valid generation references | Migrate the active process generation and validate each retained lifetime reference independently (§12) |
 | Ad-hoc state/default lookup in generic hook | Missing cells can accidentally inherit allow | Exact decision key plus explicit default and required dynamic floors (§13) |
 | Reusable inode or undefined mount generation grants a file effect | Inode is reused and namespace/mount topology changes object meaning | Use mount namespace generation + mount/fs/inode/version/live identity for positive file authority. A signed canonical path-tree `DENY` floor needs none of these child-object fields (§15, §17). |
 | Projected-token rotation can wait for asynchronous userspace update | New object may be readable before classifier catches up | Classify synchronously before access, or deny until the exact object is bound (§17) |

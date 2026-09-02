@@ -1127,6 +1127,20 @@ typedef struct binding_activation_target_key_v1 {
   uint64_t profile_generation_ref_id;
 } binding_activation_target_key_v1;
 
+typedef struct process_generation_migration_key_v1 {
+  uint64_t source_profile_generation_ref_id;
+  uint64_t target_profile_generation_ref_id;
+  uint64_t source_state_bits;
+  uint32_t source_role_id;
+  uint32_t source_process_state_vector_id;
+} process_generation_migration_key_v1;
+
+typedef struct process_generation_migration_v1 {
+  uint64_t target_state_bits;
+  uint32_t target_role_id;
+  uint32_t target_process_state_vector_id;
+} process_generation_migration_v1;
+
 typedef struct execution_set_binding_state_v1 {
   struct id128_v1 binding_id;
   struct id128_v1 binding_nonce;

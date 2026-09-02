@@ -21,6 +21,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     #[command(hide = true)]
+    Ctr {
+        #[command(subcommand)]
+        command: CtrCommand,
+    },
+    #[command(hide = true)]
     CompileRetainedIdentity {
         #[arg(long)]
         output_directory: PathBuf,
@@ -41,6 +46,16 @@ enum Command {
         /// Promote the signed fixture from observation to physical denial.
         #[arg(long)]
         protect: bool,
+    },
+    ReplacementGenerationExceptionProbe {
+        #[arg(long)]
+        output_directory: PathBuf,
+        #[arg(long)]
+        pin_root: PathBuf,
+        #[arg(long)]
+        lease_path: PathBuf,
+        #[arg(long)]
+        cgroup_path: PathBuf,
     },
     RuncEntryRoleRuntimeProbe {
         #[arg(long)]
@@ -93,6 +108,19 @@ enum Command {
         #[arg(long)]
         request_directory: PathBuf,
     },
+}
+
+#[derive(Subcommand)]
+enum CtrCommand {
+    Oci {
+        #[command(subcommand)]
+        command: OciCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum OciCommand {
+    Spec,
 }
 
 struct OciStageFixtureOwner;
@@ -228,6 +256,14 @@ fn main() {
 fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
+        Command::Ctr {
+            command: CtrCommand::Oci {
+                command: OciCommand::Spec,
+            },
+        } => {
+            println!(r#"{{"ociVersion":"1.2.0"}}"#);
+            Ok(())
+        }
         Command::CompileRetainedIdentity { output_directory } => {
             let runner = EffectTestRunner::new(cli.repo_root);
             let record = runner.compile_retained_identity_fixture(&output_directory)?;
@@ -262,6 +298,26 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 &bundle,
             )?;
             println!("Mithril effect physical probe passed");
+            Ok(())
+        }
+        Command::ReplacementGenerationExceptionProbe {
+            output_directory,
+            pin_root,
+            lease_path,
+            cgroup_path,
+        } => {
+            let runner = EffectTestRunner::new(cli.repo_root);
+            let result = runner.replacement_generation_exception_probe(
+                &output_directory,
+                &pin_root,
+                &lease_path,
+                &cgroup_path,
+            )?;
+            runner.write_json(
+                &output_directory.join("replacement-generation-exception-probe.json"),
+                &result,
+            )?;
+            println!("Mithril replacement-generation exception probe passed");
             Ok(())
         }
         Command::RuncEntryRoleRuntimeProbe {

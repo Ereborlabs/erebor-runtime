@@ -4,13 +4,15 @@ Status: Current implementation guide. The source implements the separate
 `WorkloadProtectionPolicy` and `WorkloadProtectionException` APIs. Automated
 tests cover their closed schemas, lowering, reconciliation, delivery,
 retirement, restart, and node-session boundaries. The complete automated
-two-node physical fixture passed for its recorded source state. The current
-working tree also passes the paired lightweight and Kubernetes known-route
-case. These results prove the `PreparedContainer` trust boundary, exact
-admitted-entry default, independent entry roles, bounded exception lifecycle,
-restart recovery, physical Node epoch changes, and synchronous BPF path
-reconstruction for the paired route case. The current complete two-node rerun
-and the failure and outage matrices remain unproved.
+two-node physical fixture passed for the current changed source. The paired
+lightweight fixture and that Kubernetes run prove guarded migration of a
+running process to a replacement policy generation. They also prove the
+`PreparedContainer` trust boundary, exact admitted-entry default, independent
+entry roles, bounded exception lifecycle, restart recovery, physical Node
+epoch changes, and synchronous BPF path reconstruction. The current retained
+gate permits exact Control and Node recovery shapes without an executable
+digest. The physical failure, outage, version-changed Kubernetes recovery, and
+authorized final-decommission cases remain unproved on this source.
 
 Plan: [Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -64,7 +66,9 @@ the exact admitted entry identity stored in the binding.
    [node policy delivery owner](../../../crates/mithril-node/src/policy_delivery.rs),
    [node event loop](../../../crates/mithril-node/src/node.rs), and
    [node generation owner](../../../crates/mithril-node/src/policy.rs).
-10. Read the [OCI adapter](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs),
+10. Read the [retained runtime gate](../../../crates/mithril-node/src/runtime_gate.rs),
+    [runtime integration owner](../../../crates/mithril-node/src/runtime_integration.rs),
+    [OCI adapter](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs),
     [runtime admission socket](../../../crates/mithril-node/src/runtime_admission.rs),
     [CRI identity verification](../../../crates/mithril-node/src/identity/runtime.rs),
     [cgroup binding owner](../../../crates/mithril-node/src/identity/binding.rs),
@@ -95,9 +99,11 @@ the exact admitted entry identity stored in the binding.
 | Target snapshot and node candidate | `PolicyRolloutOwner` | `ControlStore` transaction | Immutable snapshot, bundle, and rollout records | Target conflict, exact-node, mixed rollout, restart, and stale acknowledgement tests |
 | Trust generation and acknowledgement | `TrustBundleOwner` | `ControlStore` transaction | Trust generation and boot-bound acknowledgement records | Rotation, revocation, restart, and current-trust gating tests |
 | Node policy, exception, transfer, and cleanup state | `NodePolicyDeliveryOwner` | `NodePolicyDeliveryOwner` | Node state directory | Incremental transfer, complete desired inventory, exact readback, restart, session retirement, and stale-profile cleanup tests |
-| Active node generation and BPF maps | `NodePolicyGenerationOwner` and existing activation path | `mithril-node` | Node-local inactive generation and active-pointer compare-and-swap | Readback, probe, pointer, and retained-generation tests |
+| Active node generation and BPF maps | `NodePolicyGenerationOwner` and existing activation path | `mithril-node` | Node-local inactive generation and one active-pointer publication after expected-pointer readback | Readback, probe, pointer, and retained-generation tests |
+| Live process generation migration | `NodePolicyGenerationOwner` creates semantic old-to-new rows | BPF updates one process and state vector under its transition guard | `process_generation_migrations`, `process_states`, and `process_state_vectors` | Migration-row unit tests, replacement-generation lightweight probes, and the complete Kubernetes fixture |
 | Entry-time known-source routes | Held OCI admission and `NodePolicyGenerationOwner` | `mithril-node` until publication; BPF reads only after publication | Binding-scoped `canonical_mount_roots` rows in the active generation | Route-order unit test and paired lightweight and Kubernetes route case |
 | Post-start live mount topology | Current BPF file or executable hook chain | BPF mutation hooks and path resolver | Live kernel mount namespace, namespace event, mutation epoch, pending count, and BPF mount cache | Paired route case, including one later in-container bind |
+| Retained runtime integration and recovery manifest | `RuntimeIntegrationOwner` | `RuntimeIntegrationOwner`; signed node decommission owns final removal | Host containerd fragment, OCI base spec, hook binary, and recovery manifest | Runtime integration unit tests, direct-runc retained-gate probe, and two-node reinstall |
 | Runtime admission request | `mithril-oci-hook` and `RuntimeAdmissionClient` | `RuntimeAdmissionServer` | Root-owned mode-0600 Unix socket | Stock-state parser, active-owner, unavailable endpoint, convergence hold, and timeout tests |
 | Staged runtime facts | First `createRuntime` request | `WorkloadBindingOwner` | Bounded node memory only; no kernel authority | Missing, expiry, changed-head, changed-cgroup, and no-PID-authority tests |
 | Runtime container binding | `ScheduledRuntimeBindingV1` and node binding owner | Node binding owner | BPF cgroup and task maps plus node delivery state | Exact signed target, policy identity, CRI match, distinct lifetime, and reuse-rejection tests |
@@ -175,7 +181,11 @@ sequenceDiagram
     Node->>Kernel: Publish exact binding and entry-time source routes
     Node-->>Runtime: Allow after active readback
     Node-->>Rollout: Boot-bound acknowledgement
+    API->>Desired: Replacement policy revision
+    Desired->>Node: Complete signed replacement generation
+    Node->>Kernel: Stage migration rows and publish generation
     Runtime->>Kernel: File or executable effect after start
+    Kernel->>Kernel: Migrate this process under its transition guard
     Kernel->>Kernel: Rebuild and verify one live mount topology
     Kernel-->>Runtime: Apply route-first policy before effect
 ```
@@ -209,6 +219,22 @@ The node checks the tenant, trust generation, signature, source digest,
 candidate digest, artifact digests, issuer sequence, distribution sequence,
 target, expiry, capabilities, and predecessor. A delayed acknowledgement
 cannot change a newer candidate or a different boot session.
+
+`NodePolicyGenerationOwner` installs a replacement generation under keys that
+the live binding cannot reach. It reads back the generation and runs the
+controlled probes. It derives migration rows only for semantic roles and
+process-state bits that exist in both complete generations. It stages the live
+binding target before it publishes the generation pointer. The normal Node
+reload path retains the prior verified generation semantics, so it can create
+the old-to-new rows during a live Control update.
+
+At the next protected effect, BPF compares the process generation with the
+published binding generation. BPF acquires the existing process transition
+guard. It verifies the source descriptor, process state vector, target
+descriptor, and migration row. It updates the process and its state vector,
+releases the guard, and evaluates that same effect with the replacement
+generation. Another process migrates at its own next protected effect. A
+missing row or a concurrent transition denies the current effect.
 
 At held entry admission, Node opens the OCI bundle root through the held mount
 namespace. Node rebases container mountpoints and installs existing graph-prefix
@@ -294,12 +320,32 @@ not evict a running Pod or remove its last active local policy.
 
 ## Runtime Admission Flow
 
-The Node Resource Interface (NRI) hook-injector supplies the Open Container
-Initiative (OCI) hook calls. The node uses the Container Runtime Interface
-(CRI) for live container facts. The host thread group identifier (TGID)
-identifies the held initial process.
+The chart installs a containerd drop-in and an Open Container Initiative (OCI)
+base specification for the default Container Runtime Interface (CRI) runtime.
+The base specification prepends two `createRuntime` hooks and one
+`createContainer` hook. The node uses CRI for live container facts. The host
+thread group identifier (TGID) identifies the held initial process.
 
-[runtime hook configuration](../../../packaging/mithril/helm/templates/runtime-hook-configmap.yaml) NRI CreateContainer injects two ordered Mithril `createRuntime` hooks
+[`RuntimeIntegrationOwner::install`](../../../crates/mithril-node/src/runtime_integration.rs) The privileged chart installer publishes the hook, base specification, drop-in, and recovery manifest
+  -> [`OciBaseSpecOwner::build`](../../../crates/mithril-node/src/runtime_integration.rs) the base specification prepends the three ordered hook calls
+  -> [`RuntimeIntegrationOwner::restart`](../../../crates/mithril-node/src/runtime_integration.rs) the installer restarts the active configured container runtime only when the base specification or drop-in changed
+  -> [`RuntimeIntegrationOwner::read_back`](../../../crates/mithril-node/src/runtime_integration.rs) the installer verifies every owned file and the active containerd import
+
+[`RetainedRuntimeGate::decide`](../../../crates/mithril-node/src/runtime_gate.rs) The retained hook runs before the node admission socket is available
+  -> [`OciRuntimeConfigV1::is_hostile_incident`](../../../crates/mithril-node/src/runtime_gate.rs) the hook denies the exact hostile OCI shape before its process starts
+  -> [`RuntimeRecoveryManifestV1::recovery_decision`](../../../crates/mithril-node/src/runtime_gate.rs) the hook permits an exact Node or Control recovery command and security shape from the retained manifest
+  -> [`RuntimeControlRecoveryEntryV1::matches`](../../../crates/mithril-node/src/runtime_gate.rs) Control recovery requires the exact non-root user, supplementary group, empty capabilities, read-only root, namespace shape, and mount destinations
+  -> [`RuntimeRecoveryEntryV1::matches`](../../../crates/mithril-node/src/runtime_gate.rs) Node recovery requires the exact command, host namespace, capabilities, and source-bound mounts
+  -> [`RuntimeRecoveryEntryV1::matches_installer`](../../../crates/mithril-node/src/runtime_gate.rs) a version-changed installer requires the retained owner, host paths, socket, privileges, and writable mounts
+  -> [`RetainedRuntimeDecisionV1::DenyUnavailable`](../../../crates/mithril-node/src/runtime_gate.rs) any other protected or non-sandbox start denies while node admission is unavailable
+
+Neither recovery entry contains an executable digest. The manifest binds the
+command and security-sensitive OCI shape. Dynamic Kubernetes volume source
+paths do not authorize Control recovery. The Control entry binds only the
+required mount destinations and access modes because Kubernetes assigns the
+host-side volume paths.
+
+[`OciBaseSpecOwner::build`](../../../crates/mithril-node/src/runtime_integration.rs) Containerd invokes the first two ordered Mithril `createRuntime` hooks
   -> [`request_with_cgroup`](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) the first hook stages immutable container, cgroup, image, and Pod facts
   -> [`stage_runtime_admission`](../../../crates/mithril-node/src/identity/binding.rs) the node stores one bounded stage and grants no runtime authority
 
@@ -547,18 +593,22 @@ bounded. The chart rejects an OCI client timeout that has no outer runtime
 margin. The HTTPS `/healthz` route contains no policy payload.
 
 The node image contains `mithril-node` and `mithril-oci-hook`. A chart-owned
-host installer publishes each path by atomic same-directory rename. It installs
-the binary and two ordered `createRuntime` hook documents. Cleanup removes the
-fact stage before the preparation hook and the binary. Adjacent ownership
-markers bind the three exact paths to the Helm release. Setting hook
-installation to false removes only matching owned paths during the next node
-rollout. Ordinary Helm uninstall leaves hooks and pinned BPF state on the host.
-Only the independently signed node decommission flow can remove both. Foreign
-or unmarked files fail closed and stay in place.
+host installer publishes the hook binary, recovery manifest, OCI base
+specification, and containerd drop-in by atomic same-directory rename. Adjacent
+ownership markers bind those exact paths to the Helm release. The installer
+generates the base specification from the host runtime's stock specification.
+It adds no custom runtime binary.
 
-CRI-O can consume the standard hook directory. Containerd needs the stock Node
-Resource Interface hook-injector. The chart does not patch the container
-runtime and does not install a custom runtime binary.
+The containerd drop-in selects the owned base specification for the default
+CRI `runc` runtime. This selection covers protected and unprotected CRI starts
+without a RuntimeClass. The retained gate allows a healthy node to make the
+normal admission decision. It uses the recovery manifest only while the node
+socket is unavailable.
+
+Ordinary Helm uninstall leaves the runtime integration and pinned BPF state on
+the host. Only the independently signed node decommission flow can remove both
+from the default configuration. Foreign or unmarked files fail closed and stay
+in place.
 
 ## BPF Boundary
 
@@ -584,6 +634,7 @@ flowchart LR
 | --- | --- | --- | --- | --- | --- |
 | `active_profile_generations` | `Id128V1 -> u64` | Node policy generation owner | None | Node binding owner and effect gates | Pinned for the current kernel owner; stale-profile retirement removes the exact profile pointer after runtime absence |
 | `profile_generation_descriptors` | `u64 -> ProfileGenerationDescriptorV1` | Node policy generation owner | None | Node recovery, binding owner, and effect gates | Pinned until generation retirement and reference readback permit removal |
+| `process_generation_migrations` | `ProcessGenerationMigrationKeyV1 -> ProcessGenerationMigrationV1` | Node policy generation owner | None | BPF effect, exec, fork, and io_uring gates | Pinned by the kernel owner; rows belong to the target generation and retire with that generation |
 | `execution_set_bindings` | `u64 cgroup ID -> ExecutionSetBindingStateV1` | Node binding owner | Task lifecycle and prepared-container programs update exact transitions | Node recovery and effect gates | Pinned for the exact runtime cgroup lifetime |
 | `binding_activation_targets` | `BindingActivationTargetKeyV1 -> ExecutionSetBindingStateV1` | Node binding owner | None | Node recovery and runtime gate | Pinned until the exact binding and generation retire |
 | `pending_execs` | `u64 task cookie -> PendingExecV1` | None | Exec LSM and tracepoint programs update exact exec states | BPF effect and exec programs, node generation retirement, and node inspection | Pinned terminal evidence can outlive policy authority; only an in-flight state retains generation authority |
@@ -600,7 +651,7 @@ flowchart LR
 | Runtime effect gate | Existing file, network, IPC, process, device, privilege, and mount LSM hooks | Reads the exact binding, entry, generation, and deadline. It writes no runtime-object authority. | The exact prepared entry can finish setup. All other protected actors use normal policy or receive the configured denial. |
 | Exec evaluation | `lsm/bprm_check_security` | Reads the active signed policy. Writes the pending exec and reserves the exact task only for a policy-permitted exec. | A runtime-internal policy miss stays `PREPARED`. A policy-permitted exec can continue as `EXEC_PENDING`. |
 | Exec completion | `tracepoint/sched/sched_process_exec` and exec syscall exit tracepoints | Commits `ACTIVE` after a successful exec or restores `PREPARED` after a pre-commit failure. | `ACTIVE` closes prepared-runtime trust. A corrupt or expired transition stays fail-closed. |
-| Active application effect | Existing file, network, IPC, process, device, privilege, mount, exec, and io_uring hooks | Resolves explicit signed decisions and the stored admitted entry identity. File and executable hooks rebuild and verify the live mount topology synchronously. | An explicit matching Deny blocks before the default. An applicable exception can authorize that Deny. A missing decision allows only for the exact admitted entry. An unresolved path denies. |
+| Active application effect | Existing file, network, IPC, process, device, privilege, mount, exec, and io_uring hooks | Compares the active process generation with the published binding generation. A mismatch resolves one precompiled migration row and updates the process plus state vector under the process transition guard. File and executable hooks then rebuild and verify the live mount topology synchronously. | The same effect uses the replacement generation after migration. An explicit matching Deny blocks before the default. An applicable exception can authorize that Deny. A missing migration or unresolved path denies. |
 | Binding retirement | `raw_tracepoint/cgroup_release` | Changes a non-active prepared state to `EXPIRED` and clears the exec cookie. | The released cgroup cannot start or continue prepared-runtime work. |
 
 A bpffs pin keeps a map or link alive after the loader process exits. A
@@ -621,7 +672,13 @@ change. Review the exact map declarations and effect-gate lookups in
 
 This implementation adds the Kubernetes source types, Control store records,
 policy delivery messages, one authenticated health method, and the internal
-`PreparedContainer` ABI states. It uses the generated
+`PreparedContainer` ABI states. The live-update amendment adds the 32-byte
+`ProcessGenerationMigrationKeyV1` and the 16-byte
+`ProcessGenerationMigrationV1`. The generated C header and BPF static
+assertions verify those sizes. The key binds the source generation, target
+generation, source state bits, source role, and source process-state-vector
+handle. The value supplies the target state bits, target role, and target
+process-state-vector handle. It uses the generated
 `erebor.mithril.control.v1` contract. It does not add a public policy field,
 generic envelope, frame protocol, or compatibility dispatcher.
 
@@ -645,10 +702,14 @@ and coverage messages remain the Phase 6 types.
 | Compile or signature failure | No candidate or rollout is created for that source revision |
 | Partial or corrupt bundle | Node does not create a stageable pending activation |
 | Wrong tenant, target, boot, label, trust, or sequence | Service or node rejects before rollout advancement |
+| Replacement generation has no exact semantic migration row | BPF denies the current effect and does not evaluate a mixture of old and new policy rows |
+| Another process or exec transition holds the process guard | BPF denies the current effect; that process can retry migration at a later protected effect |
 | First `createRuntime` facts exceed stage bounds | The node records no stage and publishes no kernel state |
 | Early valid second `createRuntime` request | The socket holds the request while the exact candidate converges, within the configured deadline |
 | Missing, expired, or changed first stage | The second hook rejects before CRI inspection or kernel publication |
 | Missing candidate, silent node owner, or second socket owner | The bounded socket or OCI deadline returns denial; the runtime does not receive an allow result |
+| Node admission is unavailable during an exact Control or Node recovery | The retained gate permits only a manifest-bound command and security-sensitive OCI shape; it does not check an executable digest |
+| Recovery command, user, capabilities, namespaces, mount set, or access mode differs | The retained gate denies before the process starts |
 | Malformed, mismatched, changed, or reused runtime identity | The node rejects without publishing or reusing a binding |
 | `PreparedContainer` deadline, held-TGID mismatch, wrong binding, wrong entry, or later external root | BPF denies and does not activate the application |
 | Runtime-created object after `ACTIVE` | The effect checks explicit policy and exception authority, then uses the exact admitted-entry default when no decision matches; no prepared-state grant remains |
@@ -685,14 +746,16 @@ and coverage messages remain the Phase 6 types.
 | mTLS identity, boot session, trust gate, policy chunk, acknowledgement, evidence replay, connection reuse, and service isolation | [Control TLS tests](../../../crates/mithril-node/tests/control_tls.rs) |
 | Reader queue capacity, transient lag, durable queue gap, WAL capacity policies, binary migration, acknowledgement reuse, and capacity metrics | [Node observation tests](../../../crates/mithril-node/src/observation.rs) and [WAL tests](../../../crates/mithril-node/src/observation/wal.rs) |
 | Incremental chunk assembly, complete desired inventory, signature and digest checks, pending recovery, old-session cleanup, stale-profile cleanup, exact target inspection, and acknowledgement replay | [Node policy delivery tests](../../../crates/mithril-node/src/policy_delivery.rs) |
-| Existing inactive generation, readback, probes, pointer activation, and terminal pending-exec retirement | [Node policy tests](../../../crates/mithril-node/src/policy.rs) |
+| Existing inactive generation, readback, probes, pointer publication, semantic migration rows, live reload, and terminal pending-exec retirement | [Node policy tests](../../../crates/mithril-node/src/policy.rs) |
+| Guarded process migration at effect, exec, fork, and io_uring gates | [BPF migration helper](../../../bpf/erebor-interceptor/programs/identity_maps.h), [effect gate](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h), and [task helper](../../../bpf/erebor-interceptor/programs/identity_task_helpers.h) |
 | Signed scheduling authority, exact policy and runtime identity, immutable two-hook stage matching, held-TGID publication, distinct container lifetime, active socket ownership, convergence hold, unavailable endpoint, and timeout denial | [Runtime admission and binding tests](../../../crates/mithril-node/src/identity/binding.rs) |
 | OCI state parsing, cgroup-v2 path parsing, fact-only first hook, and held-PID second hook | [OCI adapter tests](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) |
-| Direct-runc PREPARED-to-ACTIVE transition, owner restart, terminal exec-failure evidence, generation retirement, independent roles, external-entry denial, and cleanup | [Runc entry-role VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) |
+| Retained integration publication, readback, exact Control and Node recovery shapes, version-independent matching, and changed-shape rejection | [Runtime integration tests](../../../crates/mithril-node/src/runtime_integration.rs), [runtime gate tests](../../../crates/mithril-node/src/runtime_gate.rs), and [retained-gate VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) |
+| Direct-runc PREPARED-to-ACTIVE transition, guarded running-process migration, replacement-generation child exec, owner restart, terminal exec-failure evidence, generation retirement, independent roles, external-entry denial, and cleanup | [Runc entry-role VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) |
 | Known-route selection before mount age, both Kubernetes mount orders, later in-container bind, wildcard denials, synchronous control allow, and exact evidence parsing | [Runc entry-role VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) and [protected-start lane](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
 | Fresh protected Pod, exact target and runtime binding, sole shell entry selector, later BusyBox applet default, explicit matching Deny, direct CRI external-entry denial, and retained-cluster resource replacement | [Protected-start lane](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
 | Webhook TLS, rules, deadlines, health probes, DaemonSet identity and hook inputs, and least-privilege RBAC | [Helm render test](../../../packaging/mithril/helm/tests/verify.sh) |
-| Exact two-node target, task lifetime, Node UID replacement, host epoch, selector lifecycle, exception target retirement, desired-inventory cleanup, and no-root inspection | [Physical fixture](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
+| Exact two-node target, live running-process migration, task lifetime, Node UID replacement, host epoch, selector lifecycle, exception target retirement, desired-inventory cleanup, retained integration recovery, and no-root inspection | [Physical fixture](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
 | Independent operator flow for exact target, runtime lifetime, exception target retirement, desired-inventory cleanup, restart, and fresh root | [Manual example](../../../examples/mithril-kubernetes-convergence-manual/run.sh) |
 
 Current focused checks passed:
@@ -711,49 +774,39 @@ VM harness behavior checks passed.
 rtk bash examples/mithril-kubernetes-convergence-manual/test.sh
 Manual example behavior checks passed.
 
-rtk env MITHRIL_VM_REUSE_IMAGES=false crates/mithril-e2e/harness/vm/two-node-convergence.sh --reuse-environment /tmp/mithril-phase-6-2-full-convergence-reuse51-inventory-retry-20260828/retained-environment.json --output-directory /tmp/mithril-phase-6-2-full-convergence-reuse52-terminal-retirement-20260828
+rtk env MITHRIL_VM_SSH_USER=ubuntu MITHRIL_VM_SSH_PRIVATE_KEY=/home/navid/.ssh/id_rsa crates/mithril-e2e/harness/vm/two-node-convergence.sh --output-directory target/mithril-generation-migration-kubernetes-20260902-d --reuse-environment target/mithril-generation-migration-kubernetes-20260902-c/retained-environment.json --keep-vms
 Two-node Kubernetes policy convergence passed.
 ```
 
-The current known-route lightweight case passed in retained VM
-`mithril-runtime-qualification-3504827`. Its evidence is
-`/var/tmp/mithril-runtime-qualification-3504827/runc-entry-roles-oci66`.
-It denied both Kubernetes mount orders, the later in-container bind,
-`/home/*/secrets`, and `/srv/**/secrets`. It allowed the unrelated control path
-and the other role. It also passed owner restart and pinned-program upgrade.
+The current direct-runc case passed in retained VM
+`mithril-runtime-qualification-3504827`. Its result is
+`/var/tmp/mithril-runtime-qualification-3504827/generation-migration-runc-repro-run9-20260902/evidence/runc-entry-role-runtime-probe.json`.
+The same application process used generation 1 before replacement. Its next
+protected effect migrated it to generation 2. A later child exec used
+generation 2. The case also passed both Kubernetes mount orders, the later
+in-container bind, wildcard denials, the unrelated control path, owner restart,
+generation retirement, pinned-program upgrade, and owned-resource cleanup.
 
-The paired current-source Kubernetes protected-start case passed with
-`--protected-start-only --reuse-environment`. Its evidence is
-`/tmp/mithril-route-synchronous-parser-fixed-20260901`. The marker oracle
-recorded the same five denials and `CONTROL_ALLOWED`. The protected Pod stayed
-Ready with zero restarts. The capture contained nine application-role
-`PATH_TREE_POLICY_DENY` records. The structured parser accepts
-`kernel_result=-13` in the final field.
+The focused replacement-exception case passed. Its result is
+`target/mithril-replacement-generation-lightweight-20260902-r12/replacement-generation-exception-probe.json`.
+It proved that a running process uses an exception after migration to the
+active replacement generation.
 
-The direct-runc entry-role VM probe also passed with runc 1.3.4. Its result
-records libc and the ELF loader as root-filesystem dependencies that are absent
-from policy. The same probe restarted the node owners over pinned state. It
-then caused a real post-point-of-no-return exec failure. The terminal evidence
-remained readable while the inactive generation, cgroup, pin root, fixture
-root, and lease retired. The result is
-`/tmp/mithril-runc-terminal-regression-20260828/runc-entry-role-runtime-probe.json`.
+The complete two-node Kubernetes case passed on Kubernetes v1.35.5+k3s1 and
+containerd v2.2.3-k3s1. Its result is
+`target/mithril-generation-migration-kubernetes-20260902-d/two-node-convergence.json`.
+The same running application migrated to the replacement generation at its
+next protected effect. A later child exec used the replacement generation and
+kept the application role. The Pod stayed Ready with zero restarts. The run
+also passed runtime and Pod lifetime replacement, Node restart, Control
+restart, host reboot, exception lifecycle, desired-inventory cleanup, and
+fresh-root activation.
 
-The focused protected-start lane passed on Kubernetes v1.35.5+k3s1 and
-containerd 2.2.3-k3s1. It reused the two owned VMs and their K3s cluster. It
-removed the prior Mithril and protected-workload resources before it installed
-their replacements. Fresh Pod UID
-`078ffde6-6ef9-4268-a7da-3a398e2f205e` ran as container
-`05bb1cc19d8b5bed04ae9058053cd907effcb18956ab65162f67f75e2daa707e`.
-Policy revision
-`5c8ab1236e1d26a7bb8ec0b9bed7bda91bdabfebd669c41533c244da957afb5d`
-activated binding `0044aed1-8c6e-877a-a0e6-84fffdaf54c9`. The policy used
-`/bin/sh` as its sole execution selector. Later BusyBox applet execs received
-`APPLICATION_DEFAULT_ALLOW` without an exact object key or composite atom.
-The explicit matching Deny blocked the protected target. A direct CRI exec
-into the same container cgroup failed with `UNSUPPORTED_OBJECT`,
-`DENIED_BEFORE_EFFECT`, and kernel result `-13`. It did not create its marker.
-Exact object matching was not requested. The result is
-`/tmp/phase-6-2-shell-only-entry-20260825-run13/protected-start-result.json`.
+The retained runtime gate result is
+`target/mithril-generation-migration-kubernetes-20260902-d/runc-retained-runtime-gate-probe.json`.
+It allowed exact Control, Node, and installer recovery shapes without an
+executable digest. It allowed version-changed Control and Node binaries with
+the same exact shapes. It rejected changed shapes before process start.
 
 These checks execute production owners and fixture command paths. The shell
 behavior suites do not parse Rust or shell source as a capability oracle. They
@@ -761,23 +814,24 @@ do not replace the physical fixture or manual run.
 
 ## Verification Limits
 
-The recorded complete automated two-node fixture passed for its recorded
-source state. It covered exact target, runtime task, exception target
-retirement, desired-inventory cleanup, restart, fresh-root activation,
-same-name Node UID replacement, DaemonSet exclusion and re-entry, and a host
-boot and label-epoch change. Its final fresh Node Pods were ready with zero
-container restarts and one Control connection each. The result is
-`/tmp/mithril-phase-6-2-full-convergence-reuse52-terminal-retirement-20260828`.
+The current complete automated two-node fixture passed for the changed
+production and harness source. It covered exact target, running-process
+migration, runtime task replacement, exception target retirement,
+desired-inventory cleanup, restart, fresh-root activation, same-name Node UID
+replacement, DaemonSet exclusion and re-entry, and a host boot and label-epoch
+change. Its final fresh Node Pods were ready with zero container restarts and
+one Control connection each. The result is
+`target/mithril-generation-migration-kubernetes-20260902-d`.
 
-The current working tree passed the focused paired route case. It did not rerun
-the complete two-node sequence. The two retained Kubernetes VMs and the
-lightweight VM remain available. No verification step destroyed them.
+The two retained Kubernetes VMs and the lightweight VM remain available. No
+verification step destroyed them.
 
 The direct lane and Kubernetes fixture close the previous stock-runtime
 regression without a runtime-specific operation list, dependency allow rules,
-or an object-authority map. The independent manual example,
-watch-compaction, network-partition, storage-outage, physical evidence-failure,
-and final-uninstall variants remain `Not run`. There is no new performance
+or an object-authority map. The independent manual result applies to its
+recorded source. The watch-compaction, network-partition, storage-outage,
+physical evidence-failure, version-changed Kubernetes recovery, and authorized
+final-decommission variants remain `Not run`. There is no new performance
 result.
 
 This work adds no Appendix C fixture ID. Phase 7 graph and finding behavior is
@@ -796,7 +850,8 @@ not present.
 - [ ] Trace one source revision through compilation, signature, and exact-node delivery.
 - [ ] Verify that a duplicate profile or workload claim creates no candidate.
 - [ ] Trace one candidate through bounded chunks and exact node digest readback.
-- [ ] Trace node activation through inactive state, probes, and one pointer compare-and-swap.
+- [ ] Trace node activation through inactive state, probes, readback, and active-pointer publication.
+- [ ] Trace one running process through guarded migration to a replacement generation at its next protected effect.
 - [ ] Trace one held OCI PID through CRI verification and exact cgroup publication.
 - [ ] Trace the held entry-time view into one `canonical_mount_roots` row.
 - [ ] Trace one later bind through the BPF mutation guard and live mount scan.
@@ -825,11 +880,10 @@ not present.
 
 ## Source State
 
-This guide covers the working tree based on `63ffb57328ab` on 2026-09-01. The
-working tree adds the known-route source policy, held-entry route publication,
-synchronous BPF topology reconstruction, paired lightweight condition, and
-paired Kubernetes evidence capture. Reviewers must compare this guide with the
-checked-out source. The physical verification limits above remain part of the
-result.
+This guide covers the working tree based on `d9136aa4` on 2026-09-02. The
+working tree adds exact shape-bound runtime recovery and guarded live-process
+generation migration. It also adds the paired lightweight and Kubernetes
+proofs. Reviewers must compare this guide with the checked-out source. The
+physical verification limits above remain part of the result.
 
 Completion of this work does not authorize the next phase.

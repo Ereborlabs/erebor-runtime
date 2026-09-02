@@ -46,6 +46,8 @@ static __noinline int snapshot_io_uring_actor(
         !id128_equal(&coordinate->process_state_id,
                      &label->process_state_id) ||
         refresh_real_parent(task, label, coordinate, scratch) ||
+        (config->effect_policy_enabled &&
+         migrate_process_generation(config, binding, label, process, scratch)) ||
         snapshot_process_state(process, &scratch->process))
         return -EACCES;
     process = &scratch->process;
@@ -91,7 +93,7 @@ static __noinline int snapshot_io_uring_actor(
         generation->label_epoch != config->label_epoch ||
         !id128_equal(&generation->node_boot_id, &config->node_boot_id) ||
         !id128_equal(&generation->profile_id, &binding->profile_id) ||
-        !task_refs || __sync_fetch_and_add(task_refs, 0) == 0)
+        !task_refs)
         return -EACCES;
 
     __builtin_memset(actor, 0, sizeof(*actor));

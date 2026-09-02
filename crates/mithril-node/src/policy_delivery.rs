@@ -5701,6 +5701,9 @@ mod tests {
             .is_err());
 
         restarted.acknowledge_exception_control(&revocation.candidate_content_id)?;
+        let retained_status = super::policy_delivery_status(directory.path())?;
+        assert_eq!(retained_status.revoked_exception_count, 1);
+        assert_eq!(retained_status.exception_ack_pending_count, 0);
         let later_revocation = ExceptionDeliveryCandidateV1::sign(
             &deletion,
             scheduled.candidate.candidate_content_id.clone(),

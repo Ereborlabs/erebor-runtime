@@ -103,6 +103,14 @@ spec:
             - {{ .Values.node.logFilter | quote }}
             - --decommission-state-directory
             - /var/lib/mithril
+            - --control-read-only-mount
+            - /etc/mithril
+            - --control-read-write-mount
+            - /var/lib/mithril-control
+{{- if .Values.control.admission.enabled }}
+            - --control-read-only-mount
+            - /etc/mithril/admission-tls
+{{- end }}
 {{- range $mount := list
       (printf "%s=/etc/mithril/node.json" $.Values.node.configHostPath)
       (printf "%s=/etc/mithril/identity" $.Values.node.identityHostPath)

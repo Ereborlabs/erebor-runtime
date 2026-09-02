@@ -204,6 +204,11 @@ default_postures:
     unknown_restricted_role_id: runtime-external
 notification_routes: []
 response_bindings: []
+file_exception_grants:
+  - grant_id: replacement-secret-open
+    denied_file_rule_ids: [deny-replacement-secret-open]
+    maximum_duration_ns: 240000000000
+    maximum_uses: 1
 exceptions:
   - exception_id: bounded-secret-write-open
     exception_instance_id: 88888888-8888-4888-8888-888888888889
@@ -554,7 +559,54 @@ rules:
         required_process_state_ids: [base]
         forbidden_process_state_ids: []
       effect_families: [FILE]
-      operation_ids: [MMAP_READ, MMAP_WRITE, MPROTECT, OPEN_READ, READ]
+      operation_ids: [MMAP_READ, MMAP_WRITE, MPROTECT, READ]
+      object:
+        kind: OBJECT_CLASSES
+        object_class_ids: [MANUAL_SECRET]
+      binding_lifecycle_states: [ACTIVE]
+      required_proof:
+        source_authority: [KERNEL_DECISION]
+        local_subject_binding: [EXACT_TASK]
+        remote_subject_binding: []
+        operation_result_authority: [PRE_EFFECT_DECISION]
+        temporal_coverage: [COMPLETE]
+        integrity: [LOCAL_ATTESTED]
+    requested_disposition: DENY
+    errno: EACCES
+    finding:
+      reason_code: MANUAL_SECRET_READ
+      severity: CRITICAL
+      route_ids: []
+      evidence_level: STANDARD
+      title_template_id: null
+    response_binding_ids: []
+    fallback_by_condition: []
+    budgets:
+      rate_limits: []
+      concurrency_limits: []
+      maximum_lifetime: null
+      automatic_response_limit: null
+    overrides_rule_ids: []
+    exception_ids: []
+    valid_from_utc_ns: null
+    valid_until_utc_ns: null
+  - schema_version: 1
+    rule_id: deny-replacement-secret-open
+    enabled: true
+    priority: 0
+    evaluation_stage: LOCAL_PRE_EFFECT
+    match:
+      kind: LOCAL_PRE_EFFECT
+      subject:
+        workload_selector_ids: [worker]
+        protected_scope_ids: [33333333-3333-4333-8333-333333333333]
+        execution_set_ids: [44444444-4444-4444-8444-444444444444]
+        entry_kind_ids: [EXTERNAL_RUNTIME_UNKNOWN]
+        role_ids: [runtime-external]
+        required_process_state_ids: [base]
+        forbidden_process_state_ids: []
+      effect_families: [FILE]
+      operation_ids: [OPEN_READ]
       object:
         kind: OBJECT_CLASSES
         object_class_ids: [MANUAL_SECRET]

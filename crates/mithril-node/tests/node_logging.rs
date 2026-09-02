@@ -134,7 +134,6 @@ fn retained_hostile_denial_logs_its_decision_code() -> TestResult {
             "version": 1,
             "entries": [{
                 "executable": "/usr/local/bin/mithril-node",
-                "executableSha256": "0".repeat(64),
                 "args": ["/usr/local/bin/mithril-node"],
                 "requiredMounts": [{"source": "/state", "destination": "/state", "readOnly": false}]
             }]

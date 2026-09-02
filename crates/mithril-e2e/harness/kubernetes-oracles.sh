@@ -59,6 +59,28 @@ assert_recreated_node_unbound() {
   ' <<<"$node_json" >/dev/null
 }
 
+exception_status_counter_advanced_by() {
+  local status_json=$1
+  local field=$2
+  local baseline=$3
+  local increment=$4
+  case $field in
+    consumed_exception_count|expired_exception_count|revoked_exception_count) ;;
+    *)
+      echo "invalid exception status counter: $field" >&2
+      return 2
+      ;;
+  esac
+  [[ $baseline =~ ^[0-9]+$ && $increment =~ ^[0-9]+$ ]] || {
+    echo "invalid exception status counter delta" >&2
+    return 2
+  }
+  local expected=$((baseline + increment))
+  jq -e --arg field "$field" --argjson expected "$expected" '
+    (.[$field] | type) == "number" and .[$field] == $expected
+  ' <<<"$status_json" >/dev/null
+}
+
 retained_mithril_state() {
   local environment=$1
 

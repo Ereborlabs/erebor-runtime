@@ -2028,15 +2028,22 @@ impl NodeChassis {
         let next_policy = if self.config.policy_candidates.is_empty() {
             None
         } else {
-            Some(
-                crate::NodePolicyGenerationOwner::load_and_install_for_bindings(
+            Some(match self.policy.as_ref() {
+                Some(policy) => policy.reload_and_install_for_bindings(
                     &self.config,
                     host,
                     &self.bindings,
                     self.node_boot_id,
                     self.label_epoch,
                 )?,
-            )
+                None => crate::NodePolicyGenerationOwner::load_and_install_for_bindings(
+                    &self.config,
+                    host,
+                    &self.bindings,
+                    self.node_boot_id,
+                    self.label_epoch,
+                )?,
+            })
         };
         if next_policy.is_some() || generation_retired {
             self.policy = next_policy;
@@ -2478,13 +2485,22 @@ impl NodeChassis {
             }
             .build()
         })?;
-        let owner = crate::NodePolicyGenerationOwner::load_and_install_for_bindings(
-            &prepared.config,
-            host,
-            &self.bindings,
-            self.node_boot_id,
-            self.label_epoch,
-        )?;
+        let owner = match self.policy.as_ref() {
+            Some(policy) => policy.reload_and_install_for_bindings(
+                &prepared.config,
+                host,
+                &self.bindings,
+                self.node_boot_id,
+                self.label_epoch,
+            )?,
+            None => crate::NodePolicyGenerationOwner::load_and_install_for_bindings(
+                &prepared.config,
+                host,
+                &self.bindings,
+                self.node_boot_id,
+                self.label_epoch,
+            )?,
+        };
         self.identity.set_effect_policy(host, true)?;
         self.bindings
             .adopt_activated_profiles(host, &prepared.config.workload_bindings)?;

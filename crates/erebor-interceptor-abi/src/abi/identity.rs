@@ -629,6 +629,28 @@ pub struct BindingActivationTargetKeyV1 {
 }
 
 #[repr(C)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
+pub struct ProcessGenerationMigrationKeyV1 {
+    pub source_profile_generation_ref_id: u64,
+    pub target_profile_generation_ref_id: u64,
+    pub source_state_bits: u64,
+    pub source_role_id: u32,
+    pub source_process_state_vector_id: u32,
+}
+
+#[repr(C)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
+pub struct ProcessGenerationMigrationV1 {
+    pub target_state_bits: u64,
+    pub target_role_id: u32,
+    pub target_process_state_vector_id: u32,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes)]
 pub struct BoundedAdministrativeArgvV1 {
     pub argument_count: u16,
@@ -998,6 +1020,8 @@ mod tests {
         assert_eq!(size_of::<ExactExecutableCandidateV1>(), 32);
         assert_eq!(size_of::<ProcessExecutionInstanceV1>(), 80);
         assert_eq!(size_of::<ExecutionSetBindingStateV1>(), 224);
+        assert_eq!(size_of::<ProcessGenerationMigrationKeyV1>(), 32);
+        assert_eq!(size_of::<ProcessGenerationMigrationV1>(), 16);
         assert_eq!(size_of::<IdentityRuntimeConfigV1>(), 48);
         assert_eq!(size_of::<EntryAdmissionRuleV1>(), 64);
         assert_eq!(size_of::<DeclaredEntryRequestV1>(), 4_104);

@@ -852,6 +852,10 @@ static __always_inline int create_native_child(
                                 &parent_label->entry_instance_id);
     if (!parent_process || !parent_vector || !entry)
         return identity_deny(config);
+    if (config->effect_policy_enabled &&
+        migrate_process_generation(config, binding, parent_label,
+                                   parent_process, scratch))
+        return identity_deny(config);
     domain = bpf_map_lookup_elem(&authority_domains,
                                  &parent_process->authority_domain_id);
     if (!domain ||
@@ -891,8 +895,7 @@ static __always_inline int create_native_child(
     profile_task_refs = bpf_map_lookup_elem(
         &profile_generation_task_refs,
         &scratch->label.birth_profile_generation_ref_id);
-    if (!profile_task_refs ||
-        __sync_fetch_and_add(profile_task_refs, 0) == 0)
+    if (!profile_task_refs)
         goto fail_locked;
     if (allocate_id(config, &task_identity))
         goto fail_locked;

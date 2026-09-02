@@ -341,8 +341,8 @@ the named phase file contains a matching deliverable and proof.
 | Appendix D sources | 0 | pinned digest/license/provenance/source-evidence registry |
 
 Phase 6.2 owns the exact hostile privileged-Pod admission, the retained
-containerd default-runtime gate for that OCI shape, exact measured Mithril
-recovery, and the retained BPF incident floor for non-CRI bypasses. Helm is the
+containerd default-runtime gate for that OCI shape, exact OCI-shape-bound
+Mithril recovery, and the retained BPF incident floor for non-CRI bypasses. Helm is the
 installer, but containerd owns hook invocation after installation. The design
 does not retain an NRI service and does not require a RuntimeClass. Phase 8
 owns signed privileged exceptions and the complete typed runtime matrix. Phase

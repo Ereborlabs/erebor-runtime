@@ -20,8 +20,8 @@ the exact policy only to that node and that the initial container process does
 not run before local policy and cgroup-binding activation. Prove that one base
 policy and one bounded file exception converge without giving Control ownership
 of node activation or exception consumption. Prove that containerd retains the
-exact incident gate after ordinary Helm deletion and permits only measured
-Mithril recovery. Prove that Phase 6 evidence reaches the production Control
+exact incident gate after ordinary Helm deletion and permits only exact
+OCI-shape-bound Mithril recovery. Prove that Phase 6 evidence reaches the production Control
 transaction before the node truncates its WAL.
 
 ## Current Physical Result
@@ -274,10 +274,11 @@ run.
     mounted at `/host`, and a command that reads `/host/etc/shadow` before it
     writes a marker. Verify that the Pod does not write the marker. Verify that
     the retained runtime gate records a start rejection.
-24. Reinstall the same Mithril release. Verify that only the exact measured
-    Mithril executable and security-sensitive OCI shape can start while the
-    node admission socket is absent. Change one recovery field and verify that
-    the forged recovery Pod rejects. After recovery, rerun every real
+24. Reinstall the same Mithril release. Verify that only the exact Mithril
+    recovery command and security-sensitive OCI shape can start while the node
+    admission socket is absent. Verify that a version-changed Node and Control
+    binary can start with that same shape. Change one recovery field and verify
+    that the forged recovery Pod rejects. After recovery, rerun every real
     Kubernetes scenario in this runbook. Do not replace healthy VMs or the
     Kubernetes cluster.
 25. Submit the exact signed decommission authorization. Verify that the owner
@@ -321,7 +322,7 @@ run.
 | Administrative entry | Only the signed one-use administrative slot installs the administrative role. An applicable exception can authorize only its exact compiled Deny. |
 | Gate failure | The runtime reports start failure at the bounded hook deadline and no application marker runs |
 | Helm deletion | The containerd default-runtime gate and pinned BPF state remain on both nodes; the exact hostile process does not write its marker |
-| Mithril recovery | Only the exact measured Mithril executable and security-sensitive OCI shape start without the node socket; a changed field rejects |
+| Mithril recovery | Only the exact Mithril recovery command and security-sensitive OCI shape start without the node socket; a changed field rejects; no executable digest grants or denies recovery |
 | Direct non-CRI bypass | The retained BPF floor denies the exact hostile task's first covered effect |
 | Authorized decommission | Only the signed node authorization removes marked runtime files and pins; containerd restart and readback prove removal |
 | Runtime lifetime | Container restart and Pod UID replacement create new authority and cannot reuse the old binding |

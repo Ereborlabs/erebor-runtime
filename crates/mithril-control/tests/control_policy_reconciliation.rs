@@ -368,9 +368,10 @@ fn prepare_exception(store: &ControlStore) -> TestResult<PreparedException> {
 }
 
 #[test]
-fn kubernetes_outage_exception_uses_current_policy_with_admission_provenance() -> TestResult {
+fn kubernetes_outage_exception_uses_current_grant_with_admission_provenance() -> TestResult {
     let directory = TempDir::new()?;
-    let owner = make_owner(ControlStore::open(directory.path())?);
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
     let policy = policy()?;
     let policy_v1 = resource(&policy, "profile", OBJECT_UID, 1, false)?;
     let initial = owner.reconcile(&policy_v1, NAMESPACE_UID, &inventory(&"1".repeat(64))?, NOW)?;
@@ -389,7 +390,9 @@ fn kubernetes_outage_exception_uses_current_policy_with_admission_provenance() -
         NOW + 2,
     )?)?;
 
-    let policy_v2 = resource(&policy, "profile", OBJECT_UID, 2, false)?;
+    let mut current_policy = policy.clone();
+    current_policy.exception_grants[0].maximum_duration = "3m".to_owned();
+    let policy_v2 = resource(&current_policy, "profile", OBJECT_UID, 2, false)?;
     let bound_v2 = owner.reconcile(&policy_v2, NAMESPACE_UID, &inventory, NOW + 3)?;
     let current_source_revision_id = bound_v2.source_revision.policy_source_revision_id.clone();
     assert_ne!(current_source_revision_id, admitted_source_revision_id);
@@ -399,12 +402,39 @@ fn kubernetes_outage_exception_uses_current_policy_with_admission_provenance() -
         NOW + 4,
     )?)?;
 
-    let activated = owner.reconcile_exception(
-        &exception_resource(EXCEPTION_UID, false)?,
-        NAMESPACE_UID,
-        &inventory,
-        NOW + 5,
-    )?;
+    let mut inventory = inventory;
+    let identity = inventory[0]
+        .kubernetes
+        .as_mut()
+        .ok_or("the Kubernetes target fixture has no provenance")?;
+    identity.node_boot_id = "02".repeat(16);
+    identity.label_epoch = 2;
+    inventory[0].workload_binding_generation_digest = workload_target_fact_digest(&inventory[0])?;
+    let rebound_v2 = owner.reconcile(&policy_v2, NAMESPACE_UID, &inventory, NOW + 5)?;
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &rebound_v2.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 6,
+    )?)?;
+
+    drop(owner);
+    drop(store);
+    let owner = make_owner(ControlStore::open(directory.path())?);
+
+    let mut oversized = exception_resource("30000000-0000-4000-8000-000000000003", false)?;
+    oversized.metadata.name = Some("temporary-file-access-oversized".to_owned());
+    oversized.spec.requested_duration = "4m".to_owned();
+    let error = match owner.reconcile_exception(&oversized, NAMESPACE_UID, &inventory, NOW + 7) {
+        Ok(_) => {
+            return Err("a four-minute request exceeded the current three-minute grant".into())
+        }
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("active base policy"));
+
+    let mut exception = exception_resource(EXCEPTION_UID, false)?;
+    exception.spec.requested_duration = "2m".to_owned();
+    let activated = owner.reconcile_exception(&exception, NAMESPACE_UID, &inventory, NOW + 7)?;
     assert_eq!(
         activated.candidate.base_policy_source_revision_id,
         current_source_revision_id
@@ -417,6 +447,13 @@ fn kubernetes_outage_exception_uses_current_policy_with_admission_provenance() -
             .as_ref()
             .map(|identity| identity.policy_source_revision_id.as_str()),
         Some(admitted_source_revision_id.as_str())
+    );
+    assert_eq!(
+        activated
+            .candidate
+            .valid_until_utc_ns
+            .saturating_sub(activated.candidate.issued_utc_ns),
+        120_000_000_000
     );
     Ok(())
 }

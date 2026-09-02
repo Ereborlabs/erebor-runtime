@@ -111,13 +111,13 @@ impl BpfPrototypeCompiler {
         &self,
         output_directory: &Path,
     ) -> Result<CompileRecordV1> {
-        // The optimizer change gives the upgrade probe different program tags without changing the map ABI.
+        // This optimizer variant changes program tags without changing the map ABI.
         self.compile_source_for(
             output_directory,
             BpfTargetArchitecture::for_host()?,
             "programs/identity.bpf.c",
             "retained-identity.bpf.o",
-            "-O1",
+            "-O3",
         )
     }
 

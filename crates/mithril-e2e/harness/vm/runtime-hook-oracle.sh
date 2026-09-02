@@ -96,9 +96,17 @@ case ${1:-} in
       (.entries | length) == 2 and
       all(.entries[];
         (.executable | startswith("/")) and
-        (.executableSha256 | test("^[0-9a-f]{64}$")) and
+        (has("executableSha256") | not) and
         (.args | length) > 0 and
         (.args[0] == .executable) and
+        (.requiredMounts | length) > 0) and
+      (.controlEntries | length) == 1 and
+      all(.controlEntries[];
+        (.executable | startswith("/")) and
+        (has("executableSha256") | not) and
+        (.args | length) > 0 and
+        (.args[0] == .executable) and
+        .uid > 0 and .gid > 0 and
         (.requiredMounts | length) > 0)
     ' "$recovery" >/dev/null
     jq -e --arg socket "$socket" --arg timeout "$timeout_ms" \

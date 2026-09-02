@@ -883,7 +883,9 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
     process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
     entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
     snapshot = scratch ? &scratch->process : NULL;
-    if (snapshot_process_state(process, snapshot) ||
+    if ((config->effect_policy_enabled &&
+         migrate_process_generation(config, binding, label, process, scratch)) ||
+        snapshot_process_state(process, snapshot) ||
         snapshot->state != process_security_state_kind_v1_active ||
         !snapshot->live_thread_refs ||
         !entry || entry->admission_state != entry_admission_state_v1_committed ||
@@ -920,8 +922,7 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
             snapshot->process_state_vector_id ||
         process_vector->profile_generation_ref_id !=
             snapshot->active_profile_generation_ref_id ||
-        !profile_task_refs ||
-        __sync_fetch_and_add(profile_task_refs, 0) == 0)
+        !profile_task_refs)
         return identity_deny(config);
     if (snapshot->exec_without_transition_task_cookie)
         return snapshot->exec_without_transition_task_cookie ==

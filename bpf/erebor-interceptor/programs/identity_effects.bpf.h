@@ -492,6 +492,8 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
     entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
     if (!coordinate || coordinate->state != task_coordinate_state_v1_runnable ||
         !scratch || refresh_real_parent(task, label, coordinate, scratch) ||
+        (config->effect_policy_enabled &&
+         migrate_process_generation(config, binding, label, process, scratch)) ||
         snapshot_process_state(process, &scratch->process) ||
         scratch->process.state != process_security_state_kind_v1_active ||
         !scratch->process.live_thread_refs || !entry ||
@@ -534,7 +536,7 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
         process_vector->label_epoch != scratch->process.label_epoch ||
         !id128_equal(&process_vector->node_boot_id,
                      &scratch->process.node_boot_id) ||
-        !profile_task_refs || __sync_fetch_and_add(profile_task_refs, 0) == 0)
+        !profile_task_refs)
         return identity_or_prior_effect_result(
             config, scratch, ret,
             effect_observation_reason_v1_corrupt_identity_or_generation);

@@ -14,13 +14,16 @@ Phase 6.2 is **Not done**. The approved API correction replaces the flattened
 `WorkloadProtectionException`. The branch now implements both resources,
 their lowering, their durable Control and node lifecycles, and current
 automated and manual fixture flows. The complete automated two-node physical
-fixture and the independent manual case passed on the current source. The
+fixture passed on the current changed source. The independent manual case
+passed on its recorded source. The
 approved policy amendment replaces `initialRole` with an explicit application
 entry, adds declared additional entries and one approved administrative entry,
 and retains `externalRole`. The Kubernetes fixture uses this schema and proved
-its declared entries. The physical evidence-failure, watch-compaction,
-network-partition, storage-outage, retained-gate uninstall, measured recovery,
-and authorized-decommission cases remain `Not run`.
+its declared entries. The current fixture also proves guarded migration of one
+running process to a replacement base-policy generation. The physical
+evidence-failure, watch-compaction, network-partition, storage-outage,
+version-changed Kubernetes recovery, and authorized final-decommission cases
+remain `Not run`.
 
 The direct stock-`runc` application-start lane proves the `PREPARED` to
 `ACTIVE` transition and dependency access with libc and the ELF loader absent
@@ -66,8 +69,8 @@ and cgroup binding.
 | `D6.2.8` | **Implemented, automated, and physically exercised.** | The non-Kubernetes VM and complete Kubernetes fixtures proved independent and reusable entry roles, application start, PostStart, PreStop, exec probes, approved administrative exec, external-entry denial, and scenario cleanup. |
 | `D6.2.9` | **Implemented, automated, and physically exercised.** | The fixture passed quarantine, same-name Node UID replacement, selector re-entry, node process restart, and host reboot with a new boot and label epoch. |
 | `D6.2.10` | **Implemented, automated, and physically exercised.** | Policy and container matching, immutable image pins, Pod mutation, update validation, binding validation, and scheduler choice passed through the current physical admission flow. |
-| `D6.2.11` | **Partial.** | Exact selected-node delivery, activation, staged runtime fact equality, cgroup binding, runtime lifetime replacement, desired-inventory cleanup, and stock-runtime process release passed physically. The retained containerd default-runtime gate, exact incident denial, measured recovery, and direct non-CRI BPF fallback remain unproved. |
-| `D6.2.12` | **Partial.** | The current chart, automated fixture, and manual case are implemented. The chart must still install and read back the retained containerd fragment, OCI base spec, hook, and recovery manifest. Ordinary uninstall, exact recovery, forged recovery rejection, and authorized decommission remain `Not run`. |
+| `D6.2.11` | **Partial.** | Exact selected-node delivery, activation, guarded live-process migration, staged runtime fact equality, cgroup binding, runtime lifetime replacement, desired-inventory cleanup, and stock-runtime process release passed physically. The retained containerd default-runtime gate and exact socket-free Control and Node recovery passed for the current image shapes. The version-changed Kubernetes recovery and direct non-CRI BPF fallback remain unproved. |
+| `D6.2.12` | **Partial.** | The current chart installs and reads back the retained containerd fragment, OCI base spec, hook, and recovery manifest. Ordinary uninstall retained that integration, and the current Control and Node shapes recovered through it. The direct-runc probe permits version-changed binaries for exact shapes and rejects changed shapes. The version-changed Kubernetes recovery and authorized final decommission remain `Not run`. |
 | `D6.2.13` | **Implemented, automated, and physically exercised.** | The Kubernetes transaction proved every declared entry, the approved administrative entry, unmatched external denial, and no role inheritance. |
 
 ## Automated Proof Matrix
@@ -77,7 +80,8 @@ and cgroup binding.
 | Public policy schema | The stored `WorkloadProtectionPolicy.spec` and offline form lower to the same internal policy. | Unknown, internal-only, unqualified, oversized, or conflicting fields reject before a candidate exists. |
 | Entry references and roles | The application entry and every declared additional entry resolve one named `Allow Execute` rule in their own role. The administrative entry resolves one role, and `externalRole` stays restricted. | A missing or cross-role rule, duplicate reference, unsupported kind, non-Execute rule, recursive entry rule, ambiguous match, implicit role inheritance, or permission union rejects. |
 | Static roles and effects | Every admitted entry receives only its referenced role, and supported path, address, Unix-stream, signal, and ptrace rules lower to exact cells. | Native transitions, semantic token or image targets, service destinations, device, privilege, mount, finding, response, proof, errno, or node-selector fields reject. Recursive allow rejects until physical qualification. |
-| Bounded exception | An API-server-authorized request activates one precompiled file grant for the exact Pod and container without migrating the base generation, within the duration and use limits. | Wrong writer, policy generation, grant, Pod UID, container, Node, boot, duration, uses, rule family, stale object, overlap, replay, or user-supplied authority material rejects. |
+| Bounded exception | An API-server-authorized request activates one precompiled file grant for the exact Pod and container without creating another base generation, within the duration and use limits. A running process uses the grant after BPF migrates that process to the active base generation at its next protected effect. | Wrong writer, policy generation, grant, Pod UID, container, Node, boot, duration, uses, rule family, stale object, overlap, replay, missing process migration, or user-supplied authority material rejects. |
+| Running policy update | Node builds and proves one unreachable immutable generation, publishes it for the live binding, and BPF migrates each running process under its transition guard at that process's next protected effect. | A partial generation is never published. A missing semantic role or process-state translation, concurrent transition, or incomplete target denies the effect. There is no workload-wide migration transaction. |
 | DaemonSet derivation | Selector and required affinity accept the same labeled nodes as the supported DaemonSet template. | Unsupported or changed constraints do not leave a stale ready projection. |
 | Node quarantine | A matching node stays tainted until its authenticated current-boot session reports complete readiness. | A missing, stale, wrong-name, wrong-UID, wrong-boot, or unhealthy session cannot remove the taint. A replacement Node cannot inherit readiness by name. |
 | Pod match | One same-namespace policy match and exactly one container-entry match for every container produce a protected admission result. | Zero policy matches do not mutate the Pod. Multiple policies, unmatched or multiply matched containers, mutable image matches, and caller-supplied Mithril annotations reject. |
@@ -87,20 +91,18 @@ and cgroup binding.
 | Workload target | Persisted Pod UID, selected node, controller, ServiceAccount, container, and digest create one immutable exact target. | Pod deletion, UID reuse, node change, or container change retires the old target. |
 | Policy delivery | Only the selected node can inventory, fetch, verify, and acknowledge the target-bound candidate. | Every other node and boot rejects the candidate even when it has the same signed policy artifact. |
 | Runtime gate | The first `createRuntime` call stages facts only. The second call stays held until the node publishes and reads back the exact cgroup, TGID, binding, policy generation, and `PreparedContainer` state. | Missing candidate, changed stage, wrong policy annotations, TGID or cgroup mismatch, timeout, disconnect, active socket-owner replacement, and restart reject without release. |
-| Retained default-runtime gate | Containerd's default CRI runtime invokes the retained hook without NRI or a RuntimeClass. The exact hostile OCI shape rejects before its process runs. Exact measured Mithril recovery succeeds when the node socket is absent. | Ordinary Helm deletion leaves the integration active. A changed executable measurement or security-sensitive recovery field rejects. A direct non-CRI bypass reaches the retained BPF incident floor. |
+| Retained default-runtime gate | Containerd's default CRI runtime invokes the retained hook without NRI or a RuntimeClass. The exact hostile OCI shape rejects before its process runs. Exact OCI-shape-bound Mithril recovery succeeds when the node socket is absent. | Ordinary Helm deletion leaves the integration active. A changed recovery command or security-sensitive OCI field rejects. A direct non-CRI bypass reaches the retained BPF incident floor. |
 | Prepared container and entries | The exact prepared binding permits runtime setup. The application entry activates the binding. A declared PostStart can commit before or after activation. Later declared entries and an approved administrative entry install only their own roles. | Another binding, unmatched external root, ordinary administrative exec, failed or ambiguous entry match, expired state, or cgroup-only entry rejects. Explicit matching Deny remains effective, and runtime-created objects carry no separate grant. |
 | Retirement | A complete relist or target snapshot removes stale bundles from complete desired node inventory. The node retains live runtime protection and removes known local membership after runtime absence. A signed exception revocation closes only its runtime instance. | A partial relist, historical event, API loss, Control loss, or recreated exception cannot erase live base protection or restore consumed authority. |
 
 ## Physical Proof Matrix
 
 The physical result uses the current stock Kubernetes and OCI runtime
-extension points. The complete automated fixture passed with Kubernetes
-v1.35.5+k3s1 and containerd v2.2.3-k3s1. The result is
-`/tmp/mithril-phase-6-2-full-convergence-reuse52-terminal-retirement-20260828`.
-The current-source rerun passed on 2026-08-29. Its result is
-`/tmp/mithril-two-node-baseline3-20260829`. The run retained both owned VMs
-after it removed the scenario namespace, policies, exceptions, Pods, runtime
-classes, and marker state.
+extension points. The complete current-source fixture passed with Kubernetes
+v1.35.5+k3s1 and containerd v2.2.3-k3s1. Its evidence is
+`target/mithril-generation-migration-kubernetes-20260902-d`. The run retained
+both owned VMs after it removed the scenario namespace, policies, exceptions,
+Pods, runtime classes, and marker state.
 
 | Scenario | Result | Observation |
 | --- | --- | --- |
@@ -111,10 +113,11 @@ classes, and marker state.
 | Independent entry roles | **Pass** | The direct-runc VM and Kubernetes procedures proved five independent additional-entry roles, repeated PostStart, PreStop, all three exec-probe kinds, approved administrative exec, role isolation, and unmatched external denial. |
 | Independent manual case | **Pass** | The case selected `ubuntu-5775b0d0`, proved exact target and prepared-container activation, failed closed when runtime admission was unavailable, replaced the container lifetime and runtime binding, refused stale-root replay, and created a fresh root activation. Its trap removed the namespace and both RuntimeClasses. |
 | Runtime and policy lifecycle | **Pass** | The run proved task replacement, exception target retirement, desired-inventory cleanup, restart, no-root inspection, and fresh-root activation. |
+| Running policy update | **Pass** | Node published one complete replacement generation for the live binding. The same running application migrated at its next protected effect. A later child exec used the replacement generation. The Pod stayed Ready with zero restarts during migration. |
 | Node lifecycle | **Pass** | The run proved session loss, quarantine, same-name Node UID replacement, DaemonSet exclusion and re-entry, node process restart, and host reboot. |
 | Evidence failure variants | **Not run** | Automated tests pass. Physical duplicate, gap, reorder, storage failure, restart, and WAL truncation remain required. |
 | Watch and outage variants | **Not run** | Physical complete and partial relist, Control outage, API outage, and mixed rollout remain required. |
-| Retained runtime integration | **Not run** | The physical run must retain healthy VMs and Kubernetes. It must remove only the Helm release and scenario Pods, read back the containerd default-runtime integration on both hosts, reject the exact hostile Pod, recover the exact Mithril Pods, reject a forged recovery, and remove the integration only through authorized decommission. |
+| Retained runtime integration | **Partial** | The current run removed the Helm release, retained and read back the host integration, and recovered the exact current Control and Node shapes. Its direct-runc probe allowed version-changed binaries for exact shapes and rejected changed recovery shapes. A Kubernetes run with version-changed images and the authorized final-decommission case remain required. |
 
 The procedure cleanup removed the test namespace and runtime classes. Control
 accepted the denial evidence before the node truncated the related WAL data.
@@ -138,34 +141,32 @@ and external entry schema and runtime transitions. They also prove complete
 desired-inventory validation, live-runtime retention, and crash-safe stale
 profile cleanup.
 
-The retained physical command passed:
+The current physical command passed:
 
 ```text
-rtk env MITHRIL_VM_REUSE_IMAGES=false crates/mithril-e2e/harness/vm/two-node-convergence.sh --reuse-environment /tmp/mithril-phase-6-2-full-convergence-reuse51-inventory-retry-20260828/retained-environment.json --output-directory /tmp/mithril-phase-6-2-full-convergence-reuse52-terminal-retirement-20260828
+rtk env MITHRIL_VM_SSH_USER=ubuntu MITHRIL_VM_SSH_PRIVATE_KEY=/home/navid/.ssh/id_rsa crates/mithril-e2e/harness/vm/two-node-convergence.sh --output-directory target/mithril-generation-migration-kubernetes-20260902-d --reuse-environment target/mithril-generation-migration-kubernetes-20260902-c/retained-environment.json --keep-vms
 ```
 
-The lightweight companion and current two-node rerun passed in this order:
+The focused and repository checks passed:
 
 ```text
-rtk bash examples/mithril-kubernetes-convergence-manual/test.sh
+rtk cargo test -p mithril-node live_process_migration_ -- --nocapture
+rtk bash .github/scripts/verify-rust-ci.sh
 rtk bash crates/mithril-e2e/harness/vm/test.sh
 rtk bash packaging/mithril/helm/tests/verify.sh
-rtk cargo test -p mithril-control --lib --tests
-rtk cargo test -p mithril-node --lib --tests
-rtk env MITHRIL_VM_REUSE_IMAGES=true crates/mithril-e2e/harness/vm/two-node-convergence.sh --keep-vms --output-directory /tmp/mithril-two-node-baseline3-20260829
+rtk bash examples/mithril-kubernetes-convergence-manual/test.sh
+rtk git diff --check
 ```
 
-The scenario removed its workload namespace, policy, exception, Pods, and
-marker state. Its final fresh Node Pods were ready with zero container restarts
-and one Control connection each. It retained the two owned VMs, K3s cluster,
-and installed Mithril release for the next failure-variant run.
-
-The independent manual case then passed on the same two-node cluster after a
-fresh retained-state reset. It selected `ubuntu-5775b0d0`. Container lifetime
-`containerd://5adc2f2bbb36afcefa04f25e78fa0349973b01b02b6261fdfe894f1ea6a878a3`
-was replaced by
-`containerd://54074773fe2017945827fbab16f671fba127f4c9acbadd2ffc88f82e006978f6`.
-The final namespace and RuntimeClass queries returned `NotFound`.
+The current direct-runc result is
+`/var/tmp/mithril-runtime-qualification-3504827/generation-migration-runc-repro-run9-20260902/evidence/runc-entry-role-runtime-probe.json`.
+The focused replacement-exception result is
+`target/mithril-replacement-generation-lightweight-20260902-r12/replacement-generation-exception-probe.json`.
+The current Kubernetes result is
+`target/mithril-generation-migration-kubernetes-20260902-d/two-node-convergence.json`.
+The scenario removed its workload namespace, policy, exception, Pods, runtime
+classes, and marker state. It retained the two owned VMs and K3s cluster for
+the remaining physical variants.
 
 ## Unadvertised Work
 

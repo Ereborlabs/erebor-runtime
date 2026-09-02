@@ -906,7 +906,7 @@ mod tests {
                 .iter()
                 .filter(|cell| cell.physical_result == CompiledPhysicalResultV1::DenyEffect)
                 .count(),
-            11
+            10
         );
         assert!(cells.iter().any(|cell| {
             cell.source_rule_ids == ["allow-manual-exec-read"]
@@ -979,7 +979,7 @@ mod tests {
                 .iter()
                 .filter(|cell| cell.consuming_exception_id.is_some())
                 .count(),
-            2
+            3
         );
         for (exception_id, expected_digest) in [
             (

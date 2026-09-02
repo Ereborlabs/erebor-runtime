@@ -63,7 +63,8 @@ pub use runtime_admission::{
 };
 pub use runtime_gate::{RetainedRuntimeDecisionV1, RetainedRuntimeGate};
 pub use runtime_integration::{
-    OciBaseSpecOwner, RuntimeIntegrationDecommissionV1, RuntimeIntegrationInstallResultV1,
-    RuntimeIntegrationInstallV1, RuntimeIntegrationOwner, RuntimeRecoveryMountInputV1,
+    OciBaseSpecOwner, RuntimeControlRecoveryMountInputV1, RuntimeIntegrationDecommissionV1,
+    RuntimeIntegrationInstallResultV1, RuntimeIntegrationInstallV1, RuntimeIntegrationOwner,
+    RuntimeRecoveryMountInputV1,
 };
 pub use trust::{InstalledTrustGenerationV1, TrustCache};

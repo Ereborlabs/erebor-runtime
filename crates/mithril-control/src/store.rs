@@ -4378,11 +4378,12 @@ fn validate_exception_desired(
             .map(|result| &result.acknowledgement)
     });
     let grant_is_valid = base_document.is_some_and(|document| {
-        document.file_exception_grants.iter().any(|grant| {
-            grant.grant_id == source.grant_id
-                && source.requested_duration_ns <= grant.maximum_duration_ns
-                && source.requested_uses <= grant.maximum_uses
-        })
+        exception_grant_covers_request(
+            document,
+            &source.grant_id,
+            source.requested_duration_ns,
+            source.requested_uses,
+        )
     });
     let base_binding_is_valid = base_source.is_some_and(|base| {
         base.state == PolicySourceStateV1::Accepted && base.tenant_id == source.tenant_id
@@ -4491,6 +4492,19 @@ fn validate_exception_desired(
         .fail();
     }
     Ok(())
+}
+
+fn exception_grant_covers_request(
+    document: &PolicyDocumentV1,
+    grant_id: &str,
+    requested_duration_ns: u64,
+    requested_uses: u32,
+) -> bool {
+    document.file_exception_grants.iter().any(|grant| {
+        grant.grant_id == grant_id
+            && requested_duration_ns <= grant.maximum_duration_ns
+            && requested_uses <= grant.maximum_uses
+    })
 }
 
 impl ControlStoreState {
@@ -6310,6 +6324,34 @@ mod tests {
             Some(42)
         );
         assert!(super::checked_store_increment(u64::MAX, Path::new("store"), "exhausted").is_err());
+    }
+
+    #[test]
+    fn exception_request_must_fit_the_current_grant() -> crate::Result<()> {
+        let mut document = PolicyDocumentV1::parse(
+            Path::new("policy-v1.yaml"),
+            include_bytes!("../tests/fixtures/policy-v1.yaml"),
+        )?;
+        document.file_exception_grants = vec![crate::FileExceptionGrantTemplateV1 {
+            grant_id: "temporary-file-access".to_owned(),
+            denied_file_rule_ids: vec!["deny-service-account-files".to_owned()],
+            maximum_duration_ns: 180_000_000_000,
+            maximum_uses: 1,
+        }];
+
+        assert!(!super::exception_grant_covers_request(
+            &document,
+            "temporary-file-access",
+            240_000_000_000,
+            1,
+        ));
+        assert!(super::exception_grant_covers_request(
+            &document,
+            "temporary-file-access",
+            180_000_000_000,
+            1,
+        ));
+        Ok(())
     }
 
     #[test]

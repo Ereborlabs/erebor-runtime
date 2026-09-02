@@ -70,6 +70,10 @@ _Static_assert(sizeof(io_uring_actor_snapshot_v1) == 232,
                "io_uring actor snapshot ABI size");
 _Static_assert(sizeof(execution_set_binding_state_v1) == 224,
                "execution-set binding ABI size");
+_Static_assert(sizeof(process_generation_migration_key_v1) == 32,
+               "process generation migration key ABI size");
+_Static_assert(sizeof(process_generation_migration_v1) == 16,
+               "process generation migration ABI size");
 _Static_assert(sizeof(entry_admission_rule_key_v1) == 40,
                "entry admission key ABI size");
 _Static_assert(sizeof(entry_admission_rule_v1) == 64,

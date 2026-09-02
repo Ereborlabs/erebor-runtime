@@ -226,6 +226,14 @@ run_lightweight_upgrade_probe() {
     .exact_recovery_allowed == true and
     .exact_recovery_process_started == true and
     .exact_recovery_decision_logged == true and
+    .exact_control_recovery_allowed == true and
+    .exact_control_recovery_process_started == true and
+    .exact_control_recovery_decision_logged == true and
+    .changed_control_recovery_denied == true and
+    .changed_control_recovery_process_never_started == true and
+    .changed_control_recovery_decision_logged == true and
+    .version_changed_control_recovery_allowed == true and
+    .version_changed_control_recovery_process_started == true and
     .exact_installer_allowed == true and
     .exact_installer_process_started == true and
     .changed_installer_allowed == true and
@@ -234,9 +242,8 @@ run_lightweight_upgrade_probe() {
     .forged_installer_denied == true and
     .forged_installer_process_never_started == true and
     .forged_installer_decision_logged == true and
-    .changed_recovery_binary_denied == true and
-    .changed_recovery_binary_process_never_started == true and
-    .changed_recovery_binary_decision_logged == true and
+    .version_changed_node_recovery_allowed == true and
+    .version_changed_node_recovery_process_started == true and
     .changed_recovery_denied == true and
     .changed_recovery_process_never_started == true and
     .unavailable_decision_logged == true and
@@ -1440,6 +1447,7 @@ assert_live_exact_target() {
   local profile=$2
   local operation=${3:-}
   local predecessor=${4:-}
+  local source_revision=${5:-}
   local status_json
   local node_json
   local pod_json
@@ -1462,7 +1470,8 @@ assert_live_exact_target() {
     if [[ -n $status_json && -n $node_json && -n $pod_json ]] &&
         [[ -n $expected_operation ]] &&
         assert_exact_policy_target "$status_json" "$node_json" "$pod_json" \
-          "$profile" converter "$expected_operation" "$expected_predecessor"; then
+          "$profile" converter "$expected_operation" "$expected_predecessor" \
+          "$source_revision"; then
       return 0
     fi
     sleep 1
@@ -2108,22 +2117,29 @@ if [[ $qualify_state_preserving_upgrade == true ]]; then
   assert_live_exact_target "$selected_node" "$profile_id" \
     "$upgrade_operation_before" "$upgrade_predecessor_before"
 
-  make_policy_manifest 2
-  remote_kubectl --as="$policy_subject" apply --server-side --validate=strict \
-    -f "$remote_a/policy-v2.yaml" >/dev/null
-  wait_policy_compiled
-  protected_candidate=$(wait_stable_live_replacement \
-    "$selected_node" "$profile_id" "$upgrade_candidate_before" \
-    "$upgrade_source_revision_before")
-  selected_status=$(node_status "$selected_node")
-  protected_operation=$(jq -er '.active_targets[0].operation' <<<"$selected_status")
-  protected_predecessor=$(jq -er \
-    '.active_targets[0].predecessor_candidate_content_id' <<<"$selected_status")
-  runtime_binding_before=$(jq -er '.active_targets[0].runtime_binding_id' \
-    <<<"$selected_status")
-  [[ $protected_operation == REPLACE &&
-     $protected_predecessor == "$upgrade_candidate_before" ]]
+fi
 
+selected_status=$(node_status "$selected_node")
+live_update_candidate_before=$(jq -er '.active_candidate_content_id' <<<"$selected_status")
+live_update_source_revision_before=$(jq -er \
+  '.active_targets[0].policy_source_revision_id' <<<"$selected_status")
+make_policy_manifest 2
+remote_kubectl --as="$policy_subject" apply --server-side --validate=strict \
+  -f "$remote_a/policy-v2.yaml" >/dev/null
+wait_policy_compiled
+protected_candidate=$(wait_stable_live_replacement \
+  "$selected_node" "$profile_id" "$live_update_candidate_before" \
+  "$live_update_source_revision_before")
+selected_status=$(node_status "$selected_node")
+protected_operation=$(jq -er '.active_targets[0].operation' <<<"$selected_status")
+protected_predecessor=$(jq -er \
+  '.active_targets[0].predecessor_candidate_content_id' <<<"$selected_status")
+runtime_binding_before=$(jq -er '.active_targets[0].runtime_binding_id' \
+  <<<"$selected_status")
+[[ $protected_operation == REPLACE &&
+   $protected_predecessor == "$live_update_candidate_before" ]]
+
+if [[ $qualify_state_preserving_upgrade == true ]]; then
   jq -n \
     --arg baseline_hook_digest "$baseline_hook_digest" \
     --arg current_hook_digest "$current_hook_digest" \
@@ -2451,6 +2467,16 @@ if [[ $protected_start_only == true ]]; then
   echo "Protected Kubernetes application startup passed. Evidence: $output_directory"
   exit 0
 fi
+exception_baseline_status=$(node_status "$selected_node")
+IFS=$'\t' read -r consumed_exception_baseline expired_exception_baseline \
+  revoked_exception_baseline \
+  < <(jq -er '[
+      .consumed_exception_count,
+      .expired_exception_count,
+      .revoked_exception_count
+    ] | @tsv' <<<"$exception_baseline_status")
+other_terminal_exception_baseline=$(jq -er '.terminal_exception_count' \
+  <<<"$(node_status "$other_node")")
 exception=$work_a/exception-v1.yaml
 sed \
   -e "s/MITHRIL_CONVERGENCE_NAMESPACE/$workload_namespace/g" \
@@ -2484,8 +2510,10 @@ done
 jq -e '
   .pending_exception_count == 0 and
   .active_exception_count == 0 and
-  .terminal_exception_count == 0
+  .exception_ack_pending_count == 0
 ' <<<"$(node_status "$other_node")" >/dev/null
+[[ $(jq -er '.terminal_exception_count' <<<"$(node_status "$other_node")") \
+  -eq $other_terminal_exception_baseline ]]
 
 overlap=$work_a/exception-overlap.yaml
 sed '0,/name: temporary-file-access/s//name: overlapping-file-access/' \
@@ -2516,16 +2544,21 @@ for _attempt in {1..120}; do
   sleep 1
 done
 wait_exception_state temporary-file-access Consumed
-jq -e '.consumed_exception_count == 1 and .active_exception_count == 0' \
-  <<<"$(node_status "$selected_node")" >/dev/null
+exception_status=$(node_status "$selected_node")
+exception_status_counter_advanced_by "$exception_status" \
+  consumed_exception_count "$consumed_exception_baseline" 1
+jq -e '.active_exception_count == 0' <<<"$exception_status" >/dev/null
 
 first_exception_uid=$(remote_kubectl -n "$workload_namespace" get \
   workloadprotectionexception temporary-file-access -o jsonpath='{.metadata.uid}')
 remote_kubectl --as="$exception_subject" -n "$workload_namespace" delete \
   workloadprotectionexception temporary-file-access --wait=true --timeout=120s >/dev/null
 for _attempt in {1..120}; do
-  if jq -e '.revoked_exception_count == 1 and .exception_ack_pending_count == 0' \
-      <<<"$(node_status "$selected_node")" >/dev/null; then
+  exception_status=$(node_status "$selected_node")
+  if exception_status_counter_advanced_by "$exception_status" \
+      revoked_exception_count "$revoked_exception_baseline" 1 &&
+      jq -e '.exception_ack_pending_count == 0' \
+        <<<"$exception_status" >/dev/null; then
     break
   fi
   [[ $_attempt -lt 120 ]] || {
@@ -2545,13 +2578,18 @@ remote_kubectl --as="$exception_subject" create \
   -f "$remote_a/exception-expired.yaml" >/dev/null
 wait_exception_state expiring-file-access Active
 wait_exception_state expiring-file-access Expired
-jq -e '.expired_exception_count == 1 and .active_exception_count == 0' \
-  <<<"$(node_status "$selected_node")" >/dev/null
+exception_status=$(node_status "$selected_node")
+exception_status_counter_advanced_by "$exception_status" \
+  expired_exception_count "$expired_exception_baseline" 1
+jq -e '.active_exception_count == 0' <<<"$exception_status" >/dev/null
 remote_kubectl --as="$exception_subject" -n "$workload_namespace" delete \
   workloadprotectionexception expiring-file-access --wait=true --timeout=120s >/dev/null
 for _attempt in {1..120}; do
-  if jq -e '.revoked_exception_count == 2 and .exception_ack_pending_count == 0' \
-      <<<"$(node_status "$selected_node")" >/dev/null; then
+  exception_status=$(node_status "$selected_node")
+  if exception_status_counter_advanced_by "$exception_status" \
+      revoked_exception_count "$revoked_exception_baseline" 2 &&
+      jq -e '.exception_ack_pending_count == 0' \
+        <<<"$exception_status" >/dev/null; then
     break
   fi
   [[ $_attempt -lt 120 ]] || {
@@ -2617,12 +2655,14 @@ protected_operation=$(jq -er '.active_targets[0].operation' <<<"$restart_baselin
 protected_predecessor=$(jq -er \
   '.active_targets[0].predecessor_candidate_content_id // ""' \
   <<<"$restart_baseline")
+protected_source_revision=$(jq -er \
+  '.active_targets[0].policy_source_revision_id' <<<"$restart_baseline")
 jq -e --arg predecessor "$gate_candidate" '
   .active_targets[0].operation == "REPLACE" and
   .active_targets[0].predecessor_candidate_content_id == $predecessor
 ' <<<"$restart_baseline" >/dev/null
 assert_live_exact_target "$selected_node" "$profile_id" \
-  "$protected_operation" "$protected_predecessor"
+  "$protected_operation" "$protected_predecessor" "$protected_source_revision"
 
 container_before=$(remote_kubectl -n "$workload_namespace" get pod protected \
   -o jsonpath='{.status.containerStatuses[0].containerID}')
@@ -2636,7 +2676,7 @@ host_pid_after=$(jq -er '.host_pid' <<<"$container_identity_after")
 restarted_status=$(wait_runtime_delivery "$selected_node" "$profile_id" \
   1 0 1 "" "$container_after_id")
 assert_live_exact_target "$selected_node" "$profile_id" \
-  "$protected_operation" "$protected_predecessor"
+  "$protected_operation" "$protected_predecessor" "$protected_source_revision"
 jq -e --arg candidate "$protected_candidate" \
   '.active_candidate_content_id == $candidate' <<<"$restarted_status" >/dev/null
 runtime_binding_after=$(jq -er '.active_targets[0].runtime_binding_id' \
@@ -2701,7 +2741,7 @@ for _attempt in {1..180}; do
   sleep 1
 done
 assert_live_exact_target "$selected_node" "$profile_id" \
-  "$protected_operation" "$protected_predecessor"
+  "$protected_operation" "$protected_predecessor" "$protected_source_revision"
 
 # Hold one matching node without a node process and prove that it stays quarantined.
 "$provider" run "$other_vm" sudo mv /etc/mithril/node.json /etc/mithril/node.json.held
@@ -2760,7 +2800,8 @@ remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
 wait_node_projection "$other_node" true false
 wait_node_projection "$selected_node" true false
 assert_ready_projection_stable "$selected_node"
-assert_live_exact_target "$selected_node" "$profile_id"
+assert_live_exact_target "$selected_node" "$profile_id" "" "" \
+  "$protected_source_revision"
 
 policy_before=$(node_status "$selected_node")
 candidate_before=$(jq -er '.active_candidate_content_id' <<<"$policy_before")
@@ -2871,6 +2912,7 @@ consumed_before_retirement=$(jq -er '.consumed_exception_count' \
 sed \
   -e "s/MITHRIL_CONVERGENCE_NAMESPACE/$workload_namespace/g" \
   -e "s/MITHRIL_CONVERGENCE_POD_UID/$post_reboot_pod_uid/g" \
+  -e 's/requestedDuration: 4m/requestedDuration: 2m/' \
   "$repo_root/crates/mithril-e2e/fixtures/convergence/exception-v1.yaml" \
   >"$exception"
 "$provider" put "$vm_a" "$exception" "$remote_a/exception-v1.yaml"
@@ -2899,9 +2941,10 @@ for _attempt in {1..120}; do
   if jq -e --argjson consumed "$consumed_before_retirement" '
       .active_exception_count == 0 and
       .consumed_exception_count == $consumed and
-      .revoked_exception_count == 3 and
       .exception_ack_pending_count == 0
-    ' <<<"$exception_status" >/dev/null; then
+    ' <<<"$exception_status" >/dev/null &&
+      exception_status_counter_advanced_by "$exception_status" \
+        revoked_exception_count "$revoked_exception_baseline" 3; then
     break
   fi
   [[ $_attempt -lt 120 ]] || {
@@ -3004,6 +3047,7 @@ jq -n \
     runtime_task_identity_replaced: true,
     pod_uid_replaced: true,
     policy_update_and_recreate: true,
+    running_policy_update: true,
     exception_one_use_consumed: true,
     exception_expired: true,
     exception_revoked: true,

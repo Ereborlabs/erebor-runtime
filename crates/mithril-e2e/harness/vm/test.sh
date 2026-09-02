@@ -220,7 +220,7 @@ for marker in "$hook_binary_owner" "$recovery_owner" "$base_spec_owner" \
   chmod 600 "$marker"
 done
 cat >"$recovery" <<'EOF'
-{"version":1,"entries":[{"executable":"/usr/local/bin/mithril-oci-hook","executableSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","args":["/usr/local/bin/mithril-oci-hook","install"],"requiredMounts":[{"source":"/usr/libexec/oci/hooks.d","destination":"/host-hook-bin","readOnly":false}]},{"executable":"/usr/local/bin/mithril-node","executableSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","args":["/usr/local/bin/mithril-node","--config","/etc/mithril/node.json"],"requiredMounts":[{"source":"/etc/mithril/node.json","destination":"/etc/mithril/node.json","readOnly":true},{"source":"/var/lib/mithril-node-20260831000000-123","destination":"/var/lib/mithril","readOnly":false}]}]}
+{"version":1,"entries":[{"executable":"/usr/local/bin/mithril-oci-hook","args":["/usr/local/bin/mithril-oci-hook","install"],"requiredMounts":[{"source":"/usr/libexec/oci/hooks.d","destination":"/host-hook-bin","readOnly":false}]},{"executable":"/usr/local/bin/mithril-node","args":["/usr/local/bin/mithril-node","--config","/etc/mithril/node.json"],"requiredMounts":[{"source":"/etc/mithril/node.json","destination":"/etc/mithril/node.json","readOnly":true},{"source":"/var/lib/mithril-node-20260831000000-123","destination":"/var/lib/mithril","readOnly":false}]}],"controlEntries":[{"executable":"/usr/local/bin/mithril-control","args":["/usr/local/bin/mithril-control","--config","/etc/mithril/control.json"],"uid":65532,"gid":65532,"requiredMounts":[{"destination":"/etc/mithril","readOnly":true},{"destination":"/var/lib/mithril-control","readOnly":false}]}]}
 EOF
 cat >"$base_spec" <<'EOF'
 {"hooks":{"createRuntime":[{"path":"/usr/libexec/oci/hooks.d/mithril-oci-hook","args":["mithril-oci-hook","run","--stage","stage-runtime-facts","--socket","/run/mithril/runtime-admission.sock","--recovery-manifest","/var/lib/rancher/k3s/agent/etc/containerd/mithril-recovery.json","--timeout-ms","4000"],"timeout":5},{"path":"/usr/libexec/oci/hooks.d/mithril-oci-hook","args":["mithril-oci-hook","run","--stage","prepare-container"],"timeout":5}],"createContainer":[{"path":"/usr/libexec/oci/hooks.d/mithril-oci-hook","args":["mithril-oci-hook","run","--stage","prepare-declared-entries"],"timeout":5}]}}
@@ -363,6 +363,14 @@ EOF
 chmod +x "$oracle_bin/kubectl"
 # These checks execute the command path. They do not inspect either fixture script.
 source "$directory/../kubernetes-oracles.sh"
+retained_exception_status='{"consumed_exception_count":0,"expired_exception_count":0,"revoked_exception_count":3}'
+exception_status_counter_advanced_by "$retained_exception_status" \
+  revoked_exception_count 2 1
+if exception_status_counter_advanced_by "$retained_exception_status" \
+    revoked_exception_count 0 1; then
+  echo "an absolute exception count satisfied a retained-state delta" >&2
+  exit 1
+fi
 retained_environment=$test_root/retained-environment.json
 write_retained_environment "$retained_environment" true \
   mithril-runtime-qualification-1 /tmp/mithril-vm-test.a \

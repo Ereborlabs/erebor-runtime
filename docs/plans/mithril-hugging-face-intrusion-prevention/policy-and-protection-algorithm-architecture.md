@@ -3882,12 +3882,14 @@ remove the fragment, base spec, hook, recovery manifest, or pinned BPF state.
 The retained hook is a gate, not a gatherer. It owns no policy compiler,
 telemetry stream, graph, or WAL. It rejects the exact Phase 6.2 hostile
 unmatched OCI shape before the initial process. A missing node socket also
-rejects a protected start. The only socket-free bootstrap exception is the
-exact measured Mithril recovery executable and its exact security-sensitive
-OCI shape. A forged image tag, Pod label, annotation, namespace, Helm release,
-or RuntimeClass cannot claim it. After recovery, the one `mithril-node` process
-verifies the retained BPF state, opens normal admission, and remains the only
-gatherer.
+rejects a protected start. The only socket-free bootstrap exceptions are the
+exact Mithril Control and Node recovery commands and their exact
+security-sensitive OCI shapes. The Control shape includes its non-root user
+and supplementary group. The gate does not use an executable digest for these
+exceptions. A forged image tag, Pod label, annotation, namespace, Helm
+release, or RuntimeClass cannot claim them. After recovery, the one
+`mithril-node` process verifies the retained BPF state, opens normal admission,
+and remains the only gatherer.
 
 The containerd base spec covers CRI starts. A caller that starts a task through
 a direct non-CRI path bypasses this gate, so retained BPF enforcement denies
@@ -3899,16 +3901,16 @@ Packaging tiers are explicit:
 | Tier | Boot guarantee |
 | --- | --- |
 | Host service before kubelet | Full start admission after local boot attestation |
-| Helm-installed containerd default-runtime gate plus DaemonSet | Exact retained incident denial and measured Mithril recovery; normal protected starts wait for node admission |
+| Helm-installed containerd default-runtime gate plus DaemonSet | Exact retained incident denial and OCI-shape-bound Mithril recovery; normal protected starts wait for node admission |
 | DaemonSet/NRI alone | `START_GAP`; reconcile/restart workloads before upgrading coverage, never first-exec prevention |
 
 `BOOT-ADMISSION-001` exercises cold boot with runtime then kubelet then node
 agent, reversed service timing, agent Pod reschedule, daemon crash, upgrade,
 ordinary Helm deletion, exact recovery, and a forged recovery Pod. The exact
 hostile user marker must not run while the retained gate is installed. The
-recovery process must match the installed executable measurement and exact OCI
-shape. In DaemonSet/NRI-only mode the same race must report `START_GAP`, not
-pass.
+recovery process must match its recorded command and exact OCI shape. An
+executable digest is not recovery authority. In DaemonSet/NRI-only mode the
+same race must report `START_GAP`, not pass.
 
 Preferred mechanisms, in descending order of guarantee:
 
@@ -16224,7 +16226,7 @@ durable owner for each state transition:
 | `WorkloadBindingOwner` | module inside `mithril-node` | `ContainerExecutionSet`, cgroup binding object/nonce/storage, initial-container `PREPARING -> BOUND -> TERMINATING -> TOMBSTONED`, execution-set lookup, node-floor request binding and teardown |
 | `NativeSecurityStateOwner` | module inside `mithril-node`; synchronous transitions run only in its owned BPF programs | schemas, semantic lifetime refs, and transition invariants for `TaskLabelV1`, `ProcessSecurityStateV1`, `AuthorityDomainStateV1`, mm/publication state, inherited restrictions, object/channel joins, and node application/removal of response-plan refs |
 | `PolicyCompiler` | control plane | source/disposition validation/lowering and immutable signed compiled artifact/digest; it never mutates node active pointers or live generation refs |
-| `PolicyActivationOwner` | module inside `mithril-node` | inactive generation staging/readback/probes, active-pointer CAS, and only the `BindingGenerationState` generation-retention counters held by task/socket/domain/pending/response objects, plus generation retirement/rollback; it does not own `AuthorityDomainStateV1` membership/semantic refs |
+| `PolicyActivationOwner` | module inside `mithril-node` | inactive generation staging/readback/probes, expected-pointer readback, active-pointer publication, and only the `BindingGenerationState` generation-retention counters held by task/socket/domain/pending/response objects, plus generation retirement/rollback; it does not own `AuthorityDomainStateV1` membership/semantic refs |
 | `KernelHostOwner` | module inside `mithril-node` | the one loader, links, map-object lifecycle, capability state, and kernel ABI; it cannot invent semantic task/process/domain transitions owned by `NativeSecurityStateOwner` |
 | `CoverageHealthOwner` | node source state in `mithril-node`; merged view in control | source epochs, counters, intervals, gaps, watermarks, negative-claim eligibility |
 | `LocalEvidenceOwner` | module inside `mithril-node` | canonical node observations and WAL/upload acknowledgement |

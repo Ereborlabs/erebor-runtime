@@ -328,8 +328,7 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
             entry->lifetime_state != entry_lifetime_state_v1_active ||
             !entry->live_task_refs || !domain ||
             domain->state != authority_domain_state_kind_v1_active ||
-            !domain->live_process_refs || !profile_task_refs ||
-            __sync_fetch_and_add(profile_task_refs, 0) == 0) {
+            !domain->live_process_refs || !profile_task_refs) {
             if (coordinate) {
                 coordinate->state = task_coordinate_state_v1_fail_closed_unknown;
                 coordinate->transition_version++;

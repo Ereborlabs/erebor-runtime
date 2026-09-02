@@ -1630,6 +1630,7 @@ fn build_network_artifact(
     external_relationship.peer_role_ids = vec!["runtime-external".to_owned()];
     document.ipc_relationship_rules = vec![converter_relationship, external_relationship];
     document.effect_family_defaults.clear();
+    document.file_exception_grants.clear();
     document.exceptions.clear();
     document.rules.clear();
     let mut destination_policies = vec![

@@ -52,6 +52,8 @@ include = [
   "ImageProvenanceV1",
   "ExecGuardStateV1",
   "BindingActivationTargetKeyV1",
+  "ProcessGenerationMigrationKeyV1",
+  "ProcessGenerationMigrationV1",
   "ExecutionSetBindingStateV1",
   "ExternalRootClassificationV1",
   "ExternalRootClassV1",
@@ -187,6 +189,8 @@ include = [
 "ImageProvenanceV1" = "image_provenance_v1"
 "ExecGuardStateV1" = "exec_guard_state_v1"
 "BindingActivationTargetKeyV1" = "binding_activation_target_key_v1"
+"ProcessGenerationMigrationKeyV1" = "process_generation_migration_key_v1"
+"ProcessGenerationMigrationV1" = "process_generation_migration_v1"
 "ExecutionSetBindingStateV1" = "execution_set_binding_state_v1"
 "ExternalRootClassificationV1" = "external_root_classification_v1"
 "ExternalRootClassV1" = "external_root_class_v1"

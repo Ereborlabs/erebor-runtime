@@ -71,7 +71,8 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub independent_entry_roles_are_distinct: bool,
     pub reusable_entry_reinvocation_isolated: bool,
     pub runtime_entry_infrastructure_observed: bool,
-    pub live_replacement_preserved_running_application: bool,
+    pub live_replacement_migrated_running_application: bool,
+    pub replacement_generation_descendant_default_exec_allowed: bool,
     pub live_replacement_entries_use_new_generation: bool,
     pub node_owner_restart_preserved_running_application: bool,
     pub prestop_retained_during_runtime_inventory_omission: bool,
@@ -126,6 +127,12 @@ pub struct RuncRetainedRuntimeGateProbeV1 {
     pub exact_recovery_allowed: bool,
     pub exact_recovery_process_started: bool,
     pub exact_recovery_decision_logged: bool,
+    pub exact_control_recovery_allowed: bool,
+    pub exact_control_recovery_process_started: bool,
+    pub exact_control_recovery_decision_logged: bool,
+    pub changed_control_recovery_denied: bool,
+    pub changed_control_recovery_process_never_started: bool,
+    pub changed_control_recovery_decision_logged: bool,
     pub exact_installer_allowed: bool,
     pub exact_installer_process_started: bool,
     pub changed_installer_allowed: bool,
@@ -134,9 +141,10 @@ pub struct RuncRetainedRuntimeGateProbeV1 {
     pub forged_installer_denied: bool,
     pub forged_installer_process_never_started: bool,
     pub forged_installer_decision_logged: bool,
-    pub changed_recovery_binary_denied: bool,
-    pub changed_recovery_binary_process_never_started: bool,
-    pub changed_recovery_binary_decision_logged: bool,
+    pub version_changed_node_recovery_allowed: bool,
+    pub version_changed_node_recovery_process_started: bool,
+    pub version_changed_control_recovery_allowed: bool,
+    pub version_changed_control_recovery_process_started: bool,
     pub changed_recovery_denied: bool,
     pub changed_recovery_process_never_started: bool,
     pub unavailable_decision_logged: bool,
@@ -174,6 +182,7 @@ struct RetainedRuntimeGateRuncFixture {
     k3s_path: PathBuf,
     output_directory: PathBuf,
     recovery_args: Vec<String>,
+    control_args: Vec<String>,
     installer_args: Vec<String>,
     stock_config: serde_json::Value,
 }
@@ -207,6 +216,11 @@ impl RetainedRuntimeGateRuncFixture {
         fs::create_dir(&marker_directory).context(IoSnafu {
             path: &marker_directory,
         })?;
+        fs::set_permissions(&marker_directory, fs::Permissions::from_mode(0o777)).context(
+            IoSnafu {
+                path: &marker_directory,
+            },
+        )?;
         Self::copy_executable(&rootfs, Path::new("/bin/sh"), Path::new("/bin/sh"))?;
         Self::copy_executable(&rootfs, nsenter_path, nsenter_path)?;
         let pause = rootfs.join("pause");
@@ -224,11 +238,6 @@ impl RetainedRuntimeGateRuncFixture {
         )
         .context(JsonSnafu { path: &config_path })?;
 
-        let shell = rootfs.join("bin/sh");
-        let shell_digest = format!(
-            "{:x}",
-            Sha256::digest(fs::read(&shell).context(IoSnafu { path: &shell })?)
-        );
         let installer = rootfs.join("usr/local/bin/mithril-oci-hook");
         fs::create_dir_all(installer.parent().ok_or_else(|| {
             InvalidInputSnafu {
@@ -245,10 +254,6 @@ impl RetainedRuntimeGateRuncFixture {
         .context(IoSnafu { path: &installer })?;
         fs::set_permissions(&installer, fs::Permissions::from_mode(0o755))
             .context(IoSnafu { path: &installer })?;
-        let installer_digest = format!(
-            "{:x}",
-            Sha256::digest(fs::read(&installer).context(IoSnafu { path: &installer })?)
-        );
         let host_hook_directory = fixture_root.join("host-hook");
         let host_containerd_directory = fixture_root.join("host-containerd");
         fs::create_dir(&host_hook_directory).context(IoSnafu {
@@ -263,6 +268,11 @@ impl RetainedRuntimeGateRuncFixture {
             "printf RECOVERY_ALLOWED >/result/recovery".to_owned(),
         ];
         recovery_args.extend((0..35).map(|index| format!("recovery-argument-{index}")));
+        let control_args = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "printf CONTROL_RECOVERY_ALLOWED >/result/control".to_owned(),
+        ];
         let installer_args = vec![
             "/usr/local/bin/mithril-oci-hook".to_owned(),
             "install".to_owned(),
@@ -285,7 +295,6 @@ impl RetainedRuntimeGateRuncFixture {
                 "entries": [
                     {
                         "executable": "/bin/sh",
-                        "executableSha256": shell_digest,
                         "args": recovery_args,
                         "requiredMounts": [
                             {
@@ -307,7 +316,6 @@ impl RetainedRuntimeGateRuncFixture {
                     },
                     {
                         "executable": "/usr/local/bin/mithril-oci-hook",
-                        "executableSha256": installer_digest,
                         "args": installer_args,
                         "requiredMounts": [
                             {
@@ -327,6 +335,20 @@ impl RetainedRuntimeGateRuncFixture {
                             }
                         ]
                     }
+                ],
+                "controlEntries": [
+                    {
+                        "executable": "/bin/sh",
+                        "args": control_args,
+                        "uid": 65532,
+                        "gid": 65532,
+                        "requiredMounts": [
+                            {
+                                "destination": "/result",
+                                "readOnly": false
+                            }
+                        ]
+                    }
                 ]
             }))
             .context(JsonSnafu { path: &manifest })?,
@@ -342,6 +364,7 @@ impl RetainedRuntimeGateRuncFixture {
             k3s_path: k3s_path.to_path_buf(),
             output_directory: output_directory.to_path_buf(),
             recovery_args,
+            control_args,
             installer_args,
             stock_config,
         })
@@ -426,6 +449,23 @@ impl RetainedRuntimeGateRuncFixture {
         self.run_case("exact-recovery", self.exact_recovery_config()?)
     }
 
+    fn run_exact_control_recovery(&self) -> Result<RetainedRuntimeGateCaseResult> {
+        self.run_case(
+            "exact-control-recovery",
+            self.exact_control_recovery_config()?,
+        )
+    }
+
+    fn run_changed_control_recovery(&self) -> Result<RetainedRuntimeGateCaseResult> {
+        let marker = self.marker_directory.join("control");
+        if marker.exists() {
+            fs::remove_file(&marker).context(IoSnafu { path: &marker })?;
+        }
+        let mut config = self.exact_control_recovery_config()?;
+        config["process"]["capabilities"]["effective"] = json!(["CAP_SYS_ADMIN"]);
+        self.run_case("changed-control-recovery", config)
+    }
+
     fn run_exact_installer(&self) -> Result<RetainedRuntimeGateCaseResult> {
         self.run_case("exact-installer", self.installer_config(false)?)
     }
@@ -467,19 +507,42 @@ impl RetainedRuntimeGateRuncFixture {
         self.run_case("changed-recovery", config)
     }
 
-    fn run_changed_recovery_binary(&self) -> Result<RetainedRuntimeGateCaseResult> {
+    fn run_version_changed_node_recovery(&self) -> Result<RetainedRuntimeGateCaseResult> {
         let executable = self.bundle.join("rootfs/bin/sh");
         let original = fs::read(&executable).context(IoSnafu { path: &executable })?;
         fs::OpenOptions::new()
             .append(true)
             .open(&executable)
-            .and_then(|mut file| file.write_all(&[0]))
+            .and_then(|mut file| file.write_all(b"\n# version-changed node recovery\n"))
             .context(IoSnafu { path: &executable })?;
         let marker = self.marker_directory.join("recovery");
         if marker.exists() {
             fs::remove_file(&marker).context(IoSnafu { path: &marker })?;
         }
-        let result = self.run_case("changed-recovery-binary", self.exact_recovery_config()?);
+        let result = self.run_case(
+            "version-changed-node-recovery",
+            self.exact_recovery_config()?,
+        );
+        fs::write(&executable, original).context(IoSnafu { path: &executable })?;
+        result
+    }
+
+    fn run_version_changed_control_recovery(&self) -> Result<RetainedRuntimeGateCaseResult> {
+        let executable = self.bundle.join("rootfs/bin/sh");
+        let original = fs::read(&executable).context(IoSnafu { path: &executable })?;
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&executable)
+            .and_then(|mut file| file.write_all(b"\n# version-changed control recovery\n"))
+            .context(IoSnafu { path: &executable })?;
+        let marker = self.marker_directory.join("control");
+        if marker.exists() {
+            fs::remove_file(&marker).context(IoSnafu { path: &marker })?;
+        }
+        let result = self.run_case(
+            "version-changed-control-recovery",
+            self.exact_control_recovery_config()?,
+        );
         fs::write(&executable, original).context(IoSnafu { path: &executable })?;
         result
     }
@@ -597,6 +660,38 @@ impl RetainedRuntimeGateRuncFixture {
         Ok(config)
     }
 
+    fn exact_control_recovery_config(&self) -> Result<serde_json::Value> {
+        let mut config = self.stock_config("exact-control-recovery")?;
+        config["process"]["args"] = json!(self.control_args);
+        config["process"]["user"] = json!({"uid": 65532, "gid": 65532, "additionalGids": [65532]});
+        config["process"]["noNewPrivileges"] = json!(true);
+        config["process"]["capabilities"] = json!({
+            "bounding": [],
+            "effective": [],
+            "permitted": [],
+            "inheritable": [],
+            "ambient": []
+        });
+        config["root"]["readonly"] = json!(true);
+        config["linux"]["namespaces"]
+            .as_array_mut()
+            .and_then(|namespaces| {
+                namespaces
+                    .iter_mut()
+                    .find(|namespace| namespace["type"] == "pid")
+            })
+            .and_then(serde_json::Value::as_object_mut)
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: self.bundle.join("config.json"),
+                    reason: "the control recovery fixture has no PID namespace",
+                }
+                .build()
+            })?
+            .remove("path");
+        Ok(config)
+    }
+
     fn cri_sandbox_config(&self) -> Result<serde_json::Value> {
         let mut config = self.stock_config("cri-sandbox")?;
         config["process"]["args"] = json!(["/pause"]);
@@ -693,6 +788,13 @@ impl RetainedRuntimeGateRuncFixture {
 
     fn exact_recovery_log(&self) -> Result<String> {
         self.decision_log(self.exact_recovery_config()?, b"exact-recovery-log")
+    }
+
+    fn exact_control_recovery_log(&self) -> Result<String> {
+        self.decision_log(
+            self.exact_control_recovery_config()?,
+            b"exact-control-recovery-log",
+        )
     }
 
     fn cri_sandbox_log(&self) -> Result<String> {
@@ -1122,16 +1224,24 @@ impl EffectTestRunner {
         let forged_cri_sandbox = fixture.run_forged_cri_sandbox()?;
         let recovery = fixture.run_exact_recovery()?;
         let exact_recovery_process_started = fixture.marker_exists("recovery");
+        let control_recovery = fixture.run_exact_control_recovery()?;
+        let exact_control_recovery_process_started = fixture.marker_exists("control");
+        let changed_control_recovery = fixture.run_changed_control_recovery()?;
+        let changed_control_recovery_process_never_started = !fixture.marker_exists("control");
+        let version_changed_control_recovery = fixture.run_version_changed_control_recovery()?;
+        let version_changed_control_recovery_process_started = fixture.marker_exists("control");
         let installer = fixture.run_exact_installer()?;
         let exact_installer_process_started = fixture.marker_exists("installer");
         let changed_installer = fixture.run_changed_installer()?;
         let changed_installer_process_started = fixture.marker_exists("installer");
         let forged_installer = fixture.run_forged_installer()?;
-        let changed_binary = fixture.run_changed_recovery_binary()?;
+        let version_changed_node_recovery = fixture.run_version_changed_node_recovery()?;
+        let version_changed_node_recovery_process_started = fixture.marker_exists("recovery");
         let changed = fixture.run_changed_recovery()?;
         let host_stock_spec = fixture.run_host_stock_spec()?;
         let cri_sandbox_log = fixture.cri_sandbox_log()?;
         let recovery_log = fixture.exact_recovery_log()?;
+        let control_recovery_log = fixture.exact_control_recovery_log()?;
         let installer_log = fixture.changed_installer_log()?;
         let host_stock_spec_generated = host_stock_spec.success
             && serde_json::from_str::<serde_json::Value>(&host_stock_spec.stdout)
@@ -1140,7 +1250,7 @@ impl EffectTestRunner {
                 .is_some();
 
         let result = RuncRetainedRuntimeGateProbeV1 {
-            schema_version: 3,
+            schema_version: 5,
             runc_version: command_text(Command::new(runc_path).arg("--version"), runc_path)?,
             hostile_container_denied: !hostile.success,
             hostile_process_never_started: !fixture.marker_exists("hostile"),
@@ -1156,6 +1266,17 @@ impl EffectTestRunner {
             exact_recovery_allowed: recovery.success,
             exact_recovery_process_started,
             exact_recovery_decision_logged: recovery_log.contains("decision=ALLOW_EXACT_RECOVERY"),
+            exact_control_recovery_allowed: control_recovery.success,
+            exact_control_recovery_process_started,
+            exact_control_recovery_decision_logged: control_recovery_log
+                .contains("decision=ALLOW_EXACT_RECOVERY"),
+            changed_control_recovery_denied: !changed_control_recovery.success,
+            changed_control_recovery_process_never_started,
+            changed_control_recovery_decision_logged: changed_control_recovery
+                .stderr
+                .contains("decision=DENY_NODE_UNAVAILABLE"),
+            version_changed_control_recovery_allowed: version_changed_control_recovery.success,
+            version_changed_control_recovery_process_started,
             exact_installer_allowed: installer.success,
             exact_installer_process_started,
             changed_installer_allowed: changed_installer.success,
@@ -1167,11 +1288,8 @@ impl EffectTestRunner {
             forged_installer_decision_logged: forged_installer
                 .stderr
                 .contains("decision=DENY_NODE_UNAVAILABLE"),
-            changed_recovery_binary_denied: !changed_binary.success,
-            changed_recovery_binary_process_never_started: !fixture.marker_exists("recovery"),
-            changed_recovery_binary_decision_logged: changed_binary
-                .stderr
-                .contains("decision=DENY_NODE_UNAVAILABLE"),
+            version_changed_node_recovery_allowed: version_changed_node_recovery.success,
+            version_changed_node_recovery_process_started,
             changed_recovery_denied: !changed.success,
             changed_recovery_process_never_started: !fixture.marker_exists("changed-recovery"),
             unavailable_decision_logged: changed.stderr.contains("decision=DENY_NODE_UNAVAILABLE"),
@@ -1191,6 +1309,14 @@ impl EffectTestRunner {
                 && result.exact_recovery_allowed
                 && result.exact_recovery_process_started
                 && result.exact_recovery_decision_logged
+                && result.exact_control_recovery_allowed
+                && result.exact_control_recovery_process_started
+                && result.exact_control_recovery_decision_logged
+                && result.changed_control_recovery_denied
+                && result.changed_control_recovery_process_never_started
+                && result.changed_control_recovery_decision_logged
+                && result.version_changed_control_recovery_allowed
+                && result.version_changed_control_recovery_process_started
                 && result.exact_installer_allowed
                 && result.exact_installer_process_started
                 && result.changed_installer_allowed
@@ -1199,9 +1325,8 @@ impl EffectTestRunner {
                 && result.forged_installer_denied
                 && result.forged_installer_process_never_started
                 && result.forged_installer_decision_logged
-                && result.changed_recovery_binary_denied
-                && result.changed_recovery_binary_process_never_started
-                && result.changed_recovery_binary_decision_logged
+                && result.version_changed_node_recovery_allowed
+                && result.version_changed_node_recovery_process_started
                 && result.changed_recovery_denied
                 && result.changed_recovery_process_never_started
                 && result.unavailable_decision_logged
@@ -1209,15 +1334,18 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: output_directory,
                 reason: format!(
-                    "the direct runc retained-gate oracle failed: hostile={:?}; cri_sandbox={:?}; forged_cri_sandbox={:?}; recovery={:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; changed_recovery_binary={:?}; changed_recovery={:?}; stock_spec={:?}",
+                    "the direct runc retained-gate oracle failed: result={result:?}; hostile={:?}; cri_sandbox={:?}; forged_cri_sandbox={:?}; recovery={:?}; control_recovery={:?}; changed_control_recovery={:?}; version_changed_control_recovery={:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; version_changed_node_recovery={:?}; changed_recovery={:?}; stock_spec={:?}",
                     hostile.stderr.trim(),
                     cri_sandbox.stderr.trim(),
                     forged_cri_sandbox.stderr.trim(),
                     recovery.stderr.trim(),
+                    control_recovery.stderr.trim(),
+                    changed_control_recovery.stderr.trim(),
+                    version_changed_control_recovery.stderr.trim(),
                     installer.stderr.trim(),
                     changed_installer.stderr.trim(),
                     forged_installer.stderr.trim(),
-                    changed_binary.stderr.trim(),
+                    version_changed_node_recovery.stderr.trim(),
                     changed.stderr.trim(),
                     host_stock_spec.stderr.trim(),
                 ),
@@ -1353,6 +1481,8 @@ impl EffectTestRunner {
                 "if /bin/cat /home/alice/secrets/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/run/mithril-entry-roles/single-wildcard.result; else echo PATH_TREE_DENIED >/run/mithril-entry-roles/single-wildcard.result; fi; ",
                 "if /bin/cat /srv/team/blue/secrets/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/run/mithril-entry-roles/recursive-wildcard.result; else echo PATH_TREE_DENIED >/run/mithril-entry-roles/recursive-wildcard.result; fi; ",
                 "if /bin/cat /run/mithril-entry-roles/control.allowed >/dev/null 2>&1; then echo CONTROL_ALLOWED >/run/mithril-entry-roles/path-tree-control.result; else echo CONTROL_DENIED >/run/mithril-entry-roles/path-tree-control.result; fi; ",
+                "read -r replacement_exec_request </run/mithril-entry-roles/replacement-exec-request; ",
+                "if [ \"$replacement_exec_request\" = EXEC ]; then if ( /bin/sleep 0 ); then echo REPLACEMENT_EXEC_ALLOWED >/run/mithril-entry-roles/replacement-exec-result; else echo REPLACEMENT_EXEC_DENIED >/run/mithril-entry-roles/replacement-exec-result; fi; fi; ",
                 "while [ ! -e /run/mithril-entry-roles/release ]; do /bin/sleep 1; done"
             )
         ]);
@@ -2080,6 +2210,54 @@ impl EffectTestRunner {
                 ),
             }
         );
+        let active = inspector
+            .snapshot(initial_pid)
+            .context(NodeSnafu)?
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "the direct runc task lost identity after its first exec",
+                }
+                .build()
+            })?;
+        let prepared_state_after_exec = active
+            .runtime_binding
+            .as_ref()
+            .map(|binding| binding.prepared_container_state.clone())
+            .unwrap_or_default();
+        ensure!(
+            prepared_state_after_exec == "active"
+                && active.profile_generation_ref_id == PROFILE_GENERATION_REF_ID,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the first configured executable did not activate normal policy",
+            }
+        );
+        wait_for_application_default_effect(
+            &reader,
+            &observations,
+            marker,
+            (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
+        )?;
+        let application_descendant_default_exec_role_preserved =
+            observations.recent_since(marker).iter().any(|event| {
+                event.reason == "APPLICATION_DEFAULT_ALLOW"
+                    && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
+                    && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
+                    && event.task_cookie != active.task_cookie
+                    && event.active_role_id == active.active_role_id
+                    && event.admitted_entry_rule_id == active.admitted_entry_rule_id
+                    && event.composite_atom_id == 0
+                    && event.exact_object_key_id == 0
+            });
+        ensure!(
+            application_descendant_default_exec_role_preserved,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason:
+                    "an application descendant did not retain its application role and admission ID",
+            }
+        );
         reader
             .poll(Duration::from_millis(100))
             .context(InterceptorSnafu)?;
@@ -2142,29 +2320,6 @@ impl EffectTestRunner {
                 reason: format!(
                     "the direct runc pre-effect capture did not preserve five physical path-tree denials after recent-window eviction: recent={recent_path_tree_effect_count}, captured={captured_path_tree_effect_count}"
                 ),
-            }
-        );
-        let active = inspector
-            .snapshot(initial_pid)
-            .context(NodeSnafu)?
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: pin_root,
-                    reason: "the direct runc task lost identity after its first exec",
-                }
-                .build()
-            })?;
-        let prepared_state_after_exec = active
-            .runtime_binding
-            .as_ref()
-            .map(|binding| binding.prepared_container_state.clone())
-            .unwrap_or_default();
-        ensure!(
-            prepared_state_after_exec == "active"
-                && active.profile_generation_ref_id == PROFILE_GENERATION_REF_ID,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the first configured executable did not activate normal policy",
             }
         );
         let application_exec_transition_event_driven = container
@@ -2249,31 +2404,6 @@ impl EffectTestRunner {
             marker,
             (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
         )?;
-        wait_for_application_default_effect(
-            &reader,
-            &observations,
-            marker,
-            (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
-        )?;
-        let application_descendant_default_exec_role_preserved =
-            observations.recent_since(marker).iter().any(|event| {
-                event.reason == "APPLICATION_DEFAULT_ALLOW"
-                    && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
-                    && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
-                    && event.task_cookie != active.task_cookie
-                    && event.active_role_id == active.active_role_id
-                    && event.admitted_entry_rule_id == active.admitted_entry_rule_id
-                    && event.composite_atom_id == 0
-                    && event.exact_object_key_id == 0
-            });
-        ensure!(
-            application_descendant_default_exec_role_preserved,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason:
-                    "an application descendant did not retain its application role and admission ID",
-            }
-        );
 
         ensure!(
             active.active_role_id == policy.initial_role_id && active.admitted_entry_rule_id > 0,
@@ -2293,21 +2423,22 @@ impl EffectTestRunner {
             policy.replacement_artifact_path.clone(),
             vec![replacement_binding.clone()],
         );
-        policy_owner = NodePolicyGenerationOwner::load_and_install_for_bindings(
-            &replacement_config,
-            &mut host,
-            &bindings,
-            node_boot_id,
-            1,
-        )
-        .context(NodeSnafu)?;
+        policy_owner = policy_owner
+            .reload_and_install_for_bindings(
+                &replacement_config,
+                &mut host,
+                &bindings,
+                node_boot_id,
+                1,
+            )
+            .context(NodeSnafu)?;
         bindings
             .adopt_activated_profiles(&host, &replacement_config.workload_bindings)
             .context(NodeSnafu)?;
         policy_owner
             .reconcile_cri_exact_bindings(&replacement_config, &mut host, &bindings)
             .context(NodeSnafu)?;
-        let active_after_replacement = inspector
+        let active_before_replacement_effect = inspector
             .snapshot(initial_pid)
             .context(NodeSnafu)?
             .ok_or_else(|| {
@@ -2317,16 +2448,166 @@ impl EffectTestRunner {
                 }
                 .build()
             })?;
-        let live_replacement_preserved_running_application =
+        let migration_deferred_until_protected_effect =
+            active_before_replacement_effect.profile_generation_ref_id == PROFILE_GENERATION_REF_ID
+                && active_before_replacement_effect.task_cookie == active.task_cookie
+                && active_before_replacement_effect.active_role_id == active.active_role_id
+                && active_before_replacement_effect.admitted_entry_rule_id
+                    == active.admitted_entry_rule_id;
+        ensure!(
+            migration_deferred_until_protected_effect,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "policy replacement migrated the running application before its next protected effect",
+            }
+        );
+        let replacement_exec_marker = observations.cursor();
+        fs::write(role_directory.join("replacement-exec-request"), b"EXEC\n").context(IoSnafu {
+            path: role_directory.join("replacement-exec-request"),
+        })?;
+        let replacement_exec_result = role_directory.join("replacement-exec-result");
+        let replacement_result_deadline = Instant::now() + WAIT_LIMIT;
+        while fs::metadata(&replacement_exec_result)
+            .map(|metadata| metadata.len() == 0)
+            .unwrap_or(true)
+        {
+            reader
+                .poll(Duration::from_millis(25))
+                .context(InterceptorSnafu)?;
+            if let Some(status) = container
+                .child
+                .as_mut()
+                .ok_or_else(|| {
+                    InvalidInputSnafu {
+                        path: &replacement_exec_result,
+                        reason: "the direct runc process has no child handle",
+                    }
+                    .build()
+                })?
+                .try_wait()
+                .context(IoSnafu {
+                    path: Path::new("runc child"),
+                })?
+            {
+                let diagnostic = format!(
+                    "the running application exited before its replacement-generation exec result: status={status}, stderr={}, effects={:?}",
+                    fs::read_to_string(&stderr_path).unwrap_or_default().trim(),
+                    recent_effect_summary(&observations, replacement_exec_marker),
+                );
+                fs::write(
+                    output_directory.join("replacement-exec-diagnostic.txt"),
+                    &diagnostic,
+                )
+                .context(IoSnafu {
+                    path: output_directory,
+                })?;
+                ensure!(
+                    false,
+                    InvalidInputSnafu {
+                        path: &replacement_exec_result,
+                        reason: diagnostic,
+                    }
+                );
+            }
+            if Instant::now() >= replacement_result_deadline {
+                let diagnostic = format!(
+                    "timed out waiting for the replacement-generation application exec result: stderr={}, effects={:?}",
+                    fs::read_to_string(&stderr_path).unwrap_or_default().trim(),
+                    recent_effect_summary(&observations, replacement_exec_marker),
+                );
+                fs::write(
+                    output_directory.join("replacement-exec-diagnostic.txt"),
+                    &diagnostic,
+                )
+                .context(IoSnafu {
+                    path: output_directory,
+                })?;
+                ensure!(
+                    false,
+                    InvalidInputSnafu {
+                        path: &replacement_exec_result,
+                        reason: diagnostic,
+                    }
+                );
+            }
+        }
+        let replacement_exec_result_text =
+            fs::read_to_string(&replacement_exec_result).context(IoSnafu {
+                path: &replacement_exec_result,
+            })?;
+        let replacement_exec_deadline = Instant::now() + WAIT_LIMIT;
+        let replacement_generation_descendant_default_exec_allowed = loop {
+            reader
+                .poll(Duration::from_millis(25))
+                .context(InterceptorSnafu)?;
+            if observations
+                .recent_since(replacement_exec_marker)
+                .iter()
+                .any(|event| {
+                    event.reason == "APPLICATION_DEFAULT_ALLOW"
+                        && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
+                        && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
+                        && event.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
+                        && event.task_cookie != active.task_cookie
+                        && event.active_role_id == active.active_role_id
+                        && event.admitted_entry_rule_id == active.admitted_entry_rule_id
+                })
+            {
+                break true;
+            }
+            if Instant::now() >= replacement_exec_deadline {
+                break false;
+            }
+        };
+        let active_after_replacement = inspector
+            .snapshot(initial_pid)
+            .context(NodeSnafu)?
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "the running application lost identity during its generation migration",
+                }
+                .build()
+            })?;
+        let running_application_used_replacement_generation = observations
+            .recent_since(replacement_exec_marker)
+            .iter()
+            .any(|event| {
+                event.reason == "APPLICATION_DEFAULT_ALLOW"
+                    && event.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
+                    && event.task_cookie == active.task_cookie
+                    && event.active_role_id == active.active_role_id
+                    && event.admitted_entry_rule_id == active.admitted_entry_rule_id
+            });
+        let live_replacement_migrated_running_application =
             active_after_replacement.profile_generation_ref_id == PROFILE_GENERATION_REF_ID
                 && active_after_replacement.task_cookie == active.task_cookie
                 && active_after_replacement.active_role_id == active.active_role_id
-                && active_after_replacement.admitted_entry_rule_id == active.admitted_entry_rule_id;
+                && active_after_replacement.admitted_entry_rule_id == active.admitted_entry_rule_id
+                && running_application_used_replacement_generation;
         ensure!(
-            live_replacement_preserved_running_application,
+            replacement_exec_result_text.trim() == "REPLACEMENT_EXEC_ALLOWED"
+                && replacement_generation_descendant_default_exec_allowed
+                && live_replacement_migrated_running_application,
             InvalidInputSnafu {
-                path: pin_root,
-                reason: "policy replacement changed the running application identity",
+                path: &replacement_exec_result,
+                reason: format!(
+                    "the replacement-generation application exec failed: result={replacement_exec_result_text:?}, process={active_after_replacement:?}, effects={:?}",
+                    observations
+                        .recent_since(replacement_exec_marker)
+                        .iter()
+                        .map(|event| (
+                            event.reason.as_str(),
+                            event.profile_generation_ref_id,
+                            event.task_cookie,
+                            event.active_role_id,
+                            event.admitted_entry_rule_id,
+                            event.effect_family,
+                            event.operation,
+                            event.kernel_result,
+                        ))
+                        .collect::<Vec<_>>()
+                ),
             }
         );
         let replacement_entry_rules = host
@@ -3060,7 +3341,7 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 22,
+            schema_version: 23,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
@@ -3084,7 +3365,8 @@ impl EffectTestRunner {
             independent_entry_roles_are_distinct,
             reusable_entry_reinvocation_isolated,
             runtime_entry_infrastructure_observed,
-            live_replacement_preserved_running_application,
+            live_replacement_migrated_running_application,
+            replacement_generation_descendant_default_exec_allowed,
             live_replacement_entries_use_new_generation,
             node_owner_restart_preserved_running_application,
             prestop_retained_during_runtime_inventory_omission,
@@ -3250,7 +3532,11 @@ fn prepare_entry_role_root(
             path: role_directory,
         },
     )?;
-    for name in ["poststart-overlap.fifo", "startup-overlap.fifo"] {
+    for name in [
+        "poststart-overlap.fifo",
+        "startup-overlap.fifo",
+        "replacement-exec-request",
+    ] {
         let path = role_directory.join(name);
         run_checked(
             Command::new("/usr/bin/mkfifo").arg(&path),

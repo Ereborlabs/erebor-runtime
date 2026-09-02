@@ -21,8 +21,9 @@ use erebor_interceptor_abi::{
     ProfileGenerationDescriptorV1, QualificationResultV1, MAX_CANONICAL_PATH_COMPONENTS_V1,
 };
 use mithril_control::{
-    PathSelectorV1, PathTreeDenyFloorV1, PolicyArtifactOwner, PolicyDocumentV1,
-    ProfileSealRequestV1,
+    ContainerKindV1, ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1, PathSelectorV1,
+    PathTreeDenyFloorV1, PolicyArtifactOwner, PolicyDocumentV1, ProfileSealRequestV1,
+    WorkloadTargetFactV1,
 };
 use mithril_node::{
     CoverageGapReasonV1, EffectObservationHealth, EffectObservationStore, EvidenceIdV1,
@@ -118,6 +119,20 @@ pub struct EffectHealthV1 {
     pub evidence_errors: u64,
     pub wal_capacity_blocked: u64,
     pub reader_queue_dropped_events: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ReplacementGenerationExceptionProbeV1 {
+    pub schema_version: u8,
+    pub existing_process_migrated_to_active_generation: bool,
+    pub first_open_allowed: bool,
+    pub second_open_denied: bool,
+    pub allow_decision_observed: bool,
+    pub exhausted_decision_observed: bool,
+    pub fixture_root_removed: bool,
+    pub pin_root_removed: bool,
+    pub lease_removed: bool,
+    pub cgroup_removed: bool,
 }
 
 impl From<EffectObservationHealth> for EffectHealthV1 {
@@ -466,8 +481,8 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub mount_setattr_reconciled: bool,
     pub external_mount_replacement_failed_closed: bool,
     pub exact_object_restored_after_reconciliation: bool,
-    pub new_roots_generation_published_atomically: bool,
-    pub existing_tasks_retained_old_generation: bool,
+    pub active_generation_published: bool,
+    pub existing_process_migrated_to_active_generation: bool,
     pub old_generation_deleted_after_last_holder: bool,
     pub baseline_average_open_ns: u64,
     pub observed_average_open_ns: u64,
@@ -695,6 +710,70 @@ fn sign_generation_artifact(
         .compile_and_sign(&generated_policy, &generated_seal, signing_key, &artifact)
         .context(PolicySnafu)?;
     Ok(artifact)
+}
+
+fn build_replacement_exception_artifact(
+    policy_source: &Path,
+    seal_source: &Path,
+    signing_key: &Path,
+    fixture_root: &Path,
+    secret_path: &Path,
+    generation: u64,
+) -> Result<PathBuf> {
+    let mut document = PolicyDocumentV1::parse(
+        policy_source,
+        &fs::read(policy_source).context(IoSnafu {
+            path: policy_source,
+        })?,
+    )
+    .context(PolicySnafu)?;
+    document
+        .protected_universe
+        .object_class_ids
+        .retain(|value| value == "MANUAL_SECRET");
+    document
+        .protected_universe
+        .role_ids
+        .retain(|value| value == "converter" || value == "runtime-external");
+    document
+        .classifier_bindings
+        .retain(|binding| binding.object_class_id == "MANUAL_SECRET");
+    document.path_selectors = vec![PathSelectorV1::exact(
+        "manual-secret",
+        secret_path.to_str().ok_or_else(|| {
+            InvalidInputSnafu {
+                path: secret_path,
+                reason: "the replacement exception secret path must be UTF-8",
+            }
+            .build()
+        })?,
+        "MANUAL_SECRET",
+    )];
+    document.path_tree_deny_floors.clear();
+    document.network_policy = None;
+    document
+        .roles
+        .retain(|role| role.role_id == "converter" || role.role_id == "runtime-external");
+    document.entry_role_assignments.retain(|assignment| {
+        assignment.assignment_id == "initial-worker"
+            || assignment.assignment_id == "external-worker"
+    });
+    document.native_transition_rules.clear();
+    document.ipc_relationship_rules.clear();
+    document.effect_family_defaults.clear();
+    document.authority_behavior_rules.clear();
+    document.correlation_package_bindings.clear();
+    document.notification_routes.clear();
+    document.response_bindings.clear();
+    document
+        .file_exception_grants
+        .retain(|grant| grant.grant_id == "replacement-secret-open");
+    document.exceptions.clear();
+    document
+        .rules
+        .retain(|rule| rule.rule_id == "deny-replacement-secret-open");
+    document.source_coverage_health_rules.clear();
+    sign_generation_artifact(document, seal_source, signing_key, fixture_root, generation)
 }
 
 pub struct EffectTestRunner {
@@ -1033,6 +1112,305 @@ impl EffectTestRunner {
         Self {
             repo_root: repo_root.into(),
         }
+    }
+
+    pub fn replacement_generation_exception_probe(
+        &self,
+        output_directory: &Path,
+        pin_root: &Path,
+        lease_path: &Path,
+        cgroup_path: &Path,
+    ) -> Result<ReplacementGenerationExceptionProbeV1> {
+        ensure!(
+            !pin_root.exists() && !lease_path.exists() && !cgroup_path.exists(),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the replacement-generation exception probe requires fresh owned paths",
+            }
+        );
+        fs::create_dir_all(output_directory).context(IoSnafu {
+            path: output_directory,
+        })?;
+        let fixture_root = output_directory.join("replacement-exception-runtime");
+        ensure!(
+            !fixture_root.exists(),
+            InvalidInputSnafu {
+                path: &fixture_root,
+                reason: "the replacement-generation exception fixture already exists",
+            }
+        );
+        fs::create_dir(&fixture_root).context(IoSnafu {
+            path: &fixture_root,
+        })?;
+        let fixture_root = fs::canonicalize(&fixture_root).context(IoSnafu {
+            path: &fixture_root,
+        })?;
+        let fixture_cleanup = ProbeDirectory::new(&fixture_root);
+        let pin_cleanup = ProbeDirectory::new(pin_root);
+        let lease_cleanup = ProbeFile::new(lease_path);
+        let cgroup_cleanup = ProbeCgroup::create(cgroup_path)?;
+
+        let repo_root = fs::canonicalize(&self.repo_root).context(IoSnafu {
+            path: &self.repo_root,
+        })?;
+        let policy_fixture = repo_root.join("crates/mithril-e2e/fixtures/mithril-policy");
+        let policy_source = policy_fixture.join("protect-policy-v1.yaml");
+        let seal_source = policy_fixture.join("observe-profile-seal-request.json");
+        let signing_key = policy_fixture.join("test-signing-key.hex");
+        let secret_path = fixture_root.join("source/secret");
+        let artifact_path = build_replacement_exception_artifact(
+            &policy_source,
+            &seal_source,
+            &signing_key,
+            &fixture_root,
+            &secret_path,
+            1,
+        )?;
+        let next_artifact_path = build_replacement_exception_artifact(
+            &policy_source,
+            &seal_source,
+            &signing_key,
+            &fixture_root,
+            &secret_path,
+            2,
+        )?;
+
+        let (boot_id, node_boot_id) = boot_identity()?;
+        let kernel_config = KernelHostConfig::identity(
+            "/sys/kernel/btf/vmlinux",
+            lease_path,
+            Some(pin_root.to_path_buf()),
+            boot_id,
+            1,
+        );
+        let mut host = KernelHostOwner::new(kernel_config.clone())
+            .start()
+            .context(InterceptorSnafu)?;
+        let binding = effect_binding(cgroup_cleanup.path());
+        WorkloadBindingOwner::system(node_boot_id, 1)
+            .context(NodeSnafu)?
+            .publish_all(&host, std::slice::from_ref(&binding))
+            .context(NodeSnafu)?;
+        NativeSecurityStateOwner::new(node_boot_id, 1)
+            .activate(&mut host)
+            .context(NodeSnafu)?;
+
+        let mut fixture = EffectProcessFixture::start(&fixture_root)?;
+        let paths = fixture.setup()?;
+        fs::write(cgroup_path.join("cgroup.procs"), fixture.pid().to_string()).context(
+            IoSnafu {
+                path: cgroup_path.join("cgroup.procs"),
+            },
+        )?;
+        let exact_object = ExactFileObjectResolver::resolve(
+            fixture.pid(),
+            &paths.secret,
+            PROFILE_GENERATION_REF_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-secret"),
+            "MANUAL_SECRET".to_owned(),
+            inode_generation(fixture.pid(), &paths.secret)?,
+            None,
+        )
+        .context(NodeSnafu)?;
+        let mut next_exact_object = exact_object.clone();
+        next_exact_object.profile_generation_ref_id = NEXT_PROFILE_GENERATION_REF_ID;
+        let node_config = effect_node_config(
+            &fixture_root,
+            pin_root,
+            lease_path,
+            &policy_fixture,
+            artifact_path,
+            vec![binding.clone()],
+        );
+        let mut next_binding = binding.clone();
+        next_binding.active_profile_generation_ref_id = NEXT_PROFILE_GENERATION_REF_ID;
+        let next_node_config = effect_node_config(
+            &fixture_root,
+            pin_root,
+            lease_path,
+            &policy_fixture,
+            next_artifact_path,
+            vec![next_binding],
+        );
+
+        host.shutdown().context(InterceptorSnafu)?;
+        let mut host = KernelHostOwner::new(kernel_config)
+            .start()
+            .context(InterceptorSnafu)?;
+        WorkloadBindingOwner::system(node_boot_id, 1)
+            .context(NodeSnafu)?
+            .publish_all(&host, std::slice::from_ref(&binding))
+            .context(NodeSnafu)?;
+        let policy = NodePolicyGenerationOwner::load_and_install_for_test_objects(
+            &node_config,
+            &mut host,
+            node_boot_id,
+            1,
+            [(binding.binding_id.clone(), exact_object)],
+        )
+        .context(NodeSnafu)?;
+        NativeSecurityStateOwner::new(node_boot_id, 1)
+            .activate_initial_with_effect_policy(&mut host, true)
+            .context(NodeSnafu)?;
+        let observations = EffectObservationStore::new(128);
+        let sink = observations.clone();
+        let reader = host
+            .effect_observation_reader(move |bytes| {
+                sink.record_bytes(bytes);
+                0
+            })
+            .context(InterceptorSnafu)?;
+
+        let initial_generation_marker = observations.cursor();
+        ensure!(
+            fixture.open(&paths.secret)?.denied(),
+            InvalidInputSnafu {
+                path: &paths.secret,
+                reason: "the inactive grant allowed an open before policy replacement",
+            }
+        );
+        wait_for_reason(
+            &reader,
+            &observations,
+            initial_generation_marker,
+            "EXCEPTION_UNAVAILABLE",
+        )?;
+        ensure!(
+            observations
+                .recent_since(initial_generation_marker)
+                .iter()
+                .any(|event| event.profile_generation_ref_id == PROFILE_GENERATION_REF_ID),
+            InvalidInputSnafu {
+                path: Path::new("effect_observations"),
+                reason: "the existing task was not governed by the initial policy generation",
+            }
+        );
+
+        let policy = policy
+            .reload_and_install_for_test_objects(
+                &next_node_config,
+                &mut host,
+                node_boot_id,
+                1,
+                [(binding.binding_id.clone(), next_exact_object)],
+            )
+            .context(NodeSnafu)?;
+        let prior_generation_marker = observations.cursor();
+        ensure!(
+            fixture.open(&paths.secret)?.denied(),
+            InvalidInputSnafu {
+                path: &paths.secret,
+                reason: "the inactive replacement-generation grant allowed an existing-task open",
+            }
+        );
+        wait_for_reason(
+            &reader,
+            &observations,
+            prior_generation_marker,
+            "EXCEPTION_UNAVAILABLE",
+        )?;
+        let existing_process_migrated_to_active_generation = observations
+            .recent_since(prior_generation_marker)
+            .iter()
+            .any(|event| event.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID);
+        ensure!(
+            existing_process_migrated_to_active_generation,
+            InvalidInputSnafu {
+                path: Path::new("effect_observations"),
+                reason: "the existing process did not migrate to the active policy generation",
+            }
+        );
+
+        let candidate = ExceptionDeliveryCandidateV1 {
+            schema_version: 1,
+            tenant_id: "10000000-0000-4000-8000-000000000001".to_owned(),
+            exception_source_revision_id: "a".repeat(64),
+            base_policy_source_revision_id: "b".repeat(64),
+            base_candidate_content_id: "c".repeat(64),
+            profile_id: binding.profile_id.clone(),
+            profile_generation_ref_id: NEXT_PROFILE_GENERATION_REF_ID,
+            grant_id: "replacement-secret-open".to_owned(),
+            exception_instance_id: "88888888-8888-4888-8888-88888888888b".to_owned(),
+            exact_target: WorkloadTargetFactV1 {
+                node_id: "effect-node".to_owned(),
+                workload_binding_generation_digest: "d".repeat(64),
+                execution_set_id: binding.execution_set_id.clone(),
+                cluster_uid: binding.cluster_uid.clone(),
+                namespace_uid: binding.namespace_uid.clone(),
+                controller_uid: binding.controller_uid.clone(),
+                service_account_uid: binding.service_account_uid.clone(),
+                pod_uid: binding.pod_uid.clone(),
+                container_id: binding.container_id.clone(),
+                container_name: binding.container_name.clone(),
+                container_kind: ContainerKindV1::Application,
+                image_digest: binding.image_digest.clone(),
+                pod_labels: binding.pod_labels.clone(),
+                kubernetes: None,
+            },
+            operation: ExceptionDeliveryOperationV1::Activate,
+            maximum_uses: 1,
+            valid_until_utc_ns: i64::MAX,
+            predecessor_candidate_content_id: None,
+            distribution_sequence_epoch: 1,
+            distribution_sequence: 1,
+            issued_utc_ns: 1,
+            expires_utc_ns: i64::MAX,
+            signing_key_id: "effect-test-key".to_owned(),
+            candidate_content_id: "e".repeat(64),
+            signature: vec![1; 64],
+        };
+        policy
+            .apply_exception_candidate_for_test(&host, &candidate, 1)
+            .context(NodeSnafu)?;
+        let exception_marker = observations.cursor();
+        let first_open_allowed = fixture.open(&paths.secret)?.allowed;
+        let second_open_denied = fixture.open(&paths.secret)?.denied();
+        ensure!(
+            first_open_allowed && second_open_denied,
+            InvalidInputSnafu {
+                path: &paths.secret,
+                reason: "a replacement-generation exception did not allow exactly one existing-task open",
+            }
+        );
+        wait_for_reason(
+            &reader,
+            &observations,
+            exception_marker,
+            "EXACT_POLICY_ALLOW",
+        )?;
+        wait_for_reason(
+            &reader,
+            &observations,
+            exception_marker,
+            "EXCEPTION_UNAVAILABLE",
+        )?;
+        let exception_events = observations.recent_since(exception_marker);
+        let allow_decision_observed = exception_events
+            .iter()
+            .any(|event| event.reason == "EXACT_POLICY_ALLOW");
+        let exhausted_decision_observed = exception_events
+            .iter()
+            .any(|event| event.reason == "EXCEPTION_UNAVAILABLE");
+
+        drop(reader);
+        host.shutdown().context(InterceptorSnafu)?;
+        drop(fixture);
+        drop(cgroup_cleanup);
+        drop(lease_cleanup);
+        drop(pin_cleanup);
+        drop(fixture_cleanup);
+        Ok(ReplacementGenerationExceptionProbeV1 {
+            schema_version: 1,
+            existing_process_migrated_to_active_generation,
+            first_open_allowed,
+            second_open_denied,
+            allow_decision_observed,
+            exhausted_decision_observed,
+            fixture_root_removed: !fixture_root.exists(),
+            pin_root_removed: !pin_root.exists(),
+            lease_removed: !lease_path.exists(),
+            cgroup_removed: !cgroup_path.exists(),
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4079,14 +4457,14 @@ impl EffectTestRunner {
                 }
                 .build()
             })?;
-        let new_roots_generation_published_atomically =
+        let active_generation_published =
             u64::from_ne_bytes(active_generation.try_into().unwrap_or_default())
                 == NEXT_PROFILE_GENERATION_REF_ID;
         ensure!(
-            new_roots_generation_published_atomically,
+            active_generation_published,
             InvalidInputSnafu {
                 path: Path::new("active_profile_generations"),
-                reason: "profile generation 2 did not become the one active new-root generation",
+                reason: "profile generation 2 did not become the active binding generation",
             }
         );
         let retiring = host
@@ -4122,7 +4500,7 @@ impl EffectTestRunner {
             fixture.read(&paths.benign)?.allowed,
             InvalidInputSnafu {
                 path: &paths.benign,
-                reason: "an existing task lost its pinned generation during activation",
+                reason: "an existing process did not use the replacement generation",
             }
         );
         wait_for_exact_effect(
@@ -4134,20 +4512,20 @@ impl EffectTestRunner {
             PathSelectorV1::kernel_handle_for_id("manual-benign"),
             None,
         )?;
-        let existing_tasks_retained_old_generation = observations
+        let existing_process_migrated_to_active_generation = observations
             .recent_since(retained_marker)
             .iter()
             .any(|event| {
                 event.reason == "EXACT_POLICY_ALLOW"
-                    && event.profile_generation_ref_id == PROFILE_GENERATION_REF_ID
+                    && event.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
                     && event.exact_object_key_id
                         == PathSelectorV1::kernel_handle_for_id("manual-benign")
             });
         ensure!(
-            existing_tasks_retained_old_generation,
+            existing_process_migrated_to_active_generation,
             InvalidInputSnafu {
                 path: Path::new("effect_observations"),
-                reason: "existing task evidence did not retain generation 1",
+                reason: "existing process evidence did not use generation 2",
             }
         );
 
@@ -4421,8 +4799,8 @@ impl EffectTestRunner {
             mount_setattr_reconciled: true,
             external_mount_replacement_failed_closed: true,
             exact_object_restored_after_reconciliation: true,
-            new_roots_generation_published_atomically,
-            existing_tasks_retained_old_generation,
+            active_generation_published,
+            existing_process_migrated_to_active_generation,
             old_generation_deleted_after_last_holder,
             baseline_average_open_ns: baseline.average_ns(),
             observed_average_open_ns: observed.average_ns(),

@@ -8,8 +8,8 @@ use erebor_telemetry::{error, init_stderr_logging};
 use mithril_node::{
     NodeDecommissionOwner, OciBaseSpecOwner, RetainedRuntimeDecisionV1, RetainedRuntimeGate,
     RuntimeAdmissionClient, RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1,
-    RuntimeIntegrationInstallV1, RuntimeIntegrationOwner, RuntimeRecoveryMountInputV1,
-    PROFILE_ID_ANNOTATION,
+    RuntimeControlRecoveryMountInputV1, RuntimeIntegrationInstallV1, RuntimeIntegrationOwner,
+    RuntimeRecoveryMountInputV1, PROFILE_ID_ANNOTATION,
 };
 use serde::Deserialize;
 
@@ -69,8 +69,6 @@ struct InstallArgsV1 {
     owner: String,
     #[arg(long, default_value = "/usr/local/bin/mithril-oci-hook")]
     hook_source: PathBuf,
-    #[arg(long, default_value = "/usr/local/bin/mithril-node")]
-    node_source: PathBuf,
     #[arg(long, default_value = "/host-hook-bin")]
     hook_mount_directory: PathBuf,
     #[arg(long)]
@@ -93,6 +91,14 @@ struct InstallArgsV1 {
     node_read_only_mount: Vec<String>,
     #[arg(long)]
     node_read_write_mount: Vec<String>,
+    #[arg(long, default_value_t = 65_532)]
+    control_uid: u32,
+    #[arg(long, default_value_t = 65_532)]
+    control_gid: u32,
+    #[arg(long)]
+    control_read_only_mount: Vec<PathBuf>,
+    #[arg(long)]
+    control_read_write_mount: Vec<PathBuf>,
     #[arg(long, default_value = "/run/mithril/runtime-admission.sock")]
     socket: PathBuf,
     #[arg(long, default_value_t = 10_000)]
@@ -160,10 +166,23 @@ impl OciHookOwner {
         for value in &args.node_read_write_mount {
             node_mounts.push(Self::parse_mount(value, false)?);
         }
+        let control_mounts = args
+            .control_read_only_mount
+            .iter()
+            .map(|destination| RuntimeControlRecoveryMountInputV1 {
+                destination: destination.clone(),
+                read_only: true,
+            })
+            .chain(args.control_read_write_mount.iter().map(|destination| {
+                RuntimeControlRecoveryMountInputV1 {
+                    destination: destination.clone(),
+                    read_only: false,
+                }
+            }))
+            .collect();
         let owner = RuntimeIntegrationOwner::new(RuntimeIntegrationInstallV1 {
             owner: args.owner,
             hook_source: args.hook_source,
-            node_source: args.node_source,
             hook_mount_directory: args.hook_mount_directory,
             hook_host_directory: args.hook_host_directory,
             containerd_mount_directory: args.containerd_mount_directory,
@@ -176,6 +195,9 @@ impl OciHookOwner {
             installer_executable: PathBuf::from("/usr/local/bin/mithril-oci-hook"),
             installer_args: process_args,
             node_mounts,
+            control_uid: args.control_uid,
+            control_gid: args.control_gid,
+            control_mounts,
             socket: args.socket,
             timeout_ms: args.timeout_ms,
             runtime_timeout_seconds: args.runtime_timeout_seconds,
