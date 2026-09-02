@@ -1096,13 +1096,18 @@ kernel `6.8.0-137-generic`, 41 LSM programs, and the current ABI, BPF source,
 object, probe, and benchmark digests. `mithril-kernel-qualification verify`
 passes for that record. The final repository verification command still needs to run.
 
-The administrative transaction now reaches draft creation, admission, and slot
-arm. Stock runc `1.4.2` then executes a sealed self-clone and uses inherited
-bootstrap channels that have no exact-object or typed-channel authority. The
-BPF program denies them as `UNSUPPORTED_OBJECT`, and the slot remains armed.
-Do not add a broad runc, pipe, or socket exception. Support requires a separate
-signed, typed runtime-bootstrap protocol with an exact helper identity and a
-bounded helper-to-target handoff.
+The administrative transaction reaches draft creation, admission, and slot
+arm. The expanded direct-runc fixture shows that stock runc shares the exec
+stub address space at syscall entry. The old BPF argv comparison therefore
+cannot authorize the target. A physical probe on Linux `6.8.0-138-generic`
+shows that the kernel-owned argument image is unreadable at the deny-capable
+pre-point-of-no-return `bprm` hook and readable only after
+`point_of_no_return=1`. The approved transaction reserves the slot at the
+deny-capable hook, verifies copied and installed argv at the two late hooks,
+and activates the role only after the final match. A late mismatch grants no
+role, queues `SIGKILL` before user mode, and emits critical evidence. Declared
+probe entries must use the same per-exec transaction. Do not add a
+mutable-user-memory, executable-only, broad runc, pipe, or socket exception.
 
 The optional Landlock deliverable is complete as `ABSENT`. The node reports
 `LANDLOCK_TARGET_CONTEXT_FLOOR=ABSENT` with reason
@@ -1520,7 +1525,7 @@ NodeChassis::start
 | Other attached hooks | Explicit typed BPF wrappers | An attached hook can still be partial or unsupported. A protected request reaches an explicit hard-safe result when the code cannot prove the required object or state. |
 | Observation | one `EffectObservationReader` plus `EffectObservationStore` | One `libbpf-rs` ring reader copies best-effort records into a bounded in-process history. It does not authorize and is not durable evidence. |
 | Landlock target-context floor | Capability registration | The optional floor is complete as `ABSENT`, with reason `NO_QUALIFIED_TARGET_CONTEXT_INSTALL`. No BPF decision depends on this floor. |
-| Physical qualification | `mithril-e2e` VM harness | The current object requires 68 production programs and 55 maps. It has 66 persistent links, one temporary task iterator, and one on-demand policy probe. Current native identity; direct CRI exec; non-TTY and TTY `kubectl exec`; `kubectl cp`; the identical native child; OBSERVE; and PROTECT records passed. The administrative lane is blocked by the unsupported stock-runc bootstrap path. The latest source still needs the complete qualification matrix. |
+| Physical qualification | `mithril-e2e` VM harness | The current object requires 68 production programs and 55 maps. It has 66 persistent links, one temporary task iterator, and one on-demand policy probe. Current native identity; direct CRI exec; non-TTY and TTY `kubectl exec`; `kubectl cp`; the identical native child; OBSERVE; and PROTECT records passed. The administrative reservation and late argv verification are not implemented or qualified. The latest source still needs the complete qualification matrix. |
 
 ## One object, one loader, one node
 
@@ -2489,14 +2494,18 @@ The node actuator is
 The authenticated user who runs `kubectl-mithril exec` is the approver for the
 implemented self-approval path. The implementation does not invent a trusted
 executable-content signer. The exact executable is resolved in the live target
-view and matched with raw ordered argv as the architecture specifies.
+view. The slot contains the expected ordered argv. The old BPF path compares
+that value with mutable syscall-entry memory, which does not meet the current
+kernel-owned argv architecture.
 
-The current physical run reaches draft creation, CONNECT admission, and node
-slot arm. It then stops before target exec because stock runc `1.4.2` uses an
-unsupported sealed self-clone and inherited bootstrap channels. The BPF path
-fails closed and leaves the slot armed. Source and local tests do not replace
-the missing end-to-end approval, replay, mismatch, expiry, and single-winner
-physical matrix.
+The current physical path reaches draft creation, CONNECT admission, and node
+slot arm. The expanded direct-runc fixture then leaves the target restricted
+and the slot armed. A Linux 6.8 physical probe shows that copied argv is
+unreadable at the deny-capable pre-point-of-no-return hook. The approved
+replacement reserves at that hook and verifies at committing-creds and
+successful exec. Source and local tests do not replace the missing end-to-end
+approval, replay, mismatch, expiry, tamper response, and single-winner physical
+matrix.
 
 ### Exact-file decision and observation
 
@@ -2862,7 +2871,7 @@ record for this exact source state.
 | Connected Unix stream | Partial | Socket storage tracks endpoint identity. Connect/send/receive validate current actor, live peer, binding, generation, role, and direction. Exact relationships can allow, alert, or deny. | Current-source physical proof is pending. Datagram, socketpair, SysV IPC, shared memory, pipe pairing, listener transfer, socket activation, and listener/socket transfer through `SCM_RIGHTS` are unsupported or unqualified. |
 | Restricted io_uring read and write | Partial | A managed disabled ring retains the exact submitter, profile generation, ring generation, submission sequence, SQE index, user data, opcode, file range, executor, and completion. Exact `IORING_OP_READ` and `IORING_OP_WRITE` use the pinned actor. | AIO, arbitrary opcodes, positive SQPOLL, credential override, uring commands, and complete registered-file or buffer authority are not implemented or qualified. |
 | Bounded exception counter and receipt | Partial | BPF uses a stable instance key, no-replace receipt claim, spin-locked count, expiry, and one-use identity for synchronous file-open decisions. Userspace persists monotonic state and consumed receipts in a local WAL. | General VFS retry correlation and offloaded exception use are not implemented. Reconciliation is periodic. Administrative exec uses its separate one-use claim slot. |
-| Administrative exec identity | Partial end-to-end source path | OIDC-authenticated self-approval, a memory-only credential, TokenReview, CONNECT admission, exact target and executable resolution, typed Control resolve and arm messages, durable replay, exact argv, slot readback, and BPF one-use consumption exist in source. | The current VM lane reaches slot arm but stock runc fails closed before target exec. The approval, replay, expiry, mismatch, runtime-bootstrap, and one-winner physical matrix is not qualified. |
+| Administrative exec identity | Not done | OIDC-authenticated self-approval, a memory-only credential, TokenReview, CONNECT admission, exact target and executable resolution, typed Control resolve and arm messages, durable replay, expected argv, and slot readback exist in source. | The old BPF path compares mutable syscall-entry argv and does not meet the approved contract. Pre-PONR reservation, two late kernel-owned argv checks, fail-closed termination, critical evidence, and the corresponding probe-entry transaction are not implemented or qualified. |
 | Hugging Face local incident classification | Partial source classification | The bundle records a checked deployment digest and static classifications for HF-002 through HF-012. The declared classification is not per-branch physical proof. | A case result must come from that branch and its paired control before it can claim prevention. Network, provider, Kubernetes semantics, resident memory, and staged-content semantics remain outside the current claim. |
 | Capability and BPF hooks | Partial safety floor | Protected requests use a typed default or hard-safe result before the operation. Generic CAPABILITY, BPF, NETWORK, MOUNT, and unqualified executable-memory positive defaults are rejected at compilation. | This is not complete credential, namespace, keyring, module, perf, or self-protection policy. |
 | Self-protection | Partial detection and safety floor | The loader verifies live map, link, and program IDs. A managed task that unlinks one pinned-link pathname hard-closes. | This is not host-root tamper prevention. It does not protect all maps, links, config, binary, process, or update paths. |
@@ -3015,9 +3024,11 @@ The current CRI effect lane proves one local Kubernetes binding and exact
 pre-effect denial. It does not prove distributed policy or multi-node
 authority. The administrative sub-lane exercises the HTTPS, OIDC, TokenReview,
 CONNECT admission, Control-to-node, and slot owners. Its current run reaches
-slot arm, then stock runc fails closed before target exec. The host-path fixture
-is an exact-file qualification input. It does not prove projected-token
-rotation semantics, release packaging, or a cloud platform.
+slot arm. The approved reservation and late kernel-owned argv checks are not
+implemented, so no Kubernetes rerun followed the paired lightweight failure.
+The host-path fixture is an exact-file
+qualification input. It does not prove projected-token rotation semantics,
+release packaging, or a cloud platform.
 
 The current provider and checked qualification record lane are x86-64. The BPF
 translation unit also compiles against checked x86, arm64, arm, and RISC-V
@@ -3220,9 +3231,12 @@ records for the final source.
 
 ### Remaining implementation work
 
-- Design and qualify a signed typed stock-runc bootstrap protocol before the
-  final target match. It must preserve the exact target slot and must not add a
-  broad runc, pipe, or socket exception. Then run the exact approval, ordinary
+- Implement the approved pre-PONR reservation, copied-argv check at
+  committing-creds, installed-argv check at successful exec, fail-closed
+  termination, and critical evidence. Apply the same per-exec transaction to
+  declared probe entries without consuming their reusable declarations. Do not
+  let mutable syscall-entry memory or an executable-only match grant a role.
+  Then run the exact approval, ordinary
   `kubectl exec` denial, consumed-slot non-winner, replay, expiry, mismatch,
   disconnect, and contention physical matrix.
 - Run one final current-source VM that completes kernel qualification, native
@@ -3261,8 +3275,8 @@ are not open product decisions. This round needs no new product decision.
 
 | Requirement | Architecture rule | Current implementation gap |
 | --- | --- | --- |
-| Administrative exec | The user who runs `kubectl-mithril exec` authenticates through the organization identity provider and is the approver for the implemented self-approval policy. Control issues one memory-only credential. Kubernetes authentication and CONNECT admission validate the approval and exact target. The node arms one exact slot and Control commits only after readback. | The physical transaction reaches slot arm. Stock runc then fails closed before target exec because its bootstrap protocol is not modeled. The complete physical transaction and race matrix remain. |
-| Executable identity | Administrative exec matches raw ordered argv and the exact executable object that the node resolves in the container view. It does not require an argv hash, executable-content hash, or trusted-content signer. General exec policy separately requires complete immutable image, script, interpreter, and loader provenance. | Administrative source wiring exists but is not physically qualified. General immutable provenance, interpreter, loader, and `binfmt_misc` coverage remain incomplete. No product choice is missing. |
+| Administrative exec | The user who runs `kubectl-mithril exec` authenticates through the organization identity provider and is the approver for the implemented self-approval policy. Control issues one memory-only credential. Kubernetes authentication and CONNECT admission validate the approval and exact target. The node arms one exact slot and Control commits only after readback. BPF reserves the slot at the deny-capable hook, verifies copied argv at committing-creds, verifies installed argv at successful exec, and then consumes the slot and activates the role. A late mismatch grants no role, queues `SIGKILL` before user mode, and emits critical evidence. | The physical transaction reaches slot arm. The reservation, two late checks, fail-closed response, and complete physical race matrix remain. Declared probe entries need the same per-exec transaction. |
+| Executable identity | Administrative exec matches the complete kernel-owned ordered argv and the exact executable object that the node resolves in the container view. Syscall-entry argv is only a bounded candidate. It does not require an argv hash, executable-content hash, or trusted-content signer. General exec policy separately requires complete immutable image, script, interpreter, and loader provenance. | The old source path can select from mutable syscall-entry argv but does not perform the required reservation and late verification. General immutable provenance, interpreter, loader, and `binfmt_misc` coverage remain incomplete. |
 | Asynchronous I/O | `ExactRequestIdentityV1` retains ring ID, ring generation, submission sequence, SQE index, user data, opcode, actor, executor, and completion ownership. SQPOLL cannot borrow a kernel worker role. | A restricted exact io_uring read/write slice exists. AIO, registered resources, broader opcodes, positive SQPOLL, and the full failure and restart matrix remain incomplete. |
 | Mount propagation | Mount, move, propagation, pivot-root, automount, overlay copy-up, and referral must invalidate every affected exact view before a new decision. Overflow must fail closed. | A global epoch now conservatively closes represented views for the current mount APIs, including `mount_setattr`, and the fixture covers one propagation peer. Automount, referral, overlay copy-up, idmapped mounts, bounded affected-set behavior, and full physical races remain. |
 | Generation retirement | Handles are monotonic and never reused in one boot and label epoch. Existing typed holders retain the old generation. `RETIRING` denies new references. Deletion requires every typed counter at zero, no owned tombstone after iterator and WAL reconciliation, and a BPF grace period. | Durable allocation, capacity preflight, staged probes, typed-holder checks, `RETIRING`, `TOMBSTONED`, and row deletion exist. The complete physical crash and holder matrix and an explicit grace-period qualification remain. |

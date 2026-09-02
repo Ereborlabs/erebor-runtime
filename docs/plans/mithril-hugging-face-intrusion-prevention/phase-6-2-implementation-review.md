@@ -826,6 +826,20 @@ one Control connection each. The result is
 The two retained Kubernetes VMs and the lightweight VM remain available. No
 verification step destroyed them.
 
+The expanded current-source direct-runc fixture does not pass its approved
+administrative-exec step. It reaches one exact armed slot. The target exec
+remains restricted and the slot remains armed because the old BPF path cannot
+trust syscall-entry argv while stock runc shares the exec stub address space.
+A physical BPF probe on the retained lightweight VM showed that the copied
+argv is unreadable at the deny-capable pre-point-of-no-return `bprm` hook and
+readable only after `point_of_no_return=1`. The approved replacement reserves
+the slot at the deny-capable hook, verifies copied argv at committing-creds,
+and verifies installed argv at successful exec. A late mismatch grants no
+role, queues `SIGKILL` before user mode, and emits critical evidence. Declared
+probe entries must use the same per-exec transaction. The replacement is not
+implemented or qualified. The paired Kubernetes case was not rerun after the
+lightweight failure.
+
 The direct lane and Kubernetes fixture close the previous stock-runtime
 regression without a runtime-specific operation list, dependency allow rules,
 or an object-authority map. The independent manual result applies to its

@@ -3,8 +3,8 @@
 Status: **Not done** for the complete phase. The signed path-tree denial claim
 is **Done** for the tested ordinary bind, recursive-bind, and `move_mount`
 forms. The Kubernetes baseline-submount route correction is **Done**. The
-remaining unsupported capabilities and the stock-runc administrative
-bootstrap keep the phase open.
+remaining unsupported capabilities and the unfinished administrative
+reservation and late argv verification keep the phase open.
 
 - Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 - Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -110,6 +110,25 @@ is atomic in the matching BPF rule/map entry; a nonmatching rule/program cannot
 consume or reuse it. Implement the approved one-use administrative exec path,
 including resolved executable object, full argv match, deadline, slot
 consumption, normal exec-chain policy, and accepted next-match race disclosure.
+At syscall entry, BPF can record a bounded argv candidate from mutable user
+memory. This candidate is not authority. At the deny-capable
+`bprm_check_security` hook, BPF must match the candidate, resolved executable,
+live binding, generation, deadline, and restricted external root before it
+atomically changes the slot from `ARMED` to `RESERVED`. Reservation grants no
+role. At `security_bprm_committing_creds`, BPF compares the complete copied
+kernel-owned argv with the reserved candidate. At `sched_process_exec`, BPF
+compares the successful process image argv again. Only an exact final match can
+change `RESERVED` to `CONSUMED` and install the administrative role. A mismatch,
+read failure, incomplete input, or failed exec consumes or corrupts the
+reservation, grants no role, keeps the task fail-closed, queues `SIGKILL` before
+user-mode execution, and emits a critical tamper observation. The node persists
+and reports that observation. It does not make the match decision.
+
+Declared PostStart, PreStop, startup, readiness, and liveness probe entries must
+use the same provisional capture, pre-PONR reservation, kernel-owned argv
+verification, successful-exec confirmation, fail-closed response, and tamper
+evidence. A declared probe remains reusable. Each probe invocation uses a new
+task-bound exec transaction instead of a one-use administrative slot.
 `claim_slot_id` remains optional outside that path. Mithril Control's
 `AdministrativeApprovalOwner` owns authenticated human approval, the explicit
 next-matching-root risk acceptance, Kubernetes admission credential, and
@@ -191,12 +210,48 @@ Commands and exact source state covered: the repository formatting, workspace ch
 Platform/kernel/runtime manifests: x86_64 Linux 6.8.0-137-generic, cgroup v2, BPF LSM, active LSM order lockdown,capability,landlock,yama,apparmor,bpf, and runtime BTF SHA-256 6da9f6b4ebcae9b07e6a717b517884abf7f6b524e46340e40fb164eed4a49a7c. No non-x86 physical claim is made.
 Performance/capacity results: the physical result has 10,000 measured opens and 50,000 saturation opens. It lost 39,081 observation records under saturation while the protected denial and benign allow remained correct. All four cleanup fields are true.
 Unsupported/degraded paths: administrative exec, immutable executable and file-content proof, complete mm/VMA state, overlay copy-up provenance, projected-token rotation and controller binding, complete mount variants and propagation, persistent file-instance lifetime, protected exec and role races, and complete local self-protection remain unsupported. Landlock target-context installation is unsupported with reason NO_QUALIFIED_TARGET_CONTEXT_INSTALL. Network and distributed results remain outside this outcome.
-Remaining work in this phase: qualify the capabilities that remain `UNSUPPORTED`. A missing hook, field, identity, or authority model must return to the prototype and type-closure gate before a later authorized plan can advertise it. The stock-runc administrative bootstrap also needs an architecture decision.
+Remaining work in this phase: qualify the capabilities that remain `UNSUPPORTED`. A missing hook, field, identity, or authority model must return to the prototype and type-closure gate before a later authorized plan can advertise it. Implement and qualify the approved administrative reservation transaction. Apply the same verification transaction to each declared probe entry before the probe-entry claim closes.
 Next phase not authorized: yes.
 ```
 
 The dated records below describe earlier source states. Their status sentences
 do not override the current Phase Result.
+
+## Administrative exec copied-argv feasibility — 2026-09-02
+
+State: **Historical measurement**. This result does not advertise
+administrative exec. The approved transaction below supersedes the requirement
+that one hook both reads copied argv and denies the exec.
+
+A disposable BPF probe ran in retained VM
+`mithril-runtime-qualification-3504827` on x86_64 Linux
+`6.8.0-138-generic`. The probe selected one exec with two arguments and
+measured the copied argument address at both sides of the exec address-space
+transition.
+
+At sleepable `lsm/bprm_check_security`, the hook was deny-capable and
+`point_of_no_return=0`. The current task used `mm=0xffff8a0bc7181600`.
+The copied argument image used `bprm->mm=0xffff8a0bc7186e00` and
+`bprm->p=0x7fffffffefc4`. `bpf_probe_read_user` and
+`bpf_copy_from_user_task` both returned `-EFAULT`. A kernel read returned
+`-ERANGE`. No argument byte was available.
+
+At `fentry/security_bprm_committing_creds`, the current task used the prior
+`bprm->mm`, `bprm->mm` was null, and `point_of_no_return=1`. A user read from
+the same `0x7fffffffefc4` address succeeded and returned
+`/bin/echo\0mithril-kernel-owned-a` as the first 32 bytes. This hook cannot
+deny or roll back the exec.
+
+The measured interface has no point where standard BPF can both
+read the complete kernel-owned argument image and deny before the point of no
+return. The approved design uses the deny-capable hook to reserve authority,
+then verifies kernel-owned argv at the two available late hooks. A late mismatch
+cannot roll back exec. It must prevent user-mode execution with `SIGKILL`, leave
+the task without the approved role, and emit critical tamper evidence. The
+checked product source still has the old syscall-entry-only comparison. It does
+not meet the approved contract and provides no administrative-exec claim. The
+probe links, pin directories, launcher, and remote objects were removed. The VM
+remains retained and running.
 
 ## Path-tree protection design update — 2026-08-17
 
@@ -398,7 +453,8 @@ It recorded `exact_open_denied_before_effect=true`,
 mount propagation and mount-attribute reconciliation, failed-closed external
 replacement, exact-object recovery, and complete fixture cleanup.
 
-The retained Kubernetes administrative-exec lane has a separate blocker. Its
+At that source state, the retained Kubernetes administrative-exec lane had a
+separate blocker. Its
 Control draft, admission, and slot-arm steps complete. Stock runc `1.4.2`
 then fails closed before the target exec. The retained observation records
 `EXECUTE` and `FILE WRITE` `UNSUPPORTED_OBJECT` results with `EACCES`, and the
@@ -419,6 +475,10 @@ The lease cannot start another container or a later exec. If runc does not
 start X before it ends, no task gets the approved role. This design trusts runc
 only for this short setup period. The current implementation does not support
 this path.
+
+This dated lease proposal was not approved and is not the current architecture.
+The approved transaction uses BPF slot reservation and late kernel-owned argv
+verification. It does not grant runc a bootstrap lease.
 
 The phase remains **Not done**. The passed probe qualifies the implemented
 local slice only. It does not complete the administrative runtime protocol or
