@@ -136,6 +136,13 @@ task fail-closed, queues `SIGKILL` before user-mode execution, and emits a
 critical tamper observation. The node persists and reports that observation.
 It does not make the match decision.
 
+`execveat(..., AT_EXECVE_CHECK)` can use the same provisional candidate and
+exact exec-file preflight. Because this call checks permission without
+installing an image, it must not create `PendingExecV1`, reserve or consume the
+slot, consume an exception, or change role. BPF deletes the provisional
+execution approval when the check syscall returns and leaves the slot `ARMED`.
+A later real exec must create and verify a new candidate independently.
+
 Declared PostStart, PreStop, startup, readiness, and liveness probe entries must
 use the same provisional capture, exact exec-file preflight, pre-PONR
 reservation, kernel-owned argv verification, successful-exec confirmation,

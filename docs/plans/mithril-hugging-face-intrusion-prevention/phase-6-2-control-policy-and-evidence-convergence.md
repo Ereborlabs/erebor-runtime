@@ -235,6 +235,8 @@ Scheduler submits the Pod binding
   -> the administrative workflow lowers its approval into one generic execution approval slot
   -> syscall-entry BPF records an untrusted bounded argv candidate for that slot
   -> the exact matching task can pass only the exec-file open that builds its bprm; the slot stays armed and grants no role
+  -> an AT_EXECVE_CHECK request deletes its provisional approval when the check returns; it does not reserve or consume the slot, consume an exception, create PendingExecV1, or change role
+  -> a later real exec creates and verifies a new candidate independently
   -> at the deny-capable bprm hook, BPF matches the candidate and resolved executable and atomically reserves the slot
   -> the reservation consumes any selected bounded exception under the claim-slot receipt but grants no role
   -> the normal exec-chain policy remains active
@@ -1184,9 +1186,12 @@ created in this phase.
   ambiguous entry match must remain fail-closed.
 - Approved administrative exec tests must prove that syscall-entry argv is
   provisional, that an exact exec-file preflight grants no role and leaves the
-  slot armed, that the deny-capable hook reserves one slot without granting a
-  role, that the reservation consumes any selected bounded exception under the
-  claim-slot receipt, and that both late hooks match complete kernel-owned argv.
+  slot armed, and that `AT_EXECVE_CHECK` removes only its provisional approval
+  without creating `PendingExecV1`, reserving or consuming the slot, consuming
+  an exception, or changing role. A later real exec must match independently.
+  The deny-capable hook must reserve one slot without granting a role. The
+  reservation must consume any selected bounded exception under the claim-slot
+  receipt. Both late hooks must match complete kernel-owned argv.
   They must prove final one-use slot consumption, installation of only
   `administrativeEntry.role`, explicit Deny precedence, applicable exception
   authorization, and denial of an ordinary exec without the slot. A late
