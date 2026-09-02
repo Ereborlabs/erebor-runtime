@@ -867,12 +867,10 @@ mark the task and reservation fail-closed, queue `SIGKILL` before user mode,
 and emit a critical tamper observation. The node persists and reports the
 observation. It does not decide whether the argv matches.
 
-`execveat(..., AT_EXECVE_CHECK)` can use the same provisional candidate and
-exact exec-file preflight. The check does not install an image. It therefore
-must not create `PendingExecV1`, reserve or consume the slot, consume an
-exception, or change role. BPF deletes the provisional execution approval when
-the check syscall returns and leaves the slot `ARMED`. A later real exec must
-create and verify a new candidate independently.
+The exec caller can be any thread in a multithreaded process. Candidate state
+is task-local. Competing threads can prepare candidates, but only the existing
+process transition guard and the slot's atomic `ARMED` to `RESERVED` change can
+select one winner. The match does not require `live_thread_refs == 1`.
 
 The webhook checks TTY and stream flags, because stock Kubernetes does not
 carry them into the Linux task. They are not BPF match fields. Therefore
@@ -7144,8 +7142,7 @@ webhook checks approval and PodExecOptions
   -> webhook returns allowed
   -> syscall entry records an untrusted bounded argv candidate
   -> exact exec-file preflight passes only the kernel open that builds bprm; slot stays ARMED
-  -> an AT_EXECVE_CHECK request deletes its provisional approval on syscall exit and leaves the slot ARMED
-  -> a later real exec creates and verifies a new candidate independently
+  -> a caller in a multithreaded process can prepare a task-local candidate
   -> at the deny-capable bprm hook, BPF matches binding + candidate + executable + generation + deadline
   -> atomic ARMED -> RESERVED; approved role stays pending and inactive
   -> consume any selected bounded exception under the claim-slot receipt
