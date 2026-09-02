@@ -234,7 +234,8 @@ Scheduler submits the Pod binding
   -> an exec that matches exactly one declared additional entry installs only that entry's role
   -> syscall-entry BPF records an untrusted bounded argv candidate for an administrative exec
   -> at the deny-capable bprm hook, BPF matches the candidate and resolved executable and atomically reserves the one-use slot
-  -> the reservation grants no role and the normal exec-chain policy remains active
+  -> the reservation consumes any selected bounded exception under the claim-slot receipt but grants no role
+  -> the normal exec-chain policy remains active
   -> committing-creds BPF verifies the complete copied kernel-owned argv against the reservation
   -> successful-exec BPF verifies the installed process image argv again
   -> an exact final match consumes the slot and installs only administrativeEntry.role
@@ -1181,8 +1182,9 @@ created in this phase.
   ambiguous entry match must remain fail-closed.
 - Approved administrative exec tests must prove that syscall-entry argv is
   provisional, that the deny-capable hook reserves one slot without granting a
-  role, and that both late hooks match complete kernel-owned argv. They must
-  prove final one-use consumption, installation of only
+  role, that the reservation consumes any selected bounded exception under the
+  claim-slot receipt, and that both late hooks match complete kernel-owned argv.
+  They must prove final one-use slot consumption, installation of only
   `administrativeEntry.role`, explicit Deny precedence, applicable exception
   authorization, and denial of an ordinary exec without the slot. A late
   mismatch, failed read, failed exec, or changed process image must grant no

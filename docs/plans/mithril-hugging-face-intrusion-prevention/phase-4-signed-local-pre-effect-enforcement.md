@@ -115,14 +115,18 @@ memory. This candidate is not authority. At the deny-capable
 `bprm_check_security` hook, BPF must match the candidate, resolved executable,
 live binding, generation, deadline, and restricted external root before it
 atomically changes the slot from `ARMED` to `RESERVED`. Reservation grants no
-role. At `security_bprm_committing_creds`, BPF compares the complete copied
-kernel-owned argv with the reserved candidate. At `sched_process_exec`, BPF
-compares the successful process image argv again. Only an exact final match can
-change `RESERVED` to `CONSUMED` and install the administrative role. A mismatch,
-read failure, incomplete input, or failed exec consumes or corrupts the
-reservation, grants no role, keeps the task fail-closed, queues `SIGKILL` before
-user-mode execution, and emits a critical tamper observation. The node persists
-and reports that observation. It does not make the match decision.
+role. If the selected compiled action consumes a bounded exception, BPF also
+consumes that exception under the slot's `claim_slot_id` in this deny-capable
+reservation path. An exception-consumption failure corrupts the reservation
+and denies the exec. At `security_bprm_committing_creds`, BPF compares the
+complete copied kernel-owned argv with the reserved candidate. At
+`sched_process_exec`, BPF compares the successful process image argv again.
+Only an exact final match can change `RESERVED` to `CONSUMED` and install the
+administrative role. A mismatch, read failure, incomplete input, or failed exec
+consumes or corrupts the already-spent reservation, grants no role, keeps the
+task fail-closed, queues `SIGKILL` before user-mode execution, and emits a
+critical tamper observation. The node persists and reports that observation.
+It does not make the match decision.
 
 Declared PostStart, PreStop, startup, readiness, and liveness probe entries must
 use the same provisional capture, pre-PONR reservation, kernel-owned argv

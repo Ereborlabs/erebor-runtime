@@ -847,13 +847,15 @@ directory, and effective `PATH`; the browser displays the resolved path and
 executable identity. Syscall-entry BPF records a bounded argv candidate from
 mutable user memory. This candidate is not authority. At the deny-capable
 `bprm_check_security` hook, BPF matches the candidate and exact executable, then
-atomically changes the slot from `ARMED` to `RESERVED`. The task stays in its
-restricted role. At `security_bprm_committing_creds`, BPF compares the complete
-copied kernel-owned argv with the reservation. At `sched_process_exec`, BPF
-compares the successful process image argv again. Only an exact final match can
-consume the slot and install the administrative role. The total argv limit is
-4096 bytes. Missing, truncated, changed, or over-limit input does not match.
-There is no argv or executable-content hash.
+atomically changes the slot from `ARMED` to `RESERVED`. If the compiled action
+selects a bounded exception, this deny-capable path atomically consumes that
+exception under the slot's `claim_slot_id`. The task stays in its restricted
+role. At `security_bprm_committing_creds`, BPF compares the complete copied
+kernel-owned argv with the reservation. At `sched_process_exec`, BPF compares
+the successful process image argv again. Only an exact final match can consume
+the slot and install the administrative role. The total argv limit is 4096
+bytes. Missing, truncated, changed, or over-limit input does not match. There
+is no argv or executable-content hash.
 
 A late mismatch or read failure occurs after the exec point of no return. BPF
 cannot roll back that exec. It must leave the task without the approved role,
@@ -874,6 +876,7 @@ non-external or application task:
 
 restricted external root with exact live match:
   ARMED -> RESERVED at the deny-capable bprm hook
+  consume any selected bounded exception under the claim-slot receipt
   keep the restricted role while exec is pending
   check every script/interpreter/executable candidate
   verify copied argv at committing-creds
@@ -6961,10 +6964,11 @@ For approved administrative exec, the external root is still labeled
 `RUNTIME_EXTERNAL_RESTRICTED` first. Syscall entry records only a provisional
 bounded argv candidate. At the deny-capable pre-point-of-no-return `bprm` hook,
 BPF can reserve the one-use slot and mark the approved role as pending without
-activating it. The committing-creds hook verifies the copied kernel-owned argv.
-The successful-exec hook verifies the installed argv, consumes the slot, and
-performs the in-place role switch. There is no unlabeled interval and no
-application descendant may inspect the slot.
+activating it. This reservation path consumes any selected bounded exception
+under the claim-slot receipt. The committing-creds hook verifies the copied
+kernel-owned argv. The successful-exec hook verifies the installed argv,
+consumes the slot, and performs the in-place role switch. There is no unlabeled
+interval and no application descendant may inspect the slot.
 
 No active record requires a held task, a setup ticket, a rootfs-ready ticket,
 a kubelet signature, a new CRI method, or a command-based pending claim.
@@ -7122,6 +7126,7 @@ webhook checks approval and PodExecOptions
   -> syscall entry records an untrusted bounded argv candidate
   -> at the deny-capable bprm hook, BPF matches binding + candidate + executable + generation + deadline
   -> atomic ARMED -> RESERVED; approved role stays pending and inactive
+  -> consume any selected bounded exception under the claim-slot receipt
   -> full exec chain passes normal pending-exec policy
   -> committing-creds verifies the complete copied kernel-owned argv
   -> successful-exec verifies installed argv
