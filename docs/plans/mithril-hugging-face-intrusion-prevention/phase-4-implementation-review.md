@@ -201,7 +201,7 @@ crosses to its parent mountpoint, and rejects a changed or incomplete walk.
 | `bprm_check_security` and executable file use | Stages the exec transition and checks represented exact file-backed execution. Unsupported anonymous, memfd, deleted, and incomplete paths hard-close. | The exact file-backed control does not prove immutable bytes, full interpreter/loader provenance, or the protected exec race. |
 | `file_open`, `file_receive`, and `file_permission` | Checks acquisition and later use for represented file objects. A received socket uses the IPC path. | Overlay copy-up, rotating projected-token binding, and persistent file-instance lifetime are unsupported. |
 | `mmap_file` and `file_mprotect` | Checks represented read, shared-write, and executable mapping acquisition. | No per-load, per-store, byte-taint, or complete mm/VMA claim exists after admission. |
-| `path_*` and mount hooks | Applies signed recursive deny floors, exact path/object rules, global dirty closure, compare-and-swap (CAS), and represented reconciliation. | Complete mount variants, fan-out, idmapped mounts, and overflow qualification are unsupported. |
+| `path_*` and mount hooks | Applies signed recursive deny floors and exact path/object rules. A mount hook advances the mutation guard. Each later protected effect scans and verifies one stable live mount topology in BPF. | Complete mount variants, fan-out, idmapped mounts, and overflow qualification are unsupported. |
 | `file_ioctl`, `ptrace_access_check`, and `task_kill` | Applies exact device-ioctl and process-control rows. It keeps a signal-zero control. | Derived-object authority after mint and broad privilege authority are not advertised. |
 | Unix socket hooks | Creates exact Unix-stream endpoint state, checks connect/send/receive relationships, and rejects stale, unmatched, inherited, or unrepresented authority. | Datagrams, socket pairs, arbitrary pipes, shared memory, and other channel families are not advertised. |
 | io_uring tracepoints and file hooks | Binds the restricted request to the submitter and executor, checks the represented file effect, releases lifecycle state, and rejects SQPOLL creation. | Unowned SQPOLL and unrepresented operations remain unsupported. |
@@ -213,7 +213,7 @@ crosses to its parent mountpoint, and rejects a changed or incomplete walk.
 | Generation descriptors, exact decisions, defaults, IPC rows, device rows, process rows, and path graphs | `NodePolicyGenerationOwner` through `KernelHost` | BPF effect programs | Installed and read back before publication. Immutable while active. Deleted only after all represented references clear. |
 | `binding_activation_targets` and `active_profile_generations` | `NodePolicyGenerationOwner` | BPF identity/effect lookup | Targets stage first. One profile pointer publishes last. Ambiguous publication is reconciled from durable pending state. |
 | Task, process, entry, execution-set, and profile-reference maps | BPF identity lifecycle plus node reconciliation | BPF effect programs and node recovery | Phase 2 owns creation and native lifetime. Missing protected identity hard-closes this phase's effect. |
-| `exact_file_objects` and mount-view maps | `NodePolicyGenerationOwner` resolves signed `EXACT` selectors from authenticated `Running` CRI identities; BPF marks mount transitions dirty | BPF file, exec, mapping, and path hooks | Exact rows bind one generation and container mount view. A changed runtime target revokes dynamic rows before replacement. Dirty, missing, replaced, or ambiguous state cannot authorize. Node configuration cannot publish an Exact row. |
+| `exact_file_objects`, admitted mount routes, and BPF mount-cache maps | `NodePolicyGenerationOwner` resolves signed `EXACT` selectors and publishes authenticated entry-time routes. BPF advances mutation guards and builds live cache rows. | BPF file, exec, mapping, and path hooks | Exact rows bind one generation and container mount view. Each protected effect verifies the live namespace event, mount tree, and mutation guard. A changed runtime target revokes dynamic rows before replacement. Missing, replaced, raced, or ambiguous state cannot authorize. Node configuration cannot publish an Exact row. |
 | `exception_runtime_states` and `exception_use_receipts` | Node installs/restores; BPF consumes under a spin lock and writes receipts | BPF decisions and `ExceptionAuthorityOwner` reconciliation | N uses succeed; N+1 and expiry deny. Restart never refunds an unproved use. Torn or poisoned WAL closes authority. |
 | `ipc_socket_states` | BPF socket lifecycle | BPF Unix-stream hooks | Socket-local state binds exact endpoint identities and generations. Inheritance alone does not grant a new actor authority. |
 | io_uring task, ring, request, execution, and async-reference maps | BPF setup, submit, execute, complete, and exit paths | BPF async and generation-retirement paths | Missing ownership or capacity hard-closes. Completion and exit release references. |
@@ -254,9 +254,10 @@ vocabulary. The JSON bundle is release evidence, not a kernel map layout.
 - Exception consumption uses a kernel spin lock. Only the decisive matching
   entry can consume. Successful receipts are durable; denied attempts do not
   create a reusable success.
-- Mount mutation enters global fail closure before the strict file or exec
-  path can reuse prior state. Exact reconciliation restores only the expected
-  object and epoch.
+- Mount mutation advances the global guard before the strict file or exec path
+  can reuse prior state. The next protected effect scans one stable live mount
+  topology in BPF and applies the admitted route before the oldest-mount
+  fallback.
 - Unix-stream state binds both endpoint identities and generations. A forked
   child that inherits the descriptor does not inherit its parent's exact
   relationship authority.

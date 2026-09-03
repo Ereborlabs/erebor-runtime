@@ -46,11 +46,11 @@ Unqualified anonymous and memfd execution, file mutation, SysV IPC, namespace
 creation, BPF map creation, and pinned-link removal remain hard closed. An
 exact file-backed exec control does not prove immutable executable authority.
 
-Before the probe enables effects or opens a protected file, it verifies every
-configured mount view is `CLEAN` at the current global epoch. A policy install
-must complete this check without a workload file access. If it fails, do not
-use a file read as a warmup. Keep the result and correct the signed policy or
-mount state.
+The probe records the BPF mount-cache keys before the first protected file
+effect. The effect must apply the exact policy and publish a new `READY` cache
+state with a nonzero mount count. After each successful mount change, the next
+protected effect must use a new stable namespace event and mount-tree snapshot.
+Node does not rebuild a running task's mount topology.
 
 The real `mithril-node` Docker and raw-namespace cases live in
 [`examples/mithril-local-enforcement-manual`](../../../../examples/mithril-local-enforcement-manual/README.md).
