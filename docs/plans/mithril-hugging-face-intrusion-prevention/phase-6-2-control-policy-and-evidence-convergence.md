@@ -778,6 +778,14 @@ failure that the lightweight case does not reproduce, stop the Kubernetes
 case. Add that exact condition and oracle to the lightweight case, make the
 lightweight case pass, and only then rerun Kubernetes.
 
+Overlap the recursive-wildcard read with a containerd exec preparation. The
+exec preparation uses `open_tree`, `fsconfig`, and `fsmount` and therefore
+opens the global BPF mount-mutation guard. Require the overlapping read to
+fail closed if it enters that guard. After the exec preparation completes,
+repeat the same read and require `PATH_TREE_POLICY_DENY`. Capture
+`UNRESOLVED_OBJECT` in both layers so the test distinguishes the concurrent
+guard denial from the stable path-policy denial.
+
 Create, update, roll back, delete, and recreate one policy while two selected
 nodes disconnect, reconnect, restart, and reject selected candidates. Create,
 consume, expire, revoke, delete, and attempt to replay one file exception.
