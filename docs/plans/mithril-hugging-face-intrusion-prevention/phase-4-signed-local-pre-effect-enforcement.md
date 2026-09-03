@@ -88,6 +88,13 @@ namespace event, scans the live mount tree, resolves the path, and rechecks the
 same guard. A concurrent or unresolved topology denies. The ring-buffer mount
 event is evidence only. Node does not complete this authorization path.
 
+Key every BPF mount-cache state and mount-selection row with the captured
+global mutation epoch. Build all rows for one epoch before the cache state
+becomes ready. Do not reuse a row from an earlier epoch when the namespace
+event, namespace address, task-root pointers, or mount-root identity stay the
+same. Use the cache only after BPF rechecks the same global epoch and confirms
+that no mount mutation is pending.
+
 ### D4.4 — IPC and process-control enforcement
 
 Enforce directional Unix/local-channel relationships and process-control
@@ -403,6 +410,7 @@ A represented namespace changes after activation
   -> the BPF mount hook updates the global epoch and pending count before effect
   -> the BPF return hook clears the pending count after the syscall
   -> the next BPF decision snapshots the guard and live namespace event
+  -> BPF selects or builds only cache rows keyed by that global epoch
   -> BPF scans the live mount tree and resolves the path in the same hook chain
   -> BPF rechecks the guard before it applies the policy decision
   -> a race or unresolved path denies without a Node round trip

@@ -883,6 +883,12 @@ guard. A concurrent, missing, or unresolved topology denies under strict
 policy. Ring-buffer delivery supplies evidence only. It does not complete the
 authorization decision or trigger Node route publication.
 
+The BPF mount-cache state key and every mount-selection row key include the
+captured global mutation epoch. BPF builds a complete cache generation before
+it marks that generation ready. It cannot reuse an earlier generation only
+because the namespace event or kernel pointers did not change. BPF uses the
+generation only after it rechecks the global epoch and the pending count.
+
 For an initial Kubernetes submount, Node follows the source dentry ancestry
 and records the inherited source path. For example, if the source root is
 mounted at `/home/secret` and `source/models` is also mounted at
