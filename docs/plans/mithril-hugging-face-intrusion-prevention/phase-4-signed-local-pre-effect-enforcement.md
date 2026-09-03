@@ -108,27 +108,34 @@ advertised operation has a qualified pre-effect hook and physical oracle.
 Implement exact, signed, expiring exceptions with `maximum_uses`. Consumption
 is atomic in the matching BPF rule/map entry; a nonmatching rule/program cannot
 consume or reuse it. An execution approval slot is the generic kernel primitive
-for one approved exec attempt. It binds the resolved executable object, full
-argv, live binding, generation, deadline, target role, and optional exception
-claim. Administrative approval is the first workflow that creates one. A later
-approved agent request for a tool such as Bash must create the same slot and
-must not add another BPF admission mechanism.
-At syscall entry, BPF can record a bounded argv candidate from mutable user
-memory. This candidate is not authority. At the exec-file open that Linux uses
-to build `linux_binprm`, BPF can provisionally allow only the same task when
-its `ARGUMENTS_MATCHED` candidate, armed slot, resolved executable, restricted
-external root, live binding, generation, and deadline all match. This preflight
-does not change the slot, consume an exception, install a role, or allow a file
-operation. At the deny-capable `bprm_check_security` hook, BPF must match the
-candidate, resolved executable,
-live binding, generation, deadline, and restricted external root before it
-atomically changes the slot from `ARMED` to `RESERVED`. Reservation grants no
-role. If the selected compiled action consumes a bounded exception, BPF also
-consumes that exception under the slot's `claim_slot_id` in this deny-capable
-reservation path. An exception-consumption failure corrupts the reservation
-and denies the exec. At `security_bprm_committing_creds`, BPF compares the
-complete copied kernel-owned argv with the reserved candidate. At
-`sched_process_exec`, BPF compares the successful process image argv again.
+for one approved exec attempt. It binds the resolved executable object, the
+complete argv digest, live binding, generation, deadline, target role, and
+optional exception claim. Administrative approval is the first workflow that
+creates one. A later approved agent request for a tool such as Bash must create
+the same slot and must not add another BPF admission mechanism.
+
+At syscall entry, BPF must calculate one digest from the complete kernel-valid
+argv in mutable user memory. This candidate is not authority. Use SHA-256 over
+the exact byte sequence `MITHRIL-EXEC-ARGV-V1\0`, each argument with its trailing
+NUL byte in order, the little-endian `u64` argument count, and the little-endian
+`u64` total span that includes the argument NUL bytes. Store the digest, count,
+span, capture result, syscall kind, and flags in task-local state. Do not use a
+Mithril buffer limit as an exec limit. An executable-only entry can continue if
+the digest is unavailable because argv is not an authorization fact for that
+entry. BPF must emit explicit incomplete-capture evidence. An entry with an
+exact-argv condition cannot reserve its slot unless the complete digest exists
+and matches.
+
+At the deny-capable `bprm_check_security` hook, BPF must match the candidate
+digest when the entry requires it, the resolved executable, live binding,
+generation, deadline, and restricted external root before it atomically changes
+the slot from `ARMED` to `RESERVED`. Reservation grants no role. If the selected
+compiled action consumes a bounded exception, BPF also consumes that exception
+under the slot's `claim_slot_id` in this deny-capable reservation path. An
+exception-consumption failure corrupts the reservation and denies the exec. At
+`security_bprm_committing_creds`, BPF calculates the same digest from the
+complete copied kernel-owned argv. At `sched_process_exec`, BPF calculates it
+from the successful process image argv again.
 Only an exact final match can change `RESERVED` to `CONSUMED` and install the
 slot's target role. A mismatch, read failure, incomplete input, or failed exec
 consumes or corrupts the already-spent reservation, grants no role, keeps the
@@ -142,12 +149,11 @@ process transition guard and the slot's atomic `ARMED` to `RESERVED` change can
 select one winner. The match must not require `live_thread_refs == 1`.
 
 Declared PostStart, PreStop, startup, readiness, and liveness probe entries must
-use the same provisional capture, exact exec-file preflight, pre-PONR
-reservation, kernel-owned argv verification, successful-exec confirmation,
-fail-closed response, and tamper evidence. A declared probe remains reusable,
-but each probe invocation creates a new task-bound execution approval slot from
-that declaration. The slot is consumed once; the probe declaration is not
-consumed.
+use the same provisional digest, pre-PONR reservation, kernel-owned argv
+verification, successful-exec confirmation, fail-closed response, and tamper
+evidence. A declared probe remains reusable, but each probe invocation creates
+a new task-bound execution approval slot from that declaration. The slot is
+consumed once; the probe declaration is not consumed.
 `claim_slot_id` remains optional outside that path. Mithril Control's
 `AdministrativeApprovalOwner` owns authenticated human approval, the explicit
 next-matching-root risk acceptance, Kubernetes admission credential, and

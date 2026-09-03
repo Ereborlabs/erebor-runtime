@@ -345,12 +345,12 @@ The closure matrix is authoritative for allocation. In short:
   self-protection models need a new prototype and type-closure outcome.
 - The approved administrative path needs implementation and qualification.
   The deny-capable hook reserves one slot from an exact executable and
-  provisional argv match. The two late hooks verify copied and installed argv
-  before slot consumption and role activation. A mismatch must grant no role,
-  queue `SIGKILL` before user mode, and emit critical evidence. Declared probe
-  entries must use the same transaction for each invocation. Do not add a broad
-  runc, pipe, or socket exception. Mutable syscall-entry arguments cannot grant
-  a role.
+  provisional complete argv digest match. The two late hooks calculate the same
+  digest from copied and installed argv before slot consumption and role
+  activation. A mismatch must grant no role, queue `SIGKILL` before user mode,
+  and emit critical evidence. Declared probe entries must use the same
+  transaction for each invocation. Do not add a broad runc, pipe, or socket
+  exception. Mutable syscall-entry arguments cannot grant a role.
 - Network belongs to the next network phase.
 - General WAL, coverage, and source-health recovery belong to the evidence
   phase. The local exception WAL is already present here.
