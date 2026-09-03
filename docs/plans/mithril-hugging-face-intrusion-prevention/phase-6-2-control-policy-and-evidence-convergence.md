@@ -233,15 +233,15 @@ Scheduler submits the Pod binding
   -> every later independent root starts with externalRole and no admitted-entry default
   -> an exec that matches exactly one declared additional entry installs only that entry's role
   -> the administrative workflow lowers its approval into one generic execution approval slot
-  -> syscall-entry BPF records one untrusted complete argv digest in task-local state before any cgroup, binding, role, policy, or slot check
+  -> syscall-entry BPF writes one untrusted complete argv chunk capture before any cgroup, binding, role, policy, or slot check
   -> the capture grants no role, does not reserve a slot, and does not change the normal exec-file path
   -> a caller in a multithreaded process can prepare a task-local candidate; the transition guard and atomic slot reservation select one winner
   -> at the deny-capable bprm hook, BPF resolves the binding, entry, and executable and applies the normal entry authorization
-  -> an entry that requires exact argv also matches the complete candidate digest and atomically reserves its execution approval slot
+  -> an entry that requires exact argv also matches the complete candidate capture with the expected immutable chunks and atomically reserves its execution approval slot
   -> the reservation consumes any selected bounded exception under the claim-slot receipt but grants no role
   -> the normal exec-chain policy remains active
-  -> committing-creds BPF calculates the digest of the complete copied kernel-owned argv and compares it with the provisional digest
-  -> successful-exec BPF calculates the digest of the installed process image argv and compares it again
+  -> committing-creds BPF compares the complete copied kernel-owned argv with the expected immutable chunks
+  -> successful-exec BPF compares the installed process image argv with the same chunks
   -> an exact final match consumes the slot and installs only its target role
   -> a late mismatch or read failure grants no role, consumes or corrupts the reservation, queues SIGKILL before user mode, and emits critical tamper evidence
   -> each declared lifecycle or health-probe invocation uses the same transaction with a fresh execution approval slot derived from its reusable declaration
@@ -257,7 +257,8 @@ the BPRM decision. It does not replace the spine or remove an existing check.
 
 ```mermaid
 flowchart LR
-    S[execve or execveat entry] --> C[Digest complete argv into task-local state]
+    N[Node publishes expected chunks, reads them back, then arms slot] --> B
+    S[execve or execveat entry] --> C[Capture complete argv in ordered immutable chunks]
     C --> A[Runtime can attach the same task to the protected cgroup]
     A --> B[BPRM resolves binding and executable]
     B --> P{Entry kind}
@@ -269,10 +270,10 @@ flowchart LR
     PD --> G
     PP --> G
     PM --> G
-    G --> K[Committing-creds compares the copied kernel argv digest]
+    G --> K[Committing-creds compares copied kernel argv with expected chunks]
     K --> X{Exact match}
     X -->|No| T[Grant no role, close or corrupt reservation, queue SIGKILL, emit tamper evidence]
-    X -->|Yes| E[sched_process_exec compares the installed argv digest and executable]
+    X -->|Yes| E[sched_process_exec compares installed argv chunks and executable]
     E --> Y{Exact match}
     Y -->|No| T
     Y -->|Yes| R[Commit entry role and consume any reserved slot]
@@ -1063,22 +1064,31 @@ already installed. A failed or unmatched next exec remains fail-closed. Do
 not match a runtime binary, helper path, file descriptor path, process name,
 or lifecycle kind in BPF.
 
-Match a declared entry with facts from the same kernel exec request. At exec
-syscall entry, calculate the complete argv digest in task-local provisional
-state before a cgroup, binding, role, policy, or slot check. Retain it across an
-in-flight cgroup attachment, and remove it when that exec commits or fails. Use
-SHA-256 over the exact byte sequence `MITHRIL-EXEC-ARGV-V1\0`, each argument
-with its trailing NUL byte in order, the little-endian `u64` argument count, and
-the little-endian `u64` total span that includes the argument NUL bytes. The
-digest operation must accept the complete argv that Linux accepts. A Mithril
-capture buffer must not become a smaller exec limit.
+Match a declared entry with facts from the same kernel exec request. Node
+serializes the signed raw argv as each argument followed by its NUL byte. It
+divides the complete stream into ordered chunks of at most 4096 bytes. Node
+allocates a fresh snapshot ID, inserts each expected chunk once with
+`BPF_NOEXIST`, reads back the complete snapshot, and then publishes the slot
+descriptor. The descriptor contains the snapshot ID, argument count, total
+span, and chunk count. Node must not modify a published chunk. A publication
+failure creates no armed slot and removes the rows that the failed publication
+created.
+
+At exec syscall entry, BPF captures the complete argv in task-local provisional
+state before a cgroup, binding, role, policy, or slot check. It serializes each
+argument with its trailing NUL byte into ordered chunks of at most 4096 bytes.
+BPF inserts each chunk once under a fresh capture ID and marks the capture
+complete only after it reads the terminating NULL argv pointer. Retain the
+capture across an in-flight cgroup attachment. Remove it when that exec commits
+or fails. A Mithril capture buffer must not become a smaller exec limit.
 
 The capture is not an authorization decision. An entry with no argv condition
-continues to use its signed executable rule if digest capture is unavailable.
+continues to use its signed executable rule if complete capture is unavailable.
 BPF emits explicit incomplete-capture evidence in this case. An administrative,
 probe, lifecycle, or later tool entry that includes exact argv cannot reserve
-its execution approval slot without a complete matching digest. Use captured
-`argv[0]` as the logical invocation path when it is canonical and available.
+its execution approval slot without a complete byte-for-byte match with the
+expected snapshot. Use captured `argv[0]` as the logical invocation path when
+it is canonical and available.
 Use the opened `linux_binprm.file` as the executable backing object. Accept only
 a canonical absolute invocation path, and walk only exact signed path
 transitions for entry admission. Run the normal opened-file policy gate first.
@@ -1088,8 +1098,8 @@ roles even when both paths resolve to the same backing executable. Do not add
 unmatched invocation path cannot install a declared role. Keep the
 container-visible opened-file match for the initial application start because a
 runtime can use an internal file-descriptor path for its held initial task. The
-provisional digest adds an integrity check. It does not add an execution rule,
-change an entry match, or grant a role.
+provisional chunk capture adds an integrity check. It does not add an execution
+rule, change an entry match, or grant a role.
 
 After activation, the runtime can inspect and then signal the exact initial
 task to stop the container. A permitted read-only inspection prepares one
@@ -1385,20 +1395,22 @@ No Kubernetes rerun started after this lightweight failure. This follows the
 paired qualification rule.
 
 The approved replacement treats syscall-entry argv as a provisional candidate.
-Syscall entry calculates the complete candidate digest in task-local state
-before any cgroup, binding, role, policy, or slot check. The deny-capable BPRM
-hook resolves those authorization facts, matches the digest and executable when
-exact argv is required, and atomically reserves the required slot without
-granting a role. `security_bprm_committing_creds` checks the complete copied argv
-digest. `sched_process_exec` checks the successful process image argv digest,
-consumes a reserved slot, and installs the role. A late mismatch or read failure
-grants no role, closes the reservation, queues `SIGKILL` before user mode, and
-emits critical evidence. The node only persists and reports the result. Every
-entry uses this provisional and late-verification transaction. Existing signed
-entry rules continue to decide admission. An entry with no argv condition does
-not fail because an observation was incomplete. Administrative and declared probe entries
-also require their execution approval slot. Probe declarations remain reusable,
-and each invocation gets a new task-bound transaction.
+Syscall entry writes the complete candidate argv into ordered provisional
+chunks before any cgroup, binding, role, policy, or slot check. The deny-capable
+BPRM hook resolves those authorization facts, compares the complete capture
+with the expected immutable snapshot when exact argv is required, and atomically
+reserves the required slot without granting a role.
+`security_bprm_committing_creds` compares the complete copied argv with the same
+snapshot. `sched_process_exec` compares the successful process image argv with
+that snapshot, consumes a reserved slot, and installs the role. A late mismatch
+or read failure grants no role, closes the reservation, queues `SIGKILL` before
+user mode, and emits critical evidence. The node only persists and reports the
+result. Every entry uses this provisional and late-verification transaction.
+Existing signed entry rules continue to decide admission. An entry with no argv
+condition does not fail because an observation was incomplete. Administrative
+and declared probe entries also require their execution approval slot. Probe
+declarations remain reusable, and each invocation gets a new task-bound
+transaction.
 
 ## Phase Result
 

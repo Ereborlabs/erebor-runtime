@@ -844,18 +844,20 @@ may inspect the slot. The approval preserves the exact argv that the
 administrator entered, including a command such as `bash`. Before approval,
 the node resolves that command in the target container's mount view, working
 directory, and effective `PATH`; the browser displays the resolved path and
-executable identity. Syscall-entry BPF calculates a SHA-256 candidate from the
-complete argv in mutable user memory. This candidate is not authority. At the
-deny-capable `bprm_check_security` hook, BPF matches the digest, exact
+executable identity. Node publishes the signed argv as an immutable ordered
+chunk snapshot before it arms the slot. Syscall-entry BPF captures the complete
+argv in mutable user memory as ordered provisional chunks. This candidate is
+not authority. At the deny-capable `bprm_check_security` hook, BPF compares the
+complete capture with the expected snapshot and matches the exact
 executable, restricted external root, binding, generation, and deadline. It
 then atomically changes the slot from `ARMED` to `RESERVED`. If the compiled
 action selects a bounded exception, this deny-capable path atomically consumes
 that exception under the slot's `claim_slot_id`. The task stays in its
-restricted role. At `security_bprm_committing_creds`, BPF calculates the same
-digest from the complete copied kernel-owned argv. At `sched_process_exec`, BPF
-calculates it from the successful process image argv again. Only an exact final
-match can consume the slot and install the administrative role. A fixed
-Mithril capture buffer is not an exec limit.
+restricted role. At `security_bprm_committing_creds`, BPF compares the complete
+copied kernel-owned argv with the expected snapshot. At `sched_process_exec`,
+BPF repeats the comparison against the successful process image argv. Only an
+exact final match can consume the slot and install the administrative role. A
+fixed Mithril capture buffer is not an exec limit.
 
 A late mismatch or read failure occurs after the exec point of no return. BPF
 cannot roll back that exec. It must leave the task without the approved role,
@@ -6195,7 +6197,7 @@ The remaining intentionally non-struct names have explicit status:
 | `AuthorityDomainStateV1` | Native-family monotonic restriction and response state; it never joins independent roots |
 | `PendingExecV1` | One bounded script/binfmt/ELF-loader exec attempt through commit or failure |
 | `ExternalRootClassificationV1` | Exact conservative result for an independent protected root and any qualified purpose evidence |
-| `AdministrativeArgvV1` / `ExecutionArgvDigestV1` | Administrative-workflow raw arguments and the generic fixed BPF digest of the complete approved argv |
+| `AdministrativeArgvV1` / `ExecutionArgvSnapshotV1` | Administrative-workflow raw arguments and the generic immutable BPF snapshot descriptor for complete approved argv |
 | `PendingExecutionApprovalV1` | Task/exec-attempt-local proof that one execution approval slot was reserved, verified, and consumed |
 | `SignedIntentV1` | Canonical signed authorization envelope for a capability-gated intent body |
 | `EntryKindV1` | Closed root class: initial, native, external-unknown, restore-unknown, and qualified registered purpose. Probe/lifecycle/admin is legal only when an existing interface proves it. |
@@ -6969,13 +6971,14 @@ prebuild container/cgroup binding from runtime inventory or a stock hook
 
 For approved administrative exec, the external root is still labeled
 `RUNTIME_EXTERNAL_RESTRICTED` first. Syscall entry records only a provisional
-digest of the complete argv. At the deny-capable pre-point-of-no-return `bprm`
-hook, BPF can reserve the one-use slot and mark the approved role as pending
-without activating it. This reservation path consumes any selected bounded
-exception under the claim-slot receipt. The committing-creds hook verifies the
-copied kernel-owned argv digest. The successful-exec hook verifies the installed
-argv digest, consumes the slot, and performs the in-place role switch. There is
-no unlabeled interval and no application descendant may inspect the slot.
+ordered chunk capture of the complete argv. At the deny-capable
+pre-point-of-no-return `bprm` hook, BPF can reserve the one-use slot and mark the
+approved role as pending without activating it. This reservation path consumes
+any selected bounded exception under the claim-slot receipt. The committing-
+creds hook verifies the copied kernel-owned argv against the expected immutable
+chunks. The successful-exec hook repeats that comparison, consumes the slot,
+and performs the in-place role switch. There is no unlabeled interval and no
+application descendant may inspect the slot.
 
 No active record requires a held task, a setup ticket, a rootfs-ready ticket,
 a kubelet signature, a new CRI method, or a command-based pending claim.
@@ -7018,7 +7021,7 @@ ExecutionApprovalSlotV1 {
   claim_slot_id: Id128
   cgroup_binding_nonce: Id128
   container_generation: nonzero u64
-  expected_argv: ExecutionArgvDigestV1
+  expected_argv: ExecutionArgvSnapshotV1
   resolved_executable_object_key_id: nonzero u64
   resolved_executable_object_generation: nonzero u64
   target_role_numeric_id: nonzero u32
@@ -7057,8 +7060,9 @@ PendingExecutionApprovalV1 {
 One cgroup binding has at most one `ARMED` slot. The BPF value omits Pod and
 container names, people, stream flags, tokens, signatures, free text, and raw
 argv. Rust has bound the other facts to the cgroup ID, nonce, and container
-generation. BPF reads the current task's binding and compares the fixed fields
-above with the kernel-owned exec argument image.
+generation. A separate short-lived map contains the immutable expected argv
+chunks. BPF reads the current task's binding and compares the fixed fields above
+and the complete kernel-owned exec argument image.
 
 An administrative-exec body deliberately does **not** carry an exception ID:
 the body proves who approved this exact exec, while the signed profile owns
@@ -7070,43 +7074,66 @@ mismatch denies before the slot is armed. This leaves one exception owner and
 does not create a second signed exception selector in the exec protocol.
 
 The signed approval contains the raw arguments exactly as Kubernetes decoded
-them. Rust calculates the same fixed-size digest that BPF calculates:
+them. Node serializes each argument followed by its NUL byte and publishes the
+complete stream with these fixed BPF types:
 
 ```text
-ExecutionArgvDigestV1 {
+ExecutionArgvSnapshotV1 {
+  snapshot_id: nonzero Id128
   argument_count: u64
   total_argument_span: u64
-  sha256: byte[32]
+  chunk_count: nonzero u32
+}
+
+ExecutionArgvChunkKeyV1 {
+  snapshot_id: nonzero Id128
+  chunk_index: u32
+}
+
+ExecutionArgvChunkV1 {
+  length: 1..4096
+  terminal: bool
+  bytes: byte[4096]
 }
 ```
 
-The digest input is the exact byte sequence `MITHRIL-EXEC-ARGV-V1\0`, each
-argument with its trailing NUL byte in order, the little-endian `u64` argument
-count, and the little-endian `u64` total span that includes the argument NUL
-bytes. Syscall entry calculates the digest only to create a provisional task
-candidate. At the deny-capable `bprm` hook, BPF matches that candidate and the
-exact executable, then reserves the slot. The committing-creds hook repeats the
-digest over the copied kernel-owned exec argument image. The successful-exec
-hook repeats it against the installed process image. BPF does not copy raw argv
-into evidence or a durable map.
+Node allocates a fresh snapshot ID. It inserts each chunk once with
+`BPF_NOEXIST`, reads back the complete snapshot, and then publishes the slot.
+It never updates a published chunk. A publication failure creates no armed slot
+and removes only the rows that the failed publication created. A completed
+slot is immutable. Node deletes its expected rows only after the slot is
+terminal and no pending reservation refers to it.
+
+Syscall entry writes the same complete byte stream into provisional chunks
+under a fresh task-local capture ID. It marks the capture complete only after it
+reads the terminating NULL argv pointer. The candidate manifest records the
+argument count, total span, chunk count, syscall kind, flags, and capture
+result. At the deny-capable `bprm` hook, BPF requires equal manifests and
+compares each captured chunk byte for byte with the expected chunk before it
+reserves the slot. The committing-creds hook repeats the comparison over the
+copied kernel-owned exec argument image. The successful-exec hook repeats it
+against the installed process image. BPF does not copy raw argv into evidence
+or a durable userspace record.
 
 The first argument is the exact nonempty command name entered by the requester;
 it may be `bash`, a relative path, or an absolute path. Before approval, the
 node resolves it using the declared mode in the target container view and
 returns `ResolvedAdministrativeExecutableV1` for display and signature. Slot
 installation repeats the resolution and requires the same exact live object.
-At the `bprm` check, the provisional complete digest must equal the approved
-digest while the actual executable object must equal the resolved object
-generation. Both late checks must confirm the same digest. The syscall filename
-and `argv[0]` need not be equal. Normal executable policy still checks the live
-file before slot consumption. Embedded NUL, ambiguous or changed resolution,
-unsupported syscall, or incomplete capture makes an exact-argv request
-unavailable. Prefix and truncated matches are forbidden.
+At the `bprm` check, the provisional complete capture must equal the approved
+snapshot while the actual executable object must equal the resolved object
+generation. Both late checks must confirm the same snapshot. The syscall
+filename and `argv[0]` need not be equal. Normal executable policy still checks
+the live file before slot consumption. Embedded NUL, ambiguous or changed
+resolution, unsupported syscall, incomplete capture, or temporary chunk-map
+exhaustion makes an exact-argv request unavailable. Prefix and truncated
+matches are forbidden. An entry with no argv condition does not fail only
+because complete capture is unavailable.
 
 Raw argv can contain secrets. Show it only to the approver and keep it only in
-the short-lived authorization and BPF slot. Do not emit it as normal telemetry
-or copy it into the WAL. Remove it after durable consumption, cancellation, or
-expiry.
+the short-lived authorization and expected chunk map. Do not emit it as normal
+telemetry or copy it into the WAL. Remove it after durable consumption,
+cancellation, or expiry.
 
 Create `PendingExecutionApprovalV1` from the provisional syscall-entry match.
 Bind it to the current exec attempt. Only its `KERNEL_ARGV_VERIFIED` state can
@@ -7127,16 +7154,17 @@ The one-use execution approval transition is intentionally simple:
 webhook checks approval and PodExecOptions
   -> Rust verifies live Pod/container/cgroup binding
   -> node appends proof/slot IDs and slot intent to WAL, without raw argv
-  -> node installs and reads back ARMED slot
+  -> node inserts and reads back every expected immutable chunk
+  -> node installs and reads back ARMED slot with the complete snapshot descriptor
   -> webhook returns allowed
-  -> syscall entry records an untrusted digest of the complete argv
+  -> syscall entry records the complete argv in untrusted provisional chunks
   -> a caller in a multithreaded process can prepare a task-local candidate
   -> at the deny-capable bprm hook, BPF matches binding + candidate + executable + generation + deadline
   -> atomic ARMED -> RESERVED; approved role stays pending and inactive
   -> consume any selected bounded exception under the claim-slot receipt
   -> full exec chain passes normal pending-exec policy
-  -> committing-creds verifies the complete copied kernel-owned argv digest
-  -> successful-exec verifies the installed argv digest
+  -> committing-creds compares the complete copied kernel-owned argv with the expected chunks
+  -> successful-exec compares the installed argv with the expected chunks
   -> atomic RESERVED -> CONSUMED and task switches to the approved role
   -> every later effect still uses normal role policy
 ```
@@ -7145,7 +7173,7 @@ Declared PostStart, PreStop, startup, readiness, and liveness probes use this
 same transaction. A reusable probe declaration authorizes the node to create a
 fresh task-bound execution approval slot for each invocation. Successful exec
 consumes that slot once but does not consume the declaration. The same slot
-shape, complete argv digest checks, late tamper response, and role activation
+shape, complete argv chunk checks, late tamper response, and role activation
 apply.
 
 If exec or the role switch fails, the task gets no approved role and the slot
