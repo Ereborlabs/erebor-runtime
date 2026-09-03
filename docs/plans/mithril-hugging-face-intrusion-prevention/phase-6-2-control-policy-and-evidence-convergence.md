@@ -735,6 +735,14 @@ health without policy source, evidence, or secret payloads in logs or metrics.
 
 ### D6.2.8 — End-to-end convergence proof
 
+Run the execution-approval lightweight case through the same containerd shim
+and `runc` versions as the paired Kubernetes case, but without a Kubernetes
+control plane. Match the OCI process specification and the shim-driven exec
+path. If the Kubernetes case finds a pre-reservation or exec-transition
+failure that the lightweight case does not reproduce, stop the Kubernetes
+case. Add that exact condition and oracle to the lightweight case, make the
+lightweight case pass, and only then rerun Kubernetes.
+
 Create, update, roll back, delete, and recreate one policy while two selected
 nodes disconnect, reconnect, restart, and reject selected candidates. Create,
 consume, expire, revoke, delete, and attempt to replay one file exception.
