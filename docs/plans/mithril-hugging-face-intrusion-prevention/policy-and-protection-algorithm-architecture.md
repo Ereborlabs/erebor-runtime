@@ -1815,7 +1815,7 @@ physical_or_provider_oracle:
   only A obtains the narrow probe role and can contact the declared loopback
   health port; B cannot read credentials or use unrelated egress; C receives
   its administrative result and never the probe budget. Three task/entry IDs
-  remain distinct even though executable bytes and argv digest are identical.
+  remain distinct even though executable bytes and complete argv are identical.
 
 degraded_or_unsupported_result:
   no carried exact ticket means AMBIGUOUS_EXTERNAL_ROOT or fail-closed admission;

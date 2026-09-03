@@ -421,6 +421,14 @@ A represented namespace changes after activation
   -> BPF scans the live mount tree and resolves the path in the same hook chain
   -> BPF rechecks the guard before it applies the policy decision
   -> a race or unresolved path denies without a Node round trip
+
+Node restarts or remeasures a live binding
+  -> Node acquires and verifies the retained container mount view
+  -> Node rebuilds the complete dynamic exact-object and mount-route rows
+  -> Node republishes each canonical route from the current mount snapshot
+  -> a changed snapshot digest can replace the prior dynamic route value
+  -> the signed path graph, generation descriptor, and graph state IDs do not change
+  -> an incomplete or unverifiable live view does not publish replacement rows
 ```
 
 The route stores graph state IDs, not an inode denial bit. A mount-root route at
@@ -436,7 +444,10 @@ Node does not create a combined graph state.
 This route publication is part of the existing held-initial-PID inode stage.
 It is not policy compilation and does not require a second generation. A later
 signed policy replacement can use a new generation. Container creation cannot
-replace a generation to publish inode routes.
+replace a generation to publish inode routes. The route row is dynamic binding
+authority. Node can replace its snapshot digest and measured route data after
+it verifies a complete current view. The signed graph rows in that generation
+remain immutable.
 
 The paired lightweight and Kubernetes tests must use both Kubernetes mount
 orders. They must also complete a later in-container bind mount. Both source

@@ -2084,7 +2084,7 @@ loader has the file descriptor; it does not invent map contents.
 
 | Map(s) | Filled by | Read or changed by | Plain meaning |
 | --- | --- | --- | --- |
-| `execution_approval_slots`, `execution_approval_arguments` | An authorized node workflow calls `AuthorizationProofOwner`; administrative exec is the first issuer | Exec path reserves and consumes one matching slot; exec path reads bounded argument bytes | One exact next-match execution authority. It is not a command-string allow list. |
+| `execution_approval_slots`, `execution_argv_expected_chunks`, `execution_argv_provisional_chunks` | An authorized node workflow calls `AuthorizationProofOwner`; administrative exec is the first issuer | Exec path captures, compares, reserves, and consumes one matching slot | One exact next-match execution authority with complete immutable argv chunks. It is not a command-string allow list. |
 | `pending_execution_approvals` | Exec entry path | BPRM/exec completion path | Short-lived bridge from provisional syscall argv through kernel-owned argv verification and successful exec. |
 
 ### 4. Signed policy, exact file, and mount state
@@ -2103,7 +2103,7 @@ loader has the file descriptor; it does not invent map contents.
 | `exact_file_objects` | `NodePolicyGenerationOwner` resolves signed `EXACT` selectors from authenticated `Running` CRI identities, then writes measured rows | Effect and device gates read only | Selector-derived handle plus generation, mount namespace, unique mount identity, device, inode, and inode generation. BPF does not create a new authority row from a pathname. Node configuration cannot provide this row. |
 | `mount_security_views`, `mount_mutation_epochs`, `mount_security_view_locks`, `mount_reconciliation_proposals` | Policy owner initializes/reconciles; BPF mount hooks dirty/advance state; BPF file gate commits an exact proposal | BPF path and policy reconciliation | Per-namespace topology safety state. A dirty or racing view cannot produce a strict file decision. |
 | `mount_global_mutation_epoch`, `mount_global_clean_epoch`, `mount_global_pending_mutations` | Policy owner initializes and reconciles; mount LSM and syscall-entry programs advance global state | Every exact path gate and mount reconciliation | Conservative cross-namespace barrier for mount APIs and propagation. Exact decisions require the global clean epoch to match. |
-| `canonical_mount_roots`, `path_graph_exact_transitions`, `path_graph_wildcard_transitions`, `path_graph_terminals` | Policy owner from signed `PATH` and `EXACT` selectors; exact mount roots come from measured CRI views | BPF canonical path candidate | The bounded component graph and trusted root prefix used to turn live dentry components into a signed class candidate. Terminals state whether a measured Exact object is also required. |
+| `canonical_mount_roots`, `path_graph_exact_transitions`, `path_graph_wildcard_transitions`, `path_graph_terminals` | Policy owner from signed `PATH` and `EXACT` selectors; exact mount roots come from measured CRI views | BPF canonical path candidate | The graph rows are immutable generation policy. Canonical mount roots are dynamic binding authority that Node can republish from a complete verified live view. Terminals state whether a measured Exact object is also required. |
 | `mount_mutation_attempts` (task storage) | BPF mount and exit paths | BPF mount completion | A small task-local pairing record only. Namespace topology authority stays in namespace-keyed maps. |
 
 ### Complete map lifecycle matrix
@@ -2148,7 +2148,8 @@ the active handle and immutable generation keys.
 | `image_provenance` | `Id128V1` → `ImageProvenanceV1` | None | Root and exec commit/rollback | Exec, effect, exit, inspector | Pin-root lifetime; execution reference lifetime |
 | `process_execution_instances` | `Id128V1` → `ProcessExecutionInstanceV1` | None | Root and exec commit/rollback | Exec, effect, exit, inspector | Pin-root lifetime; execution reference lifetime |
 | `execution_approval_slots` | `ExecutionApprovalSlotKeyV1` → `ExecutionApprovalSlotV1` | `AuthorizationProofOwner` | Exec path changes or consumes a matching slot | Authorization owner and exec path | Pin-root lifetime; one execution approval slot lifetime |
-| `execution_approval_arguments` | `ExecutionApprovalArgumentKeyV1` → `u8` | `AuthorizationProofOwner` | None | Authorization owner and exec argument matcher | Pin-root lifetime; removed with its slot |
+| `execution_argv_expected_chunks` | `ExecutionArgvChunkKeyV1` → `ExecutionArgvChunkV1` | `AuthorizationProofOwner` | None | Exec argument matcher | Approval-slot lifetime; immutable chunks are removed with the slot |
+| `execution_argv_provisional_chunks` | `ExecutionArgvChunkKeyV1` → `ExecutionArgvChunkV1` | None | Syscall-entry exec capture | BPRM and exec completion paths | One exec attempt; removed on commit, failure, or task exit |
 | `pending_execution_approvals` | `u64 task_cookie` → `PendingExecutionApprovalV1` | None | Exec entry, BPRM, committing-creds, completion, and exit | Exec path | Pin-root lifetime; one in-flight execution approval |
 | `task_reference_tombstones` | `u64 task_cookie` → `TaskReferenceTombstoneV1` | None | Birth, rollback, and exit | Exit and reconciliation | Pin-root lifetime; used once for exact reference release |
 | `profile_generation_descriptors` | `u64 generation_ref` → `ProfileGenerationDescriptorV1` | `NodePolicyGenerationOwner` | None | Effect gate and recovery | Pin-root lifetime; immutable active generation until policy cleanup |
@@ -2176,7 +2177,7 @@ the active handle and immutable generation keys.
 | `mount_security_view_locks` | `u32 mount_namespace_inode` → BPF spin lock | `NodePolicyGenerationOwner` creates row | LSM mount and path programs lock the row | LSM mount and path programs | Pin-root lifetime; namespace view lifetime |
 | `mount_reconciliation_proposals` | `u32 mount_namespace_inode` → `MountReconciliationProposalV1` | `NodePolicyGenerationOwner` | File gate consumes a matching proposal | Policy owner and file gate | Pin-root lifetime; one exact epoch/version proposal |
 | `mount_mutation_epochs` | `u32 mount_namespace_inode` → `u64` | `NodePolicyGenerationOwner` initializes row | Mount paths advance epoch atomically | Policy owner, mount path, file path | Pin-root lifetime; namespace view lifetime |
-| `canonical_mount_roots` | `CanonicalMountRootKeyV1` → `CanonicalMountRootV1` | `NodePolicyGenerationOwner` | None | Canonical path engine | Pin-root lifetime; active generation and represented view lifetime |
+| `canonical_mount_roots` | `CanonicalMountRootKeyV1` → `CanonicalMountRootV1` | `NodePolicyGenerationOwner` | None | Canonical path engine | Dynamic binding lifetime; republished from a complete verified live mount view |
 | `path_graph_exact_transitions` | `PathGraphTransitionKeyV1` → `PathGraphTransitionV1` | `NodePolicyGenerationOwner` | None | Canonical path engine | Pin-root lifetime; active generation lifetime |
 | `path_graph_wildcard_transitions` | `PathGraphStateKeyV1` → `PathGraphTransitionV1` | `NodePolicyGenerationOwner` | None | Canonical path engine | Pin-root lifetime; active generation lifetime |
 | `path_graph_terminals` | `PathGraphStateKeyV1` → `PathGraphTerminalV1` | `NodePolicyGenerationOwner` | None | Canonical path engine | Pin-root lifetime; active generation lifetime |
@@ -2414,9 +2415,9 @@ sequenceDiagram
     U->>S: executable, ordered argv, and execveat flags
     alt AT_EXECVE_CHECK
         S->>M: mark a check-only request
-    else exact administrative candidate
-        S->>M: match the preinstalled argument keys in order
-        S->>M: publish a pending administrative match
+    else exec candidate
+        S->>M: capture complete argv chunks before cgroup and policy lookup
+        S->>M: publish task-local provisional snapshot state
     end
     U->>B: Linux presents the first executable candidate
     B->>M: create pending exec state and add the candidate
@@ -2434,16 +2435,14 @@ sequenceDiagram
     end
 ```
 
-The administrative argument matcher starts at
-[`administrative_argv_matches`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L207).
-It accepts at most 256 arguments and 4,096 argument bytes in total. It does not
-sort, normalize, or hash the arguments. It checks the exact argument count,
-argument order, length, bytes, and final null pointer. Userspace first installs
-one map key for each argument in
-[`arm_administrative_slot`](../../../crates/mithril-node/src/identity/authorization/mod.rs#L205).
-The syscall-entry program then checks those keys without copying a variable
-argument vector into one BPF map value. This design keeps the comparison exact
-and gives the verifier fixed bounds.
+The approved execution argument matcher serializes each argument with its NUL
+boundary and stores the complete stream in immutable 4,096-byte chunks. The
+slot descriptor stores the snapshot ID, argument count, byte count, and chunk
+count. Syscall entry creates a provisional chunk snapshot. The BPRM,
+committing-creds, and successful-exec paths compare complete chunk snapshots
+byte for byte. This design does not use a digest as authority and does not make
+a fixed Mithril byte buffer into a Linux exec limit. The implementation and
+physical qualification are not complete in this review record.
 
 The general transition starts in
 [`identity_bprm_transition`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L424),
@@ -3276,7 +3275,7 @@ are not open product decisions. This round needs no new product decision.
 | Requirement | Architecture rule | Current implementation gap |
 | --- | --- | --- |
 | Administrative exec | The user who runs `kubectl-mithril exec` authenticates through the organization identity provider and is the approver for the implemented self-approval policy. Control issues one memory-only credential. Kubernetes authentication and CONNECT admission validate the approval and exact target. The node arms one exact slot and Control commits only after readback. BPF reserves the slot at the deny-capable hook, verifies copied argv at committing-creds, verifies installed argv at successful exec, and then consumes the slot and activates the role. A late mismatch grants no role, queues `SIGKILL` before user mode, and emits critical evidence. | The physical transaction reaches slot arm. The reservation, two late checks, fail-closed response, and complete physical race matrix remain. Declared probe entries need the same per-exec transaction. |
-| Executable identity | Administrative exec matches the complete kernel-owned ordered argv and the exact executable object that the node resolves in the container view. Syscall-entry argv is only a bounded candidate. It does not require an argv hash, executable-content hash, or trusted-content signer. General exec policy separately requires complete immutable image, script, interpreter, and loader provenance. | The old source path can select from mutable syscall-entry argv but does not perform the required reservation and late verification. General immutable provenance, interpreter, loader, and `binfmt_misc` coverage remain incomplete. |
+| Executable identity | Administrative exec matches the complete kernel-owned ordered argv chunk snapshot and the exact executable object that the node resolves in the container view. Syscall-entry argv supplies only a provisional chunk snapshot. General exec policy separately requires complete immutable image, script, interpreter, and loader provenance. | The changed source still needs complete verifier, lightweight, and Kubernetes qualification. General immutable provenance, interpreter, loader, and `binfmt_misc` coverage remain incomplete. |
 | Asynchronous I/O | `ExactRequestIdentityV1` retains ring ID, ring generation, submission sequence, SQE index, user data, opcode, actor, executor, and completion ownership. SQPOLL cannot borrow a kernel worker role. | A restricted exact io_uring read/write slice exists. AIO, registered resources, broader opcodes, positive SQPOLL, and the full failure and restart matrix remain incomplete. |
 | Mount propagation | Mount, move, propagation, pivot-root, automount, overlay copy-up, and referral must invalidate every affected exact view before a new decision. Overflow must fail closed. | A global epoch now conservatively closes represented views for the current mount APIs, including `mount_setattr`, and the fixture covers one propagation peer. Automount, referral, overlay copy-up, idmapped mounts, bounded affected-set behavior, and full physical races remain. |
 | Generation retirement | Handles are monotonic and never reused in one boot and label epoch. Existing typed holders retain the old generation. `RETIRING` denies new references. Deletion requires every typed counter at zero, no owned tombstone after iterator and WAL reconciliation, and a BPF grace period. | Durable allocation, capacity preflight, staged probes, typed-holder checks, `RETIRING`, `TOMBSTONED`, and row deletion exist. The complete physical crash and holder matrix and an explicit grace-period qualification remain. |
