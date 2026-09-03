@@ -95,6 +95,13 @@ event, namespace address, task-root pointers, or mount-root identity stay the
 same. Use the cache only after BPF rechecks the same global epoch and confirms
 that no mount mutation is pending.
 
+For a bind mount, BPF evaluates the canonical path below the current task root
+and each admitted source route that represents the resolved object. A path-tree
+denial from either path wins. An admitted source route can supply positive exact
+object authority only after the task-root path has no applicable denial. Thus,
+binding an allowed object over a denied path cannot convert the denied path to
+an allow.
+
 ### D4.4 — IPC and process-control enforcement
 
 Enforce directional Unix/local-channel relationships and process-control

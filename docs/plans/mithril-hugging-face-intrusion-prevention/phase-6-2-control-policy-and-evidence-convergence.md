@@ -77,6 +77,7 @@ Known path-tree route
   -> BPF uses the route when the target dentry or a source ancestor has one
   -> BPF does not compare mount ages for a routed path
   -> BPF uses the oldest unique mount only when no route exists
+  -> BPF applies a task-root path denial before positive source-route authority
   -> an unresolved route and fallback deny under strict policy
 
 WorkloadProtectionException CRD bounded request
