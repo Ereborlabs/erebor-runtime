@@ -1444,18 +1444,18 @@ impl WorkloadBindingOwner {
             .context(IdentityStateSnafu {
                 reason: "initial executable request exceeds its kernel ABI bound",
             })?;
-        let composite = host
+        let declared = host
             .lookup_map("declared_entry_requests", request.as_bytes())
             .context(InterceptorSnafu)?
             .context(IdentityStateSnafu {
                 reason: "initial executable request is not declared by signed policy",
             })?;
-        let composite = u64::read_from_bytes(&composite).map_err(|error| {
+        ensure!(
+            declared_entry_request_is_present(&declared),
             IdentityStateSnafu {
-                reason: format!("declared entry request has an invalid ABI value: {error}"),
+                reason: "declared entry request has an invalid membership value",
             }
-            .build()
-        })?;
+        );
         let mut matches = 0_usize;
         for key in host
             .map_keys("entry_admission_rules")
@@ -1470,7 +1470,6 @@ impl WorkloadBindingOwner {
             if key.profile_generation_ref_id == binding.state.active_profile_generation_ref_id
                 && key.binding_id == binding.state.binding_id
                 && key.source_role_id == binding.state.initial_role_id
-                && key.composite_atom_id == composite
             {
                 matches += 1;
             }
@@ -2440,6 +2439,10 @@ fn derive_id(parts: &[&[u8]]) -> Id128V1 {
     }
 }
 
+fn declared_entry_request_is_present(bytes: &[u8]) -> bool {
+    bytes == [1]
+}
+
 fn execution_set_binding_state(bytes: &[u8]) -> Result<ExecutionSetBindingStateV1> {
     ExecutionSetBindingStateV1::try_read_from_bytes(bytes).map_err(|error| {
         IdentityStateSnafu {
@@ -2517,8 +2520,8 @@ mod tests {
     use snafu::{OptionExt as _, ResultExt as _};
 
     use super::{
-        same_runtime_binding, RuntimeContainerIdentity, StagedRuntimeAdmissionV1,
-        WorkloadBindingOwner,
+        declared_entry_request_is_present, same_runtime_binding, RuntimeContainerIdentity,
+        StagedRuntimeAdmissionV1, WorkloadBindingOwner,
     };
     use crate::error::{IdentityStateSnafu, IoSnafu};
     use crate::identity::runtime::RuntimeContainerState;
@@ -2560,6 +2563,13 @@ mod tests {
             external_role_id: 11,
             arm_initial_root: true,
         }
+    }
+
+    #[test]
+    fn fresh_declared_entry_map_uses_one_byte_membership() {
+        assert!(declared_entry_request_is_present(&[1]));
+        assert!(!declared_entry_request_is_present(&[0]));
+        assert!(!declared_entry_request_is_present(&1_u64.to_ne_bytes()));
     }
 
     fn authorization_request(_cgroup_path: &Path) -> RuntimeAdmissionRequestV1 {
