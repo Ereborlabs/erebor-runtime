@@ -1,18 +1,15 @@
 # Phase 6.2 Implementation Review Guide
 
-Status: Current implementation guide. The source implements the separate
-`WorkloadProtectionPolicy` and `WorkloadProtectionException` APIs. Automated
-tests cover their closed schemas, lowering, reconciliation, delivery,
-retirement, restart, and node-session boundaries. The complete automated
-two-node physical fixture passed for the current changed source. The paired
-lightweight fixture and that Kubernetes run prove guarded migration of a
-running process to a replacement policy generation. They also prove the
-`PreparedContainer` trust boundary, exact admitted-entry default, independent
-entry roles, bounded exception lifecycle, restart recovery, physical Node
-epoch changes, and synchronous BPF path reconstruction. The current retained
-gate permits exact Control and Node recovery shapes without an executable
-digest. The physical failure, outage, version-changed Kubernetes recovery, and
-authorized final-decommission cases remain unproved on this source.
+Status: Current implementation guide with an unresolved architecture gap. The
+source implements the separate `WorkloadProtectionPolicy` and
+`WorkloadProtectionException` APIs. Earlier recorded lightweight and
+Kubernetes results prove guarded migration for an actual signed policy
+replacement. The current working tree also contains an interim runtime-row
+replacement change. The latest fresh-image Kubernetes attempt passed the
+entry-role boundary but did not complete protected workload startup. The code
+still mixes signed entry authority with mutable executable and mount evidence.
+The accepted separation in this guide is not implemented or physically
+qualified. The startup and PostStart problem remains open.
 
 Plan: [Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -36,6 +33,59 @@ The BPF application binary interface (ABI) and BPF programs add one
 no runtime-object authority map or runtime-specific operation list. After
 activation, cgroup membership alone grants no authority. The default requires
 the exact admitted entry identity stored in the binding.
+
+## Architecture Correction: Signed Policy And Runtime Evidence
+
+The accepted end state gives signed policy authority and runtime evidence
+different owners, identifiers, mutation rules, and lifetimes. A policy
+generation changes only after Control accepts and signs a policy change. A
+container event or mount event changes only binding-scoped runtime state.
+
+The following current behavior is invalidated as a design endpoint:
+
+[`NodePolicyGenerationOwner::reconcile_cri_exact_bindings`](../../../crates/mithril-node/src/policy.rs) A runtime target changes
+  -> [`NodePolicyGenerationOwner::revoke_dynamic_path_dependencies`](../../../crates/mithril-node/src/policy.rs) the current code deletes selected runtime-dependent rows
+  -> [`NodePolicyGenerationOwner::install`](../../../crates/mithril-node/src/policy.rs) the current code calls the generation installation path again
+  -> [`NodePolicyGenerationOwner::retire_replaced_entry_admissions`](../../../crates/mithril-node/src/policy.rs) the current interim code keeps shared entry rows and deletes stale entry rows after replacement
+
+The final transition closes one missing-role interval. It does not separate the
+two authorities. `EntryAdmissionRuleV1` still stores a signed target role and a
+runtime-resolved executable object in one value. The same row cannot have both
+an immutable signed-policy lifetime and a mutable runtime-snapshot lifetime.
+
+### Intended end state
+
+[`PolicyDesiredStateOwner`](../../../crates/mithril-control/src/policy/reconciliation.rs) Control creates a signed candidate only for a policy change
+  -> [`NodePolicyGenerationOwner::install`](../../../crates/mithril-node/src/policy.rs) the node stages, verifies, and publishes the immutable signed generation
+  -> Partial [`WorkloadBindingOwner`](../../../crates/mithril-node/src/identity/binding.rs) the node binds an authenticated container to that generation, but the current ABI has no separate runtime snapshot ID
+  -> Not implemented: a runtime snapshot owner stages executable, exact-object, mount-route, and mount-view rows under an unreachable binding-scoped snapshot ID
+  -> Not implemented: the runtime snapshot owner reads back all candidate rows and atomically publishes the binding's snapshot pointer and clean epoch
+  -> Not implemented: BPF joins the immutable signed rule with the selected clean runtime snapshot before it authorizes the effect
+  -> Not implemented: the runtime snapshot owner retires old runtime rows without changing any signed policy row
+
+The runtime snapshot transaction has this order:
+
+1. Mark the affected runtime view dirty.
+2. Resolve the complete candidate runtime row set.
+3. Preflight capacity for the union of active and candidate keys.
+4. Install candidate rows under a new runtime snapshot ID.
+5. Read back and verify all candidate rows.
+6. Atomically publish the new snapshot ID and clean evidence epoch.
+7. Retire the prior snapshot after no reader can select it.
+8. On failure, remove candidate-only rows and keep the runtime view dirty.
+
+The failure path keeps the signed policy generation and its signed entry rows.
+A concurrent PostStart or exec sees the old active snapshot before publication
+and the complete new snapshot after publication. If the old snapshot is dirty,
+the request waits at an available lifecycle hold or denies at the BPF gate. It
+does not observe a partial candidate and it does not lose its signed role.
+
+The initial seccomp notification can remain as the hold before the first
+application instruction. Its purpose is to wait for a clean runtime snapshot.
+It is not a policy publication point. A later relevant mount event dirties only
+the runtime snapshot. Container exit retires the binding and runtime snapshots.
+Only a signed policy replacement creates a new policy generation and invokes
+the guarded running-process migration path.
 
 ## Recommended Reading Order
 
@@ -99,10 +149,11 @@ the exact admitted entry identity stored in the binding.
 | Target snapshot and node candidate | `PolicyRolloutOwner` | `ControlStore` transaction | Immutable snapshot, bundle, and rollout records | Target conflict, exact-node, mixed rollout, restart, and stale acknowledgement tests |
 | Trust generation and acknowledgement | `TrustBundleOwner` | `ControlStore` transaction | Trust generation and boot-bound acknowledgement records | Rotation, revocation, restart, and current-trust gating tests |
 | Node policy, exception, transfer, and cleanup state | `NodePolicyDeliveryOwner` | `NodePolicyDeliveryOwner` | Node state directory | Incremental transfer, complete desired inventory, exact readback, restart, session retirement, and stale-profile cleanup tests |
-| Active node generation and BPF maps | `NodePolicyGenerationOwner` and existing activation path | `mithril-node` | Node-local inactive generation and one active-pointer publication after expected-pointer readback | Readback, probe, pointer, and retained-generation tests |
+| Active signed node generation and BPF policy rows | `NodePolicyGenerationOwner` and existing activation path | `mithril-node` only after a signed policy candidate | Node-local inactive generation and one active-pointer publication after expected-pointer readback | Readback, probe, pointer, and retained-generation tests; current runtime-row reconciliation violates the required lifetime separation |
 | Live process generation migration | `NodePolicyGenerationOwner` creates semantic old-to-new rows | BPF updates one process and state vector under its transition guard | `process_generation_migrations`, `process_states`, and `process_state_vectors` | Migration-row unit tests, replacement-generation lightweight probes, and the complete Kubernetes fixture |
-| Entry-time known-source routes | Held OCI admission and `NodePolicyGenerationOwner` | `mithril-node` until publication; BPF reads only after publication | Binding-scoped `canonical_mount_roots` rows in the active generation | Route-order unit test and paired lightweight and Kubernetes route case |
-| Post-start live mount topology | Current BPF file or executable hook chain | BPF mutation hooks and path resolver | Live kernel mount namespace, namespace event, mutation epoch, pending count, and BPF mount cache | Paired route case, including one later in-container bind |
+| Binding-scoped runtime evidence snapshot | Not implemented as a separate owner | Target: node snapshot owner publishes complete rows; BPF only dirties or validates the selected snapshot | Target: separate runtime snapshot ID, active pointer, executable objects, mount routes, mount views, and evidence epoch | No current test proves this ownership split |
+| Entry-time known-source routes | Current source: held OCI admission and `NodePolicyGenerationOwner` | Current source: `mithril-node` replaces rows through the policy generation owner | Binding-scoped `canonical_mount_roots` rows are coupled to the active policy generation | Route-order tests cover route behavior; they do not prove the required lifetime separation |
+| Post-start live mount topology | Current BPF file or executable hook chain | BPF mutation hooks and path resolver | Live kernel mount namespace, namespace event, mutation epoch, pending count, and BPF mount cache | Paired route cases cover path behavior; they do not prove an independent runtime snapshot transaction |
 | Retained runtime integration and recovery manifest | `RuntimeIntegrationOwner` | `RuntimeIntegrationOwner`; signed node decommission owns final removal | Host containerd fragment, OCI base spec, hook binary, and recovery manifest | Runtime integration unit tests, direct-runc retained-gate probe, and two-node reinstall |
 | Runtime admission request | `mithril-oci-hook` and `RuntimeAdmissionClient` | `RuntimeAdmissionServer` | Root-owned mode-0600 Unix socket | Stock-state parser, active-owner, unavailable endpoint, convergence hold, and timeout tests |
 | Staged runtime facts | First `createRuntime` request | `WorkloadBindingOwner` | Bounded node memory only; no kernel authority | Missing, expiry, changed-head, changed-cgroup, and no-PID-authority tests |
@@ -638,7 +689,10 @@ flowchart LR
 | `execution_set_bindings` | `u64 cgroup ID -> ExecutionSetBindingStateV1` | Node binding owner | Task lifecycle and prepared-container programs update exact transitions | Node recovery and effect gates | Pinned for the exact runtime cgroup lifetime |
 | `binding_activation_targets` | `BindingActivationTargetKeyV1 -> ExecutionSetBindingStateV1` | Node binding owner | None | Node recovery and runtime gate | Pinned until the exact binding and generation retire |
 | `pending_execs` | `u64 task cookie -> PendingExecV1` | None | Exec LSM and tracepoint programs update exact exec states | BPF effect and exec programs, node generation retirement, and node inspection | Pinned terminal evidence can outlive policy authority; only an in-flight state retains generation authority |
-| `canonical_mount_roots` | `CanonicalMountRootKeyV1 -> CanonicalMountRootV1` | Node held-entry admission | None | BPF known-route walker | Pinned binding-scoped rows retire with the binding or generation; entry-time rows use topology generation zero |
+| `entry_admission_rules` | `EntryAdmissionRuleKeyV1 -> EntryAdmissionRuleV1` | Node policy generation owner | None | BPF exec gate | Current value mixes signed role and runtime executable evidence. This coupled lifetime is invalidated and must split. |
+| `exact_file_objects` | `ExactFileObjectKeyV1 -> ExactObjectBindingV1` | Node policy generation owner during runtime reconciliation | None | BPF effect and device gates | Current rows use a dynamic generation and container-view lifetime. Target rows use a separate binding-scoped runtime snapshot. |
+| `canonical_mount_roots` | `CanonicalMountRootKeyV1 -> CanonicalMountRootV1` | Node held-entry admission | None | BPF known-route walker | Current binding-scoped rows also retire with a policy generation. Target rows retire only with their runtime snapshot or binding. |
+| `mount_security_views` | `u32 mount namespace inode -> MountSecurityViewStateV1` | Node policy generation owner | BPF mount hooks dirty and advance the view | Node reconciliation and BPF path gates | Current namespace-view lifetime has no separate runtime snapshot publication ID. |
 | `canonical_mount_cache` and `canonical_mount_cache_states` | Private live namespace, event, root-dentry, and selected-mount state | None | BPF path resolver | BPF path resolver | Pinned bounded caches; a stale, missing, or full row cannot allow |
 | `mount_global_mutation_epoch` and `mount_global_pending_mutations` | Native-endian zero `u32 -> u64` | Node initializes the rows | BPF mount hooks | BPF synchronous path stability checks | Pinned for the kernel-owner lifetime |
 | `exception_runtime_states` | `ExceptionRuntimeStateKeyV1 -> ExceptionRuntimeStateV1` | Node exception owner | Effect gate consumes uses under the map value lock | Node recovery and exception gate | Pinned until the instance is terminal and durable receipts permit cleanup |
@@ -758,11 +812,11 @@ and coverage messages remain the Phase 6 types.
 | Exact two-node target, live running-process migration, task lifetime, Node UID replacement, host epoch, selector lifecycle, exception target retirement, desired-inventory cleanup, retained integration recovery, and no-root inspection | [Physical fixture](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
 | Independent operator flow for exact target, runtime lifetime, exception target retirement, desired-inventory cleanup, restart, and fresh root | [Manual example](../../../examples/mithril-kubernetes-convergence-manual/run.sh) |
 
-Current focused checks passed:
+The following focused checks passed at their recorded source checkpoints:
 
 ```text
 rtk bash .github/scripts/verify-rust-ci.sh
-The current-source format, workspace check, strict Clippy, and full workspace
+The recorded-source format, workspace check, strict Clippy, and full workspace
 test gate passed.
 
 rtk bash packaging/mithril/helm/tests/verify.sh
@@ -802,6 +856,12 @@ also passed runtime and Pod lifetime replacement, Node restart, Control
 restart, host reboot, exception lifecycle, desired-inventory cleanup, and
 fresh-root activation.
 
+These recorded results do not prove the policy and runtime-evidence
+separation. The latest fresh-image Kubernetes attempt on the dirty working tree
+passed the earlier missing-role point. It then stopped before the protected Pod
+started its concurrent recursive read loop. This result is incomplete. No
+current physical result proves the corrected startup or PostStart design.
+
 The retained runtime gate result is
 `target/mithril-generation-migration-kubernetes-20260902-d/runc-retained-runtime-gate-probe.json`.
 It allowed exact Control, Node, and installer recovery shapes without an
@@ -814,14 +874,18 @@ do not replace the physical fixture or manual run.
 
 ## Verification Limits
 
-The current complete automated two-node fixture passed for the changed
-production and harness source. It covered exact target, running-process
+The recorded complete automated two-node fixture passed at its changed
+production and harness source checkpoint. It covered exact target, running-process
 migration, runtime task replacement, exception target retirement,
 desired-inventory cleanup, restart, fresh-root activation, same-name Node UID
 replacement, DaemonSet exclusion and re-entry, and a host boot and label-epoch
 change. Its final fresh Node Pods were ready with zero container restarts and
 one Control connection each. The result is
 `target/mithril-generation-migration-kubernetes-20260902-d`.
+
+That result predates the dirty working-tree changes and the accepted policy and
+runtime-evidence separation. Do not treat it as current proof of the corrected
+design.
 
 The two retained Kubernetes VMs and the lightweight VM remain available. No
 verification step destroyed them.
@@ -867,6 +931,9 @@ not present.
 - [ ] Trace node activation through inactive state, probes, readback, and active-pointer publication.
 - [ ] Trace one running process through guarded migration to a replacement generation at its next protected effect.
 - [ ] Trace one held OCI PID through CRI verification and exact cgroup publication.
+- [ ] Verify that a runtime event does not delete, overwrite, reinstall, or republish a signed policy row.
+- [ ] Trace one binding through a separate runtime snapshot ID, candidate readback, atomic publication, and old-snapshot retirement.
+- [ ] Race PostStart and a later exec against runtime snapshot preparation. Verify that each request sees an old dirty snapshot or a complete new snapshot, never a partial candidate.
 - [ ] Trace the held entry-time view into one `canonical_mount_roots` row.
 - [ ] Trace one later bind through the BPF mutation guard and live mount scan.
 - [ ] Confirm that no ring-buffer consumer can complete a path decision.
@@ -894,10 +961,12 @@ not present.
 
 ## Source State
 
-This guide covers the working tree based on `d9136aa4` on 2026-09-02. The
-working tree adds exact shape-bound runtime recovery and guarded live-process
-generation migration. It also adds the paired lightweight and Kubernetes
-proofs. Reviewers must compare this guide with the checked-out source. The
-physical verification limits above remain part of the result.
+This guide covers the dirty working tree based on
+`05a1a399c0bd10231a77268761c66a33a850d3a9` on 2026-09-04.
+The working tree contains interim runtime-row replacement changes. This
+documentation records the required policy and runtime-evidence separation. It
+does not claim that the source implements that separation. No test run in this
+documentation change changes the latest incomplete physical result. Reviewers
+must compare this guide with the checked-out source.
 
 Completion of this work does not authorize the next phase.

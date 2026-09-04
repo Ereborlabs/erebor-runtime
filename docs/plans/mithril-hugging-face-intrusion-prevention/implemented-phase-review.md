@@ -51,6 +51,15 @@ This section supersedes older exact-file examples in this guide that use a
 numeric key from node configuration. Those examples remain dated evidence for
 their named source state. They do not describe the current authority source.
 
+Architecture correction, 2026-09-04: The runtime-driven revocation and
+replacement design in this section is invalidated. This section still
+describes implemented code and historical evidence. It does not describe the
+accepted endpoint. A signed policy generation changes only after a signed
+policy change. PID, container, mount, exact-object, and lifecycle events must
+update a separate binding-scoped runtime evidence snapshot. They must not
+delete, reinstall, or republish signed policy rows. The current source does not
+implement this separation, and the startup and PostStart problem remains open.
+
 Review the current path in this order:
 
 1. [`PathSelectorV1`](../../../crates/mithril-control/src/policy/source.rs#L661)
@@ -72,9 +81,11 @@ Review the current path in this order:
    is valid identity input, but it is not an Exact-resolution target.
 5. [`NodePolicyGenerationOwner::resolve_cri_exact_objects`](../../../crates/mithril-node/src/policy.rs#L602)
    reads verified signed `EXACT` selectors and resolves them in that init
-   process mount view. Missing paths add no measured object. A changed runtime
-   target revokes dynamic path authority before the owner installs and reads
-   back replacement rows.
+   process mount view. Missing paths add no measured object. The current code
+   routes a changed runtime target through dynamic path revocation and the
+   generation installation owner. That behavior is an implementation fact,
+   not an accepted design. The replacement must become a separate runtime
+   snapshot transaction that leaves signed rows unchanged.
 6. [`LoweredGeneration::lower_path_tables`](../../../crates/mithril-node/src/policy.rs#L4060)
    belongs to the generation that owns the resulting rows. It lowers both
    selector kinds into one bounded path graph. A `PATH` terminal
@@ -113,9 +124,23 @@ sequenceDiagram
     W->>P: authenticated Exact-resolution target
     P->>P: resolve signed path in task mount view
     P->>B: install and read back measured inode rows
-    R->>W: container or PID changes
-    W->>P: changed Exact-resolution target
-    P->>B: revoke old dynamic rows before replacement
+    R->>W: container, PID, or mount evidence changes
+    W->>P: current code sends changed runtime target to policy owner
+    P->>B: current invalidated code replaces dynamic generation rows
+```
+
+The accepted flow keeps the first two authorities separate:
+
+```text
+signed candidate changes
+  -> install and publish one immutable signed policy generation
+
+runtime binding or mount evidence changes
+  -> mark the binding runtime view dirty
+  -> build and verify an unreachable runtime snapshot
+  -> atomically publish the runtime snapshot
+  -> retire only old runtime rows
+  -> keep all signed policy rows unchanged
 ```
 
 The stock containerd `Running` inventory transition occurs after the process
@@ -2169,7 +2194,7 @@ the active handle and immutable generation keys.
 | `io_uring_ring_states` | `Id128V1 ring_id` → `IoUringRingStateV1` | None | create, register, submit, and free programs | io_uring and retirement owners | Pin-root lifetime; ring and pinned-generation lifetime |
 | `io_uring_request_states` | `IoUringRequestKeyV1` → `IoUringRequestStateV1` | None | submit, issue, complete, and free programs | io_uring executor and completion paths | Pin-root lifetime; exact request lifetime |
 | `io_uring_execution_states` | `u64 task_cookie` → `IoUringExecutionStateV1` | None | issue entry and exit programs | File-effect attribution and completion | Pin-root lifetime; one in-flight executor binding |
-| `exact_file_objects` | `ExactFileObjectKeyV1` → `ExactObjectBindingV1` | `NodePolicyGenerationOwner`, from signed `EXACT` selectors and authenticated `Running` CRI identities | None | Common effect and device gates | Dynamic generation and container mount-view lifetime; revoked before a changed runtime target is installed |
+| `exact_file_objects` | `ExactFileObjectKeyV1` → `ExactObjectBindingV1` | `NodePolicyGenerationOwner`, from signed `EXACT` selectors and authenticated `Running` CRI identities | None | Common effect and device gates | Current code couples dynamic generation and container mount-view lifetimes. The accepted design moves this row to a separate binding-scoped runtime snapshot. |
 | `mount_security_views` | `u32 mount_namespace_inode` → `MountSecurityViewStateV1` | `NodePolicyGenerationOwner` | Mount hooks dirty and advance the view; file gate can commit reconciliation | Policy owner, mount hooks, path gate | Pin-root lifetime; namespace view lifetime |
 | `mount_global_mutation_epoch` | `u32` → `u64` | `NodePolicyGenerationOwner` initializes | Mount LSM and syscall-entry programs increment | Exact path gate and reconciliation | Pin-root lifetime; node-global mutation epoch |
 | `mount_global_clean_epoch` | `u32` → `u64` | `NodePolicyGenerationOwner` advances after exact reconciliation | None | Exact path gate and reconciliation | Pin-root lifetime; node-global reconciled epoch |
@@ -3274,6 +3299,7 @@ are not open product decisions. This round needs no new product decision.
 
 | Requirement | Architecture rule | Current implementation gap |
 | --- | --- | --- |
+| Policy and runtime-evidence separation | A signed policy generation changes only after a signed policy change. Stable signed entry rows contain role and rule identity. A separate binding-scoped runtime snapshot contains executable, exact-object, mount-route, mount-view, and evidence-epoch facts. Runtime replacement publishes one complete snapshot before it retires the old runtime rows. | `EntryAdmissionRuleV1` mixes the signed target role with a runtime executable object. `NodePolicyGenerationOwner::reconcile_cri_exact_bindings` can revoke dynamic rows and call the generation install path after a runtime target change. The separate runtime snapshot ID, active pointer, split entry ABI, publication transaction, and race qualification do not exist. |
 | Administrative exec | The user who runs `kubectl-mithril exec` authenticates through the organization identity provider and is the approver for the implemented self-approval policy. Control issues one memory-only credential. Kubernetes authentication and CONNECT admission validate the approval and exact target. The node arms one exact slot and Control commits only after readback. BPF reserves the slot at the deny-capable hook, verifies copied argv at committing-creds, verifies installed argv at successful exec, and then consumes the slot and activates the role. A late mismatch grants no role, queues `SIGKILL` before user mode, and emits critical evidence. | The physical transaction reaches slot arm. The reservation, two late checks, fail-closed response, and complete physical race matrix remain. Declared probe entries need the same per-exec transaction. |
 | Executable identity | Administrative exec matches the complete kernel-owned ordered argv chunk snapshot and the exact executable object that the node resolves in the container view. Syscall-entry argv supplies only a provisional chunk snapshot. General exec policy separately requires complete immutable image, script, interpreter, and loader provenance. | The changed source still needs complete verifier, lightweight, and Kubernetes qualification. General immutable provenance, interpreter, loader, and `binfmt_misc` coverage remain incomplete. |
 | Asynchronous I/O | `ExactRequestIdentityV1` retains ring ID, ring generation, submission sequence, SQE index, user data, opcode, actor, executor, and completion ownership. SQPOLL cannot borrow a kernel worker role. | A restricted exact io_uring read/write slice exists. AIO, registered resources, broader opcodes, positive SQPOLL, and the full failure and restart matrix remain incomplete. |
