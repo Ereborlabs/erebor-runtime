@@ -37,7 +37,7 @@ use mithril_node::{
 use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
-use snafu::{ensure, ResultExt as _};
+use snafu::{ensure, OptionExt as _, ResultExt as _};
 use zerocopy::{IntoBytes as _, TryFromBytes as _};
 
 use super::support::{
@@ -67,6 +67,7 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub prepared_state_after_exec: String,
     pub prepared_runtime_effect_observed: bool,
     pub initial_exec_notification_blocked: bool,
+    pub unprotected_initial_exec_allowed: bool,
     pub runc_post_create_mount_mutation_observed: bool,
     pub start_container_final_mount_reconciled: bool,
     pub application_entry_allow_observed: bool,
@@ -2235,6 +2236,87 @@ impl EffectTestRunner {
                 }));
             }
         }
+        let unprotected_container_id = format!(
+            "{:x}",
+            Sha256::digest(format!("unprotected-{container_id}").as_bytes())
+        );
+        let unprotected_cgroup_name =
+            format!("mithril-unprotected-direct-runc-{}", std::process::id());
+        let unprotected_cgroup_path = PathBuf::from("/sys/fs/cgroup/system.slice")
+            .join(format!("{unprotected_cgroup_name}.scope"));
+        ensure!(
+            !unprotected_cgroup_path.exists(),
+            InvalidInputSnafu {
+                path: &unprotected_cgroup_path,
+                reason: "the unprotected direct runc cgroup already exists",
+            }
+        );
+        let mut unprotected_config = config.clone();
+        unprotected_config["process"]["args"] = json!(["/bin/busybox", "true"]);
+        unprotected_config["hooks"] = json!({});
+        unprotected_config["linux"]["cgroupsPath"] = json!(format!(
+            "system.slice:mithril-unprotected-direct-runc:{}",
+            std::process::id()
+        ));
+        unprotected_config["annotations"][IMAGE_NAME_ANNOTATION] =
+            json!("mithril-control:convergence");
+        unprotected_config["annotations"]
+            .as_object_mut()
+            .context(InvalidInputSnafu {
+                path: &config_path,
+                reason: "the unprotected direct runc annotations are not an object",
+            })?
+            .remove(PROFILE_ID_ANNOTATION);
+        unprotected_config["annotations"]
+            .as_object_mut()
+            .context(InvalidInputSnafu {
+                path: &config_path,
+                reason: "the unprotected direct runc annotations are not an object",
+            })?
+            .remove(POLICY_SOURCE_REVISION_ANNOTATION);
+        fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&unprotected_config)
+                .context(JsonSnafu { path: &config_path })?,
+        )
+        .context(IoSnafu { path: &config_path })?;
+        let unprotected_output = Command::new(runc_path)
+            .args(["--root", state_root.to_string_lossy().as_ref()])
+            .arg("--systemd-cgroup")
+            .args(["run", "--bundle", bundle.to_string_lossy().as_ref()])
+            .arg(&unprotected_container_id)
+            .stdin(Stdio::null())
+            .output()
+            .context(IoSnafu { path: runc_path })?;
+        fs::write(
+            output_directory.join("runc-unprotected-initial.stdout"),
+            &unprotected_output.stdout,
+        )
+        .context(IoSnafu {
+            path: output_directory,
+        })?;
+        fs::write(
+            output_directory.join("runc-unprotected-initial.stderr"),
+            &unprotected_output.stderr,
+        )
+        .context(IoSnafu {
+            path: output_directory,
+        })?;
+        let _cleanup = Command::new(runc_path)
+            .args(["--root", state_root.to_string_lossy().as_ref()])
+            .args(["delete", "--force", &unprotected_container_id])
+            .output();
+        let unprotected_initial_exec_allowed = unprotected_output.status.success();
+        ensure!(
+            unprotected_initial_exec_allowed && !unprotected_cgroup_path.exists(),
+            CommandSnafu {
+                program: runc_path.display().to_string(),
+                reason: format!(
+                    "unprotected initial exec was not continued: {}",
+                    String::from_utf8_lossy(&unprotected_output.stderr).trim()
+                ),
+            }
+        );
         fs::write(
             &config_path,
             serde_json::to_vec_pretty(&config).context(JsonSnafu { path: &config_path })?,
@@ -5115,13 +5197,14 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 28,
+            schema_version: 29,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
             prepared_state_after_exec,
             prepared_runtime_effect_observed: true,
             initial_exec_notification_blocked,
+            unprotected_initial_exec_allowed,
             runc_post_create_mount_mutation_observed,
             start_container_final_mount_reconciled,
             application_entry_allow_observed: true,

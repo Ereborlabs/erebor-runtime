@@ -120,6 +120,13 @@ impl OciContainerProcessStateV1 {
         &self.state.annotations
     }
 
+    fn requires_protected_admission(&self) -> bool {
+        self.state
+            .annotations
+            .get(crate::runtime_admission::PROFILE_ID_ANNOTATION)
+            .is_some_and(|profile| !profile.is_empty())
+    }
+
     pub(crate) fn state_pid(&self) -> i32 {
         self.state.pid
     }
@@ -307,6 +314,24 @@ impl RuntimeSeccompServer {
                 None
             };
             let expected_executable_path = executable_path.clone();
+            if !process.requires_protected_admission() {
+                if respond_to_notification(
+                    &listener,
+                    &process,
+                    notification,
+                    initial_exec,
+                    expected_executable_path.as_deref(),
+                    true,
+                    Instant::now() + timeout,
+                )
+                .await?
+                {
+                    sequence = sequence.checked_add(1).context(IdentityStateSnafu {
+                        reason: "runtime exec notification sequence overflowed",
+                    })?;
+                }
+                continue;
+            }
             let pid = Pid::from_raw(notification.pid as i32).context(IdentityStateSnafu {
                 reason: "runtime exec notification has an invalid PID",
             })?;
@@ -964,6 +989,23 @@ mod tests {
         let state = process_state()?;
         state.validate()?;
         assert_eq!(state.container_id(), "a".repeat(64));
+        assert!(!state.requires_protected_admission());
+        Ok(())
+    }
+
+    #[test]
+    fn only_a_nonempty_profile_routes_exec_to_protected_admission() -> crate::Result<()> {
+        let mut state = process_state()?;
+        state.state.annotations.insert(
+            crate::runtime_admission::PROFILE_ID_ANNOTATION.to_owned(),
+            String::new(),
+        );
+        assert!(!state.requires_protected_admission());
+        state.state.annotations.insert(
+            crate::runtime_admission::PROFILE_ID_ANNOTATION.to_owned(),
+            "11111111-1111-4111-8111-111111111111".to_owned(),
+        );
+        assert!(state.requires_protected_admission());
         Ok(())
     }
 
