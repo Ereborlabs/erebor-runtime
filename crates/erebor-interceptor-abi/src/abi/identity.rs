@@ -3,8 +3,42 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
 pub const MAX_ANCESTOR_PROCESS_LINEAGES_V1: usize = 8;
 pub const MAX_EXEC_CANDIDATES_V1: usize = 8;
-pub const MAX_ADMINISTRATIVE_ARGUMENTS_V1: usize = 256;
-pub const MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1: usize = 4096;
+pub const MAX_EXECUTION_APPROVAL_ARGUMENT_BYTES_V1: usize = 4096;
+pub const EXECUTION_ARGV_CHUNK_BYTES_V1: usize = 4096;
+const EXECUTION_ARGV_CHUNK_BYTES_U64_V1: u64 = 4096;
+pub const EXECUTION_ARGV_CHUNK_TERMINAL_V1: u32 = 1;
+pub const EXECUTION_APPROVAL_TRACE_STAGE_EXECVE_ENTRY_V1: u8 = 2;
+pub const EXECUTION_APPROVAL_TRACE_STAGE_EXECVEAT_ENTRY_V1: u8 = 3;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PENDING_MISSING_V1: u64 = 1 << 0;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PENDING_STATE_V1: u64 = 1 << 1;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_TASK_COOKIE_V1: u64 = 1 << 2;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_ATTEMPT_SEQUENCE_V1: u64 = 1 << 3;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PROFILE_GENERATION_V1: u64 = 1 << 4;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_SLOT_MISSING_V1: u64 = 1 << 5;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_SLOT_IDENTITY_V1: u64 = 1 << 6;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_SLOT_STATE_V1: u64 = 1 << 7;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_SLOT_GUARD_V1: u64 = 1 << 8;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PROOF_V1: u64 = 1 << 9;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_CLAIM_SLOT_V1: u64 = 1 << 10;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_TARGET_ROLE_V1: u64 = 1 << 11;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_EXPECTED_EXECUTABLE_V1: u64 = 1 << 12;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_OBSERVED_UNRESOLVED_V1: u64 = 1 << 13;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_OBSERVED_EXECUTABLE_V1: u64 = 1 << 14;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_LABEL_V1: u64 = 1 << 15;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_PROCESS_V1: u64 = 1 << 16;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ENTRY_V1: u64 = 1 << 17;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_RUNTIME_LABEL_V1: u64 = 1 << 18;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_BINDING_LABEL_V1: u64 = 1 << 19;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_PROCESS_STATE_V1: u64 = 1 << 20;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_TRANSITION_GUARD_V1: u64 = 1 << 21;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_EXEC_GUARD_V1: u64 = 1 << 22;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_CLASSIFICATION_V1: u64 = 1 << 23;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ROOT_CLASS_V1: u64 = 1 << 24;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_PURPOSE_V1: u64 = 1 << 25;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ROLE_V1: u64 = 1 << 26;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_SLOT_GUARD_V1: u64 = 1 << 27;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ARGV_V1: u64 = 1 << 28;
+pub const EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_MAP_UPDATE_V1: u64 = 1 << 29;
 pub const TASK_REFERENCE_ENTRY_V1: u64 = 1 << 0;
 pub const TASK_REFERENCE_PROCESS_V1: u64 = 1 << 1;
 pub const TASK_REFERENCE_PROFILE_GENERATION_V1: u64 = 1 << 2;
@@ -318,7 +352,7 @@ pub enum PreparedContainerStateV1 {
 #[derive(
     Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
 )]
-pub enum ApprovedExecSlotStateV1 {
+pub enum ExecutionApprovalSlotStateV1 {
     #[default]
     Unknown = 0,
     Armed = 1,
@@ -326,17 +360,22 @@ pub enum ApprovedExecSlotStateV1 {
     Expired = 3,
     Cancelled = 4,
     Corrupt = 5,
+    Reserved = 6,
+    Tampered = 7,
 }
 
 #[repr(u8)]
 #[derive(
     Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
 )]
-pub enum PendingAdministrativeMatchStateV1 {
+pub enum PendingExecutionApprovalStateV1 {
     #[default]
     Unknown = 0,
     ArgumentsMatched = 1,
-    SlotConsumed = 2,
+    SlotReserved = 2,
+    KernelArgvVerified = 3,
+    SlotConsumed = 4,
+    Tampered = 5,
 }
 
 #[repr(C)]
@@ -534,7 +573,7 @@ pub struct EntryAdmissionRuleV1 {
 pub struct DeclaredEntryRequestV1 {
     pub path_length: u32,
     pub reserved: u32,
-    pub path: [u8; MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1],
+    pub path: [u8; MAX_EXECUTION_APPROVAL_ARGUMENT_BYTES_V1],
 }
 
 impl Default for DeclaredEntryRequestV1 {
@@ -542,7 +581,7 @@ impl Default for DeclaredEntryRequestV1 {
         Self {
             path_length: 0,
             reserved: 0,
-            path: [0; MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1],
+            path: [0; MAX_EXECUTION_APPROVAL_ARGUMENT_BYTES_V1],
         }
     }
 }
@@ -551,7 +590,7 @@ impl DeclaredEntryRequestV1 {
     #[must_use]
     pub fn from_path(path: &[u8]) -> Option<Self> {
         if path.is_empty()
-            || path.len() >= MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1
+            || path.len() >= MAX_EXECUTION_APPROVAL_ARGUMENT_BYTES_V1
             || path.contains(&0)
         {
             return None;
@@ -651,130 +690,87 @@ pub struct ProcessGenerationMigrationV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes)]
-pub struct BoundedAdministrativeArgvV1 {
-    pub argument_count: u16,
-    pub total_argument_bytes: u16,
-    pub argument_lengths: [u16; MAX_ADMINISTRATIVE_ARGUMENTS_V1],
-    pub argument_bytes: [u8; MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1],
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
+pub struct ExecutionArgvSnapshotV1 {
+    pub snapshot_id: Id128V1,
+    pub argument_count: u64,
+    pub total_argument_span: u64,
+    pub chunk_count: u32,
+    pub reserved: u32,
 }
 
-impl Default for BoundedAdministrativeArgvV1 {
-    fn default() -> Self {
-        Self {
-            argument_count: 0,
-            total_argument_bytes: 0,
-            argument_lengths: [0; MAX_ADMINISTRATIVE_ARGUMENTS_V1],
-            argument_bytes: [0; MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1],
-        }
-    }
-}
-
-impl BoundedAdministrativeArgvV1 {
-    #[must_use]
-    pub fn from_arguments<T: AsRef<[u8]>>(arguments: &[T]) -> Option<Self> {
-        if arguments.is_empty() || arguments.len() > MAX_ADMINISTRATIVE_ARGUMENTS_V1 {
-            return None;
-        }
-        let mut bounded = Self::default();
-        let mut offset = 0_usize;
-        for (index, argument) in arguments.iter().enumerate() {
-            let argument = argument.as_ref();
-            if (index == 0 && argument.is_empty())
-                || argument.len() > u16::MAX as usize
-                || argument.contains(&0)
-                || offset
-                    .checked_add(argument.len())
-                    .is_none_or(|end| end > MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1)
-            {
-                return None;
-            }
-            let end = offset + argument.len();
-            bounded.argument_lengths[index] = argument.len() as u16;
-            bounded.argument_bytes[offset..end].copy_from_slice(argument);
-            offset = end;
-        }
-        if offset == 0 {
-            return None;
-        }
-        bounded.argument_count = arguments.len() as u16;
-        bounded.total_argument_bytes = offset as u16;
-        Some(bounded)
-    }
-
+impl ExecutionArgvSnapshotV1 {
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        let count = usize::from(self.argument_count);
-        let total = usize::from(self.total_argument_bytes);
-        if !(1..=MAX_ADMINISTRATIVE_ARGUMENTS_V1).contains(&count)
-            || !(1..=MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1).contains(&total)
-            || self.argument_lengths[0] == 0
-            || self.argument_lengths[count..]
-                .iter()
-                .any(|length| *length != 0)
-            || self.argument_bytes[total..].iter().any(|byte| *byte != 0)
-        {
-            return false;
-        }
-        let mut offset = 0_usize;
-        for length in &self.argument_lengths[..count] {
-            let length = usize::from(*length);
-            let Some(end) = offset.checked_add(length) else {
-                return false;
-            };
-            if end > total || self.argument_bytes[offset..end].contains(&0) {
-                return false;
-            }
-            offset = end;
-        }
-        offset == total
+        !self.snapshot_id.is_zero()
+            && self.argument_count > 0
+            && self.total_argument_span >= self.argument_count
+            && self.total_argument_span <= u64::from(u32::MAX)
+            && self.chunk_count > 0
+            && u64::from(self.chunk_count)
+                == ((self.total_argument_span - 1) / EXECUTION_ARGV_CHUNK_BYTES_U64_V1) + 1
+            && self.reserved == 0
     }
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes)]
-pub struct ApprovedExecArgumentKeyV1 {
-    pub proof_id: Id128V1,
-    pub argument_index: u16,
-    pub argument_length: u16,
-    pub argument_bytes: [u8; MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1],
-    pub reserved: [u8; 4],
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    FromBytes,
+    Hash,
+    Immutable,
+    IntoBytes,
+    KnownLayout,
+    Ord,
+    PartialEq,
+    PartialOrd,
+)]
+pub struct ExecutionArgvChunkKeyV1 {
+    pub snapshot_id: Id128V1,
+    pub chunk_index: u32,
+    pub reserved: u32,
 }
 
-impl Default for ApprovedExecArgumentKeyV1 {
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub struct ExecutionArgvChunkV1 {
+    pub length: u32,
+    pub flags: u32,
+    pub bytes: [u8; EXECUTION_ARGV_CHUNK_BYTES_V1],
+}
+
+impl Default for ExecutionArgvChunkV1 {
     fn default() -> Self {
         Self {
-            proof_id: Id128V1::ZERO,
-            argument_index: 0,
-            argument_length: 0,
-            argument_bytes: [0; MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1],
-            reserved: [0; 4],
+            length: 0,
+            flags: 0,
+            bytes: [0; EXECUTION_ARGV_CHUNK_BYTES_V1],
         }
     }
 }
 
-impl ApprovedExecArgumentKeyV1 {
+impl ExecutionArgvChunkV1 {
     #[must_use]
-    pub fn from_argument(
-        proof_id: Id128V1,
-        argument_index: usize,
-        argument: &[u8],
-    ) -> Option<Self> {
-        if proof_id.is_zero()
-            || argument_index >= MAX_ADMINISTRATIVE_ARGUMENTS_V1
-            || argument.len() > MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1
-            || argument.contains(&0)
-        {
-            return None;
+    pub fn is_valid_for(&self, snapshot: &ExecutionArgvSnapshotV1, chunk_index: u32) -> bool {
+        if !snapshot.is_valid() || chunk_index >= snapshot.chunk_count {
+            return false;
         }
-        let mut key = Self {
-            proof_id,
-            argument_index: u16::try_from(argument_index).ok()?,
-            argument_length: u16::try_from(argument.len()).ok()?,
-            ..Self::default()
-        };
-        key.argument_bytes[..argument.len()].copy_from_slice(argument);
-        Some(key)
+        let preceding = u64::from(chunk_index) * EXECUTION_ARGV_CHUNK_BYTES_U64_V1;
+        let expected_length =
+            (snapshot.total_argument_span - preceding).min(EXECUTION_ARGV_CHUNK_BYTES_U64_V1);
+        u64::from(self.length) == expected_length
+            && self.flags
+                == if chunk_index + 1 == snapshot.chunk_count {
+                    EXECUTION_ARGV_CHUNK_TERMINAL_V1
+                } else {
+                    0
+                }
     }
 }
 
@@ -782,34 +778,33 @@ impl ApprovedExecArgumentKeyV1 {
 #[derive(
     Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
 )]
-pub struct ApprovedExecSlotKeyV1 {
+pub struct ExecutionApprovalSlotKeyV1 {
     pub node_boot_id: Id128V1,
     pub cgroup_binding_id: Id128V1,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes)]
-pub struct ApprovedExecSlotV1 {
+pub struct ExecutionApprovalSlotV1 {
     pub proof_id: Id128V1,
     pub claim_slot_id: Id128V1,
     pub authorization_body_sha256: [u8; 32],
     pub cgroup_binding_nonce: Id128V1,
     pub container_generation: u64,
-    pub expected_argv: BoundedAdministrativeArgvV1,
-    pub reserved_pre_executable: [u8; 4],
+    pub expected_argv: ExecutionArgvSnapshotV1,
     pub resolved_executable: ExactExecutableCandidateV1,
-    pub approved_role_numeric_id: u32,
+    pub target_role_numeric_id: u32,
     pub expected_root_class: ExternalRootClassV1,
     pub reserved_0: [u8; 3],
     pub profile_generation_ref_id: u64,
     pub exception_numeric_handle: u32,
     pub admitted_entry_rule_id: u32,
     pub deadline_boottime_ns: u64,
-    pub state: ApprovedExecSlotStateV1,
+    pub state: ExecutionApprovalSlotStateV1,
     pub transition_version: u64,
 }
 
-impl Default for ApprovedExecSlotV1 {
+impl Default for ExecutionApprovalSlotV1 {
     fn default() -> Self {
         Self {
             proof_id: Id128V1::ZERO,
@@ -817,17 +812,16 @@ impl Default for ApprovedExecSlotV1 {
             authorization_body_sha256: [0; 32],
             cgroup_binding_nonce: Id128V1::ZERO,
             container_generation: 0,
-            expected_argv: BoundedAdministrativeArgvV1::default(),
-            reserved_pre_executable: [0; 4],
+            expected_argv: ExecutionArgvSnapshotV1::default(),
             resolved_executable: ExactExecutableCandidateV1::default(),
-            approved_role_numeric_id: 0,
+            target_role_numeric_id: 0,
             expected_root_class: ExternalRootClassV1::Unknown,
             reserved_0: [0; 3],
             profile_generation_ref_id: 0,
             exception_numeric_handle: 0,
             admitted_entry_rule_id: 0,
             deadline_boottime_ns: 0,
-            state: ApprovedExecSlotStateV1::Unknown,
+            state: ExecutionApprovalSlotStateV1::Unknown,
             transition_version: 0,
         }
     }
@@ -837,17 +831,17 @@ impl Default for ApprovedExecSlotV1 {
 #[derive(
     Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
 )]
-pub struct PendingAdministrativeMatchV1 {
+pub struct PendingExecutionApprovalV1 {
     pub task_cookie: u64,
     pub exec_attempt_sequence: u64,
     pub proof_id: Id128V1,
     pub claim_slot_id: Id128V1,
-    pub approved_role_numeric_id: u32,
+    pub target_role_numeric_id: u32,
     pub reserved_0: u32,
     pub profile_generation_ref_id: u64,
     pub resolved_executable: ExactExecutableCandidateV1,
     pub transition_version: u64,
-    pub state: PendingAdministrativeMatchStateV1,
+    pub state: PendingExecutionApprovalStateV1,
     pub reserved_1: [u8; 7],
 }
 
@@ -862,6 +856,22 @@ pub struct ExactExecutableCandidateV1 {
     pub mount_id: u32,
     pub filesystem_device: u32,
     pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
+)]
+pub struct ExecutionApprovalTraceV1 {
+    pub exec_attempt_sequence: u64,
+    pub failed_checks: u64,
+    pub expected_executable: ExactExecutableCandidateV1,
+    pub observed_executable: ExactExecutableCandidateV1,
+    pub syscall_flags: u32,
+    pub pending_state: u8,
+    pub slot_state: u8,
+    pub stage: u8,
+    pub reserved: u8,
 }
 
 #[repr(C)]
@@ -1025,13 +1035,18 @@ mod tests {
         assert_eq!(size_of::<IdentityRuntimeConfigV1>(), 48);
         assert_eq!(size_of::<EntryAdmissionRuleV1>(), 64);
         assert_eq!(size_of::<DeclaredEntryRequestV1>(), 4_104);
-        assert_eq!(size_of::<ApprovedExecArgumentKeyV1>(), 4_120);
-        assert_eq!(size_of::<ApprovedExecSlotV1>(), 4_784);
+        assert_eq!(size_of::<ExecutionArgvSnapshotV1>(), 40);
+        assert_eq!(size_of::<ExecutionArgvChunkKeyV1>(), 24);
+        assert_eq!(size_of::<ExecutionArgvChunkV1>(), 4_104);
+        assert_eq!(size_of::<ExecutionApprovalSlotV1>(), 208);
         assert_eq!(
-            offset_of!(ApprovedExecSlotV1, exception_numeric_handle),
-            4_752
+            offset_of!(ExecutionApprovalSlotV1, exception_numeric_handle),
+            176
         );
-        assert_eq!(offset_of!(ApprovedExecSlotV1, deadline_boottime_ns), 4_760);
+        assert_eq!(
+            offset_of!(ExecutionApprovalSlotV1, deadline_boottime_ns),
+            184
+        );
     }
 
     #[test]
@@ -1048,6 +1063,12 @@ mod tests {
         assert_eq!(PreparedContainerStateV1::ExecPending as u64, 2);
         assert_eq!(PreparedContainerStateV1::Active as u64, 3);
         assert_eq!(PreparedContainerStateV1::Corrupt as u64, 5);
+        assert_eq!(ExecutionApprovalSlotStateV1::Reserved as u64, 6);
+        assert_eq!(ExecutionApprovalSlotStateV1::Tampered as u64, 7);
+        assert_eq!(PendingExecutionApprovalStateV1::SlotReserved as u8, 2);
+        assert_eq!(PendingExecutionApprovalStateV1::KernelArgvVerified as u8, 3);
+        assert_eq!(PendingExecutionApprovalStateV1::SlotConsumed as u8, 4);
+        assert_eq!(PendingExecutionApprovalStateV1::Tampered as u8, 5);
         assert_eq!(TASK_REFERENCE_ALL_V1, 0b111);
     }
 
@@ -1066,43 +1087,41 @@ mod tests {
         let state_offset = offset_of!(ExecutionSetBindingStateV1, prepared_container_state);
         binding_bytes[state_offset..state_offset + size_of::<u64>()].fill(u8::MAX);
         assert!(ExecutionSetBindingStateV1::try_read_from_bytes(&binding_bytes).is_err());
-        let slot = ApprovedExecSlotV1 {
-            state: ApprovedExecSlotStateV1::Armed,
-            ..ApprovedExecSlotV1::default()
+        let slot = ExecutionApprovalSlotV1 {
+            state: ExecutionApprovalSlotStateV1::Armed,
+            ..ExecutionApprovalSlotV1::default()
         };
         let mut slot_bytes = slot.as_bytes().to_vec();
-        let state_offset = offset_of!(ApprovedExecSlotV1, state);
+        let state_offset = offset_of!(ExecutionApprovalSlotV1, state);
         slot_bytes[state_offset..state_offset + size_of::<u64>()].fill(u8::MAX);
-        assert!(ApprovedExecSlotV1::try_read_from_bytes(&slot_bytes).is_err());
+        assert!(ExecutionApprovalSlotV1::try_read_from_bytes(&slot_bytes).is_err());
     }
 
     #[test]
-    fn administrative_argv_is_exact_and_zero_filled() {
-        let lowered = BoundedAdministrativeArgvV1::from_arguments(&[b"bash".as_slice(), b"-lc"]);
-        assert!(lowered.is_some());
-        let argv = lowered.unwrap_or_default();
-        assert!(argv.is_valid());
-        assert_eq!(argv.argument_count, 2);
-        assert_eq!(argv.total_argument_bytes, 7);
-        assert_eq!(&argv.argument_lengths[..2], &[4, 3]);
-        assert_eq!(&argv.argument_bytes[..7], b"bash-lc");
-        assert!(BoundedAdministrativeArgvV1::from_arguments(&[b"ba\0sh"]).is_none());
-        assert!(BoundedAdministrativeArgvV1::from_arguments::<&[u8]>(&[]).is_none());
-    }
-
-    #[test]
-    fn approved_exec_argument_key_is_exact_and_zero_padded() {
-        let proof_id = Id128V1::new(1, 2);
-        let key = ApprovedExecArgumentKeyV1::from_argument(proof_id, 3, b"--flag");
-        assert!(key.is_some());
-        let key = key.unwrap_or_default();
-
-        assert_eq!(key.proof_id, proof_id);
-        assert_eq!(key.argument_index, 3);
-        assert_eq!(key.argument_length, 6);
-        assert_eq!(&key.argument_bytes[..6], b"--flag");
-        assert!(key.argument_bytes[6..].iter().all(|byte| *byte == 0));
-        assert!(ApprovedExecArgumentKeyV1::from_argument(Id128V1::ZERO, 0, b"bash").is_none());
-        assert!(ApprovedExecArgumentKeyV1::from_argument(proof_id, 256, b"bash").is_none());
+    fn execution_approval_argv_snapshot_is_closed() {
+        let snapshot = ExecutionArgvSnapshotV1 {
+            snapshot_id: Id128V1::new(1, 2),
+            argument_count: 2,
+            total_argument_span: 9,
+            chunk_count: 1,
+            reserved: 0,
+        };
+        assert!(snapshot.is_valid());
+        assert!(!ExecutionArgvSnapshotV1::default().is_valid());
+        assert!(!ExecutionArgvSnapshotV1 {
+            snapshot_id: Id128V1::new(1, 2),
+            argument_count: 2,
+            total_argument_span: 1,
+            chunk_count: 1,
+            reserved: 0,
+        }
+        .is_valid());
+        let chunk = ExecutionArgvChunkV1 {
+            length: 9,
+            flags: EXECUTION_ARGV_CHUNK_TERMINAL_V1,
+            ..ExecutionArgvChunkV1::default()
+        };
+        assert!(chunk.is_valid_for(&snapshot, 0));
+        assert!(!ExecutionArgvChunkV1 { flags: 0, ..chunk }.is_valid_for(&snapshot, 0));
     }
 }

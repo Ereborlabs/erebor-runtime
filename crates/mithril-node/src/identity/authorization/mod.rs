@@ -4,11 +4,13 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use ed25519_dalek::{Signature, VerifyingKey};
-use erebor_interceptor::KernelHost;
+use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
-    ApprovedExecArgumentKeyV1, ApprovedExecSlotKeyV1, ApprovedExecSlotStateV1, ApprovedExecSlotV1,
-    BoundedAdministrativeArgvV1, ExceptionBindingStateV1, ExceptionHandleBindingKeyV1,
-    ExceptionHandleBindingV1, ExternalRootClassV1, Id128V1,
+    ExceptionBindingStateV1, ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1,
+    ExecutionApprovalSlotKeyV1, ExecutionApprovalSlotStateV1, ExecutionApprovalSlotV1,
+    ExecutionArgvChunkKeyV1, ExecutionArgvChunkV1, ExecutionArgvSnapshotV1, ExternalRootClassV1,
+    Id128V1, PendingExecutionApprovalStateV1, PendingExecutionApprovalV1,
+    EXECUTION_ARGV_CHUNK_BYTES_V1, EXECUTION_ARGV_CHUNK_TERMINAL_V1,
 };
 use minicbor::data::Token;
 use minicbor::{Decoder, Encoder};
@@ -59,7 +61,7 @@ pub struct AdministrativeExecIdentityV1 {
     pub container_name: Vec<u8>,
     pub full_container_id: Vec<u8>,
     pub container_generation: u64,
-    pub approved_argv: BoundedAdministrativeArgvV1,
+    pub approved_argv: Vec<Vec<u8>>,
     pub stream_flags: u8,
     pub approved_role_id: String,
     pub profile: PortableProfileGenerationIdentityV1,
@@ -249,18 +251,23 @@ impl AuthorizationProofOwner {
         self.replay.consume(proof_id, claim_slot_id)
     }
 
-    pub fn arm_administrative_slot(
+    pub fn arm_execution_approval_slot(
         &mut self,
         host: &KernelHost,
-        key: ApprovedExecSlotKeyV1,
-        mut slot: ApprovedExecSlotV1,
+        key: ExecutionApprovalSlotKeyV1,
+        mut slot: ExecutionApprovalSlotV1,
         proof: PreparedAuthorizationProofV1,
     ) -> Result<()> {
+        let argv_snapshot = execution_argv_snapshot(
+            &proof.administrative_exec.approved_argv,
+            proof.claim_slot_id,
+        )?;
         slot.proof_id = proof.proof_id;
         slot.claim_slot_id = proof.claim_slot_id;
         slot.authorization_body_sha256 = proof.body_sha256;
         slot.deadline_boottime_ns = proof.deadline_boottime_ns;
-        slot.state = ApprovedExecSlotStateV1::Armed;
+        slot.expected_argv = argv_snapshot.descriptor;
+        slot.state = ExecutionApprovalSlotStateV1::Armed;
         slot.transition_version = 1;
         ensure!(
             key.node_boot_id == self.node_boot_id
@@ -269,7 +276,6 @@ impl AuthorizationProofOwner {
                 && slot.container_generation > 0
                 && slot.container_generation == proof.administrative_exec.container_generation
                 && slot.expected_argv.is_valid()
-                && slot.expected_argv == proof.administrative_exec.approved_argv
                 && slot.resolved_executable.mount_namespace_inode > 0
                 && slot.resolved_executable.mount_id > 0
                 && slot.resolved_executable.mount_id
@@ -293,12 +299,12 @@ impl AuthorizationProofOwner {
                         .resolved_executable
                         .executable_object
                         .inode_generation
-                && slot.approved_role_numeric_id > 0
+                && slot.target_role_numeric_id > 0
                 && slot.profile_generation_ref_id > 0
                 && slot.admitted_entry_rule_id > 0
                 && slot.expected_root_class == ExternalRootClassV1::ExternalRuntimeRoot,
             AuthorizationSnafu {
-                reason: "administrative slot is not an exact bounded external-root match",
+                reason: "execution approval slot is not an exact bounded external-root match",
             }
         );
         if slot.exception_numeric_handle > 0 {
@@ -315,7 +321,7 @@ impl AuthorizationProofOwner {
                 .context(InterceptorSnafu)?
                 .ok_or_else(|| {
                     AuthorizationSnafu {
-                        reason: "administrative slot has no active bounded-exception binding"
+                        reason: "execution approval slot has no active bounded-exception binding"
                             .to_owned(),
                     }
                     .build()
@@ -328,126 +334,171 @@ impl AuthorizationProofOwner {
                 exception_binding.state == ExceptionBindingStateV1::Active
                     && exception_binding.runtime_state_key.node_id == self.node_id,
                 AuthorizationSnafu {
-                    reason: "administrative slot exception is not active on this stable node",
+                    reason: "execution approval slot exception is not active on this stable node",
                 }
             );
         }
-        let intent_sha256 = administrative_slot_intent_sha256(&key, &slot);
-        let argument_keys = administrative_argument_keys(slot.proof_id, &slot.expected_argv)?;
+        let intent_sha256 = execution_approval_slot_intent_sha256(&key, &slot, &argv_snapshot);
         let existing = host
-            .lookup_map("approved_exec_slots", key.as_bytes())
+            .lookup_map("execution_approval_slots", key.as_bytes())
             .context(InterceptorSnafu)?;
         ensure!(
             existing
                 .as_deref()
                 .is_none_or(|value| value == slot.as_bytes()),
             AuthorizationSnafu {
-                reason: "live cgroup binding already has a different administrative slot",
+                reason: "live cgroup binding already has a different execution approval slot",
             }
         );
-        self.replay.arm(
+        let inserted_chunks = publish_execution_argv_snapshot(host, &argv_snapshot)?;
+        if let Err(error) = self.replay.arm(
             proof.proof_id,
             proof.claim_slot_id,
             proof.body_sha256,
             intent_sha256,
-        )?;
-        for argument_key in &argument_keys {
-            host.update_map("approved_exec_arguments", argument_key.as_bytes(), &[1])
-                .context(InterceptorSnafu)?;
+        ) {
+            delete_execution_argv_chunks(host, inserted_chunks)?;
+            return Err(error);
+        }
+        let publish_slot = (|| -> Result<()> {
+            match host
+                .insert_map("execution_approval_slots", key.as_bytes(), slot.as_bytes())
+                .context(InterceptorSnafu)?
+            {
+                MapInsertResult::Inserted | MapInsertResult::AlreadyExists => {}
+            }
             ensure!(
-                host.lookup_map("approved_exec_arguments", argument_key.as_bytes())
+                host.lookup_map("execution_approval_slots", key.as_bytes())
                     .context(InterceptorSnafu)?
                     .as_deref()
-                    == Some([1_u8].as_slice()),
+                    == Some(slot.as_bytes()),
                 AuthorizationSnafu {
-                    reason: "administrative argument failed kernel readback",
+                    reason: "execution approval slot failed kernel readback",
                 }
             );
-        }
-        if existing.is_none() {
-            host.update_map("approved_exec_slots", key.as_bytes(), slot.as_bytes())
-                .context(InterceptorSnafu)?;
-        }
-        ensure!(
-            host.lookup_map("approved_exec_slots", key.as_bytes())
-                .context(InterceptorSnafu)?
-                .as_deref()
-                == Some(slot.as_bytes()),
-            AuthorizationSnafu {
-                reason: "administrative slot failed kernel readback",
+            Ok(())
+        })();
+        if let Err(error) = publish_slot {
+            if existing.is_none() {
+                if host
+                    .lookup_map("execution_approval_slots", key.as_bytes())
+                    .context(InterceptorSnafu)?
+                    .as_deref()
+                    == Some(slot.as_bytes())
+                {
+                    host.delete_map_entry("execution_approval_slots", key.as_bytes())
+                        .context(InterceptorSnafu)?;
+                }
+                self.replay
+                    .close(proof.proof_id, proof.claim_slot_id, intent_sha256)?;
             }
-        );
+            delete_execution_argv_chunks(host, inserted_chunks)?;
+            return Err(error);
+        }
         Ok(())
     }
 
-    pub fn reconcile_administrative_slots(&mut self, host: &KernelHost) -> Result<()> {
+    pub fn reconcile_execution_approval_slots(&mut self, host: &KernelHost) -> Result<()> {
         let mut live_slots = BTreeSet::new();
-        let mut live_proofs = BTreeSet::new();
+        let mut live_argv_snapshots = BTreeSet::new();
+        let mut reserved_matches = BTreeSet::new();
         for key in host
-            .map_keys("approved_exec_slots")
+            .map_keys("pending_execution_approvals")
             .context(InterceptorSnafu)?
         {
-            let slot_key =
-                read_abi_value::<ApprovedExecSlotKeyV1>(&key, "administrative slot key")?;
             let Some(value) = host
-                .lookup_map("approved_exec_slots", &key)
+                .lookup_map("pending_execution_approvals", &key)
                 .context(InterceptorSnafu)?
             else {
                 continue;
             };
-            let mut slot = read_abi_value::<ApprovedExecSlotV1>(&value, "administrative slot")?;
+            let pending =
+                read_abi_value::<PendingExecutionApprovalV1>(&value, "pending execution approval")?;
+            if pending_execution_approval_retains_reservation(pending.state) {
+                reserved_matches.insert((pending.proof_id, pending.claim_slot_id));
+            }
+        }
+        for key in host
+            .map_keys("execution_approval_slots")
+            .context(InterceptorSnafu)?
+        {
+            let slot_key =
+                read_abi_value::<ExecutionApprovalSlotKeyV1>(&key, "execution approval slot key")?;
+            let Some(value) = host
+                .lookup_map("execution_approval_slots", &key)
+                .context(InterceptorSnafu)?
+            else {
+                continue;
+            };
+            let mut slot =
+                read_abi_value::<ExecutionApprovalSlotV1>(&value, "execution approval slot")?;
             let state = slot.state;
             let proof_id = slot.proof_id;
             let claim_slot_id = slot.claim_slot_id;
-            let argument_keys = administrative_argument_keys(slot.proof_id, &slot.expected_argv)?;
-            slot.state = ApprovedExecSlotStateV1::Armed;
+            slot.state = ExecutionApprovalSlotStateV1::Armed;
             slot.transition_version = 1;
-            let intent_sha256 = administrative_slot_intent_sha256(&slot_key, &slot);
+            let argv_snapshot = read_execution_argv_snapshot(host, slot.expected_argv)?;
+            let intent_sha256 =
+                execution_approval_slot_intent_sha256(&slot_key, &slot, &argv_snapshot);
             match state {
-                ApprovedExecSlotStateV1::Armed => {
+                ExecutionApprovalSlotStateV1::Armed => {
                     ensure!(
                         self.replay.armed_intent(claim_slot_id) == Some(intent_sha256),
                         AuthorizationSnafu {
                             reason: "armed kernel slot differs from its durable intent",
                         }
                     );
-                    ensure_administrative_arguments(host, &argument_keys)?;
                     live_slots.insert(claim_slot_id);
-                    live_proofs.insert(proof_id);
+                    live_argv_snapshots.insert(slot.expected_argv.snapshot_id);
                 }
-                ApprovedExecSlotStateV1::Consumed => {
+                ExecutionApprovalSlotStateV1::Reserved => {
+                    ensure!(
+                        self.replay.armed_intent(claim_slot_id) == Some(intent_sha256),
+                        AuthorizationSnafu {
+                            reason: "reserved kernel slot differs from its durable intent",
+                        }
+                    );
+                    if reserved_matches.contains(&(proof_id, claim_slot_id)) {
+                        live_slots.insert(claim_slot_id);
+                        live_argv_snapshots.insert(slot.expected_argv.snapshot_id);
+                    } else {
+                        self.replay.close(proof_id, claim_slot_id, intent_sha256)?;
+                        host.delete_map_entry("execution_approval_slots", &key)
+                            .context(InterceptorSnafu)?;
+                        delete_execution_argv_chunks(
+                            host,
+                            argv_snapshot.keyed_chunks().map(|(key, _)| key),
+                        )?;
+                    }
+                }
+                ExecutionApprovalSlotStateV1::Consumed | ExecutionApprovalSlotStateV1::Tampered => {
                     self.replay
                         .reconcile_consumed(proof_id, claim_slot_id, intent_sha256)?;
-                    delete_administrative_arguments(host, &argument_keys)?;
-                    host.delete_map_entry("approved_exec_slots", &key)
+                    host.delete_map_entry("execution_approval_slots", &key)
                         .context(InterceptorSnafu)?;
+                    delete_execution_argv_chunks(
+                        host,
+                        argv_snapshot.keyed_chunks().map(|(key, _)| key),
+                    )?;
                 }
-                ApprovedExecSlotStateV1::Expired
-                | ApprovedExecSlotStateV1::Cancelled
-                | ApprovedExecSlotStateV1::Corrupt => {
+                ExecutionApprovalSlotStateV1::Expired
+                | ExecutionApprovalSlotStateV1::Cancelled
+                | ExecutionApprovalSlotStateV1::Corrupt => {
                     self.replay.close(proof_id, claim_slot_id, intent_sha256)?;
-                    delete_administrative_arguments(host, &argument_keys)?;
-                    host.delete_map_entry("approved_exec_slots", &key)
+                    host.delete_map_entry("execution_approval_slots", &key)
                         .context(InterceptorSnafu)?;
+                    delete_execution_argv_chunks(
+                        host,
+                        argv_snapshot.keyed_chunks().map(|(key, _)| key),
+                    )?;
                 }
-                ApprovedExecSlotStateV1::Unknown => {
+                ExecutionApprovalSlotStateV1::Unknown => {
                     return AuthorizationSnafu {
-                        reason: "administrative slot is neither armed nor durably consumable"
+                        reason: "execution approval slot is neither armed nor durably consumable"
                             .to_owned(),
                     }
                     .fail()
                 }
-            }
-        }
-        for key in host
-            .map_keys("approved_exec_arguments")
-            .context(InterceptorSnafu)?
-        {
-            let argument =
-                read_abi_value::<ApprovedExecArgumentKeyV1>(&key, "administrative argument key")?;
-            if !live_proofs.contains(&argument.proof_id) {
-                host.delete_map_entry("approved_exec_arguments", &key)
-                    .context(InterceptorSnafu)?;
             }
         }
         ensure!(
@@ -456,86 +507,244 @@ impl AuthorizationProofOwner {
                 .into_iter()
                 .all(|slot_id| live_slots.contains(&slot_id)),
             AuthorizationSnafu {
-                reason: "durably armed administrative slot is missing from the kernel",
+                reason: "durably armed execution approval slot is missing from the kernel",
             }
         );
+        for raw_key in host
+            .map_keys("execution_argv_expected_chunks")
+            .context(InterceptorSnafu)?
+        {
+            let key =
+                read_abi_value::<ExecutionArgvChunkKeyV1>(&raw_key, "expected argv chunk key")?;
+            if !live_argv_snapshots.contains(&key.snapshot_id) {
+                host.delete_map_entry("execution_argv_expected_chunks", &raw_key)
+                    .context(InterceptorSnafu)?;
+            }
+        }
         Ok(())
     }
 }
 
-fn administrative_argument_keys(
-    proof_id: Id128V1,
-    argv: &BoundedAdministrativeArgvV1,
-) -> Result<Vec<ApprovedExecArgumentKeyV1>> {
-    ensure!(
-        argv.is_valid(),
-        AuthorizationSnafu {
-            reason: "administrative argv is not canonical",
-        }
-    );
-    let mut keys = Vec::with_capacity(usize::from(argv.argument_count));
-    let mut offset = 0_usize;
-    for (index, length) in argv.argument_lengths[..usize::from(argv.argument_count)]
-        .iter()
-        .enumerate()
-    {
-        let end = offset + usize::from(*length);
-        let key = ApprovedExecArgumentKeyV1::from_argument(
-            proof_id,
-            index,
-            &argv.argument_bytes[offset..end],
-        )
-        .ok_or_else(|| authorization_error("administrative argument key is invalid"))?;
-        keys.push(key);
-        offset = end;
-    }
-    Ok(keys)
+fn pending_execution_approval_retains_reservation(state: PendingExecutionApprovalStateV1) -> bool {
+    matches!(
+        state,
+        PendingExecutionApprovalStateV1::SlotReserved
+            | PendingExecutionApprovalStateV1::KernelArgvVerified
+    )
 }
 
-fn ensure_administrative_arguments(
-    host: &KernelHost,
-    keys: &[ApprovedExecArgumentKeyV1],
-) -> Result<()> {
-    for key in keys {
+#[derive(Debug, Eq, PartialEq)]
+struct ExecutionArgvSnapshotRowsV1 {
+    descriptor: ExecutionArgvSnapshotV1,
+    chunks: Vec<ExecutionArgvChunkV1>,
+}
+
+impl ExecutionArgvSnapshotRowsV1 {
+    fn from_arguments<T: AsRef<[u8]>>(arguments: &[T], snapshot_id: Id128V1) -> Result<Self> {
         ensure!(
-            host.lookup_map("approved_exec_arguments", key.as_bytes())
-                .context(InterceptorSnafu)?
-                .as_deref()
-                == Some([1_u8].as_slice()),
+            !snapshot_id.is_zero(),
             AuthorizationSnafu {
-                reason: "armed administrative argument is missing from the kernel",
+                reason: "argv snapshot ID is zero",
             }
         );
-    }
-    Ok(())
-}
-
-fn delete_administrative_arguments(
-    host: &KernelHost,
-    keys: &[ApprovedExecArgumentKeyV1],
-) -> Result<()> {
-    for key in keys {
-        if host
-            .lookup_map("approved_exec_arguments", key.as_bytes())
-            .context(InterceptorSnafu)?
-            .is_some()
-        {
-            host.delete_map_entry("approved_exec_arguments", key.as_bytes())
-                .context(InterceptorSnafu)?;
+        ensure!(
+            !arguments.is_empty() && !arguments[0].as_ref().is_empty(),
+            AuthorizationSnafu {
+                reason: "administrative argv is empty",
+            }
+        );
+        let argument_count = u64::try_from(arguments.len())
+            .map_err(|error| authorization_error(format!("argv count overflow: {error}")))?;
+        let mut total_argument_span = 0_u64;
+        let mut chunks = Vec::new();
+        let mut chunk = ExecutionArgvChunkV1::default();
+        for argument in arguments {
+            let argument = argument.as_ref();
+            ensure!(
+                !argument.contains(&0),
+                AuthorizationSnafu {
+                    reason: "administrative argv contains NUL",
+                }
+            );
+            total_argument_span = total_argument_span
+                .checked_add(
+                    u64::try_from(argument.len())
+                        .map_err(|error| {
+                            authorization_error(format!("argument size overflow: {error}"))
+                        })?
+                        .saturating_add(1),
+                )
+                .ok_or_else(|| authorization_error("argv span overflow"))?;
+            for byte in argument.iter().copied().chain(std::iter::once(0)) {
+                if chunk.length as usize == EXECUTION_ARGV_CHUNK_BYTES_V1 {
+                    chunks.push(chunk);
+                    chunk = ExecutionArgvChunkV1::default();
+                }
+                chunk.bytes[chunk.length as usize] = byte;
+                chunk.length += 1;
+            }
         }
+        let chunk_count = u32::try_from(chunks.len() + 1)
+            .map_err(|error| authorization_error(format!("argv chunk count overflow: {error}")))?;
+        chunk.flags = EXECUTION_ARGV_CHUNK_TERMINAL_V1;
+        chunks.push(chunk);
+        let descriptor = ExecutionArgvSnapshotV1 {
+            snapshot_id,
+            argument_count,
+            total_argument_span,
+            chunk_count,
+            reserved: 0,
+        };
+        ensure!(
+            descriptor.is_valid()
+                && chunks.iter().enumerate().all(|(index, chunk)| {
+                    u32::try_from(index).is_ok_and(|index| chunk.is_valid_for(&descriptor, index))
+                }),
+            AuthorizationSnafu {
+                reason: "administrative argv cannot form a complete immutable snapshot",
+            }
+        );
+        Ok(Self { descriptor, chunks })
     }
-    Ok(())
+
+    fn keyed_chunks(
+        &self,
+    ) -> impl Iterator<Item = (ExecutionArgvChunkKeyV1, &ExecutionArgvChunkV1)> {
+        (0_u32..)
+            .zip(self.chunks.iter())
+            .map(|(chunk_index, chunk)| {
+                (
+                    ExecutionArgvChunkKeyV1 {
+                        snapshot_id: self.descriptor.snapshot_id,
+                        chunk_index,
+                        reserved: 0,
+                    },
+                    chunk,
+                )
+            })
+    }
 }
 
-fn administrative_slot_intent_sha256(
-    key: &ApprovedExecSlotKeyV1,
-    slot: &ApprovedExecSlotV1,
+pub(crate) fn validate_execution_argv<T: AsRef<[u8]>>(arguments: &[T]) -> Result<()> {
+    ExecutionArgvSnapshotRowsV1::from_arguments(arguments, Id128V1::new(1, 1)).map(drop)
+}
+
+fn execution_argv_snapshot<T: AsRef<[u8]>>(
+    arguments: &[T],
+    snapshot_id: Id128V1,
+) -> Result<ExecutionArgvSnapshotRowsV1> {
+    ExecutionArgvSnapshotRowsV1::from_arguments(arguments, snapshot_id)
+}
+
+fn execution_approval_slot_intent_sha256(
+    key: &ExecutionApprovalSlotKeyV1,
+    slot: &ExecutionApprovalSlotV1,
+    chunks: &ExecutionArgvSnapshotRowsV1,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"MITHRIL-ADMINISTRATIVE-SLOT-V1\0");
     digest.update(key.as_bytes());
     digest.update(slot.as_bytes());
+    for (chunk_key, chunk) in chunks.keyed_chunks() {
+        digest.update(chunk_key.as_bytes());
+        digest.update(chunk.as_bytes());
+    }
     digest.finalize().into()
+}
+
+fn read_execution_argv_snapshot(
+    host: &KernelHost,
+    descriptor: ExecutionArgvSnapshotV1,
+) -> Result<ExecutionArgvSnapshotRowsV1> {
+    ensure!(
+        descriptor.is_valid(),
+        AuthorizationSnafu {
+            reason: "execution approval slot has an invalid argv snapshot descriptor",
+        }
+    );
+    let mut chunks = Vec::with_capacity(descriptor.chunk_count as usize);
+    for chunk_index in 0..descriptor.chunk_count {
+        let key = ExecutionArgvChunkKeyV1 {
+            snapshot_id: descriptor.snapshot_id,
+            chunk_index,
+            reserved: 0,
+        };
+        let value = host
+            .lookup_map("execution_argv_expected_chunks", key.as_bytes())
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| {
+                AuthorizationSnafu {
+                    reason: format!("expected argv chunk {chunk_index} is missing"),
+                }
+                .build()
+            })?;
+        let chunk = read_abi_value::<ExecutionArgvChunkV1>(&value, "expected argv chunk")?;
+        ensure!(
+            chunk.is_valid_for(&descriptor, chunk_index),
+            AuthorizationSnafu {
+                reason: format!("expected argv chunk {chunk_index} is invalid"),
+            }
+        );
+        chunks.push(chunk);
+    }
+    Ok(ExecutionArgvSnapshotRowsV1 { descriptor, chunks })
+}
+
+fn publish_execution_argv_snapshot(
+    host: &KernelHost,
+    snapshot: &ExecutionArgvSnapshotRowsV1,
+) -> Result<Vec<ExecutionArgvChunkKeyV1>> {
+    let mut inserted = Vec::new();
+    let publication = (|| -> Result<()> {
+        for (key, chunk) in snapshot.keyed_chunks() {
+            match host
+                .insert_map(
+                    "execution_argv_expected_chunks",
+                    key.as_bytes(),
+                    chunk.as_bytes(),
+                )
+                .context(InterceptorSnafu)?
+            {
+                MapInsertResult::Inserted => inserted.push(key),
+                MapInsertResult::AlreadyExists => {}
+            }
+            ensure!(
+                host.lookup_map("execution_argv_expected_chunks", key.as_bytes())
+                    .context(InterceptorSnafu)?
+                    .as_deref()
+                    == Some(chunk.as_bytes()),
+                AuthorizationSnafu {
+                    reason: format!(
+                        "expected argv chunk {} failed exact readback",
+                        key.chunk_index
+                    ),
+                }
+            );
+        }
+        Ok(())
+    })();
+    if let Err(error) = publication {
+        delete_execution_argv_chunks(host, inserted)?;
+        return Err(error);
+    }
+    Ok(inserted)
+}
+
+fn delete_execution_argv_chunks(
+    host: &KernelHost,
+    chunks: impl IntoIterator<Item = ExecutionArgvChunkKeyV1>,
+) -> Result<()> {
+    for key in chunks {
+        if host
+            .lookup_map("execution_argv_expected_chunks", key.as_bytes())
+            .context(InterceptorSnafu)?
+            .is_some()
+        {
+            host.delete_map_entry("execution_argv_expected_chunks", key.as_bytes())
+                .context(InterceptorSnafu)?;
+        }
+    }
+    Ok(())
 }
 
 fn read_abi_value<T: KnownLayout + TryFromBytes>(bytes: &[u8], name: &str) -> Result<T> {
@@ -911,7 +1120,7 @@ fn validate_administrative_body(
     ensure!(
         decode_u64(&mut decoder)? == 1,
         AuthorizationSnafu {
-            reason: "administrative match mode is not NEXT_MATCHING_RUNTIME_EXTERNAL_ROOT",
+            reason: "execution approval mode is not NEXT_MATCHING_RUNTIME_EXTERNAL_ROOT",
         }
     );
     expect_key(&mut decoder, 14)?;
@@ -922,8 +1131,6 @@ fn validate_administrative_body(
         }
     );
     expect_key(&mut decoder, 15)?;
-    let approved_argv = BoundedAdministrativeArgvV1::from_arguments(&arguments)
-        .ok_or_else(|| authorization_error("approved argv cannot be lowered to the BPF ABI"))?;
     let resolved_executable =
         validate_resolved_executable(&mut decoder, arguments.first().copied().unwrap_or_default())?;
     ensure!(
@@ -941,7 +1148,7 @@ fn validate_administrative_body(
         container_name,
         full_container_id,
         container_generation,
-        approved_argv,
+        approved_argv: arguments.into_iter().map(ToOwned::to_owned).collect(),
         stream_flags: u8::try_from(stream_flags).map_err(|error| {
             authorization_error(format!("administrative stream flags exceed u8: {error}"))
         })?,
@@ -1415,15 +1622,35 @@ mod tests {
     use sha2::{Digest as _, Sha256};
 
     use super::{
-        administrative_argument_keys, authorization_error, cbor_error, read_abi_value,
-        validate_administrative_body, AuthorizationProofOwner, AuthorizationTargetV1,
-        IntentPayloadV1, IssuerTrustV1, TrustBundleV1, ADMINISTRATIVE_EXEC_KIND, SIGNATURE_DOMAIN,
+        authorization_error, cbor_error, execution_argv_snapshot,
+        pending_execution_approval_retains_reservation, validate_administrative_body,
+        AuthorizationProofOwner, AuthorizationTargetV1, IntentPayloadV1, IssuerTrustV1,
+        TrustBundleV1, ADMINISTRATIVE_EXEC_KIND, SIGNATURE_DOMAIN,
     };
-    use erebor_interceptor_abi::{ApprovedExecSlotV1, BoundedAdministrativeArgvV1, Id128V1};
-    use zerocopy::IntoBytes as _;
+    use erebor_interceptor_abi::{
+        Id128V1, PendingExecutionApprovalStateV1, EXECUTION_ARGV_CHUNK_TERMINAL_V1,
+    };
 
     fn id(value: u64) -> Id128V1 {
         Id128V1::new(1, value)
+    }
+
+    #[test]
+    fn only_in_flight_kernel_argv_states_retain_a_reserved_slot() {
+        assert!(pending_execution_approval_retains_reservation(
+            PendingExecutionApprovalStateV1::SlotReserved
+        ));
+        assert!(pending_execution_approval_retains_reservation(
+            PendingExecutionApprovalStateV1::KernelArgvVerified
+        ));
+        for state in [
+            PendingExecutionApprovalStateV1::Unknown,
+            PendingExecutionApprovalStateV1::ArgumentsMatched,
+            PendingExecutionApprovalStateV1::SlotConsumed,
+            PendingExecutionApprovalStateV1::Tampered,
+        ] {
+            assert!(!pending_execution_approval_retains_reservation(state));
+        }
     }
 
     fn encode_id(encoder: &mut Encoder<&mut Vec<u8>>, value: Id128V1) -> crate::Result<()> {
@@ -1747,8 +1974,7 @@ mod tests {
         assert_eq!(decoded.container_name, b"worker");
         assert_eq!(decoded.full_container_id, vec![b'c'; 32]);
         assert_eq!(decoded.container_generation, 1);
-        assert_eq!(decoded.approved_argv.argument_count, 1);
-        assert_eq!(&decoded.approved_argv.argument_bytes[..4], b"bash");
+        assert_eq!(decoded.approved_argv, [b"bash".to_vec()]);
         assert_eq!(decoded.stream_flags, 2);
         assert_eq!(decoded.approved_role_id, "admin.exec");
         assert_eq!(decoded.profile.profile_id, id(31));
@@ -1824,34 +2050,37 @@ mod tests {
     }
 
     #[test]
-    fn administrative_argument_map_keys_preserve_exact_order() -> crate::Result<()> {
-        let proof_id = id(41);
-        let argv = BoundedAdministrativeArgvV1::from_arguments(&[
-            b"bash".as_slice(),
-            b"-lc",
-            b"echo value",
-        ])
-        .ok_or_else(|| authorization_error("test argv is invalid"))?;
-        let keys = administrative_argument_keys(proof_id, &argv)?;
-        let slot = ApprovedExecSlotV1 {
-            proof_id,
-            expected_argv: argv,
-            ..ApprovedExecSlotV1::default()
-        };
-        let decoded = read_abi_value::<ApprovedExecSlotV1>(slot.as_bytes(), "test slot")?;
-
-        assert_eq!(
-            keys,
-            administrative_argument_keys(decoded.proof_id, &decoded.expected_argv)?
+    fn execution_approval_snapshot_preserves_exact_order_and_boundaries() -> crate::Result<()> {
+        let snapshot_id = id(40);
+        let snapshot =
+            execution_argv_snapshot(&[b"bash".as_slice(), b"-lc", b"echo value"], snapshot_id)?;
+        assert!(snapshot.descriptor.is_valid());
+        assert_eq!(snapshot.descriptor.snapshot_id, snapshot_id);
+        assert_eq!(snapshot.descriptor.argument_count, 3);
+        assert_eq!(snapshot.descriptor.total_argument_span, 20);
+        assert_eq!(snapshot.descriptor.chunk_count, 1);
+        assert_eq!(snapshot.chunks[0].length, 20);
+        assert_eq!(snapshot.chunks[0].flags, EXECUTION_ARGV_CHUNK_TERMINAL_V1);
+        assert_eq!(&snapshot.chunks[0].bytes[..20], b"bash\0-lc\0echo value\0");
+        assert_ne!(
+            snapshot,
+            execution_argv_snapshot(&[b"bash-lc".as_slice(), b"echo value"], snapshot_id)?
         );
-        assert_eq!(keys.len(), 3);
-        assert_eq!(keys[0].argument_index, 0);
-        assert_eq!(&keys[0].argument_bytes[..4], b"bash");
-        assert_eq!(keys[1].argument_index, 1);
-        assert_eq!(&keys[1].argument_bytes[..3], b"-lc");
-        assert_eq!(keys[2].argument_index, 2);
-        assert_eq!(&keys[2].argument_bytes[..10], b"echo value");
-        assert_ne!(keys[1].as_bytes(), keys[2].as_bytes());
+        assert_ne!(
+            snapshot,
+            execution_argv_snapshot(&[b"bash".as_slice(), b"-lcecho value"], snapshot_id)?
+        );
+        let large_arguments = vec![b"/run/mithril-entry-roles/control.allowed".as_slice(); 1_200];
+        let large_snapshot = execution_argv_snapshot(&large_arguments, id(41))?;
+        assert_eq!(large_snapshot.descriptor.argument_count, 1_200);
+        assert_eq!(large_snapshot.descriptor.total_argument_span, 49_200);
+        assert_eq!(large_snapshot.descriptor.chunk_count, 13);
+        assert!(large_snapshot
+            .chunks
+            .iter()
+            .enumerate()
+            .all(|(index, chunk)| u32::try_from(index)
+                .is_ok_and(|index| { chunk.is_valid_for(&large_snapshot.descriptor, index) })));
         Ok(())
     }
 

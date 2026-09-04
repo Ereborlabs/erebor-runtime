@@ -1358,6 +1358,49 @@ mod tests {
     }
 
     #[test]
+    fn recursive_path_tree_deny_covers_the_maximum_depth_child() -> crate::Result<()> {
+        let floor_components = (0..MAX_CANONICAL_PATH_COMPONENTS_V1 - 1)
+            .map(|index| format!("d{index}").into_bytes())
+            .collect::<Vec<_>>();
+        let graph = CanonicalPathGraphV1::compile_with_path_tree_denies(
+            "maximum-depth",
+            &[],
+            &[PathTreeDenyPatternV1 {
+                role_id: "converter".to_owned(),
+                components: floor_components
+                    .iter()
+                    .cloned()
+                    .map(PathPatternComponentV1::Exact)
+                    .collect(),
+                operations: vec![2],
+            }],
+        )?
+        .determinize("maximum-depth")?;
+        let target_components = floor_components
+            .into_iter()
+            .chain([b"pre-existing".to_vec()])
+            .collect::<Vec<_>>();
+
+        let state = graph.state_after(&target_components).ok_or_else(|| {
+            crate::Error::PolicyValidation {
+                policy_id: "maximum-depth".to_owned(),
+                code: "PATH_TEST",
+                reason: "maximum-depth recursive denial graph did not match".to_owned(),
+                location: snafu::Location::default(),
+            }
+        })?;
+        assert_eq!(
+            graph
+                .path_tree_deny_floors
+                .iter()
+                .find(|floor| floor.state_id == state && floor.role_id == "converter")
+                .map(|floor| floor.operation_mask),
+            Some(1 << 2)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn canonical_path_accepts_meta_depth_and_rejects_one_more() -> crate::Result<()> {
         let path = format!(
             "/{}",

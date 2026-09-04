@@ -33,6 +33,7 @@ int erebor_sched_process_exit(struct trace_event_raw_sched_process_template *con
     finish_mount_mutation();
     task = bpf_get_current_task_btf();
     exit_task_effect_attempts(task);
+    clear_provisional_exec_request(task);
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!label)
         return 0;
@@ -52,7 +53,8 @@ int erebor_sched_process_exit(struct trace_event_raw_sched_process_template *con
     }
     if (task_cookie == TASK_LABEL_EXIT_COOKIE_V1)
         return 0;
-    bpf_map_delete_elem(&pending_administrative_matches,
+    close_current_execution_approval(label);
+    bpf_map_delete_elem(&pending_execution_approvals,
                         &label->task_cookie);
     process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
     if (process)

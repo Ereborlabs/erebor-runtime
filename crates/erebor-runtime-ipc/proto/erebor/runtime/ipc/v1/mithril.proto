@@ -139,4 +139,20 @@ message MithrilEffectObservation {
   uint64 source_sequence = 71;
   uint32 source_cpu_id = 72;
   uint32 admitted_entry_rule_id = 73;
+  uint32 execution_approval_trace_stage = 74;
+  uint32 execution_approval_pending_state = 75;
+  uint32 execution_approval_slot_state = 76;
+  uint64 execution_approval_exec_attempt_sequence = 77;
+  uint64 execution_approval_failed_checks = 78;
+  uint32 execution_approval_expected_mount_namespace_inode = 79;
+  uint32 execution_approval_expected_mount_id = 80;
+  uint32 execution_approval_expected_filesystem_device = 81;
+  uint64 execution_approval_expected_inode = 82;
+  uint64 execution_approval_expected_inode_generation = 83;
+  uint32 execution_approval_observed_mount_namespace_inode = 84;
+  uint32 execution_approval_observed_mount_id = 85;
+  uint32 execution_approval_observed_filesystem_device = 86;
+  uint64 execution_approval_observed_inode = 87;
+  uint64 execution_approval_observed_inode_generation = 88;
+  uint32 execution_approval_syscall_flags = 89;
 }

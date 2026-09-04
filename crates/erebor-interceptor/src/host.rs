@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use erebor_interceptor_abi::{
-    ApprovedExecSlotKeyV1, ExactFileMeasurementStateV1, ExactFileMeasurementV1, Id128V1,
+    ExactFileMeasurementStateV1, ExactFileMeasurementV1, ExecutionApprovalSlotKeyV1, Id128V1,
     PhysicalDecisionKindV1, PhysicalDecisionV1, PolicyActivationProbeMapKindV1,
     PolicyActivationProbeV1, MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
 };
@@ -255,7 +255,7 @@ pub enum MapInsertResult {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AdministrativeSlotCancelResult {
+pub enum ExecutionApprovalSlotCancelResult {
     Cancelled,
     Consumed,
     Closed,
@@ -1570,12 +1570,12 @@ impl KernelHost {
         .build())
     }
 
-    pub fn cancel_administrative_slot(
+    pub fn cancel_execution_approval_slot(
         &mut self,
-        key: ApprovedExecSlotKeyV1,
+        key: ExecutionApprovalSlotKeyV1,
         proof_id: Id128V1,
         claim_slot_id: Id128V1,
-    ) -> Result<AdministrativeSlotCancelResult> {
+    ) -> Result<ExecutionApprovalSlotCancelResult> {
         let mut probe_key = [0_u8; MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1];
         let mut offset = 0;
         for value in [
@@ -1588,11 +1588,11 @@ impl KernelHost {
             offset = end;
         }
         let request = PolicyActivationProbeV1 {
-            map_kind: PolicyActivationProbeMapKindV1::AdministrativeSlotCancel,
+            map_kind: PolicyActivationProbeMapKindV1::ExecutionApprovalSlotCancel,
             reserved: [0; 7],
             key_size: u32::try_from(offset).map_err(|error| {
                 ManifestMismatchSnafu {
-                    path: PathBuf::from("approved_exec_slots"),
+                    path: PathBuf::from("execution_approval_slots"),
                     reason: format!("administrative cancellation key exceeds u32: {error}"),
                 }
                 .build()
@@ -1609,14 +1609,14 @@ impl KernelHost {
             },
         };
         match self.run_policy_activation_command(request.as_bytes())? {
-            1 => Ok(AdministrativeSlotCancelResult::Cancelled),
-            7 => Ok(AdministrativeSlotCancelResult::Missing),
-            9 => Ok(AdministrativeSlotCancelResult::Consumed),
-            10 => Ok(AdministrativeSlotCancelResult::Closed),
+            1 => Ok(ExecutionApprovalSlotCancelResult::Cancelled),
+            7 => Ok(ExecutionApprovalSlotCancelResult::Missing),
+            9 => Ok(ExecutionApprovalSlotCancelResult::Consumed),
+            10 => Ok(ExecutionApprovalSlotCancelResult::Closed),
             code => ManifestMismatchSnafu {
-                path: PathBuf::from("approved_exec_slots"),
+                path: PathBuf::from("execution_approval_slots"),
                 reason: format!(
-                    "administrative slot cancellation failed closed with probe code {code}"
+                    "execution approval slot cancellation failed closed with probe code {code}"
                 ),
             }
             .fail(),

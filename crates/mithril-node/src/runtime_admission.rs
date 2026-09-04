@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+use std::fs;
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -43,6 +45,7 @@ pub enum RuntimeAdmissionOperationV1 {
     StageRuntimeFacts,
     PrepareContainer,
     PrepareDeclaredEntries,
+    FinalizeContainer,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -71,6 +74,7 @@ pub(crate) struct ScheduledRuntimeBindingV1 {
 
 pub(crate) struct RuntimeAdmissionEnvelope {
     pub(crate) request: RuntimeAdmissionRequestV1,
+    peer_pid: u32,
     deadline: Instant,
     response: oneshot::Sender<RuntimeAdmissionResponseV1>,
     delivered: oneshot::Receiver<()>,
@@ -127,6 +131,11 @@ impl RuntimeAdmissionRequestV1 {
             }
             RuntimeAdmissionOperationV1::PrepareDeclaredEntries => {
                 self.initial_pid.is_none()
+                    && self.cgroup_path.is_none()
+                    && self.oci_bundle.as_deref().is_some_and(clean_oci_bundle)
+            }
+            RuntimeAdmissionOperationV1::FinalizeContainer => {
+                self.initial_pid.is_some_and(|pid| pid > 0)
                     && self.cgroup_path.is_none()
                     && self.oci_bundle.as_deref().is_some_and(clean_oci_bundle)
             }
@@ -200,6 +209,18 @@ impl RuntimeAdmissionRequestV1 {
             reason: "OCI runtime admission has no initial process",
         })
     }
+
+    pub(crate) fn final_initial_pid(&self) -> Result<u32> {
+        ensure!(
+            self.operation == RuntimeAdmissionOperationV1::FinalizeContainer,
+            IdentityStateSnafu {
+                reason: "container finalization requires the startContainer OCI hook",
+            }
+        );
+        self.initial_pid.context(IdentityStateSnafu {
+            reason: "OCI startContainer admission has no initial process",
+        })
+    }
 }
 
 fn clean_oci_bundle(path: &Path) -> bool {
@@ -222,6 +243,10 @@ impl RuntimeAdmissionEnvelope {
             }
         );
         Ok(())
+    }
+
+    pub(crate) const fn peer_pid(&self) -> u32 {
+        self.peer_pid
     }
 
     pub(crate) async fn deliver(self, response: RuntimeAdmissionResponseV1) -> Result<()> {
@@ -329,6 +354,7 @@ impl RuntimeAdmissionReceiver {
             requests
                 .send(RuntimeAdmissionEnvelope {
                     request,
+                    peer_pid: std::process::id(),
                     deadline,
                     response,
                     delivered: delivery,
@@ -631,12 +657,9 @@ impl RuntimeAdmissionServer {
         let deadline = Instant::now() + timeout;
         let result = tokio::time::timeout_at(deadline, async {
             // SO_PEERCRED prevents an unprivileged local process from invoking the gate.
+            let peer = stream.peer_cred().context(IoSnafu { path: socket_path })?;
             ensure!(
-                stream
-                    .peer_cred()
-                    .context(IoSnafu { path: socket_path })?
-                    .uid()
-                    == 0,
+                peer.uid() == 0,
                 IdentityStateSnafu {
                     reason: "runtime admission peer is not root",
                 }
@@ -678,9 +701,18 @@ impl RuntimeAdmissionServer {
                     .context(IoSnafu { path: socket_path })?;
                 return Ok(());
             }
+            let peer_pid = peer.pid().context(IdentityStateSnafu {
+                reason: "runtime admission peer has no host PID",
+            })?;
+            let peer_pid = u32::try_from(peer_pid).map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("runtime admission peer PID is invalid: {error}"),
+                }
+                .build()
+            })?;
             let mut trailing = [0_u8; 1];
             let dispatched = tokio::select! {
-                result = Self::dispatch(request, requests, deadline) => result?,
+                result = Self::dispatch(request, peer_pid, requests, deadline) => result?,
                 read = stream.read(&mut trailing) => {
                     let count = read.context(IoSnafu { path: socket_path })?;
                     let reason = if count == 0 {
@@ -742,6 +774,7 @@ impl RuntimeAdmissionServer {
 
     async fn dispatch(
         request: RuntimeAdmissionRequestV1,
+        peer_pid: u32,
         requests: mpsc::Sender<RuntimeAdmissionEnvelope>,
         deadline: Instant,
     ) -> Result<RuntimeAdmissionDispatch> {
@@ -751,6 +784,7 @@ impl RuntimeAdmissionServer {
             requests
                 .send(RuntimeAdmissionEnvelope {
                     request: request.clone(),
+                    peer_pid,
                     deadline,
                     response,
                     delivered: delivery,
@@ -781,10 +815,77 @@ impl RuntimeAdmissionServer {
     }
 }
 
+pub(crate) fn verify_trusted_start_peer(
+    peer_pid: u32,
+    initial_pid: u32,
+    cgroup_path: &Path,
+    trusted_start_hook_path: &Path,
+) -> Result<()> {
+    ensure!(
+        peer_pid > 0 && initial_pid > 0 && clean_cgroup_path(cgroup_path),
+        IdentityStateSnafu {
+            reason: "startContainer peer identity is not canonical",
+        }
+    );
+    let trusted = fs::metadata(trusted_start_hook_path).context(IoSnafu {
+        path: trusted_start_hook_path,
+    })?;
+    let peer_executable = PathBuf::from(format!("/proc/{peer_pid}/exe"));
+    let peer = fs::metadata(&peer_executable).context(IoSnafu {
+        path: &peer_executable,
+    })?;
+    ensure!(
+        trusted.is_file() && trusted.dev() == peer.dev() && trusted.ino() == peer.ino(),
+        IdentityStateSnafu {
+            reason: "startContainer peer is not the trusted Mithril helper",
+        }
+    );
+    let peer_mount_namespace = PathBuf::from(format!("/proc/{peer_pid}/ns/mnt"));
+    let initial_mount_namespace = PathBuf::from(format!("/proc/{initial_pid}/ns/mnt"));
+    ensure!(
+        fs::metadata(&peer_mount_namespace)
+            .context(IoSnafu {
+                path: &peer_mount_namespace,
+            })?
+            .ino()
+            == fs::metadata(&initial_mount_namespace)
+                .context(IoSnafu {
+                    path: &initial_mount_namespace,
+                })?
+                .ino(),
+        IdentityStateSnafu {
+            reason: "startContainer peer is outside the initial task mount namespace",
+        }
+    );
+    let peer_cgroup_file = PathBuf::from(format!("/proc/{peer_pid}/cgroup"));
+    let peer_cgroups = fs::read_to_string(&peer_cgroup_file).context(IoSnafu {
+        path: &peer_cgroup_file,
+    })?;
+    let relative = peer_cgroups
+        .lines()
+        .find_map(|line| line.strip_prefix("0::"))
+        .and_then(|path| path.strip_prefix('/'))
+        .filter(|path| !path.is_empty())
+        .context(IdentityStateSnafu {
+            reason: "startContainer peer has no unified cgroup",
+        })?;
+    let peer_cgroup =
+        fs::canonicalize(Path::new("/sys/fs/cgroup").join(relative)).context(IoSnafu {
+            path: Path::new("/sys/fs/cgroup").join(relative),
+        })?;
+    ensure!(
+        peer_cgroup == cgroup_path,
+        IdentityStateSnafu {
+            reason: "startContainer peer is outside the prepared container cgroup",
+        }
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     use super::{
@@ -892,6 +993,46 @@ mod tests {
     }
 
     #[test]
+    fn start_container_finalization_requires_the_same_pid_and_bundle() -> crate::Result<()> {
+        let mut finalization = request();
+        finalization.operation = RuntimeAdmissionOperationV1::FinalizeContainer;
+        finalization.oci_bundle = Some(PathBuf::from("/run/oci/container-a"));
+        finalization.kubernetes_identity()?;
+
+        finalization.initial_pid = None;
+        assert!(finalization.kubernetes_identity().is_err());
+        finalization.initial_pid = Some(42);
+        finalization.oci_bundle = None;
+        assert!(finalization.kubernetes_identity().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn start_container_rejects_an_untrusted_helper_inode() -> crate::Result<()> {
+        let directory = tempfile::tempdir().map_err(|error| crate::Error::Io {
+            path: PathBuf::from("runtime-admission-untrusted-helper"),
+            source: error,
+            location: snafu::Location::new(file!(), line!(), column!()),
+        })?;
+        let untrusted = directory.path().join("mithril-oci-hook");
+        std::fs::write(&untrusted, b"not-the-running-test-binary").map_err(|error| {
+            crate::Error::Io {
+                path: untrusted.clone(),
+                source: error,
+                location: snafu::Location::new(file!(), line!(), column!()),
+            }
+        })?;
+        assert!(super::verify_trusted_start_peer(
+            std::process::id(),
+            std::process::id(),
+            Path::new("/sys/fs/cgroup/kubepods/test"),
+            &untrusted,
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
     fn malformed_or_unpinned_requests_fail_closed() {
         let mut invalid_path = request();
         invalid_path.cgroup_path = Some(PathBuf::from("/tmp/not-a-cgroup"));
@@ -991,6 +1132,7 @@ mod tests {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
         let task = tokio::spawn(RuntimeAdmissionServer::dispatch(
             request(),
+            std::process::id(),
             sender,
             deadline,
         ));
@@ -1046,6 +1188,7 @@ mod tests {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(20);
         let task = tokio::spawn(RuntimeAdmissionServer::dispatch(
             request(),
+            std::process::id(),
             sender,
             deadline,
         ));

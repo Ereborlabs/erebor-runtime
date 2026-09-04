@@ -4949,6 +4949,7 @@ mod tests {
         config.kubernetes_node_name = Some("worker-a".to_owned());
         config.runtime_admission = Some(RuntimeAdmissionConfig {
             socket_path: directory.path().join("runtime-admission.sock"),
+            trusted_start_hook_path: "/host-hook-bin/mithril-oci-hook".into(),
             maximum_request_bytes: 64 * 1_024,
             timeout_ms: 10_000,
         });
@@ -5234,6 +5235,7 @@ mod tests {
         config.kubernetes_node_name = Some("worker-a".to_owned());
         config.runtime_admission = Some(RuntimeAdmissionConfig {
             socket_path: directory.path().join("runtime-admission.sock"),
+            trusted_start_hook_path: "/host-hook-bin/mithril-oci-hook".into(),
             maximum_request_bytes: 64 * 1_024,
             timeout_ms: 10_000,
         });
@@ -6613,6 +6615,7 @@ mod tests {
         config.kubernetes_node_name = Some("worker-a".to_owned());
         config.runtime_admission = Some(RuntimeAdmissionConfig {
             socket_path: state_directory.join("runtime-admission.sock"),
+            trusted_start_hook_path: "/host-hook-bin/mithril-oci-hook".into(),
             maximum_request_bytes: 64 * 1_024,
             timeout_ms: 10_000,
         });

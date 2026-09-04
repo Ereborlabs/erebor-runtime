@@ -310,11 +310,12 @@ mod tests {
 
     #[test]
     fn exec_programs_bound_exact_argv_capture_iterations() -> crate::Result<()> {
-        use libbpf_rs::libbpf_sys::{BPF_ALU64, BPF_K, BPF_MOV};
+        use libbpf_rs::libbpf_sys::{BPF_ALU64, BPF_K, BPF_MOV, BPF_PSEUDO_CALL};
 
         const BPF_CALL: u8 = 0x85;
-        const ARGV_LOOP_BUDGET: i32 = 256;
+        const ARGV_LOOP_BUDGET: i32 = 5 << 8;
         let object = open_object()?;
+        let mut capture_call = None;
         for program_name in ["erebor_sys_enter_execve", "erebor_sys_enter_execveat"] {
             let mut found = false;
             for program in object
@@ -323,27 +324,43 @@ mod tests {
             {
                 found = true;
                 let instructions = program.insns();
-                let loop_calls = instructions
+                let capture_calls = instructions
                     .iter()
-                    .enumerate()
-                    .filter(|(_, instruction)| {
+                    .filter(|instruction| {
                         instruction.code == BPF_CALL
-                            && instruction.imm == libbpf_rs::libbpf_sys::BPF_FUNC_loop as i32
+                            && instruction.src_reg() == BPF_PSEUDO_CALL as u8
                     })
-                    .map(|(index, _)| index)
+                    .map(|instruction| instruction.imm)
                     .collect::<Vec<_>>();
-                assert_eq!(loop_calls.len(), 1, "{program_name}");
-                let loop_call = loop_calls[0];
-                assert!(instructions[loop_call.saturating_sub(8)..loop_call]
-                    .iter()
-                    .any(|instruction| {
-                        instruction.code == (BPF_ALU64 | BPF_MOV | BPF_K) as u8
-                            && instruction.dst_reg() == 1
-                            && instruction.imm == ARGV_LOOP_BUDGET
-                    }));
+                assert_eq!(capture_calls.len(), 1, "{program_name}");
+                match capture_call {
+                    Some(expected) => assert_eq!(capture_calls[0], expected, "{program_name}"),
+                    None => capture_call = Some(capture_calls[0]),
+                }
             }
             assert!(found, "bundled object must contain {program_name}");
         }
+
+        let instructions = BUNDLED_BPF_OBJECT.chunks_exact(8).collect::<Vec<_>>();
+        let loop_calls = instructions
+            .iter()
+            .enumerate()
+            .filter(|(_, instruction)| {
+                instruction[0] == BPF_CALL
+                    && bpf_immediate(instruction)
+                        == Some(libbpf_rs::libbpf_sys::BPF_FUNC_loop as i32)
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert!(loop_calls.iter().any(|loop_call| {
+            instructions[loop_call.saturating_sub(8)..*loop_call]
+                .iter()
+                .any(|instruction| {
+                    instruction[0] == (BPF_ALU64 | BPF_MOV | BPF_K) as u8
+                        && instruction[1] & 0x0f == 1
+                        && bpf_immediate(instruction) == Some(ARGV_LOOP_BUDGET)
+                })
+        }));
         Ok(())
     }
 

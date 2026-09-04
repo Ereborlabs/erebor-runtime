@@ -31,11 +31,13 @@ include = [
   "CanonicalMountRootKeyV1",
   "CanonicalMountRootV1",
   "CanonicalPathComponentV1",
-  "ApprovedExecArgumentKeyV1",
-  "ApprovedExecSlotKeyV1",
-  "ApprovedExecSlotStateV1",
-  "ApprovedExecSlotV1",
-  "BoundedAdministrativeArgvV1",
+  "ExecutionArgvChunkKeyV1",
+  "ExecutionArgvChunkV1",
+  "ExecutionArgvSnapshotV1",
+  "ExecutionApprovalSlotKeyV1",
+  "ExecutionApprovalSlotStateV1",
+  "ExecutionApprovalSlotV1",
+  "ExecutionApprovalTraceV1",
   "CreatedByEdgeV1",
   "AuthorityDomainStateKindV1",
   "AuthorityDomainStateV1",
@@ -129,8 +131,8 @@ include = [
   "MountTopologyStateV1",
   "PendingExecStateV1",
   "PendingExecV1",
-  "PendingAdministrativeMatchStateV1",
-  "PendingAdministrativeMatchV1",
+  "PendingExecutionApprovalStateV1",
+  "PendingExecutionApprovalV1",
   "PhysicalDecisionKindV1",
   "PhysicalDecisionV1",
   "PolicyActivationProbeMapKindV1",
@@ -169,11 +171,12 @@ include = [
 "CanonicalMountRootKeyV1" = "canonical_mount_root_key_v1"
 "CanonicalMountRootV1" = "canonical_mount_root_v1"
 "CanonicalPathComponentV1" = "canonical_path_component_v1"
-"ApprovedExecArgumentKeyV1" = "approved_exec_argument_key_v1"
-"ApprovedExecSlotKeyV1" = "approved_exec_slot_key_v1"
-"ApprovedExecSlotStateV1" = "approved_exec_slot_state_v1"
-"ApprovedExecSlotV1" = "approved_exec_slot_v1"
-"BoundedAdministrativeArgvV1" = "bounded_administrative_argv_v1"
+"ExecutionArgvChunkKeyV1" = "execution_argv_chunk_key_v1"
+"ExecutionArgvChunkV1" = "execution_argv_chunk_v1"
+"ExecutionArgvSnapshotV1" = "execution_argv_snapshot_v1"
+"ExecutionApprovalSlotKeyV1" = "execution_approval_slot_key_v1"
+"ExecutionApprovalSlotStateV1" = "execution_approval_slot_state_v1"
+"ExecutionApprovalSlotV1" = "execution_approval_slot_v1"
 "CreatedByEdgeV1" = "created_by_edge_v1"
 "AuthorityDomainStateKindV1" = "authority_domain_state_kind_v1"
 "AuthorityDomainStateV1" = "authority_domain_state_v1"
@@ -201,6 +204,7 @@ include = [
 "EffectObservationHealthV1" = "effect_observation_health_v1"
 "EffectObservationReasonV1" = "effect_observation_reason_v1"
 "EffectObservationV1" = "effect_observation_v1"
+"ExecutionApprovalTraceV1" = "execution_approval_trace_v1"
 "EffectPhysicalResultV1" = "effect_physical_result_v1"
 "ExactFileObjectKeyV1" = "exact_file_object_key_v1"
 "ExactFileMeasurementStateV1" = "exact_file_measurement_state_v1"
@@ -266,8 +270,8 @@ include = [
 "MountTopologyStateV1" = "mount_topology_state_v1"
 "PendingExecStateV1" = "pending_exec_state_v1"
 "PendingExecV1" = "pending_exec_v1"
-"PendingAdministrativeMatchStateV1" = "pending_administrative_match_state_v1"
-"PendingAdministrativeMatchV1" = "pending_administrative_match_v1"
+"PendingExecutionApprovalStateV1" = "pending_execution_approval_state_v1"
+"PendingExecutionApprovalV1" = "pending_execution_approval_v1"
 "PhysicalDecisionKindV1" = "physical_decision_kind_v1"
 "PhysicalDecisionV1" = "physical_decision_v1"
 "PolicyActivationProbeMapKindV1" = "policy_activation_probe_map_kind_v1"

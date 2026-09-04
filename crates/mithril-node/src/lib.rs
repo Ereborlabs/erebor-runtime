@@ -39,7 +39,7 @@ pub use identity::{
 };
 pub use local::RuntimeObservationServer;
 #[cfg(feature = "test-support")]
-pub use node::PolicyControlPacingOwner;
+pub use node::{AdministrativeExecTestOwner, PolicyControlPacingOwner};
 pub use node::{NodeChassis, NodeReadinessV1};
 pub use observation::{
     CoverageCountersV1, CoverageGapReasonV1, CoverageHealthOwner, CoverageIntervalV1,

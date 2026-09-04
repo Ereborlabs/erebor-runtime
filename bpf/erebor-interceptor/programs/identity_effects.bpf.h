@@ -442,6 +442,7 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
     __u64 *profile_task_refs;
     struct cgroup *cgroup = NULL;
     __u64 path_composite_atom_id = 0;
+    bool admitted_exact_object = false;
     int visible_path_result;
     int binding_lookup;
 
@@ -561,6 +562,12 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
+    if (scratch->observation.effect_family == kernel_effect_family_v1_exec &&
+        scratch->observation.operation ==
+            kernel_effect_operation_v1_execute &&
+        scratch->effect_gate_flags & EFFECT_GATE_FILE_OPEN_ATTEMPT_V1 &&
+        initial_exec_has_provisional_capture())
+        return runtime_entry_infrastructure_effect_result(scratch);
     if (!(scratch->effect_gate_flags &
           EFFECT_GATE_PREPARED_EXEC_EVALUATION_V1) &&
         runtime_entry_bootstrap_actor_is_exact(
@@ -572,6 +579,14 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
           EFFECT_GATE_PREPARED_EXEC_EVALUATION_V1) &&
         prepared_container_pre_active_actor_is_exact(binding, label, entry))
         return prepared_runtime_effect_result(scratch);
+    if (file &&
+        scratch->observation.effect_family == kernel_effect_family_v1_exec) {
+        candidate_from_file(&scratch->image.ordered_candidates[0], file);
+        if (!scratch->image.ordered_candidates[0].mount_id)
+            return admitted_default_or_hard_effect_result(
+                config, scratch, binding, label, entry,
+                effect_observation_reason_v1_unsupported_object);
+    }
     if (scratch->process.exec_guard_state != exec_guard_state_v1_none) {
         pending = bpf_map_lookup_elem(&pending_execs, &label->task_cookie);
         if (!pending ||
@@ -624,6 +639,10 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
                 effect_observation_reason_v1_unresolved_object);
         scratch->effect_gate_flags |= EFFECT_GATE_PATH_SUPPLIED_V1;
     }
+    if (scratch->effect_gate_flags & EFFECT_GATE_MOUNT_CACHE_FAILED_V1)
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_unresolved_object);
     if (!(scratch->effect_gate_flags & EFFECT_GATE_PATH_SUPPLIED_V1)) {
         if (scratch->effect_gate_flags & EFFECT_GATE_DEFER_DECISION_V1)
             return 0;
@@ -647,7 +666,40 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
     visible_path_result = known_mount_path_candidate(
         &scratch->effect_path, binding,
         scratch->process.active_profile_generation_ref_id,
-        scratch->process.active_role_id, scratch);
+        scratch->process.active_role_id, scratch, true);
+    if (!visible_path_result) {
+        if (path_tree_denies(scratch, scratch->observation.operation)) {
+            if (generation->mode != policy_generation_mode_v1_protect)
+                return hard_effect_result(
+                    config, scratch,
+                    effect_observation_reason_v1_corrupt_identity_or_generation);
+            return path_tree_effect_result(config, scratch);
+        }
+        if (scratch->path_terminal.exact_object_required) {
+            path_composite_atom_id =
+                scratch->path_terminal.composite_atom_id;
+            exact_file_object_from_path(&scratch->file_object,
+                                        &scratch->effect_path);
+            scratch->file_object.profile_generation_ref_id =
+                scratch->process.active_profile_generation_ref_id;
+            scratch->file_object.mount_id_unique =
+                scratch->canonical_mount_root.selected_mount_id_unique;
+            object_binding = configured_file_object_binding(scratch);
+            if (!object_binding ||
+                object_binding->state !=
+                    exact_object_binding_state_v1_read_back ||
+                object_binding->profile_generation_ref_id !=
+                    scratch->process.active_profile_generation_ref_id ||
+                object_binding->composite_atom_id != path_composite_atom_id)
+                return hard_effect_result(
+                    config, scratch,
+                    effect_observation_reason_v1_unresolved_object);
+        }
+    }
+    visible_path_result = known_mount_path_candidate(
+        &scratch->effect_path, binding,
+        scratch->process.active_profile_generation_ref_id,
+        scratch->process.active_role_id, scratch, false);
     if (visible_path_result &&
         scratch->canonical_mount_root.selected_mount_id_unique)
         return admitted_default_or_hard_effect_result(
@@ -666,7 +718,7 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
             visible_path_result = canonical_path_candidate(
                 &scratch->effect_path, binding,
                 scratch->process.active_profile_generation_ref_id,
-                scratch->process.active_role_id, scratch);
+                scratch->process.active_role_id, scratch, false);
             if (visible_path_result &&
                 !scratch->mount_topology_generation)
                 return hard_effect_result(
@@ -701,10 +753,26 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
         /* Exact selectors also bind the source-aware mount view. Ordinary
          * path policy remains independent of inode-generation support. */
         scratch->file_object = scratch->live_file_object;
-        if (canonical_path_candidate(
+        if (scratch->canonical_mount_root.selected_mount_id_unique) {
+            scratch->file_object.mount_id_unique =
+                scratch->canonical_mount_root.selected_mount_id_unique;
+            object_binding = configured_file_object_binding(scratch);
+            admitted_exact_object =
+                object_binding &&
+                object_binding->state ==
+                    exact_object_binding_state_v1_read_back &&
+                object_binding->profile_generation_ref_id ==
+                    scratch->process.active_profile_generation_ref_id &&
+                object_binding->exact_object_key_id &&
+                object_binding->composite_atom_id == path_composite_atom_id;
+        }
+        if (!admitted_exact_object) {
+            scratch->file_object = scratch->live_file_object;
+        }
+        if (!admitted_exact_object && canonical_path_candidate(
                 &scratch->effect_path, binding,
                 scratch->process.active_profile_generation_ref_id,
-                scratch->process.active_role_id, scratch)) {
+                scratch->process.active_role_id, scratch, true)) {
             if (scratch->path_mount_namespace_inode) {
                 scratch->path_mount_namespace_inode = 0;
                 return admitted_default_or_hard_effect_result(
@@ -798,6 +866,7 @@ static __always_inline int dispatch_identity_effect_gate(
     scratch = identity_scratch_record();
     if (scratch) {
         begin_effect_observation(scratch, effect_family, operation);
+        scratch->mount_topology_generation = 0;
         __builtin_memset(&scratch->effect_path, 0,
                          sizeof(scratch->effect_path));
         __builtin_memset(&scratch->path_terminal, 0,
@@ -806,6 +875,17 @@ static __always_inline int dispatch_identity_effect_gate(
             scratch->effect_gate_flags |= EFFECT_GATE_PATH_SUPPLIED_V1;
             (void)bpf_probe_read_kernel(&scratch->effect_path,
                                         sizeof(scratch->effect_path), path);
+        }
+        if (file || path) {
+            int mount_cache_result =
+                prepare_current_task_mount_cache(scratch);
+
+            if (mount_cache_result) {
+                scratch->effect_gate_operation_argument =
+                    (__u32)-mount_cache_result;
+                scratch->effect_gate_flags |=
+                    EFFECT_GATE_MOUNT_CACHE_FAILED_V1;
+            }
         }
         scratch->observation.operation_argument =
             scratch->effect_gate_operation_argument;
@@ -998,18 +1078,6 @@ static __always_inline int identity_dentry_effect_gate(
         NULL, &target, kernel_effect_family_v1_file, operation, ret);
 }
 
-static __always_inline bool initial_exec_open_without_pending(void)
-{
-    struct task_struct *task = bpf_get_current_task_btf();
-    task_label_v1 *label;
-
-    if (!task || !BPF_CORE_READ_BITFIELD_PROBED(task, in_execve))
-        return false;
-    label = bpf_task_storage_get(&task_labels, task, 0, 0);
-    return label &&
-           !bpf_map_lookup_elem(&pending_execs, &label->task_cookie);
-}
-
 static __always_inline int file_mode_effects(struct file *file,
                                              bool allow_exception, int ret)
 {
@@ -1118,7 +1186,7 @@ int BPF_PROG(erebor_identity_file_permission, struct file *file, int mask,
         return ret;
     if (file && !BPF_CORE_READ_INTO(&flags, file, f_flags) &&
         (flags & __FMODE_EXEC)) {
-        if (initial_exec_open_without_pending())
+        if (initial_exec_has_provisional_capture())
             return identity_effect_actor_gate(
                 NULL, kernel_effect_family_v1_exec,
                 kernel_effect_operation_v1_execute, ret);

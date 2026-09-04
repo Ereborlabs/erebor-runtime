@@ -8,7 +8,7 @@ mod platform;
 pub use bundled::{bundled_bpf_sha256, BUNDLED_BPF_OBJECT};
 pub use error::{Error, Result};
 pub use host::{
-    AdministrativeSlotCancelResult, EffectObservationReader, KernelHost, KernelHostConfig,
+    EffectObservationReader, ExecutionApprovalSlotCancelResult, KernelHost, KernelHostConfig,
     KernelHostOwner, KernelObjectKind, KernelStateReader, MapInsertResult,
     EXCEPTION_USE_RECEIPT_CAPACITY, REQUIRED_IDENTITY_PROGRAMS,
     REQUIRED_QUALIFICATION_LSM_PROGRAMS, REQUIRED_QUALIFICATION_PROGRAMS,

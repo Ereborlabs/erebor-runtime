@@ -240,7 +240,7 @@ pub enum PolicyActivationProbeMapKindV1 {
     IpcRelationship = 3,
     DeviceEffect = 4,
     ProcessControl = 5,
-    AdministrativeSlotCancel = 6,
+    ExecutionApprovalSlotCancel = 6,
     MountReconciliation = 7,
     NetworkDestination = 8,
 }
@@ -1151,6 +1151,7 @@ pub enum EffectObservationReasonV1 {
     PreparedRuntimeInfrastructure = 13,
     ApplicationDefaultAllow = 14,
     RuntimeEntryInfrastructure = 15,
+    ExecutionApprovalVerificationFailed = 16,
 }
 
 #[repr(u8)]
@@ -1170,6 +1171,7 @@ pub enum EffectPhysicalResultV1 {
     UnknownAfterPreEffect = 0,
     DeniedBeforeEffect = 1,
     PacketDroppedAfterRewrite = 2,
+    TerminationQueuedBeforeUserMode = 3,
 }
 
 #[repr(C)]
@@ -1254,6 +1256,7 @@ pub struct EffectObservationV1 {
     pub io_uring_rw_flags: u32,
     pub io_uring_opcode: u16,
     pub reserved_io_uring: [u8; 6],
+    pub execution_approval_trace: ExecutionApprovalTraceV1,
 }
 
 #[repr(C)]
@@ -1323,11 +1326,12 @@ mod tests {
         ExceptionBindingStateV1, ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1,
         ExceptionReceiptStateV1, ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1,
         ExceptionRuntimeStateV1, ExceptionUseIdentityKindV1, ExceptionUseIdentityV1,
-        ExceptionUseReceiptKeyV1, ExceptionUseReceiptV1, FileOpenEventV1, FileOpenTargetV1,
-        Id128V1, IoUringActorSnapshotV1, IoUringExecutionStateKindV1, IoUringExecutionStateV1,
-        IoUringRequestStateKindV1, IoUringRequestStateV1, IoUringRestrictionStateV1,
-        IoUringRingStateKindV1, IoUringRingStateV1, IoUringSetupStateKindV1, IoUringSetupStateV1,
-        KernelEffectFamilyV1, KernelEffectOperationV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
+        ExceptionUseReceiptKeyV1, ExceptionUseReceiptV1, ExecutionApprovalTraceV1, FileOpenEventV1,
+        FileOpenTargetV1, Id128V1, IoUringActorSnapshotV1, IoUringExecutionStateKindV1,
+        IoUringExecutionStateV1, IoUringRequestStateKindV1, IoUringRequestStateV1,
+        IoUringRestrictionStateV1, IoUringRingStateKindV1, IoUringRingStateV1,
+        IoUringSetupStateKindV1, IoUringSetupStateV1, KernelEffectFamilyV1,
+        KernelEffectOperationV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
         PolicyActivationProbeMapKindV1, PolicyActivationProbeV1, PolicyGenerationModeV1,
         ProcessControlRuleKeyV1, ProfileGenerationDescriptorV1, TaskEffectAttemptFrameStateV1,
         TaskEffectAttemptFrameV1, TaskEffectAttemptStateKindV1, TaskEffectAttemptStateV1,
@@ -1408,12 +1412,17 @@ mod tests {
         assert_eq!(ExactFileMeasurementStateV1::Requested as u8, 1);
         assert_eq!(ExactFileMeasurementStateV1::Measured as u8, 2);
         assert_eq!(size_of::<ExactObjectBindingV1>(), 32);
-        assert_eq!(size_of::<EffectObservationV1>(), 536);
+        assert_eq!(size_of::<EffectObservationV1>(), 624);
+        assert_eq!(size_of::<ExecutionApprovalTraceV1>(), 88);
         assert_eq!(size_of::<EffectObservationHealthV1>(), 64);
         assert_eq!(offset_of!(EffectObservationV1, source_sequence), 8);
         assert_eq!(offset_of!(EffectObservationV1, source_cpu_id), 16);
         assert_eq!(offset_of!(EffectObservationV1, file_object), 136);
         assert_eq!(offset_of!(EffectObservationV1, kernel_result), 208);
+        assert_eq!(
+            offset_of!(EffectObservationV1, execution_approval_trace),
+            536
+        );
         assert_eq!(PhysicalDecisionKindV1::Allow as u8, 0);
         assert_eq!(PhysicalDecisionKindV1::AuditAllow as u8, 1);
         assert_eq!(PhysicalDecisionKindV1::Deny as u8, 2);

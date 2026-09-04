@@ -4,6 +4,7 @@ mod inspection;
 mod native;
 mod runtime;
 
+pub(crate) use authorization::validate_execution_argv;
 pub use authorization::{
     AdministrativeExecIdentityV1, AdministrativeFileObjectIdentityV1, AuthorizationProofOwner,
     AuthorizationTargetV1, IssuerTrustV1, PortableProfileGenerationIdentityV1,

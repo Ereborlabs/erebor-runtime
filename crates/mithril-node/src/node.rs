@@ -39,6 +39,84 @@ pub struct NodeReadinessV1 {
     pub effect_prevention_claims_enabled: bool,
 }
 
+#[cfg(feature = "test-support")]
+pub struct AdministrativeExecTestOwner {
+    inner: AdministrativeExecOwner,
+}
+
+#[cfg(feature = "test-support")]
+impl AdministrativeExecTestOwner {
+    pub fn load(
+        config: &crate::AdministrativeAuthorizationConfig,
+        state_directory: &std::path::Path,
+        node_id: Id128V1,
+        node_boot_id: Id128V1,
+    ) -> Result<Self> {
+        Ok(Self {
+            inner: AdministrativeExecOwner::load(config, state_directory, node_id, node_boot_id)?,
+        })
+    }
+
+    pub fn resolve(
+        &self,
+        host: &KernelHost,
+        bindings: &WorkloadBindingOwner,
+        policy: &crate::NodePolicyGenerationOwner,
+        request: mithril_control::ResolveAdministrativeExec,
+    ) -> Result<AdministrativeExecResolution> {
+        snafu::ensure!(
+            request.request_id.len() == 16 && request.request_id.iter().any(|byte| *byte != 0),
+            IdentityStateSnafu {
+                reason: "test administrative request ID is not exact",
+            }
+        );
+        let stream_flags = u8::try_from(request.stream_flags).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("test administrative stream flags are invalid: {error}"),
+            }
+            .build()
+        })?;
+        let request_id = request.request_id;
+        let resolution = self.inner.resolve(
+            host,
+            bindings,
+            policy,
+            AdministrativeResolveRequestV1 {
+                namespace: request.namespace,
+                pod_uid: request.pod_uid,
+                container_name: request.container_name,
+                full_container_id: request.full_container_id,
+                container_generation: request.container_generation,
+                argv: request.argv,
+                stream_flags,
+                approved_role_id: request.approved_role_id,
+            },
+        )?;
+        Ok(resolution_response(
+            request_id,
+            self.inner.node_id(),
+            resolution,
+        ))
+    }
+
+    pub fn verify_and_arm(
+        &mut self,
+        host: &KernelHost,
+        bindings: &WorkloadBindingOwner,
+        policy: &crate::NodePolicyGenerationOwner,
+        envelope: &[u8],
+        body_sha256: [u8; 32],
+    ) -> Result<()> {
+        self.inner
+            .verify_and_arm(host, bindings, policy, envelope, body_sha256)?;
+        Ok(())
+    }
+
+    pub fn reconcile(&mut self, host: &KernelHost) -> Result<()> {
+        self.inner.reconcile(host)
+    }
+}
+
 impl NodeReadinessV1 {
     #[must_use]
     pub const fn admits_new_work(self) -> bool {
@@ -1555,6 +1633,9 @@ impl NodeChassis {
             crate::runtime_admission::RuntimeAdmissionOperationV1::PrepareDeclaredEntries => {
                 self.answer_runtime_entry_preparation(envelope).await
             }
+            crate::runtime_admission::RuntimeAdmissionOperationV1::FinalizeContainer => {
+                self.answer_runtime_finalization(envelope).await
+            }
         }
     }
 
@@ -1735,11 +1816,17 @@ impl NodeChassis {
             )?;
             self.bindings
                 .verify_runtime_entry_admissions(host, &binding_id)?;
+            if !policy.reconcile_policy_lifecycle(host)? {
+                return Ok(false);
+            }
+            self.bindings
+                .verify_runtime_finalization(&self.config.workload_bindings, &request)?;
             envelope.ensure_active()?;
-            Ok(())
+            Ok(true)
         })();
         let (allowed, reason_code) = match &prepared {
-            Ok(()) => (true, "DECLARED_ENTRY_TABLE_VERIFIED"),
+            Ok(true) => (true, "PROVISIONAL_ENTRY_TABLE_VERIFIED"),
+            Ok(false) => (false, crate::runtime_admission::POLICY_CONVERGENCE_PENDING),
             Err(_error) => (false, "RUNTIME_ADMISSION_REJECTED"),
         };
         let delivered = envelope
@@ -1750,6 +1837,78 @@ impl NodeChassis {
             .await;
         if delivered.is_ok() {
             log_runtime_admission_decision(&request, allowed, reason_code, prepared.as_ref().err());
+        }
+        Ok(())
+    }
+
+    async fn answer_runtime_finalization(
+        &mut self,
+        envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
+    ) -> Result<()> {
+        let request = envelope.request.clone();
+        let finalized = (|| {
+            envelope.ensure_active()?;
+            let (binding_id, held_initial_pid, cgroup_path) = self
+                .bindings
+                .verify_runtime_finalization(&self.config.workload_bindings, &request)?;
+            let trusted_start_hook_path = &self
+                .config
+                .runtime_admission
+                .as_ref()
+                .context(IdentityStateSnafu {
+                    reason: "runtime finalization has no admission configuration",
+                })?
+                .trusted_start_hook_path;
+            crate::runtime_admission::verify_trusted_start_peer(
+                envelope.peer_pid(),
+                held_initial_pid,
+                &cgroup_path,
+                trusted_start_hook_path,
+            )?;
+            let policy = self.policy.as_mut().context(IdentityStateSnafu {
+                reason: "runtime finalization has no active policy owner",
+            })?;
+            let host = self.host.as_mut().ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "runtime finalization has no live kernel host".to_owned(),
+                }
+                .build()
+            })?;
+            policy.reconcile_cri_exact_bindings(&self.config, host, &self.bindings)?;
+            if !policy.reconcile_policy_lifecycle(host)? {
+                return Ok(false);
+            }
+            self.bindings
+                .verify_runtime_finalization(&self.config.workload_bindings, &request)?;
+            crate::runtime_admission::verify_trusted_start_peer(
+                envelope.peer_pid(),
+                held_initial_pid,
+                &cgroup_path,
+                trusted_start_hook_path,
+            )?;
+            self.bindings
+                .verify_runtime_entry_admissions(host, &binding_id)?;
+            envelope.ensure_active()?;
+            Ok(true)
+        })();
+        let (allowed, reason_code) = match &finalized {
+            Ok(true) => (true, "FINAL_MOUNT_VIEW_VERIFIED"),
+            Ok(false) => (false, crate::runtime_admission::POLICY_CONVERGENCE_PENDING),
+            Err(_error) => (false, "RUNTIME_ADMISSION_REJECTED"),
+        };
+        let delivered = envelope
+            .deliver(crate::RuntimeAdmissionResponseV1 {
+                allowed,
+                reason_code: reason_code.to_owned(),
+            })
+            .await;
+        if delivered.is_ok() {
+            log_runtime_admission_decision(
+                &request,
+                allowed,
+                reason_code,
+                finalized.as_ref().err(),
+            );
         }
         if allowed && delivered.is_ok() {
             self.bindings.discard_runtime_stage(&request.container_id);

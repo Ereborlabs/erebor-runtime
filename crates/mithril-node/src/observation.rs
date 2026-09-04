@@ -751,6 +751,48 @@ fn to_ipc(event: EffectObservationV1) -> MithrilEffectObservation {
         io_uring_request_flags: event.io_uring_request_flags,
         io_uring_rw_flags: event.io_uring_rw_flags,
         io_uring_opcode: u32::from(event.io_uring_opcode),
+        execution_approval_trace_stage: u32::from(event.execution_approval_trace.stage),
+        execution_approval_pending_state: u32::from(event.execution_approval_trace.pending_state),
+        execution_approval_slot_state: u32::from(event.execution_approval_trace.slot_state),
+        execution_approval_exec_attempt_sequence: event
+            .execution_approval_trace
+            .exec_attempt_sequence,
+        execution_approval_failed_checks: event.execution_approval_trace.failed_checks,
+        execution_approval_syscall_flags: event.execution_approval_trace.syscall_flags,
+        execution_approval_expected_mount_namespace_inode: event
+            .execution_approval_trace
+            .expected_executable
+            .mount_namespace_inode,
+        execution_approval_expected_mount_id: event
+            .execution_approval_trace
+            .expected_executable
+            .mount_id,
+        execution_approval_expected_filesystem_device: event
+            .execution_approval_trace
+            .expected_executable
+            .filesystem_device,
+        execution_approval_expected_inode: event.execution_approval_trace.expected_executable.inode,
+        execution_approval_expected_inode_generation: event
+            .execution_approval_trace
+            .expected_executable
+            .inode_generation,
+        execution_approval_observed_mount_namespace_inode: event
+            .execution_approval_trace
+            .observed_executable
+            .mount_namespace_inode,
+        execution_approval_observed_mount_id: event
+            .execution_approval_trace
+            .observed_executable
+            .mount_id,
+        execution_approval_observed_filesystem_device: event
+            .execution_approval_trace
+            .observed_executable
+            .filesystem_device,
+        execution_approval_observed_inode: event.execution_approval_trace.observed_executable.inode,
+        execution_approval_observed_inode_generation: event
+            .execution_approval_trace
+            .observed_executable
+            .inode_generation,
     }
 }
 
@@ -793,6 +835,9 @@ const fn reason_name(reason: u8) -> &'static str {
         value if value == EffectObservationReasonV1::RuntimeEntryInfrastructure as u8 => {
             "RUNTIME_ENTRY_INFRASTRUCTURE"
         }
+        value if value == EffectObservationReasonV1::ExecutionApprovalVerificationFailed as u8 => {
+            "EXECUTION_APPROVAL_VERIFICATION_FAILED"
+        }
         _ => "UNKNOWN",
     }
 }
@@ -808,15 +853,22 @@ const fn physical_result_name(result: u8) -> &'static str {
         value if value == EffectPhysicalResultV1::PacketDroppedAfterRewrite as u8 => {
             "PACKET_DROPPED_AFTER_REWRITE"
         }
+        value if value == EffectPhysicalResultV1::TerminationQueuedBeforeUserMode as u8 => {
+            "TERMINATION_QUEUED_BEFORE_USER_MODE"
+        }
         _ => "UNKNOWN",
     }
 }
 
 const fn observation_stage(result: u8) -> &'static str {
-    if result == EffectPhysicalResultV1::PacketDroppedAfterRewrite as u8 {
-        "FINAL_PACKET_V1"
-    } else {
-        "LOCAL_PRE_EFFECT_V1"
+    match result {
+        value if value == EffectPhysicalResultV1::PacketDroppedAfterRewrite as u8 => {
+            "FINAL_PACKET_V1"
+        }
+        value if value == EffectPhysicalResultV1::TerminationQueuedBeforeUserMode as u8 => {
+            "EXEC_POST_PONR_RESPONSE_V1"
+        }
+        _ => "LOCAL_PRE_EFFECT_V1",
     }
 }
 
@@ -824,13 +876,15 @@ const fn observation_stage(result: u8) -> &'static str {
 mod tests {
     use erebor_interceptor_abi::{
         EffectObservationHealthV1, EffectObservationReasonV1, EffectObservationV1,
-        EffectPhysicalResultV1, Id128V1, KernelEffectFamilyV1, NetworkNamespaceGenerationV1,
+        EffectPhysicalResultV1, ExactExecutableCandidateV1, ExecutionApprovalTraceV1, Id128V1,
+        KernelEffectFamilyV1, NetworkNamespaceGenerationV1,
     };
     use zerocopy::IntoBytes as _;
 
     use super::{
-        reason_name, CoverageGapReasonV1, EffectObservationStore, EvidenceAckV1, EvidenceIdV1,
-        EvidenceWalCapacityPolicyV1, EvidenceWalLimits, ObservationCanonicalizer,
+        observation_stage, physical_result_name, reason_name, CoverageGapReasonV1,
+        EffectObservationStore, EvidenceAckV1, EvidenceIdV1, EvidenceWalCapacityPolicyV1,
+        EvidenceWalLimits, ObservationCanonicalizer,
     };
 
     #[test]
@@ -854,6 +908,18 @@ mod tests {
         assert_eq!(
             reason_name(EffectObservationReasonV1::RuntimeEntryInfrastructure as u8),
             "RUNTIME_ENTRY_INFRASTRUCTURE"
+        );
+        assert_eq!(
+            reason_name(EffectObservationReasonV1::ExecutionApprovalVerificationFailed as u8),
+            "EXECUTION_APPROVAL_VERIFICATION_FAILED"
+        );
+        assert_eq!(
+            physical_result_name(EffectPhysicalResultV1::TerminationQueuedBeforeUserMode as u8),
+            "TERMINATION_QUEUED_BEFORE_USER_MODE"
+        );
+        assert_eq!(
+            observation_stage(EffectPhysicalResultV1::TerminationQueuedBeforeUserMode as u8),
+            "EXEC_POST_PONR_RESPONSE_V1"
         );
     }
 
@@ -898,6 +964,31 @@ mod tests {
                 io_uring_request_flags: 25,
                 io_uring_rw_flags: 26,
                 io_uring_opcode: 27,
+                execution_approval_trace: ExecutionApprovalTraceV1 {
+                    exec_attempt_sequence: 32,
+                    failed_checks: 33,
+                    expected_executable: ExactExecutableCandidateV1 {
+                        inode: 34,
+                        inode_generation: 35,
+                        mount_namespace_inode: 36,
+                        mount_id: 37,
+                        filesystem_device: 38,
+                        reserved: 0,
+                    },
+                    observed_executable: ExactExecutableCandidateV1 {
+                        inode: 39,
+                        inode_generation: 40,
+                        mount_namespace_inode: 41,
+                        mount_id: 42,
+                        filesystem_device: 43,
+                        reserved: 0,
+                    },
+                    syscall_flags: 47,
+                    pending_state: 44,
+                    slot_state: 45,
+                    stage: 46,
+                    reserved: 0,
+                },
                 reason: EffectObservationReasonV1::WouldDeny as u8,
                 physical_result: EffectPhysicalResultV1::UnknownAfterPreEffect as u8,
                 ..EffectObservationV1::default()
@@ -949,6 +1040,28 @@ mod tests {
         assert_eq!(recent[0].io_uring_request_flags, 25);
         assert_eq!(recent[0].io_uring_rw_flags, 26);
         assert_eq!(recent[0].io_uring_opcode, 27);
+        assert_eq!(recent[0].execution_approval_exec_attempt_sequence, 32);
+        assert_eq!(recent[0].execution_approval_failed_checks, 33);
+        assert_eq!(recent[0].execution_approval_expected_inode, 34);
+        assert_eq!(recent[0].execution_approval_expected_inode_generation, 35);
+        assert_eq!(
+            recent[0].execution_approval_expected_mount_namespace_inode,
+            36
+        );
+        assert_eq!(recent[0].execution_approval_expected_mount_id, 37);
+        assert_eq!(recent[0].execution_approval_expected_filesystem_device, 38);
+        assert_eq!(recent[0].execution_approval_observed_inode, 39);
+        assert_eq!(recent[0].execution_approval_observed_inode_generation, 40);
+        assert_eq!(
+            recent[0].execution_approval_observed_mount_namespace_inode,
+            41
+        );
+        assert_eq!(recent[0].execution_approval_observed_mount_id, 42);
+        assert_eq!(recent[0].execution_approval_observed_filesystem_device, 43);
+        assert_eq!(recent[0].execution_approval_pending_state, 44);
+        assert_eq!(recent[0].execution_approval_slot_state, 45);
+        assert_eq!(recent[0].execution_approval_trace_stage, 46);
+        assert_eq!(recent[0].execution_approval_syscall_flags, 47);
     }
 
     #[tokio::test]

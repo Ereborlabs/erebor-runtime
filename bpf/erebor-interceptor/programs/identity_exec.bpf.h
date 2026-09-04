@@ -3,6 +3,11 @@
 #ifndef EREBOR_IDENTITY_EXEC_BPF_H
 #define EREBOR_IDENTITY_EXEC_BPF_H
 
+static __noinline bool provisional_exec_request_valid(
+    const struct provisional_exec_request_v1 *request);
+static __noinline bool execution_argv_snapshot_valid(
+    const execution_argv_snapshot_v1 *snapshot);
+
 static __always_inline void remember_pending_exec_exact_requirement(
     pending_exec_v1 *pending, const struct identity_scratch_v1 *scratch)
 {
@@ -111,7 +116,7 @@ static __noinline int commit_entry_admission_metadata(
 {
     entry_security_state_v1 *entry;
     external_root_classification_v1 *classification;
-    pending_administrative_match_v1 *administrative_match = NULL;
+    pending_execution_approval_v1 *execution_approval = NULL;
 
     if (!pending->admitted_entry_rule_id)
         return 0;
@@ -119,14 +124,14 @@ static __noinline int commit_entry_admission_metadata(
     classification = entry_root_classification(label, entry);
     if (!entry || !classification)
         return -EACCES;
-    administrative_match = bpf_map_lookup_elem(
-        &pending_administrative_matches, &label->task_cookie);
-    if (administrative_match) {
-        if (administrative_match->state !=
-                pending_administrative_match_state_v1_slot_consumed ||
-            administrative_match->exec_attempt_sequence !=
+    execution_approval = bpf_map_lookup_elem(
+        &pending_execution_approvals, &label->task_cookie);
+    if (execution_approval) {
+        if (execution_approval->state !=
+                pending_execution_approval_state_v1_slot_consumed ||
+            execution_approval->exec_attempt_sequence !=
                 pending->exec_attempt_sequence ||
-            administrative_match->approved_role_numeric_id !=
+            execution_approval->target_role_numeric_id !=
                 process->pending_target_role_id)
             return -EACCES;
     }
@@ -135,16 +140,16 @@ static __noinline int commit_entry_admission_metadata(
     entry->transition_version++;
     classification->installed_role_numeric_id =
         process->pending_target_role_id;
-    if (administrative_match) {
+    if (execution_approval) {
         classification->purpose =
             entry_purpose_v1_approved_administrative_next_match;
         classification->installed_role_numeric_id =
-            administrative_match->approved_role_numeric_id;
+            execution_approval->target_role_numeric_id;
         classification->administrative_approval_proof_id =
-            administrative_match->proof_id;
+            execution_approval->proof_id;
         classification->administrative_claim_slot_id =
-            administrative_match->claim_slot_id;
-        entry->claim_slot_id = administrative_match->claim_slot_id;
+            execution_approval->claim_slot_id;
+        entry->claim_slot_id = execution_approval->claim_slot_id;
         entry->transition_version++;
     } else if (classification->root_class ==
                external_root_class_v1_external_runtime_root) {
@@ -158,7 +163,7 @@ static __noinline bool entry_admission_matches_live_state(
     const task_label_v1 *label, const pending_exec_v1 *pending,
     const execution_set_binding_state_v1 *binding,
     const process_security_state_v1 *process,
-    const pending_administrative_match_v1 *administrative_match)
+    const pending_execution_approval_v1 *execution_approval)
 {
     external_root_classification_v1 *classification;
     entry_security_state_v1 *entry;
@@ -174,7 +179,7 @@ static __noinline bool entry_admission_matches_live_state(
             prepared_container_state_v1_exec_pending &&
         binding->prepared_container_exec_task_cookie == label->task_cookie;
     if (application)
-        return !administrative_match &&
+        return !execution_approval &&
                pending->source_role_id == binding->initial_role_id &&
                id128_equal(&binding->prepared_container_entry_instance_id,
                            &label->entry_instance_id);
@@ -189,14 +194,14 @@ static __noinline bool entry_admission_matches_live_state(
         entry->admission_state != entry_admission_state_v1_committed ||
         entry->lifetime_state != entry_lifetime_state_v1_active)
         return false;
-    return !administrative_match ||
-           (administrative_match->state ==
-                pending_administrative_match_state_v1_slot_consumed &&
-            administrative_match->exec_attempt_sequence ==
+    return !execution_approval ||
+           (execution_approval->state ==
+                pending_execution_approval_state_v1_slot_consumed &&
+            execution_approval->exec_attempt_sequence ==
                 pending->exec_attempt_sequence &&
-            administrative_match->approved_role_numeric_id ==
+            execution_approval->target_role_numeric_id ==
                 process->pending_target_role_id &&
-            administrative_match->profile_generation_ref_id ==
+            execution_approval->profile_generation_ref_id ==
                 process->active_profile_generation_ref_id);
 }
 
@@ -222,8 +227,13 @@ static __noinline int observe_declared_entry_admission(
     if (binding_lookup || !binding_matches_label(binding, label) || !entry)
         return identity_deny(config);
     {
-        declared_entry_request_v1 *request = bpf_task_storage_get(
-            &pending_exec_request_paths, task, 0, 0);
+        struct provisional_exec_request_v1 *provisional =
+            bpf_task_storage_get(&provisional_exec_requests, task, 0, 0);
+        declared_entry_request_v1 *request =
+            provisional && provisional->transition_version &&
+                    provisional->declared_entry.path_length
+                ? &provisional->declared_entry
+                : NULL;
 
         scratch->entry_admission_key.composite_atom_id =
             logical_exec_request_atom(
@@ -304,6 +314,7 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
     execution_set_binding_state_v1 *binding;
     struct cgroup *cgroup = NULL;
     struct file *file = NULL;
+    struct identity_scratch_v1 *scratch;
     int binding_lookup;
     int result;
 
@@ -350,6 +361,14 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
     result = prepared_exec_policy_gate(file);
     if (result)
         return result;
+    scratch = identity_scratch_record();
+    if (!pending && scratch &&
+        scratch->effect_gate_flags & EFFECT_GATE_PREPARED_EXEC_POLICY_MISS_V1) {
+        scratch->effect_gate_flags = 0;
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_unsupported_object);
+    }
     return observe_declared_entry_admission(config, task, label, pending);
 }
 
@@ -444,288 +463,827 @@ static __always_inline int append_bprm_auxiliary_candidates(
     return 0;
 }
 
-static __noinline bool administrative_slot_matches_binding(
-    approved_exec_slot_v1 *slot,
+static __always_inline bool execution_approval_slot_identity_matches(
+    execution_approval_slot_v1 *slot,
     const execution_set_binding_state_v1 *binding,
     __u64 profile_generation_ref_id)
 {
     bool body_digest_present = false;
-    __u64 now = bpf_ktime_get_ns();
 
     if (slot) {
 #pragma clang loop unroll(disable)
         for (int index = 0; index < 32; index++)
             body_digest_present |= slot->authorization_body_sha256[index] != 0;
-        if (slot->state == approved_exec_slot_state_v1_armed &&
-            now > slot->deadline_boottime_ns &&
-            __sync_val_compare_and_swap(
-                &slot->state, approved_exec_slot_state_v1_armed,
-                approved_exec_slot_state_v1_expired) ==
-                approved_exec_slot_state_v1_armed)
-            __sync_fetch_and_add(&slot->transition_version, 1);
     }
     return slot && binding &&
-           slot->state == approved_exec_slot_state_v1_armed &&
            !id128_is_zero(&slot->proof_id) &&
            !id128_is_zero(&slot->claim_slot_id) &&
            body_digest_present &&
            slot->container_generation == binding->container_generation &&
            slot->profile_generation_ref_id == profile_generation_ref_id &&
-           slot->approved_role_numeric_id &&
+           slot->target_role_numeric_id &&
            slot->resolved_executable.mount_namespace_inode &&
            slot->resolved_executable.mount_id &&
            slot->resolved_executable.filesystem_device &&
            slot->resolved_executable.inode &&
            slot->resolved_executable.inode_generation &&
+           execution_argv_snapshot_valid(&slot->expected_argv) &&
            slot->expected_root_class ==
                external_root_class_v1_external_runtime_root &&
            id128_equal(&slot->cgroup_binding_nonce,
                        &binding->binding_nonce) &&
-           slot->transition_version &&
+           slot->transition_version;
+}
+
+static __always_inline bool execution_approval_armed_slot_matches(
+    execution_approval_slot_v1 *slot,
+    const execution_set_binding_state_v1 *binding,
+    __u64 profile_generation_ref_id)
+{
+    __u64 now = bpf_ktime_get_ns();
+
+    if (slot && slot->state == execution_approval_slot_state_v1_armed &&
+        now > slot->deadline_boottime_ns &&
+        __sync_val_compare_and_swap(
+            &slot->state, execution_approval_slot_state_v1_armed,
+            execution_approval_slot_state_v1_expired) ==
+            execution_approval_slot_state_v1_armed)
+        __sync_fetch_and_add(&slot->transition_version, 1);
+    return execution_approval_slot_identity_matches(
+               slot, binding, profile_generation_ref_id) &&
+           slot->state == execution_approval_slot_state_v1_armed &&
            now <= slot->deadline_boottime_ns;
 }
 
-struct administrative_argument_match {
-    const bounded_administrative_argv_v1 *expected;
-    const char *const *argv;
-    struct identity_scratch_v1 *scratch;
-    __u32 argument_count;
-    __u32 aggregate;
-    __u32 mismatch;
+static __noinline bool execution_approval_reserved_slot_matches(
+    execution_approval_slot_v1 *slot,
+    const execution_set_binding_state_v1 *binding,
+    __u64 profile_generation_ref_id)
+{
+    return execution_approval_slot_identity_matches(
+               slot, binding, profile_generation_ref_id) &&
+           slot->state == execution_approval_slot_state_v1_reserved &&
+           bpf_ktime_get_ns() <= slot->deadline_boottime_ns;
+}
+
+static __noinline bool execution_argv_snapshot_valid(
+    const execution_argv_snapshot_v1 *snapshot)
+{
+    __u64 expected_chunks;
+
+    if (!snapshot || id128_is_zero(&snapshot->snapshot_id) ||
+        !snapshot->argument_count ||
+        snapshot->argument_count > MAX_PROVISIONAL_EXEC_ARGUMENTS_V1 ||
+        snapshot->total_argument_span < snapshot->argument_count ||
+        snapshot->total_argument_span > 0xffffffffULL ||
+        !snapshot->chunk_count ||
+        snapshot->chunk_count > MAX_PROVISIONAL_EXEC_CHUNKS_V1 ||
+        snapshot->reserved)
+        return false;
+    expected_chunks =
+        ((snapshot->total_argument_span - 1) >>
+         EXECUTION_ARGV_CHUNK_SHIFT_V1) + 1;
+    return snapshot->chunk_count == expected_chunks;
+}
+
+static __noinline bool execution_argv_chunk_valid(
+    const execution_argv_snapshot_v1 *snapshot, __u32 chunk_index,
+    const execution_argv_chunk_v1 *chunk)
+{
+    __u64 preceding;
+    __u64 remaining;
+    __u32 expected_length;
+    __u32 expected_flags;
+
+    if (!execution_argv_snapshot_valid(snapshot) || !chunk ||
+        chunk_index >= snapshot->chunk_count)
+        return false;
+    preceding = (__u64)chunk_index << EXECUTION_ARGV_CHUNK_SHIFT_V1;
+    if (preceding >= snapshot->total_argument_span)
+        return false;
+    remaining = snapshot->total_argument_span - preceding;
+    expected_length = remaining > EXECUTION_ARGV_CHUNK_BYTES_V1
+                          ? EXECUTION_ARGV_CHUNK_BYTES_V1
+                          : (__u32)remaining;
+    expected_flags = chunk_index + 1 == snapshot->chunk_count
+                         ? EXECUTION_ARGV_CHUNK_TERMINAL_V1
+                         : 0;
+    return chunk->length == expected_length &&
+           chunk->flags == expected_flags;
+}
+
+struct execution_argv_copy_context {
+    execution_argv_chunk_v1 *chunk;
+    const __u8 *bytes;
+    __u32 source_offset;
+    __u32 destination_offset;
 };
 
-static long administrative_argv_match_step(__u32 step, void *data)
+static long execution_argv_copy_step(__u32 step, void *data)
 {
-    struct administrative_argument_match *match = data;
-    approved_exec_argument_key_v1 *key =
-        &match->scratch->administrative_argument_key;
-    __u8 *approved;
-    __u32 argument_index = step;
-    __u32 expected_length;
-    __u32 argument_length;
-    const char *argument = NULL;
-    long length;
+    struct execution_argv_copy_context *copy = data;
+    __u32 source_index =
+        (copy->source_offset + step) &
+        (EXECUTION_ARGV_CHUNK_BYTES_V1 - 1);
+    __u32 destination_index =
+        (copy->destination_offset + step) &
+        (EXECUTION_ARGV_CHUNK_BYTES_V1 - 1);
 
-    asm volatile("%[index] &= %1 ;\n"
-                 : [index] "+r"(argument_index)
-                 : "i"(MAX_ADMINISTRATIVE_ARGUMENTS_V1 - 1));
-    if (argument_index >= match->argument_count)
-        return 1;
-    expected_length = match->expected->argument_lengths[argument_index];
-    if (expected_length > MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 ||
-        match->aggregate > match->expected->total_argument_bytes ||
-        expected_length >
-            match->expected->total_argument_bytes - match->aggregate ||
-        bpf_probe_read_user(&argument, sizeof(argument),
-                            &match->argv[argument_index]) ||
-        !argument)
-        goto mismatch;
-    length = bpf_probe_read_user_str(
-        match->scratch->exec_argument,
-        sizeof(match->scratch->exec_argument), argument);
-    if (length <= 0 || length > sizeof(match->scratch->exec_argument))
-        goto mismatch;
-    argument_length = (__u32)length - 1;
-    if (argument_length != expected_length ||
-        bpf_probe_read_kernel(key->argument_bytes,
-                              sizeof(key->argument_bytes),
-                              match->scratch->zero_bytes) ||
-        (argument_length &&
-         bpf_probe_read_kernel(key->argument_bytes, argument_length,
-                               match->scratch->exec_argument)))
-        goto mismatch;
-    key->argument_index = argument_index;
-    key->argument_length = argument_length;
-    approved = bpf_map_lookup_elem(&approved_exec_arguments, key);
-    if (!approved || !*approved)
-        goto mismatch;
-    match->aggregate += argument_length;
+    copy->chunk->bytes[destination_index] = copy->bytes[source_index];
     return 0;
-
-mismatch:
-    match->mismatch = 1;
-    return 1;
 }
 
-static __always_inline int administrative_argv_matches(
-    const approved_exec_slot_v1 *slot,
-    const char *const *argv, struct identity_scratch_v1 *scratch)
+static __noinline int execution_argv_copy(
+    execution_argv_chunk_v1 *chunk, const __u8 *bytes,
+    __u32 source_offset, __u32 destination_offset, __u32 length)
 {
-    const bounded_administrative_argv_v1 *expected = &slot->expected_argv;
-    const char *argument = NULL;
-    __u32 argument_count = expected->argument_count;
-    __u32 total_argument_bytes = expected->total_argument_bytes;
+    struct execution_argv_copy_context copy = {
+        .chunk = chunk,
+        .bytes = bytes,
+        .source_offset = source_offset,
+        .destination_offset = destination_offset,
+    };
     long steps;
 
-    if (!argv || !argument_count ||
-        argument_count > MAX_ADMINISTRATIVE_ARGUMENTS_V1 ||
-        !expected->argument_lengths[0] ||
-        !total_argument_bytes ||
-        total_argument_bytes > MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1)
+    if (!chunk || !bytes ||
+        length > MAX_EXECUTION_APPROVAL_ARGUMENT_BYTES_V1 ||
+        source_offset >
+            MAX_EXECUTION_APPROVAL_ARGUMENT_BYTES_V1 - length ||
+        destination_offset >
+            EXECUTION_ARGV_CHUNK_BYTES_V1 - length)
         return -EACCES;
-    scratch->administrative_argument_key.proof_id = slot->proof_id;
-    scratch->administrative_argument_key.argument_index = 0;
-    scratch->administrative_argument_key.argument_length = 0;
-#pragma unroll
-    for (int index = 0; index < 4; index++)
-        scratch->administrative_argument_key.reserved[index] = 0;
-    struct administrative_argument_match match = {
-        .expected = expected,
-        .argv = argv,
-        .scratch = scratch,
-        .argument_count = argument_count,
+    if (!length)
+        return 0;
+    steps = bpf_loop(length, execution_argv_copy_step, &copy, 0);
+    return steps == length ? 0 : -EACCES;
+}
+
+static __noinline int clear_execution_argv_chunk(
+    struct identity_scratch_v1 *scratch)
+{
+    if (!scratch ||
+        bpf_probe_read_kernel(
+            scratch->exec_argv_chunk.bytes,
+            sizeof(scratch->exec_argv_chunk.bytes),
+            scratch->zero_bytes))
+        return -EACCES;
+    scratch->exec_argv_chunk.length = 0;
+    scratch->exec_argv_chunk.flags = 0;
+    return 0;
+}
+
+static __noinline int flush_provisional_execution_argv_chunk(
+    execution_argv_snapshot_v1 *snapshot,
+    struct identity_scratch_v1 *scratch, bool terminal)
+{
+    execution_argv_chunk_key_v1 *key;
+
+    if (!snapshot || !scratch || id128_is_zero(&snapshot->snapshot_id) ||
+        !scratch->exec_argv_chunk.length ||
+        scratch->exec_argv_chunk.length >
+            EXECUTION_ARGV_CHUNK_BYTES_V1 ||
+        snapshot->chunk_count >= MAX_PROVISIONAL_EXEC_CHUNKS_V1 ||
+        (!terminal &&
+         scratch->exec_argv_chunk.length !=
+             EXECUTION_ARGV_CHUNK_BYTES_V1))
+        return -EACCES;
+    key = &scratch->exec_argv_chunk_key;
+    key->snapshot_id = snapshot->snapshot_id;
+    key->chunk_index = snapshot->chunk_count;
+    key->reserved = 0;
+    scratch->exec_argv_chunk.flags =
+        terminal ? EXECUTION_ARGV_CHUNK_TERMINAL_V1 : 0;
+    if (bpf_map_update_elem(
+            &execution_argv_provisional_chunks, key,
+            &scratch->exec_argv_chunk, BPF_NOEXIST))
+        return -EACCES;
+    snapshot->chunk_count++;
+    return clear_execution_argv_chunk(scratch);
+}
+
+static __noinline int append_provisional_execution_argv_bytes(
+    execution_argv_snapshot_v1 *snapshot,
+    struct identity_scratch_v1 *scratch, const __u8 *bytes,
+    __u32 length)
+{
+    __u32 available;
+    __u32 prefix;
+    __u32 remainder;
+
+    if (!snapshot || !scratch || !bytes || !length ||
+        length > MAX_EXECUTION_APPROVAL_ARGUMENT_BYTES_V1 ||
+        scratch->exec_argv_chunk.length >
+            EXECUTION_ARGV_CHUNK_BYTES_V1)
+        return -EACCES;
+    if (scratch->exec_argv_chunk.length ==
+            EXECUTION_ARGV_CHUNK_BYTES_V1 &&
+        flush_provisional_execution_argv_chunk(
+            snapshot, scratch, false))
+        return -EACCES;
+    available = EXECUTION_ARGV_CHUNK_BYTES_V1 -
+                scratch->exec_argv_chunk.length;
+    prefix = length < available ? length : available;
+    if (execution_argv_copy(
+            &scratch->exec_argv_chunk, bytes, 0,
+            scratch->exec_argv_chunk.length, prefix))
+        return -EACCES;
+    scratch->exec_argv_chunk.length += prefix;
+    remainder = length - prefix;
+    if (!remainder)
+        return 0;
+    if (flush_provisional_execution_argv_chunk(
+            snapshot, scratch, false) ||
+        execution_argv_copy(
+            &scratch->exec_argv_chunk, bytes, prefix, 0,
+            remainder))
+        return -EACCES;
+    scratch->exec_argv_chunk.length = remainder;
+    return 0;
+}
+
+static __always_inline void capture_declared_exec_request(
+    struct provisional_exec_request_v1 *request,
+    struct identity_scratch_v1 *scratch, const char *argument)
+{
+    declared_entry_request_v1 *declared_entry = &request->declared_entry;
+    __u8 *declared;
+    __u8 terminator = 1;
+    __u32 argument_length;
+    long length;
+
+    length = bpf_probe_read_user_str(scratch->exec_argument,
+                                     sizeof(scratch->exec_argument),
+                                     argument);
+    if (length <= 1 || length > sizeof(scratch->exec_argument))
+        return;
+    argument_length = (__u32)length - 1;
+    if (length == sizeof(scratch->exec_argument) &&
+        (bpf_probe_read_user(&terminator, sizeof(terminator),
+                             argument + argument_length) || terminator))
+        return;
+    if (argument_length > MAX_EXECUTION_APPROVAL_ARGUMENT_BYTES_V1)
+        return;
+    declared_entry->path_length = argument_length;
+    declared_entry->reserved = 0;
+    if (bpf_probe_read_kernel(declared_entry->path, argument_length,
+                              scratch->exec_argument))
+        return;
+    declared = bpf_map_lookup_elem(&declared_entry_requests, declared_entry);
+    if (!declared || !*declared)
+        declared_entry->path_length = 0;
+}
+
+struct execution_argv_cleanup_context {
+    id128_v1 snapshot_id;
+};
+
+static long cleanup_provisional_execution_argv_chunk(
+    __u32 chunk_index, void *data)
+{
+    struct execution_argv_cleanup_context *cleanup = data;
+    execution_argv_chunk_key_v1 key = {
+        .snapshot_id = cleanup->snapshot_id,
+        .chunk_index = chunk_index,
     };
 
-    steps = bpf_loop(MAX_ADMINISTRATIVE_ARGUMENTS_V1,
-                     administrative_argv_match_step, &match, 0);
-    if (steps < 0 || match.mismatch ||
-        match.aggregate != total_argument_bytes ||
-        bpf_probe_read_user(&argument, sizeof(argument),
-                            &argv[argument_count]) ||
-        argument)
+    bpf_map_delete_elem(&execution_argv_provisional_chunks, &key);
+    return 0;
+}
+
+static __noinline void cleanup_provisional_execution_argv(
+    const execution_argv_snapshot_v1 *snapshot)
+{
+    long steps;
+    struct execution_argv_cleanup_context cleanup = {};
+
+    if (!snapshot || id128_is_zero(&snapshot->snapshot_id) ||
+        !snapshot->chunk_count ||
+        snapshot->chunk_count > MAX_PROVISIONAL_EXEC_CHUNKS_V1)
+        return;
+    cleanup.snapshot_id = snapshot->snapshot_id;
+    steps = bpf_loop(snapshot->chunk_count,
+                     cleanup_provisional_execution_argv_chunk,
+                     &cleanup, 0);
+    (void)steps;
+}
+
+static __noinline void clear_provisional_exec_request(
+    struct task_struct *task)
+{
+    struct provisional_exec_request_v1 *request;
+
+    if (!task)
+        return;
+    request = bpf_task_storage_get(
+        &provisional_exec_requests, task, 0, 0);
+    if (request)
+        cleanup_provisional_execution_argv(&request->argv_snapshot);
+    bpf_task_storage_delete(&provisional_exec_requests, task);
+}
+
+struct provisional_exec_capture_context {
+    const char *const *argv;
+    struct provisional_exec_request_v1 *request;
+    struct identity_scratch_v1 *scratch;
+    const char *current_argument;
+    __u64 current_argument_span;
+    __u32 argument_index;
+    __u32 complete;
+    __u32 failed;
+};
+
+static long capture_provisional_exec_stream(__u32 step, void *data)
+{
+    struct provisional_exec_capture_context *capture = data;
+    const char *current_argument;
+    __u64 current_argument_span;
+    __u32 argument_index;
+    __u32 length;
+    long result;
+
+    (void)step;
+    if (bpf_probe_read_kernel(
+            &current_argument, sizeof(current_argument),
+            &capture->current_argument) ||
+        bpf_probe_read_kernel(
+            &current_argument_span, sizeof(current_argument_span),
+            &capture->current_argument_span) ||
+        bpf_probe_read_kernel(
+            &argument_index, sizeof(argument_index),
+            &capture->argument_index)) {
+        capture->failed = 1;
+        return 1;
+    }
+    if (!current_argument) {
+        if (argument_index >= MAX_PROVISIONAL_EXEC_ARGUMENTS_V1) {
+            capture->failed = 1;
+            return 1;
+        }
+        asm volatile("%[index] &= %1 ;\n"
+                     : [index] "+r"(argument_index)
+                     : "i"(MAX_PROVISIONAL_EXEC_ARGUMENTS_V1 - 1));
+        if (bpf_probe_read_user(
+                &current_argument,
+                sizeof(current_argument),
+                &capture->argv[argument_index])) {
+            capture->failed = 1;
+            return 1;
+        }
+        if (!current_argument) {
+            capture->complete = 1;
+            return 1;
+        }
+        capture->current_argument = current_argument;
+        if (!argument_index)
+            capture_declared_exec_request(
+                capture->request, capture->scratch,
+                current_argument);
+    }
+    result = bpf_probe_read_user_str(
+        capture->scratch->exec_argument,
+        sizeof(capture->scratch->exec_argument),
+        current_argument + current_argument_span);
+    if (result <= 0 ||
+        result > sizeof(capture->scratch->exec_argument)) {
+        capture->failed = 1;
+        return 1;
+    }
+    length = result == sizeof(capture->scratch->exec_argument)
+                 ? MAX_EXECUTION_APPROVAL_ARGUMENT_BYTES_V1
+                 : (__u32)result;
+    if (current_argument_span >
+            MAX_PROVISIONAL_EXEC_ARGUMENT_SPAN_V1 - length ||
+        append_provisional_execution_argv_bytes(
+            &capture->request->argv_snapshot, capture->scratch,
+            capture->scratch->exec_argument, length)) {
+        capture->failed = 1;
+        return 1;
+    }
+    current_argument_span += length;
+    capture->current_argument_span = current_argument_span;
+    if (result == sizeof(capture->scratch->exec_argument))
+        return 0;
+    if (capture->request->argv_snapshot.argument_count == ~0ULL ||
+        capture->request->argv_snapshot.total_argument_span >
+            0xffffffffULL - current_argument_span) {
+        capture->failed = 1;
+        return 1;
+    }
+    capture->request->argv_snapshot.argument_count++;
+    capture->request->argv_snapshot.total_argument_span +=
+        current_argument_span;
+    capture->argument_index = argument_index + 1;
+    capture->current_argument = NULL;
+    capture->current_argument_span = 0;
+    return 0;
+}
+
+static __noinline void capture_provisional_exec_request(
+    identity_runtime_config_v1 *config, struct task_struct *task,
+    const char *const *argv, __u8 syscall_stage,
+    __u32 syscall_flags)
+{
+    struct identity_scratch_v1 *scratch;
+    struct provisional_exec_request_v1 *request;
+    long steps;
+
+    clear_provisional_exec_request(task);
+    scratch = identity_scratch_record();
+    if (!config || !task || !scratch)
+        return;
+    request = bpf_task_storage_get(
+        &provisional_exec_requests, task, 0,
+        BPF_LOCAL_STORAGE_GET_F_CREATE);
+    if (!request)
+        return;
+    request->declared_entry.path_length = 0;
+    request->declared_entry.reserved = 0;
+    bpf_probe_read_kernel(request->declared_entry.path,
+                          sizeof(request->declared_entry.path),
+                          scratch->zero_bytes);
+    __builtin_memset(&request->argv_snapshot, 0,
+                     sizeof(request->argv_snapshot));
+    request->state = PROVISIONAL_EXEC_REQUEST_STATE_CAPTURING_V1;
+    request->syscall_stage = syscall_stage;
+    request->syscall_flags = syscall_flags;
+    request->transition_version = 1;
+    if (!argv ||
+        allocate_id(config, &request->argv_snapshot.snapshot_id) ||
+        clear_execution_argv_chunk(scratch))
+        goto unavailable;
+    struct provisional_exec_capture_context capture = {
+        .argv = argv,
+        .request = request,
+        .scratch = scratch,
+    };
+
+    steps = bpf_loop(MAX_PROVISIONAL_EXEC_STREAM_STEPS_V1,
+                     capture_provisional_exec_stream, &capture, 0);
+    if (steps < 0 || capture.failed || !capture.complete ||
+        flush_provisional_execution_argv_chunk(
+            &request->argv_snapshot, scratch, true) ||
+        !execution_argv_snapshot_valid(&request->argv_snapshot))
+        goto unavailable;
+    request->state = PROVISIONAL_EXEC_REQUEST_STATE_CAPTURED_V1;
+    request->transition_version++;
+    return;
+
+unavailable:
+    cleanup_provisional_execution_argv(&request->argv_snapshot);
+    __builtin_memset(&request->argv_snapshot, 0,
+                     sizeof(request->argv_snapshot));
+    request->state = PROVISIONAL_EXEC_REQUEST_STATE_UNAVAILABLE_V1;
+    request->transition_version++;
+}
+
+static __noinline bool provisional_exec_request_valid(
+    const struct provisional_exec_request_v1 *request)
+{
+    return request &&
+           request->state ==
+               PROVISIONAL_EXEC_REQUEST_STATE_CAPTURED_V1 &&
+           request->transition_version >= 2 &&
+           execution_argv_snapshot_valid(&request->argv_snapshot);
+}
+
+struct execution_argv_compare_context {
+    const execution_argv_snapshot_v1 *left;
+    const execution_argv_snapshot_v1 *right;
+    struct identity_scratch_v1 *scratch;
+    __u32 right_is_expected;
+    __u32 failed;
+};
+
+static long compare_execution_argv_word(__u32 word_index, void *data)
+{
+    struct execution_argv_compare_context *compare = data;
+    execution_argv_chunk_key_v1 *left_key;
+    execution_argv_chunk_key_v1 *right_key;
+    execution_argv_chunk_v1 *left;
+    execution_argv_chunk_v1 *right;
+    __u32 chunk_index = word_index >> 9;
+    __u32 byte_offset = (word_index & 511) << 3;
+
+    if (!compare->scratch ||
+        chunk_index >= compare->left->chunk_count ||
+        chunk_index >= compare->right->chunk_count) {
+        compare->failed = 1;
+        return 1;
+    }
+    left_key = &compare->scratch->exec_argv_chunk_key;
+    right_key = &compare->scratch->exec_argv_compare_chunk_key;
+    left_key->snapshot_id = compare->left->snapshot_id;
+    left_key->chunk_index = chunk_index;
+    left_key->reserved = 0;
+    right_key->snapshot_id = compare->right->snapshot_id;
+    right_key->chunk_index = chunk_index;
+    right_key->reserved = 0;
+    left = bpf_map_lookup_elem(
+        &execution_argv_provisional_chunks, left_key);
+    if (compare->right_is_expected)
+        right = bpf_map_lookup_elem(
+            &execution_argv_expected_chunks, right_key);
+    else
+        right = bpf_map_lookup_elem(
+            &execution_argv_provisional_chunks, right_key);
+    compare->scratch->exec_argv_left_word = 0;
+    compare->scratch->exec_argv_right_word = 0;
+    if (!execution_argv_chunk_valid(
+            compare->left, chunk_index, left) ||
+        !execution_argv_chunk_valid(
+            compare->right, chunk_index, right) ||
+        bpf_probe_read_kernel(
+            &compare->scratch->exec_argv_left_word,
+            sizeof(compare->scratch->exec_argv_left_word),
+            &left->bytes[byte_offset]) ||
+        bpf_probe_read_kernel(
+            &compare->scratch->exec_argv_right_word,
+            sizeof(compare->scratch->exec_argv_right_word),
+            &right->bytes[byte_offset]) ||
+        compare->scratch->exec_argv_left_word !=
+            compare->scratch->exec_argv_right_word) {
+        compare->failed = 1;
+        return 1;
+    }
+    return 0;
+}
+
+static __noinline bool execution_argv_snapshots_equal(
+    const execution_argv_snapshot_v1 *left,
+    const execution_argv_snapshot_v1 *right, bool right_is_expected)
+{
+    struct identity_scratch_v1 *scratch = identity_scratch_record();
+    long steps;
+    __u64 words;
+    struct execution_argv_compare_context compare = {
+        .left = left,
+        .right = right,
+        .scratch = scratch,
+        .right_is_expected = right_is_expected,
+    };
+
+    if (!scratch || !execution_argv_snapshot_valid(left) ||
+        !execution_argv_snapshot_valid(right) ||
+        left->argument_count != right->argument_count ||
+        left->total_argument_span != right->total_argument_span ||
+        left->chunk_count != right->chunk_count)
+        return false;
+    words = (left->total_argument_span + 7) >> 3;
+    if (!words || words > MAX_EXECUTION_ARGV_COMPARE_WORDS_V1)
+        return false;
+    steps = bpf_loop((__u32)words, compare_execution_argv_word,
+                     &compare, 0);
+    return steps >= 0 && (__u64)steps == words && !compare.failed;
+}
+
+static __always_inline int provisional_execution_approval_matches(
+    const struct provisional_exec_request_v1 *request,
+    const execution_approval_slot_v1 *slot,
+    struct identity_scratch_v1 *scratch)
+{
+    if (!scratch || !slot || !provisional_exec_request_valid(request) ||
+        !execution_argv_snapshots_equal(
+            &request->argv_snapshot, &slot->expected_argv, true))
         return -EACCES;
     return 0;
 }
 
-static __always_inline bool task_has_exclusive_mm(struct task_struct *task)
-{
-    struct mm_struct *mm = NULL;
-    int users = 0;
+struct execution_argv_packed_context {
+    __u64 cursor;
+    __u64 end;
+    execution_argv_snapshot_v1 *snapshot;
+    struct identity_scratch_v1 *scratch;
+    __u32 failed;
+};
 
-    if (!task || BPF_CORE_READ_INTO(&mm, task, mm) || !mm ||
-        BPF_CORE_READ_INTO(&users, mm, mm_users.counter))
-        return false;
-    return users == 1;
+static long capture_execution_argv_packed_stream(
+    __u32 step, void *data)
+{
+    struct execution_argv_packed_context *context = data;
+    execution_argv_chunk_key_v1 *key;
+    __u64 remaining;
+    __u32 length;
+    long read_result;
+    bool terminal;
+
+    if (context->cursor >= context->end ||
+        step >= context->snapshot->chunk_count)
+        return 1;
+    remaining = context->end - context->cursor;
+    length = remaining > EXECUTION_ARGV_CHUNK_BYTES_V1
+                 ? EXECUTION_ARGV_CHUNK_BYTES_V1
+                 : (__u32)remaining;
+    if (!length ||
+        length > EXECUTION_ARGV_CHUNK_BYTES_V1) {
+        context->failed = 1;
+        return 1;
+    }
+    if (length == EXECUTION_ARGV_CHUNK_BYTES_V1)
+        read_result = bpf_probe_read_user(
+            context->scratch->exec_argv_chunk.bytes,
+            EXECUTION_ARGV_CHUNK_BYTES_V1,
+            (const void *)context->cursor);
+    else {
+        asm volatile("%[length] &= 4095 ;\n"
+                     : [length] "+r"(length));
+        read_result = bpf_probe_read_user(
+            context->scratch->exec_argv_chunk.bytes, length,
+            (const void *)context->cursor);
+    }
+    if (read_result) {
+        context->failed = 1;
+        return 1;
+    }
+    context->scratch->exec_argv_chunk.length = length;
+    context->cursor += length;
+    terminal = context->cursor == context->end;
+    key = &context->scratch->exec_argv_chunk_key;
+    key->snapshot_id = context->snapshot->snapshot_id;
+    key->chunk_index = step;
+    key->reserved = 0;
+    context->scratch->exec_argv_chunk.flags =
+        terminal ? EXECUTION_ARGV_CHUNK_TERMINAL_V1 : 0;
+    if (bpf_map_update_elem(
+            &execution_argv_provisional_chunks, key,
+            &context->scratch->exec_argv_chunk, BPF_NOEXIST) ||
+        clear_execution_argv_chunk(context->scratch)) {
+        context->failed = 1;
+        return 1;
+    }
+    return terminal ? 1 : 0;
 }
 
-static __noinline void capture_declared_exec_request(
-    struct task_struct *task, const char *const *argv)
+static __noinline int capture_execution_argv_packed_user(
+    __u64 start, __u64 end, __u64 argument_count,
+    struct identity_scratch_v1 *scratch,
+    execution_argv_snapshot_v1 *snapshot)
 {
-    struct identity_scratch_v1 *scratch;
-    declared_entry_request_v1 *candidate;
-    declared_entry_request_v1 *request;
-    const char *argument = NULL;
-    __u8 *declared;
-    long length;
+    identity_runtime_config_v1 *config = identity_runtime_config();
+    __u64 argument_span;
+    __u64 expected_chunks;
+    long steps;
 
-    bpf_task_storage_delete(&pending_exec_request_paths, task);
-    if (!argv ||
-        bpf_probe_read_user(&argument, sizeof(argument), &argv[0]) ||
-        !argument)
-        return;
-    scratch = identity_scratch_record();
-    if (!scratch)
-        return;
-    candidate = &scratch->declared_entry_request;
-    candidate->path_length = 0;
-    candidate->reserved = 0;
-    if (bpf_probe_read_kernel(candidate->path, sizeof(candidate->path),
-                              scratch->zero_bytes))
-        return;
-    length = bpf_probe_read_user_str(candidate->path,
-                                     sizeof(candidate->path), argument);
-    if (length <= 2 || length > sizeof(candidate->path))
-        return;
-    candidate->path_length = (__u32)length - 1;
-    declared = bpf_map_lookup_elem(&declared_entry_requests, candidate);
-    if (!declared || !*declared)
-        return;
-    request = bpf_task_storage_get(
-        &pending_exec_request_paths, task, 0,
-        BPF_LOCAL_STORAGE_GET_F_CREATE);
-    if (!request ||
-        bpf_probe_read_kernel(request, sizeof(*request), candidate))
-        bpf_task_storage_delete(&pending_exec_request_paths, task);
+    if (!config || !start || !end || end <= start ||
+        !scratch || !snapshot ||
+        !argument_count ||
+        argument_count > MAX_PROVISIONAL_EXEC_ARGUMENTS_V1)
+        return -EACCES;
+    argument_span = end - start;
+    expected_chunks = ((argument_span - 1) >>
+                       EXECUTION_ARGV_CHUNK_SHIFT_V1) + 1;
+    if (argument_span > 0xffffffffULL ||
+        expected_chunks > MAX_PROVISIONAL_EXEC_PACKED_CHUNKS_V1)
+        return -EACCES;
+    __builtin_memset(snapshot, 0, sizeof(*snapshot));
+    snapshot->argument_count = argument_count;
+    snapshot->total_argument_span = argument_span;
+    snapshot->chunk_count = (__u32)expected_chunks;
+    if (allocate_id(config, &snapshot->snapshot_id) ||
+        clear_execution_argv_chunk(scratch))
+        goto unavailable;
+    struct execution_argv_packed_context context = {
+        .cursor = start,
+        .end = end,
+        .snapshot = snapshot,
+        .scratch = scratch,
+    };
+
+    steps = bpf_loop((__u32)expected_chunks,
+                     capture_execution_argv_packed_stream,
+                     &context, 0);
+    if (steps < 0 || context.failed ||
+        context.cursor != end ||
+        !execution_argv_snapshot_valid(snapshot))
+        goto unavailable;
+    return 0;
+
+unavailable:
+    cleanup_provisional_execution_argv(snapshot);
+    __builtin_memset(snapshot, 0, sizeof(*snapshot));
+    return -EACCES;
+}
+
+static __noinline int provisional_exec_request_matches_installed_argv(
+    const struct provisional_exec_request_v1 *request, __u64 start,
+    __u64 end, __u64 argument_count,
+    struct identity_scratch_v1 *scratch)
+{
+    execution_argv_snapshot_v1 observed = {};
+    bool matches;
+
+    if (!provisional_exec_request_valid(request) ||
+        request->argv_snapshot.argument_count != argument_count ||
+        capture_execution_argv_packed_user(
+            start, end, argument_count, scratch,
+            &observed))
+        return -EACCES;
+    matches = execution_argv_snapshots_equal(
+        &observed, &request->argv_snapshot, false);
+    cleanup_provisional_execution_argv(&observed);
+    return matches ? 0 : -EACCES;
+}
+
+static __noinline int provisional_exec_request_matches_bprm(
+    const struct provisional_exec_request_v1 *request,
+    struct linux_binprm *bprm, struct identity_scratch_v1 *scratch)
+{
+    unsigned long argument_start = 0;
+    __u64 argument_end;
+    int argument_count = 0;
+
+    if (!bprm || BPF_CORE_READ_INTO(&argument_start, bprm, p) ||
+        BPF_CORE_READ_INTO(&argument_count, bprm, argc) ||
+        argument_count < 0 || !provisional_exec_request_valid(request) ||
+        argument_start >
+            ~0ULL - request->argv_snapshot.total_argument_span)
+        return -EACCES;
+    argument_end = argument_start +
+                   request->argv_snapshot.total_argument_span;
+    return provisional_exec_request_matches_installed_argv(
+        request, argument_start, argument_end,
+        (__u64)argument_count, scratch);
+}
+
+static __noinline int provisional_exec_request_matches_mm(
+    const struct provisional_exec_request_v1 *request,
+    struct mm_struct *mm, struct identity_scratch_v1 *scratch)
+{
+    unsigned long argument_start = 0;
+    unsigned long argument_end = 0;
+
+    if (!mm || BPF_CORE_READ_INTO(&argument_start, mm, arg_start) ||
+        BPF_CORE_READ_INTO(&argument_end, mm, arg_end))
+        return -EACCES;
+    return provisional_exec_request_matches_installed_argv(
+        request, argument_start, argument_end,
+        request ? request->argv_snapshot.argument_count : 0,
+        scratch);
+}
+
+static __always_inline bool initial_exec_has_provisional_capture(void)
+{
+    struct task_struct *task = bpf_get_current_task_btf();
+    task_label_v1 *label;
+    struct provisional_exec_request_v1 *request;
+
+    if (!task)
+        return false;
+    request = bpf_task_storage_get(&provisional_exec_requests, task, 0, 0);
+    if (!request || !request->transition_version ||
+        (request->state != PROVISIONAL_EXEC_REQUEST_STATE_CAPTURED_V1 &&
+         request->state != PROVISIONAL_EXEC_REQUEST_STATE_UNAVAILABLE_V1))
+        return false;
+    label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    return label &&
+           !bpf_map_lookup_elem(&pending_execs, &label->task_cookie);
+}
+
+static __always_inline void begin_execution_approval_prepare_trace(
+    struct identity_scratch_v1 *scratch,
+    const execution_set_binding_state_v1 *binding,
+    const execution_approval_slot_v1 *slot, __u8 stage,
+    __u32 syscall_flags)
+{
+    begin_effect_observation(scratch, kernel_effect_family_v1_exec,
+                             kernel_effect_operation_v1_execute);
+    scratch->observation.binding_id = binding->binding_id;
+    scratch->observation.execution_set_id = binding->execution_set_id;
+    scratch->observation.execution_approval_trace.syscall_flags =
+        syscall_flags;
+    scratch->observation.execution_approval_trace.expected_executable =
+        slot->resolved_executable;
+    scratch->observation.execution_approval_trace.slot_state =
+        (__u8)slot->state;
+    scratch->observation.execution_approval_trace.stage = stage;
+}
+
+static __noinline void emit_execution_approval_prepare_trace(
+    struct identity_scratch_v1 *scratch, __u64 failed_checks)
+{
+    scratch->observation.execution_approval_trace.failed_checks =
+        failed_checks;
+    runtime_entry_infrastructure_effect_result(scratch);
 }
 
 static __always_inline int prepare_exec_matches(
-    const char *const *argv)
+    const char *const *argv, __u8 trace_stage, __u32 syscall_flags)
 {
     identity_runtime_config_v1 *config = identity_runtime_config();
-    struct task_struct *task;
-    struct identity_scratch_v1 *scratch;
-    task_label_v1 *label;
-    process_security_state_v1 *process;
-    entry_security_state_v1 *entry;
-    external_root_classification_v1 *classification;
-    execution_set_binding_state_v1 *binding;
-    approved_exec_slot_key_v1 key;
-    approved_exec_slot_v1 *slot;
-    struct cgroup *cgroup = NULL;
-    int binding_lookup;
 
     if (!config || !config->enabled)
         return 0;
-    task = bpf_get_current_task_btf();
-    capture_declared_exec_request(task, argv);
-    if (task_cgroup(task, &cgroup))
-        return 0;
-    binding = binding_for_cgroup(cgroup, &binding_lookup);
-    if (binding_lookup)
-        return 0;
-    label = bpf_task_storage_get(&task_labels, task, 0, 0);
-    if (!label && binding) {
-        if (label_external_root(task, binding, config))
-            return 0;
-        label = bpf_task_storage_get(&task_labels, task, 0, 0);
-    }
-    if (!label)
-        return 0;
-    bpf_map_delete_elem(&pending_administrative_matches,
-                        &label->task_cookie);
-    process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
-    entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
-    classification = entry_root_classification(label, entry);
-    if (!label_matches_runtime(label, config) ||
-        !binding_matches_label(binding, label) || !process ||
-        process->state != process_security_state_kind_v1_active ||
-        process->transition_guard ||
-        process->exec_guard_state != exec_guard_state_v1_none ||
-        process->live_thread_refs != 1 || !task_has_exclusive_mm(task) ||
-        !classification ||
-        classification->root_class !=
-            external_root_class_v1_external_runtime_root ||
-        classification->purpose != entry_purpose_v1_unknown ||
-        classification->installed_role_numeric_id != process->active_role_id)
-        return 0;
-    key.node_boot_id = config->node_boot_id;
-    key.cgroup_binding_id = binding->binding_id;
-    slot = bpf_map_lookup_elem(&approved_exec_slots, &key);
-    scratch = identity_scratch_record();
-    if (!scratch ||
-        !administrative_slot_matches_binding(
-            slot, binding, process->active_profile_generation_ref_id) ||
-        administrative_argv_matches(slot, argv, scratch))
-        return 0;
-    scratch->administrative_match.task_cookie = label->task_cookie;
-    scratch->administrative_match.exec_attempt_sequence =
-        process->transition_version + 1;
-    scratch->administrative_match.proof_id = slot->proof_id;
-    scratch->administrative_match.claim_slot_id = slot->claim_slot_id;
-    scratch->administrative_match.approved_role_numeric_id =
-        slot->approved_role_numeric_id;
-    scratch->administrative_match.reserved_0 = 0;
-    scratch->administrative_match.profile_generation_ref_id =
-        slot->profile_generation_ref_id;
-    scratch->administrative_match.resolved_executable =
-        slot->resolved_executable;
-    scratch->administrative_match.transition_version = 1;
-    scratch->administrative_match.state =
-        pending_administrative_match_state_v1_arguments_matched;
-#pragma unroll
-    for (int index = 0; index < 7; index++)
-        scratch->administrative_match.reserved_1[index] = 0;
-    bpf_map_update_elem(&pending_administrative_matches,
-                        &label->task_cookie,
-                        &scratch->administrative_match, BPF_NOEXIST);
+    capture_provisional_exec_request(
+        config, bpf_get_current_task_btf(), argv,
+        trace_stage, syscall_flags);
     return 0;
 }
 
 SEC("tracepoint/syscalls/sys_enter_execve")
 int erebor_sys_enter_execve(struct trace_event_raw_sys_enter *context)
 {
-    return prepare_exec_matches(
-        (const char *const *)context->args[1]);
+    return prepare_exec_matches((const char *const *)context->args[1],
+                                EXECUTION_APPROVAL_TRACE_STAGE_EXECVE_ENTRY_V1,
+                                0);
 }
 
 SEC("tracepoint/syscalls/sys_enter_execveat")
@@ -753,60 +1311,330 @@ int erebor_sys_enter_execveat(struct trace_event_raw_sys_enter *context)
         return 0;
     }
     return prepare_exec_matches(
-        (const char *const *)context->args[2]);
+        (const char *const *)context->args[2],
+        EXECUTION_APPROVAL_TRACE_STAGE_EXECVEAT_ENTRY_V1,
+        (__u32)context->args[4]);
 }
 
-static __always_inline int consume_administrative_match(
+static __always_inline int reserve_execution_approval(
     identity_runtime_config_v1 *config, const task_label_v1 *label,
     execution_set_binding_state_v1 *binding,
-    process_security_state_v1 *process, pending_exec_v1 *pending)
+    process_security_state_v1 *process, pending_exec_v1 *pending,
+    const struct provisional_exec_request_v1 *request,
+    struct identity_scratch_v1 *scratch)
 {
-    pending_administrative_match_v1 *match = bpf_map_lookup_elem(
-        &pending_administrative_matches, &label->task_cookie);
-    approved_exec_slot_key_v1 key;
-    approved_exec_slot_v1 *slot;
+    execution_approval_slot_key_v1 *key;
+    execution_approval_slot_v1 *slot;
 
-    if (!match)
+    if (!config || !label || !binding || !process || !pending || !scratch ||
+        !provisional_exec_request_valid(request))
         return 0;
-    if (match->state !=
-            pending_administrative_match_state_v1_arguments_matched ||
-        match->exec_attempt_sequence != pending->exec_attempt_sequence ||
-        match->profile_generation_ref_id !=
-            process->active_profile_generation_ref_id ||
-        !candidate_equal(&match->resolved_executable,
-                         &pending->ordered_candidates[0]))
-        goto reject;
+    key = &scratch->execution_approval_slot_key;
+    key->node_boot_id = config->node_boot_id;
+    key->cgroup_binding_id = binding->binding_id;
+    slot = bpf_map_lookup_elem(&execution_approval_slots, key);
+    if (!slot)
+        return 0;
+    begin_execution_approval_prepare_trace(
+        scratch, binding, slot, request->syscall_stage,
+        request->syscall_flags);
+    scratch->observation.task_cookie = label->task_cookie;
+    scratch->observation.profile_generation_ref_id =
+        process->active_profile_generation_ref_id;
+    scratch->observation.execution_approval_trace.exec_attempt_sequence =
+        pending->exec_attempt_sequence;
+    scratch->observation.execution_approval_trace.observed_executable =
+        pending->ordered_candidates[0];
+    if (!execution_approval_armed_slot_matches(
+            slot, binding, process->active_profile_generation_ref_id)) {
+        emit_execution_approval_prepare_trace(
+            scratch,
+            EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_SLOT_GUARD_V1);
+        return 0;
+    }
+    if (!slot->admitted_entry_rule_id ||
+        !candidate_equal(&slot->resolved_executable,
+                         &pending->ordered_candidates[0])) {
+        emit_execution_approval_prepare_trace(
+            scratch,
+            EXECUTION_APPROVAL_TRACE_FAILURE_OBSERVED_EXECUTABLE_V1);
+        return 0;
+    }
+    if (provisional_execution_approval_matches(request, slot, scratch)) {
+        emit_execution_approval_prepare_trace(
+            scratch, EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ARGV_V1);
+        return 0;
+    }
+    scratch->execution_approval.task_cookie = label->task_cookie;
+    scratch->execution_approval.exec_attempt_sequence =
+        pending->exec_attempt_sequence;
+    scratch->execution_approval.proof_id = slot->proof_id;
+    scratch->execution_approval.claim_slot_id = slot->claim_slot_id;
+    scratch->execution_approval.target_role_numeric_id =
+        slot->target_role_numeric_id;
+    scratch->execution_approval.reserved_0 = 0;
+    scratch->execution_approval.profile_generation_ref_id =
+        slot->profile_generation_ref_id;
+    scratch->execution_approval.resolved_executable =
+        slot->resolved_executable;
+    scratch->execution_approval.transition_version = 1;
+    scratch->execution_approval.state =
+        pending_execution_approval_state_v1_slot_reserved;
+#pragma unroll
+    for (int index = 0; index < 7; index++)
+        scratch->execution_approval.reserved_1[index] = 0;
+    if (__sync_val_compare_and_swap(
+            &slot->state, execution_approval_slot_state_v1_armed,
+            execution_approval_slot_state_v1_reserved) !=
+        execution_approval_slot_state_v1_armed) {
+        emit_execution_approval_prepare_trace(
+            scratch, EXECUTION_APPROVAL_TRACE_FAILURE_SLOT_STATE_V1);
+        return -EACCES;
+    }
+    slot->transition_version++;
+    if (bpf_map_update_elem(
+            &pending_execution_approvals, &label->task_cookie,
+            &scratch->execution_approval, BPF_NOEXIST))
+        goto reject_map_update;
+    if (consume_bounded_exception(slot->profile_generation_ref_id,
+                                  slot->exception_numeric_handle,
+                                  &slot->claim_slot_id, 0, 0, 0)) {
+        goto reject_slot_guard;
+    }
+    process->pending_target_role_id = slot->target_role_numeric_id;
+    pending->admitted_entry_rule_id = slot->admitted_entry_rule_id;
+    pending->transition_version++;
+    emit_execution_approval_prepare_trace(scratch, 0);
+    return 0;
+
+reject_map_update:
+    if (__sync_val_compare_and_swap(
+            &slot->state, execution_approval_slot_state_v1_reserved,
+            execution_approval_slot_state_v1_tampered) ==
+        execution_approval_slot_state_v1_reserved)
+        slot->transition_version++;
+    bpf_map_delete_elem(&pending_execution_approvals,
+                        &label->task_cookie);
+    emit_execution_approval_prepare_trace(
+        scratch, EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_MAP_UPDATE_V1);
+    return -EACCES;
+
+reject_slot_guard:
+    if (__sync_val_compare_and_swap(
+            &slot->state, execution_approval_slot_state_v1_reserved,
+            execution_approval_slot_state_v1_tampered) ==
+        execution_approval_slot_state_v1_reserved)
+        slot->transition_version++;
+    bpf_map_delete_elem(&pending_execution_approvals,
+                        &label->task_cookie);
+    emit_execution_approval_prepare_trace(
+        scratch, EXECUTION_APPROVAL_TRACE_FAILURE_SLOT_GUARD_V1);
+    return -EACCES;
+}
+
+#define MITHRIL_SIGKILL_V1 9
+
+static __always_inline execution_approval_slot_v1 *
+execution_approval_reserved_slot_for_match(
+    identity_runtime_config_v1 *config, const execution_set_binding_state_v1 *binding,
+    const process_security_state_v1 *process,
+    const pending_execution_approval_v1 *match)
+{
+    execution_approval_slot_key_v1 key;
+    execution_approval_slot_v1 *slot;
+
+    if (!config || !binding || !process || !match)
+        return NULL;
     key.node_boot_id = config->node_boot_id;
     key.cgroup_binding_id = binding->binding_id;
-    slot = bpf_map_lookup_elem(&approved_exec_slots, &key);
-    if (!administrative_slot_matches_binding(
+    slot = bpf_map_lookup_elem(&execution_approval_slots, &key);
+    if (!execution_approval_reserved_slot_matches(
             slot, binding, process->active_profile_generation_ref_id) ||
         !id128_equal(&slot->proof_id, &match->proof_id) ||
         !id128_equal(&slot->claim_slot_id, &match->claim_slot_id) ||
         !candidate_equal(&slot->resolved_executable,
-                         &match->resolved_executable) ||
-        !slot->admitted_entry_rule_id ||
-        __sync_val_compare_and_swap(
-            &slot->state, approved_exec_slot_state_v1_armed,
-            approved_exec_slot_state_v1_consumed) !=
-            approved_exec_slot_state_v1_armed)
-        goto reject;
-    slot->transition_version++;
-    match->state = pending_administrative_match_state_v1_slot_consumed;
-    match->transition_version++;
-    if (consume_bounded_exception(slot->profile_generation_ref_id,
-                                  slot->exception_numeric_handle,
-                                  &slot->claim_slot_id, 0, 0, 0))
-        return -EACCES;
-    process->pending_target_role_id = match->approved_role_numeric_id;
-    pending->admitted_entry_rule_id = slot->admitted_entry_rule_id;
-    pending->transition_version++;
-    return 0;
+                         &match->resolved_executable))
+        return NULL;
+    return slot;
+}
 
-reject:
-    bpf_map_delete_elem(&pending_administrative_matches,
-                        &label->task_cookie);
-    return 0;
+static __always_inline int verify_execution_approval_bprm_argv(
+    identity_runtime_config_v1 *config,
+    const task_label_v1 *label, const execution_set_binding_state_v1 *binding,
+    const process_security_state_v1 *process, const pending_exec_v1 *pending,
+    const struct provisional_exec_request_v1 *request)
+{
+    pending_execution_approval_v1 *match;
+    execution_approval_slot_v1 *slot;
+
+    match = bpf_map_lookup_elem(&pending_execution_approvals,
+                                &label->task_cookie);
+    if (!match)
+        return 0;
+    if (match->state !=
+            pending_execution_approval_state_v1_slot_reserved ||
+        match->exec_attempt_sequence != pending->exec_attempt_sequence ||
+        match->target_role_numeric_id != process->pending_target_role_id ||
+        match->profile_generation_ref_id !=
+            process->active_profile_generation_ref_id)
+        return -EACCES;
+    slot = execution_approval_reserved_slot_for_match(
+        config, binding, process, match);
+    if (!slot || !provisional_exec_request_valid(request) ||
+        !execution_argv_snapshots_equal(
+            &request->argv_snapshot, &slot->expected_argv, true))
+        return -EACCES;
+    match->state =
+        pending_execution_approval_state_v1_kernel_argv_verified;
+    match->transition_version++;
+    return 1;
+}
+
+static __always_inline int finalize_execution_approval(
+    identity_runtime_config_v1 *config,
+    const task_label_v1 *label, const execution_set_binding_state_v1 *binding,
+    process_security_state_v1 *process, pending_exec_v1 *pending,
+    const struct provisional_exec_request_v1 *request)
+{
+    pending_execution_approval_v1 *match;
+    execution_approval_slot_v1 *slot;
+
+    match = bpf_map_lookup_elem(&pending_execution_approvals,
+                                &label->task_cookie);
+    if (!match)
+        return 0;
+    if (match->state !=
+            pending_execution_approval_state_v1_kernel_argv_verified ||
+        match->exec_attempt_sequence != pending->exec_attempt_sequence ||
+        match->target_role_numeric_id != process->pending_target_role_id ||
+        match->profile_generation_ref_id !=
+            process->active_profile_generation_ref_id)
+        return -EACCES;
+    slot = execution_approval_reserved_slot_for_match(
+        config, binding, process, match);
+    if (!slot || !provisional_exec_request_valid(request) ||
+        !execution_argv_snapshots_equal(
+            &request->argv_snapshot, &slot->expected_argv, true) ||
+        __sync_val_compare_and_swap(
+            &slot->state, execution_approval_slot_state_v1_reserved,
+            execution_approval_slot_state_v1_consumed) !=
+            execution_approval_slot_state_v1_reserved)
+        return -EACCES;
+    slot->transition_version++;
+    match->state = pending_execution_approval_state_v1_slot_consumed;
+    match->transition_version++;
+    return 1;
+}
+
+static __noinline void fail_execution_approval_verification(
+    identity_runtime_config_v1 *config, const task_label_v1 *label,
+    execution_set_binding_state_v1 *binding,
+    pending_exec_v1 *pending, struct identity_scratch_v1 *scratch)
+{
+    pending_execution_approval_v1 *match;
+    process_security_state_v1 *process;
+    entry_security_state_v1 *entry;
+    execution_approval_slot_key_v1 key;
+    execution_approval_slot_v1 *slot = NULL;
+    int signal_result;
+
+    clear_provisional_exec_request(bpf_get_current_task_btf());
+    process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
+    entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
+    match = bpf_map_lookup_elem(&pending_execution_approvals,
+                                &label->task_cookie);
+    if (match && binding) {
+        key.node_boot_id = config->node_boot_id;
+        key.cgroup_binding_id = binding->binding_id;
+        slot = bpf_map_lookup_elem(&execution_approval_slots, &key);
+        if (slot &&
+            id128_equal(&slot->proof_id, &match->proof_id) &&
+            id128_equal(&slot->claim_slot_id, &match->claim_slot_id)) {
+            if (__sync_val_compare_and_swap(
+                    &slot->state, execution_approval_slot_state_v1_reserved,
+                    execution_approval_slot_state_v1_tampered) ==
+                execution_approval_slot_state_v1_reserved)
+                slot->transition_version++;
+            else if (__sync_val_compare_and_swap(
+                         &slot->state,
+                         execution_approval_slot_state_v1_consumed,
+                         execution_approval_slot_state_v1_tampered) ==
+                     execution_approval_slot_state_v1_consumed)
+                slot->transition_version++;
+        }
+        match->state = pending_execution_approval_state_v1_tampered;
+        match->transition_version++;
+    }
+    if (pending) {
+        pending->state = pending_exec_state_v1_post_ponr_fatal;
+        pending->transition_version++;
+    }
+    if (process) {
+        process->state = process_security_state_kind_v1_corrupt;
+        process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
+        process->pending_target_role_id = 0;
+        process->transition_version++;
+    }
+    signal_result = bpf_send_signal(MITHRIL_SIGKILL_V1);
+    if (!scratch)
+        return;
+    begin_effect_observation(scratch, kernel_effect_family_v1_exec,
+                             kernel_effect_operation_v1_execute);
+    if (process && entry)
+        populate_effect_actor(scratch, label, process, entry, NULL);
+    if (binding) {
+        scratch->observation.binding_id = binding->binding_id;
+        scratch->observation.execution_set_id = binding->execution_set_id;
+    }
+    if (pending)
+        scratch->observation.admitted_entry_rule_id =
+            pending->admitted_entry_rule_id;
+    emit_effect_observation(
+        scratch, signal_result,
+        effect_observation_reason_v1_execution_approval_verification_failed,
+        signal_result == 0
+            ? effect_physical_result_v1_termination_queued_before_user_mode
+            : effect_physical_result_v1_unknown_after_pre_effect);
+}
+
+static __always_inline void close_current_execution_approval(
+    const task_label_v1 *label)
+{
+    identity_runtime_config_v1 *config = identity_runtime_config();
+    pending_execution_approval_v1 *match;
+    execution_approval_slot_key_v1 key;
+    execution_approval_slot_v1 *slot;
+    execution_set_binding_state_v1 *binding;
+    struct cgroup *cgroup = NULL;
+    int binding_lookup;
+
+    if (!config || !label)
+        return;
+    match = bpf_map_lookup_elem(&pending_execution_approvals,
+                                &label->task_cookie);
+    if (!match ||
+        (match->state !=
+             pending_execution_approval_state_v1_slot_reserved &&
+         match->state !=
+             pending_execution_approval_state_v1_kernel_argv_verified) ||
+        task_cgroup(bpf_get_current_task_btf(), &cgroup))
+        return;
+    binding = binding_for_cgroup(cgroup, &binding_lookup);
+    if (binding_lookup || !binding_matches_label(binding, label))
+        return;
+    key.node_boot_id = config->node_boot_id;
+    key.cgroup_binding_id = binding->binding_id;
+    slot = bpf_map_lookup_elem(&execution_approval_slots, &key);
+    if (!slot || !id128_equal(&slot->proof_id, &match->proof_id) ||
+        !id128_equal(&slot->claim_slot_id, &match->claim_slot_id) ||
+        __sync_val_compare_and_swap(
+            &slot->state, execution_approval_slot_state_v1_reserved,
+            execution_approval_slot_state_v1_consumed) !=
+            execution_approval_slot_state_v1_reserved)
+        return;
+    slot->transition_version++;
+    match->state = pending_execution_approval_state_v1_slot_consumed;
+    match->transition_version++;
 }
 
 #define BPRM_OBSERVE_EFFECT_V1 1
@@ -829,6 +1657,7 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
     process_state_vector_v1 *process_vector;
     execution_set_binding_state_v1 *binding;
     pending_exec_v1 *pending;
+    struct provisional_exec_request_v1 *request;
     __u64 *profile_task_refs;
     struct cgroup *cgroup = NULL;
     int binding_lookup;
@@ -869,6 +1698,7 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
             return 0;
         }
     }
+    request = bpf_task_storage_get(&provisional_exec_requests, task, 0, 0);
     coordinate = bpf_map_lookup_elem(&task_coordinates, &label->task_cookie);
     if (!label_matches_runtime(label, config) ||
         !binding_matches_label(binding, label) || !coordinate ||
@@ -1033,8 +1863,8 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
             release_transition_guard(&process->transition_guard);
             return identity_deny(config);
         }
-        int administrative_result = consume_administrative_match(
-            config, label, binding, process, pending);
+        int administrative_result = reserve_execution_approval(
+            config, label, binding, process, pending, request, scratch);
 
         release_transition_guard(&process->transition_guard);
         if (administrative_result)
@@ -1110,16 +1940,24 @@ int BPF_PROG(erebor_bprm_committing_creds, struct linux_binprm *bprm)
     task_label_v1 *label;
     process_security_state_v1 *process;
     pending_exec_v1 *pending;
+    struct provisional_exec_request_v1 *request;
     entry_security_state_v1 *entry = NULL;
     execution_set_binding_state_v1 *binding = NULL;
     struct cgroup *cgroup = NULL;
     bool non_exact_candidate_allowed = false;
+    int administrative_result;
     int binding_lookup = -1;
 
-    bpf_task_storage_delete(&pending_exec_request_paths, task);
-    label = bpf_task_storage_get(&task_labels, task, 0, 0);
-    if (!label)
+    request = bpf_task_storage_get(&provisional_exec_requests, task, 0, 0);
+    if (!config) {
+        clear_provisional_exec_request(task);
         return 0;
+    }
+    label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    if (!label) {
+        clear_provisional_exec_request(task);
+        return 0;
+    }
     process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
     pending = bpf_map_lookup_elem(&pending_execs, &label->task_cookie);
     if (!task_cgroup(task, &cgroup)) {
@@ -1137,8 +1975,10 @@ int BPF_PROG(erebor_bprm_committing_creds, struct linux_binprm *bprm)
                (pending->admitted_entry_rule_id &&
                 !pending->exact_object_required))));
     }
-    if (!process)
+    if (!process) {
+        clear_provisional_exec_request(task);
         return 0;
+    }
     if (__sync_val_compare_and_swap(&process->transition_guard, 0, 1))
         return 0;
     if (!pending) {
@@ -1176,12 +2016,43 @@ int BPF_PROG(erebor_bprm_committing_creds, struct linux_binprm *bprm)
          !prepared_container_bootstrap_exec_is_pending(
              binding, label)) ||
         append_bprm_auxiliary_candidates(
-            bprm, pending, scratch, non_exact_candidate_allowed) ||
+            bprm, pending, scratch, non_exact_candidate_allowed)) {
+        if (bpf_map_lookup_elem(&pending_execution_approvals,
+                                &label->task_cookie))
+            fail_execution_approval_verification(
+                config, label, binding, pending, scratch);
+        else {
+            process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
+            process->transition_version++;
+            pending->state = pending_exec_state_v1_outcome_unknown;
+            pending->transition_version++;
+        }
+        release_transition_guard(&process->transition_guard);
+        return 0;
+    }
+    if (provisional_exec_request_valid(request) &&
+        provisional_exec_request_matches_bprm(
+            request, bprm, scratch)) {
+        fail_execution_approval_verification(
+            config, label, binding, pending, scratch);
+        release_transition_guard(&process->transition_guard);
+        return 0;
+    }
+    administrative_result = verify_execution_approval_bprm_argv(
+        config, label, binding, process, pending, request);
+    if (administrative_result < 0 ||
         prepare_exec_records(scratch, pending, process)) {
-        process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
-        process->transition_version++;
-        pending->state = pending_exec_state_v1_outcome_unknown;
-        pending->transition_version++;
+        if (administrative_result ||
+            bpf_map_lookup_elem(&pending_execution_approvals,
+                                &label->task_cookie))
+            fail_execution_approval_verification(
+                config, label, binding, pending, scratch);
+        else {
+            process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
+            process->transition_version++;
+            pending->state = pending_exec_state_v1_outcome_unknown;
+            pending->transition_version++;
+        }
         release_transition_guard(&process->transition_guard);
         return 0;
     }
@@ -1235,12 +2106,13 @@ static __always_inline int complete_failed_exec(long result)
     if (result >= 0)
         return 0;
     task = bpf_get_current_task_btf();
-    bpf_task_storage_delete(&pending_exec_request_paths, task);
+    clear_provisional_exec_request(task);
     clear_runtime_entry_bootstrap(task);
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!label)
         return 0;
-    bpf_map_delete_elem(&pending_administrative_matches,
+    close_current_execution_approval(label);
+    bpf_map_delete_elem(&pending_execution_approvals,
                         &label->task_cookie);
     process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
     pending = bpf_map_lookup_elem(&pending_execs, &label->task_cookie);
@@ -1334,10 +2206,11 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
     task_label_v1 *label;
     process_security_state_v1 *process;
     pending_exec_v1 *pending;
+    struct provisional_exec_request_v1 *request;
     process_execution_instance_v1 *previous_execution;
     process_execution_instance_v1 *target_execution;
     image_provenance_v1 *target_image;
-    pending_administrative_match_v1 *administrative_match;
+    pending_execution_approval_v1 *execution_approval;
     task_coordinate_v1 *coordinate;
     struct identity_scratch_v1 *scratch;
     struct mm_struct *mm = NULL;
@@ -1348,18 +2221,27 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
     struct cgroup *cgroup = NULL;
     bool non_exact_candidate_allowed;
     bool entry_admission;
+    int administrative_result;
     int binding_lookup = -1;
 
     config = identity_runtime_config();
     task = bpf_get_current_task_btf();
+    request = bpf_task_storage_get(&provisional_exec_requests, task, 0, 0);
+    if (!config) {
+        clear_provisional_exec_request(task);
+        clear_runtime_entry_bootstrap(task);
+        return 0;
+    }
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!label) {
+        clear_provisional_exec_request(task);
         clear_runtime_entry_bootstrap(task);
         return 0;
     }
     process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
     pending = bpf_map_lookup_elem(&pending_execs, &label->task_cookie);
     if (!process) {
+        clear_provisional_exec_request(task);
         clear_runtime_entry_bootstrap(task);
         return 0;
     }
@@ -1384,11 +2266,13 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
             process->exec_without_transition_task_cookie = 0;
             process->transition_version++;
             release_transition_guard(&process->transition_guard);
+            clear_provisional_exec_request(task);
             return 0;
         }
         process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
         process->transition_version++;
         release_transition_guard(&process->transition_guard);
+        clear_provisional_exec_request(task);
         clear_runtime_entry_bootstrap(task);
         return 0;
     }
@@ -1398,6 +2282,7 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
         pending->state = pending_exec_state_v1_outcome_unknown;
         pending->transition_version++;
         release_transition_guard(&process->transition_guard);
+        clear_provisional_exec_request(task);
         clear_runtime_entry_bootstrap(task);
         return 0;
     }
@@ -1420,6 +2305,7 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
         process->transition_version++;
         pending->transition_version++;
         release_transition_guard(&process->transition_guard);
+        clear_provisional_exec_request(task);
         clear_runtime_entry_bootstrap(task);
         return 0;
     }
@@ -1437,8 +2323,28 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
             candidate_from_file(&scratch->image.ordered_candidates[0],
                                 executable);
     }
-    administrative_match = bpf_map_lookup_elem(
-        &pending_administrative_matches, &label->task_cookie);
+    if (!scratch ||
+        (provisional_exec_request_valid(request) &&
+         provisional_exec_request_matches_mm(
+             request, mm, scratch))) {
+        fail_execution_approval_verification(
+            config, label, binding, pending, scratch);
+        release_transition_guard(&process->transition_guard);
+        clear_runtime_entry_bootstrap(task);
+        return 0;
+    }
+    execution_approval = bpf_map_lookup_elem(
+        &pending_execution_approvals, &label->task_cookie);
+    administrative_result = finalize_execution_approval(
+        config, label, binding, process, pending, request);
+    if (administrative_result < 0) {
+        fail_execution_approval_verification(
+            config, label, binding, pending, scratch);
+        release_transition_guard(&process->transition_guard);
+        clear_provisional_exec_request(task);
+        clear_runtime_entry_bootstrap(task);
+        return 0;
+    }
     entry_admission = pending->admitted_entry_rule_id != 0;
     if (!entry) {
         process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
@@ -1455,6 +2361,7 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
             target_image->transition_version++;
         }
         release_transition_guard(&process->transition_guard);
+        clear_provisional_exec_request(task);
         clear_runtime_entry_bootstrap(task);
         return 0;
     }
@@ -1484,7 +2391,7 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
         (entry_admission &&
          !entry_admission_matches_live_state(
              label, pending, binding, process,
-             administrative_match)) ||
+             execution_approval)) ||
         commit_entry_admission_metadata(label, pending, process) ||
         (pending->prepared_runtime_exec ==
              PREPARED_RUNTIME_EXEC_CONTAINER_BOOTSTRAP_V1 &&
@@ -1503,6 +2410,7 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
             target_image->transition_version++;
         }
         release_transition_guard(&process->transition_guard);
+        clear_provisional_exec_request(task);
         clear_runtime_entry_bootstrap(task);
         return 0;
     }
@@ -1541,9 +2449,10 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
     release_transition_guard(&process->transition_guard);
     if (entry_admission)
         clear_runtime_entry_bootstrap(task);
-    bpf_map_delete_elem(&pending_administrative_matches,
+    bpf_map_delete_elem(&pending_execution_approvals,
                         &label->task_cookie);
     bpf_map_delete_elem(&pending_execs, &label->task_cookie);
+    clear_provisional_exec_request(task);
     return 0;
 }
 

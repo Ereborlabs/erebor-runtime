@@ -80,6 +80,14 @@ _Static_assert(sizeof(entry_admission_rule_v1) == 64,
                "entry admission rule ABI size");
 _Static_assert(sizeof(declared_entry_request_v1) == 4104,
                "declared entry request ABI size");
+_Static_assert(sizeof(execution_argv_snapshot_v1) == 40,
+               "execution argv snapshot ABI size");
+_Static_assert(sizeof(execution_argv_chunk_key_v1) == 24,
+               "execution argv chunk key ABI size");
+_Static_assert(sizeof(execution_argv_chunk_v1) == 4104,
+               "execution argv chunk ABI size");
+_Static_assert(sizeof(struct provisional_exec_request_v1) == 4160,
+               "provisional exec request size");
 _Static_assert(sizeof(io_uring_ring_state_v1) == 528,
                "io_uring ring state ABI size");
 _Static_assert(sizeof(io_uring_request_state_v1) == 344,
@@ -110,7 +118,7 @@ _Static_assert(sizeof(exact_file_measurement_v1) == 48,
                "exact file measurement ABI size");
 _Static_assert(sizeof(exact_object_binding_v1) == 32,
                "exact object binding ABI size");
-_Static_assert(sizeof(effect_observation_v1) == 536,
+_Static_assert(sizeof(effect_observation_v1) == 624,
                "effect observation ABI size");
 _Static_assert(sizeof(effect_observation_health_v1) == 64,
                "effect observation health ABI size");
@@ -141,7 +149,7 @@ int erebor_policy_activation_probe(struct __sk_buff *context)
     policy_activation_probe_v1 *request;
     struct identity_scratch_v1 *scratch;
     physical_decision_v1 *decision = NULL;
-    approved_exec_slot_v1 *administrative_slot;
+    execution_approval_slot_v1 *execution_approval_slot;
 
     (void)context;
     request = bpf_map_lookup_elem(&policy_activation_probe_requests,
@@ -200,45 +208,47 @@ int erebor_policy_activation_probe(struct __sk_buff *context)
         decision = bpf_map_lookup_elem(&network_destination_decisions,
                                        &scratch->network_destination_key);
         break;
-    case policy_activation_probe_map_kind_v1_administrative_slot_cancel:
-        if (request->key_size != sizeof(scratch->administrative_slot_key) +
-                                     sizeof(scratch->administrative_match.proof_id) +
-                                     sizeof(scratch->administrative_match.claim_slot_id))
+    case policy_activation_probe_map_kind_v1_execution_approval_slot_cancel:
+        if (request->key_size != sizeof(scratch->execution_approval_slot_key) +
+                                     sizeof(scratch->execution_approval.proof_id) +
+                                     sizeof(scratch->execution_approval.claim_slot_id))
             return 4;
-        __builtin_memcpy(&scratch->administrative_slot_key, request->key,
-                         sizeof(scratch->administrative_slot_key));
-        __builtin_memcpy(&scratch->administrative_match.proof_id,
-                         request->key + sizeof(scratch->administrative_slot_key),
-                         sizeof(scratch->administrative_match.proof_id));
+        __builtin_memcpy(&scratch->execution_approval_slot_key, request->key,
+                         sizeof(scratch->execution_approval_slot_key));
+        __builtin_memcpy(&scratch->execution_approval.proof_id,
+                         request->key + sizeof(scratch->execution_approval_slot_key),
+                         sizeof(scratch->execution_approval.proof_id));
         __builtin_memcpy(
-            &scratch->administrative_match.claim_slot_id,
-            request->key + sizeof(scratch->administrative_slot_key) +
-                sizeof(scratch->administrative_match.proof_id),
-            sizeof(scratch->administrative_match.claim_slot_id));
-        administrative_slot = bpf_map_lookup_elem(
-            &approved_exec_slots, &scratch->administrative_slot_key);
-        if (!administrative_slot)
+            &scratch->execution_approval.claim_slot_id,
+            request->key + sizeof(scratch->execution_approval_slot_key) +
+                sizeof(scratch->execution_approval.proof_id),
+            sizeof(scratch->execution_approval.claim_slot_id));
+        execution_approval_slot = bpf_map_lookup_elem(
+            &execution_approval_slots, &scratch->execution_approval_slot_key);
+        if (!execution_approval_slot)
             return 7;
-        if (!id128_equal(&administrative_slot->proof_id,
-                         &scratch->administrative_match.proof_id) ||
-            !id128_equal(&administrative_slot->claim_slot_id,
-                         &scratch->administrative_match.claim_slot_id))
+        if (!id128_equal(&execution_approval_slot->proof_id,
+                         &scratch->execution_approval.proof_id) ||
+            !id128_equal(&execution_approval_slot->claim_slot_id,
+                         &scratch->execution_approval.claim_slot_id))
             return 8;
-        if (administrative_slot->state == approved_exec_slot_state_v1_consumed)
+        if (execution_approval_slot->state == execution_approval_slot_state_v1_consumed ||
+            execution_approval_slot->state == execution_approval_slot_state_v1_reserved)
             return 9;
-        if (administrative_slot->state == approved_exec_slot_state_v1_cancelled ||
-            administrative_slot->state == approved_exec_slot_state_v1_expired ||
-            administrative_slot->state == approved_exec_slot_state_v1_corrupt)
+        if (execution_approval_slot->state == execution_approval_slot_state_v1_cancelled ||
+            execution_approval_slot->state == execution_approval_slot_state_v1_expired ||
+            execution_approval_slot->state == execution_approval_slot_state_v1_corrupt ||
+            execution_approval_slot->state == execution_approval_slot_state_v1_tampered)
             return 10;
-        if (administrative_slot->state != approved_exec_slot_state_v1_armed)
+        if (execution_approval_slot->state != execution_approval_slot_state_v1_armed)
             return 8;
         if (__sync_val_compare_and_swap(
-                &administrative_slot->state,
-                approved_exec_slot_state_v1_armed,
-                approved_exec_slot_state_v1_cancelled) !=
-            approved_exec_slot_state_v1_armed)
+                &execution_approval_slot->state,
+                execution_approval_slot_state_v1_armed,
+                execution_approval_slot_state_v1_cancelled) !=
+            execution_approval_slot_state_v1_armed)
             return 11;
-        __sync_fetch_and_add(&administrative_slot->transition_version, 1);
+        __sync_fetch_and_add(&execution_approval_slot->transition_version, 1);
         return 1;
     case policy_activation_probe_map_kind_v1_mount_reconciliation:
         if (request->key_size !=
@@ -288,6 +298,17 @@ static __always_inline int prepared_runtime_effect_result(
     struct identity_scratch_v1 *scratch);
 static __always_inline int runtime_entry_infrastructure_effect_result(
     struct identity_scratch_v1 *scratch);
+static __always_inline void begin_effect_observation(
+    struct identity_scratch_v1 *scratch, __u16 effect_family,
+    __u16 operation);
+static __always_inline int emit_effect_observation(
+    struct identity_scratch_v1 *scratch, int result, __u8 reason,
+    __u8 physical_result);
+static __always_inline void populate_effect_actor(
+    struct identity_scratch_v1 *scratch, const task_label_v1 *label,
+    const process_security_state_v1 *process,
+    const entry_security_state_v1 *entry,
+    const authority_domain_state_v1 *domain);
 static __always_inline int hard_effect_result(
     identity_runtime_config_v1 *config, struct identity_scratch_v1 *scratch,
     __u8 reason);

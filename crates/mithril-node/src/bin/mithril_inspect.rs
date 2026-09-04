@@ -122,7 +122,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     let line = format!(
-                    "observed_boottime_ns={} source_sequence={} source_cpu_id={} task_cookie={} target_task_cookie={} admitted_entry_rule_id={} active_role_id={} family={} operation={} operation_argument={} reason={} result={} object={}:{}:{}:{}:{} exact_object_key_id={} composite_atom_id={} kernel_result={}",
+                    "observed_boottime_ns={} source_sequence={} source_cpu_id={} task_cookie={} target_task_cookie={} admitted_entry_rule_id={} active_role_id={} family={} operation={} operation_argument={} reason={} result={} object={}:{}:{}:{}:{} exact_object_key_id={} composite_atom_id={} kernel_result={} approval_stage={} approval_pending_state={} approval_slot_state={} approval_exec_attempt_sequence={} approval_failed_checks={:#x} approval_syscall_flags={:#x} approval_expected={}:{}:{}:{}:{} approval_observed={}:{}:{}:{}:{}",
                     effect.observed_boottime_ns,
                     effect.source_sequence,
                     effect.source_cpu_id,
@@ -143,6 +143,22 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     effect.exact_object_key_id,
                     effect.composite_atom_id,
                     effect.kernel_result,
+                    effect.execution_approval_trace_stage,
+                    effect.execution_approval_pending_state,
+                    effect.execution_approval_slot_state,
+                    effect.execution_approval_exec_attempt_sequence,
+                    effect.execution_approval_failed_checks,
+                    effect.execution_approval_syscall_flags,
+                    effect.execution_approval_expected_mount_namespace_inode,
+                    effect.execution_approval_expected_mount_id,
+                    effect.execution_approval_expected_filesystem_device,
+                    effect.execution_approval_expected_inode,
+                    effect.execution_approval_expected_inode_generation,
+                    effect.execution_approval_observed_mount_namespace_inode,
+                    effect.execution_approval_observed_mount_id,
+                    effect.execution_approval_observed_filesystem_device,
+                    effect.execution_approval_observed_inode,
+                    effect.execution_approval_observed_inode_generation,
                     );
                     if seen.insert(line.clone()) {
                         println!("{line}");

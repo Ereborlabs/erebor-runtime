@@ -45,6 +45,8 @@ pub struct RuntimeObservationConfig {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeAdmissionConfig {
     pub socket_path: PathBuf,
+    #[serde(default = "default_trusted_start_hook_path")]
+    pub trusted_start_hook_path: PathBuf,
     #[serde(default = "default_runtime_admission_request_bytes")]
     pub maximum_request_bytes: usize,
     #[serde(default = "default_runtime_admission_timeout_ms")]
@@ -415,12 +417,14 @@ impl NodeConfig {
         if let Some(admission) = &self.runtime_admission {
             ensure!(
                 admission.socket_path.is_absolute()
+                    && clean_absolute_path(&admission.trusted_start_hook_path)
+                    && admission.trusted_start_hook_path != Path::new("/")
                     && (1_024..=1_048_576).contains(&admission.maximum_request_bytes)
                     && (100..=30_000).contains(&admission.timeout_ms)
                     && self.kubernetes_node_name.is_some()
                     && self.container_runtime.is_some(),
                 InvalidConfigurationSnafu {
-                    reason: "runtime admission requires CRI, a Kubernetes Node name, an absolute socket path, and bounded request and timeout limits",
+                    reason: "runtime admission requires CRI, a Kubernetes Node name, absolute socket and trusted start-hook paths, and bounded request and timeout limits",
                 }
             );
         }
@@ -651,6 +655,10 @@ const fn default_runtime_admission_request_bytes() -> usize {
 
 const fn default_runtime_admission_timeout_ms() -> u64 {
     10_000
+}
+
+fn default_trusted_start_hook_path() -> PathBuf {
+    PathBuf::from("/host-hook-bin/mithril-oci-hook")
 }
 
 const fn default_authorization_clock_skew_ns() -> i64 {

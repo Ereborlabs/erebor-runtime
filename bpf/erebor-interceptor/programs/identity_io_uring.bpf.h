@@ -406,7 +406,7 @@ static __noinline int resolved_io_uring_effect_gate(
     if (canonical_path_candidate(
             &file_path, &ring->binding,
             request->actor.profile_generation_ref_id,
-            request->actor.active_role_id, scratch))
+            request->actor.active_role_id, scratch, false))
         return io_uring_application_default_or_hard(
             config, scratch, application_default_allow,
             effect_observation_reason_v1_unresolved_object);

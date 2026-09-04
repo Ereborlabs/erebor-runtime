@@ -1,14 +1,14 @@
 use std::fs;
 
-use erebor_interceptor::{AdministrativeSlotCancelResult, KernelHost};
+use erebor_interceptor::{ExecutionApprovalSlotCancelResult, KernelHost};
 use erebor_interceptor_abi::{
-    ApprovedExecSlotKeyV1, ApprovedExecSlotV1, BoundedAdministrativeArgvV1, ExternalRootClassV1,
-    Id128V1,
+    ExecutionApprovalSlotKeyV1, ExecutionApprovalSlotV1, ExternalRootClassV1, Id128V1,
 };
 use snafu::{ensure, ResultExt as _};
 use zerocopy::TryFromBytes as _;
 
 use crate::error::{AuthorizationSnafu, IoSnafu};
+use crate::identity::validate_execution_argv;
 use crate::policy::{current_boottime_ns, current_utc_ns, ResolvedAdministrativePolicyV1};
 use crate::{
     AdministrativeAuthorizationConfig, AdministrativeBindingTargetV1, AuthorizationProofOwner,
@@ -40,7 +40,7 @@ pub(crate) struct AdministrativeResolutionV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AdministrativeSlotReceiptV1 {
+pub(crate) struct ExecutionApprovalSlotReceiptV1 {
     pub proof_id: Id128V1,
     pub claim_slot_id: Id128V1,
     pub binding_id: Id128V1,
@@ -112,13 +112,7 @@ impl AdministrativeExecOwner {
                 reason: "administrative stream flags contain unallocated bits",
             }
         );
-        BoundedAdministrativeArgvV1::from_arguments(&request.argv).ok_or_else(|| {
-            AuthorizationSnafu {
-                reason: "administrative argv is empty, truncated, over-limit, or contains NUL"
-                    .to_owned(),
-            }
-            .build()
-        })?;
+        validate_execution_argv(&request.argv)?;
         let target = bindings.administrative_target(
             &request.namespace,
             &request.pod_uid,
@@ -148,7 +142,7 @@ impl AdministrativeExecOwner {
         policy: &NodePolicyGenerationOwner,
         envelope: &[u8],
         body_sha256: [u8; 32],
-    ) -> Result<AdministrativeSlotReceiptV1> {
+    ) -> Result<ExecutionApprovalSlotReceiptV1> {
         let proof = self.proof.verify_and_accept(
             envelope,
             AuthorizationTargetV1 {
@@ -183,11 +177,10 @@ impl AdministrativeExecOwner {
                 reason: "signed administrative profile differs from the live binding",
             }
         );
-        let arguments = bounded_arguments(&signed.approved_argv)?;
         let live_policy = policy.resolve_administrative_policy(
             host,
             &target,
-            &arguments[0],
+            &signed.approved_argv[0],
             &signed.approved_role_id,
         )?;
         ensure!(
@@ -197,93 +190,78 @@ impl AdministrativeExecOwner {
                 reason: "signed administrative executable or profile changed before arming",
             }
         );
-        let key = ApprovedExecSlotKeyV1 {
+        let key = ExecutionApprovalSlotKeyV1 {
             node_boot_id: self.proof.node_boot_id(),
             cgroup_binding_id: target.binding_id,
         };
-        let slot = ApprovedExecSlotV1 {
+        let slot = ExecutionApprovalSlotV1 {
             cgroup_binding_nonce: target.binding_nonce,
             container_generation: target.container_generation,
-            expected_argv: signed.approved_argv,
             resolved_executable: live_policy.kernel_executable,
-            approved_role_numeric_id: live_policy.approved_role_numeric_id,
+            target_role_numeric_id: live_policy.approved_role_numeric_id,
             expected_root_class: ExternalRootClassV1::ExternalRuntimeRoot,
             profile_generation_ref_id: live_policy.profile_generation_ref_id,
             exception_numeric_handle: live_policy.exception_numeric_handle,
             admitted_entry_rule_id: live_policy.admitted_entry_rule_id,
-            ..ApprovedExecSlotV1::default()
+            ..ExecutionApprovalSlotV1::default()
         };
-        let receipt = AdministrativeSlotReceiptV1 {
+        let receipt = ExecutionApprovalSlotReceiptV1 {
             proof_id: proof.proof_id,
             claim_slot_id: proof.claim_slot_id,
             binding_id: target.binding_id,
         };
-        self.proof.arm_administrative_slot(host, key, slot, proof)?;
+        self.proof
+            .arm_execution_approval_slot(host, key, slot, proof)?;
         Ok(receipt)
     }
 
     pub(crate) fn reconcile(&mut self, host: &KernelHost) -> Result<()> {
-        self.proof.reconcile_administrative_slots(host)
+        self.proof.reconcile_execution_approval_slots(host)
     }
 
     pub(crate) fn cancel_armed_slots(&mut self, host: &mut KernelHost) -> Result<()> {
         for raw_key in host
-            .map_keys("approved_exec_slots")
+            .map_keys("execution_approval_slots")
             .context(crate::error::InterceptorSnafu)?
         {
-            let key = ApprovedExecSlotKeyV1::try_read_from_bytes(&raw_key).map_err(|error| {
-                AuthorizationSnafu {
-                    reason: format!("administrative slot key has the wrong ABI: {error}"),
-                }
-                .build()
-            })?;
+            let key =
+                ExecutionApprovalSlotKeyV1::try_read_from_bytes(&raw_key).map_err(|error| {
+                    AuthorizationSnafu {
+                        reason: format!("execution approval slot key has the wrong ABI: {error}"),
+                    }
+                    .build()
+                })?;
             let Some(raw_slot) = host
-                .lookup_map("approved_exec_slots", &raw_key)
+                .lookup_map("execution_approval_slots", &raw_key)
                 .context(crate::error::InterceptorSnafu)?
             else {
                 continue;
             };
-            let slot = ApprovedExecSlotV1::try_read_from_bytes(&raw_slot).map_err(|error| {
-                AuthorizationSnafu {
-                    reason: format!("administrative slot has the wrong ABI: {error}"),
-                }
-                .build()
-            })?;
-            if slot.state != erebor_interceptor_abi::ApprovedExecSlotStateV1::Armed {
+            let slot =
+                ExecutionApprovalSlotV1::try_read_from_bytes(&raw_slot).map_err(|error| {
+                    AuthorizationSnafu {
+                        reason: format!("execution approval slot has the wrong ABI: {error}"),
+                    }
+                    .build()
+                })?;
+            if slot.state != erebor_interceptor_abi::ExecutionApprovalSlotStateV1::Armed {
                 continue;
             }
             ensure!(
                 matches!(
-                    host.cancel_administrative_slot(key, slot.proof_id, slot.claim_slot_id)
+                    host.cancel_execution_approval_slot(key, slot.proof_id, slot.claim_slot_id)
                         .context(crate::error::InterceptorSnafu)?,
-                    AdministrativeSlotCancelResult::Cancelled
-                        | AdministrativeSlotCancelResult::Consumed
-                        | AdministrativeSlotCancelResult::Closed
+                    ExecutionApprovalSlotCancelResult::Cancelled
+                        | ExecutionApprovalSlotCancelResult::Consumed
+                        | ExecutionApprovalSlotCancelResult::Closed
                 ),
                 AuthorizationSnafu {
-                    reason: "an armed administrative slot disappeared during cancellation",
+                    reason: "an armed execution approval slot disappeared during cancellation",
                 }
             );
         }
-        self.proof.reconcile_administrative_slots(host)
+        self.proof.reconcile_execution_approval_slots(host)
     }
-}
-
-fn bounded_arguments(argv: &BoundedAdministrativeArgvV1) -> Result<Vec<Vec<u8>>> {
-    ensure!(
-        argv.is_valid(),
-        AuthorizationSnafu {
-            reason: "signed administrative argv is not canonical",
-        }
-    );
-    let mut offset = 0;
-    let mut arguments = Vec::with_capacity(usize::from(argv.argument_count));
-    for length in &argv.argument_lengths[..usize::from(argv.argument_count)] {
-        let end = offset + usize::from(*length);
-        arguments.push(argv.argument_bytes[offset..end].to_vec());
-        offset = end;
-    }
-    Ok(arguments)
 }
 
 fn parse_id(name: &str, value: &str) -> Result<Id128V1> {

@@ -60,6 +60,7 @@ struct runtime_entry_bootstrap_state_v1 {
 #define EFFECT_GATE_PATH_SUPPLIED_V1 8
 #define EFFECT_GATE_PREPARED_EXEC_EVALUATION_V1 16
 #define EFFECT_GATE_PREPARED_EXEC_POLICY_MISS_V1 32
+#define EFFECT_GATE_MOUNT_CACHE_FAILED_V1 64
 #define MAX_CANONICAL_MOUNTS_V1 4096
 #define CANONICAL_MOUNT_CACHE_READY_V1 1
 #define CANONICAL_MOUNT_CACHE_MISS_V1 1
@@ -68,6 +69,7 @@ struct canonical_mount_cache_key_v1 {
     __u64 mount_namespace_address;
     __u64 namespace_root_mount_id_unique;
     __u64 namespace_event;
+    __u64 topology_generation;
     __u64 walk_root_mount_address;
     __u64 walk_root_dentry_address;
     __u64 root_dentry_address;
@@ -84,6 +86,7 @@ struct canonical_mount_cache_state_key_v1 {
     __u64 mount_namespace_address;
     __u64 namespace_root_mount_id_unique;
     __u64 namespace_event;
+    __u64 topology_generation;
     __u64 walk_root_mount_address;
     __u64 walk_root_dentry_address;
 };
@@ -112,6 +115,7 @@ struct canonical_mount_cache_build_state_v1 {
     __u64 mount_namespace_address;
     __u64 namespace_root_mount_id_unique;
     __u64 namespace_event;
+    __u64 topology_generation;
     __u64 walk_root_mount_address;
     __u64 walk_root_dentry_address;
     __u64 candidate_mount_address;
@@ -138,6 +142,7 @@ struct canonical_mount_path_walk_state_v1 {
     __u64 selected_mount_address;
     __u64 selected_mount_id_unique;
     __u64 namespace_event;
+    __u64 topology_generation;
     __u64 namespace_root_mount_id_unique;
     __u64 first_selected_mount_id_unique;
     __u32 component_count;
@@ -145,7 +150,7 @@ struct canonical_mount_path_walk_state_v1 {
     __u32 reached_walk_root;
     __u32 failed;
     __u32 source_ancestry_started;
-    __u32 reserved;
+    __u32 ignore_known_route;
 };
 
 struct canonical_path_view_v1 {
@@ -185,8 +190,8 @@ struct identity_scratch_v1 {
     pending_exec_v1 pending_exec;
     image_provenance_v1 image;
     process_execution_instance_v1 execution;
-    pending_administrative_match_v1 administrative_match;
-    approved_exec_slot_key_v1 administrative_slot_key;
+    pending_execution_approval_v1 execution_approval;
+    execution_approval_slot_key_v1 execution_approval_slot_key;
     entry_admission_rule_key_v1 entry_admission_key;
     process_generation_migration_key_v1 process_generation_migration_key;
     effect_decision_key_v1 effect_key;
@@ -241,15 +246,41 @@ struct identity_scratch_v1 {
         path_component_views[MAX_CANONICAL_PATH_COMPONENTS_V1 + 1];
     effect_observation_v1 observation;
     declared_entry_request_v1 declared_entry_request;
-    __u8 exec_argument[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 + 1];
-    approved_exec_argument_key_v1 administrative_argument_key;
-    __u8 zero_bytes[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1];
+    __u8 exec_argument[MAX_EXECUTION_APPROVAL_ARGUMENT_BYTES_V1 + 1];
+    execution_argv_chunk_key_v1 exec_argv_chunk_key;
+    execution_argv_chunk_key_v1 exec_argv_compare_chunk_key;
+    execution_argv_chunk_v1 exec_argv_chunk;
+    __u64 exec_argv_left_word;
+    __u64 exec_argv_right_word;
+    __u8 zero_bytes[MAX_EXECUTION_APPROVAL_ARGUMENT_BYTES_V1];
 };
 
 struct exact_inode_lifetime_key_v1 {
     __u64 inode;
     __u32 filesystem_device;
     __u32 reserved;
+};
+
+#define MAX_PROVISIONAL_EXEC_ARGUMENTS_V1 (1U << 21)
+#define MAX_PROVISIONAL_EXEC_ARGUMENT_SPAN_V1 (1U << 17)
+#define MAX_PROVISIONAL_EXEC_STREAM_STEPS_V1 (5U << 8)
+#define MAX_PROVISIONAL_EXEC_PACKED_CHUNKS_V1 (1U << 11)
+#define MAX_PROVISIONAL_EXEC_CHUNKS_V1 (1U << 16)
+#define MAX_EXECUTION_ARGV_COMPARE_WORDS_V1 (1U << 23)
+#define EXECUTION_ARGV_CHUNK_SHIFT_V1 12
+
+#define PROVISIONAL_EXEC_REQUEST_STATE_CAPTURING_V1 1
+#define PROVISIONAL_EXEC_REQUEST_STATE_CAPTURED_V1 2
+#define PROVISIONAL_EXEC_REQUEST_STATE_UNAVAILABLE_V1 3
+
+struct provisional_exec_request_v1 {
+    declared_entry_request_v1 declared_entry;
+    execution_argv_snapshot_v1 argv_snapshot;
+    __u32 syscall_flags;
+    __u8 syscall_stage;
+    __u8 state;
+    __u8 reserved[2];
+    __u64 transition_version;
 };
 
 struct {
@@ -290,9 +321,25 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
     __type(key, int);
-    __type(value, declared_entry_request_v1);
+    __type(value, struct provisional_exec_request_v1);
     __uint(map_flags, BPF_F_NO_PREALLOC);
-} pending_exec_request_paths SEC(".maps");
+} provisional_exec_requests SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, execution_argv_chunk_key_v1);
+    __type(value, execution_argv_chunk_v1);
+} execution_argv_expected_chunks SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, execution_argv_chunk_key_v1);
+    __type(value, execution_argv_chunk_v1);
+} execution_argv_provisional_chunks SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -403,24 +450,16 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
-    __type(key, approved_exec_slot_key_v1);
-    __type(value, approved_exec_slot_v1);
-} approved_exec_slots SEC(".maps");
-
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 262144);
-    __uint(map_flags, BPF_F_NO_PREALLOC);
-    __type(key, approved_exec_argument_key_v1);
-    __type(value, __u8);
-} approved_exec_arguments SEC(".maps");
+    __type(key, execution_approval_slot_key_v1);
+    __type(value, execution_approval_slot_v1);
+} execution_approval_slots SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 32768);
     __type(key, __u64);
-    __type(value, pending_administrative_match_v1);
-} pending_administrative_matches SEC(".maps");
+    __type(value, pending_execution_approval_v1);
+} pending_execution_approvals SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);

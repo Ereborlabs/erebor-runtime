@@ -7,24 +7,25 @@ use std::sync::Mutex;
 
 use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
-    ApprovedExecSlotStateV1, ApprovedExecSlotV1, AuthorityDomainStateV1,
-    BindingActivationTargetKeyV1, BindingLifecycleStateV1, CanonicalMountRootKeyV1,
-    CanonicalMountRootV1, CanonicalPathComponentV1, DeclaredEntryRequestV1, EffectDecisionKeyV1,
-    EffectDefaultKeyV1, EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExactExecutableCandidateV1,
-    ExactFileObjectKeyV1, ExactObjectBindingStateV1, ExactObjectBindingV1, ExceptionBindingStateV1,
+    AuthorityDomainStateV1, BindingActivationTargetKeyV1, BindingLifecycleStateV1,
+    CanonicalMountRootKeyV1, CanonicalMountRootV1, CanonicalPathComponentV1,
+    DeclaredEntryRequestV1, EffectDecisionKeyV1, EffectDefaultKeyV1, EntryAdmissionRuleKeyV1,
+    EntryAdmissionRuleV1, ExactExecutableCandidateV1, ExactFileObjectKeyV1,
+    ExactObjectBindingStateV1, ExactObjectBindingV1, ExceptionBindingStateV1,
     ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1, ExceptionRuntimeStateKeyV1,
-    ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, Id128V1,
-    IoUringRequestStateV1, IoUringRingStateV1, KernelEffectFamilyV1, KernelEffectOperationV1,
-    MountSecurityViewStateV1, MountTopologyStateV1, NetworkDestinationDecisionKeyV1,
-    NetworkResponseFloorKeyV1, NetworkResponseFloorV1, NetworkResponseScopeV1, PathGraphStateKeyV1,
-    PathGraphTerminalV1, PathGraphTransitionKeyV1, PathGraphTransitionV1, PathTreeDenyKeyV1,
-    PendingAdministrativeMatchV1, PendingExecStateV1, PendingExecV1, PhysicalDecisionKindV1,
-    PhysicalDecisionV1, PolicyActivationProbeMapKindV1, PolicyActivationProbeV1,
-    PolicyGenerationModeV1, PolicyGenerationStateV1, ProcessGenerationMigrationKeyV1,
-    ProcessGenerationMigrationV1, ProcessSecurityStateKindV1, ProcessSecurityStateV1,
-    ProfileGenerationDescriptorV1, ReferenceTombstoneStateV1, TaskReferenceTombstoneV1,
-    MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_CANONICAL_ROUTE_STATES_V1,
-    MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
+    ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExecutionApprovalSlotStateV1,
+    ExecutionApprovalSlotV1, ExecutionSetBindingStateV1, Id128V1, IoUringRequestStateV1,
+    IoUringRingStateV1, KernelEffectFamilyV1, KernelEffectOperationV1,
+    MountReconciliationProposalV1, MountSecurityViewStateV1, MountTopologyStateV1,
+    NetworkDestinationDecisionKeyV1, NetworkResponseFloorKeyV1, NetworkResponseFloorV1,
+    NetworkResponseScopeV1, PathGraphStateKeyV1, PathGraphTerminalV1, PathGraphTransitionKeyV1,
+    PathGraphTransitionV1, PathTreeDenyKeyV1, PendingExecStateV1, PendingExecV1,
+    PendingExecutionApprovalV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
+    PolicyActivationProbeMapKindV1, PolicyActivationProbeV1, PolicyGenerationModeV1,
+    PolicyGenerationStateV1, ProcessGenerationMigrationKeyV1, ProcessGenerationMigrationV1,
+    ProcessSecurityStateKindV1, ProcessSecurityStateV1, ProfileGenerationDescriptorV1,
+    ReferenceTombstoneStateV1, TaskReferenceTombstoneV1, MAX_CANONICAL_COMPONENT_BYTES_V1,
+    MAX_CANONICAL_ROUTE_STATES_V1, MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
 };
 use mithril_control::{
     canonical_path_components, AntiRollbackStore, CanonicalPathGraphV1, CompiledOperationV1,
@@ -791,13 +792,14 @@ impl NodePolicyGenerationOwner {
         S: Into<String>,
     {
         let measured_exact_objects = Self::resolve_test_exact_objects(config, objects)?;
+        let measured_mount_routes = Self::resolve_test_mount_routes(host, &measured_exact_objects)?;
         Self::install(
             config,
             host,
             node_boot_id,
             label_epoch,
             measured_exact_objects,
-            Vec::new(),
+            measured_mount_routes,
             BTreeMap::new(),
             BTreeMap::new(),
         )
@@ -817,6 +819,7 @@ impl NodePolicyGenerationOwner {
         S: Into<String>,
     {
         let measured_exact_objects = Self::resolve_test_exact_objects(config, objects)?;
+        let measured_mount_routes = self.measured_mount_routes;
         let generation_semantics = self.generation_semantics;
         Self::install(
             config,
@@ -824,7 +827,7 @@ impl NodePolicyGenerationOwner {
             node_boot_id,
             label_epoch,
             measured_exact_objects,
-            Vec::new(),
+            measured_mount_routes,
             self.mount_view_handles,
             generation_semantics,
         )
@@ -1046,6 +1049,34 @@ impl NodePolicyGenerationOwner {
             validate_mount_view(&view, root, is_retained)?;
             mount_view_is_retained.insert(root.mount_namespace_inode, is_retained);
             mount_view_handles.insert(root.mount_namespace_inode, view);
+        }
+        for route in &measured_mount_routes {
+            let mount_namespace_inode = route.route.mount_namespace_inode;
+            if let Some(existing) =
+                mount_view_root_pids.insert(mount_namespace_inode, route.mount_view_root_pid)
+            {
+                ensure!(
+                    existing == route.mount_view_root_pid,
+                    IdentityStateSnafu {
+                        reason: "one mount security view has multiple live root processes",
+                    }
+                );
+                continue;
+            }
+            let retained = retained_mount_views.remove(&mount_namespace_inode);
+            let view = match retained {
+                Some(view) => view,
+                None => {
+                    crate::exact_object::ExactFileObjectView::acquire(route.mount_view_root_pid)?
+                }
+            };
+            ensure!(
+                view.mount_namespace_inode()? == mount_namespace_inode,
+                IdentityStateSnafu {
+                    reason: "held mount namespace differs from the configured route view",
+                }
+            );
+            mount_view_handles.insert(mount_namespace_inode, view);
         }
         install_global_mount_barrier(host, &mount_roots)?;
         for generation in generations.values() {
@@ -1516,6 +1547,43 @@ impl NodePolicyGenerationOwner {
             .collect()
     }
 
+    #[cfg(feature = "test-support")]
+    fn resolve_test_mount_routes(
+        host: &KernelHost,
+        objects: &[MeasuredExactObjectV1],
+    ) -> Result<Vec<MeasuredMountRouteV1>> {
+        let mut targets = BTreeMap::<&str, u32>::new();
+        for measured in objects {
+            let root_pid = measured.object.mount_view_root_pid;
+            match targets.insert(measured.binding_id.as_str(), root_pid) {
+                Some(existing) => ensure!(
+                    existing == root_pid,
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "test binding `{}` has more than one live mount view",
+                            measured.binding_id
+                        ),
+                    }
+                ),
+                None => {}
+            }
+        }
+        let topology_generation = Self::current_mount_topology_generation(host)?;
+        let mut measured_routes = Vec::new();
+        for (binding_id, root_pid) in targets {
+            let view = crate::exact_object::ExactFileObjectView::acquire(root_pid)?;
+            measured_routes.extend(view.mount_root_routes()?.into_iter().map(|route| {
+                MeasuredMountRouteV1 {
+                    binding_id: binding_id.to_owned(),
+                    mount_view_root_pid: root_pid,
+                    mount_topology_generation: topology_generation,
+                    route,
+                }
+            }));
+        }
+        Ok(measured_routes)
+    }
+
     fn current_mount_topology_generation(host: &KernelHost) -> Result<u64> {
         let key = 0_u32.to_ne_bytes();
         let Some(bytes) = host
@@ -1773,6 +1841,7 @@ impl NodePolicyGenerationOwner {
     }
 
     pub fn reconcile_policy_lifecycle(&self, host: &mut KernelHost) -> Result<bool> {
+        let mount_views_reconciled = self.reconcile_mount_views(host)?;
         self.exception_authority
             .lock()
             .map_err(|_| {
@@ -1783,6 +1852,177 @@ impl NodePolicyGenerationOwner {
             })?
             .reconcile(host, current_utc_ns()?)?;
         reconcile_generation_retirement(host, self.node_boot_id, self.label_epoch)?;
+        Ok(mount_views_reconciled)
+    }
+
+    fn reconcile_mount_views(&self, host: &mut KernelHost) -> Result<bool> {
+        let global_key = 0_u32.to_ne_bytes();
+        let global_epoch = mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)?;
+        let global_clean = mount_epoch_from(host, "mount_global_clean_epoch", &global_key)?;
+        let global_pending = mount_epoch_from(host, "mount_global_pending_mutations", &global_key)?;
+        ensure!(
+            global_epoch > 0 && global_clean <= global_epoch,
+            IdentityStateSnafu {
+                reason: "global mount reconciliation state is invalid",
+            }
+        );
+        if global_pending != 0 {
+            return Ok(false);
+        }
+
+        let configured_views = self
+            .dynamic_rows
+            .get("mount_security_views")
+            .cloned()
+            .unwrap_or_default();
+        let held_views = self
+            .mount_view_handles
+            .keys()
+            .map(|mount_namespace_inode| mount_namespace_inode.to_ne_bytes().to_vec())
+            .collect::<BTreeSet<_>>();
+        ensure!(
+            configured_views == held_views,
+            IdentityStateSnafu {
+                reason: "mount reconciliation has no held view for one configured namespace",
+            }
+        );
+
+        let mut snapshots = Vec::new();
+        for (mount_namespace_inode, view) in &self.mount_view_handles {
+            ensure!(
+                view.mount_namespace_inode()? == *mount_namespace_inode,
+                IdentityStateSnafu {
+                    reason: "a held mount view changed namespaces during reconciliation",
+                }
+            );
+            let routes = view.mount_root_routes()?;
+            let snapshot_digests = routes
+                .iter()
+                .map(|route| route.mount_snapshot_digest_id)
+                .collect::<BTreeSet<_>>();
+            let Some(snapshot_digest_id) = snapshot_digests.iter().next().copied() else {
+                return IdentityStateSnafu {
+                    reason: "a configured mount view has no stable mount snapshot".to_owned(),
+                }
+                .fail();
+            };
+            ensure!(
+                snapshot_digests.len() == 1 && snapshot_digest_id != 0,
+                IdentityStateSnafu {
+                    reason: "a configured mount view has inconsistent mount snapshots",
+                }
+            );
+            snapshots.push((*mount_namespace_inode, snapshot_digest_id));
+        }
+
+        if mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)? != global_epoch
+            || mount_epoch_from(host, "mount_global_pending_mutations", &global_key)? != 0
+        {
+            return Ok(false);
+        }
+
+        for (mount_namespace_inode, snapshot_digest_id) in snapshots {
+            let key = mount_namespace_inode.to_ne_bytes();
+            let view_bytes = host
+                .lookup_map("mount_security_views", &key)
+                .context(InterceptorSnafu)?
+                .context(IdentityStateSnafu {
+                    reason: "configured mount security view disappeared during reconciliation",
+                })?;
+            let view =
+                read_abi_value::<MountSecurityViewStateV1>(&view_bytes, "mount security view")?;
+            let mount_epoch = mount_epoch_from(host, "mount_mutation_epochs", &key)?;
+            ensure!(
+                mount_epoch <= global_epoch && view.topology_generation <= global_epoch,
+                IdentityStateSnafu {
+                    reason: "mount reconciliation observed a future topology generation",
+                }
+            );
+            if view.state == MountTopologyStateV1::Clean && view.topology_generation == global_epoch
+            {
+                ensure!(
+                    view.snapshot_digest_id == snapshot_digest_id
+                        && mount_epoch == global_epoch
+                        && view.pending_mutations == 0,
+                    IdentityStateSnafu {
+                        reason: "current clean mount view differs from its held snapshot",
+                    }
+                );
+                continue;
+            }
+            ensure!(
+                (view.state == MountTopologyStateV1::Dirty
+                    || (view.state == MountTopologyStateV1::Clean
+                        && view.topology_generation < global_epoch))
+                    && view.pending_mutations == 0
+                    && view.transition_version != u64::MAX,
+                IdentityStateSnafu {
+                    reason: "mount view cannot accept a current reconciliation proposal",
+                }
+            );
+            let proposal = MountReconciliationProposalV1 {
+                topology_generation: global_epoch,
+                snapshot_digest_id,
+                expected_transition_version: view.transition_version,
+                transition_version: view.transition_version + 1,
+            };
+            host.update_map("mount_reconciliation_proposals", &key, proposal.as_bytes())
+                .context(InterceptorSnafu)?;
+            ensure!(
+                host.lookup_map("mount_reconciliation_proposals", &key)
+                    .context(InterceptorSnafu)?
+                    .as_deref()
+                    == Some(proposal.as_bytes()),
+                IdentityStateSnafu {
+                    reason: "mount reconciliation proposal readback failed",
+                }
+            );
+            if !host
+                .apply_mount_reconciliation_proposal(mount_namespace_inode)
+                .context(InterceptorSnafu)?
+            {
+                return Ok(false);
+            }
+            let committed_bytes = host
+                .lookup_map("mount_security_views", &key)
+                .context(InterceptorSnafu)?
+                .context(IdentityStateSnafu {
+                    reason: "committed mount security view disappeared during reconciliation",
+                })?;
+            let committed = read_abi_value::<MountSecurityViewStateV1>(
+                &committed_bytes,
+                "committed mount security view",
+            )?;
+            ensure!(
+                committed.state == MountTopologyStateV1::Clean
+                    && committed.topology_generation == global_epoch
+                    && committed.snapshot_digest_id == snapshot_digest_id
+                    && committed.transition_version == proposal.transition_version
+                    && committed.pending_mutations == 0
+                    && mount_epoch_from(host, "mount_mutation_epochs", &key)? == global_epoch,
+                IdentityStateSnafu {
+                    reason: "mount reconciliation commit readback failed",
+                }
+            );
+        }
+
+        if mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)? != global_epoch
+            || mount_epoch_from(host, "mount_global_pending_mutations", &global_key)? != 0
+        {
+            return Ok(false);
+        }
+        host.update_map(
+            "mount_global_clean_epoch",
+            &global_key,
+            &global_epoch.to_ne_bytes(),
+        )
+        .context(InterceptorSnafu)?;
+        ensure!(
+            mount_epoch_from(host, "mount_global_clean_epoch", &global_key)? == global_epoch,
+            IdentityStateSnafu {
+                reason: "global mount clean epoch readback failed",
+            }
+        );
         Ok(true)
     }
 
@@ -3029,10 +3269,10 @@ impl LoweredGeneration {
             ("mount_security_views", &self.mount_views),
             ("mount_mutation_epochs", &self.mount_epochs),
             ("mount_security_view_locks", &self.mount_locks),
-            ("canonical_mount_roots", &self.mount_roots),
         ] {
             install_missing_rows(host, map, rows)?;
         }
+        install_rows(host, "canonical_mount_roots", &self.mount_roots)?;
         Ok(())
     }
 }
@@ -4019,16 +4259,16 @@ fn generation_has_retained_authority(host: &KernelHost, generation: u64) -> Resu
         }
     }
     for key in host
-        .map_keys("pending_administrative_matches")
+        .map_keys("pending_execution_approvals")
         .context(InterceptorSnafu)?
     {
         let Some(value) = host
-            .lookup_map("pending_administrative_matches", &key)
+            .lookup_map("pending_execution_approvals", &key)
             .context(InterceptorSnafu)?
         else {
             continue;
         };
-        if read_abi_value::<PendingAdministrativeMatchV1>(&value, "pending administrative match")?
+        if read_abi_value::<PendingExecutionApprovalV1>(&value, "pending execution approval")?
             .profile_generation_ref_id
             == generation
         {
@@ -4036,18 +4276,21 @@ fn generation_has_retained_authority(host: &KernelHost, generation: u64) -> Resu
         }
     }
     for key in host
-        .map_keys("approved_exec_slots")
+        .map_keys("execution_approval_slots")
         .context(InterceptorSnafu)?
     {
         let Some(value) = host
-            .lookup_map("approved_exec_slots", &key)
+            .lookup_map("execution_approval_slots", &key)
             .context(InterceptorSnafu)?
         else {
             continue;
         };
-        let slot = read_abi_value::<ApprovedExecSlotV1>(&value, "approved exec slot")?;
+        let slot = read_abi_value::<ExecutionApprovalSlotV1>(&value, "execution approval slot")?;
         if slot.profile_generation_ref_id == generation
-            && slot.state == ApprovedExecSlotStateV1::Armed
+            && matches!(
+                slot.state,
+                ExecutionApprovalSlotStateV1::Armed | ExecutionApprovalSlotStateV1::Reserved
+            )
         {
             return Ok(true);
         }
@@ -4255,13 +4498,11 @@ fn delete_process_generation_migrations(host: &KernelHost, generation: u64) -> R
 fn install_rows(host: &KernelHost, map: &str, rows: &BTreeMap<Vec<u8>, Vec<u8>>) -> Result<()> {
     for (key, value) in rows {
         host.update_map(map, key, value).context(InterceptorSnafu)?;
+        let actual = host.lookup_map(map, key).context(InterceptorSnafu)?;
         ensure!(
-            host.lookup_map(map, key)
-                .context(InterceptorSnafu)?
-                .as_ref()
-                == Some(value),
+            actual.as_ref() == Some(value),
             IdentityStateSnafu {
-                reason: format!("candidate `{map}` row readback failed"),
+                reason: row_readback_failure("install", map, key, value, actual.as_deref()),
             }
         );
     }
@@ -4270,17 +4511,52 @@ fn install_rows(host: &KernelHost, map: &str, rows: &BTreeMap<Vec<u8>, Vec<u8>>)
 
 fn verify_rows(host: &KernelHost, map: &str, rows: &BTreeMap<Vec<u8>, Vec<u8>>) -> Result<()> {
     for (key, value) in rows {
+        let actual = host.lookup_map(map, key).context(InterceptorSnafu)?;
         ensure!(
-            host.lookup_map(map, key)
-                .context(InterceptorSnafu)?
-                .as_ref()
-                == Some(value),
+            actual.as_ref() == Some(value),
             IdentityStateSnafu {
-                reason: format!("candidate `{map}` row readback failed"),
+                reason: row_readback_failure("verification", map, key, value, actual.as_deref()),
             }
         );
     }
     Ok(())
+}
+
+fn row_readback_failure(
+    stage: &str,
+    map: &str,
+    key_bytes: &[u8],
+    expected_bytes: &[u8],
+    actual_bytes: Option<&[u8]>,
+) -> String {
+    if map == "canonical_mount_roots" {
+        let key = CanonicalMountRootKeyV1::try_read_from_bytes(key_bytes);
+        let expected = CanonicalMountRootV1::try_read_from_bytes(expected_bytes);
+        let actual =
+            actual_bytes.and_then(|bytes| CanonicalMountRootV1::try_read_from_bytes(bytes).ok());
+        if let (Ok(key), Ok(expected)) = (key, expected) {
+            return format!(
+                "candidate `{map}` row {stage} readback failed: profile_generation_ref_id={}, binding_id={:016x}{:016x}, topology_generation={}, root_inode={}, mount_namespace_inode={}, filesystem_device={}, expected_selected_mount_id_unique={}, expected_snapshot_digest_id={}, expected_graph_prefix_state_ids={:?}, expected_graph_prefix_state_count={}, actual={actual:?}",
+                key.profile_generation_ref_id,
+                key.binding_id.high,
+                key.binding_id.low,
+                key.topology_generation,
+                key.root_inode,
+                key.mount_namespace_inode,
+                key.filesystem_device,
+                expected.selected_mount_id_unique,
+                expected.snapshot_digest_id,
+                &expected.graph_prefix_state_ids[..expected.graph_prefix_state_count as usize],
+                expected.graph_prefix_state_count,
+            );
+        }
+    }
+    format!(
+        "candidate `{map}` row {stage} readback failed: key={}, expected={}, actual={}",
+        hex::encode(key_bytes),
+        hex::encode(expected_bytes),
+        actual_bytes.map_or_else(|| "missing".to_owned(), hex::encode),
+    )
 }
 
 fn install_exception_rows(
@@ -6794,6 +7070,22 @@ mod tests {
             1_800_000_000_000_000_000,
             100,
         )?;
+        let refreshed_routes =
+            [protected.clone(), alias.clone(), unrelated.clone()].map(|mut measured| {
+                measured.route.mount_snapshot_digest_id = 16;
+                measured
+            });
+        let refreshed = LoweredGeneration::for_binding_with_mount_routes(
+            &artifact,
+            &binding,
+            std::slice::from_ref(&object),
+            &refreshed_routes,
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
         let composite_handles = LoweredGeneration::composite_handles(&artifact);
         let role_handles = handles(
             artifact
@@ -6824,6 +7116,23 @@ mod tests {
         assert_eq!(baseline.path_wildcards, routed.path_wildcards);
         assert_eq!(baseline.path_terminals, routed.path_terminals);
         assert_eq!(baseline.path_tree_denials, routed.path_tree_denials);
+        assert_eq!(routed.descriptor, refreshed.descriptor);
+        assert_eq!(routed.path_exact, refreshed.path_exact);
+        assert_eq!(routed.path_wildcards, refreshed.path_wildcards);
+        assert_eq!(routed.path_terminals, refreshed.path_terminals);
+        assert_eq!(routed.path_tree_denials, refreshed.path_tree_denials);
+        assert_eq!(
+            routed.mount_roots.keys().collect::<Vec<_>>(),
+            refreshed.mount_roots.keys().collect::<Vec<_>>()
+        );
+        assert_ne!(routed.mount_roots, refreshed.mount_roots);
+        let refreshed_digests = refreshed
+            .mount_roots
+            .values()
+            .filter_map(|value| CanonicalMountRootV1::read_from_bytes(value).ok())
+            .map(|root| root.snapshot_digest_id)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(refreshed_digests, BTreeSet::from([16, 60]));
         assert_eq!(first.mount_roots, second.mount_roots);
         assert_eq!(first.mount_roots.len(), 2);
         let roots = first

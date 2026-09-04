@@ -116,6 +116,7 @@ enum HookStageV1 {
     StageRuntimeFacts,
     PrepareContainer,
     PrepareDeclaredEntries,
+    FinalizeContainer,
 }
 
 #[derive(Deserialize)]
@@ -445,7 +446,9 @@ impl OciHookOwner {
                 }
                 Some(Self::process_cgroup_path(state.pid, cgroup_root)?)
             }
-            HookStageV1::PrepareContainer | HookStageV1::PrepareDeclaredEntries => None,
+            HookStageV1::PrepareContainer
+            | HookStageV1::PrepareDeclaredEntries
+            | HookStageV1::FinalizeContainer => None,
         };
         Self::request_with_cgroup(stage, state, cgroup_path)
     }
@@ -480,6 +483,19 @@ impl OciHookOwner {
                 None,
                 Some(state.bundle),
             ),
+            HookStageV1::FinalizeContainer => {
+                if state.pid == 0 {
+                    return Err(invalid_data(
+                        "OCI runtime finalization has no initial process",
+                    ));
+                }
+                (
+                    RuntimeAdmissionOperationV1::FinalizeContainer,
+                    Some(state.pid),
+                    None,
+                    Some(state.bundle),
+                )
+            }
         };
         Ok(RuntimeAdmissionRequestV1 {
             operation,
@@ -612,6 +628,15 @@ mod tests {
                 "/run/containerd/io.containerd.runtime.v2.task/k8s.io/container-a"
             ))
         );
+
+        let finalized =
+            OciHookOwner::request_with_cgroup(HookStageV1::FinalizeContainer, state()?, None)?;
+        assert_eq!(
+            finalized.operation,
+            RuntimeAdmissionOperationV1::FinalizeContainer
+        );
+        assert_eq!(finalized.initial_pid, Some(42));
+        assert_eq!(finalized.oci_bundle, entries.oci_bundle);
         Ok(())
     }
 }

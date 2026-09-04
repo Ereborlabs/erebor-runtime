@@ -10,6 +10,7 @@ use crate::runtime_gate::{
 use serde_json::{Map, Value};
 
 const MAXIMUM_OWNED_FILE_BYTES: u64 = 536_870_912;
+pub const START_HOOK_CONTAINER_PATH: &str = "/run/mithril-start-hook";
 
 pub struct RuntimeIntegrationInstallV1 {
     pub owner: String,
@@ -173,7 +174,7 @@ impl RuntimeIntegrationOwner {
         )?;
         self.read_back_owned(&fragment, self.fragment().as_bytes())?;
         self.read_back_marker(&base_spec)?;
-        OciBaseSpecOwner::read_back(
+        OciBaseSpecOwner::verify(
             &fs::read(base_spec)?,
             &self.hook_host_path(),
             &self.recovery_host_path(),
@@ -701,9 +702,11 @@ impl OciBaseSpecOwner {
     ) -> io::Result<Vec<u8>> {
         let mut spec: Value = serde_json::from_slice(default_spec)
             .map_err(|error| Self::invalid(&format!("OCI base spec is invalid: {error}")))?;
-        let hooks = spec
+        let spec_object = spec
             .as_object_mut()
-            .ok_or_else(|| Self::invalid("OCI base spec is not an object"))?
+            .ok_or_else(|| Self::invalid("OCI base spec is not an object"))?;
+        Self::append_start_bridge_mounts(spec_object, hook_path, socket)?;
+        let hooks = spec_object
             .entry("hooks")
             .or_insert_with(|| serde_json::json!({}))
             .as_object_mut()
@@ -745,11 +748,24 @@ impl OciBaseSpecOwner {
                 log_filter,
             )],
         )?;
+        Self::prepend_hooks(
+            hooks,
+            "startContainer",
+            [Self::hook_document(
+                "finalize-container",
+                &Self::start_hook_container_path(socket)?,
+                recovery_manifest,
+                socket,
+                timeout_ms,
+                runtime_timeout_seconds,
+                log_filter,
+            )],
+        )?;
         serde_json::to_vec(&spec)
             .map_err(|error| Self::invalid(&format!("OCI base spec failed: {error}")))
     }
 
-    fn read_back(
+    pub fn verify(
         base_spec: &[u8],
         hook_path: &Path,
         recovery_manifest: &Path,
@@ -770,7 +786,11 @@ impl OciBaseSpecOwner {
             log_filter,
         )?)
         .map_err(|error| Self::invalid(&format!("OCI base spec is invalid: {error}")))?;
-        for (stage, count) in [("createRuntime", 2), ("createContainer", 1)] {
+        for (stage, count) in [
+            ("createRuntime", 2),
+            ("createContainer", 1),
+            ("startContainer", 1),
+        ] {
             let actual = actual["hooks"][stage]
                 .as_array()
                 .ok_or_else(|| Self::invalid("OCI base spec hook stage is missing"))?;
@@ -781,7 +801,67 @@ impl OciBaseSpecOwner {
                 return Err(Self::invalid("OCI base spec hook readback failed"));
             }
         }
+        let actual_mounts = actual["mounts"]
+            .as_array()
+            .ok_or_else(|| Self::invalid("OCI base spec mount list is missing"))?;
+        let expected_mounts = expected["mounts"]
+            .as_array()
+            .ok_or_else(|| Self::invalid("expected OCI bridge mounts are missing"))?;
+        if !expected_mounts
+            .iter()
+            .all(|expected| actual_mounts.contains(expected))
+        {
+            return Err(Self::invalid("OCI start bridge mount readback failed"));
+        }
         Ok(())
+    }
+
+    fn append_start_bridge_mounts(
+        spec: &mut Map<String, Value>,
+        hook_path: &Path,
+        socket: &Path,
+    ) -> io::Result<()> {
+        let socket_directory = socket
+            .parent()
+            .filter(|path| path != &Path::new("/"))
+            .ok_or_else(|| Self::invalid("runtime admission socket has no bridge directory"))?;
+        let hook_destination = Self::start_hook_container_path(socket)?;
+        let mounts = spec
+            .entry("mounts")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .ok_or_else(|| Self::invalid("OCI base spec mounts are not an array"))?;
+        for destination in [socket_directory, hook_destination.as_path()] {
+            if mounts
+                .iter()
+                .any(|mount| mount["destination"].as_str() == destination.to_str())
+            {
+                return Err(Self::invalid(
+                    "OCI base spec already owns a start bridge path",
+                ));
+            }
+        }
+        mounts.push(serde_json::json!({
+            "destination": socket_directory,
+            "type": "bind",
+            "source": socket_directory,
+            "options": ["rbind", "ro", "nosuid", "nodev"]
+        }));
+        mounts.push(serde_json::json!({
+            "destination": hook_destination,
+            "type": "bind",
+            "source": hook_path,
+            "options": ["bind", "ro", "nosuid", "nodev"]
+        }));
+        Ok(())
+    }
+
+    pub fn start_hook_container_path(socket: &Path) -> io::Result<PathBuf> {
+        socket
+            .parent()
+            .filter(|path| path != &Path::new("/"))
+            .map(|_path| PathBuf::from(START_HOOK_CONTAINER_PATH))
+            .ok_or_else(|| Self::invalid("runtime admission socket has no bridge directory"))
     }
 
     fn hook_document(
@@ -908,6 +988,22 @@ mod tests {
             base["hooks"]["createContainer"].as_array().map(Vec::len),
             Some(1)
         );
+        assert_eq!(
+            base["hooks"]["startContainer"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            base["hooks"]["startContainer"][0]["path"],
+            "/run/mithril-start-hook"
+        );
+        assert!(base["mounts"].as_array().is_some_and(|mounts| {
+            mounts.iter().any(|mount| {
+                mount["source"] == "/run/mithril" && mount["destination"] == "/run/mithril"
+            }) && mounts.iter().any(|mount| {
+                mount["source"] == "/usr/libexec/oci/hooks.d/mithril-oci-hook"
+                    && mount["destination"] == "/run/mithril-start-hook"
+            })
+        }));
         let recovery: Value =
             serde_json::from_slice(&fs::read(containerd_mount.join("mithril-recovery.json"))?)?;
         assert_eq!(recovery["entries"].as_array().map(Vec::len), Some(2));

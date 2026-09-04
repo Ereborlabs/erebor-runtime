@@ -25,9 +25,75 @@ typedef __s32 int32_t;
 
 #define MAX_EXEC_CANDIDATES_V1 8
 
-#define MAX_ADMINISTRATIVE_ARGUMENTS_V1 256
+#define MAX_EXECUTION_APPROVAL_ARGUMENT_BYTES_V1 4096
 
-#define MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 4096
+#define EXECUTION_ARGV_CHUNK_BYTES_V1 4096
+
+#define EXECUTION_ARGV_CHUNK_TERMINAL_V1 1
+
+#define EXECUTION_APPROVAL_TRACE_STAGE_EXECVE_ENTRY_V1 2
+
+#define EXECUTION_APPROVAL_TRACE_STAGE_EXECVEAT_ENTRY_V1 3
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PENDING_MISSING_V1 (1 << 0)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PENDING_STATE_V1 (1 << 1)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_TASK_COOKIE_V1 (1 << 2)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_ATTEMPT_SEQUENCE_V1 (1 << 3)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PROFILE_GENERATION_V1 (1 << 4)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_SLOT_MISSING_V1 (1 << 5)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_SLOT_IDENTITY_V1 (1 << 6)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_SLOT_STATE_V1 (1 << 7)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_SLOT_GUARD_V1 (1 << 8)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PROOF_V1 (1 << 9)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_CLAIM_SLOT_V1 (1 << 10)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_TARGET_ROLE_V1 (1 << 11)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_EXPECTED_EXECUTABLE_V1 (1 << 12)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_OBSERVED_UNRESOLVED_V1 (1 << 13)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_OBSERVED_EXECUTABLE_V1 (1 << 14)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_LABEL_V1 (1 << 15)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_PROCESS_V1 (1 << 16)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ENTRY_V1 (1 << 17)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_RUNTIME_LABEL_V1 (1 << 18)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_BINDING_LABEL_V1 (1 << 19)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_PROCESS_STATE_V1 (1 << 20)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_TRANSITION_GUARD_V1 (1 << 21)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_EXEC_GUARD_V1 (1 << 22)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_CLASSIFICATION_V1 (1 << 23)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ROOT_CLASS_V1 (1 << 24)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_PURPOSE_V1 (1 << 25)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ROLE_V1 (1 << 26)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_SLOT_GUARD_V1 (1 << 27)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ARGV_V1 (1 << 28)
+
+#define EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_MAP_UPDATE_V1 (1 << 29)
 
 #define TASK_REFERENCE_ENTRY_V1 (1 << 0)
 
@@ -71,22 +137,24 @@ typedef enum binding_lifecycle_state_v1 binding_lifecycle_state_v1;
 typedef uint8_t binding_lifecycle_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
-enum approved_exec_slot_state_v1
+enum execution_approval_slot_state_v1
 #if __STDC_VERSION__ >= 202311L
   : uint64_t
 #endif // __STDC_VERSION__ >= 202311L
  {
-  approved_exec_slot_state_v1_unknown = 0,
-  approved_exec_slot_state_v1_armed = 1,
-  approved_exec_slot_state_v1_consumed = 2,
-  approved_exec_slot_state_v1_expired = 3,
-  approved_exec_slot_state_v1_cancelled = 4,
-  approved_exec_slot_state_v1_corrupt = 5,
+  execution_approval_slot_state_v1_unknown = 0,
+  execution_approval_slot_state_v1_armed = 1,
+  execution_approval_slot_state_v1_consumed = 2,
+  execution_approval_slot_state_v1_expired = 3,
+  execution_approval_slot_state_v1_cancelled = 4,
+  execution_approval_slot_state_v1_corrupt = 5,
+  execution_approval_slot_state_v1_reserved = 6,
+  execution_approval_slot_state_v1_tampered = 7,
 };
 #if __STDC_VERSION__ >= 202311L
-typedef enum approved_exec_slot_state_v1 approved_exec_slot_state_v1;
+typedef enum execution_approval_slot_state_v1 execution_approval_slot_state_v1;
 #else
-typedef uint64_t approved_exec_slot_state_v1;
+typedef uint64_t execution_approval_slot_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum external_root_class_v1
@@ -292,6 +360,7 @@ enum effect_observation_reason_v1
   effect_observation_reason_v1_prepared_runtime_infrastructure = 13,
   effect_observation_reason_v1_application_default_allow = 14,
   effect_observation_reason_v1_runtime_entry_infrastructure = 15,
+  effect_observation_reason_v1_execution_approval_verification_failed = 16,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum effect_observation_reason_v1 effect_observation_reason_v1;
@@ -307,6 +376,7 @@ enum effect_physical_result_v1
   effect_physical_result_v1_unknown_after_pre_effect = 0,
   effect_physical_result_v1_denied_before_effect = 1,
   effect_physical_result_v1_packet_dropped_after_rewrite = 2,
+  effect_physical_result_v1_termination_queued_before_user_mode = 3,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum effect_physical_result_v1 effect_physical_result_v1;
@@ -733,19 +803,22 @@ typedef enum pending_exec_state_v1 pending_exec_state_v1;
 typedef uint8_t pending_exec_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
-enum pending_administrative_match_state_v1
+enum pending_execution_approval_state_v1
 #if __STDC_VERSION__ >= 202311L
   : uint8_t
 #endif // __STDC_VERSION__ >= 202311L
  {
-  pending_administrative_match_state_v1_unknown = 0,
-  pending_administrative_match_state_v1_arguments_matched = 1,
-  pending_administrative_match_state_v1_slot_consumed = 2,
+  pending_execution_approval_state_v1_unknown = 0,
+  pending_execution_approval_state_v1_arguments_matched = 1,
+  pending_execution_approval_state_v1_slot_reserved = 2,
+  pending_execution_approval_state_v1_kernel_argv_verified = 3,
+  pending_execution_approval_state_v1_slot_consumed = 4,
+  pending_execution_approval_state_v1_tampered = 5,
 };
 #if __STDC_VERSION__ >= 202311L
-typedef enum pending_administrative_match_state_v1 pending_administrative_match_state_v1;
+typedef enum pending_execution_approval_state_v1 pending_execution_approval_state_v1;
 #else
-typedef uint8_t pending_administrative_match_state_v1;
+typedef uint8_t pending_execution_approval_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum physical_decision_kind_v1
@@ -774,7 +847,7 @@ enum policy_activation_probe_map_kind_v1
   policy_activation_probe_map_kind_v1_ipc_relationship = 3,
   policy_activation_probe_map_kind_v1_device_effect = 4,
   policy_activation_probe_map_kind_v1_process_control = 5,
-  policy_activation_probe_map_kind_v1_administrative_slot_cancel = 6,
+  policy_activation_probe_map_kind_v1_execution_approval_slot_cancel = 6,
   policy_activation_probe_map_kind_v1_mount_reconciliation = 7,
   policy_activation_probe_map_kind_v1_network_destination = 8,
 };
@@ -982,25 +1055,30 @@ typedef struct canonical_path_component_v1 {
   uint8_t bytes[CANONICAL_COMPONENT_STORAGE_BYTES_V1];
 } canonical_path_component_v1;
 
-typedef struct approved_exec_argument_key_v1 {
-  struct id128_v1 proof_id;
-  uint16_t argument_index;
-  uint16_t argument_length;
-  uint8_t argument_bytes[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1];
-  uint8_t reserved[4];
-} approved_exec_argument_key_v1;
+typedef struct execution_argv_chunk_key_v1 {
+  struct id128_v1 snapshot_id;
+  uint32_t chunk_index;
+  uint32_t reserved;
+} execution_argv_chunk_key_v1;
 
-typedef struct approved_exec_slot_key_v1 {
+typedef struct execution_argv_chunk_v1 {
+  uint32_t length;
+  uint32_t flags;
+  uint8_t bytes[EXECUTION_ARGV_CHUNK_BYTES_V1];
+} execution_argv_chunk_v1;
+
+typedef struct execution_argv_snapshot_v1 {
+  struct id128_v1 snapshot_id;
+  uint64_t argument_count;
+  uint64_t total_argument_span;
+  uint32_t chunk_count;
+  uint32_t reserved;
+} execution_argv_snapshot_v1;
+
+typedef struct execution_approval_slot_key_v1 {
   struct id128_v1 node_boot_id;
   struct id128_v1 cgroup_binding_id;
-} approved_exec_slot_key_v1;
-
-typedef struct bounded_administrative_argv_v1 {
-  uint16_t argument_count;
-  uint16_t total_argument_bytes;
-  uint16_t argument_lengths[MAX_ADMINISTRATIVE_ARGUMENTS_V1];
-  uint8_t argument_bytes[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1];
-} bounded_administrative_argv_v1;
+} execution_approval_slot_key_v1;
 
 typedef struct exact_executable_candidate_v1 {
   uint64_t inode;
@@ -1011,25 +1089,36 @@ typedef struct exact_executable_candidate_v1 {
   uint32_t reserved;
 } exact_executable_candidate_v1;
 
-typedef struct approved_exec_slot_v1 {
+typedef struct execution_approval_slot_v1 {
   struct id128_v1 proof_id;
   struct id128_v1 claim_slot_id;
   uint8_t authorization_body_sha256[32];
   struct id128_v1 cgroup_binding_nonce;
   uint64_t container_generation;
-  struct bounded_administrative_argv_v1 expected_argv;
-  uint8_t reserved_pre_executable[4];
+  struct execution_argv_snapshot_v1 expected_argv;
   struct exact_executable_candidate_v1 resolved_executable;
-  uint32_t approved_role_numeric_id;
+  uint32_t target_role_numeric_id;
   external_root_class_v1 expected_root_class;
   uint8_t reserved_0[3];
   uint64_t profile_generation_ref_id;
   uint32_t exception_numeric_handle;
   uint32_t admitted_entry_rule_id;
   uint64_t deadline_boottime_ns;
-  approved_exec_slot_state_v1 state;
+  execution_approval_slot_state_v1 state;
   uint64_t transition_version;
-} approved_exec_slot_v1;
+} execution_approval_slot_v1;
+
+typedef struct execution_approval_trace_v1 {
+  uint64_t exec_attempt_sequence;
+  uint64_t failed_checks;
+  struct exact_executable_candidate_v1 expected_executable;
+  struct exact_executable_candidate_v1 observed_executable;
+  uint32_t syscall_flags;
+  uint8_t pending_state;
+  uint8_t slot_state;
+  uint8_t stage;
+  uint8_t reserved;
+} execution_approval_trace_v1;
 
 typedef struct created_by_edge_v1 {
   uint64_t child_task_cookie;
@@ -1090,7 +1179,7 @@ typedef struct entry_admission_rule_v1 {
 typedef struct declared_entry_request_v1 {
   uint32_t path_length;
   uint32_t reserved;
-  uint8_t path[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1];
+  uint8_t path[MAX_EXECUTION_APPROVAL_ARGUMENT_BYTES_V1];
 } declared_entry_request_v1;
 
 typedef struct entry_security_state_v1 {
@@ -1317,6 +1406,7 @@ typedef struct effect_observation_v1 {
   uint32_t io_uring_rw_flags;
   uint16_t io_uring_opcode;
   uint8_t reserved_io_uring[6];
+  struct execution_approval_trace_v1 execution_approval_trace;
 } effect_observation_v1;
 
 typedef struct exact_file_measurement_v1 {
@@ -1680,19 +1770,19 @@ typedef struct pending_exec_v1 {
   uint8_t reserved_1[3];
 } pending_exec_v1;
 
-typedef struct pending_administrative_match_v1 {
+typedef struct pending_execution_approval_v1 {
   uint64_t task_cookie;
   uint64_t exec_attempt_sequence;
   struct id128_v1 proof_id;
   struct id128_v1 claim_slot_id;
-  uint32_t approved_role_numeric_id;
+  uint32_t target_role_numeric_id;
   uint32_t reserved_0;
   uint64_t profile_generation_ref_id;
   struct exact_executable_candidate_v1 resolved_executable;
   uint64_t transition_version;
-  pending_administrative_match_state_v1 state;
+  pending_execution_approval_state_v1 state;
   uint8_t reserved_1[7];
-} pending_administrative_match_v1;
+} pending_execution_approval_v1;
 
 typedef struct physical_decision_v1 {
   physical_decision_kind_v1 decision;
