@@ -2,16 +2,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::mem::size_of;
 use std::os::fd::AsRawFd as _;
+use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
-    BindingActivationTargetKeyV1, BindingLifecycleStateV1, EntryAdmissionRuleKeyV1,
-    EntryAdmissionRuleV1, ExactFileObjectKeyV1, ExecutionSetBindingStateV1, Id128V1,
-    InitialRootStateV1, PolicyGenerationStateV1, PreparedContainerStateV1,
-    ProfileGenerationDescriptorV1, TaskCoordinateStateV1, TaskCoordinateV1, TaskLabelV1,
+    BindingActivationTargetKeyV1, BindingLifecycleStateV1, DeclaredEntryRequestV1,
+    EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExactFileObjectKeyV1,
+    ExecutionSetBindingStateV1, Id128V1, InitialRootStateV1, PolicyGenerationStateV1,
+    PreparedContainerStateV1, ProfileGenerationDescriptorV1, TaskCoordinateStateV1,
+    TaskCoordinateV1, TaskLabelV1,
 };
 use erebor_runtime_error::{ErrorExt as _, RetryHint};
 use rustix::process::{pidfd_open, Pid, PidfdFlags};
@@ -330,6 +332,8 @@ struct StagedRuntimeAdmissionV1 {
     authority_head_binding_id: String,
     identity: KubernetesRuntimeIdentityV1,
     cgroup_path: PathBuf,
+    oci_bundle: Option<PathBuf>,
+    declared_entries_staged: bool,
     deadline: Instant,
 }
 
@@ -1030,6 +1034,8 @@ impl WorkloadBindingOwner {
             cgroup_path: request.cgroup_path.clone().context(IdentityStateSnafu {
                 reason: "OCI runtime-fact stage has no cgroup path",
             })?,
+            oci_bundle: None,
+            declared_entries_staged: false,
             deadline: now + RUNTIME_STAGE_LIFETIME,
         };
         if let Some(existing) = self.staged_runtime_admissions.get(&request.container_id) {
@@ -1168,10 +1174,191 @@ impl WorkloadBindingOwner {
         Ok((spec.binding_id.clone(), held_initial_pid))
     }
 
+    pub(crate) fn mark_runtime_entries_staged(
+        &mut self,
+        container_id: &str,
+        oci_bundle: &Path,
+    ) -> Result<()> {
+        let staged = self
+            .staged_runtime_admissions
+            .get_mut(container_id)
+            .context(IdentityStateSnafu {
+                reason: "declared-entry staging lost its immutable runtime stage",
+            })?;
+        ensure!(
+            staged.deadline > Instant::now() && oci_bundle.is_absolute(),
+            IdentityStateSnafu {
+                reason: "declared-entry staging exceeded its runtime-stage lifetime",
+            }
+        );
+        staged.oci_bundle = Some(oci_bundle.to_owned());
+        staged.declared_entries_staged = true;
+        Ok(())
+    }
+
+    pub(crate) fn verify_runtime_entry_staging(
+        &self,
+        host: &KernelHost,
+        binding_id: &str,
+    ) -> Result<()> {
+        let binding = self
+            .bindings
+            .values()
+            .find(|binding| binding.spec.binding_id == binding_id)
+            .context(IdentityStateSnafu {
+                reason: "declared-entry staging has no published runtime binding",
+            })?;
+        for key in host
+            .map_keys("entry_admission_rules")
+            .context(InterceptorSnafu)?
+        {
+            let key = EntryAdmissionRuleKeyV1::try_read_from_bytes(&key).map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("entry admission key has the wrong ABI: {error}"),
+                }
+                .build()
+            })?;
+            ensure!(
+                key.profile_generation_ref_id != binding.state.active_profile_generation_ref_id
+                    || key.binding_id != binding.state.binding_id,
+                IdentityStateSnafu {
+                    reason: "binding-specific application entry was published before final exec",
+                }
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn verify_runtime_exec_notification(
+        &mut self,
+        configured: &[WorkloadBindingConfig],
+        process: &crate::runtime_seccomp::OciContainerProcessStateV1,
+        notification_pid: u32,
+        initial_exec: bool,
+    ) -> Result<String> {
+        let request = RuntimeAdmissionRequestV1 {
+            operation: RuntimeAdmissionOperationV1::PrepareContainer,
+            container_id: process.container_id().to_owned(),
+            initial_pid: Some(notification_pid),
+            cgroup_path: None,
+            oci_bundle: None,
+            annotations: process.annotations().clone(),
+        };
+        let identity = request.kubernetes_identity()?;
+        let matches = configured
+            .iter()
+            .filter(|binding| {
+                binding.scheduled_binding_authority_id.is_some()
+                    && binding.container_id == request.container_id
+                    && binding.profile_id == identity.profile_id
+                    && binding.namespace == identity.namespace
+                    && binding.pod_uid == identity.pod_uid
+                    && binding.container_name == identity.container_name
+                    && binding.image_digest == identity.image_digest
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            matches.len() == 1,
+            IdentityStateSnafu {
+                reason: "runtime exec notification does not resolve to one exact binding",
+            }
+        );
+        let spec = matches[0];
+        let binding = self
+            .bindings
+            .values()
+            .find(|binding| binding.spec.binding_id == spec.binding_id)
+            .context(IdentityStateSnafu {
+                reason: "runtime exec notification has no published binding",
+            })?;
+        binding.validate_live_cgroup()?;
+        self.verify_notification_pid_cgroup(binding, notification_pid)?;
+        if initial_exec {
+            ensure!(
+                binding.held_initial_pid == Some(notification_pid)
+                    && binding.state.prepared_container_state == PreparedContainerStateV1::Prepared
+                    && self
+                        .staged_runtime_admissions
+                        .get(process.container_id())
+                        .is_some_and(|staged| {
+                            staged.deadline > Instant::now()
+                                && staged.declared_entries_staged
+                                && staged.oci_bundle.as_deref() == Some(process.bundle())
+                        }),
+                IdentityStateSnafu {
+                    reason: "initial exec notification has no staged prepared binding",
+                }
+            );
+        }
+        let expected_runtime = binding
+            .runtime_identity
+            .clone()
+            .context(IdentityStateSnafu {
+                reason: "runtime exec notification has no verified CRI identity",
+            })?;
+        let runtime = self.runtime.as_mut().context(IdentityStateSnafu {
+            reason: "runtime exec notification has no CRI inventory owner",
+        })?;
+        let observed = runtime.snapshot(std::slice::from_ref(spec)).await?;
+        ensure!(
+            observed.len() == 1 && expected_runtime.accepts_observed_lifetime(&observed[0]),
+            IdentityStateSnafu {
+                reason: "CRI identity changed before the runtime exec",
+            }
+        );
+        Ok(spec.binding_id.clone())
+    }
+
+    fn verify_notification_pid_cgroup(
+        &self,
+        binding: &PublishedBinding,
+        notification_pid: u32,
+    ) -> Result<()> {
+        let proc_path = PathBuf::from(format!("/proc/{notification_pid}/cgroup"));
+        let cgroups = fs::read_to_string(&proc_path).context(IoSnafu { path: &proc_path })?;
+        let relative = cgroups
+            .lines()
+            .find_map(|line| line.strip_prefix("0::"))
+            .and_then(|path| path.strip_prefix('/'))
+            .context(IdentityStateSnafu {
+                reason: "runtime exec notification PID has no absolute unified cgroup",
+            })?;
+        ensure!(
+            !relative.is_empty()
+                && Path::new(relative)
+                    .components()
+                    .all(|component| { matches!(component, std::path::Component::Normal(_)) }),
+            IdentityStateSnafu {
+                reason: "runtime exec notification PID has a non-canonical cgroup",
+            }
+        );
+        let cgroup_path = fs::canonicalize(self.cgroup_root.join(relative)).context(IoSnafu {
+            path: self.cgroup_root.join(relative),
+        })?;
+        let metadata = fs::metadata(&cgroup_path).context(IoSnafu { path: &cgroup_path })?;
+        binding.validate_live_cgroup_metadata(&metadata)
+    }
+
+    pub(crate) fn revoke_runtime_entry_admissions(
+        &self,
+        host: &KernelHost,
+        binding_id: &str,
+    ) -> Result<()> {
+        let binding = self
+            .bindings
+            .values()
+            .find(|binding| binding.spec.binding_id == binding_id)
+            .context(IdentityStateSnafu {
+                reason: "runtime entry revocation has no published binding",
+            })?;
+        Self::remove_runtime_entry_admissions(host, binding)
+    }
+
     pub(crate) fn verify_runtime_entry_admissions(
         &self,
         host: &KernelHost,
         binding_id: &str,
+        initial_pid: u32,
     ) -> Result<()> {
         let binding = self
             .bindings
@@ -1182,6 +1369,17 @@ impl WorkloadBindingOwner {
             })?;
         let mut count = 0_usize;
         let mut admitted_rules = BTreeSet::new();
+        let mount_namespace = fs::metadata(format!("/proc/{initial_pid}/ns/mnt"))
+            .context(IoSnafu {
+                path: PathBuf::from(format!("/proc/{initial_pid}/ns/mnt")),
+            })?
+            .ino();
+        let mount_namespace = u32::try_from(mount_namespace).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("initial exec mount namespace inode exceeds its ABI: {error}"),
+            }
+            .build()
+        })?;
         for key in host
             .map_keys("entry_admission_rules")
             .context(InterceptorSnafu)?
@@ -1212,6 +1410,7 @@ impl WorkloadBindingOwner {
             ensure!(
                 value.exact_object_key_id != 0
                     && value.executable_object != ExactFileObjectKeyV1::default()
+                    && value.executable_object.mount_namespace_inode == mount_namespace
                     && admitted_rules.insert(value.admitted_entry_rule_id),
                 IdentityStateSnafu {
                     reason: "declared-entry table has deferred or colliding executable proof",
@@ -1228,111 +1427,69 @@ impl WorkloadBindingOwner {
         Ok(())
     }
 
+    pub(crate) fn verify_runtime_initial_entry_admission(
+        &self,
+        host: &KernelHost,
+        binding_id: &str,
+        executable_path: &Path,
+    ) -> Result<()> {
+        let binding = self
+            .bindings
+            .values()
+            .find(|binding| binding.spec.binding_id == binding_id)
+            .context(IdentityStateSnafu {
+                reason: "initial entry readback has no published runtime binding",
+            })?;
+        let request = DeclaredEntryRequestV1::from_path(executable_path.as_os_str().as_bytes())
+            .context(IdentityStateSnafu {
+                reason: "initial executable request exceeds its kernel ABI bound",
+            })?;
+        let composite = host
+            .lookup_map("declared_entry_requests", request.as_bytes())
+            .context(InterceptorSnafu)?
+            .context(IdentityStateSnafu {
+                reason: "initial executable request is not declared by signed policy",
+            })?;
+        let composite = u64::read_from_bytes(&composite).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("declared entry request has an invalid ABI value: {error}"),
+            }
+            .build()
+        })?;
+        let mut matches = 0_usize;
+        for key in host
+            .map_keys("entry_admission_rules")
+            .context(InterceptorSnafu)?
+        {
+            let key = EntryAdmissionRuleKeyV1::try_read_from_bytes(&key).map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("entry admission key has the wrong ABI: {error}"),
+                }
+                .build()
+            })?;
+            if key.profile_generation_ref_id == binding.state.active_profile_generation_ref_id
+                && key.binding_id == binding.state.binding_id
+                && key.source_role_id == binding.state.initial_role_id
+                && key.composite_atom_id == composite
+            {
+                matches += 1;
+            }
+        }
+        ensure!(
+            matches == 1,
+            IdentityStateSnafu {
+                reason: "initial executable request does not match one application entry",
+            }
+        );
+        Ok(())
+    }
+
     pub(crate) fn cancel_runtime_admission(&mut self) {
         self.pending_runtime_admission = None;
     }
 
     pub(crate) fn discard_runtime_stage(&mut self, container_id: &str) {
         self.staged_runtime_admissions.remove(container_id);
-    }
-
-    fn install_runtime_entry_admissions(
-        host: &KernelHost,
-        binding: &PublishedBinding,
-    ) -> Result<()> {
-        let Some(authority_binding_id) = binding.spec.scheduled_binding_authority_id.as_deref()
-        else {
-            return Ok(());
-        };
-        let authority_binding_id =
-            parse_id("scheduled_binding_authority_id", authority_binding_id)?;
-        let mut rows = Vec::new();
-        for source_key in host
-            .map_keys("entry_admission_rules")
-            .context(InterceptorSnafu)?
-        {
-            let source =
-                EntryAdmissionRuleKeyV1::try_read_from_bytes(&source_key).map_err(|error| {
-                    IdentityStateSnafu {
-                        reason: format!("entry admission key has the wrong ABI: {error}"),
-                    }
-                    .build()
-                })?;
-            if source.profile_generation_ref_id != binding.state.active_profile_generation_ref_id
-                || source.binding_id != authority_binding_id
-            {
-                continue;
-            }
-            let value = host
-                .lookup_map("entry_admission_rules", &source_key)
-                .context(InterceptorSnafu)?
-                .context(IdentityStateSnafu {
-                    reason: "scheduled entry admission disappeared during runtime publication",
-                })?;
-            let mut target = source;
-            target.binding_id = binding.state.binding_id;
-            rows.push((target.as_bytes().to_vec(), value));
-        }
-        ensure!(
-            !rows.is_empty(),
-            IdentityStateSnafu {
-                reason: "scheduled runtime binding has no entry admission rows",
-            }
-        );
-
-        let mut inserted = Vec::new();
-        let result = (|| {
-            for (key, value) in &rows {
-                match host
-                    .lookup_map("entry_admission_rules", key)
-                    .context(InterceptorSnafu)?
-                {
-                    Some(existing) => ensure!(
-                        existing == *value,
-                        IdentityStateSnafu {
-                            reason: "runtime entry admission changed during publication",
-                        }
-                    ),
-                    None => {
-                        ensure!(
-                            host.insert_map("entry_admission_rules", key, value)
-                                .context(InterceptorSnafu)?
-                                == MapInsertResult::Inserted,
-                            IdentityStateSnafu {
-                                reason: "runtime entry admission changed during insertion",
-                            }
-                        );
-                        inserted.push(key.clone());
-                    }
-                }
-                ensure!(
-                    host.lookup_map("entry_admission_rules", key)
-                        .context(InterceptorSnafu)?
-                        .as_deref()
-                        == Some(value.as_slice()),
-                    IdentityStateSnafu {
-                        reason: "runtime entry admission failed readback",
-                    }
-                );
-            }
-            Ok(())
-        })();
-        if let Err(error) = result {
-            let rollback = inserted.iter().try_for_each(|key| {
-                host.delete_map_entry("entry_admission_rules", key)
-                    .context(InterceptorSnafu)
-            });
-            return match rollback {
-                Ok(()) => Err(error),
-                Err(rollback) => IdentityStateSnafu {
-                    reason: format!(
-                        "runtime entry admission publication failed: {error}; rollback failed: {rollback}"
-                    ),
-                }
-                .fail(),
-            };
-        }
-        Ok(())
     }
 
     fn remove_runtime_entry_admissions(
@@ -1476,7 +1633,6 @@ impl WorkloadBindingOwner {
                 reason: "held runtime binding activation target failed readback",
             }
         );
-        Self::install_runtime_entry_admissions(host, binding)?;
         self.profile_handles
             .insert(active, binding.state.profile_id);
         Ok(())
@@ -2439,6 +2595,8 @@ mod tests {
             authority_head_binding_id: "authority-head-a".to_owned(),
             identity: request.kubernetes_identity()?,
             cgroup_path: cgroup.clone(),
+            oci_bundle: None,
+            declared_entries_staged: false,
             deadline: Instant::now() + Duration::from_secs(1),
         };
         let now = Instant::now();

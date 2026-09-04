@@ -74,6 +74,7 @@ pub struct NodePolicyGenerationOwner {
     administrative_plans: Vec<AdministrativePolicyPlanV1>,
     measured_exact_objects: Vec<MeasuredExactObjectV1>,
     measured_mount_routes: Vec<MeasuredMountRouteV1>,
+    deferred_entry_binding_ids: BTreeSet<String>,
     generation_semantics: BTreeMap<u64, GenerationSemantics>,
     dynamic_rows: BTreeMap<&'static str, BTreeSet<Vec<u8>>>,
     exception_authority: Mutex<ExceptionAuthorityOwner>,
@@ -701,6 +702,7 @@ impl NodePolicyGenerationOwner {
             Vec::new(),
             BTreeMap::new(),
             BTreeMap::new(),
+            BTreeSet::new(),
         )
     }
 
@@ -727,6 +729,7 @@ impl NodePolicyGenerationOwner {
             measured_mount_routes,
             measured_mount_views,
             BTreeMap::new(),
+            BTreeSet::new(),
         )
     }
 
@@ -754,6 +757,7 @@ impl NodePolicyGenerationOwner {
             measured_mount_routes,
             measured_mount_views,
             self.generation_semantics.clone(),
+            BTreeSet::new(),
         )
     }
 
@@ -776,6 +780,7 @@ impl NodePolicyGenerationOwner {
             measured_mount_routes,
             self.mount_view_handles,
             generation_semantics,
+            BTreeSet::new(),
         )
     }
 
@@ -802,6 +807,7 @@ impl NodePolicyGenerationOwner {
             measured_mount_routes,
             BTreeMap::new(),
             BTreeMap::new(),
+            BTreeSet::new(),
         )
     }
 
@@ -830,6 +836,7 @@ impl NodePolicyGenerationOwner {
             measured_mount_routes,
             self.mount_view_handles,
             generation_semantics,
+            BTreeSet::new(),
         )
     }
 
@@ -843,6 +850,7 @@ impl NodePolicyGenerationOwner {
         measured_mount_routes: Vec<MeasuredMountRouteV1>,
         mut retained_mount_views: BTreeMap<u32, crate::exact_object::ExactFileObjectView>,
         mut retained_generation_semantics: BTreeMap<u64, GenerationSemantics>,
+        deferred_entry_binding_ids: BTreeSet<String>,
     ) -> Result<Self> {
         let platform_scope_digest = format!(
             "{:x}",
@@ -961,6 +969,7 @@ impl NodePolicyGenerationOwner {
                 label_epoch,
                 now_utc_ns,
                 now_boottime_ns,
+                deferred_entry_binding_ids.contains(&binding.binding_id),
             )?;
             match generations.get_mut(&binding.active_profile_generation_ref_id) {
                 Some(existing) => existing.merge(lowered)?,
@@ -1131,11 +1140,36 @@ impl NodePolicyGenerationOwner {
             administrative_plans,
             measured_exact_objects,
             measured_mount_routes,
+            deferred_entry_binding_ids,
             generation_semantics,
             dynamic_rows,
             exception_authority: Mutex::new(exception_authority),
         };
-        owner.reconcile_policy_lifecycle(host)?;
+        ensure!(
+            owner.reconcile_policy_lifecycle(host)?,
+            IdentityStateSnafu {
+                reason: "entry admission publication found a dirty mount view or pending mutation",
+            }
+        );
+        let clean_epoch = verified_clean_global_mount_epoch(host)?;
+        let publication: Result<()> = (|| {
+            for generation in generations.values() {
+                generation.install_entry_admissions(host)?;
+            }
+            ensure!(
+                verified_clean_global_mount_epoch(host)? == clean_epoch,
+                IdentityStateSnafu {
+                    reason: "mount security epoch changed during entry admission publication",
+                }
+            );
+            Ok(())
+        })();
+        if publication.is_err() {
+            for generation in generations.values() {
+                generation.revoke_entry_admissions(host)?;
+            }
+        }
+        publication?;
         Ok(owner)
     }
 
@@ -1219,8 +1253,13 @@ impl NodePolicyGenerationOwner {
                     return Err(error);
                 }
             };
+        let deferred_entry_binding_ids = oci_entry_view
+            .as_ref()
+            .map(|(binding_id, _, _)| BTreeSet::from([(*binding_id).to_owned()]))
+            .unwrap_or_default();
         if measured_exact_objects == self.measured_exact_objects
             && measured_mount_routes == self.measured_mount_routes
+            && deferred_entry_binding_ids == self.deferred_entry_binding_ids
         {
             self.mount_view_handles.extend(measured_mount_views);
             if let Some((_, _, view)) = oci_entry_view {
@@ -1246,6 +1285,7 @@ impl NodePolicyGenerationOwner {
             measured_mount_routes,
             retained_mount_views,
             retained_generation_semantics,
+            deferred_entry_binding_ids,
         )?;
         *self = next;
         Ok(())
@@ -1555,8 +1595,8 @@ impl NodePolicyGenerationOwner {
         let mut targets = BTreeMap::<&str, u32>::new();
         for measured in objects {
             let root_pid = measured.object.mount_view_root_pid;
-            match targets.insert(measured.binding_id.as_str(), root_pid) {
-                Some(existing) => ensure!(
+            if let Some(existing) = targets.insert(measured.binding_id.as_str(), root_pid) {
+                ensure!(
                     existing == root_pid,
                     IdentityStateSnafu {
                         reason: format!(
@@ -1564,8 +1604,7 @@ impl NodePolicyGenerationOwner {
                             measured.binding_id
                         ),
                     }
-                ),
-                None => {}
+                );
             }
         }
         let topology_generation = Self::current_mount_topology_generation(host)?;
@@ -2104,6 +2143,20 @@ fn install_global_mount_barrier(
     Ok(())
 }
 
+fn verified_clean_global_mount_epoch(host: &KernelHost) -> Result<u64> {
+    let key = 0_u32.to_ne_bytes();
+    let epoch = mount_epoch_from(host, "mount_global_mutation_epoch", &key)?;
+    ensure!(
+        epoch > 0
+            && mount_epoch_from(host, "mount_global_clean_epoch", &key)? == epoch
+            && mount_epoch_from(host, "mount_global_pending_mutations", &key)? == 0,
+        IdentityStateSnafu {
+            reason: "entry admission publication requires a clean mount security epoch",
+        }
+    );
+    Ok(epoch)
+}
+
 fn same_exact_file(left: &ExactFileObjectConfig, right: &ExactFileObjectConfig) -> bool {
     left.mount_namespace_inode == right.mount_namespace_inode
         && left.mount_id_unique == right.mount_id_unique
@@ -2201,6 +2254,7 @@ impl LoweredGeneration {
             label_epoch,
             now_utc_ns,
             now_boottime_ns,
+            false,
         )
     }
 
@@ -2215,6 +2269,7 @@ impl LoweredGeneration {
         label_epoch: u64,
         now_utc_ns: i64,
         now_boottime_ns: u64,
+        defer_binding_entries: bool,
     ) -> Result<Self> {
         ensure!(
             artifact.header.profile_id == binding.profile_id,
@@ -2291,9 +2346,10 @@ impl LoweredGeneration {
             })
             .collect::<Vec<_>>();
         let entry_selector_ids = entry_admission_path_selector_ids(artifact, binding)?;
-        let defer_entry_admissions = binding.arm_initial_root
-            && !entry_selector_ids.is_empty()
-            && generation_objects.is_empty();
+        let defer_entry_admissions = defer_binding_entries
+            || binding.arm_initial_root
+                && !entry_selector_ids.is_empty()
+                && generation_objects.is_empty();
         let mut exact_object_handles = BTreeMap::new();
         for selector in artifact
             .policy_document
@@ -3111,7 +3167,6 @@ impl LoweredGeneration {
             );
             if existing == active.as_bytes() {
                 self.verify_immutable_rows(host)?;
-                install_rows(host, "entry_admission_rules", &self.entry_admissions)?;
                 install_rows(host, "device_effect_decisions", &self.device_decisions)?;
                 install_exception_rows(
                     host,
@@ -3124,7 +3179,7 @@ impl LoweredGeneration {
                 install_rows(host, "exception_handle_bindings", &self.exception_bindings)?;
                 install_rows(host, "exact_file_objects", &self.file_objects)?;
                 self.install_missing_mount_rows(host)?;
-                self.verify_dynamic_authority_rows(host)?;
+                self.verify_dynamic_dependency_rows(host)?;
                 return Ok(());
             }
         }
@@ -3136,7 +3191,6 @@ impl LoweredGeneration {
             )
             .context(InterceptorSnafu)?;
         }
-        install_rows(host, "entry_admission_rules", &self.entry_admissions)?;
         install_rows(host, "effect_decisions", &self.decisions)?;
         install_rows(host, "effect_defaults", &self.defaults)?;
         install_rows(host, "device_effect_decisions", &self.device_decisions)?;
@@ -3177,7 +3231,7 @@ impl LoweredGeneration {
         install_rows(host, "path_graph_terminals", &self.path_terminals)?;
         install_rows(host, "path_tree_denials", &self.path_tree_denials)?;
         self.verify_immutable_rows(host)?;
-        self.verify_dynamic_authority_rows(host)?;
+        self.verify_dynamic_dependency_rows(host)?;
         let read_back = self.read_back_descriptor();
         host.update_map(
             "profile_generation_descriptors",
@@ -3252,14 +3306,40 @@ impl LoweredGeneration {
         Ok(())
     }
 
-    fn verify_dynamic_authority_rows(&self, host: &KernelHost) -> Result<()> {
+    fn verify_dynamic_dependency_rows(&self, host: &KernelHost) -> Result<()> {
         for (map, rows) in [
-            ("entry_admission_rules", &self.entry_admissions),
             ("device_effect_decisions", &self.device_decisions),
             ("exact_file_objects", &self.file_objects),
             ("canonical_mount_roots", &self.mount_roots),
         ] {
             verify_rows(host, map, rows)?;
+        }
+        Ok(())
+    }
+
+    fn install_entry_admissions(&self, host: &KernelHost) -> Result<()> {
+        install_rows(host, "entry_admission_rules", &self.entry_admissions)?;
+        verify_rows(host, "entry_admission_rules", &self.entry_admissions)
+    }
+
+    fn revoke_entry_admissions(&self, host: &KernelHost) -> Result<()> {
+        for key in self.entry_admissions.keys() {
+            if host
+                .lookup_map("entry_admission_rules", key)
+                .context(InterceptorSnafu)?
+                .is_some()
+            {
+                host.delete_map_entry("entry_admission_rules", key)
+                    .context(InterceptorSnafu)?;
+            }
+            ensure!(
+                host.lookup_map("entry_admission_rules", key)
+                    .context(InterceptorSnafu)?
+                    .is_none(),
+                IdentityStateSnafu {
+                    reason: "entry admission survived failed publication cleanup",
+                }
+            );
         }
         Ok(())
     }
@@ -4808,7 +4888,16 @@ fn lower_entry_admissions(
             .iter()
             .map(|assignment| assignment.assignment_id.as_str()),
     );
-    let binding_id = parse_id("binding_id", &binding.binding_id)?;
+    let binding_id = if defer_non_initial_entries {
+        binding
+            .scheduled_binding_authority_id
+            .as_deref()
+            .map(|binding_id| parse_id("scheduled_binding_authority_id", binding_id))
+            .transpose()?
+            .unwrap_or(parse_id("binding_id", &binding.binding_id)?)
+    } else {
+        parse_id("binding_id", &binding.binding_id)?
+    };
     let external_role_id = role_handles
         .iter()
         .find_map(|(role, handle)| (*handle == binding.external_role_id).then_some(role.as_str()))
@@ -4937,7 +5026,9 @@ fn lower_entry_admissions(
             .iter()
             .copied()
             .filter(|object| object.exact_object_key_id == selector.kernel_handle());
-        let object = objects.next();
+        let object = (!defer_non_initial_entries)
+            .then(|| objects.next())
+            .flatten();
         ensure!(
             object.is_some() || defer_non_initial_entries,
             IdentityStateSnafu {
@@ -4945,7 +5036,7 @@ fn lower_entry_admissions(
             }
         );
         ensure!(
-            objects.next().is_none(),
+            defer_non_initial_entries || objects.next().is_none(),
             IdentityStateSnafu {
                 reason: format!(
                     "entry admission rule `{rule_id}` has more than one executable object"
@@ -6682,6 +6773,65 @@ mod tests {
     }
 
     #[test]
+    fn runtime_entry_rows_remain_on_scheduled_authority_until_final_exec() -> crate::Result<()> {
+        let (artifact, mut binding) = entry_roles_artifact()?;
+        let authority = Id128V1::new(20, 21);
+        binding.scheduled_binding_authority_id = Some(
+            uuid::Uuid::from_bytes(authority.to_be_bytes())
+                .hyphenated()
+                .to_string(),
+        );
+        binding.arm_initial_root = true;
+        let objects = entry_role_objects(&artifact, &binding)?;
+        let staged = LoweredGeneration::for_binding_with_mount_routes(
+            &artifact,
+            &binding,
+            &objects,
+            &[],
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+            true,
+        )?;
+        assert!(staged.entry_admissions.iter().all(|(key, value)| {
+            EntryAdmissionRuleKeyV1::try_read_from_bytes(key).is_ok_and(|key| {
+                key.binding_id == authority
+                    && EntryAdmissionRuleV1::try_read_from_bytes(value)
+                        .is_ok_and(|rule| rule.exact_object_key_id == 0)
+            })
+        }));
+
+        let final_rows = LoweredGeneration::for_binding_with_mount_routes(
+            &artifact,
+            &binding,
+            &objects,
+            &[],
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+            false,
+        )?;
+        let runtime_binding = parse_id("binding_id", &binding.binding_id)?;
+        assert!(final_rows.entry_admissions.iter().all(|(key, value)| {
+            EntryAdmissionRuleKeyV1::try_read_from_bytes(key).is_ok_and(|key| {
+                key.binding_id == runtime_binding
+                    && EntryAdmissionRuleV1::try_read_from_bytes(value)
+                        .is_ok_and(|rule| rule.exact_object_key_id > 0)
+            })
+        }));
+        assert_eq!(
+            staged.descriptor.table_digest,
+            final_rows.descriptor.table_digest
+        );
+        assert_eq!(staged.descriptor.row_count, final_rows.descriptor.row_count);
+        Ok(())
+    }
+
+    #[test]
     fn recursive_signed_selector_stages_without_a_live_object() -> crate::Result<()> {
         let (mut artifact, binding, _) = exact_artifact(ProfileModeV1::Protect)?;
         artifact.policy_document.path_selectors[0].target = PathSelectorTargetV1::Path {
@@ -7069,6 +7219,7 @@ mod tests {
             3,
             1_800_000_000_000_000_000,
             100,
+            false,
         )?;
         let refreshed_routes =
             [protected.clone(), alias.clone(), unrelated.clone()].map(|mut measured| {
@@ -7085,6 +7236,7 @@ mod tests {
             3,
             1_800_000_000_000_000_000,
             100,
+            false,
         )?;
         let composite_handles = LoweredGeneration::composite_handles(&artifact);
         let role_handles = handles(

@@ -21,6 +21,11 @@ pub const SANDBOX_ID_ANNOTATION: &str = "io.kubernetes.cri.sandbox-id";
 pub const PROFILE_ID_ANNOTATION: &str = "mithril.erebor.dev/profile-id";
 pub const POLICY_SOURCE_REVISION_ANNOTATION: &str = "mithril.erebor.dev/policy-source-revision";
 pub(crate) const POLICY_CONVERGENCE_PENDING: &str = "POLICY_CONVERGENCE_PENDING";
+pub(crate) const SECCOMP_LISTENER_METADATA: &str = "mithril-runtime-exec-v1";
+
+pub(crate) fn seccomp_listener_path(socket_path: &Path) -> PathBuf {
+    socket_path.with_extension("seccomp.sock")
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]

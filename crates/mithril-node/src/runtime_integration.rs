@@ -745,6 +745,7 @@ impl OciBaseSpecOwner {
                 log_filter,
             )],
         )?;
+        Self::install_exec_notification(&mut spec, socket)?;
         serde_json::to_vec(&spec)
             .map_err(|error| Self::invalid(&format!("OCI base spec failed: {error}")))
     }
@@ -781,6 +782,149 @@ impl OciBaseSpecOwner {
                 return Err(Self::invalid("OCI base spec hook readback failed"));
             }
         }
+        let actual_seccomp = actual["linux"]["seccomp"]
+            .as_object()
+            .ok_or_else(|| Self::invalid("OCI exec notification seccomp field is missing"))?;
+        let expected_seccomp = expected["linux"]["seccomp"]
+            .as_object()
+            .ok_or_else(|| Self::invalid("expected OCI seccomp field is missing"))?;
+        let mut normalized = actual.clone();
+        Self::install_exec_notification(&mut normalized, socket)?;
+        if actual_seccomp.get("listenerPath") != expected_seccomp.get("listenerPath")
+            || actual_seccomp.get("listenerMetadata") != expected_seccomp.get("listenerMetadata")
+            || actual_seccomp
+                .get("defaultAction")
+                .and_then(Value::as_str)
+                .is_none_or(|action| action == "SCMP_ACT_NOTIFY")
+            || actual_seccomp
+                .get("syscalls")
+                .and_then(Value::as_array)
+                .is_none_or(|syscalls| {
+                    syscalls
+                        .iter()
+                        .filter(|rule| {
+                            rule.get("action").and_then(Value::as_str) == Some("SCMP_ACT_NOTIFY")
+                                && rule.get("names")
+                                    == Some(&serde_json::json!(["execve", "execveat"]))
+                        })
+                        .count()
+                        != 1
+                })
+            || normalized["linux"]["seccomp"] != actual["linux"]["seccomp"]
+        {
+            return Err(Self::invalid("OCI exec notification readback failed"));
+        }
+        Ok(())
+    }
+
+    fn install_exec_notification(spec: &mut Value, socket: &Path) -> io::Result<()> {
+        let listener_path = crate::runtime_admission::seccomp_listener_path(socket);
+        if !listener_path.is_absolute()
+            || listener_path.as_os_str().as_encoded_bytes().len() > 4_096
+            || listener_path
+                .components()
+                .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
+        {
+            return Err(Self::invalid("OCI seccomp listener path is not clean"));
+        }
+        let root = spec
+            .as_object_mut()
+            .ok_or_else(|| Self::invalid("OCI base spec is not an object"))?;
+        let linux = root
+            .entry("linux")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or_else(|| Self::invalid("OCI base spec linux field is not an object"))?;
+        let seccomp = linux
+            .entry("seccomp")
+            .or_insert_with(|| serde_json::json!({"defaultAction": "SCMP_ACT_ALLOW"}))
+            .as_object_mut()
+            .ok_or_else(|| Self::invalid("OCI base spec seccomp field is not an object"))?;
+        for field in ["listenerPath", "listenerMetadata"] {
+            if seccomp
+                .get(field)
+                .is_some_and(|value| value != &Value::Null)
+                && seccomp.get(field)
+                    != Some(&Value::String(if field == "listenerPath" {
+                        listener_path.display().to_string()
+                    } else {
+                        crate::runtime_admission::SECCOMP_LISTENER_METADATA.to_owned()
+                    }))
+            {
+                return Err(Self::invalid(
+                    "OCI seccomp already belongs to another notification listener",
+                ));
+            }
+        }
+        if seccomp
+            .get("defaultAction")
+            .and_then(Value::as_str)
+            .is_none_or(|action| action == "SCMP_ACT_NOTIFY")
+        {
+            return Err(Self::invalid(
+                "OCI seccomp needs a non-notify default action",
+            ));
+        }
+        let syscalls = seccomp
+            .entry("syscalls")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .ok_or_else(|| Self::invalid("OCI seccomp syscalls field is not an array"))?;
+        for syscall in syscalls.iter_mut() {
+            let rule = syscall
+                .as_object_mut()
+                .ok_or_else(|| Self::invalid("OCI seccomp syscall rule is not an object"))?;
+            let action = rule
+                .get("action")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Self::invalid("OCI seccomp syscall rule has no action"))?
+                .to_owned();
+            let names = rule
+                .get_mut("names")
+                .and_then(Value::as_array_mut)
+                .ok_or_else(|| Self::invalid("OCI seccomp syscall rule has no names"))?;
+            if action == "SCMP_ACT_NOTIFY"
+                && names.iter().any(|name| {
+                    name.as_str()
+                        .is_none_or(|name| !matches!(name, "execve" | "execveat"))
+                })
+            {
+                return Err(Self::invalid(
+                    "OCI seccomp has a notification rule outside the Mithril exec contract",
+                ));
+            }
+            if names.iter().any(|name| {
+                name.as_str()
+                    .is_some_and(|name| matches!(name, "execve" | "execveat"))
+            }) && action != "SCMP_ACT_ALLOW"
+                && action != "SCMP_ACT_NOTIFY"
+            {
+                return Err(Self::invalid(
+                    "OCI seccomp already restricts an exec notification syscall",
+                ));
+            }
+            names.retain(|name| {
+                name.as_str()
+                    .is_none_or(|name| !matches!(name, "execve" | "execveat"))
+            });
+        }
+        syscalls.retain(|rule| {
+            rule.get("names")
+                .and_then(Value::as_array)
+                .is_none_or(|names| !names.is_empty())
+        });
+        syscalls.push(serde_json::json!({
+            "names": ["execve", "execveat"],
+            "action": "SCMP_ACT_NOTIFY"
+        }));
+        seccomp.insert(
+            "listenerPath".to_owned(),
+            Value::String(listener_path.display().to_string()),
+        );
+        seccomp.insert(
+            "listenerMetadata".to_owned(),
+            Value::String(crate::runtime_admission::SECCOMP_LISTENER_METADATA.to_owned()),
+        );
         Ok(())
     }
 
@@ -828,15 +972,87 @@ impl OciBaseSpecOwner {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
     use serde_json::Value;
 
     use crate::runtime_gate::RetainedRuntimeGate;
 
     use super::{
-        RuntimeControlRecoveryMountInputV1, RuntimeIntegrationDecommissionV1,
+        OciBaseSpecOwner, RuntimeControlRecoveryMountInputV1, RuntimeIntegrationDecommissionV1,
         RuntimeIntegrationInstallV1, RuntimeIntegrationOwner, RuntimeRecoveryMountInputV1,
     };
+
+    #[test]
+    fn exec_notification_preserves_the_existing_seccomp_policy(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let built = OciBaseSpecOwner::build(
+            br#"{
+                "linux": {
+                    "seccomp": {
+                        "defaultAction": "SCMP_ACT_ERRNO",
+                        "syscalls": [{
+                            "names": ["read", "execve", "execveat"],
+                            "action": "SCMP_ACT_ALLOW"
+                        }]
+                    }
+                }
+            }"#,
+            Path::new("/usr/libexec/oci/hooks.d/mithril-oci-hook"),
+            Path::new("/etc/mithril/runtime-recovery.json"),
+            Path::new("/run/mithril/runtime-admission.sock"),
+            4_000,
+            5,
+            "info",
+        )?;
+        let built: Value = serde_json::from_slice(&built)?;
+        assert_eq!(built["linux"]["seccomp"]["defaultAction"], "SCMP_ACT_ERRNO");
+        assert_eq!(
+            built["linux"]["seccomp"]["syscalls"],
+            serde_json::json!([
+                {"names": ["read"], "action": "SCMP_ACT_ALLOW"},
+                {"names": ["execve", "execveat"], "action": "SCMP_ACT_NOTIFY"}
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exec_notification_rejects_conflicting_seccomp_authority() {
+        for spec in [
+            serde_json::json!({
+                "linux": {"seccomp": {
+                    "defaultAction": "SCMP_ACT_ALLOW",
+                    "listenerPath": "/run/another-agent.sock",
+                    "syscalls": []
+                }}
+            }),
+            serde_json::json!({
+                "linux": {"seccomp": {
+                    "defaultAction": "SCMP_ACT_ALLOW",
+                    "syscalls": [{"names": ["mount"], "action": "SCMP_ACT_NOTIFY"}]
+                }}
+            }),
+            serde_json::json!({
+                "linux": {"seccomp": {
+                    "defaultAction": "SCMP_ACT_ALLOW",
+                    "syscalls": [{"names": ["execve"], "action": "SCMP_ACT_ERRNO"}]
+                }}
+            }),
+        ] {
+            let encoded = serde_json::to_vec(&spec).expect("test spec must encode");
+            assert!(OciBaseSpecOwner::build(
+                &encoded,
+                Path::new("/usr/libexec/oci/hooks.d/mithril-oci-hook"),
+                Path::new("/etc/mithril/runtime-recovery.json"),
+                Path::new("/run/mithril/runtime-admission.sock"),
+                4_000,
+                5,
+                "info",
+            )
+            .is_err());
+        }
+    }
 
     #[test]
     fn owner_installs_one_default_runtime_spec_and_exact_recovery_manifest(
@@ -910,6 +1126,21 @@ mod tests {
         );
         assert!(base["hooks"].get("startContainer").is_none());
         assert!(base["mounts"].as_array().is_none_or(Vec::is_empty));
+        assert_eq!(
+            base["linux"]["seccomp"]["listenerPath"],
+            "/run/mithril/runtime-admission.seccomp.sock"
+        );
+        assert_eq!(
+            base["linux"]["seccomp"]["listenerMetadata"],
+            crate::runtime_admission::SECCOMP_LISTENER_METADATA
+        );
+        assert_eq!(
+            base["linux"]["seccomp"]["syscalls"],
+            serde_json::json!([{
+                "names": ["execve", "execveat"],
+                "action": "SCMP_ACT_NOTIFY"
+            }])
+        );
         let recovery: Value =
             serde_json::from_slice(&fs::read(containerd_mount.join("mithril-recovery.json"))?)?;
         assert_eq!(recovery["entries"].as_array().map(Vec::len), Some(2));

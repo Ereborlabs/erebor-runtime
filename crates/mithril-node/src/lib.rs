@@ -14,6 +14,7 @@ mod policy_delivery;
 mod runtime_admission;
 mod runtime_gate;
 mod runtime_integration;
+mod runtime_seccomp;
 mod trust;
 mod unix_socket;
 

@@ -11,6 +11,8 @@ use snafu::{OptionExt as _, ResultExt as _};
 use std::cmp;
 use std::collections::VecDeque;
 use std::future::Future;
+use std::os::fd::AsRawFd as _;
+use std::path::Component;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -263,6 +265,8 @@ pub struct NodeChassis {
     local_server: Option<crate::RuntimeObservationServer>,
     runtime_admission_server: Option<crate::runtime_admission::RuntimeAdmissionServer>,
     runtime_admission_requests: Option<crate::runtime_admission::RuntimeAdmissionReceiver>,
+    runtime_seccomp_server: Option<crate::runtime_seccomp::RuntimeSeccompServer>,
+    runtime_seccomp_notifications: Option<crate::runtime_seccomp::RuntimeSeccompReceiver>,
     trust: TrustCache,
     bindings: WorkloadBindingOwner,
     identity: NativeSecurityStateOwner,
@@ -653,6 +657,14 @@ impl NodeChassis {
             .map_or((None, None), |(server, requests)| {
                 (Some(server), Some(requests))
             });
+        let (runtime_seccomp_server, runtime_seccomp_notifications) = config
+            .runtime_admission
+            .as_ref()
+            .map(crate::runtime_seccomp::RuntimeSeccompServer::bind)
+            .transpose()?
+            .map_or((None, None), |(server, notifications)| {
+                (Some(server), Some(notifications))
+            });
         let mut chassis = Self {
             base_config,
             config,
@@ -665,6 +677,8 @@ impl NodeChassis {
             local_server,
             runtime_admission_server,
             runtime_admission_requests,
+            runtime_seccomp_server,
+            runtime_seccomp_notifications,
             trust,
             bindings,
             identity,
@@ -718,6 +732,10 @@ impl NodeChassis {
             tokio::spawn(server.serve(local_shutdown))
         });
         let mut runtime_admission_task = self.runtime_admission_server.take().map(|server| {
+            let runtime_shutdown = shutdown.clone();
+            tokio::spawn(server.serve(runtime_shutdown))
+        });
+        let mut runtime_seccomp_task = self.runtime_seccomp_server.take().map(|server| {
             let runtime_shutdown = shutdown.clone();
             tokio::spawn(server.serve(runtime_shutdown))
         });
@@ -776,6 +794,11 @@ impl NodeChassis {
                         request = next_runtime_admission(&mut self.runtime_admission_requests) => {
                             self.answer_runtime_admission(request).await?;
                         }
+                        notification = next_runtime_seccomp(
+                            &mut self.runtime_seccomp_notifications
+                        ) => {
+                            self.answer_runtime_seccomp(notification).await?;
+                        }
                         result = effect_reader_finished(&mut effect_task) => {
                             let _result = self.observations.mark_coverage_gapped(
                                 CoverageGapReasonV1::ReaderStopped,
@@ -795,6 +818,15 @@ impl NodeChassis {
                         result = runtime_admission_finished(&mut runtime_admission_task) => {
                             runtime_admission_task = None;
                             run_error = runtime_admission_exit(
+                                &self.readiness,
+                                result,
+                                *shutdown.borrow(),
+                            );
+                            break 'running;
+                        }
+                        result = runtime_admission_finished(&mut runtime_seccomp_task) => {
+                            runtime_seccomp_task = None;
+                            run_error = runtime_seccomp_exit(
                                 &self.readiness,
                                 result,
                                 *shutdown.borrow(),
@@ -941,20 +973,32 @@ impl NodeChassis {
                                             task.abort();
                                             let _result = task.await;
                                         }
+                                        if let Some(task) = runtime_seccomp_task.take() {
+                                            task.abort();
+                                            let _result = task.await;
+                                        }
                                         self.runtime_admission_requests = None;
+                                        self.runtime_seccomp_notifications = None;
                                         if let Some(admission) = &self.config.runtime_admission {
-                                            match std::fs::remove_file(&admission.socket_path) {
-                                                Ok(()) => {}
-                                                Err(error)
-                                                    if error.kind()
-                                                        == std::io::ErrorKind::NotFound => {}
-                                                Err(source) => {
-                                                    run_error = Some(crate::Error::Io {
-                                                        path: admission.socket_path.clone(),
-                                                        source,
-                                                        location: snafu::Location::default(),
-                                                    });
-                                                    break 'running;
+                                            for socket_path in [
+                                                admission.socket_path.clone(),
+                                                crate::runtime_admission::seccomp_listener_path(
+                                                    &admission.socket_path,
+                                                ),
+                                            ] {
+                                                match std::fs::remove_file(&socket_path) {
+                                                    Ok(()) => {}
+                                                    Err(error)
+                                                        if error.kind()
+                                                            == std::io::ErrorKind::NotFound => {}
+                                                    Err(source) => {
+                                                        run_error = Some(crate::Error::Io {
+                                                            path: socket_path,
+                                                            source,
+                                                            location: snafu::Location::default(),
+                                                        });
+                                                        break 'running;
+                                                    }
                                                 }
                                             }
                                         }
@@ -1274,6 +1318,11 @@ impl NodeChassis {
                             request = next_runtime_admission(&mut self.runtime_admission_requests) => {
                                 self.answer_runtime_admission(request).await?;
                             }
+                            notification = next_runtime_seccomp(
+                                &mut self.runtime_seccomp_notifications
+                            ) => {
+                                self.answer_runtime_seccomp(notification).await?;
+                            }
                             result = effect_reader_finished(&mut effect_task) => {
                                 let _result = self.observations.mark_coverage_gapped(
                                     CoverageGapReasonV1::ReaderStopped,
@@ -1293,6 +1342,15 @@ impl NodeChassis {
                             result = runtime_admission_finished(&mut runtime_admission_task) => {
                                 runtime_admission_task = None;
                                 run_error = runtime_admission_exit(
+                                    &self.readiness,
+                                    result,
+                                    *shutdown.borrow(),
+                                );
+                                break 'running;
+                            }
+                            result = runtime_admission_finished(&mut runtime_seccomp_task) => {
+                                runtime_seccomp_task = None;
+                                run_error = runtime_seccomp_exit(
                                     &self.readiness,
                                     result,
                                     *shutdown.borrow(),
@@ -1508,6 +1566,11 @@ impl NodeChassis {
                     request = next_runtime_admission(&mut self.runtime_admission_requests) => {
                         self.answer_runtime_admission(request).await?;
                     }
+                    notification = next_runtime_seccomp(
+                        &mut self.runtime_seccomp_notifications
+                    ) => {
+                        self.answer_runtime_seccomp(notification).await?;
+                    }
                     result = effect_reader_finished(&mut effect_task) => {
                         let _result = self.observations.mark_coverage_gapped(
                             CoverageGapReasonV1::ReaderStopped,
@@ -1527,6 +1590,15 @@ impl NodeChassis {
                     result = runtime_admission_finished(&mut runtime_admission_task) => {
                         runtime_admission_task = None;
                         run_error = runtime_admission_exit(
+                            &self.readiness,
+                            result,
+                            *shutdown.borrow(),
+                        );
+                        break 'running;
+                    }
+                    result = runtime_admission_finished(&mut runtime_seccomp_task) => {
+                        runtime_seccomp_task = None;
+                        run_error = runtime_seccomp_exit(
                             &self.readiness,
                             result,
                             *shutdown.borrow(),
@@ -1605,6 +1677,14 @@ impl NodeChassis {
                 let _result = task.await;
             }
         } else if let Some(task) = runtime_admission_task {
+            task.await.context(LocalTaskSnafu)??;
+        }
+        if run_error.is_some() {
+            if let Some(task) = runtime_seccomp_task.take() {
+                task.abort();
+                let _result = task.await;
+            }
+        } else if let Some(task) = runtime_seccomp_task {
             task.await.context(LocalTaskSnafu)??;
         }
         if let Some(error) = run_error {
@@ -1812,12 +1892,18 @@ impl NodeChassis {
                 bundle,
             )?;
             self.bindings
-                .verify_runtime_entry_admissions(host, &binding_id)?;
+                .verify_runtime_entry_staging(host, &binding_id)?;
+            self.bindings.mark_runtime_entries_staged(
+                &request.container_id,
+                request.oci_bundle.as_deref().context(IdentityStateSnafu {
+                    reason: "declared-entry staging has no OCI bundle",
+                })?,
+            )?;
             envelope.ensure_active()?;
             Ok(())
         })();
         let (allowed, reason_code) = match &prepared {
-            Ok(()) => (true, "DECLARED_ENTRY_TABLE_VERIFIED"),
+            Ok(()) => (true, "DECLARED_ENTRY_CANDIDATE_STAGED"),
             Err(_error) => (false, "RUNTIME_ADMISSION_REJECTED"),
         };
         let delivered = envelope
@@ -1829,8 +1915,132 @@ impl NodeChassis {
         if delivered.is_ok() {
             log_runtime_admission_decision(&request, allowed, reason_code, prepared.as_ref().err());
         }
-        if allowed && delivered.is_ok() {
-            self.bindings.discard_runtime_stage(&request.container_id);
+        Ok(())
+    }
+
+    async fn answer_runtime_seccomp(
+        &mut self,
+        envelope: crate::runtime_seccomp::RuntimeSeccompEnvelope,
+    ) -> Result<()> {
+        let initial_exec = envelope.notification.initial_exec;
+        let container_id = envelope.process.container_id().to_owned();
+        let executable_path = envelope.notification.executable_path.clone();
+        let notification_pid = envelope.notification.pid;
+        let notification_id = envelope.notification.id;
+        let mut finalized_binding_id = None;
+        let verified = async {
+            envelope.ensure_active()?;
+            snafu::ensure!(
+                envelope.pidfd.as_raw_fd() >= 0
+                    && notification_pid > 0
+                    && envelope.notification.syscall != 0
+                    && executable_path.is_absolute()
+                    && executable_path.as_os_str().as_encoded_bytes().len() <= 4_096
+                    && executable_path.components().all(|component| {
+                        matches!(component, Component::RootDir | Component::Normal(_))
+                    })
+                    && (!initial_exec
+                        || envelope.process.process_pid() == notification_pid as i32
+                            && envelope.process.state_pid() == notification_pid as i32
+                            && envelope.process.status() == "creating"),
+                IdentityStateSnafu {
+                    reason: "runtime exec request does not match its runc process state",
+                }
+            );
+            let binding_id = self
+                .bindings
+                .verify_runtime_exec_notification(
+                    &self.config.workload_bindings,
+                    &envelope.process,
+                    notification_pid,
+                    initial_exec,
+                )
+                .await?;
+            if !initial_exec {
+                return Ok::<Option<String>, crate::Error>(None);
+            }
+            finalized_binding_id = Some(binding_id.clone());
+            let host = self.host.as_mut().ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "initial exec finalization has no live kernel host".to_owned(),
+                }
+                .build()
+            })?;
+            self.bindings
+                .verify_prepared_initial_root(host, &binding_id, notification_pid)?;
+            self.reconcile_runtime_exact_bindings()?;
+            let policy = self.policy.as_ref().context(IdentityStateSnafu {
+                reason: "initial exec finalization has no active policy owner",
+            })?;
+            let host = self.host.as_mut().ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "initial exec finalization lost its kernel host".to_owned(),
+                }
+                .build()
+            })?;
+            snafu::ensure!(
+                policy.reconcile_policy_lifecycle(host)?,
+                IdentityStateSnafu {
+                    reason: "initial exec mount security view is dirty or has a pending mutation",
+                }
+            );
+            self.bindings
+                .verify_runtime_entry_admissions(host, &binding_id, notification_pid)?;
+            self.bindings.verify_runtime_initial_entry_admission(
+                host,
+                &binding_id,
+                &executable_path,
+            )?;
+            envelope.ensure_active()?;
+            Ok(Some(binding_id))
+        }
+        .await;
+
+        match verified {
+            Ok(binding_id) => {
+                if let Err(error) = envelope.respond(true).await {
+                    if let Some(binding_id) = binding_id.as_deref() {
+                        let host = self.host.as_ref().context(IdentityStateSnafu {
+                            reason: "initial exec rollback has no live kernel host",
+                        })?;
+                        self.bindings
+                            .revoke_runtime_entry_admissions(host, binding_id)?;
+                    }
+                    erebor_telemetry::warn!(
+                        error;
+                        "runtime exec continuation failed after validation",
+                        container_id = %container_id,
+                        notification_id = %notification_id
+                    );
+                } else if initial_exec {
+                    self.bindings.discard_runtime_stage(&container_id);
+                    erebor_telemetry::debug!(
+                        "continued validated initial application exec",
+                        container_id = %container_id,
+                        notification_id = %notification_id,
+                        executable = %executable_path.display()
+                    );
+                }
+            }
+            Err(error) => {
+                if let Some(binding_id) = finalized_binding_id.as_deref() {
+                    let host = self.host.as_ref().context(IdentityStateSnafu {
+                        reason: "initial exec denial has no live kernel host",
+                    })?;
+                    self.bindings
+                        .revoke_runtime_entry_admissions(host, binding_id)?;
+                }
+                let delivered = envelope.respond(false).await;
+                if delivered.is_ok() {
+                    erebor_telemetry::info!(
+                        "denied runtime exec notification",
+                        container_id = %container_id,
+                        notification_id = %notification_id,
+                        executable = %executable_path.display(),
+                        error = %error
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -3000,12 +3210,40 @@ fn runtime_admission_exit(
     }))
 }
 
+fn runtime_seccomp_exit(
+    readiness: &watch::Sender<NodeReadinessV1>,
+    result: Result<()>,
+    shutdown_requested: bool,
+) -> Option<crate::Error> {
+    if shutdown_requested {
+        return result.err();
+    }
+    readiness.send_modify(|readiness| readiness.admission_ready = false);
+    Some(result.err().unwrap_or_else(|| {
+        IdentityStateSnafu {
+            reason: "runtime seccomp listener stopped before node shutdown".to_owned(),
+        }
+        .build()
+    }))
+}
+
 async fn next_runtime_admission(
     receiver: &mut Option<crate::runtime_admission::RuntimeAdmissionReceiver>,
 ) -> crate::runtime_admission::RuntimeAdmissionEnvelope {
     if let Some(receiver) = receiver {
         if let Some(request) = receiver.receive().await {
             return request;
+        }
+    }
+    std::future::pending().await
+}
+
+async fn next_runtime_seccomp(
+    receiver: &mut Option<crate::runtime_seccomp::RuntimeSeccompReceiver>,
+) -> crate::runtime_seccomp::RuntimeSeccompEnvelope {
+    if let Some(receiver) = receiver {
+        if let Some(notification) = receiver.receive().await {
+            return notification;
         }
     }
     std::future::pending().await
@@ -3696,6 +3934,8 @@ mod tests {
             local_server: None,
             runtime_admission_server: None,
             runtime_admission_requests: Some(runtime_admission_requests),
+            runtime_seccomp_server: None,
+            runtime_seccomp_notifications: None,
             trust: TrustCache::load(state.path())?,
             bindings: WorkloadBindingOwner::system(node_boot_id, 1)?,
             identity: NativeSecurityStateOwner::new(node_boot_id, 1),
