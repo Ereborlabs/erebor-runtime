@@ -3224,6 +3224,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "clap",
+ "containerd-client",
  "crc32c",
  "ed25519-dalek 3.0.0",
  "erebor-interceptor",
@@ -3240,6 +3241,7 @@ dependencies = [
  "mithril-control",
  "mithril-node",
  "prost",
+ "prost-types",
  "rcgen",
  "reqwest",
  "rustix",

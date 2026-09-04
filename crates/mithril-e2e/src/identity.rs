@@ -50,10 +50,11 @@ const KUBERNETES_CLEANUP_WAIT_LIMIT: Duration = Duration::from_secs(120);
 const PROFILE_GENERATION_REF_ID: u64 = 7;
 const PRESTART_REQUEST_DIRECTORY: &str = "/run/mithril-identity-prestart";
 
-const REQUIRED_IDENTITY_MAPS: [&str; 74] = [
+const REQUIRED_IDENTITY_MAPS: [&str; 76] = [
     "active_profile_generations",
-    "approved_exec_arguments",
-    "approved_exec_slots",
+    "execution_approval_slots",
+    "execution_argv_expected_chunks",
+    "execution_argv_provisional_chunks",
     "authority_domains",
     "binding_activation_targets",
     "canonical_mount_cache",
@@ -90,9 +91,10 @@ const REQUIRED_IDENTITY_MAPS: [&str; 74] = [
     "io_uring_setup_states",
     "kernel_real_parent_intervals",
     "pending_execs",
-    "pending_exec_request_paths",
-    "pending_administrative_matches",
+    "provisional_exec_requests",
+    "pending_execution_approvals",
     "mount_global_ambiguous_epoch",
+    "mount_global_activity_sequence",
     "mount_global_clean_epoch",
     "mount_global_mutation_epoch",
     "mount_global_pending_mutations",
@@ -9590,7 +9592,20 @@ fn verify_recovery_rejects_displaced_map(
                 host.shutdown().context(InterceptorSnafu)?;
                 Ok(false)
             }
-            Err(error) => Ok(error.to_string().contains("recovered maps")),
+            Err(error) => {
+                let message = error.to_string();
+                ensure!(
+                    message.contains("recovered maps")
+                        || message.contains("does not use the recovered map set"),
+                    InvalidInputSnafu {
+                        path: pin,
+                        reason: format!(
+                            "displaced-map recovery failed for an unrelated reason: {message}"
+                        ),
+                    }
+                );
+                Ok(true)
+            }
         }
     })();
     let remove = match fs::remove_file(pin) {

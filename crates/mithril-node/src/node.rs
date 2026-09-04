@@ -1934,13 +1934,14 @@ impl NodeChassis {
                 envelope.pidfd.as_raw_fd() >= 0
                     && notification_pid > 0
                     && envelope.notification.syscall != 0
-                    && executable_path.is_absolute()
-                    && executable_path.as_os_str().as_encoded_bytes().len() <= 4_096
-                    && executable_path.components().all(|component| {
-                        matches!(component, Component::RootDir | Component::Normal(_))
-                    })
                     && (!initial_exec
-                        || envelope.process.process_pid() == notification_pid as i32
+                        || executable_path.as_ref().is_some_and(|path| {
+                            path.is_absolute()
+                                && path.as_os_str().as_encoded_bytes().len() <= 4_096
+                                && path.components().all(|component| {
+                                    matches!(component, Component::RootDir | Component::Normal(_))
+                                })
+                        }) && envelope.process.process_pid() == notification_pid as i32
                             && envelope.process.state_pid() == notification_pid as i32
                             && envelope.process.status() == "creating"),
                 IdentityStateSnafu {
@@ -1986,10 +1987,13 @@ impl NodeChassis {
             );
             self.bindings
                 .verify_runtime_entry_admissions(host, &binding_id, notification_pid)?;
+            let executable_path = executable_path.as_deref().context(IdentityStateSnafu {
+                reason: "initial exec notification has no executable path",
+            })?;
             self.bindings.verify_runtime_initial_entry_admission(
                 host,
                 &binding_id,
-                &executable_path,
+                executable_path,
             )?;
             envelope.ensure_active()?;
             Ok(Some(binding_id))
@@ -1998,7 +2002,8 @@ impl NodeChassis {
 
         match verified {
             Ok(binding_id) => {
-                if let Err(error) = envelope.respond(true).await {
+                let delivered = envelope.respond(true).await;
+                if !matches!(delivered, Ok(true)) {
                     if let Some(binding_id) = binding_id.as_deref() {
                         let host = self.host.as_ref().context(IdentityStateSnafu {
                             reason: "initial exec rollback has no live kernel host",
@@ -2006,19 +2011,21 @@ impl NodeChassis {
                         self.bindings
                             .revoke_runtime_entry_admissions(host, binding_id)?;
                     }
-                    erebor_telemetry::warn!(
-                        error;
-                        "runtime exec continuation failed after validation",
-                        container_id = %container_id,
-                        notification_id = %notification_id
-                    );
+                    if let Err(error) = delivered {
+                        erebor_telemetry::warn!(
+                            error;
+                            "runtime exec continuation failed after validation",
+                            container_id = %container_id,
+                            notification_id = %notification_id
+                        );
+                    }
                 } else if initial_exec {
                     self.bindings.discard_runtime_stage(&container_id);
                     erebor_telemetry::debug!(
                         "continued validated initial application exec",
                         container_id = %container_id,
                         notification_id = %notification_id,
-                        executable = %executable_path.display()
+                        executable = %executable_path.as_deref().unwrap_or_else(|| std::path::Path::new("<kernel-enforced>")).display()
                     );
                 }
             }
@@ -2031,12 +2038,12 @@ impl NodeChassis {
                         .revoke_runtime_entry_admissions(host, binding_id)?;
                 }
                 let delivered = envelope.respond(false).await;
-                if delivered.is_ok() {
+                if matches!(delivered, Ok(true)) {
                     erebor_telemetry::info!(
                         "denied runtime exec notification",
                         container_id = %container_id,
                         notification_id = %notification_id,
-                        executable = %executable_path.display(),
+                        executable = %executable_path.as_deref().unwrap_or_else(|| std::path::Path::new("<kernel-enforced>")).display(),
                         error = %error
                     );
                 }

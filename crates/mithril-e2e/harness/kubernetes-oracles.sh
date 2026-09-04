@@ -81,6 +81,32 @@ exception_status_counter_advanced_by() {
   ' <<<"$status_json" >/dev/null
 }
 
+external_cgroup_exec_denial_count_after() {
+  local effects=$1
+  local marker=$2
+
+  awk -v marker="$marker" '
+    /^observed_boottime_ns=/ {
+      split($1, observed_time, "=")
+      if (observed_time[2] > marker &&
+          $0 ~ / family=1( |$)/ &&
+          $0 ~ / operation=1( |$)/ &&
+          $0 ~ / reason=UNSUPPORTED_OBJECT( |$)/ &&
+          $0 ~ / result=DENIED_BEFORE_EFFECT( |$)/ &&
+          $0 ~ / kernel_result=-13( |$)/) {
+        count++
+      }
+    }
+    END { print count + 0 }
+  ' <<<"$effects"
+}
+
+external_cgroup_exec_denial_after() {
+  local count
+  count=$(external_cgroup_exec_denial_count_after "$1" "$2")
+  ((count > 0))
+}
+
 retained_mithril_state() {
   local environment=$1
 

@@ -181,7 +181,9 @@ else
     --bin mithril-kernel-qualification \
     -p mithril-node --bin mithril-node --bin mithril-inspect \
     -p mithril-control --bin mithril-control --bin mithril-policy \
-    --bin kubectl-mithril)
+    --bin kubectl-mithril && \
+    cargo rustc --locked -p mithril-node --bin mithril-oci-hook -- \
+      -C target-feature=+crt-static)
 
   open_probe_target=$work_directory/open-probe-build
   mkdir -p -- "$open_probe_target"
@@ -248,7 +250,7 @@ if [[ $manual_vm == true ]]; then
 fi
 
 "$provider" run "$vm_name" \
-  'sudo apt-get update && sudo apt-get install -y --no-install-recommends iproute2 nftables runc'
+  'sudo apt-get update && sudo apt-get install -y --no-install-recommends containerd iproute2 nftables runc'
 
 "$provider" run "$vm_name" mkdir -p \
   "$remote_source/bpf/erebor-interceptor/qualification" \
@@ -278,6 +280,8 @@ fi
   "$remote_bin/kubectl-mithril"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-kernel-qualification" \
   "$remote_bin/mithril-kernel-qualification"
+"$provider" put "$vm_name" "$repo_root/target/debug/mithril-oci-hook" \
+  "$remote_bin/mithril-oci-hook"
 "$provider" put "$vm_name" \
   "$open_probe_target/mithril-open-probe" \
   "$remote_bin/mithril-open-probe"
@@ -352,22 +356,25 @@ entry_role_output=$remote_root/runc-entry-roles
   --lease-path "$entry_role_output/owner.lock" \
   --runc-path /usr/sbin/runc --workload-path /usr/bin/busybox \
   --retained-bpf-object "$remote_bin/retained-identity.bpf.o" \
-  --prestart-hook \
-  "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh"
+  --containerd-path /usr/bin/containerd
 "$provider" get "$vm_name" \
   "$entry_role_output/runc-entry-role-runtime-probe.json" \
   "$output_directory/runc-entry-role-runtime-probe.json"
 
 if [[ $entry_role_runtime_only == true ]]; then
   jq -e '
-    .schema_version == 23 and
+    .schema_version == 28 and
     .prepared_state_before_exec == "prepared" and
     .prepared_state_after_exec == "active" and
     .prepared_runtime_effect_observed and
+    .initial_exec_notification_blocked and
     .application_entry_allow_observed and
     .application_default_file_allow_observed and
     .application_descendant_default_exec_role_preserved and
+    .large_exec_argv_allowed and
     .held_runtime_admission_reconciled and
+    .runc_post_create_mount_mutation_observed and
+    .start_container_final_mount_reconciled and
     .application_exec_transition_event_driven and
     .kubernetes_subpath_alias_path_tree_denied and
     .newer_kubernetes_subpath_alias_path_tree_denied and
@@ -375,6 +382,8 @@ if [[ $entry_role_runtime_only == true ]]; then
     .container_bind_alias_path_tree_denied and
     .single_wildcard_path_tree_denied and
     .recursive_wildcard_path_tree_denied and
+    .concurrent_exec_detached_mounts_preserved_view and
+    .recursive_wildcard_stable_after_concurrent_exec and
     .other_role_path_tree_allowed and
     .path_tree_control_allowed and
     .application_admitted_entry_rule_id > 0 and
@@ -393,6 +402,15 @@ if [[ $entry_role_runtime_only == true ]]; then
     .live_replacement_migrated_running_application and
     .replacement_generation_descendant_default_exec_allowed and
     .live_replacement_entries_use_new_generation and
+    .administrative_unapproved_exec_denied and
+    .execution_approval_trace_observed and
+    (.execution_approval_prepare_trace_stage == 2 or
+      .execution_approval_prepare_trace_stage == 3) and
+    .execution_approval_prepare_trace_failed_checks == 268435456 and
+    .administrative_approval_consumed_once and
+    .administrative_role_installed and
+    .administrative_replay_exec_denied and
+    .execution_approval_slot_reconciled and
     .node_owner_restart_preserved_running_application and
     .prestop_retained_during_runtime_inventory_omission and
     .kernel_upgrade_preserved_map_ids and

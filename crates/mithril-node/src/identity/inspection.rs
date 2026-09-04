@@ -61,6 +61,8 @@ pub struct NativeRuntimeBindingSnapshotV1 {
     pub prepared_container_entry_instance_id: String,
     pub prepared_container_exec_task_cookie: u64,
     pub prepared_container_initial_host_tgid: u32,
+    #[serde(default)]
+    pub prepared_container_bootstrap_state: u32,
 }
 
 pub struct NativeIdentityInspector {
@@ -120,6 +122,7 @@ impl NativeIdentityInspector {
                 ),
                 prepared_container_exec_task_cookie: binding.prepared_container_exec_task_cookie,
                 prepared_container_initial_host_tgid: binding.prepared_container_initial_host_tgid,
+                prepared_container_bootstrap_state: binding.prepared_container_bootstrap_state,
             },
         );
         let process = self.required(

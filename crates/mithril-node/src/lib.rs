@@ -68,4 +68,8 @@ pub use runtime_integration::{
     RuntimeIntegrationInstallResultV1, RuntimeIntegrationInstallV1, RuntimeIntegrationOwner,
     RuntimeRecoveryMountInputV1,
 };
+#[cfg(feature = "test-support")]
+pub use runtime_seccomp::{
+    RuntimeSeccompTestNotification, RuntimeSeccompTestReceiver, RuntimeSeccompTestServer,
+};
 pub use trust::{InstalledTrustGenerationV1, TrustCache};

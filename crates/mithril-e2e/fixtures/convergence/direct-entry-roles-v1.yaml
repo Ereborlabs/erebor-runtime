@@ -43,7 +43,7 @@ roles:
   - name: application
     files:
       - name: deny-application-file
-        path: /run/mithril-entry-roles/application.denied
+        path: /var/lib/mithril-convergence/protected.exception-target
         recursive: false
         operations: [OpenRead]
         action: Deny
@@ -75,7 +75,7 @@ roles:
   - name: poststart
     files:
       - name: deny-poststart-file
-        path: /run/mithril-entry-roles/poststart.denied
+        path: /var/lib/mithril-convergence/poststart.denied
         recursive: false
         operations: [OpenRead]
         action: Deny
@@ -93,7 +93,7 @@ roles:
   - name: prestop
     files:
       - name: deny-prestop-file
-        path: /run/mithril-entry-roles/prestop.denied
+        path: /var/lib/mithril-convergence/prestop.denied
         recursive: false
         operations: [OpenRead]
         action: Deny
@@ -111,7 +111,7 @@ roles:
   - name: startup
     files:
       - name: deny-startup-file
-        path: /run/mithril-entry-roles/startup.denied
+        path: /var/lib/mithril-convergence/startup.denied
         recursive: false
         operations: [OpenRead]
         action: Deny
@@ -129,7 +129,7 @@ roles:
   - name: readiness
     files:
       - name: deny-readiness-file
-        path: /run/mithril-entry-roles/readiness.denied
+        path: /var/lib/mithril-convergence/readiness.denied
         recursive: false
         operations: [OpenRead]
         action: Deny
@@ -147,7 +147,7 @@ roles:
   - name: liveness
     files:
       - name: deny-liveness-file
-        path: /run/mithril-entry-roles/liveness.denied
+        path: /var/lib/mithril-convergence/liveness.denied
         recursive: false
         operations: [OpenRead]
         action: Deny
@@ -184,7 +184,12 @@ roles:
     processControl: []
     unixStreams: []
   - name: runtime-external
-    files: []
+    files:
+      - name: allow-approved-exec-read
+        path: /var/lib/mithril/busybox
+        recursive: false
+        operations: [OpenRead]
+        action: Allow
     execution: []
     network:
       socketControls: []

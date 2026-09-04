@@ -4,12 +4,12 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::IoSliceMut;
 use std::mem::MaybeUninit;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use rustix::ioctl::{opcode, Getter, Setter};
+use rustix::ioctl::{opcode, Setter, Updater};
 use rustix::net::{recvmsg, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags};
 use rustix::process::{pidfd_open, Pid, PidfdFlags};
 use serde::Deserialize;
@@ -30,6 +30,13 @@ const SECCOMP_IOCTL_NOTIF_RECV: rustix::ioctl::Opcode =
 const SECCOMP_IOCTL_NOTIF_SEND: rustix::ioctl::Opcode =
     opcode::read_write::<libc::seccomp_notif_resp>(b'!', 1);
 const SECCOMP_IOCTL_NOTIF_ID_VALID: rustix::ioctl::Opcode = opcode::write::<u64>(b'!', 2);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NotificationListenerReadiness {
+    Pending,
+    Readable,
+    Closed,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -60,7 +67,7 @@ pub(crate) struct RuntimeExecNotificationV1 {
     pub id: u64,
     pub pid: u32,
     pub syscall: i32,
-    pub executable_path: PathBuf,
+    pub executable_path: Option<PathBuf>,
     pub initial_exec: bool,
 }
 
@@ -74,7 +81,7 @@ pub(crate) struct RuntimeSeccompEnvelope {
 
 struct RuntimeSeccompDispatch {
     allowed: bool,
-    delivered: oneshot::Sender<()>,
+    delivered: oneshot::Sender<bool>,
 }
 
 pub(crate) struct RuntimeSeccompServer {
@@ -87,6 +94,21 @@ pub(crate) struct RuntimeSeccompServer {
 
 pub(crate) struct RuntimeSeccompReceiver {
     notifications: mpsc::Receiver<RuntimeSeccompEnvelope>,
+}
+
+#[cfg(feature = "test-support")]
+pub struct RuntimeSeccompTestServer {
+    server: RuntimeSeccompServer,
+}
+
+#[cfg(feature = "test-support")]
+pub struct RuntimeSeccompTestReceiver {
+    receiver: RuntimeSeccompReceiver,
+}
+
+#[cfg(feature = "test-support")]
+pub struct RuntimeSeccompTestNotification {
+    envelope: RuntimeSeccompEnvelope,
 }
 
 impl OciContainerProcessStateV1 {
@@ -151,7 +173,7 @@ impl RuntimeSeccompEnvelope {
         Ok(())
     }
 
-    pub(crate) async fn respond(self, allowed: bool) -> Result<()> {
+    pub(crate) async fn respond(self, allowed: bool) -> Result<bool> {
         self.ensure_active()?;
         let (delivered, delivery) = oneshot::channel();
         self.response
@@ -162,7 +184,7 @@ impl RuntimeSeccompEnvelope {
                 }
                 .build()
             })?;
-        tokio::time::timeout_at(self.deadline, delivery)
+        let delivered = tokio::time::timeout_at(self.deadline, delivery)
             .await
             .map_err(|_elapsed| {
                 IdentityStateSnafu {
@@ -177,7 +199,7 @@ impl RuntimeSeccompEnvelope {
                 }
                 .build()
             })?;
-        Ok(())
+        Ok(delivered)
     }
 }
 
@@ -253,24 +275,50 @@ impl RuntimeSeccompServer {
         );
         let (process, listener) = receive_process_state(&stream, socket_path).await?;
         process.validate()?;
+        let first_noninitial_continued = process.status() == "running"
+            && continue_first_noninitial_notification(&listener, timeout)?;
         let listener = AsyncFd::new(listener).context(IoSnafu { path: socket_path })?;
-        let mut sequence = 0_u64;
+        let mut sequence = u64::from(first_noninitial_continued);
         loop {
-            let notification = receive_notification(&listener).await?;
+            if sequence > 0 || process.status() == "running" {
+                if !continue_noninitial_notification(&listener).await? {
+                    return Ok(());
+                }
+                sequence = sequence.checked_add(1).context(IdentityStateSnafu {
+                    reason: "runtime exec notification sequence overflowed",
+                })?;
+                continue;
+            }
+            let Some(notification) = receive_notification(&listener).await? else {
+                return Ok(());
+            };
             let initial_exec = sequence == 0 && process.status() == "creating";
-            sequence = sequence.checked_add(1).context(IdentityStateSnafu {
-                reason: "runtime exec notification sequence overflowed",
-            })?;
             validate_notification(&process, &notification, initial_exec)?;
-            let executable_path = read_executable_path(&notification)?;
+            if !notification_is_valid(&listener, notification.id)? {
+                continue;
+            }
+            let executable_path = if initial_exec {
+                match read_executable_path(&notification) {
+                    Ok(path) => Some(path),
+                    Err(_error) if !notification_is_valid(&listener, notification.id)? => continue,
+                    Err(error) => return Err(error),
+                }
+            } else {
+                None
+            };
+            let expected_executable_path = executable_path.clone();
             let pid = Pid::from_raw(notification.pid as i32).context(IdentityStateSnafu {
                 reason: "runtime exec notification has an invalid PID",
             })?;
-            let pidfd = pidfd_open(pid, PidfdFlags::empty())
-                .map_err(std::io::Error::from)
-                .context(IoSnafu {
-                    path: PathBuf::from(format!("/proc/{}", notification.pid)),
-                })?;
+            let pidfd = match pidfd_open(pid, PidfdFlags::empty()) {
+                Ok(pidfd) => pidfd,
+                Err(_error) if !notification_is_valid(&listener, notification.id)? => continue,
+                Err(error) => {
+                    return Err(std::io::Error::from(error)).context(IoSnafu {
+                        path: PathBuf::from(format!("/proc/{}", notification.pid)),
+                    });
+                }
+            };
             let deadline = Instant::now() + timeout;
             let (response, dispatched) = oneshot::channel();
             notifications
@@ -302,8 +350,164 @@ impl RuntimeSeccompServer {
                     allowed: false,
                     delivered: oneshot::channel().0,
                 });
-            respond_to_notification(&listener, notification.id, dispatched.allowed).await?;
-            let _result = dispatched.delivered.send(());
+            let allowed = dispatched.allowed;
+            let delivered = respond_to_notification(
+                &listener,
+                &process,
+                notification,
+                initial_exec,
+                expected_executable_path.as_deref(),
+                allowed,
+                deadline,
+            )
+            .await?;
+            let _result = dispatched.delivered.send(delivered);
+            if delivered {
+                sequence = sequence.checked_add(1).context(IdentityStateSnafu {
+                    reason: "runtime exec notification sequence overflowed",
+                })?;
+            }
+        }
+    }
+}
+
+fn continue_first_noninitial_notification(listener: &OwnedFd, timeout: Duration) -> Result<bool> {
+    let deadline = std::time::Instant::now() + timeout.min(Duration::from_millis(100));
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return Ok(false);
+        }
+        let remaining_ms = deadline
+            .saturating_duration_since(now)
+            .as_millis()
+            .clamp(1, i32::MAX as u128) as i32;
+        let mut descriptor = libc::pollfd {
+            fd: listener.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ready = unsafe { libc::poll(&raw mut descriptor, 1, remaining_ms) };
+        if ready < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error).context(IoSnafu {
+                path: Path::new("seccomp notification fd"),
+            });
+        }
+        if ready == 0 {
+            return Ok(false);
+        }
+        if descriptor.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+            return Ok(false);
+        }
+        let mut notification = empty_notification();
+        let received = unsafe {
+            rustix::ioctl::ioctl(
+                listener,
+                Updater::<SECCOMP_IOCTL_NOTIF_RECV, libc::seccomp_notif>::new(&mut notification),
+            )
+        };
+        if let Err(error) = received {
+            if matches!(error, rustix::io::Errno::NOENT | rustix::io::Errno::INTR) {
+                continue;
+            }
+            return Err(std::io::Error::from(error)).context(IoSnafu {
+                path: Path::new("seccomp notification fd"),
+            });
+        }
+        ensure!(
+            notification_is_one_exec(&notification),
+            IdentityStateSnafu {
+                reason: "runtime seccomp notification is not one exact exec request",
+            }
+        );
+        let response = libc::seccomp_notif_resp {
+            id: notification.id,
+            val: 0,
+            error: 0,
+            flags: libc::SECCOMP_USER_NOTIF_FLAG_CONTINUE as u32,
+        };
+        match unsafe {
+            rustix::ioctl::ioctl(
+                listener,
+                Setter::<SECCOMP_IOCTL_NOTIF_SEND, libc::seccomp_notif_resp>::new(response),
+            )
+        } {
+            Ok(()) => return Ok(true),
+            Err(error) if notification_response_was_canceled(error) => {
+                continue;
+            }
+            Err(error) => {
+                return Err(std::io::Error::from(error)).context(IoSnafu {
+                    path: Path::new("seccomp notification fd"),
+                });
+            }
+        }
+    }
+}
+
+async fn continue_noninitial_notification(listener: &AsyncFd<OwnedFd>) -> Result<bool> {
+    loop {
+        let mut ready = listener.readable().await.context(IoSnafu {
+            path: Path::new("seccomp notification fd"),
+        })?;
+        match notification_listener_readiness(listener.get_ref()).context(IoSnafu {
+            path: Path::new("seccomp notification fd"),
+        })? {
+            NotificationListenerReadiness::Closed => return Ok(false),
+            NotificationListenerReadiness::Pending => {
+                ready.clear_ready();
+                continue;
+            }
+            NotificationListenerReadiness::Readable => ready.clear_ready(),
+        }
+        let mut notification = empty_notification();
+        let received = unsafe {
+            rustix::ioctl::ioctl(
+                listener.get_ref(),
+                Updater::<SECCOMP_IOCTL_NOTIF_RECV, libc::seccomp_notif>::new(&mut notification),
+            )
+        };
+        if let Err(error) = received {
+            let error = std::io::Error::from(error);
+            if notification_receive_was_canceled(&error) {
+                tokio::task::yield_now().await;
+                continue;
+            }
+            return Err(error).context(IoSnafu {
+                path: Path::new("seccomp notification fd"),
+            });
+        }
+        ensure!(
+            notification_is_one_exec(&notification),
+            IdentityStateSnafu {
+                reason: "runtime seccomp notification is not one exact exec request",
+            }
+        );
+        let response = libc::seccomp_notif_resp {
+            id: notification.id,
+            val: 0,
+            error: 0,
+            flags: libc::SECCOMP_USER_NOTIF_FLAG_CONTINUE as u32,
+        };
+        match unsafe {
+            rustix::ioctl::ioctl(
+                listener.get_ref(),
+                Setter::<SECCOMP_IOCTL_NOTIF_SEND, libc::seccomp_notif_resp>::new(response),
+            )
+        } {
+            Ok(()) => return Ok(true),
+            Err(error) if notification_response_was_canceled(error) => {
+                tokio::task::yield_now().await;
+            }
+            Err(error) => {
+                return Err(std::io::Error::from(error)).context(IoSnafu {
+                    path: Path::new("seccomp notification fd"),
+                });
+            }
         }
     }
 }
@@ -311,6 +515,110 @@ impl RuntimeSeccompServer {
 impl RuntimeSeccompReceiver {
     pub(crate) async fn receive(&mut self) -> Option<RuntimeSeccompEnvelope> {
         self.notifications.recv().await
+    }
+}
+
+#[cfg(feature = "test-support")]
+impl RuntimeSeccompTestServer {
+    pub fn bind(
+        socket_path: &Path,
+        timeout: Duration,
+    ) -> Result<(Self, RuntimeSeccompTestReceiver)> {
+        let timeout_ms = u64::try_from(timeout.as_millis()).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("runtime seccomp test timeout is invalid: {error}"),
+            }
+            .build()
+        })?;
+        let config = RuntimeAdmissionConfig {
+            socket_path: socket_path.to_owned(),
+            trusted_start_hook_path: PathBuf::from("/mithril-test-hook"),
+            maximum_request_bytes: MAXIMUM_PROCESS_STATE_BYTES,
+            timeout_ms,
+        };
+        let (server, receiver) = RuntimeSeccompServer::bind(&config)?;
+        Ok((Self { server }, RuntimeSeccompTestReceiver { receiver }))
+    }
+
+    #[must_use]
+    pub fn listener_path(&self) -> &Path {
+        &self.server.socket_path
+    }
+
+    pub async fn serve(self, shutdown: watch::Receiver<bool>) -> Result<()> {
+        self.server.serve(shutdown).await
+    }
+
+    #[must_use]
+    pub const fn listener_metadata() -> &'static str {
+        crate::runtime_admission::SECCOMP_LISTENER_METADATA
+    }
+}
+
+#[cfg(feature = "test-support")]
+impl RuntimeSeccompTestReceiver {
+    pub async fn receive(&mut self) -> Option<RuntimeSeccompTestNotification> {
+        self.receiver
+            .receive()
+            .await
+            .map(|envelope| RuntimeSeccompTestNotification { envelope })
+    }
+}
+
+#[cfg(feature = "test-support")]
+impl RuntimeSeccompTestNotification {
+    #[must_use]
+    pub fn container_id(&self) -> &str {
+        self.envelope.process.container_id()
+    }
+
+    #[must_use]
+    pub fn process_pid(&self) -> i32 {
+        self.envelope.process.process_pid()
+    }
+
+    #[must_use]
+    pub fn state_pid(&self) -> i32 {
+        self.envelope.process.state_pid()
+    }
+
+    #[must_use]
+    pub fn status(&self) -> &str {
+        self.envelope.process.status()
+    }
+
+    #[must_use]
+    pub fn bundle(&self) -> &Path {
+        self.envelope.process.bundle()
+    }
+
+    #[must_use]
+    pub fn notification_id(&self) -> u64 {
+        self.envelope.notification.id
+    }
+
+    #[must_use]
+    pub fn notification_pid(&self) -> u32 {
+        self.envelope.notification.pid
+    }
+
+    #[must_use]
+    pub fn syscall(&self) -> i32 {
+        self.envelope.notification.syscall
+    }
+
+    #[must_use]
+    pub fn executable_path(&self) -> Option<&Path> {
+        self.envelope.notification.executable_path.as_deref()
+    }
+
+    #[must_use]
+    pub fn initial_exec(&self) -> bool {
+        self.envelope.notification.initial_exec
+    }
+
+    pub async fn respond(self, allowed: bool) -> Result<bool> {
+        self.envelope.respond(allowed).await
     }
 }
 
@@ -368,36 +676,158 @@ async fn receive_process_state(
     }
 }
 
-async fn receive_notification(listener: &AsyncFd<OwnedFd>) -> Result<libc::seccomp_notif> {
+async fn receive_notification(listener: &AsyncFd<OwnedFd>) -> Result<Option<libc::seccomp_notif>> {
     loop {
         let mut ready = listener.readable().await.context(IoSnafu {
             path: Path::new("seccomp notification fd"),
         })?;
-        match ready.try_io(|listener| {
-            let request = unsafe {
-                rustix::ioctl::ioctl(
-                    listener.get_ref(),
-                    Getter::<SECCOMP_IOCTL_NOTIF_RECV, libc::seccomp_notif>::new(),
-                )
-            }?;
-            Ok(request)
-        }) {
-            Ok(Ok(notification)) => return Ok(notification),
-            Ok(Err(error)) => {
-                return Err(error).context(IoSnafu {
-                    path: Path::new("seccomp notification fd"),
-                });
+        match notification_listener_readiness(listener.get_ref()).context(IoSnafu {
+            path: Path::new("seccomp notification fd"),
+        })? {
+            NotificationListenerReadiness::Closed => return Ok(None),
+            NotificationListenerReadiness::Pending => {
+                ready.clear_ready();
+                continue;
             }
-            Err(_would_block) => continue,
+            NotificationListenerReadiness::Readable => ready.clear_ready(),
         }
+        let mut request = empty_notification();
+        match unsafe {
+            rustix::ioctl::ioctl(
+                listener.get_ref(),
+                Updater::<SECCOMP_IOCTL_NOTIF_RECV, libc::seccomp_notif>::new(&mut request),
+            )
+        } {
+            Ok(()) => return Ok(Some(request)),
+            Err(error) => {
+                let error = std::io::Error::from(error);
+                if !notification_receive_was_canceled(&error) {
+                    return Err(error).context(IoSnafu {
+                        path: Path::new("seccomp notification fd"),
+                    });
+                }
+                tokio::task::yield_now().await;
+            }
+        }
+    }
+}
+
+fn notification_listener_readiness(
+    listener: &OwnedFd,
+) -> std::io::Result<NotificationListenerReadiness> {
+    let mut descriptor = libc::pollfd {
+        fd: listener.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let ready = unsafe { libc::poll(&raw mut descriptor, 1, 0) };
+    if ready < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if ready == 0 {
+        return Ok(NotificationListenerReadiness::Pending);
+    }
+    if descriptor.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+        return Ok(NotificationListenerReadiness::Closed);
+    }
+    if descriptor.revents & libc::POLLIN != 0 {
+        return Ok(NotificationListenerReadiness::Readable);
+    }
+    Ok(NotificationListenerReadiness::Pending)
+}
+
+fn notification_receive_was_canceled(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(libc::ENOENT | libc::EINTR))
+}
+
+fn notification_response_was_canceled(error: rustix::io::Errno) -> bool {
+    matches!(
+        error,
+        rustix::io::Errno::NOENT | rustix::io::Errno::INPROGRESS
+    )
+}
+
+const fn empty_notification() -> libc::seccomp_notif {
+    libc::seccomp_notif {
+        id: 0,
+        pid: 0,
+        flags: 0,
+        data: libc::seccomp_data {
+            nr: 0,
+            arch: 0,
+            instruction_pointer: 0,
+            args: [0; 6],
+        },
     }
 }
 
 async fn respond_to_notification(
     listener: &AsyncFd<OwnedFd>,
-    id: u64,
+    process: &OciContainerProcessStateV1,
+    mut notification: libc::seccomp_notif,
+    initial_exec: bool,
+    expected_executable_path: Option<&Path>,
     allowed: bool,
-) -> Result<()> {
+    deadline: Instant,
+) -> Result<bool> {
+    let syscall = notification.data.nr;
+    loop {
+        let response = libc::seccomp_notif_resp {
+            id: notification.id,
+            val: 0,
+            error: if allowed { 0 } else { -libc::EPERM },
+            flags: if allowed {
+                libc::SECCOMP_USER_NOTIF_FLAG_CONTINUE as u32
+            } else {
+                0
+            },
+        };
+        match unsafe {
+            rustix::ioctl::ioctl(
+                listener,
+                Setter::<SECCOMP_IOCTL_NOTIF_SEND, libc::seccomp_notif_resp>::new(response),
+            )
+        } {
+            Ok(()) => return Ok(true),
+            Err(error) if notification_response_was_canceled(error) => {}
+            Err(error) => {
+                return Err(std::io::Error::from(error)).context(IoSnafu {
+                    path: Path::new("seccomp notification fd"),
+                });
+            }
+        }
+        notification = match tokio::time::timeout_at(deadline, receive_notification(listener)).await
+        {
+            Ok(notification) => match notification? {
+                Some(notification) => notification,
+                None => return Ok(false),
+            },
+            Err(_elapsed) => return Ok(false),
+        };
+        validate_notification(process, &notification, initial_exec)?;
+        ensure!(
+            notification.data.nr == syscall,
+            IdentityStateSnafu {
+                reason: "retried runtime seccomp notification changed syscall",
+            }
+        );
+        if initial_exec {
+            let executable_path = match read_executable_path(&notification) {
+                Ok(path) => path,
+                Err(_error) if !notification_is_valid(listener, notification.id)? => continue,
+                Err(error) => return Err(error),
+            };
+            ensure!(
+                expected_executable_path == Some(executable_path.as_path()),
+                IdentityStateSnafu {
+                    reason: "retried runtime seccomp notification changed executable",
+                }
+            );
+        }
+    }
+}
+
+fn notification_is_valid(listener: &AsyncFd<OwnedFd>, id: u64) -> Result<bool> {
     let valid = unsafe {
         rustix::ioctl::ioctl(
             listener,
@@ -405,30 +835,14 @@ async fn respond_to_notification(
         )
     };
     if let Err(error) = valid {
+        if error == rustix::io::Errno::NOENT {
+            return Ok(false);
+        }
         return Err(std::io::Error::from(error)).context(IoSnafu {
             path: Path::new("seccomp notification fd"),
         });
     }
-    let response = libc::seccomp_notif_resp {
-        id,
-        val: 0,
-        error: if allowed { 0 } else { -libc::EPERM },
-        flags: if allowed {
-            libc::SECCOMP_USER_NOTIF_FLAG_CONTINUE as u32
-        } else {
-            0
-        },
-    };
-    unsafe {
-        rustix::ioctl::ioctl(
-            listener,
-            Setter::<SECCOMP_IOCTL_NOTIF_SEND, libc::seccomp_notif_resp>::new(response),
-        )
-    }
-    .map_err(std::io::Error::from)
-    .context(IoSnafu {
-        path: Path::new("seccomp notification fd"),
-    })
+    Ok(true)
 }
 
 fn validate_notification(
@@ -437,19 +851,23 @@ fn validate_notification(
     initial_exec: bool,
 ) -> Result<()> {
     ensure!(
-        notification.id > 0
-            && notification.pid > 0
-            && notification.flags == 0
-            && matches!(
-                notification.data.nr as libc::c_long,
-                libc::SYS_execve | libc::SYS_execveat
-            )
+        notification_is_one_exec(notification)
             && (!initial_exec || notification.pid == process.process_pid() as u32),
         IdentityStateSnafu {
             reason: "seccomp notification is not one exact exec request",
         }
     );
     Ok(())
+}
+
+fn notification_is_one_exec(notification: &libc::seccomp_notif) -> bool {
+    notification.id > 0
+        && notification.pid > 0
+        && notification.flags == 0
+        && matches!(
+            notification.data.nr as libc::c_long,
+            libc::SYS_execve | libc::SYS_execveat
+        )
 }
 
 fn read_executable_path(notification: &libc::seccomp_notif) -> Result<PathBuf> {
@@ -483,12 +901,15 @@ fn read_executable_path(notification: &libc::seccomp_notif) -> Result<PathBuf> {
             0,
         )
     };
-    ensure!(
-        read > 0,
-        IdentityStateSnafu {
-            reason: "exec notification executable path is unreadable",
+    if read <= 0 {
+        return IdentityStateSnafu {
+            reason: format!(
+                "exec notification executable path is unreadable: {}",
+                std::io::Error::last_os_error()
+            ),
         }
-    );
+        .fail();
+    }
     bytes.truncate(read as usize);
     let end = bytes
         .iter()
@@ -508,9 +929,15 @@ fn read_executable_path(notification: &libc::seccomp_notif) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+
     use snafu::ResultExt as _;
 
-    use super::{validate_notification, OciContainerProcessStateV1};
+    use super::{
+        empty_notification, notification_listener_readiness, notification_receive_was_canceled,
+        notification_response_was_canceled, validate_notification, NotificationListenerReadiness,
+        OciContainerProcessStateV1,
+    };
 
     fn process_state() -> crate::Result<OciContainerProcessStateV1> {
         serde_json::from_value(serde_json::json!({
@@ -537,6 +964,68 @@ mod tests {
         let state = process_state()?;
         state.validate()?;
         assert_eq!(state.container_id(), "a".repeat(64));
+        Ok(())
+    }
+
+    #[test]
+    fn notification_receive_buffer_starts_zeroed() {
+        let notification = empty_notification();
+        assert_eq!(notification.id, 0);
+        assert_eq!(notification.pid, 0);
+        assert_eq!(notification.flags, 0);
+        assert_eq!(notification.data.nr, 0);
+        assert_eq!(notification.data.arch, 0);
+        assert_eq!(notification.data.instruction_pointer, 0);
+        assert_eq!(notification.data.args, [0; 6]);
+    }
+
+    #[test]
+    fn canceled_notification_receive_is_retryable() {
+        for errno in [libc::ENOENT, libc::EINTR] {
+            assert!(notification_receive_was_canceled(
+                &std::io::Error::from_raw_os_error(errno)
+            ));
+        }
+        assert!(!notification_receive_was_canceled(
+            &std::io::Error::from_raw_os_error(libc::EINVAL)
+        ));
+    }
+
+    #[test]
+    fn canceled_notification_response_is_retryable() {
+        for errno in [rustix::io::Errno::NOENT, rustix::io::Errno::INPROGRESS] {
+            assert!(notification_response_was_canceled(errno));
+        }
+        assert!(!notification_response_was_canceled(
+            rustix::io::Errno::INVAL
+        ));
+    }
+
+    #[test]
+    fn closed_notification_listener_is_detected_before_receive() -> std::io::Result<()> {
+        let mut descriptors = [-1; 2];
+        let status = unsafe { libc::pipe(descriptors.as_mut_ptr()) };
+        assert_eq!(status, 0);
+        let reader = unsafe { OwnedFd::from_raw_fd(descriptors[0]) };
+        let writer = unsafe { OwnedFd::from_raw_fd(descriptors[1]) };
+        assert_eq!(
+            notification_listener_readiness(&reader)?,
+            NotificationListenerReadiness::Pending
+        );
+        let byte = [1_u8];
+        assert_eq!(
+            unsafe { libc::write(writer.as_raw_fd(), byte.as_ptr().cast(), byte.len()) },
+            1
+        );
+        assert_eq!(
+            notification_listener_readiness(&reader)?,
+            NotificationListenerReadiness::Readable
+        );
+        drop(writer);
+        assert_eq!(
+            notification_listener_readiness(&reader)?,
+            NotificationListenerReadiness::Closed
+        );
         Ok(())
     }
 

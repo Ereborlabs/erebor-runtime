@@ -237,6 +237,7 @@ case ${1:-} in
     : >"$fixture_root/release"
     chmod 644 "$fixture_root/release"
     install -m 0555 "$(command -v busybox)" "$fixture_root/busybox"
+    install -m 0555 "$work_directory/bin/mithril-open-probe" "$fixture_root/open-probe"
     /usr/local/bin/k3s kubectl apply -f "$manifest" >/dev/null
     /usr/local/bin/k3s kubectl -n "$namespace" wait \
       --for=condition=Ready pod/mithril-runtime --timeout=300s
@@ -1240,6 +1241,7 @@ path_tree_deny_floors:\
     chmod 400 "$fixture_root/secret" "$fixture_root/benign" \
       "$fixture_root/release"
     install -m 0555 "$(command -v busybox)" "$executable_path"
+    install -m 0555 "$work_directory/bin/mithril-open-probe" "$fixture_root/open-probe"
 
     ca_key=$lane_root/ca-key.pem
     ca=$lane_root/ca.pem

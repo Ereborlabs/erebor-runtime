@@ -69,6 +69,30 @@ spec:
           else echo CONTROL_DENIED >
           /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-control-result;
           fi;
+          echo READY >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.concurrent-recursive-ready;
+          read -r concurrent_recursive_start <
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.concurrent-recursive-start;
+          concurrent_recursive_result=PATH_TREE_DENIED;
+          concurrent_recursive_count=0;
+          while [ "$concurrent_recursive_count" -lt 16384 ] && [ ! -e
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.concurrent-recursive-stop ];
+          do if command : </srv/team/blue/secrets/models/secret;
+          then concurrent_recursive_result=PATH_TREE_ALLOWED; break; fi;
+          concurrent_recursive_count=$((concurrent_recursive_count + 1));
+          done 2>/dev/null;
+          echo "$concurrent_recursive_result" >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.concurrent-recursive-result;
+          echo "$concurrent_recursive_count" >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.concurrent-recursive-count;
+          read -r stable_recursive_start <
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.stable-recursive-start;
+          if cat /srv/team/blue/secrets/models/secret >/dev/null 2>&1;
+          then echo PATH_TREE_ALLOWED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-recursive-wildcard-stable-result;
+          else echo PATH_TREE_DENIED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-recursive-wildcard-stable-result;
+          fi;
           if ( /usr/bin/env /bin/sleep 0 );
           then echo APPLICATION_DEFAULT_ALLOWED >
           /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.prepared-result;
@@ -129,9 +153,10 @@ spec:
               - /bin/cat
               - /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.lifecycle-ready
               - /home/alice/secrets/models/secret
-        periodSeconds: 10
+              - /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.concurrent-startup-gate
+        periodSeconds: 1
         timeoutSeconds: 1
-        failureThreshold: 30
+        failureThreshold: 120
       readinessProbe:
         exec:
           command:

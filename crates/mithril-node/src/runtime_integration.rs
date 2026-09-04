@@ -1018,7 +1018,8 @@ mod tests {
     }
 
     #[test]
-    fn exec_notification_rejects_conflicting_seccomp_authority() {
+    fn exec_notification_rejects_conflicting_seccomp_authority(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         for spec in [
             serde_json::json!({
                 "linux": {"seccomp": {
@@ -1040,7 +1041,7 @@ mod tests {
                 }}
             }),
         ] {
-            let encoded = serde_json::to_vec(&spec).expect("test spec must encode");
+            let encoded = serde_json::to_vec(&spec)?;
             assert!(OciBaseSpecOwner::build(
                 &encoded,
                 Path::new("/usr/libexec/oci/hooks.d/mithril-oci-hook"),
@@ -1052,6 +1053,7 @@ mod tests {
             )
             .is_err());
         }
+        Ok(())
     }
 
     #[test]

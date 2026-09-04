@@ -256,8 +256,9 @@ run_lightweight_upgrade_probe() {
 if [[ $lightweight_only == true ]]; then
   echo "Building the lightweight retained-upgrade probe"
   (cd -- "$repo_root" && cargo build --locked \
-    -p mithril-e2e --bin mithril-effect-test \
-    -p mithril-node --bin mithril-oci-hook)
+    -p mithril-e2e --bin mithril-effect-test && \
+    cargo rustc --locked -p mithril-node --bin mithril-oci-hook -- \
+      -C target-feature=+crt-static)
   "$provider" wait "$vm_a"
   remote_a=/var/tmp/$vm_a
   "$provider" run "$vm_a" mkdir -p "$remote_a"
@@ -570,6 +571,8 @@ for node in "$vm_a" "$vm_b"; do
   "$provider" put "$node" "$directory/guest.sh" "$remote/harness/guest.sh"
   "$provider" put "$node" "$directory/runtime-hook-oracle.sh" \
     "$remote/harness/runtime-hook-oracle.sh"
+  "$provider" put "$node" "$directory/concurrent-exec-overlap.sh" \
+    "$remote/harness/concurrent-exec-overlap.sh"
   "$provider" put "$node" "$directory/k3s-config-v1.yaml" \
     "$remote/harness/k3s-config-v1.yaml"
   "$provider" put "$node" "$image_archive" "$remote/mithril-images.tar"
@@ -1568,6 +1571,75 @@ runtime_task_snapshot() {
       task --host-pid "$host_pid"
 }
 
+mount_map_counter() {
+  local vm=$1
+  local map_name=$2
+  "$provider" run "$vm" sudo bpftool -j map lookup pinned \
+    "/sys/fs/bpf/mithril-convergence/maps/$map_name" \
+    key hex 00 00 00 00 | jq -er '
+      def hex_byte:
+        if type == "number" then .
+        else ascii_downcase | ltrimstr("0x") |
+          reduce (explode[]) as $code
+            (0; . * 16 + if $code >= 97 then $code - 87 else $code - 48 end)
+        end;
+      .value | reduce to_entries[] as $byte
+        (0; . + (($byte.value | hex_byte) * pow(256; $byte.key)))
+    '
+}
+
+mount_topology_snapshot() {
+  local vm=$1
+  local host_pid=$2
+  local mount_namespace_inode
+  local namespace_event
+  local mountinfo_sha256
+  local security_epoch
+  local activity_sequence
+  local exact_events
+
+  mount_namespace_inode=$("$provider" run "$vm" sudo stat -Lc %i \
+    "/proc/$host_pid/ns/mnt")
+  exact_events=$("$provider" run "$vm" sudo bpftool -j map dump pinned \
+    /sys/fs/bpf/mithril-convergence/maps/exact_mount_events)
+  namespace_event=$(jq -er --argjson namespace "$mount_namespace_inode" '
+    def hex_byte:
+      if type == "number" then .
+      else ascii_downcase | ltrimstr("0x") |
+        reduce (explode[]) as $code
+          (0; . * 16 + if $code >= 97 then $code - 87 else $code - 48 end)
+      end;
+    def little_endian:
+      reduce to_entries[] as $byte
+        (0; . + (($byte.value | hex_byte) * pow(256; $byte.key)));
+    [
+      .[] |
+      select((.key[16:20] | little_endian) == $namespace) |
+      (.value[16:24] | little_endian)
+    ] | unique |
+    if length == 1 then .[0]
+    else error("the target namespace does not have one exact mount event")
+    end
+  ' <<<"$exact_events")
+  mountinfo_sha256=$("$provider" run "$vm" sudo sha256sum \
+    "/proc/$host_pid/mountinfo" | awk '{print $1}')
+  security_epoch=$(mount_map_counter "$vm" mount_global_mutation_epoch)
+  activity_sequence=$(mount_map_counter "$vm" mount_global_activity_sequence)
+  jq -cn --argjson mount_namespace_inode "$mount_namespace_inode" \
+    --argjson namespace_event "$namespace_event" \
+    --arg mountinfo_sha256 "$mountinfo_sha256" \
+    --argjson security_epoch "$security_epoch" \
+    --argjson activity_sequence "$activity_sequence" '
+    {
+      mount_namespace_inode: $mount_namespace_inode,
+      namespace_event: $namespace_event,
+      mountinfo_sha256: $mountinfo_sha256,
+      security_epoch: $security_epoch,
+      activity_sequence: $activity_sequence
+    }
+  '
+}
+
 wait_running_container_identity() {
   local vm=$1
   local namespace=$2
@@ -1615,7 +1687,8 @@ node_effects() {
   remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
     mithril-inspect effects --socket-path /run/mithril/observation.sock \
       --cgroup-scope / --reason APPLICATION_DEFAULT_ALLOW \
-      --reason UNSUPPORTED_OBJECT --reason PATH_TREE_POLICY_DENY
+      --reason UNSUPPORTED_OBJECT --reason UNRESOLVED_OBJECT \
+      --reason PATH_TREE_POLICY_DENY
 }
 
 effect_health_value() {
@@ -1702,6 +1775,7 @@ start_entry_effect_capture() {
       --reason APPLICATION_DEFAULT_ALLOW \
       --reason PREPARED_RUNTIME_INFRASTRUCTURE \
       --reason RUNTIME_ENTRY_INFRASTRUCTURE \
+      --reason UNRESOLVED_OBJECT \
       --reason PATH_TREE_POLICY_DENY \
       >"$output" 2>/dev/null &
   entry_effect_capture_pids+=("$!")
@@ -1726,14 +1800,28 @@ prepare_pod_markers() {
       "$marker_root/$pod_name.path-tree-bind-result" \
       "$marker_root/$pod_name.path-tree-wildcard-result" \
       "$marker_root/$pod_name.path-tree-recursive-wildcard-result" \
+      "$marker_root/$pod_name.path-tree-recursive-wildcard-stable-result" \
       "$marker_root/$pod_name.path-tree-control-result" \
+      "$marker_root/$pod_name.concurrent-recursive-ready" \
+      "$marker_root/$pod_name.concurrent-recursive-start" \
+      "$marker_root/$pod_name.concurrent-recursive-result" \
+      "$marker_root/$pod_name.concurrent-recursive-count" \
+      "$marker_root/$pod_name.concurrent-recursive-stop" \
+      "$marker_root/$pod_name.concurrent-startup-gate" \
+      "$marker_root/$pod_name.stable-recursive-start" \
       "$marker_root/$pod_name.poststart-observed" \
       "$marker_root/$pod_name.prestop-observed"
     "$provider" run "$node" sudo touch \
       "$marker_root/$pod_name.exception-target"
+    if [[ $pod_name != protected ]]; then
+      "$provider" run "$node" sudo touch \
+        "$marker_root/$pod_name.concurrent-startup-gate"
+    fi
     "$provider" run "$node" sudo mkfifo \
       "$marker_root/$pod_name.application-request" \
       "$marker_root/$pod_name.exception-request" \
+      "$marker_root/$pod_name.concurrent-recursive-start" \
+      "$marker_root/$pod_name.stable-recursive-start" \
       "$marker_root/$pod_name.restart"
     "$provider" run "$node" \
       "printf '%s\\n' READY | sudo tee '$marker_root/$pod_name.lifecycle-ready' >/dev/null"
@@ -1872,16 +1960,136 @@ protected_effect_capture_b=$output_directory/protected-effect-capture-node-b.txt
 start_entry_effect_capture "$node_a_name" "$protected_effect_capture_a"
 start_entry_effect_capture "$node_b_name" "$protected_effect_capture_b"
 remote_kubectl create -f "$remote_a/protected.yaml" >/dev/null
-remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
-  --timeout=300s >/dev/null
-selected_node=$(remote_kubectl -n "$workload_namespace" get pod protected \
-  -o jsonpath='{.spec.nodeName}')
+selected_node=
+for _attempt in {1..120}; do
+  selected_node=$(remote_kubectl -n "$workload_namespace" get pod protected \
+    -o jsonpath='{.spec.nodeName}')
+  [[ -n $selected_node ]] && break
+  [[ $_attempt -lt 120 ]] || {
+    echo "the protected Pod was not scheduled" >&2
+    exit 1
+  }
+  sleep 1
+done
 [[ $selected_node == "$node_a_name" || $selected_node == "$node_b_name" ]] || {
   echo "the scheduler selected a Node outside the DaemonSet-derived set" >&2
   exit 1
 }
-other_node=$node_a_name
-[[ $selected_node == "$node_b_name" ]] || other_node=$node_b_name
+if [[ $selected_node == "$node_a_name" ]]; then
+  selected_vm=$vm_a
+  selected_remote=$remote_a
+  other_node=$node_b_name
+  other_vm=$vm_b
+else
+  selected_vm=$vm_b
+  selected_remote=$remote_b
+  other_node=$node_a_name
+  other_vm=$vm_a
+fi
+for _attempt in {1..120}; do
+  protected_restart_count=$(remote_kubectl -n "$workload_namespace" get pod protected \
+    -o jsonpath='{.status.containerStatuses[0].restartCount}' 2>/dev/null || true)
+  [[ $protected_restart_count =~ ^[0-9]+$ ]] || protected_restart_count=-1
+  ((protected_restart_count == 0)) || {
+    echo "the protected Pod restarted before the concurrent containerd exec proof" >&2
+    exit 1
+  }
+  if "$provider" run "$selected_vm" sudo cmp -s \
+    /var/lib/mithril-convergence/markers/protected.lifecycle-ready \
+    /var/lib/mithril-convergence/markers/protected.poststart-observed; then
+    break
+  fi
+  [[ $_attempt -lt 120 ]] || {
+    echo "the protected Pod did not complete PostStart before the concurrent containerd exec proof" >&2
+    exit 1
+  }
+  sleep 1
+done
+for _attempt in {1..120}; do
+  if "$provider" run "$selected_vm" sudo test -e \
+    /var/lib/mithril-convergence/markers/protected.concurrent-recursive-ready; then
+    break
+  fi
+  [[ $_attempt -lt 120 ]] || {
+    echo "the protected Pod did not start its concurrent recursive read loop" >&2
+    exit 1
+  }
+  sleep 1
+done
+concurrent_container_uri=
+for _attempt in {1..120}; do
+  concurrent_container_uri=$(remote_kubectl -n "$workload_namespace" \
+    get pod protected -o jsonpath='{.status.containerStatuses[0].containerID}' \
+    2>/dev/null || true)
+  [[ $concurrent_container_uri == containerd://* ]] && break
+  [[ $_attempt -lt 120 ]] || {
+    echo "the protected Pod did not publish its running container ID" >&2
+    exit 1
+  }
+  sleep 0.25
+done
+concurrent_container_id=${concurrent_container_uri#containerd://}
+[[ $concurrent_container_id =~ ^[0-9a-f]{64}$ ]] || {
+  echo "the protected Pod published an invalid container ID" >&2
+  exit 1
+}
+concurrent_container_json=$("$provider" run "$selected_vm" sudo \
+  /usr/local/bin/k3s crictl inspect "$concurrent_container_id")
+concurrent_host_pid=$(jq -er '.info.pid | select(. > 0)' \
+  <<<"$concurrent_container_json")
+concurrent_mount_before=$(mount_topology_snapshot \
+  "$selected_vm" "$concurrent_host_pid")
+concurrent_exec_root=/var/tmp/mithril-concurrent-exec-$run_id
+concurrent_exec_evidence=$output_directory/concurrent-exec-mount-overlap.txt
+set +e
+"$provider" run "$selected_vm" sudo bash \
+  "$selected_remote/harness/concurrent-exec-overlap.sh" \
+  /var/lib/mithril-convergence/markers/protected.concurrent-recursive-start \
+  "$concurrent_exec_root" "$concurrent_container_id" 32 \
+  >"$concurrent_exec_evidence" 2>&1
+concurrent_exec_status=$?
+set -e
+"$provider" run "$selected_vm" sudo rm -rf -- "$concurrent_exec_root"
+[[ $concurrent_exec_status -eq 0 ]] || {
+  cat "$concurrent_exec_evidence" >&2
+  echo "the concurrent containerd exec preparations did not all fail closed" >&2
+  exit 1
+}
+concurrent_mount_after=$(mount_topology_snapshot \
+  "$selected_vm" "$concurrent_host_pid")
+jq -n --argjson before "$concurrent_mount_before" \
+  --argjson after "$concurrent_mount_after" \
+  '{before: $before, after: $after}' \
+  >"$output_directory/concurrent-exec-mount-topology.json"
+jq -e --argjson before "$concurrent_mount_before" \
+  --argjson after "$concurrent_mount_after" '
+  ($before.mount_namespace_inode == $after.mount_namespace_inode) and
+  ($before.namespace_event == $after.namespace_event) and
+  ($before.mountinfo_sha256 == $after.mountinfo_sha256) and
+  ($before.security_epoch == $after.security_epoch) and
+  ($after.activity_sequence > $before.activity_sequence)
+' <<<null >/dev/null || {
+  echo "detached containerd exec preparation changed the protected mount view" >&2
+  exit 1
+}
+"$provider" run "$selected_vm" sudo touch \
+  /var/lib/mithril-convergence/markers/protected.concurrent-recursive-stop \
+  /var/lib/mithril-convergence/markers/protected.concurrent-startup-gate
+for _attempt in {1..120}; do
+  concurrent_recursive_result=$("$provider" run "$selected_vm" sudo cat \
+    /var/lib/mithril-convergence/markers/protected.concurrent-recursive-result \
+    2>/dev/null || true)
+  [[ $concurrent_recursive_result == PATH_TREE_DENIED ]] && break
+  [[ $_attempt -lt 120 ]] || {
+    echo "the protected Pod did not complete its concurrent recursive read after the stop marker" >&2
+    exit 1
+  }
+  sleep 1
+done
+remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
+  --timeout=300s >/dev/null
+"$provider" run "$selected_vm" \
+  "printf 'start\\n' | sudo timeout 30s tee /var/lib/mithril-convergence/markers/protected.stable-recursive-start >/dev/null"
 
 assert_prepared_container_activation() {
   local task_json=$1
@@ -1963,14 +2171,6 @@ jq -e '
   .scheduled_binding_count == 0 and
   .runtime_binding_count == 0
 ' <<<"$other_status" >/dev/null
-
-if [[ $selected_node == "$node_a_name" ]]; then
-  selected_vm=$vm_a
-  other_vm=$vm_b
-else
-  selected_vm=$vm_b
-  other_vm=$vm_a
-fi
 
 if [[ $qualify_state_preserving_upgrade == true ]]; then
   upgrade_candidate_before=$protected_candidate
@@ -2205,7 +2405,9 @@ for path_tree_result in \
     path-tree-bind-result:PATH_TREE_DENIED \
     path-tree-wildcard-result:PATH_TREE_DENIED \
     path-tree-recursive-wildcard-result:PATH_TREE_DENIED \
-    path-tree-control-result:CONTROL_ALLOWED; do
+    path-tree-recursive-wildcard-stable-result:PATH_TREE_DENIED \
+    path-tree-control-result:CONTROL_ALLOWED \
+    concurrent-recursive-result:PATH_TREE_DENIED; do
   marker_name=${path_tree_result%%:*}
   expected_result=${path_tree_result#*:}
   for _attempt in {1..120}; do
@@ -2222,18 +2424,26 @@ for path_tree_result in \
   "$provider" run "$other_vm" sudo test ! -e \
     "/var/lib/mithril-convergence/markers/protected.$marker_name"
 done
+concurrent_recursive_count=$("$provider" run "$selected_vm" sudo cat \
+  /var/lib/mithril-convergence/markers/protected.concurrent-recursive-count)
+[[ $concurrent_recursive_count =~ ^[1-9][0-9]*$ ]] || {
+  echo "the concurrent protected-read loop did not complete one read" >&2
+  exit 1
+}
 
 stop_entry_effect_capture
 protected_effect_capture=$protected_effect_capture_a
 [[ $selected_node == "$node_b_name" ]] && \
   protected_effect_capture=$protected_effect_capture_b
-path_tree_effect_count=$(awk -v role="$application_role_id" '
+read -r application_entry_rule_id path_tree_effect_count \
+  unresolved_object_effect_count < <(awk -v role="$application_role_id" '
       /^observed_boottime_ns=/ {
         reason = ""
         family = 0
         operation = 0
         kernel_result = 0
         active_role_id = 0
+        admitted_entry_rule_id = 0
         for (field_index = 1; field_index <= NF; field_index++) {
           split($field_index, field, "=")
           if (field[1] == "reason") {
@@ -2246,18 +2456,31 @@ path_tree_effect_count=$(awk -v role="$application_role_id" '
             kernel_result = field[2]
           } else if (field[1] == "active_role_id") {
             active_role_id = field[2]
+          } else if (field[1] == "admitted_entry_rule_id") {
+            admitted_entry_rule_id = field[2]
           }
         }
-        if (reason == "PATH_TREE_POLICY_DENY" &&
+        if ((reason == "PATH_TREE_POLICY_DENY" ||
+             reason == "UNRESOLVED_OBJECT") &&
             family == 2 && operation == 2 && kernel_result == -13 &&
-            active_role_id == role) {
-          count++
+            active_role_id == role && admitted_entry_rule_id > 0) {
+          if (entry_rule_id == 0) {
+            entry_rule_id = admitted_entry_rule_id
+          }
+          if (admitted_entry_rule_id == entry_rule_id) {
+            if (reason == "PATH_TREE_POLICY_DENY") {
+              path_count++
+            } else {
+              guard_count++
+            }
+          }
         }
       }
-      END { print count + 0 }
+      END { print entry_rule_id + 0, path_count + 0, guard_count + 0 }
     ' "$protected_effect_capture")
-[[ $path_tree_effect_count -ge 5 ]] || {
-  echo "the protected Pod produced $path_tree_effect_count of five required path-tree denial events" >&2
+[[ $application_entry_rule_id -gt 0 && $path_tree_effect_count -ge 5 && \
+  $unresolved_object_effect_count -eq 0 ]] || {
+  echo "the protected Pod path proof used entry rule $application_entry_rule_id, $path_tree_effect_count path denials, and $unresolved_object_effect_count unresolved-object denials; expected one rule, at least five path denials, and no unresolved-object denial" >&2
   exit 1
 }
 
@@ -2369,21 +2592,13 @@ fi
 "$provider" run "$other_vm" sudo test ! -e "$external_marker"
 
 external_cgroup_entry_denied=false
+external_cgroup_entry_denial_count=0
 for _attempt in {1..40}; do
   external_effects=$(node_effects "$selected_node")
-  if awk -v marker="$effect_marker" '
-      /^observed_boottime_ns=/ {
-        split($1, field, "=")
-        if (field[2] > marker &&
-            $0 ~ / family=1 operation=1 / &&
-            $0 ~ / reason=UNSUPPORTED_OBJECT / &&
-            $0 ~ / result=DENIED_BEFORE_EFFECT / &&
-            $0 ~ / kernel_result=-13$/) {
-          found = 1
-        }
-      }
-      END { exit !found }
-    ' <<<"$external_effects"; then
+  external_cgroup_entry_denial_count=$(
+    external_cgroup_exec_denial_count_after "$external_effects" "$effect_marker"
+  )
+  if ((external_cgroup_entry_denial_count > 0)); then
     external_cgroup_entry_denied=true
     break
   fi
@@ -2396,9 +2611,11 @@ printf '%s\n' "$external_effects" \
   exit 1
 }
 external_unresolved=$(effect_health_value "$external_effects" unresolved)
-expected_external_unresolved=$((external_unresolved_before + 1))
+expected_external_unresolved=$((
+  external_unresolved_before + external_cgroup_entry_denial_count
+))
 [[ $external_unresolved == "$expected_external_unresolved" ]] || {
-  echo "the external cgroup denial did not record one unresolved effect" >&2
+  echo "the external cgroup denials did not record their exact unresolved effects" >&2
   exit 1
 }
 protected_uid=$(remote_kubectl -n "$workload_namespace" get pod protected \

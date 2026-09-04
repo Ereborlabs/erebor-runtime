@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, Read as _, Write as _};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, UdpSocket};
@@ -26,8 +25,7 @@ use zerocopy::{FromBytes as _, IntoBytes as _};
 
 use super::child::EffectProcessFixture;
 use super::support::{
-    effect_binding_with_identity, effect_node_config, inode_generation, mount_views_are_clean,
-    wait_for_effect,
+    effect_binding_with_identity, effect_node_config, inode_generation, wait_for_effect,
 };
 use crate::error::{
     InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu, PolicySnafu,
@@ -439,7 +437,6 @@ impl NetworkTestRunner {
             None,
         )
         .context(NodeSnafu)?;
-        let token_mount_namespaces = BTreeSet::from([token_object.mount_namespace_inode]);
         let artifact_path = build_network_artifact(&policy_fixture, &fixture_root, peer)?;
         let node_config = effect_node_config(
             &fixture_root,
@@ -461,13 +458,6 @@ impl NetworkTestRunner {
             test_token_object.clone(),
         )
         .context(NodeSnafu)?;
-        ensure!(
-            mount_views_are_clean(&host, &token_mount_namespaces)?,
-            InvalidInputSnafu {
-                path: Path::new("mount_security_views"),
-                reason: "network token policy activation did not produce a clean mount view",
-            }
-        );
         NativeSecurityStateOwner::new(node_boot_id, 1)
             .activate_initial_with_effect_policy(&mut host, true)
             .context(NodeSnafu)?;

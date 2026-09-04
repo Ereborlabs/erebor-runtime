@@ -205,35 +205,56 @@ pub(super) fn global_mount_view_is_dirty(host: &KernelHost) -> Result<bool> {
     Ok(mutation != clean || pending != 0)
 }
 
-pub(super) fn mount_views_are_clean(
-    host: &KernelHost,
-    mount_namespaces: &BTreeSet<u32>,
-) -> Result<bool> {
-    let global_key = 0_u32.to_ne_bytes();
-    let global_epoch = mount_counter(host, "mount_global_mutation_epoch", &global_key)?;
-    let global_clean = mount_counter(host, "mount_global_clean_epoch", &global_key)?;
-    let global_pending = mount_counter(host, "mount_global_pending_mutations", &global_key)?;
-    if mount_namespaces.is_empty()
-        || global_epoch == 0
-        || global_clean != global_epoch
-        || global_pending != 0
+pub(super) fn global_mount_mutation_epoch(host: &KernelHost) -> Result<u64> {
+    mount_counter(host, "mount_global_mutation_epoch", &0_u32.to_ne_bytes())
+}
+
+pub(super) fn global_mount_activity_sequence(host: &KernelHost) -> Result<u64> {
+    mount_counter(host, "mount_global_activity_sequence", &0_u32.to_ne_bytes())
+}
+
+pub(super) fn ready_canonical_mount_snapshots(host: &KernelHost) -> Result<BTreeSet<Vec<u8>>> {
+    let mut ready = BTreeSet::new();
+    for key in host
+        .map_keys("canonical_mount_cache_states")
+        .context(InterceptorSnafu)?
     {
-        return Ok(false);
-    }
-    for mount_namespace_inode in mount_namespaces {
-        let key = mount_namespace_inode.to_ne_bytes();
-        let view = mount_state(host, "mount_security_views", &key)?;
-        if view.state != MountTopologyStateV1::Clean
-            || view.topology_generation != global_epoch
-            || view.snapshot_digest_id == 0
-            || view.pending_mutations != 0
-            || view.transition_version == 0
-            || mount_counter(host, "mount_mutation_epochs", &key)? != global_epoch
-        {
-            return Ok(false);
+        let bytes = host
+            .lookup_map("canonical_mount_cache_states", &key)
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: Path::new("canonical_mount_cache_states"),
+                    reason: "a canonical mount snapshot disappeared during readback",
+                }
+                .build()
+            })?;
+        let value: [u8; 8] = bytes.as_slice().try_into().map_err(|_| {
+            InvalidInputSnafu {
+                path: Path::new("canonical_mount_cache_states"),
+                reason: "a canonical mount snapshot has an invalid ABI value",
+            }
+            .build()
+        })?;
+        let mount_count = u32::from_ne_bytes(value[..4].try_into().map_err(|error| {
+            InvalidInputSnafu {
+                path: Path::new("canonical_mount_cache_states"),
+                reason: format!("the canonical mount count is invalid: {error}"),
+            }
+            .build()
+        })?);
+        let state = u32::from_ne_bytes(value[4..].try_into().map_err(|error| {
+            InvalidInputSnafu {
+                path: Path::new("canonical_mount_cache_states"),
+                reason: format!("the canonical mount state is invalid: {error}"),
+            }
+            .build()
+        })?);
+        if mount_count > 0 && state == 1 {
+            ready.insert(key);
         }
     }
-    Ok(true)
+    Ok(ready)
 }
 
 fn mount_counter(host: &KernelHost, map: &str, key: &[u8]) -> Result<u64> {
@@ -499,6 +520,7 @@ fn wait_for_observation(
                                 event.reason.as_str(),
                                 event.effect_family,
                                 event.operation,
+                                event.active_role_id,
                                 event.operation_argument,
                                 event.exact_object_key_id,
                                 event.composite_atom_id,
@@ -646,6 +668,21 @@ impl ExternalMountNamespace {
         self.run(["mkdir", "-p", "--"], [path])
     }
 
+    pub(super) fn mount_tmpfs(&self, target: &Path) -> Result<()> {
+        self.run(
+            ["mount", "-t", "tmpfs", "-o", "mode=0755", "tmpfs", "--"],
+            [target],
+        )
+    }
+
+    pub(super) fn copy_file(&self, source: &Path, target: &Path) -> Result<()> {
+        self.run(["cp", "--"], [source, target])
+    }
+
+    pub(super) fn make_executable(&self, path: &Path) -> Result<()> {
+        self.run(["chmod", "0555", "--"], [path])
+    }
+
     pub(super) fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
         Ok(self.output(["cat", "--"], [path])?.stdout)
     }
@@ -685,6 +722,45 @@ impl ExternalMountNamespace {
             output.status.success(),
             CommandSnafu {
                 program: "mithril-effect-test mount-setattr",
+                reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            }
+        );
+        Ok(())
+    }
+
+    pub(super) fn reconfigure_mount(&self, target: &Path) -> Result<()> {
+        let executable = std::env::current_exe().context(IoSnafu {
+            path: Path::new("current executable"),
+        })?;
+        let flags = rustix::io::fcntl_getfd(&self.namespace)
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: Path::new("held mount namespace"),
+            })?;
+        rustix::io::fcntl_setfd(&self.namespace, flags - rustix::io::FdFlags::CLOEXEC)
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: Path::new("held mount namespace"),
+            })?;
+        let output = Command::new(executable)
+            .arg("mount-reconfigure")
+            .arg("--namespace")
+            .arg(format!("/proc/self/fd/{}", self.namespace.as_raw_fd()))
+            .arg("--path")
+            .arg(target)
+            .output();
+        rustix::io::fcntl_setfd(&self.namespace, flags)
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: Path::new("held mount namespace"),
+            })?;
+        let output = output.context(IoSnafu {
+            path: Path::new("fsconfig reconfigure helper"),
+        })?;
+        ensure!(
+            output.status.success(),
+            CommandSnafu {
+                program: "mithril-effect-test mount-reconfigure",
                 reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
             }
         );
@@ -906,7 +982,7 @@ mod tests {
                 .iter()
                 .filter(|cell| cell.physical_result == CompiledPhysicalResultV1::DenyEffect)
                 .count(),
-            10
+            11
         );
         assert!(cells.iter().any(|cell| {
             cell.source_rule_ids == ["allow-manual-exec-read"]
@@ -979,7 +1055,7 @@ mod tests {
                 .iter()
                 .filter(|cell| cell.consuming_exception_id.is_some())
                 .count(),
-            3
+            2
         );
         for (exception_id, expected_digest) in [
             (

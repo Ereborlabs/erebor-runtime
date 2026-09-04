@@ -204,11 +204,7 @@ default_postures:
     unknown_restricted_role_id: runtime-external
 notification_routes: []
 response_bindings: []
-file_exception_grants:
-  - grant_id: replacement-secret-open
-    denied_file_rule_ids: [deny-replacement-secret-open]
-    maximum_duration_ns: 240000000000
-    maximum_uses: 1
+file_exception_grants: []
 exceptions:
   - exception_id: bounded-secret-write-open
     exception_instance_id: 88888888-8888-4888-8888-888888888889

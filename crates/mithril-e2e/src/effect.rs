@@ -16,14 +16,13 @@ use erebor_interceptor::{EffectObservationReader, KernelHost, KernelHostConfig, 
 use erebor_interceptor_abi::{
     BindingActivationTargetKeyV1, ExceptionReceiptStateV1, ExceptionRuntimeStateKeyV1,
     ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExceptionUseReceiptV1, Id128V1,
-    IpcOperationV1, KernelEffectFamilyV1, KernelEffectOperationV1, MountReconciliationProposalV1,
-    MountSecurityViewStateV1, MountTopologyStateV1, PolicyGenerationStateV1,
+    IpcOperationV1, KernelEffectFamilyV1, KernelEffectOperationV1, PolicyGenerationStateV1,
     ProfileGenerationDescriptorV1, QualificationResultV1, MAX_CANONICAL_PATH_COMPONENTS_V1,
 };
 use mithril_control::{
-    ContainerKindV1, ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1, PathSelectorV1,
-    PathTreeDenyFloorV1, PolicyArtifactOwner, PolicyDocumentV1, ProfileSealRequestV1,
-    WorkloadTargetFactV1,
+    ContainerKindV1, ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1,
+    FileExceptionGrantTemplateV1, PathSelectorV1, PathTreeDenyFloorV1, PolicyArtifactOwner,
+    PolicyDocumentV1, ProfileSealRequestV1, WorkloadTargetFactV1,
 };
 use mithril_node::{
     CoverageGapReasonV1, EffectObservationHealth, EffectObservationStore, EvidenceIdV1,
@@ -37,8 +36,9 @@ use zerocopy::{IntoBytes as _, TryFromBytes as _};
 use self::child::{EffectProcessFixture, HardClosedOperation};
 use self::support::{
     effect_binding, effect_node_config, effect_peer_binding, effect_propagation_binding,
-    global_mount_view_is_dirty, health_delta, inode_generation, mount_view_is_dirty,
-    mount_views_are_clean, sample_observation_health, wait_for_effect, wait_for_exact_effect,
+    global_mount_activity_sequence, global_mount_mutation_epoch, global_mount_view_is_dirty,
+    health_delta, inode_generation, mount_view_is_dirty, ready_canonical_mount_snapshots,
+    sample_observation_health, wait_for_effect, wait_for_exact_effect,
     wait_for_exact_io_uring_effect, wait_for_path_exec_effect, wait_for_reason,
     wait_for_unsupported_effect, ExternalMountNamespace,
 };
@@ -51,7 +51,9 @@ use crate::physical::{boot_identity, ProbeCgroup, ProbeDirectory, ProbeFile};
 use crate::LatencyDistributionV1;
 use crate::Result;
 
-pub use child::{run_effect_child, run_mount_move_child, run_mount_setattr_child};
+pub use child::{
+    run_effect_child, run_mount_move_child, run_mount_reconfigure_child, run_mount_setattr_child,
+};
 pub use network::{
     run_network_peer_server, NetworkFixtureResultV1, NetworkPeerServerResultV1,
     NetworkPeerTargetV1, NetworkPhysicalProbeBundleV1, NetworkTestRunner, NETWORK_PEER_DENIED_PORT,
@@ -68,26 +70,35 @@ const BOUNDED_EXCEPTION_INSTANCE_ID: Id128V1 =
 const EXPIRED_EXCEPTION_INSTANCE_ID: Id128V1 =
     Id128V1::new(0x8888_8888_8888_4888, 0x8888_8888_8888_888a);
 
-fn reconcile_policy_lifecycle_with_admission_views(
+fn reconcile_policy_lifecycle(
     policy: &NodePolicyGenerationOwner,
     host: &mut KernelHost,
-    mount_namespaces: &BTreeSet<u32>,
 ) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        policy.reconcile_policy_lifecycle(host).context(NodeSnafu)?;
-        if mount_views_are_clean(host, mount_namespaces)? {
-            return Ok(());
+    policy.reconcile_policy_lifecycle(host).context(NodeSnafu)?;
+    Ok(())
+}
+
+fn wait_for_path_tree_effect(
+    reader: &EffectObservationReader,
+    observations: &EffectObservationStore,
+    marker: u64,
+    path: &Path,
+    operation: KernelEffectOperationV1,
+) -> Result<()> {
+    wait_for_effect(
+        reader,
+        observations,
+        marker,
+        "PATH_TREE_POLICY_DENY",
+        (KernelEffectFamilyV1::File, operation),
+    )
+    .map_err(|error| {
+        InvalidInputSnafu {
+            path,
+            reason: format!("path-tree decision did not resolve for this path: {error}"),
         }
-        ensure!(
-            Instant::now() < deadline,
-            InvalidInputSnafu {
-                path: Path::new("mount_security_views"),
-                reason: "admission mount-view readback was not stable before an exact-effect check",
-            }
-        );
-        std::thread::sleep(Duration::from_millis(25));
-    }
+        .build()
+    })
 }
 
 fn process_descriptor_set(pid: u32) -> Result<BTreeSet<u32>> {
@@ -445,6 +456,7 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub hard_link_alias_denied: bool,
     pub symlink_alias_denied: bool,
     pub proc_fd_alias_denied: bool,
+    pub unattached_mount_fd_access_denied: bool,
     pub passed_fd_read_denied: bool,
     pub passed_benign_fd_read_allowed: bool,
     pub passed_fd_acquisition_denied: bool,
@@ -471,16 +483,19 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub allowed_recursive_bind_alias_allowed: bool,
     pub path_tree_move_mount_alias_denied: bool,
     pub allowed_move_mount_alias_allowed: bool,
+    pub detached_open_tree_activity_observed: bool,
+    pub move_mount_attachment_invalidated_security_view: bool,
+    pub fsconfig_reconfigure_global_invalidation: bool,
     pub path_tree_mount_attack_failed_closed: bool,
     pub protected_mount_race_denied: bool,
-    pub mount_stale_proposal_failed_closed: bool,
+    pub mount_snapshot_rebuilt_after_mutation: bool,
     pub mount_propagation_reached_peer: bool,
-    pub mount_propagation_all_views_failed_closed: bool,
-    pub mount_propagation_reconciled: bool,
+    pub mount_propagation_all_views_rebuilt: bool,
+    pub mount_propagation_unmount_rebuilt: bool,
     pub mount_setattr_global_invalidation: bool,
-    pub mount_setattr_reconciled: bool,
+    pub mount_setattr_snapshot_rebuilt: bool,
     pub external_mount_replacement_failed_closed: bool,
-    pub exact_object_restored_after_reconciliation: bool,
+    pub exact_object_restored_after_mount_removal: bool,
     pub active_generation_published: bool,
     pub existing_process_migrated_to_active_generation: bool,
     pub old_generation_deleted_after_last_holder: bool,
@@ -616,27 +631,29 @@ fn build_generation_artifact(
             }
             .build()
         })?;
-        document.path_tree_deny_floors.push(PathTreeDenyFloorV1 {
-            rule_id: "manual-secret-tree-deny".to_owned(),
-            role_id: "converter".to_owned(),
-            path: canonical_path.to_owned(),
-            operation_ids: [
-                "CREATE",
-                "LINK",
-                "MMAP_READ",
-                "MMAP_WRITE",
-                "MPROTECT",
-                "OPEN_READ",
-                "OPEN_WRITE",
-                "READ",
-                "RENAME",
-                "SETATTR",
-                "UNLINK",
-                "WRITE",
-            ]
-            .map(str::to_owned)
-            .to_vec(),
-        });
+        for role_id in ["converter", "runtime-external"] {
+            document.path_tree_deny_floors.push(PathTreeDenyFloorV1 {
+                rule_id: format!("manual-secret-tree-deny-{role_id}"),
+                role_id: role_id.to_owned(),
+                path: canonical_path.to_owned(),
+                operation_ids: [
+                    "CREATE",
+                    "LINK",
+                    "MMAP_READ",
+                    "MMAP_WRITE",
+                    "MPROTECT",
+                    "OPEN_READ",
+                    "OPEN_WRITE",
+                    "READ",
+                    "RENAME",
+                    "SETATTR",
+                    "UNLINK",
+                    "WRITE",
+                ]
+                .map(str::to_owned)
+                .to_vec(),
+            });
+        }
     }
     sign_generation_artifact(document, seal_source, signing_key, fixture_root, generation)
 }
@@ -765,9 +782,12 @@ fn build_replacement_exception_artifact(
     document.correlation_package_bindings.clear();
     document.notification_routes.clear();
     document.response_bindings.clear();
-    document
-        .file_exception_grants
-        .retain(|grant| grant.grant_id == "replacement-secret-open");
+    document.file_exception_grants = vec![FileExceptionGrantTemplateV1 {
+        grant_id: "replacement-secret-open".to_owned(),
+        denied_file_rule_ids: vec!["deny-replacement-secret-open".to_owned()],
+        maximum_duration_ns: 240_000_000_000,
+        maximum_uses: 1,
+    }];
     document.exceptions.clear();
     document
         .rules
@@ -1649,7 +1669,19 @@ impl EffectTestRunner {
             &paths.mount_target
         };
         fixture.prepare_mount_race(&paths.source, mount_race_target, 8)?;
+        let detached_open_tree_epoch = global_mount_mutation_epoch(&host)?;
+        let detached_open_tree_activity = global_mount_activity_sequence(&host)?;
         fixture.prepare_operations(&paths, &truncate_target)?;
+        let detached_open_tree_activity_observed = global_mount_mutation_epoch(&host)?
+            == detached_open_tree_epoch
+            && global_mount_activity_sequence(&host)? > detached_open_tree_activity;
+        ensure!(
+            detached_open_tree_activity_observed,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "detached open_tree preparation did not remain evidence-only",
+            }
+        );
         let shared_mmap_target_pid = fixture.shared_mmap_target_pid()?;
         let unix_stream_peer_pid = fixture.prepare_unix_stream_target()?;
         if protect {
@@ -1961,13 +1993,6 @@ impl EffectTestRunner {
             test_exact_objects.clone(),
         )
         .context(NodeSnafu)?;
-        ensure!(
-            mount_views_are_clean(&host, &mount_namespaces)?,
-            InvalidInputSnafu {
-                path: Path::new("mount_security_views"),
-                reason: "policy activation did not complete every kernel mount reconciliation",
-            }
-        );
         NativeSecurityStateOwner::new(node_boot_id, 1)
             .activate_initial_with_effect_policy(&mut host, true)
             .context(NodeSnafu)?;
@@ -1975,7 +2000,7 @@ impl EffectTestRunner {
             1_024,
             output_directory.join("evidence-wal-v2"),
             EvidenceWalLimits {
-                maximum_retained_records: 1_024,
+                maximum_retained_records: 128,
                 ..EvidenceWalLimits::default()
             },
             ObservationCanonicalizer::new(
@@ -1996,6 +2021,28 @@ impl EffectTestRunner {
             .context(InterceptorSnafu)?;
         sample_observation_health(&host, &observations)?;
 
+        let synchronous_mount_marker = observations.cursor();
+        let synchronous_mount_effect = fixture.open(&paths.benign)?;
+        ensure!(
+            synchronous_mount_effect.allowed,
+            InvalidInputSnafu {
+                path: &paths.benign,
+                reason: "the first protected effect did not apply the admitted exact allow",
+            }
+        );
+        wait_for_exact_effect(
+            &reader,
+            &observations,
+            synchronous_mount_marker,
+            "EXACT_POLICY_ALLOW",
+            (
+                KernelEffectFamilyV1::File,
+                KernelEffectOperationV1::OpenRead,
+            ),
+            PathSelectorV1::kernel_handle_for_id("manual-benign"),
+            None,
+        )?;
+
         let mut path_tree_future_namespace_denied = false;
         let mut path_tree_meta_depth_denied = false;
         let mut path_tree_preexisting_bind_alias_denied = false;
@@ -2005,6 +2052,7 @@ impl EffectTestRunner {
         let mut allowed_recursive_bind_alias_allowed = false;
         let mut path_tree_move_mount_alias_denied = false;
         let mut allowed_move_mount_alias_allowed = false;
+        let mut move_mount_attachment_invalidated_security_view = false;
         if protect {
             let protected_alias_child = path_tree_preexisting_bind_target.join("pre-existing");
             let protected_alias_marker = observations.cursor();
@@ -2015,24 +2063,42 @@ impl EffectTestRunner {
                     reason: "a pre-existing successful bind exposed a protected child",
                 }
             );
-            wait_for_effect(
+            wait_for_path_tree_effect(
                 &reader,
                 &observations,
                 protected_alias_marker,
-                "PATH_TREE_POLICY_DENY",
-                (
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::OpenRead,
-                ),
+                &protected_alias_child,
+                KernelEffectOperationV1::OpenRead,
             )?;
             path_tree_preexisting_bind_alias_denied = true;
 
             let allowed_alias_marker = observations.cursor();
+            let allowed_alias = fixture.open(&allowed_bind_alias)?;
+            if !allowed_alias.allowed {
+                reader
+                    .poll(Duration::from_millis(100))
+                    .context(InterceptorSnafu)?;
+            }
             ensure!(
-                fixture.open(&allowed_bind_alias)?.allowed,
+                allowed_alias.allowed,
                 InvalidInputSnafu {
                     path: &allowed_bind_alias,
-                    reason: "the allowed pre-existing bind alias was denied",
+                    reason: format!(
+                        "the allowed pre-existing bind alias was denied; observed {:?}",
+                        observations
+                            .recent_since(allowed_alias_marker)
+                            .iter()
+                            .map(|event| (
+                                event.reason.as_str(),
+                                event.active_role_id,
+                                event.admitted_entry_rule_id,
+                                event.exact_object_key_id,
+                                event.composite_atom_id,
+                                event.kernel_result,
+                                event.mount_id_unique,
+                            ))
+                            .collect::<Vec<_>>()
+                    ),
                 }
             );
             wait_for_exact_effect(
@@ -2091,15 +2157,12 @@ impl EffectTestRunner {
                     reason: "a process in a mount namespace created after policy activation opened the protected path",
                 }
             );
-            wait_for_effect(
+            wait_for_path_tree_effect(
                 &reader,
                 &observations,
                 marker,
-                "PATH_TREE_POLICY_DENY",
-                (
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::OpenRead,
-                ),
+                &path_tree_preexisting,
+                KernelEffectOperationV1::OpenRead,
             )?;
             future_fixture.stop()?;
             path_tree_future_namespace_denied = true;
@@ -2118,15 +2181,12 @@ impl EffectTestRunner {
                         reason: format!("the {label} returned a file descriptor"),
                     }
                 );
-                wait_for_effect(
+                wait_for_path_tree_effect(
                     &reader,
                     &observations,
                     marker,
-                    "PATH_TREE_POLICY_DENY",
-                    (
-                        KernelEffectFamilyV1::File,
-                        KernelEffectOperationV1::OpenRead,
-                    ),
+                    path,
+                    KernelEffectOperationV1::OpenRead,
                 )?;
             }
             path_tree_meta_depth_denied = true;
@@ -2142,15 +2202,12 @@ impl EffectTestRunner {
                     reason: "a child created after activation returned a file descriptor",
                 }
             );
-            wait_for_effect(
+            wait_for_path_tree_effect(
                 &reader,
                 &observations,
                 later_marker,
-                "PATH_TREE_POLICY_DENY",
-                (
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::OpenRead,
-                ),
+                &path_tree_later,
+                KernelEffectOperationV1::OpenRead,
             )?;
 
             let create_marker = observations.cursor();
@@ -2166,12 +2223,12 @@ impl EffectTestRunner {
                     reason: "a managed create produced a child in the protected tree",
                 }
             );
-            wait_for_effect(
+            wait_for_path_tree_effect(
                 &reader,
                 &observations,
                 create_marker,
-                "PATH_TREE_POLICY_DENY",
-                (KernelEffectFamilyV1::File, KernelEffectOperationV1::Create),
+                &path_tree_actor_create,
+                KernelEffectOperationV1::Create,
             )?;
 
             fs::remove_file(&path_tree_replacement).context(IoSnafu {
@@ -2188,15 +2245,12 @@ impl EffectTestRunner {
                     reason: "a replacement child returned a file descriptor",
                 }
             );
-            wait_for_effect(
+            wait_for_path_tree_effect(
                 &reader,
                 &observations,
                 replacement_marker,
-                "PATH_TREE_POLICY_DENY",
-                (
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::OpenRead,
-                ),
+                &path_tree_replacement,
+                KernelEffectOperationV1::OpenRead,
             )?;
 
             let outside_marker = observations.cursor();
@@ -2482,7 +2536,7 @@ impl EffectTestRunner {
                 }
             );
 
-            reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
+            reconcile_policy_lifecycle(&policy, &mut host)?;
             let inherited_marker = observations.cursor();
             ensure!(
                 fixture.read_prepared()?.denied(),
@@ -3385,6 +3439,26 @@ impl EffectTestRunner {
                 ),
             )?;
 
+            let passed_secret_control_marker = observations.cursor();
+            ensure!(
+                fixture.open(&paths.secret)?.denied(),
+                InvalidInputSnafu {
+                    path: &paths.secret,
+                    reason: "the direct open control lost the exact secret denial before descriptor transfer",
+                }
+            );
+            wait_for_exact_effect(
+                &reader,
+                &observations,
+                passed_secret_control_marker,
+                "EXACT_POLICY_DENY",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                ),
+                PathSelectorV1::kernel_handle_for_id("manual-secret"),
+                None,
+            )?;
             let passed_secret_descriptors = process_descriptor_set(fixture.pid())?;
             let passed_secret_acquisition_marker = observations.cursor();
             let passed_secret_acquisition = fixture.receive_passed_secret()?;
@@ -3644,7 +3718,7 @@ impl EffectTestRunner {
             }
         );
 
-        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
+        reconcile_policy_lifecycle(&policy, &mut host)?;
         let original_marker = observations.cursor();
         let original = fixture.open(&paths.secret)?;
         if original.allowed == protect {
@@ -3789,7 +3863,30 @@ impl EffectTestRunner {
                 None,
             )?;
 
-            reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
+            let detached_mount_marker = observations.cursor();
+            ensure!(
+                fixture
+                    .run_prepared(HardClosedOperation::DetachedMountOpen)?
+                    .denied(),
+                InvalidInputSnafu {
+                    path: &paths.secret,
+                    reason: "an unattached mount descriptor bypassed the exact object denial",
+                }
+            );
+            wait_for_exact_effect(
+                &reader,
+                &observations,
+                detached_mount_marker,
+                "EXACT_POLICY_DENY",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                ),
+                PathSelectorV1::kernel_handle_for_id("manual-secret"),
+                None,
+            )?;
+
+            reconcile_policy_lifecycle(&policy, &mut host)?;
             let passed_secret_marker = observations.cursor();
             ensure!(
                 fixture
@@ -3968,7 +4065,7 @@ impl EffectTestRunner {
             "UNSUPPORTED_OBJECT",
             (KernelEffectFamilyV1::Mount, KernelEffectOperationV1::Mount),
         )?;
-        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
+        reconcile_policy_lifecycle(&policy, &mut host)?;
         let reconciled_marker = observations.cursor();
         ensure!(
             fixture.open(&paths.secret)?.allowed != protect,
@@ -3994,129 +4091,25 @@ impl EffectTestRunner {
             None,
         )?;
 
-        let stale_proposal_key = exact_object.mount_namespace_inode.to_ne_bytes();
-        let clean_view_bytes = host
-            .lookup_map("mount_security_views", &stale_proposal_key)
-            .context(InterceptorSnafu)?
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: Path::new("mount_security_views"),
-                    reason: "the exact mount view disappeared before the stale proposal test",
-                }
-                .build()
-            })?;
-        let clean_view =
-            MountSecurityViewStateV1::try_read_from_bytes(&clean_view_bytes).map_err(|error| {
-                InvalidInputSnafu {
-                    path: Path::new("mount_security_views"),
-                    reason: format!("mount security view has invalid ABI: {error}"),
-                }
-                .build()
-            })?;
-        let stale_proposal_bytes = host
-            .lookup_map("mount_reconciliation_proposals", &stale_proposal_key)
-            .context(InterceptorSnafu)?
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: Path::new("mount_reconciliation_proposals"),
-                    reason: "the clean mount view has no reconciliation proposal",
-                }
-                .build()
-            })?;
-        let stale_proposal = MountReconciliationProposalV1::try_read_from_bytes(
-            &stale_proposal_bytes,
-        )
-        .map_err(|error| {
-            InvalidInputSnafu {
-                path: Path::new("mount_reconciliation_proposals"),
-                reason: format!("mount reconciliation proposal has invalid ABI: {error}"),
-            }
-            .build()
+        let mount_snapshots_before_mutation = ready_canonical_mount_snapshots(&host)?;
+        let mount_epoch_before_mutation = global_mount_mutation_epoch(&host)?;
+        let changed_mount_secret = paths.mount_target.join("secret");
+        fs::write(&changed_mount_secret, b"mount target\n").context(IoSnafu {
+            path: &changed_mount_secret,
         })?;
+        external_mount_namespace.bind_mount(&paths.secret, &changed_mount_secret)?;
+        let changed_mount_marker = observations.cursor();
         ensure!(
-            clean_view.state == MountTopologyStateV1::Clean
-                && clean_view.pending_mutations == 0
-                && stale_proposal.topology_generation == clean_view.topology_generation
-                && stale_proposal.snapshot_digest_id == clean_view.snapshot_digest_id
-                && stale_proposal.transition_version == clean_view.transition_version
-                && stale_proposal.topology_generation != 0
-                && stale_proposal.snapshot_digest_id != 0
-                && stale_proposal.transition_version > stale_proposal.expected_transition_version,
+            fixture.open(&changed_mount_secret)?.allowed != protect,
             InvalidInputSnafu {
-                path: Path::new("mount_reconciliation_proposals"),
-                reason: "the clean mount view did not retain a usable proposal",
-            }
-        );
-
-        external_mount_namespace.bind_mount(&paths.source, &paths.mount_target)?;
-        ensure!(
-            global_mount_view_is_dirty(&host)?
-                && mount_view_is_dirty(&host, exact_object.mount_namespace_inode)?,
-            InvalidInputSnafu {
-                path: &paths.mount_target,
-                reason: "an external topology change did not dirty the exact mount view",
-            }
-        );
-        host.update_map(
-            "mount_reconciliation_proposals",
-            &stale_proposal_key,
-            stale_proposal.as_bytes(),
-        )
-        .context(InterceptorSnafu)?;
-        ensure!(
-            host.lookup_map("mount_reconciliation_proposals", &stale_proposal_key)
-                .context(InterceptorSnafu)?
-                .as_deref()
-                == Some(stale_proposal.as_bytes()),
-            InvalidInputSnafu {
-                path: Path::new("mount_reconciliation_proposals"),
-                reason: "the stale mount proposal readback changed",
-            }
-        );
-        ensure!(
-            !host
-                .apply_mount_reconciliation_proposal(exact_object.mount_namespace_inode)
-                .context(InterceptorSnafu)?,
-            InvalidInputSnafu {
-                path: Path::new("mount_reconciliation_proposals"),
-                reason: "a stale mount proposal committed after an external topology change",
-            }
-        );
-        ensure!(
-            global_mount_view_is_dirty(&host)?
-                && mount_view_is_dirty(&host, exact_object.mount_namespace_inode)?,
-            InvalidInputSnafu {
-                path: &paths.mount_target,
-                reason: "a rejected stale proposal cleared the exact mount view",
-            }
-        );
-        let stale_proposal_marker = observations.cursor();
-        ensure!(
-            fixture.open(&paths.secret)?.denied(),
-            InvalidInputSnafu {
-                path: &paths.secret,
-                reason: "a stale mount proposal made the exact path readable",
-            }
-        );
-        wait_for_reason(
-            &reader,
-            &observations,
-            stale_proposal_marker,
-            "UNRESOLVED_OBJECT",
-        )?;
-        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
-        let current_proposal_marker = observations.cursor();
-        ensure!(
-            fixture.open(&paths.secret)?.allowed != protect,
-            InvalidInputSnafu {
-                path: &paths.secret,
-                reason: "the current mount snapshot did not restore the exact policy result",
+                path: &changed_mount_secret,
+                reason: "the first effect after a mount change did not apply the exact policy",
             }
         );
         wait_for_exact_effect(
             &reader,
             &observations,
-            current_proposal_marker,
+            changed_mount_marker,
             exact_reason,
             (
                 KernelEffectFamilyV1::File,
@@ -4125,8 +4118,24 @@ impl EffectTestRunner {
             PathSelectorV1::kernel_handle_for_id("manual-secret"),
             None,
         )?;
-        external_mount_namespace.unmount(&paths.mount_target)?;
-        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
+        let mount_snapshots_after_mutation = ready_canonical_mount_snapshots(&host)?;
+        let mount_epoch_after_mutation = global_mount_mutation_epoch(&host)?;
+        ensure!(
+            mount_snapshots_after_mutation
+                .difference(&mount_snapshots_before_mutation)
+                .next()
+                .is_some(),
+            InvalidInputSnafu {
+                path: Path::new("canonical_mount_cache_states"),
+                reason: format!(
+                    "the first effect after a mount change reused the old BPF mount snapshot; global epoch {mount_epoch_before_mutation} -> {mount_epoch_after_mutation}; cache keys {:?} -> {:?}",
+                    mount_snapshots_before_mutation,
+                    mount_snapshots_after_mutation,
+                ),
+            }
+        );
+        external_mount_namespace.unmount(&changed_mount_secret)?;
+        reconcile_policy_lifecycle(&policy, &mut host)?;
 
         external_mount_namespace.bind_mount(&paths.benign, &paths.secret)?;
         ensure!(
@@ -4138,13 +4147,7 @@ impl EffectTestRunner {
             }
         );
         let replacement_marker = observations.cursor();
-        ensure!(
-            fixture.open(&paths.secret)?.denied(),
-            InvalidInputSnafu {
-                path: &paths.secret,
-                reason: "a replaced exact path was physically allowed while its topology was DIRTY",
-            }
-        );
+        let replacement_open = fixture.open(&paths.secret)?;
         wait_for_reason(
             &reader,
             &observations,
@@ -4152,14 +4155,17 @@ impl EffectTestRunner {
             "UNRESOLVED_OBJECT",
         )?;
         ensure!(
-            policy.reconcile_policy_lifecycle(&mut host).is_err(),
+            replacement_open.denied(),
             InvalidInputSnafu {
                 path: &paths.secret,
-                reason: "reconciliation accepted a different object mounted over the exact path",
+                reason: "a replaced exact path was physically allowed while its topology was DIRTY",
             }
         );
+        policy
+            .reconcile_policy_lifecycle(&mut host)
+            .context(NodeSnafu)?;
         external_mount_namespace.unmount(&paths.secret)?;
-        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
+        reconcile_policy_lifecycle(&policy, &mut host)?;
         let restored_marker = observations.cursor();
         ensure!(
             fixture.open(&paths.secret)?.allowed != protect,
@@ -4197,7 +4203,7 @@ impl EffectTestRunner {
                     reason: "a successful protected-tree bind did not dirty its mount view",
                 }
             );
-            reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
+            reconcile_policy_lifecycle(&policy, &mut host)?;
             let path_tree_mount_marker = observations.cursor();
             let mounted_child = path_tree_postactivation_bind_target.join("pre-existing");
             ensure!(
@@ -4207,15 +4213,12 @@ impl EffectTestRunner {
                     reason: "a successful reconciled bind exposed a protected child",
                 }
             );
-            wait_for_effect(
+            wait_for_path_tree_effect(
                 &reader,
                 &observations,
                 path_tree_mount_marker,
-                "PATH_TREE_POLICY_DENY",
-                (
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::OpenRead,
-                ),
+                &mounted_child,
+                KernelEffectOperationV1::OpenRead,
             )?;
             path_tree_postactivation_bind_alias_denied = true;
 
@@ -4243,14 +4246,14 @@ impl EffectTestRunner {
         }
         external_mount_namespace.unmount(&path_tree_preexisting_bind_target)?;
         external_mount_namespace.unmount(&allowed_bind_target)?;
-        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
+        reconcile_policy_lifecycle(&policy, &mut host)?;
 
         if protect {
             external_mount_namespace
                 .recursive_bind_mount(&path_tree_root, &path_tree_recursive_bind_target)?;
             external_mount_namespace
                 .recursive_bind_mount(&allowed_bind_source, &allowed_recursive_bind_target)?;
-            reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
+            reconcile_policy_lifecycle(&policy, &mut host)?;
 
             let protected_recursive_child = path_tree_recursive_bind_target.join("pre-existing");
             let protected_recursive_marker = observations.cursor();
@@ -4261,15 +4264,12 @@ impl EffectTestRunner {
                     reason: "a successful recursive bind exposed a protected child",
                 }
             );
-            wait_for_effect(
+            wait_for_path_tree_effect(
                 &reader,
                 &observations,
                 protected_recursive_marker,
-                "PATH_TREE_POLICY_DENY",
-                (
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::OpenRead,
-                ),
+                &protected_recursive_child,
+                KernelEffectOperationV1::OpenRead,
             )?;
             path_tree_recursive_bind_alias_denied = true;
 
@@ -4297,12 +4297,25 @@ impl EffectTestRunner {
 
             external_mount_namespace.unmount(&path_tree_recursive_bind_target)?;
             external_mount_namespace.unmount(&allowed_recursive_bind_target)?;
-            reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
+            reconcile_policy_lifecycle(&policy, &mut host)?;
 
+            let move_mount_epoch = global_mount_mutation_epoch(&host)?;
+            let move_mount_activity = global_mount_activity_sequence(&host)?;
             external_mount_namespace.move_mount(&path_tree_root, &path_tree_move_mount_target)?;
             external_mount_namespace
                 .move_mount(&allowed_bind_source, &allowed_move_mount_target)?;
-            reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
+            move_mount_attachment_invalidated_security_view = global_mount_mutation_epoch(&host)?
+                > move_mount_epoch
+                && global_mount_activity_sequence(&host)? > move_mount_activity
+                && global_mount_view_is_dirty(&host)?;
+            ensure!(
+                move_mount_attachment_invalidated_security_view,
+                InvalidInputSnafu {
+                    path: &path_tree_move_mount_target,
+                    reason: "move_mount attachment did not dirty the represented security view",
+                }
+            );
+            reconcile_policy_lifecycle(&policy, &mut host)?;
 
             let protected_move_child = path_tree_move_mount_target.join("pre-existing");
             let protected_move_marker = observations.cursor();
@@ -4313,15 +4326,12 @@ impl EffectTestRunner {
                     reason: "a successful move_mount attachment exposed a protected child",
                 }
             );
-            wait_for_effect(
+            wait_for_path_tree_effect(
                 &reader,
                 &observations,
                 protected_move_marker,
-                "PATH_TREE_POLICY_DENY",
-                (
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::OpenRead,
-                ),
+                &protected_move_child,
+                KernelEffectOperationV1::OpenRead,
             )?;
             path_tree_move_mount_alias_denied = true;
 
@@ -4349,7 +4359,7 @@ impl EffectTestRunner {
 
             external_mount_namespace.unmount(&path_tree_move_mount_target)?;
             external_mount_namespace.unmount(&allowed_move_mount_target)?;
-            reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
+            reconcile_policy_lifecycle(&policy, &mut host)?;
         }
 
         ensure!(
@@ -4359,6 +4369,8 @@ impl EffectTestRunner {
                 reason: "the propagation-peer benign control was denied before mutation",
             }
         );
+        let propagation_epoch = global_mount_mutation_epoch(&host)?;
+        let propagation_snapshots = ready_canonical_mount_snapshots(&host)?;
         external_mount_namespace
             .bind_mount(&paths.propagation_source, &paths.propagation_target)?;
         ensure!(
@@ -4369,71 +4381,125 @@ impl EffectTestRunner {
             }
         );
         ensure!(
-            fixture.open(&paths.benign)?.denied() && fixture.propagation_peer_open()?.denied(),
+            global_mount_mutation_epoch(&host)? > propagation_epoch
+                && fixture.open(&paths.benign)?.allowed
+                && fixture.propagation_peer_open()?.allowed,
             InvalidInputSnafu {
                 path: &paths.benign,
-                reason: "one represented namespace authorized an exact open after propagation",
+                reason: "one represented namespace did not rebuild and allow the benign object after propagation",
             }
         );
-        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
         ensure!(
-            fixture.open(&paths.benign)?.allowed && fixture.propagation_peer_open()?.allowed,
+            ready_canonical_mount_snapshots(&host)?
+                .difference(&propagation_snapshots)
+                .count()
+                >= 2,
             InvalidInputSnafu {
-                path: &paths.benign,
-                reason: "the propagated topology did not reconcile across both namespaces",
+                path: Path::new("canonical_mount_cache_states"),
+                reason: "propagation did not produce new BPF mount snapshots for both namespaces",
             }
         );
+        let propagated_snapshots = ready_canonical_mount_snapshots(&host)?;
         external_mount_namespace.unmount(&paths.propagation_target)?;
         ensure!(
-            !fixture.propagation_peer_has_marker()? && fixture.propagation_peer_open()?.denied(),
+            !fixture.propagation_peer_has_marker()? && fixture.propagation_peer_open()?.allowed,
             InvalidInputSnafu {
                 path: &paths.propagation_marker,
-                reason: "propagated unmount did not invalidate the peer namespace",
+                reason:
+                    "the peer did not rebuild and allow the benign object after propagated unmount",
             }
         );
-        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
         ensure!(
-            fixture.propagation_peer_open()?.allowed,
+            ready_canonical_mount_snapshots(&host)?
+                .difference(&propagated_snapshots)
+                .next()
+                .is_some(),
             InvalidInputSnafu {
-                path: &paths.benign,
-                reason: "the peer exact decision did not recover after propagated unmount",
+                path: Path::new("canonical_mount_cache_states"),
+                reason: "the peer reused an old BPF mount snapshot after propagated unmount",
             }
         );
 
+        let mount_setattr_epoch = global_mount_mutation_epoch(&host)?;
+        let mount_setattr_snapshots = ready_canonical_mount_snapshots(&host)?;
         external_mount_namespace.mount_setattr(&paths.mount_target, true)?;
         ensure!(
-            global_mount_view_is_dirty(&host)?
-                && fixture.open(&paths.benign)?.denied()
-                && fixture.propagation_peer_open()?.denied(),
+            global_mount_mutation_epoch(&host)? > mount_setattr_epoch
+                && fixture.open(&paths.benign)?.allowed
+                && fixture.propagation_peer_open()?.allowed,
             InvalidInputSnafu {
                 path: &paths.mount_target,
-                reason: "mount_setattr did not invalidate every represented namespace",
+                reason: "mount_setattr did not advance the guard and rebuild both represented namespaces",
             }
         );
-        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
         ensure!(
-            fixture.open(&paths.benign)?.allowed && fixture.propagation_peer_open()?.allowed,
+            ready_canonical_mount_snapshots(&host)?
+                .difference(&mount_setattr_snapshots)
+                .next()
+                .is_some(),
             InvalidInputSnafu {
-                path: &paths.benign,
-                reason: "mount_setattr topology did not reconcile",
+                path: Path::new("canonical_mount_cache_states"),
+                reason: "mount_setattr did not produce a new BPF mount snapshot for the affected namespace",
             }
         );
+        let mount_restore_epoch = global_mount_mutation_epoch(&host)?;
+        let mount_restore_snapshots = ready_canonical_mount_snapshots(&host)?;
         external_mount_namespace.mount_setattr(&paths.mount_target, false)?;
         ensure!(
-            global_mount_view_is_dirty(&host)?,
+            global_mount_mutation_epoch(&host)? > mount_restore_epoch,
             InvalidInputSnafu {
                 path: &paths.mount_target,
-                reason: "mount_setattr restore did not invalidate the global view",
+                reason: "mount_setattr restore did not advance the global mutation guard",
             }
         );
-        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
         ensure!(
             fixture.open(&paths.benign)?.allowed,
             InvalidInputSnafu {
                 path: &paths.benign,
-                reason: "mount_setattr restore did not reconcile",
+                reason: "the effect after mount_setattr restore did not rebuild and allow the benign object",
             }
         );
+        ensure!(
+            ready_canonical_mount_snapshots(&host)?
+                .difference(&mount_restore_snapshots)
+                .next()
+                .is_some(),
+            InvalidInputSnafu {
+                path: Path::new("canonical_mount_cache_states"),
+                reason: "the effect after mount_setattr restore reused an old BPF mount snapshot",
+            }
+        );
+
+        let reconfigure_target = fixture_root.join("fsconfig-reconfigure-target");
+        fs::create_dir(&reconfigure_target).context(IoSnafu {
+            path: &reconfigure_target,
+        })?;
+        external_mount_namespace.mount_tmpfs(&reconfigure_target)?;
+        reconcile_policy_lifecycle(&policy, &mut host)?;
+        let reconfigure_epoch = global_mount_mutation_epoch(&host)?;
+        let reconfigure_activity = global_mount_activity_sequence(&host)?;
+        external_mount_namespace.reconfigure_mount(&reconfigure_target)?;
+        let fsconfig_reconfigure_global_invalidation = global_mount_mutation_epoch(&host)?
+            > reconfigure_epoch
+            && global_mount_activity_sequence(&host)? > reconfigure_activity
+            && global_mount_view_is_dirty(&host)?;
+        ensure!(
+            fsconfig_reconfigure_global_invalidation,
+            InvalidInputSnafu {
+                path: &reconfigure_target,
+                reason: "FSCONFIG_CMD_RECONFIGURE did not dirty the represented security view",
+            }
+        );
+        reconcile_policy_lifecycle(&policy, &mut host)?;
+        ensure!(
+            fixture.open(&paths.benign)?.allowed,
+            InvalidInputSnafu {
+                path: &paths.benign,
+                reason: "the benign control failed after filesystem reconfiguration",
+            }
+        );
+        external_mount_namespace.unmount(&reconfigure_target)?;
+        reconcile_policy_lifecycle(&policy, &mut host)?;
 
         policy = policy
             .reload_and_install_for_test_objects(
@@ -4763,6 +4829,7 @@ impl EffectTestRunner {
             hard_link_alias_denied: true,
             symlink_alias_denied: protect,
             proc_fd_alias_denied: protect,
+            unattached_mount_fd_access_denied: protect,
             passed_fd_read_denied: protect,
             passed_benign_fd_read_allowed: protect,
             passed_fd_acquisition_denied: protect,
@@ -4789,16 +4856,19 @@ impl EffectTestRunner {
             allowed_recursive_bind_alias_allowed,
             path_tree_move_mount_alias_denied,
             allowed_move_mount_alias_allowed,
+            detached_open_tree_activity_observed,
+            move_mount_attachment_invalidated_security_view,
+            fsconfig_reconfigure_global_invalidation,
             path_tree_mount_attack_failed_closed: path_tree_postactivation_bind_alias_denied,
             protected_mount_race_denied: true,
-            mount_stale_proposal_failed_closed: true,
+            mount_snapshot_rebuilt_after_mutation: true,
             mount_propagation_reached_peer: true,
-            mount_propagation_all_views_failed_closed: true,
-            mount_propagation_reconciled: true,
+            mount_propagation_all_views_rebuilt: true,
+            mount_propagation_unmount_rebuilt: true,
             mount_setattr_global_invalidation: true,
-            mount_setattr_reconciled: true,
+            mount_setattr_snapshot_rebuilt: true,
             external_mount_replacement_failed_closed: true,
-            exact_object_restored_after_reconciliation: true,
+            exact_object_restored_after_mount_removal: true,
             active_generation_published,
             existing_process_migrated_to_active_generation,
             old_generation_deleted_after_last_holder,
@@ -4901,8 +4971,9 @@ mod tests {
         observations.sample_coverage_health(EffectObservationHealthV1::default().as_bytes())?;
         for (source_sequence, task_cookie, target_task_cookie, operation, argument) in [
             (1, 0, 5, KernelEffectOperationV1::Ptrace, 9),
-            (2, 0, 5, KernelEffectOperationV1::Signal, 15),
-            (3, 160, 0, KernelEffectOperationV1::Signal, 0),
+            (2, 0, 5, KernelEffectOperationV1::Ptrace, 18),
+            (3, 0, 5, KernelEffectOperationV1::Signal, 15),
+            (4, 160, 0, KernelEffectOperationV1::Signal, 0),
         ] {
             observations.record_bytes(
                 EffectObservationV1 {
@@ -4926,15 +4997,16 @@ mod tests {
             .next_evidence_batch()
             .ok_or("durable process-control evidence is missing")?;
         let records = batch.decode_records()?;
-        assert_eq!(records.len(), 3);
-        assert!(records[..2]
+        assert_eq!(records.len(), 4);
+        assert!(records[..3]
             .iter()
             .all(|record| { record.task_cookie == 0 && record.target_task_cookie == Some(5) }));
         assert_eq!(records[0].operation_argument, Some(9));
-        assert_eq!(records[1].operation_argument, Some(15));
-        assert_eq!(records[2].task_cookie, 160);
-        assert_eq!(records[2].target_task_cookie, None);
-        assert_eq!(records[2].operation_argument, Some(0));
+        assert_eq!(records[1].operation_argument, Some(18));
+        assert_eq!(records[2].operation_argument, Some(15));
+        assert_eq!(records[3].task_cookie, 160);
+        assert_eq!(records[3].target_task_cookie, None);
+        assert_eq!(records[3].operation_argument, Some(0));
         Ok(())
     }
 

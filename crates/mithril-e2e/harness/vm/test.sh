@@ -27,6 +27,9 @@ help=$("$directory/run.sh" --help 2>&1)
 [[ $help == *--keep-vm* ]]
 [[ $help == *--manual* ]]
 "$directory/guest.sh" --help >/dev/null 2>&1
+[[ $(grep -Fc \
+  'install -m 0555 "$work_directory/bin/mithril-open-probe" "$fixture_root/open-probe"' \
+  "$directory/guest.sh") -eq 2 ]]
 two_node_help=$("$directory/two-node-network.sh" --help 2>&1)
 [[ $two_node_help == *--keep-vms* ]]
 convergence_help=$("$directory/two-node-convergence.sh" --help 2>&1)
@@ -34,6 +37,54 @@ convergence_help=$("$directory/two-node-convergence.sh" --help 2>&1)
 [[ $convergence_help == *--manual-environment* ]]
 [[ $convergence_help == *--protected-start-only* ]]
 [[ $convergence_help == *--reuse-environment* ]]
+overlap_help=$("$directory/concurrent-exec-overlap.sh" --help 2>&1)
+[[ $overlap_help == *START_FIFO* ]]
+overlap_bin=$test_root/overlap-bin
+mkdir -p "$overlap_bin"
+cat >"$overlap_bin/k3s" <<'EOF'
+#!/usr/bin/env bash
+[[ $1 == crictl && $2 == exec && $4 == /bin/sleep && $5 == 5 ]]
+exit "${FAKE_K3S_STATUS:?}"
+EOF
+chmod +x "$overlap_bin/k3s"
+overlap_container_id=$(printf '%064d' 0)
+overlap_fifo=$test_root/concurrent-recursive-start
+mkfifo "$overlap_fifo"
+(read -r overlap_start <"$overlap_fifo" && [[ $overlap_start == start ]]) &
+overlap_reader_pid=$!
+FAKE_K3S_STATUS=23 MITHRIL_K3S_PATH=$overlap_bin/k3s \
+  "$directory/concurrent-exec-overlap.sh" "$overlap_fifo" \
+    "$test_root/denied-overlap" "$overlap_container_id" 3 \
+    >"$test_root/denied-overlap.txt"
+wait "$overlap_reader_pid"
+[[ $(grep -Fc 'status=23' "$test_root/denied-overlap.txt") -eq 3 ]]
+rm -f -- "$overlap_fifo"
+mkfifo "$overlap_fifo"
+(read -r overlap_start <"$overlap_fifo" && [[ $overlap_start == start ]]) &
+overlap_reader_pid=$!
+set +e
+allowed_overlap=$(FAKE_K3S_STATUS=0 MITHRIL_K3S_PATH=$overlap_bin/k3s \
+  "$directory/concurrent-exec-overlap.sh" "$overlap_fifo" \
+    "$test_root/allowed-overlap" "$overlap_container_id" 1 2>&1)
+status=$?
+set -e
+wait "$overlap_reader_pid"
+[[ $status -eq 1 && $allowed_overlap == *'entered the protected container'* ]]
+protected_pod_fixture=$directory/../../fixtures/convergence/protected-pod-v1.yaml
+grep -Fq 'do if command : </srv/team/blue/secrets/models/secret;' "$protected_pod_fixture"
+grep -Fq -- '--containerd-path /usr/bin/containerd' "$directory/run.sh"
+if grep -Fq -- '--start-hook-path' "$directory/run.sh"; then
+  echo "the direct runtime probe still uses the rejected start hook" >&2
+  exit 1
+fi
+grep -Fq 'concurrent-recursive-result' "$directory/two-node-convergence.sh"
+grep -Fq 'concurrent-exec-mount-topology.json' "$directory/two-node-convergence.sh"
+grep -Fq '$unresolved_object_effect_count -eq 0' \
+  "$directory/two-node-convergence.sh"
+grep -Fq 'protected Pod restarted before the concurrent containerd exec proof' \
+  "$directory/two-node-convergence.sh"
+grep -Fq 'timeout 30s tee /var/lib/mithril-convergence/markers/protected.stable-recursive-start' \
+  "$directory/two-node-convergence.sh"
 grep -Fq 'node_state_host_path=/var/lib/mithril-node-$run_id' \
   "$directory/two-node-convergence.sh"
 grep -Fq 'control_state_claim=mithril-control-state-$run_id' \
@@ -369,6 +420,23 @@ exception_status_counter_advanced_by "$retained_exception_status" \
 if exception_status_counter_advanced_by "$retained_exception_status" \
     revoked_exception_count 0 1; then
   echo "an absolute exception count satisfied a retained-state delta" >&2
+  exit 1
+fi
+external_cgroup_effect='observed_boottime_ns=387854701949 source_sequence=2130 source_cpu_id=1 task_cookie=5635 target_task_cookie=0 admitted_entry_rule_id=0 active_role_id=6 family=1 operation=1 operation_argument=0 reason=UNSUPPORTED_OBJECT result=DENIED_BEFORE_EFFECT object=0:0:0:0:0 exact_object_key_id=0 composite_atom_id=0 kernel_result=-13 approval_stage=0 approval_pending_state=0 approval_slot_state=0 approval_exec_attempt_sequence=0 approval_failed_checks=0x0 approval_syscall_flags=0x0 approval_expected=0:0:0:0:0 approval_observed=0:0:0:0:0'
+external_cgroup_exec_denial_after "$external_cgroup_effect" 387854701948
+external_cgroup_effects=$(printf '%s\n%s\n%s\n' \
+  "$external_cgroup_effect" \
+  "${external_cgroup_effect/observed_boottime_ns=387854701949/observed_boottime_ns=387874649369}" \
+  "${external_cgroup_effect/observed_boottime_ns=387854701949/observed_boottime_ns=389392523570}")
+[[ $(external_cgroup_exec_denial_count_after \
+  "$external_cgroup_effects" 387854701948) -eq 3 ]]
+if external_cgroup_exec_denial_after "$external_cgroup_effect" 387854701949; then
+  echo "an external-cgroup effect at the marker satisfied the denial oracle" >&2
+  exit 1
+fi
+if external_cgroup_exec_denial_after \
+    "${external_cgroup_effect/kernel_result=-13/kernel_result=0}" 0; then
+  echo "an allowed external-cgroup effect satisfied the denial oracle" >&2
   exit 1
 fi
 retained_environment=$test_root/retained-environment.json

@@ -220,6 +220,7 @@ pub(super) enum PreparedOperation {
     IoUringBenignRead,
     IoUringSqpoll,
     ProcFdOpen,
+    DetachedMountOpen,
     MoveMount,
     MountSetattr,
     MountPropagation,
@@ -1695,6 +1696,19 @@ pub fn run_mount_setattr_child(namespace: &Path, path: &Path, read_only: bool) -
     .context(IoSnafu { path })
 }
 
+pub fn run_mount_reconfigure_child(namespace: &Path, path: &Path) -> Result<()> {
+    let namespace = fs::File::open(namespace).context(IoSnafu { path: namespace })?;
+    rustix::thread::move_into_link_name_space(
+        namespace.as_fd(),
+        Some(rustix::thread::LinkNameSpaceType::Mount),
+    )
+    .map_err(io::Error::from)
+    .context(IoSnafu {
+        path: Path::new("mount namespace"),
+    })?;
+    fixture_syscalls::reconfigure_mount(path).context(IoSnafu { path })
+}
+
 pub fn run_mount_move_child(source: &Path, target: &Path) -> Result<()> {
     let tree = fixture_syscalls::open_mount_tree(source).context(IoSnafu { path: source })?;
     fixture_syscalls::move_mount(tree.as_raw_fd(), target).context(IoSnafu { path: target })
@@ -2695,6 +2709,12 @@ impl PreparedOperations {
                 "/proc/self/fd/{}",
                 self.secret_file.as_raw_fd()
             ))),
+            PreparedOperation::DetachedMountOpen => {
+                io_outcome(fixture_syscalls::open_detached_mount_file(
+                    self.mount_tree.as_raw_fd(),
+                    Path::new("secret"),
+                ))
+            }
             PreparedOperation::MoveMount => io_outcome(fixture_syscalls::move_mount(
                 self.mount_tree.as_raw_fd(),
                 &self.move_mount_target,

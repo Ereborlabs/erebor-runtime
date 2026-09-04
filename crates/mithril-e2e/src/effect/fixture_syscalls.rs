@@ -11,6 +11,9 @@ use std::path::Path;
 use std::sync::atomic::{fence, Ordering};
 
 const AT_RECURSIVE: libc::c_int = 0x8000;
+const FSCONFIG_SET_STRING: libc::c_uint = 1;
+const FSCONFIG_CMD_RECONFIGURE: libc::c_uint = 7;
+const FSPICK_CLOEXEC: libc::c_uint = 0x0000_0001;
 const MOUNT_ATTR_RDONLY: u64 = 0x0000_0001;
 const MOVE_MOUNT_F_EMPTY_PATH: libc::c_uint = 0x0000_0004;
 const OPEN_TREE_CLONE: libc::c_uint = 0x0000_0001;
@@ -737,6 +740,59 @@ pub(super) fn move_mount(tree: RawFd, target: &Path) -> io::Result<()> {
             libc::AT_FDCWD,
             target.as_ptr(),
             MOVE_MOUNT_F_EMPTY_PATH,
+        )
+    })
+}
+
+pub(super) fn open_detached_mount_file(tree: RawFd, path: &Path) -> io::Result<()> {
+    let path = path_c_string(path)?;
+    // SAFETY: tree and path identify a live detached mount and a bounded relative path.
+    let fd = unsafe { libc::openat(tree, path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: openat returned a new owned descriptor.
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    let mut byte = [0_u8; 1];
+    std::io::Read::read_exact(&mut file, &mut byte)
+}
+
+pub(super) fn reconfigure_mount(path: &Path) -> io::Result<()> {
+    let path = path_c_string(path)?;
+    // SAFETY: path is NUL-terminated and FSPICK_CLOEXEC is a valid fspick flag.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_fspick,
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            FSPICK_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: fspick returned a new owned filesystem-context descriptor.
+    let context = unsafe { File::from_raw_fd(fd as RawFd) };
+    // SAFETY: the filesystem context and static NUL-terminated strings remain valid.
+    syscall_result(unsafe {
+        libc::syscall(
+            libc::SYS_fsconfig,
+            context.as_raw_fd(),
+            FSCONFIG_SET_STRING,
+            c"size".as_ptr(),
+            c"4194304".as_ptr(),
+            0,
+        )
+    })?;
+    // SAFETY: CMD_RECONFIGURE consumes the completed options on the live context.
+    syscall_result(unsafe {
+        libc::syscall(
+            libc::SYS_fsconfig,
+            context.as_raw_fd(),
+            FSCONFIG_CMD_RECONFIGURE,
+            std::ptr::null::<libc::c_char>(),
+            std::ptr::null::<libc::c_void>(),
+            0,
         )
     })
 }

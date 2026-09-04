@@ -252,6 +252,14 @@ static __always_inline bool ptrace_mode_is_read_only(__u16 operation,
                !!(argument & EFFECT_CONTROLLER_PTRACE_REALCREDS_V1);
 }
 
+static __always_inline bool ptrace_mode_is_runtime_fd_transfer(
+    __u16 operation, __u32 argument)
+{
+    return operation == kernel_effect_operation_v1_ptrace &&
+           argument == (EFFECT_CONTROLLER_PTRACE_ATTACH_V1 |
+                        EFFECT_CONTROLLER_PTRACE_REALCREDS_V1);
+}
+
 static __always_inline bool effect_controller_may_read_target(
     const identity_runtime_config_v1 *config, struct task_struct *target,
     __u16 operation, __u32 operation_argument)
@@ -299,6 +307,36 @@ static __always_inline bool prepared_container_target_is_exact(
     return true;
 }
 
+static __noinline bool runtime_entry_fd_transfer_target_is_exact(
+    const identity_runtime_config_v1 *config, struct task_struct *target,
+    const execution_set_binding_state_v1 *binding,
+    const task_label_v1 *target_label,
+    const entry_security_state_v1 *target_entry)
+{
+    struct task_struct *current = bpf_get_current_task_btf();
+    struct runtime_entry_bootstrap_state_v1 *bootstrap;
+    execution_set_binding_state_v1 *activation;
+    process_security_state_v1 *process;
+
+    if (!current || !target->real_parent ||
+        runtime_entry_bootstrap_owner(current) !=
+            runtime_entry_bootstrap_owner(target->real_parent))
+        return false;
+    process = bpf_map_lookup_elem(&process_states,
+                                  &target_label->process_state_id);
+    bootstrap = runtime_entry_bootstrap_for_task(target);
+    activation = binding_activation_for_new_root(binding, config);
+    return process && activation &&
+           runtime_entry_bootstrap_actor_is_exact(
+               config, binding, target_label, process, target_entry) &&
+           runtime_entry_bootstrap_state_valid(bootstrap, config) &&
+           bootstrap->profile_generation_ref_id ==
+               activation->active_profile_generation_ref_id &&
+           id128_equal(&bootstrap->binding_id, &activation->binding_id) &&
+           id128_equal(&bootstrap->target_entry_instance_id,
+                       &binding->prepared_container_entry_instance_id);
+}
+
 static __noinline bool runtime_entry_may_control_initial_target(
     const identity_runtime_config_v1 *config, struct task_struct *target,
     __u16 operation, __u32 operation_argument,
@@ -314,13 +352,18 @@ static __noinline bool runtime_entry_may_control_initial_target(
     external_root_classification_v1 *classification;
     execution_set_binding_state_v1 *binding;
     struct cgroup *target_cgroup = NULL;
+    bool admitted_initial_target;
     bool prepares_runtime;
+    bool transfers_runtime_fd;
     bool signals_target;
     int binding_lookup;
 
     prepares_runtime = ptrace_mode_is_read_only(operation, operation_argument);
+    transfers_runtime_fd =
+        ptrace_mode_is_runtime_fd_transfer(operation, operation_argument);
     signals_target = operation == kernel_effect_operation_v1_signal;
-    if (!config || !target || (!prepares_runtime && !signals_target) ||
+    if (!config || !target ||
+        (!prepares_runtime && !transfers_runtime_fd && !signals_target) ||
         task_cgroup(target, &target_cgroup))
         return false;
     binding = binding_for_cgroup(target_cgroup, &binding_lookup);
@@ -331,12 +374,21 @@ static __noinline bool runtime_entry_may_control_initial_target(
                        : NULL;
     if (binding_lookup || !binding || !target_label || !target_entry ||
         binding->prepared_container_state != prepared_container_state_v1_active ||
-        !binding_matches_label(binding, target_label) ||
-        !id128_equal(&binding->prepared_container_entry_instance_id,
-                     &target_label->entry_instance_id) ||
-        !target_entry->admitted_entry_rule_id)
+        !binding_matches_label(binding, target_label))
         return false;
-    if (signals_target) {
+    admitted_initial_target =
+        id128_equal(&binding->prepared_container_entry_instance_id,
+                    &target_label->entry_instance_id) &&
+        target_entry->admitted_entry_rule_id;
+    if (!admitted_initial_target &&
+        (!transfers_runtime_fd ||
+         !runtime_entry_fd_transfer_target_is_exact(
+             config, target, binding, target_label, target_entry)))
+        return false;
+    if (transfers_runtime_fd || signals_target) {
+        /* pidfd_getfd uses PTRACE_MODE_ATTACH_REALCREDS. Treat that stronger
+         * access like signaling: it may continue an exact bootstrap, but it
+         * must never establish one for an unlabeled caller. */
         activation = binding_activation_for_new_root(binding, config);
         bootstrap = runtime_entry_bootstrap_for_task(current);
         if (!activation ||
@@ -345,7 +397,7 @@ static __noinline bool runtime_entry_may_control_initial_target(
                 activation->active_profile_generation_ref_id ||
             !id128_equal(&bootstrap->binding_id, &activation->binding_id) ||
             !id128_equal(&bootstrap->target_entry_instance_id,
-                         &target_label->entry_instance_id))
+                         &binding->prepared_container_entry_instance_id))
             return false;
         *target_label_out = target_label;
         return true;

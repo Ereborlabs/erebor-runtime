@@ -1973,7 +1973,7 @@ int BPF_PROG(erebor_bprm_committing_creds, struct linux_binprm *bprm)
              (pending &&
               (pending->prepared_runtime_exec ||
                (pending->admitted_entry_rule_id &&
-                !pending->exact_object_required))));
+                 !pending->exact_object_required))));
     }
     if (!process) {
         clear_provisional_exec_request(task);
