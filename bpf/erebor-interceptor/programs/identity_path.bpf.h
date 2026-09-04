@@ -18,11 +18,22 @@ static __always_inline __u32 current_mount_namespace_inode(void)
     return inode;
 }
 
+static __always_inline void record_mount_activity(void)
+{
+    const __u32 global_key = 0;
+    __u64 *sequence = bpf_map_lookup_elem(
+        &mount_global_activity_sequence, &global_key);
+
+    if (sequence)
+        __sync_fetch_and_add(sequence, 1);
+}
+
 static __always_inline int begin_global_mount_mutation(void)
 {
     const __u32 global_key = 0;
     __u64 *global_epoch;
     __u64 *global_pending;
+    __u64 *ambiguous;
     mount_mutation_attempt_v1 *attempt;
     struct task_struct *task;
     task_label_v1 *label;
@@ -40,12 +51,15 @@ static __always_inline int begin_global_mount_mutation(void)
                                        &global_key);
     global_pending = bpf_map_lookup_elem(&mount_global_pending_mutations,
                                          &global_key);
-    if (!global_epoch || !global_pending)
+    ambiguous = bpf_map_lookup_elem(&mount_global_ambiguous_epoch,
+                                    &global_key);
+    if (!global_epoch || !global_pending || !ambiguous)
         return label ? -EACCES : 0;
     attempt = bpf_task_storage_get(&mount_mutation_attempts, task, 0,
                                    BPF_LOCAL_STORAGE_GET_F_CREATE);
     if (!attempt) {
         __sync_fetch_and_add(global_epoch, 1);
+        __sync_fetch_and_add(ambiguous, 1);
         return -EACCES;
     }
     if (attempt->active)
@@ -53,6 +67,7 @@ static __always_inline int begin_global_mount_mutation(void)
     __builtin_memset(attempt, 0, sizeof(*attempt));
     __sync_fetch_and_add(global_pending, 1);
     __sync_fetch_and_add(global_epoch, 1);
+    __sync_fetch_and_add(ambiguous, 1);
     attempt->active = 1;
     return 0;
 }
@@ -1730,26 +1745,35 @@ int erebor_mount_mutation_sys_exit(struct trace_event_raw_sys_exit *context)
     return 0;
 }
 
-#define MOUNT_SYSCALL_INVALIDATION(NAME)                                  \
+#define MOUNT_ACTIVITY_ONLY(NAME)                                         \
     SEC("tracepoint/syscalls/sys_enter_" #NAME)                           \
     int erebor_mount_sys_enter_##NAME(struct trace_event_raw_sys_enter *context) \
     {                                                                     \
         (void)context;                                                    \
-        const __u32 global_key = 0;                                      \
-        __u32 mount_namespace_inode = current_mount_namespace_inode();    \
-        __u64 *ambiguous = bpf_map_lookup_elem(                           \
-            &mount_global_ambiguous_epoch, &global_key);                  \
-        begin_global_mount_mutation();                                   \
-        if (ambiguous && mount_namespace_inode &&                         \
-            bpf_map_lookup_elem(&mount_security_views,                    \
-                                &mount_namespace_inode))                  \
-            __sync_fetch_and_add(ambiguous, 1);                           \
+        record_mount_activity();                                         \
         return 0;                                                         \
     }
 
-MOUNT_SYSCALL_INVALIDATION(open_tree)
-MOUNT_SYSCALL_INVALIDATION(fsconfig)
-MOUNT_SYSCALL_INVALIDATION(fsmount)
-MOUNT_SYSCALL_INVALIDATION(mount_setattr)
+MOUNT_ACTIVITY_ONLY(open_tree)
+MOUNT_ACTIVITY_ONLY(fsmount)
+
+SEC("tracepoint/syscalls/sys_enter_fsconfig")
+int erebor_mount_sys_enter_fsconfig(struct trace_event_raw_sys_enter *context)
+{
+    record_mount_activity();
+    if (context->args[1] == FSCONFIG_CMD_RECONFIGURE)
+        (void)begin_global_mount_mutation();
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_enter_mount_setattr")
+int erebor_mount_sys_enter_mount_setattr(
+    struct trace_event_raw_sys_enter *context)
+{
+    (void)context;
+    record_mount_activity();
+    (void)begin_global_mount_mutation();
+    return 0;
+}
 
 #endif /* EREBOR_IDENTITY_PATH_BPF_H */

@@ -2120,13 +2120,18 @@ fn install_global_mount_barrier(
                 .context(InterceptorSnafu)?;
         }
     }
-    if host
-        .lookup_map("mount_global_ambiguous_epoch", &key)
-        .context(InterceptorSnafu)?
-        .is_none()
-    {
-        host.update_map("mount_global_ambiguous_epoch", &key, &1_u64.to_ne_bytes())
-            .context(InterceptorSnafu)?;
+    for map in [
+        "mount_global_activity_sequence",
+        "mount_global_ambiguous_epoch",
+    ] {
+        if host
+            .lookup_map(map, &key)
+            .context(InterceptorSnafu)?
+            .is_none()
+        {
+            host.update_map(map, &key, &1_u64.to_ne_bytes())
+                .context(InterceptorSnafu)?;
+        }
     }
     let epoch = mount_epoch_from(host, "mount_global_mutation_epoch", &key)?;
     let clean = mount_epoch_from(host, "mount_global_clean_epoch", &key)?;
@@ -2135,6 +2140,7 @@ fn install_global_mount_barrier(
         epoch != 0
             && clean <= epoch
             && pending == 0
+            && mount_epoch_from(host, "mount_global_activity_sequence", &key)? != 0
             && mount_epoch_from(host, "mount_global_ambiguous_epoch", &key)? != 0,
         IdentityStateSnafu {
             reason: "global mount security barrier readback is invalid",
@@ -3365,6 +3371,7 @@ fn preflight_policy_map_capacity(
 ) -> Result<()> {
     let mut planned = BTreeMap::<&'static str, BTreeSet<Vec<u8>>>::new();
     for map in [
+        "mount_global_activity_sequence",
         "mount_global_ambiguous_epoch",
         "mount_global_mutation_epoch",
         "mount_global_clean_epoch",

@@ -1438,15 +1438,18 @@ static __always_inline bool initial_root_is_before_first_exec(void)
 
 static __always_inline int mount_mutation_effect(__u16 operation, int ret)
 {
+    record_mount_activity();
     /* An explicit mount denial wins before exact CAP_SYS_ADMIN authority. */
     if (!ret)
         prepare_effect_identity();
-    if (ret || initial_root_is_before_first_exec())
-        return ret;
-    ret = identity_effect_gate(NULL, kernel_effect_family_v1_mount, operation,
-                               ret);
     if (ret)
         return ret;
+    if (!initial_root_is_before_first_exec()) {
+        ret = identity_effect_gate(
+            NULL, kernel_effect_family_v1_mount, operation, ret);
+        if (ret)
+            return ret;
+    }
     return begin_mount_mutation();
 }
 
