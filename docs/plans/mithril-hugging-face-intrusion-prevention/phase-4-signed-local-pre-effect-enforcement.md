@@ -4,7 +4,9 @@ Status: **Not done** for the complete phase. The signed path-tree denial claim
 is **Done** for the tested ordinary bind, recursive-bind, and `move_mount`
 forms. The Kubernetes baseline-submount route correction is **Done**. The
 remaining unsupported capabilities and the unfinished administrative
-reservation and late argv verification keep the phase open.
+reservation and late argv verification keep the phase open. The approved
+initial-exec and mount-epoch architecture is documentation only. Its
+implementation is not approved.
 
 - Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 - Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -77,23 +79,28 @@ exact-object measurement also stays in the same generation.
 At the held `createRuntime` stage, the task still has its pre-container root.
 Node opens the configured root from the OCI bundle through the held mount
 namespace. It rebases bundle mountpoints to container paths and publishes the
-entry-time routes. It must not derive a route from `/proc/<pid>/root` at this
-stage. Node does not rebuild these routes after the task starts. This lifecycle
-does not change the graph or allocate another generation.
+provisional entry-time routes. It must not derive a route from
+`/proc/<pid>/root` at this stage. At the approved initial-exec boundary, Node
+replaces the provisional dynamic rows from the final container mount view
+before it publishes application-entry authority. This lifecycle does not
+change the graph or allocate another generation.
 
-BPF owns topology reconstruction after admission. Before a namespace-visible
-mount change, the BPF hooks update a global mutation epoch and pending count.
-For each file or executable decision, BPF snapshots that guard, reads the live
-namespace event, scans the live mount tree, resolves the path, and rechecks the
-same guard. A concurrent or unresolved topology denies. The ring-buffer mount
-event is evidence only. Node does not complete this authorization path.
+BPF owns the pre-effect mount guard. Keep mount activity evidence separate
+from the security-view epoch. Record every observed mount API operation. An
+operation advances the affected namespace security epoch only when it can
+change that namespace's visible topology or security attributes. An operation
+with unknown attribution or possible propagation advances the global
+fail-closed epoch. A concurrent, dirty, or unresolved security view denies.
+Node reconciles a dirty represented view from a complete verified snapshot.
 
 Key every BPF mount-cache state and mount-selection row with the captured
-global mutation epoch. Build all rows for one epoch before the cache state
-becomes ready. Do not reuse a row from an earlier epoch when the namespace
-event, namespace address, task-root pointers, or mount-root identity stay the
-same. Use the cache only after BPF rechecks the same global epoch and confirms
-that no mount mutation is pending.
+security-view epoch and namespace identity. Build all rows for one epoch before
+the cache state becomes ready. Do not reuse a row from an earlier epoch when
+the namespace event, namespace address, task-root pointers, or mount-root
+identity stay the same. Use the cache only after BPF rechecks the same
+security-view epoch and confirms that no relevant mount mutation is pending.
+The approved classification and fallback rules are in the dated architecture
+correction below.
 
 For a bind mount, BPF evaluates the canonical path below the current task root
 and each admitted source route that represents the resolved object. A path-tree
@@ -209,6 +216,10 @@ outside-authority branches retain their honest result rather than a fabricated
 denial.
 
 ## Approved OCI Hook Lifecycle Correction — 2026-09-03
+
+State: **Superseded** by the approved initial-exec and mount-epoch architecture
+below. Do not implement this `startContainer` helper or its communication
+bridge. This section remains as historical analysis.
 
 Yes—my recommended incremental design is to keep `createContainer` and add `startContainer`, with different responsibilities. More precisely, the full sequence uses three stages:
 
@@ -438,6 +449,231 @@ If you approve this lifecycle structure, I will proceed in this order:
 
 This is an architecture/lifecycle change, so I need your approval before implementing it.
 
+## Approved Initial-Exec And Mount-Epoch Architecture — 2026-09-03
+
+State: **Architecture approved. Implementation is not approved.** Stop after
+this documentation commit. Wait for explicit implementation approval.
+
+This correction uses stock runc. It does not add a runc wrapper, runc patch,
+container helper, container-mounted socket, or `startContainer` hook. Keep all
+current execution and mount diagnostics.
+
+### Initial PID completion boundary
+
+1. Containerd asks stock runc to create the container.
+
+2. runc creates the initial `runc init` process.
+
+3. runc creates the namespaces and performs the early rootfs mounts.
+
+4. runc runs the two ordered Mithril `createRuntime` hook entries.
+
+5. The first entry stages immutable container, cgroup, image, and Pod facts.
+   The second entry sends the exact held initial PID and OCI state to the node
+   through the existing host path.
+
+6. The node verifies the exact PID, PID lifetime, cgroup, container identity,
+   signed policy candidate, and provisional namespace state. The node creates
+   a `PREPARED` binding. It does not publish application-entry authority for
+   this binding.
+
+7. runc runs `createContainer`. The node validates the declared entries and
+   stages candidate data. It keeps the binding-specific application-entry row
+   absent. `createContainer` returns without declaring the mount view final.
+
+8. runc performs its remaining rootfs work. This work includes `pivot_root`,
+   final read-only remounts, and masked-path mounts.
+
+9. runc installs the OCI seccomp filter that contains the `execve` and
+   `execveat` user-notification rule.
+
+10. The runc host parent sends the seccomp listener FD and OCI process state to
+    the node through the OCI `listenerPath`. The socket is host-only. It is not
+    mounted in the container.
+
+11. runc completes create. The initial process waits on runc's start FIFO.
+
+12. Containerd starts the container. runc opens the start FIFO.
+
+13. The exact initial PID calls `execve` or `execveat` for the application.
+
+14. The kernel blocks that syscall and sends one seccomp notification to the
+    node. No application instruction has run.
+
+15. The node validates the live notification ID, PID lifetime, cgroup, mount
+    namespace, executable request, container identity, and `PREPARED` binding.
+    The node reads the final mount topology and rejects any mismatch or pending
+    mutation.
+
+16. On success, the node rebuilds the final exact executable, exact-object,
+    mount-view, and mount-route dependencies. It installs and reads back those
+    dependencies. It writes the binding-specific application-entry rule last
+    and reads it back. That final row is the application-authority publication
+    point. The node then replies `CONTINUE` to the seccomp notification.
+
+17. BPF evaluates the real exec request. BPF verifies the opened executable,
+    invocation path, argv requirements, binding, generation, and entry rule.
+    A successful transaction changes `PREPARED` to `EXEC_PENDING`.
+
+18. The first syscall from the new application image proves that the image
+    reached user space. BPF changes `EXEC_PENDING` to `ACTIVE` at this point.
+
+The checked local stock-runc source fixes this order. `createContainer` returns
+before `pivot_root` and the final rootfs operations
+([rootfs order](../../../runc/libcontainer/rootfs_linux.go#L226)). The host
+parent forwards the seccomp listener FD and OCI process state through
+`listenerPath`
+([listener transfer](../../../runc/libcontainer/process_linux.go#L940)). The
+init process installs seccomp, waits on the existing exec FIFO, closes its
+internal file descriptors, and then calls exec
+([initial exec order](../../../runc/libcontainer/standard_init_linux.go#L234)).
+
+A failure at stages 14 through 16 denies the syscall and publishes no
+application role. A pre-point-of-no-return BPF failure at stage 17 denies the
+exec. A later BPF mismatch grants no role and prevents a user-mode effect with
+the existing fail-closed exec response. If the node fails after row publication
+but before its `CONTINUE` response, the initial process remains blocked in the
+kernel. Recovery must revalidate the complete transaction or revoke the
+binding-specific row before it resolves the notification.
+
+### Delayed binding publication
+
+A policy generation can already be active for another container. The node
+must not deactivate that shared generation. The delay applies to the new
+container's binding-specific authority.
+
+The binding-specific entry key contains the profile generation, binding ID,
+entry atom, and source role. BPF has no application admission when that row is
+absent. Stages 6 and 7 can verify signed immutable policy content and prepare
+candidate rows, but they must not publish the new binding's usable
+application-entry row. Stage 16 installs all dependencies first and writes the
+binding-specific entry row last.
+
+### Why earlier lightweight cases passed
+
+Before implementation commit `27e7763`, the global mount snapshot rejected a
+path decision only while a mount syscall was pending. It did not require the
+clean epoch to equal the current epoch. A runc mount syscall could finish,
+clear the pending counter, and let BPF rebuild from live kernel state without
+a final node reconciliation.
+
+Commit `27e7763` added the persistent `clean_epoch == current_epoch` guard.
+The complete direct-runc lifecycle then exposed the missing boundary:
+
+```text
+createContainer reconciles epoch 1
+  -> createContainer returns
+  -> runc performs post-hook mount work
+  -> current epoch becomes 3
+  -> clean epoch remains 1
+  -> the first application path effect returns UNRESOLVED_OBJECT
+```
+
+Focused Rust tests exercised state and map transitions. They did not execute
+the complete stock-runc rootfs lifecycle. Lightweight r84 passed its
+regression oracle because it reproduced `UNRESOLVED_OBJECT`; it did not prove
+successful application startup. The earlier Kubernetes r13 reader ran after
+the Pod was Running and Ready and did not guard the initial application exec
+under the persistent clean-epoch rule.
+
+The retained VM is `mithril-runtime-qualification-960031`. Retained directories
+`/var/tmp/mithril-r96` through `/var/tmp/mithril-r102` remain on that VM. The
+r97 failure is in `/var/tmp/mithril-r97/run.log`. The r98 through r100 mount
+actor logs record the runc lifecycle. The r100 lifecycle log gives the clearest
+post-`createContainer` mount sequence.
+
+### Later runc exec correction
+
+An ordinary later `runc exec` does not repeat initial rootfs setup. The local
+runc setns-init path joins the existing namespaces and calls exec. The measured
+`open_tree`, `fsconfig`, and `fsmount` calls came from runc executable sealing.
+That code creates a detached overlayfs mount FD. It does not attach the mount
+to the running container's mount namespace.
+
+The observed global epoch change from 22 to 220 proves mount API activity. It
+does not prove a change to the target container's mount topology. The prior
+concurrent-exec oracle tested false global coupling. Do not add an initial-
+mount reconciliation transaction to later exec on this evidence.
+
+An application descendant inherits the initial seccomp filter. A stock-runc
+later exec does not depend on that lineage. Its setns init installs the
+configured filter for the new process
+([setns filter](../../../runc/libcontainer/setns_init_linux.go#L94)). Its host
+parent forwards the new listener FD
+([setns listener](../../../runc/libcontainer/process_linux.go#L532)). Only the
+exact initial PID in `PREPARED` uses stages 15 and 16. A later notification must
+not publish initial-entry authority or start an initial-mount reconciliation.
+The node validates the notification and container lifetime, then lets the
+normal BPF entry transaction make the authorization decision. Loss of the
+listener remains fail-closed.
+
+### Mount activity and security-view epochs
+
+Keep two logical facts separate:
+
+1. The mount-activity evidence sequence records every observed `fsconfig`,
+   `fsmount`, `open_tree`, `mount_setattr`, `mount`, `umount`, `pivot_root`, and
+   `move_mount` operation. These records remain available for diagnostics and
+   future features.
+
+2. The security-view epoch advances only when an operation can change a
+   represented namespace's visible topology or security attributes. Unknown
+   attribution and possible mount propagation use the global fail-closed
+   fallback.
+
+Use this classification:
+
+| Operation | Evidence record | Security-view invalidation |
+| --- | --- | --- |
+| `fsconfig` `SET_*` on a new context | Yes | No |
+| `fsconfig` `CMD_CREATE` for a detached mount | Yes | No |
+| `fsmount` that returns a detached mount FD | Yes | No |
+| `open_tree` with `OPEN_TREE_CLONE` | Yes | No |
+| `move_mount` that attaches or moves a mount | Yes | Affected namespace |
+| `fsconfig` `CMD_RECONFIGURE` | Yes | Affected filesystem, or global fallback |
+| `mount_setattr` on an attached mount | Yes | Affected namespace |
+| `mount`, `umount`, or `pivot_root` | Yes | Affected namespace |
+| Unknown target or possible propagation | Yes | Global fail-closed fallback |
+
+This is not a syscall-name exemption. The implementation must distinguish a
+new detached filesystem context from reconfiguration of an existing mounted
+filesystem. Access through an unattached mount FD must remain fail-closed
+unless separate exact authority exists. `move_mount` must invalidate the
+destination security view before an attached mount becomes usable.
+
+### Required qualification order
+
+1. Unit tests must prove delayed binding publication, notification validation,
+   entry-row-last publication, failure cleanup, and the first-syscall `ACTIVE`
+   transition.
+
+2. The lightweight direct-runc test must prove the post-`createContainer`
+   mount sequence, the blocked initial exec, final reconciliation, first marker
+   success, protected denials, and the allowed control.
+
+3. The lightweight later-exec test must compare the target mount namespace
+   inode, namespace event, and `mountinfo` digest before and after concurrent
+   exec preparation. Detached runc sealing must remain visible as evidence and
+   must not dirty the target security view.
+
+4. A separate lightweight case must attach a detached mount with `move_mount`.
+   It must prove that the target view becomes dirty before protected access can
+   continue. It must also cover `FSCONFIG_CMD_RECONFIGURE`, attached
+   `mount_setattr`, access through an unattached mount FD, and shared-mount
+   propagation.
+
+5. Kubernetes runs only after all paired lightweight cases pass. If Kubernetes
+   exposes a condition that lightweight missed, stop the Kubernetes cycle. Add
+   that exact condition to lightweight and make lightweight pass before the
+   next Kubernetes run.
+
+6. Preserve every temporary diagnostic stage until the approved implementation
+   and qualification work determines its permanent evidence owner. Do not
+   remove a trace as part of this correction.
+
+No implementation, lightweight rerun, or Kubernetes rerun is authorized by
+this documentation decision. Wait for explicit implementation approval.
+
 ## Checkpoint
 
 Every qualified non-network local effect has a signed task-first decision and
@@ -470,6 +706,15 @@ remain outside the checkpoint.
   atomically active.
 - Mount, alias, identity, fd, mmap, async, and object-reuse bypasses do not
   widen authority.
+- The initial application image cannot execute until the node validates the
+  final mount view and publishes the binding-specific application entry. The
+  BPF exec transaction changes the binding from `PREPARED` to `EXEC_PENDING`.
+  The first application syscall changes it to `ACTIVE`.
+- Detached mount construction emits mount activity evidence but does not
+  invalidate an unrelated mount-namespace security view. An attachment,
+  reconfiguration, attached mount-attribute change, or propagation event
+  advances the affected security-view epoch. Unknown scope uses the global
+  fail-closed fallback.
 - A signed path-tree denial protects each covered current, new, or replaced
   file under the canonical tree without a child inode binding. A path-only
   rule cannot allow a file effect.
@@ -620,7 +865,10 @@ below replaces the earlier reconciliation ownership. The readable algorithm is i
 
 ## Kubernetes baseline-submount route correction — 2026-08-31
 
-State: **Done** for the paired lightweight and Kubernetes route case.
+State: **Done** for the paired lightweight and Kubernetes route case at its
+recorded source. The global-epoch flow below records that source. The approved
+initial-exec and mount-epoch architecture above supersedes that epoch ownership
+for future implementation.
 
 ```text
 Node holds the authenticated initial container mount snapshot
@@ -643,7 +891,7 @@ BPF finds no Node route on the source dentry ancestry
   -> BPF continues through that mount's parent path
   -> a missing or unresolved fallback denies under strict policy
 
-A represented namespace changes after activation
+At the recorded source, a represented namespace changes after activation
   -> the BPF mount hook updates the global epoch and pending count before effect
   -> the BPF return hook clears the pending count after the syscall
   -> the next BPF decision snapshots the guard and live namespace event
