@@ -1176,6 +1176,236 @@ execution. Keep `EXACT` object identity for filesystem rules and the separate
 administrative-exec approval path. After activation, resolve exact object
 identity only when a signed selector explicitly requests `EXACT`.
 
+## Approved OCI Hook Lifecycle Correction — 2026-09-03
+
+Yes—my recommended incremental design is to keep `createContainer` and add `startContainer`, with different responsibilities. More precisely, the full sequence uses three stages:
+
+1. `createRuntime`: establish the host-side admission and hold.
+2. `createContainer`: prepare provisional identity and the trusted bridge.
+3. `startContainer`: reconcile the final mount view and release execution.
+
+`createContainer` must stop meaning “mount state is final.”
+
+## What happens now
+
+1. Containerd asks runc to create the container.
+
+2. runc creates the init process and installs the OCI specification mounts.
+
+3. runc runs Mithril’s `createRuntime` hook.
+
+4. The node loads the BPF policy maps and places the runc-init task in the prepared/held state.
+
+5. runc runs Mithril’s `createContainer` hook.
+
+6. Mithril reads the PID, bundle, cgroup, namespaces, and mount routes.
+
+7. Mithril currently reconciles the mount epoch and treats that view as final.
+
+8. Mithril releases `createContainer`.
+
+9. runc then performs `pivot_root` cleanup:
+
+```text
+mount("", ".", MS_SLAVE | MS_REC)
+umount(".", MNT_DETACH)
+```
+
+10. BPF observes those operations:
+
+```text
+clean_epoch   = 1
+current_epoch = 3
+```
+
+11. No owner performs another reconciliation.
+
+12. runc executes the application.
+
+13. The application’s first marker write encounters the stale mount view and gets `UNRESOLVED_OBJECT`.
+
+That is the lightweight r95–r97 failure.
+
+## What both hooks would do
+
+1. `createRuntime` establishes the signed admission and holds the task.
+
+2. `createContainer` receives the OCI state while the host filesystem is still reachable.
+
+3. `createContainer` performs only provisional work:
+
+   - verify container ID, PID, cgroup, bundle, and annotations;
+   - create the prepared identity;
+   - install non-final policy data;
+   - prepare or verify the trusted helper and node communication path that will remain available after pivot-root;
+   - keep the application admission held.
+
+4. `createContainer` returns.
+
+5. runc performs its remaining mount operations.
+
+6. BPF increments the mount epoch and leaves the mount view dirty.
+
+7. This is safe because the application is still held and has not executed.
+
+8. After root finalization, runc invokes `startContainer`.
+
+9. The `startContainer` helper sends the same OCI identity to the node.
+
+10. The node independently verifies the live PID, cgroup, namespace, and prior admission.
+
+11. The node reads the now-final `/proc/<pid>/mountinfo`.
+
+12. The node compares the mount routes with the BPF views.
+
+13. The node applies the reconciliation proposal.
+
+14. The node verifies:
+
+```text
+pending_mounts == 0
+clean_epoch == current_epoch
+all required mount-route digests match
+task remains in the prepared state
+```
+
+15. The node atomically changes the task from prepared to active.
+
+16. `startContainer` returns success.
+
+17. The local runc source shows that runc then closes file descriptors and calls `execve`; it performs no further rootfs mount setup. [final hook and exec](/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/runc/libcontainer/standard_init_linux.go:282)
+
+18. The application’s first effect therefore uses the final, clean mount view.
+
+## What this solves
+
+It solves the startup mutation specifically:
+
+```text
+createContainer reconciliation
+        ↓
+runc changes mounts
+        ↓
+stale BPF view
+```
+
+becomes:
+
+```text
+createContainer preparation
+        ↓
+runc changes mounts
+        ↓
+startContainer final reconciliation
+        ↓
+application exec
+```
+
+The runc mount and unmount are no longer a race. They occur before the final reconciliation by construction.
+
+## What it does not solve alone
+
+Containerd can perform later mount preparation for `crictl exec` after the application is running. `startContainer` does not run for each ordinary runc exec.
+
+That case still requires the persistent mount-mutation mechanism:
+
+1. Containerd/runc starts an exec preparation.
+
+2. BPF increments the global mount epoch.
+
+3. The clean epoch no longer matches.
+
+4. BPF refuses stale path authorization.
+
+5. Reads during this dirty state fail closed with guard evidence.
+
+6. The node reads the changed mount topology and reconciles it.
+
+7. The clean epoch catches up.
+
+8. Later protected reads return normal `PATH_TREE_POLICY_DENY`.
+
+Thus `startContainer` fixes initial bootstrap, while the epoch/reconciliation mechanism protects later runtime mutations.
+
+## What we have tested so far
+
+1. Focused Rust unit tests and static harness tests passed.
+
+2. Earlier lightweight runs reached the concurrent-exec test, but the old guard existed only during the extremely short pending syscall interval.
+
+3. Lightweight r86 completed 16,384 reads before the mount epoch changed from `22` to `220`. No read overlapped the pending interval, so the intended guard oracle failed.
+
+4. Kubernetes r13 successfully started the pod:
+
+   - pod Ready;
+   - zero restarts;
+   - mounts succeeded;
+   - protected paths denied;
+   - control path allowed;
+   - 566 normal policy denials;
+   - zero unresolved events.
+
+   It then stopped because it did not observe the required mutation collision.
+
+5. Replacing the subshell read with `command : <path` removed one fork and exit per read.
+
+6. The new FIFO and 32-exec driver were added but have not yet been qualified in Kubernetes.
+
+7. The strict dirty-epoch latch made the later-mutation test deterministic in principle, but exposed the missing startup boundary first.
+
+8. r95–r97 failed at the first application marker, before the application’s own mount commands or concurrent reads ran.
+
+9. The actor trace showed runc-init issuing `mount` and `umount` after the `createContainer` release.
+
+10. The local runc source confirmed that those operations are part of post-hook pivot-root cleanup.
+
+No latest-shape Kubernetes run has happened yet.
+
+## Proposed deliverables
+
+If you approve this lifecycle structure, I will proceed in this order:
+
+1. Add `startContainer` support while preserving `createRuntime`, `createContainer`, and every existing trace.
+
+2. Change `createContainer` to provisional preparation only.
+
+3. Implement the trusted post-pivot helper/IPC bridge.
+
+4. Make `startContainer` perform final reconciliation and activation.
+
+5. Add unit tests for:
+
+   - lifecycle ordering;
+   - no activation at `createContainer`;
+   - dirty epoch after post-create mounts;
+   - final reconciliation at `startContainer`;
+   - failure when another mount occurs before activation;
+   - failure when the helper or peer identity is incorrect.
+
+6. Run the focused Rust and harness tests, then commit that deliverable.
+
+7. Run the lightweight physical test and require:
+
+   - runc post-create mount mutation observed;
+   - start reconciliation succeeds;
+   - first application marker succeeds;
+   - all protected reads denied;
+   - control read allowed;
+   - no stable-state unresolved events;
+   - every concurrent exec denied;
+   - deliberate dirty-state reads fail closed;
+   - post-reconciliation reads return normal policy denial.
+
+8. Commit the completed lightweight deliverable.
+
+9. Run Kubernetes only after lightweight passes the same state transitions and oracles.
+
+10. If Kubernetes exposes a condition missing from lightweight, stop the Kubernetes cycle, add that exact condition to lightweight, and make lightweight pass first.
+
+11. Commit Kubernetes harness/evidence and documentation separately.
+
+This is an architecture/lifecycle change, so I need your approval before implementing it.
+
 ## Checkpoint
 
 An operator changes one `WorkloadProtectionPolicy` or requests one bounded
