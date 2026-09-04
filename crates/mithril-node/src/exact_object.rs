@@ -535,7 +535,8 @@ impl ExactFileObjectView {
             Ok(file) => read(&file),
             Err(crate::Error::Io { source, .. })
                 if source.kind() == std::io::ErrorKind::NotFound
-                    || source.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()) =>
+                    || source.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error())
+                    || source.raw_os_error() == Some(rustix::io::Errno::INVAL.raw_os_error()) =>
             {
                 read(&self.mountinfo)
             }
@@ -1580,10 +1581,25 @@ mod tests {
                 path: Path::new("/bin/sleep"),
             })?;
         let child_pid = child.id();
-        let view = ExactFileObjectView::acquire(child_pid);
+        let view = ExactFileObjectView::acquire(child_pid)?;
         let _ = child.kill();
+        let zombie_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            let state = fs::read_to_string(format!("/proc/{child_pid}/stat")).unwrap_or_default();
+            if state
+                .split_once(") ")
+                .is_some_and(|(_, state)| state.starts_with('Z'))
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < zombie_deadline,
+                "the retained mount-view source did not enter its unreaped exit state",
+            );
+            std::thread::yield_now();
+        }
+        assert!(!parse_mountinfo(&view.read_mountinfo()?)?.is_empty());
         let _ = child.wait();
-        let view = view?;
 
         assert!(!PathBuf::from(format!("/proc/{child_pid}")).exists());
         assert!(view.mount_namespace_inode()? > 0);
