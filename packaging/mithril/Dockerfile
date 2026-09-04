@@ -13,7 +13,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \
     cargo build --locked --release -p mithril-node -p mithril-control \
-    && cargo rustc --locked --release -p mithril-node --bin mithril-oci-hook -- -C target-feature=+crt-static \
     && install -D -m 0755 target/release/mithril-node /out/mithril-node \
     && install -D -m 0755 target/release/mithril-oci-hook /out/mithril-oci-hook \
     && install -D -m 0755 target/release/mithril-inspect /out/mithril-inspect \

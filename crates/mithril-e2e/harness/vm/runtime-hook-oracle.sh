@@ -120,7 +120,11 @@ case ${1:-} in
       ] and
       .hooks.createRuntime[0].timeout == $runtime_timeout and
       .hooks.createRuntime[1].args[3] == "prepare-container" and
-      .hooks.createContainer[0].args[3] == "prepare-declared-entries"
+      .hooks.createContainer[0].args[3] == "prepare-declared-entries" and
+      (.hooks | has("startContainer") | not) and
+      ([.mounts[]? | select(
+        .destination == "/run/mithril" or
+        .destination == "/run/mithril-start-hook")] | length) == 0
     ' "$base_spec" >/dev/null
     grep -Fxq "base_runtime_spec = \"/var/lib/rancher/k3s/agent/etc/containerd/mithril-base-spec.json\"" \
       "$fragment"

@@ -330,7 +330,6 @@ struct StagedRuntimeAdmissionV1 {
     authority_head_binding_id: String,
     identity: KubernetesRuntimeIdentityV1,
     cgroup_path: PathBuf,
-    prepared_oci_bundle: Option<PathBuf>,
     deadline: Instant,
 }
 
@@ -364,24 +363,6 @@ impl StagedRuntimeAdmissionV1 {
                 && request.kubernetes_identity()? == self.identity,
             IdentityStateSnafu {
                 reason: "declared-entry preparation differs from its immutable runtime stage",
-            }
-        );
-        Ok(())
-    }
-
-    fn verify_finalization(
-        &self,
-        authority_head_binding_id: &str,
-        request: &RuntimeAdmissionRequestV1,
-        now: Instant,
-    ) -> Result<()> {
-        ensure!(
-            self.deadline > now
-                && authority_head_binding_id == self.authority_head_binding_id
-                && request.kubernetes_identity()? == self.identity
-                && request.oci_bundle == self.prepared_oci_bundle,
-            IdentityStateSnafu {
-                reason: "startContainer finalization differs from its provisional runtime stage",
             }
         );
         Ok(())
@@ -1049,7 +1030,6 @@ impl WorkloadBindingOwner {
             cgroup_path: request.cgroup_path.clone().context(IdentityStateSnafu {
                 reason: "OCI runtime-fact stage has no cgroup path",
             })?,
-            prepared_oci_bundle: None,
             deadline: now + RUNTIME_STAGE_LIFETIME,
         };
         if let Some(existing) = self.staged_runtime_admissions.get(&request.container_id) {
@@ -1113,7 +1093,7 @@ impl WorkloadBindingOwner {
     }
 
     pub(crate) fn verify_runtime_entry_preparation(
-        &mut self,
+        &self,
         configured: &[WorkloadBindingConfig],
         request: &RuntimeAdmissionRequestV1,
     ) -> Result<(String, u32)> {
@@ -1123,9 +1103,12 @@ impl WorkloadBindingOwner {
                 reason: "declared-entry preparation requires the post-root OCI hook",
             }
         );
-        let bundle = request.oci_bundle.clone().context(IdentityStateSnafu {
-            reason: "declared-entry preparation has no OCI bundle",
-        })?;
+        let staged = self
+            .staged_runtime_admissions
+            .get(&request.container_id)
+            .context(IdentityStateSnafu {
+                reason: "declared-entry preparation has no live runtime stage",
+            })?;
         let identity = request.kubernetes_identity()?;
         let matches = configured
             .iter()
@@ -1152,33 +1135,14 @@ impl WorkloadBindingOwner {
                 .context(IdentityStateSnafu {
                     reason: "runtime binding lost its scheduled authority",
                 })?;
-        let staged_cgroup_path = {
-            let staged = self
-                .staged_runtime_admissions
-                .get_mut(&request.container_id)
-                .context(IdentityStateSnafu {
-                    reason: "declared-entry preparation has no live runtime stage",
-                })?;
-            staged.verify_declared_entries(authority_binding_id, request, Instant::now())?;
-            ensure!(
-                staged
-                    .prepared_oci_bundle
-                    .as_ref()
-                    .is_none_or(|existing| existing == &bundle),
-                IdentityStateSnafu {
-                    reason: "declared-entry preparation changed its OCI bundle",
-                }
-            );
-            staged.prepared_oci_bundle = Some(bundle);
-            staged.cgroup_path.clone()
-        };
+        staged.verify_declared_entries(authority_binding_id, request, Instant::now())?;
         ensure!(
             spec.binding_id
                 == ScheduledRuntimeBindingV1::runtime_binding_id(
                     authority_binding_id,
                     &request.container_id,
                 )
-                && spec.root_cgroup_path.as_ref() == Some(&staged_cgroup_path),
+                && spec.root_cgroup_path.as_ref() == Some(&staged.cgroup_path),
             IdentityStateSnafu {
                 reason: "declared-entry preparation does not match its concrete runtime binding",
             }
@@ -1202,86 +1166,6 @@ impl WorkloadBindingOwner {
             }
         );
         Ok((spec.binding_id.clone(), held_initial_pid))
-    }
-
-    pub(crate) fn verify_runtime_finalization(
-        &self,
-        configured: &[WorkloadBindingConfig],
-        request: &RuntimeAdmissionRequestV1,
-    ) -> Result<(String, u32, PathBuf)> {
-        ensure!(
-            request.operation == RuntimeAdmissionOperationV1::FinalizeContainer,
-            IdentityStateSnafu {
-                reason: "runtime finalization requires the startContainer OCI hook",
-            }
-        );
-        let staged = self
-            .staged_runtime_admissions
-            .get(&request.container_id)
-            .context(IdentityStateSnafu {
-                reason: "runtime finalization has no unconsumed provisional stage",
-            })?;
-        let identity = request.kubernetes_identity()?;
-        let matches = configured
-            .iter()
-            .filter(|binding| {
-                binding.scheduled_binding_authority_id.is_some()
-                    && binding.container_id == request.container_id
-                    && binding.profile_id == identity.profile_id
-                    && binding.namespace == identity.namespace
-                    && binding.pod_uid == identity.pod_uid
-                    && binding.container_name == identity.container_name
-                    && binding.image_digest == identity.image_digest
-            })
-            .collect::<Vec<_>>();
-        ensure!(
-            matches.len() == 1,
-            IdentityStateSnafu {
-                reason: "runtime finalization does not resolve to one runtime binding",
-            }
-        );
-        let spec = matches[0];
-        let authority_binding_id =
-            spec.scheduled_binding_authority_id
-                .as_deref()
-                .context(IdentityStateSnafu {
-                    reason: "runtime finalization lost its scheduled authority",
-                })?;
-        staged.verify_finalization(authority_binding_id, request, Instant::now())?;
-        ensure!(
-            spec.binding_id
-                == ScheduledRuntimeBindingV1::runtime_binding_id(
-                    authority_binding_id,
-                    &request.container_id,
-                )
-                && spec.root_cgroup_path.as_ref() == Some(&staged.cgroup_path),
-            IdentityStateSnafu {
-                reason: "runtime finalization does not match its concrete runtime binding",
-            }
-        );
-        let binding = self
-            .bindings
-            .values()
-            .find(|binding| binding.spec.binding_id == spec.binding_id)
-            .context(IdentityStateSnafu {
-                reason: "runtime finalization has no published runtime binding",
-            })?;
-        binding.validate_live_cgroup()?;
-        let held_initial_pid = binding.held_initial_pid.context(IdentityStateSnafu {
-            reason: "runtime finalization has no held initial task",
-        })?;
-        ensure!(
-            held_initial_pid == request.final_initial_pid()?
-                && binding.state.prepared_container_state == PreparedContainerStateV1::Prepared,
-            IdentityStateSnafu {
-                reason: "runtime finalization has no exact prepared initial task",
-            }
-        );
-        Ok((
-            spec.binding_id.clone(),
-            held_initial_pid,
-            staged.cgroup_path.clone(),
-        ))
     }
 
     pub(crate) fn verify_runtime_entry_admissions(
@@ -2555,7 +2439,6 @@ mod tests {
             authority_head_binding_id: "authority-head-a".to_owned(),
             identity: request.kubernetes_identity()?,
             cgroup_path: cgroup.clone(),
-            prepared_oci_bundle: Some(PathBuf::from("/run/oci/container-a")),
             deadline: Instant::now() + Duration::from_secs(1),
         };
         let now = Instant::now();
@@ -2565,11 +2448,6 @@ mod tests {
         entries.initial_pid = None;
         entries.oci_bundle = Some(PathBuf::from("/run/oci/container-a"));
         stage.verify_declared_entries("authority-head-a", &entries, now)?;
-        let mut finalization = entries.clone();
-        finalization.operation = RuntimeAdmissionOperationV1::FinalizeContainer;
-        finalization.initial_pid = Some(42);
-        stage.verify_finalization("authority-head-a", &finalization, now)?;
-
         assert!(stage
             .verify_preparation("authority-head-b", &request, now)
             .is_err());
@@ -2582,11 +2460,6 @@ mod tests {
             .is_err());
         assert!(stage
             .verify_declared_entries("authority-head-a", &wrong_identity, now)
-            .is_err());
-        let mut wrong_bundle = finalization;
-        wrong_bundle.oci_bundle = Some(PathBuf::from("/run/oci/container-b"));
-        assert!(stage
-            .verify_finalization("authority-head-a", &wrong_bundle, now)
             .is_err());
         let mut expired = stage;
         expired.deadline = now;
