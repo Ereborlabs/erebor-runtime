@@ -1276,6 +1276,7 @@ impl NodePolicyGenerationOwner {
         let borrowed_oci_entry_view = oci_entry_view
             .as_ref()
             .map(|(binding_id, root_pid, view)| (*binding_id, *root_pid, view));
+        let refreshed_binding_id = borrowed_oci_entry_view.map(|(binding_id, _, _)| binding_id);
         let (
             mut measured_exact_objects,
             mut measured_mount_routes,
@@ -1290,6 +1291,7 @@ impl NodePolicyGenerationOwner {
         let retained_binding_ids = self
             .resolved_path_binding_ids
             .intersection(&active_binding_ids)
+            .filter(|binding_id| Some(binding_id.as_str()) != refreshed_binding_id)
             .cloned()
             .collect::<BTreeSet<_>>();
         measured_exact_objects

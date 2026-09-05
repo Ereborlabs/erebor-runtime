@@ -1,7 +1,9 @@
 # Phase 6.2 Independent Runtime Mount-Cache Generation Design Proposal
 
-Status: Implemented in source with incomplete lifecycle and Kubernetes
-qualification. Git commit `8c66f0c3` preserves the earlier security-epoch-key
+Status: Implemented in the working tree based on `641b8a93`. The complete
+K3s-runc lightweight case and the bounded Kubernetes protected-start case
+pass. Explicit cache-row retirement and the complete phase acceptance matrix
+remain open. Git commit `8c66f0c3` preserves the earlier security-epoch-key
 experiment. Stash `487a32fcdd873f43b84c9a157fa0a8e9d3b5e793` preserves the state before that
 experiment. This document does not change the signed policy model or the
 exact-object contract.
@@ -253,8 +255,8 @@ This design changes runtime cache qualification only.
 | `crates/erebor-interceptor-abi/src/abi/path.rs` | Record the namespace address, event, and mount count for one tracked mutation attempt. |
 | `bpf/erebor-interceptor/programs/identity_maps.h` | Add the global runtime cache generation. Key ready states and rows by the security-view epoch and runtime cache generation without changing the private cache-key sizes. |
 | `bpf/erebor-interceptor/programs/identity_path.bpf.h` | Advance the runtime cache generation after a confirmed topology change. Rotate and rebuild after a stale ready-state count. Recheck the generation before a decision. |
-| `crates/mithril-node/src/policy.rs` | Initialize and validate the BPF-owned runtime cache generation without changing signed policy rows. |
-| `crates/mithril-e2e/src/effect/runc.rs` | Require detached-activity stability, confirmed-mutation generation advance, and deterministic stale-cache repair. |
+| `crates/mithril-node/src/policy.rs` | Initialize and validate the BPF-owned runtime cache generation. Replace a retained process-view route with the authoritative OCI route for the same binding. Do not change signed policy rows. |
+| `crates/mithril-e2e/src/effect/runc.rs` | Reproduce background process-view reconciliation before authoritative OCI reconciliation. Require route replacement, detached-view stability, confirmed-mutation generation advance, and deterministic stale-cache repair. |
 | `crates/mithril-e2e/harness/vm/two-node-convergence.sh` | Apply the same cache-stability rule and capture a final timeout snapshot. |
 
 ## Qualification
@@ -265,8 +267,10 @@ Run the tests in this order:
 2. Run the lightweight direct-runc case with the distribution runtime.
 3. Run the lightweight case with the exact K3s-bundled runc and containerd.
 4. Require detached activity to advance the activity sequence without
-   advancing the security-view epoch, cache generation, or protected ready
-   key set.
+   advancing the security-view epoch or changing the visible mount table. The
+   cache generation can stay stable or publish a complete replacement after a
+   transient mount-count mismatch. Require normal policy denials, a current
+   ready state, and no unresolved decision.
 5. Require the concurrent protected read to produce a normal
    `PATH_TREE_POLICY_DENY` result with no `UNRESOLVED_OBJECT` result.
 6. Require runc's confirmed post-create mount work to advance both the
@@ -314,7 +318,13 @@ object identity has a separate transition and ambiguity contract.
 
 Not done.
 
-The current implementation uses the working tree based on `8c66f0c3`. The
+The route-replacement correction and its paired bounded qualification are
+done. The overall result stays `Not done` because explicit cache-row retirement
+and the complete phase acceptance matrix remain open.
+
+### Prior Cache-Generation Checkpoint
+
+The following record applies to the working tree based on `8c66f0c3`. The
 earlier checkpoint stash remains available as
 `487a32fcdd873f43b84c9a157fa0a8e9d3b5e793`.
 
@@ -374,3 +384,58 @@ Kubernetes case has not run with this implementation. Explicit retirement of
 unreachable candidate and ready rows, the intermittent stale-state capture,
 the complete direct-runc lifecycle, the paired Kubernetes concurrent-read
 proof, and the complete phase acceptance matrix remain open.
+
+### 2026-09-05 Route-Replacement Correction
+
+Kubernetes exposed a condition that the earlier lightweight case did not
+create. Background node reconciliation inspected the held runc task before
+the authoritative Open Container Initiative (OCI) view arrived. That process
+view produced host-prefixed canonical routes. The later OCI reconciliation
+included the same binding in `retained_binding_ids`. The node discarded the
+new OCI routes and kept the stale process-view routes. The protected object
+therefore had no graph prefix state and received `APPLICATION_DEFAULT_ALLOW`.
+
+The lightweight case now calls the normal background
+`reconcile_cri_exact_bindings` path before it calls the authoritative OCI
+reconciliation path. Before the correction, the new assertion returned
+`PATH_TREE_ALLOWED`. The node now excludes the explicit OCI binding from the
+retained set. The OCI measurement replaces the earlier process measurement.
+
+The complete lightweight case passed with the K3s v1.35.5+k3s1 bundled runc
+1.4.2 and containerd. Its result is
+`/tmp/mithril-cache-generation-lightweight-green-3/runc-entry-role-runtime-probe.json`.
+Its SHA-256 is
+`71f5ae79e9005bc1d9fcc5072e763e17dd1e752e5ba25e23eb61bf2ff294f776`.
+The result proves the initial route replacement, normal wildcard denials,
+confirmed mutation handling, detached-exec handling, deterministic stale-cache
+repair, the later lifecycle checks, and owned-resource cleanup.
+
+The lightweight case uses a fixture-owned `system.slice` cgroup. K3s does not
+garbage-collect this cgroup during the long direct-runc procedure. The case
+still uses the K3s-bundled containerd and runc and the Kubernetes mount layout.
+The physical Kubernetes case owns the real `kubepods` cgroup proof.
+
+One lightweight attempt sampled a transient namespace mount-count mismatch
+during detached runc exec preparation. The security-view epoch and the visible
+`mountinfo` digest stayed stable. BPF advanced the runtime cache generation and
+published a complete replacement. The corrected oracle accepts this safe
+repair. It still requires normal path-tree denials, no unresolved decision,
+an unchanged security-view epoch, an unchanged visible mount table, and a
+current ready cache.
+
+The bounded Kubernetes protected-start case passed with Kubernetes
+v1.35.5+k3s1 and containerd 2.2.3-k3s1. Its result is
+`/tmp/mithril-cache-generation-protected-start-green-final/protected-start-result.json`.
+Its SHA-256 is
+`c3e2b9d36955a06b34bd9de3122b3d6708d0d768047a32444aa87301f9d24726`.
+The case proves active initial admission, six independent entry roles, the
+matching path denial, external-cgroup denial, and resource cleanup. The same
+harness path passed the cache and concurrent-read checks before it wrote the
+bounded result.
+
+Two complete two-node attempts passed this cache checkpoint and then failed in
+later evidence-health and node-projection stress sections. These failures do
+not invalidate the bounded cache result. They also do not qualify the complete
+two-node lifecycle. Explicit retirement of unreachable cache rows and the
+complete phase acceptance matrix remain `Not done`. No qualification VM
+remains.

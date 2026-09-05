@@ -1848,15 +1848,15 @@ effect_health_value() {
   local health=$1
   local field_name=$2
   awk -v field_name="$field_name" '
-    NR == 1 {
+    /^attempted=/ {
       for (field_index = 1; field_index <= NF; field_index++) {
         split($field_index, field, "=")
         if (field[1] == field_name) {
-          print field[2]
-          exit
+          value = field[2]
         }
       }
     }
+    END { print value }
   ' <<<"$health"
 }
 
@@ -2790,12 +2790,14 @@ fi
 
 external_cgroup_entry_denied=false
 external_cgroup_entry_denial_count=0
-for _attempt in {1..40}; do
+for _attempt in {1..120}; do
   external_effects=$(node_effects "$selected_node")
   external_cgroup_entry_denial_count=$(
     external_cgroup_exec_denial_count_after "$external_effects" "$effect_marker"
   )
-  if ((external_cgroup_entry_denial_count > 0)); then
+  external_pending=$(effect_health_value "$external_effects" pending_evidence_records)
+  if [[ $external_pending =~ ^[0-9]+$ ]] &&
+      ((external_cgroup_entry_denial_count > 0 && external_pending == 0)); then
     external_cgroup_entry_denied=true
     break
   fi

@@ -72,7 +72,8 @@ wait "$overlap_reader_pid"
 [[ $status -eq 1 && $allowed_overlap == *'entered the protected container'* ]]
 protected_pod_fixture=$directory/../../fixtures/convergence/protected-pod-v1.yaml
 grep -Fq 'do if command : </srv/team/blue/secrets/models/secret;' "$protected_pod_fixture"
-grep -Fq -- '--containerd-path /usr/bin/containerd' "$directory/run.sh"
+grep -Fq 'entry_containerd_path=/usr/bin/containerd' "$directory/run.sh"
+grep -Fq -- '--containerd-path "$entry_containerd_path"' "$directory/run.sh"
 if grep -Fq -- '--start-hook-path' "$directory/run.sh"; then
   echo "the direct runtime probe still uses the rejected start hook" >&2
   exit 1
@@ -81,6 +82,11 @@ grep -Fq 'concurrent-recursive-result' "$directory/two-node-convergence.sh"
 grep -Fq 'concurrent-exec-mount-topology.json' "$directory/two-node-convergence.sh"
 grep -Fq '$unresolved_object_effect_count -eq 0' \
   "$directory/two-node-convergence.sh"
+grep -Fq '/^attempted=/' "$directory/two-node-convergence.sh"
+grep -Fq 'external_pending=$(effect_health_value' \
+  "$directory/two-node-convergence.sh"
+grep -Fq 'external_pending =~ ^[0-9]+$' "$directory/two-node-convergence.sh"
+grep -Fq 'external_pending == 0' "$directory/two-node-convergence.sh"
 grep -Fq 'protected Pod restarted before the concurrent containerd exec proof' \
   "$directory/two-node-convergence.sh"
 grep -Fq 'timeout 30s tee /var/lib/mithril-convergence/markers/protected.stable-recursive-start' \

@@ -2042,26 +2042,10 @@ impl EffectTestRunner {
         .context(JsonSnafu { path: &config_path })?;
         let container_id = format!("{:x}", Sha256::digest(fixture_root.as_os_str().as_bytes()));
         let cgroup_name = format!("mithril-direct-runc-{}", std::process::id());
-        let (cgroups_path, cgroup_path, expected_observed_cgroup) = if containerd_server.is_some() {
-            let pod_uid = format!("00000000_0000_4000_8000_{:012x}", std::process::id());
-            let pod_slice = format!("kubepods-besteffort-pod{pod_uid}.slice");
-            let container_scope = format!("cri-containerd-{container_id}.scope");
-            (
-                format!("{pod_slice}:cri-containerd:{container_id}"),
-                PathBuf::from("/sys/fs/cgroup/kubepods.slice")
-                    .join("kubepods-besteffort.slice")
-                    .join(&pod_slice)
-                    .join(&container_scope),
-                format!("/kubepods.slice/kubepods-besteffort.slice/{pod_slice}/{container_scope}"),
-            )
-        } else {
-            let cgroup_scope = format!("{cgroup_name}.scope");
-            (
-                format!("system.slice:mithril-direct-runc:{}", std::process::id()),
-                PathBuf::from("/sys/fs/cgroup/system.slice").join(&cgroup_scope),
-                format!("/system.slice/{cgroup_scope}"),
-            )
-        };
+        let cgroup_scope = format!("{cgroup_name}.scope");
+        let cgroups_path = format!("system.slice:mithril-direct-runc:{}", std::process::id());
+        let cgroup_path = PathBuf::from("/sys/fs/cgroup/system.slice").join(&cgroup_scope);
+        let expected_observed_cgroup = format!("/system.slice/{cgroup_scope}");
         ensure!(
             !cgroup_path.exists(),
             InvalidInputSnafu {
@@ -2769,6 +2753,9 @@ impl EffectTestRunner {
             container.prepare_execution_approval_executable(initial_pid, &runtime_rootfs, false)?;
         }
         container.record_mountinfo(initial_pid, output_directory)?;
+        policy_owner
+            .reconcile_cri_exact_bindings(&node_config, &mut host, &bindings)
+            .context(NodeSnafu)?;
         if let Err(error) = policy_owner.reconcile_cri_exact_bindings_for_oci_entries_for_test(
             &node_config,
             &mut host,
@@ -3124,6 +3111,21 @@ impl EffectTestRunner {
                 reason: format!(
                     "the synchronous BPF mount rebuild denied the application control read: effects={:?}",
                     recent_effect_summary(&observations, marker),
+                ),
+            }
+        );
+        let initial_recursive_wildcard_result = role_directory.join("recursive-wildcard.result");
+        let initial_recursive_wildcard = fs::read_to_string(&initial_recursive_wildcard_result)
+            .context(IoSnafu {
+                path: &initial_recursive_wildcard_result,
+            })?;
+        ensure!(
+            initial_recursive_wildcard.trim() == "PATH_TREE_DENIED",
+            InvalidInputSnafu {
+                path: &initial_recursive_wildcard_result,
+                reason: format!(
+                    "the admitted application used stale process-view routes instead of the OCI routes: result={}",
+                    initial_recursive_wildcard.trim(),
                 ),
             }
         );
@@ -3519,6 +3521,12 @@ impl EffectTestRunner {
             .iter()
             .filter(|event| event.reason == "UNRESOLVED_OBJECT")
             .count();
+        let detached_cache_stayed_current = mount_topology_after_concurrent_exec.cache_generation
+            >= concurrent_recursive_mount_topology.cache_generation
+            && (mount_topology_after_concurrent_exec.cache_generation
+                > concurrent_recursive_mount_topology.cache_generation
+                || mount_topology_after_concurrent_exec.ready_snapshot_keys
+                    == concurrent_recursive_mount_topology.ready_snapshot_keys);
         let concurrent_exec_detached_mounts_preserved_view = concurrent_recursive_denied
             && concurrent_recursive_count > 0
             && normal_denials > 0
@@ -3529,12 +3537,9 @@ impl EffectTestRunner {
                 == concurrent_recursive_mount_topology.mount_namespace_inode
             && mount_topology_after_concurrent_exec.security_view_epoch
                 == concurrent_recursive_mount_topology.security_view_epoch
-            && mount_topology_after_concurrent_exec.cache_generation
-                == concurrent_recursive_mount_topology.cache_generation
+            && detached_cache_stayed_current
             && mount_topology_after_concurrent_exec.mountinfo_sha256
-                == concurrent_recursive_mount_topology.mountinfo_sha256
-            && mount_topology_after_concurrent_exec.ready_snapshot_keys
-                == concurrent_recursive_mount_topology.ready_snapshot_keys;
+                == concurrent_recursive_mount_topology.mountinfo_sha256;
         ensure!(
             concurrent_exec_detached_mounts_preserved_view,
             InvalidInputSnafu {
