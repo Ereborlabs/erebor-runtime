@@ -1208,6 +1208,24 @@ impl NodePolicyGenerationOwner {
         self.reconcile_cri_exact_bindings_inner(config, host, bindings, None)
     }
 
+    pub(crate) fn require_held_oci_path_authority_deferred(&self, binding_id: &str) -> Result<()> {
+        ensure!(
+            !self.resolved_path_binding_ids.contains(binding_id)
+                && !self
+                    .measured_exact_objects
+                    .iter()
+                    .any(|measured| measured.binding_id == binding_id)
+                && !self
+                    .measured_mount_routes
+                    .iter()
+                    .any(|measured| measured.binding_id == binding_id),
+            IdentityStateSnafu {
+                reason: "held OCI binding published path authority before createContainer",
+            }
+        );
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn reconcile_cri_exact_bindings_for_oci_entries(
         &mut self,
@@ -1505,10 +1523,13 @@ impl NodePolicyGenerationOwner {
                 .path_selectors
                 .iter()
                 .filter(|selector| selector.requires_exact_object());
-            let view = crate::exact_object::ExactFileObjectView::acquire(target.init_pid)?;
-            let process_root_is_container = !binding.arm_initial_root || !view.has_host_root()?;
             let target_oci_entry_view =
                 oci_entry_view.filter(|(binding_id, _, _)| *binding_id == target.binding_id);
+            if !target.process_path_view_allowed && target_oci_entry_view.is_none() {
+                continue;
+            }
+            let view = crate::exact_object::ExactFileObjectView::acquire(target.init_pid)?;
+            let process_root_is_container = !binding.arm_initial_root || !view.has_host_root()?;
             if let Some((_, held_initial_pid, _)) = target_oci_entry_view {
                 ensure!(
                     held_initial_pid == target.init_pid,

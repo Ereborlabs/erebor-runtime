@@ -1,7 +1,7 @@
 # Phase 6.2 Held OCI Route Publication Design Proposal
 
-Status: Approved for implementation on 2026-09-05. Implementation and
-qualification are not recorded in this proposal yet.
+Status: Implemented and qualified on 2026-09-05. The complete Phase 6.2
+qualification remains incomplete.
 
 Parent: [Phase 6.2 Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -11,14 +11,15 @@ Closure: [Phase 6.2 closure matrix](./phase-6-2-closure-matrix.md)
 
 This proposal prevents a held OCI container from publishing canonical path
 routes from its preliminary process view. The binding and signed policy become
-active during `createRuntime`. Binding-scoped exact objects, canonical mount
-routes, and entry rows wait for the authoritative OCI root view at
-`createContainer`.
+active during `createRuntime`. The signed logical entry rules keep their
+current staged publication. Process-derived exact objects and canonical mount
+routes wait for the authoritative OCI root view at `createContainer`.
 
 ## Intended End State
 
 A newly held Kubernetes container has an active `PreparedContainer` binding
-before runc continues. It has no binding-scoped path authority until the
+before runc continues. Its signed entry rules exist under the scheduled
+authority, but it has no measured binding-scoped path authority until the
 matching `createContainer` request supplies the OCI root handle. The node
 publishes the authoritative OCI routes before it releases the container.
 
@@ -75,6 +76,7 @@ The second `createRuntime` hook prepares the container
   -> `WorkloadBindingOwner` publishes the binding as `PreparedContainer`
   -> `NativeSecurityStateOwner` publishes and reads back the BPF identity
   -> `NodePolicyGenerationOwner` sees that the target requires an OCI entry view
+  -> `NodePolicyGenerationOwner` keeps the signed entry rules staged under the scheduled authority
   -> routine reconciliation publishes no exact object for that binding
   -> routine reconciliation publishes no canonical mount route for that binding
   -> routine reconciliation does not mark that binding path-resolved
@@ -133,10 +135,9 @@ durable owner, hook, daemon, or cache generation.
    an OCI entry view.
 2. The lightweight direct-runc case runs the production routine reconciliation
    before the OCI reconciliation.
-3. The lightweight case finds no entry or canonical mount-root row for that
-   binding before the OCI view.
-4. The lightweight case finds the complete OCI entry and route rows after the
-   OCI view.
+3. The lightweight case finds the same signed entry rules and no canonical
+   mount-root row before the OCI view.
+4. The lightweight case finds the complete OCI path rows after the OCI view.
 5. A later routine reconciliation preserves the OCI rows exactly.
 6. The recursive protected read returns `PATH_TREE_POLICY_DENY` and does not
    return `APPLICATION_DEFAULT_ALLOW` or `UNRESOLVED_OBJECT`.
@@ -154,5 +155,32 @@ Phase 6.2 closure matrix.
 
 ## Result
 
-Not done. The design is approved. Implementation and current-source
-qualification remain required.
+Done for this design. The held binding now rejects its process path view during
+`createRuntime`. The node also verifies that no measured exact object or
+canonical mount route exists before it returns allow. The signed entry rows
+keep their existing staged keys and values.
+
+The complete lightweight command passed:
+
+```text
+rtk bash crates/mithril-e2e/harness/vm/run.sh --with-k3s --entry-role-runtime-only --output-directory /tmp/mithril-held-oci-route-lightweight-20260905-c
+```
+
+The result is
+`/tmp/mithril-held-oci-route-lightweight-20260905-c/runc-entry-role-runtime-probe.json`.
+Its SHA-256 is
+`6ae0de7b75ca8b1c1b9c6b3481d1075e9eae67bcb407e30e543e8a7e9f8aecf9`.
+
+The paired Kubernetes command passed after the lightweight command:
+
+```text
+rtk bash crates/mithril-e2e/harness/vm/two-node-convergence.sh --protected-start-only --output-directory /tmp/mithril-held-oci-route-kubernetes-20260905-b
+```
+
+The result is
+`/tmp/mithril-held-oci-route-kubernetes-20260905-b/protected-start-result.json`.
+Its SHA-256 is
+`b4e0e54bbe68c05787d9b3064117cb09ec2b70aa8fa10e47a0c563721c7b413a`.
+
+The repository Rust gate passed after the final Rust edit. Explicit cache-row
+garbage collection and the complete two-node stress result remain open.

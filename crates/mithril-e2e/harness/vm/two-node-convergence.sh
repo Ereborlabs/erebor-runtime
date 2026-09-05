@@ -2866,6 +2866,7 @@ if [[ $protected_start_only == true ]]; then
       task_cookie: $task_cookie,
       prepared_state: $prepared_state,
       admitted_entry_instance_id: $admitted_entry_instance_id,
+      create_runtime_path_authority_deferred: true,
       application_default_allowed: ($application_default_marker == "APPLICATION_DEFAULT_ALLOWED"),
       later_busybox_applet_exec_default_allowed: $later_busybox_applet_exec_default_allowed,
       explicit_matching_deny_observed: ($explicit_deny_marker == "BASE_DENIED"),

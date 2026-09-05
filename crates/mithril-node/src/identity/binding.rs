@@ -320,6 +320,7 @@ pub struct WorkloadBindingOwner {
 pub(crate) struct ExactObjectBindingTargetV1<'a> {
     pub binding_id: &'a str,
     pub init_pid: u32,
+    pub process_path_view_allowed: bool,
 }
 
 struct RuntimeBindingUpdate {
@@ -1973,6 +1974,8 @@ impl WorkloadBindingOwner {
                 Some(ExactObjectBindingTargetV1 {
                     binding_id: &binding.spec.binding_id,
                     init_pid,
+                    process_path_view_allowed: binding.state.prepared_container_state
+                        != PreparedContainerStateV1::Prepared,
                 })
             })
     }
@@ -2798,7 +2801,7 @@ mod tests {
         let root = temporary.path().join("workload");
         fs::create_dir(&root).context(IoSnafu { path: &root })?;
         fs::write(root.join("cgroup.procs"), "42\n").context(IoSnafu { path: &root })?;
-        let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        let mut owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
         let mut binding = owner.prepare(&spec(&root))?;
         assert_eq!(
             binding.state.prepared_container_state,
@@ -2814,6 +2817,11 @@ mod tests {
         );
         assert_eq!(binding.state.prepared_container_initial_host_tgid, 42);
         assert!(binding.prepare_container().is_err());
+        let root_id = binding.root_cgroup_id;
+        owner.bindings.insert(root_id, binding);
+        let targets = owner.exact_object_binding_targets().collect::<Vec<_>>();
+        assert_eq!(targets.len(), 1);
+        assert!(!targets[0].process_path_view_allowed);
         Ok(())
     }
 

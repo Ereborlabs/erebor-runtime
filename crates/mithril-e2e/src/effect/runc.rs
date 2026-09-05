@@ -68,6 +68,7 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub prepared_state_after_exec: String,
     pub prepared_runtime_effect_observed: bool,
     pub seccomp_start_gate_unlinked: bool,
+    pub create_runtime_path_authority_deferred: bool,
     pub runtime_topology_uninitialized_at_create_container: bool,
     pub stable_entry_policy_preserved_after_mount_mutation: bool,
     pub stable_canonical_mount_policy_preserved_after_mount_mutation: bool,
@@ -2550,6 +2551,11 @@ impl EffectTestRunner {
                 .collect::<Result<Vec<_>>>()
         };
         let provisional_entry_rules = read_entry_rules(&host)?;
+        let provisional_entry_rule_keys = host
+            .map_keys("entry_admission_rules")
+            .context(InterceptorSnafu)?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
         ensure!(
             provisional_entry_rules.len() == 7
                 && provisional_entry_rules
@@ -2756,6 +2762,34 @@ impl EffectTestRunner {
         policy_owner
             .reconcile_cri_exact_bindings(&node_config, &mut host, &bindings)
             .context(NodeSnafu)?;
+        let create_runtime_entry_rules = read_entry_rules(&host)?;
+        let create_runtime_entry_rule_keys = host
+            .map_keys("entry_admission_rules")
+            .context(InterceptorSnafu)?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let create_runtime_canonical_policy = canonical_mount_route_summary(&host)?;
+        let create_runtime_path_authority_deferred = create_runtime_entry_rules
+            == provisional_entry_rules
+            && create_runtime_entry_rule_keys == provisional_entry_rule_keys
+            && create_runtime_canonical_policy.trim().is_empty();
+        ensure!(
+            create_runtime_path_authority_deferred,
+            InvalidInputSnafu {
+                path: Path::new("canonical_mount_roots"),
+                reason: format!(
+                    "routine reconciliation changed the signed entry rows or published a canonical mount route before the OCI view: entry_rule_count={}, routes={create_runtime_canonical_policy:?}",
+                    create_runtime_entry_rule_keys.len(),
+                ),
+            }
+        );
+        fs::write(
+            output_directory.join("runc-entry-role-create-runtime-mount-roots.txt"),
+            &create_runtime_canonical_policy,
+        )
+        .context(IoSnafu {
+            path: output_directory,
+        })?;
         if let Err(error) = policy_owner.reconcile_cri_exact_bindings_for_oci_entries_for_test(
             &node_config,
             &mut host,
@@ -5197,13 +5231,14 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 34,
+            schema_version: 35,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
             prepared_state_after_exec,
             prepared_runtime_effect_observed: true,
             seccomp_start_gate_unlinked,
+            create_runtime_path_authority_deferred,
             runtime_topology_uninitialized_at_create_container,
             stable_entry_policy_preserved_after_mount_mutation,
             stable_canonical_mount_policy_preserved_after_mount_mutation,
