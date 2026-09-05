@@ -1,5 +1,6 @@
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, Read as _};
+use std::os::fd::AsRawFd as _;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -285,6 +286,8 @@ async fn run_containerd_start_fixture(
                         format!("workdir={}", fixture.rootfs_work_path.display()),
                         format!("upperdir={}", fixture.rootfs_upper_path.display()),
                         format!("lowerdir={}", fixture.rootfs_lower_path.display()),
+                        "uuid=on".to_owned(),
+                        "nouserxattr".to_owned(),
                     ],
                 }],
                 stdin: "/dev/null".to_owned(),
@@ -501,6 +504,16 @@ impl OciStageFixtureOwner {
         Ok(cgroup.to_owned())
     }
 
+    fn outer_process_pid() -> io::Result<u32> {
+        fs::read_to_string("/proc/self/status")?
+            .lines()
+            .find_map(|line| line.strip_prefix("NSpid:"))
+            .and_then(|pids| pids.split_whitespace().next())
+            .and_then(|pid| pid.parse().ok())
+            .filter(|pid| *pid > 0)
+            .ok_or_else(|| Self::invalid("the OCI hook has no outer process ID"))
+    }
+
     fn run(stage: &str, request_directory: &Path) -> io::Result<()> {
         if !matches!(stage, "createRuntime" | "createContainer") {
             return Err(Self::invalid("the OCI fixture stage is invalid"));
@@ -546,6 +559,15 @@ impl OciStageFixtureOwner {
         {
             return Ok(());
         }
+        let root = if stage == "createContainer" {
+            let root = File::open(".")?;
+            if !root.metadata()?.is_dir() {
+                return Err(Self::invalid("the OCI root handle is not a directory"));
+            }
+            Some(root)
+        } else {
+            None
+        };
         let cgroup = (stage == "createRuntime")
             .then(|| Self::runtime_cgroup(pid))
             .transpose()?;
@@ -563,6 +585,8 @@ impl OciStageFixtureOwner {
             serde_json::to_vec(&serde_json::json!({
                 "stage": stage,
                 "pid": pid,
+                "hook_pid": Self::outer_process_pid()?,
+                "oci_root_fd": root.as_ref().map(|root| root.as_raw_fd()),
                 "cgroup": cgroup,
                 "state": state,
                 "annotations": annotations,
@@ -795,5 +819,16 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
             stage,
             request_directory,
         } => Ok(OciStageFixtureOwner::run(&stage, &request_directory)?),
+    }
+}
+
+#[cfg(test)]
+mod oci_stage_tests {
+    use super::OciStageFixtureOwner;
+
+    #[test]
+    fn outer_process_id_is_available() -> std::io::Result<()> {
+        assert!(OciStageFixtureOwner::outer_process_pid()? > 0);
+        Ok(())
     }
 }

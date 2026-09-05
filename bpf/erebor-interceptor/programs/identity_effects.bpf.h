@@ -328,9 +328,12 @@ static __always_inline exact_object_binding_v1 *configured_file_object_binding(
     return bpf_map_lookup_elem(&exact_file_objects, &scratch->file_object);
 }
 
+static __noinline bool initial_root_is_before_first_exec(void);
+
 static __noinline void prepare_effect_identity(void)
 {
     identity_runtime_config_v1 *config = identity_runtime_config();
+    struct identity_scratch_v1 *scratch;
     struct task_struct *task;
     task_label_v1 *label;
     execution_set_binding_state_v1 *binding;
@@ -341,7 +344,17 @@ static __noinline void prepare_effect_identity(void)
         return;
     task = bpf_get_current_task_btf();
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
-    if (label || task_cgroup(task, &cgroup))
+    if (label) {
+        scratch = identity_scratch_record();
+        if (scratch &&
+            !(scratch->effect_gate_flags &
+              EFFECT_GATE_PREPARED_EXEC_EVALUATION_V1) &&
+            initial_root_is_before_first_exec())
+            scratch->effect_gate_flags |=
+                EFFECT_GATE_SKIP_MOUNT_CACHE_V1;
+        return;
+    }
+    if (task_cgroup(task, &cgroup))
         return;
     binding = binding_for_cgroup(cgroup, &binding_lookup);
     if (!binding_lookup && binding)
@@ -853,6 +866,35 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
                                      EFFECT_GATE_FILE_OPEN_ATTEMPT_V1);
 }
 
+static __noinline bool initial_root_is_before_first_exec(void)
+{
+    identity_runtime_config_v1 *config = identity_runtime_config();
+    struct task_struct *task;
+    task_label_v1 *label;
+    entry_security_state_v1 *entry;
+    execution_set_binding_state_v1 *binding;
+    struct cgroup *cgroup = NULL;
+    int binding_lookup;
+
+    if (!config || !config->enabled)
+        return false;
+    task = bpf_get_current_task_btf();
+    if (!task || task_cgroup(task, &cgroup))
+        return false;
+    binding = binding_for_cgroup(cgroup, &binding_lookup);
+    if (binding_lookup || !binding ||
+        binding->lifecycle_state != binding_lifecycle_state_v1_active)
+        return false;
+    label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    if (!label)
+        return false;
+    if (!label_matches_runtime(label, config) ||
+        !binding_matches_label(binding, label))
+        return false;
+    entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
+    return prepared_container_pre_active_actor_is_exact(binding, label, entry);
+}
+
 static __always_inline int dispatch_identity_effect_gate(
     struct file *file, const struct path *path, __u16 effect_family,
     __u16 operation, int ret)
@@ -876,7 +918,9 @@ static __always_inline int dispatch_identity_effect_gate(
             (void)bpf_probe_read_kernel(&scratch->effect_path,
                                         sizeof(scratch->effect_path), path);
         }
-        if (file || path) {
+        if ((file || path) &&
+            !(scratch->effect_gate_flags &
+              EFFECT_GATE_SKIP_MOUNT_CACHE_V1)) {
             int mount_cache_result =
                 prepare_current_task_mount_cache(scratch);
 
@@ -1405,35 +1449,6 @@ int BPF_PROG(erebor_identity_path_rename, const struct path *old_dir,
         return ret;
     return identity_dentry_effect_gate(
         new_dir, new_dentry, kernel_effect_operation_v1_rename, 0);
-}
-
-static __always_inline bool initial_root_is_before_first_exec(void)
-{
-    identity_runtime_config_v1 *config = identity_runtime_config();
-    struct task_struct *task;
-    task_label_v1 *label;
-    entry_security_state_v1 *entry;
-    execution_set_binding_state_v1 *binding;
-    struct cgroup *cgroup = NULL;
-    int binding_lookup;
-
-    if (!config || !config->enabled)
-        return false;
-    task = bpf_get_current_task_btf();
-    if (!task || task_cgroup(task, &cgroup))
-        return false;
-    binding = binding_for_cgroup(cgroup, &binding_lookup);
-    if (binding_lookup || !binding ||
-        binding->lifecycle_state != binding_lifecycle_state_v1_active)
-        return false;
-    label = bpf_task_storage_get(&task_labels, task, 0, 0);
-    if (!label)
-        return false;
-    if (!label_matches_runtime(label, config) ||
-        !binding_matches_label(binding, label))
-        return false;
-    entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
-    return prepared_container_pre_active_actor_is_exact(binding, label, entry);
 }
 
 static __always_inline int mount_mutation_effect(__u16 operation, int ret)

@@ -61,6 +61,7 @@ struct runtime_entry_bootstrap_state_v1 {
 #define EFFECT_GATE_PREPARED_EXEC_EVALUATION_V1 16
 #define EFFECT_GATE_PREPARED_EXEC_POLICY_MISS_V1 32
 #define EFFECT_GATE_MOUNT_CACHE_FAILED_V1 64
+#define EFFECT_GATE_SKIP_MOUNT_CACHE_V1 128
 #define MAX_CANONICAL_MOUNTS_V1 4096
 #define CANONICAL_MOUNT_CACHE_READY_V1 1
 #define CANONICAL_MOUNT_CACHE_MISS_V1 1
@@ -68,8 +69,8 @@ struct runtime_entry_bootstrap_state_v1 {
 struct canonical_mount_cache_key_v1 {
     __u64 mount_namespace_address;
     __u64 namespace_root_mount_id_unique;
-    __u64 namespace_event;
-    __u64 topology_generation;
+    __u64 security_view_epoch;
+    __u64 reserved;
     __u64 walk_root_mount_address;
     __u64 walk_root_dentry_address;
     __u64 root_dentry_address;
@@ -85,14 +86,14 @@ struct canonical_mount_cache_value_v1 {
 struct canonical_mount_cache_state_key_v1 {
     __u64 mount_namespace_address;
     __u64 namespace_root_mount_id_unique;
-    __u64 namespace_event;
-    __u64 topology_generation;
+    __u64 security_view_epoch;
+    __u64 reserved;
     __u64 walk_root_mount_address;
     __u64 walk_root_dentry_address;
 };
 
 struct canonical_mount_cache_state_v1 {
-    __u32 mount_count;
+    __u32 namespace_mount_count;
     __u32 state;
 };
 
@@ -115,7 +116,7 @@ struct canonical_mount_cache_build_state_v1 {
     __u64 mount_namespace_address;
     __u64 namespace_root_mount_id_unique;
     __u64 namespace_event;
-    __u64 topology_generation;
+    __u64 security_view_epoch;
     __u64 walk_root_mount_address;
     __u64 walk_root_dentry_address;
     __u64 candidate_mount_address;

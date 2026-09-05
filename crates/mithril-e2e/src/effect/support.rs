@@ -236,7 +236,7 @@ pub(super) fn ready_canonical_mount_snapshots(host: &KernelHost) -> Result<BTree
             }
             .build()
         })?;
-        let mount_count = u32::from_ne_bytes(value[..4].try_into().map_err(|error| {
+        let namespace_mount_count = u32::from_ne_bytes(value[..4].try_into().map_err(|error| {
             InvalidInputSnafu {
                 path: Path::new("canonical_mount_cache_states"),
                 reason: format!("the canonical mount count is invalid: {error}"),
@@ -250,11 +250,48 @@ pub(super) fn ready_canonical_mount_snapshots(host: &KernelHost) -> Result<BTree
             }
             .build()
         })?);
-        if mount_count > 0 && state == 1 {
+        if namespace_mount_count > 0 && state == 1 {
             ready.insert(key);
         }
     }
     Ok(ready)
+}
+
+pub(super) fn ready_canonical_mount_snapshots_at_epoch(
+    host: &KernelHost,
+    topology_generation: u64,
+) -> Result<BTreeSet<Vec<u8>>> {
+    ready_canonical_mount_snapshots(host)?
+        .into_iter()
+        .filter_map(|key| {
+            let key_generation = key
+                .get(16..24)
+                .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+                .map(u64::from_ne_bytes);
+            let reserved = key
+                .get(24..32)
+                .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+                .map(u64::from_ne_bytes);
+            match (reserved, key_generation) {
+                (Some(0), Some(generation)) if generation == topology_generation => Some(Ok(key)),
+                (Some(0), Some(_)) => None,
+                (Some(_), Some(_)) => Some(
+                    InvalidInputSnafu {
+                        path: Path::new("canonical_mount_cache_states"),
+                        reason: "a canonical mount snapshot key uses its reserved field",
+                    }
+                    .fail(),
+                ),
+                _ => Some(
+                    InvalidInputSnafu {
+                        path: Path::new("canonical_mount_cache_states"),
+                        reason: "a canonical mount snapshot key has an invalid ABI value",
+                    }
+                    .fail(),
+                ),
+            }
+        })
+        .collect()
 }
 
 fn mount_counter(host: &KernelHost, map: &str, key: &[u8]) -> Result<u64> {

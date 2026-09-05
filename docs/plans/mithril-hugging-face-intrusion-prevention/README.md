@@ -11,6 +11,7 @@ The known-path route with oldest-mount fallback was approved on 2026-08-31.
 Design authority:
 
 - [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
+- [Phase 6.2 security-epoch-qualified mount cache proposal](./phase-6-2-security-epoch-qualified-mount-cache-design.md)
 - [Hugging Face adversarial acceptance](./hugging-face-adversarial-acceptance.md)
 - [Live two-node lifecycle probe](./live-two-node-lifecycle-probe.md)
 - [Manual acceptance index](./manual-testing/README.md)

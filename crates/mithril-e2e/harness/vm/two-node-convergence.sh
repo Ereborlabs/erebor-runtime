@@ -350,6 +350,7 @@ assert_runtime_hook() {
 }
 
 stop_entry_effect_capture() {
+  local node
   local pid
   for pid in "${entry_effect_capture_pids[@]}"; do
     kill "$pid" >/dev/null 2>&1 || true
@@ -358,6 +359,12 @@ stop_entry_effect_capture() {
     wait "$pid" >/dev/null 2>&1 || true
   done
   entry_effect_capture_pids=()
+  for node in "${vm_a:-}" "${vm_b:-}"; do
+    [[ -n $node && -x ${provider:-} ]] || continue
+    "$provider" run "$node" \
+      'for process in /proc/[0-9]*; do read -r name < "$process/comm" || continue; [ "$name" = mithril-inspect ] || continue; sudo kill "${process##*/}"; done' \
+      >/dev/null 2>&1 || true
+  done
 }
 
 restore_runtime_sockets() {
@@ -882,16 +889,15 @@ if ! remote_kubectl get namespace "$system_namespace" >/dev/null 2>&1; then
   remote_kubectl create namespace "$system_namespace" >/dev/null
 fi
 
-if [[ $reuse_mithril_state == false ]]; then
-  make_node_config "$materials/node-a.json" "${node_ids[0]}" "$node_a_name" \
-    66666666-6666-4666-8666-666666666661
-  make_node_config "$materials/node-b.json" "${node_ids[1]}" "$node_b_name" \
-    66666666-6666-4666-8666-666666666662
+make_node_config "$materials/node-a.json" "${node_ids[0]}" "$node_a_name" \
+  66666666-6666-4666-8666-666666666661
+make_node_config "$materials/node-b.json" "${node_ids[1]}" "$node_b_name" \
+  66666666-6666-4666-8666-666666666662
 
-  jq -n \
-    --arg digest_a "${node_digests[0]}" --arg digest_b "${node_digests[1]}" \
-    --slurpfile trust "$materials/trust.json" \
-    '{
+jq -n \
+  --arg digest_a "${node_digests[0]}" --arg digest_b "${node_digests[1]}" \
+  --slurpfile trust "$materials/trust.json" \
+  '{
     listen: "0.0.0.0:8443",
     tls: {
       certificate_path: "/etc/mithril/tls.crt",
@@ -934,39 +940,40 @@ if [[ $reuse_mithril_state == false ]]; then
       maximum_request_bytes: 1048576,
       request_timeout_ms: 4000
     }
-    }' >"$materials/control.json"
+  }' >"$materials/control.json"
 
-  for file in ca.pem tls.crt tls.key policy-signing-key profile-seal-request.json control.json; do
-    "$provider" put "$vm_a" "$materials/$file" "$remote_a/materials/$file"
-  done
-  for index in 0 1; do
-    node=$vm_a
-    remote=$remote_a
-    label=a
-    [[ $index -eq 0 ]] || { node=$vm_b; remote=$remote_b; label=b; }
-    "$provider" put "$node" "$ca" "$remote/materials/ca.pem"
-    "$provider" put "$node" "$materials/${node_ids[$index]}.pem" \
-      "$remote/materials/node.pem"
-    "$provider" put "$node" "$materials/${node_ids[$index]}-key.pem" \
-      "$remote/materials/node-key.pem"
-    "$provider" put "$node" "$materials/administrative-public-key.hex" \
-      "$remote/materials/administrative-public-key.hex"
-    "$provider" put "$node" "$materials/node-$label.json" \
-      "$remote/materials/node.json"
-    "$provider" run "$node" \
-      "sudo install -d -m 0700 /etc/mithril/identity /var/lib/mithril-convergence/markers /run/mithril && \
-       sudo install -m 0444 '$remote/materials/ca.pem' /etc/mithril/identity/ca.pem && \
-       sudo install -m 0444 '$remote/materials/node.pem' /etc/mithril/identity/node.pem && \
-       sudo install -m 0400 '$remote/materials/node-key.pem' /etc/mithril/identity/node-key.pem && \
-       sudo install -m 0444 '$remote/materials/administrative-public-key.hex' /etc/mithril/identity/administrative-public-key.hex"
-    if [[ $reusing_environment == true ]]; then
-      "$provider" run "$node" sudo install -m 0400 \
-        "$remote/materials/node.json" /etc/mithril/node.json
-      "$provider" run "$node" sudo bash \
-        "$remote/harness/runtime-hook-oracle.sh" recovery-inputs /
-    fi
-  done
+for file in ca.pem tls.crt tls.key policy-signing-key profile-seal-request.json control.json; do
+  "$provider" put "$vm_a" "$materials/$file" "$remote_a/materials/$file"
+done
+for index in 0 1; do
+  node=$vm_a
+  remote=$remote_a
+  label=a
+  [[ $index -eq 0 ]] || { node=$vm_b; remote=$remote_b; label=b; }
+  "$provider" put "$node" "$ca" "$remote/materials/ca.pem"
+  "$provider" put "$node" "$materials/${node_ids[$index]}.pem" \
+    "$remote/materials/node.pem"
+  "$provider" put "$node" "$materials/${node_ids[$index]}-key.pem" \
+    "$remote/materials/node-key.pem"
+  "$provider" put "$node" "$materials/administrative-public-key.hex" \
+    "$remote/materials/administrative-public-key.hex"
+  "$provider" put "$node" "$materials/node-$label.json" \
+    "$remote/materials/node.json"
+  "$provider" run "$node" \
+    "sudo install -d -m 0700 /etc/mithril/identity /var/lib/mithril-convergence/markers /run/mithril && \
+     sudo install -m 0444 '$remote/materials/ca.pem' /etc/mithril/identity/ca.pem && \
+     sudo install -m 0444 '$remote/materials/node.pem' /etc/mithril/identity/node.pem && \
+     sudo install -m 0400 '$remote/materials/node-key.pem' /etc/mithril/identity/node-key.pem && \
+     sudo install -m 0444 '$remote/materials/administrative-public-key.hex' /etc/mithril/identity/administrative-public-key.hex"
+  if [[ $reusing_environment == true ]]; then
+    "$provider" run "$node" sudo install -m 0400 \
+      "$remote/materials/node.json" /etc/mithril/node.json
+    "$provider" run "$node" sudo bash \
+      "$remote/harness/runtime-hook-oracle.sh" recovery-inputs /
+  fi
+done
 
+if [[ $reuse_mithril_state == false ]]; then
   remote_kubectl -n "$system_namespace" create secret generic "$control_config_secret" \
     --from-file=control.json="$remote_a/materials/control.json" \
     --from-file=policy-signing-key="$remote_a/materials/policy-signing-key" \
@@ -994,6 +1001,25 @@ EOF
   remote_kubectl apply --server-side --validate=strict \
     -f "$remote_a/control-pvc.yaml" >/dev/null
 else
+  control_secret_manifest=$work_a/control-secret.json
+  admission_secret_manifest=$work_a/admission-secret.json
+  remote_kubectl -n "$system_namespace" create secret generic "$control_config_secret" \
+    --from-file=control.json="$remote_a/materials/control.json" \
+    --from-file=policy-signing-key="$remote_a/materials/policy-signing-key" \
+    --from-file=profile-seal-request.json="$remote_a/materials/profile-seal-request.json" \
+    --from-file=ca.pem="$remote_a/materials/ca.pem" \
+    --from-file=tls.crt="$remote_a/materials/tls.crt" \
+    --from-file=tls.key="$remote_a/materials/tls.key" \
+    --dry-run=client -o json >"$control_secret_manifest"
+  remote_kubectl -n "$system_namespace" create secret tls "$admission_tls_secret" \
+    --cert="$remote_a/materials/tls.crt" --key="$remote_a/materials/tls.key" \
+    --dry-run=client -o json >"$admission_secret_manifest"
+  "$provider" put "$vm_a" "$control_secret_manifest" \
+    "$remote_a/control-secret.json"
+  "$provider" put "$vm_a" "$admission_secret_manifest" \
+    "$remote_a/admission-secret.json"
+  remote_kubectl apply -f "$remote_a/control-secret.json" >/dev/null
+  remote_kubectl apply -f "$remote_a/admission-secret.json" >/dev/null
   for node in "$vm_a" "$vm_b"; do
     remote=$remote_a
     [[ $node == "$vm_a" ]] || remote=$remote_b
@@ -1021,12 +1047,7 @@ done
 "$provider" run "$vm_a" sudo chown ubuntu:ubuntu "$remote_a/kubeconfig.yaml"
 "$provider" get "$vm_a" "$remote_a/kubeconfig.yaml" "$kubeconfig"
 sed -i "s|https://127.0.0.1:6443|https://$address_a:6443|" "$kubeconfig"
-if [[ $reuse_mithril_state == true ]]; then
-  ca_bundle=$(remote_kubectl -n "$system_namespace" get secret \
-    "$control_config_secret" -o 'jsonpath={.data.ca\.pem}')
-else
-  ca_bundle=$(base64 -w0 "$ca")
-fi
+ca_bundle=$(base64 -w0 "$ca")
 node_image=mithril-node:upgrade-baseline
 control_image=mithril-control:upgrade-baseline
 qualify_state_preserving_upgrade=true
@@ -1056,6 +1077,7 @@ cat >"$values" <<EOF
 node:
   image: $node_image
   imagePullPolicy: Never
+  logFilter: info,mithril_node::node=debug,mithril_node::policy=debug,mithril_node::runtime_seccomp=debug
   configHostPath: /etc/mithril/node.json
   identityHostPath: /etc/mithril/identity
   stateHostPath: $node_state_host_path
@@ -1592,17 +1614,18 @@ mount_topology_snapshot() {
   local vm=$1
   local host_pid=$2
   local mount_namespace_inode
-  local namespace_event
   local mountinfo_sha256
-  local security_epoch
+  local topology_generation
   local activity_sequence
-  local exact_events
+  local cache_states
+  local ready_snapshot_keys
 
   mount_namespace_inode=$("$provider" run "$vm" sudo stat -Lc %i \
     "/proc/$host_pid/ns/mnt")
-  exact_events=$("$provider" run "$vm" sudo bpftool -j map dump pinned \
-    /sys/fs/bpf/mithril-convergence/maps/exact_mount_events)
-  namespace_event=$(jq -er --argjson namespace "$mount_namespace_inode" '
+  topology_generation=$(mount_map_counter "$vm" mount_global_mutation_epoch)
+  cache_states=$("$provider" run "$vm" sudo bpftool -j map dump pinned \
+    /sys/fs/bpf/mithril-convergence/maps/canonical_mount_cache_states)
+  ready_snapshot_keys=$(jq -cer --argjson generation "$topology_generation" '
     def hex_byte:
       if type == "number" then .
       else ascii_downcase | ltrimstr("0x") |
@@ -1614,30 +1637,71 @@ mount_topology_snapshot() {
         (0; . + (($byte.value | hex_byte) * pow(256; $byte.key)));
     [
       .[] |
-      select((.key[16:20] | little_endian) == $namespace) |
-      (.value[16:24] | little_endian)
-    ] | unique |
-    if length == 1 then .[0]
-    else error("the target namespace does not have one exact mount event")
+      select((.key[16:24] | little_endian) == $generation) |
+      select((.key[24:32] | little_endian) == 0) |
+      select((.value[0:4] | little_endian) > 0) |
+      select((.value[4:8] | little_endian) == 1) |
+      (.key | map(hex_byte))
+    ] | unique | sort |
+    if length > 0 then .
+    else error("the current mount epoch has no BPF-ready topology snapshot")
     end
-  ' <<<"$exact_events")
+  ' <<<"$cache_states")
   mountinfo_sha256=$("$provider" run "$vm" sudo sha256sum \
     "/proc/$host_pid/mountinfo" | awk '{print $1}')
-  security_epoch=$(mount_map_counter "$vm" mount_global_mutation_epoch)
   activity_sequence=$(mount_map_counter "$vm" mount_global_activity_sequence)
   jq -cn --argjson mount_namespace_inode "$mount_namespace_inode" \
-    --argjson namespace_event "$namespace_event" \
+    --argjson topology_generation "$topology_generation" \
+    --argjson ready_snapshot_keys "$ready_snapshot_keys" \
     --arg mountinfo_sha256 "$mountinfo_sha256" \
-    --argjson security_epoch "$security_epoch" \
     --argjson activity_sequence "$activity_sequence" '
     {
       mount_namespace_inode: $mount_namespace_inode,
-      namespace_event: $namespace_event,
+      topology_generation: $topology_generation,
+      ready_snapshot_keys: $ready_snapshot_keys,
       mountinfo_sha256: $mountinfo_sha256,
-      security_epoch: $security_epoch,
       activity_sequence: $activity_sequence
     }
   '
+}
+
+capture_concurrent_recursive_timeout() {
+  local after_stop=null
+  local map
+
+  after_stop=$(mount_topology_snapshot \
+    "$selected_vm" "$concurrent_host_pid" 2>/dev/null || true)
+  [[ -n $after_stop ]] || after_stop=null
+  jq -n --argjson before "$concurrent_mount_before" \
+    --argjson after_exec "$concurrent_mount_after" \
+    --argjson after_stop "$after_stop" \
+    '{before: $before, after_exec: $after_exec, after_stop: $after_stop}' \
+    >"$output_directory/concurrent-exec-mount-timeout.json"
+  "$provider" run "$selected_vm" sudo stat -Lc \
+    'device=%d inode=%i mode=%f size=%s' \
+    /var/lib/mithril-convergence/markers/protected.concurrent-recursive-stop \
+    >"$output_directory/concurrent-recursive-stop-host.txt" 2>&1 || true
+  "$provider" run "$selected_vm" sudo nsenter \
+    -t "$concurrent_host_pid" -m -- stat -Lc \
+    'device=%d inode=%i mode=%f size=%s' \
+    /var/lib/mithril-convergence/markers/protected.concurrent-recursive-stop \
+    >"$output_directory/concurrent-recursive-stop-container.txt" 2>&1 || true
+  "$provider" run "$selected_vm" sudo cat \
+    "/proc/$concurrent_host_pid/status" \
+    >"$output_directory/concurrent-recursive-process-status.txt" 2>&1 || true
+  "$provider" run "$selected_vm" sudo cat \
+    "/proc/$concurrent_host_pid/wchan" \
+    >"$output_directory/concurrent-recursive-process-wchan.txt" 2>&1 || true
+  for map in \
+    canonical_mount_cache_states \
+    exact_mount_events \
+    mount_global_mutation_epoch \
+    mount_global_pending_mutations \
+    mount_global_activity_sequence; do
+    "$provider" run "$selected_vm" sudo bpftool -j map dump pinned \
+      "/sys/fs/bpf/mithril-convergence/maps/$map" \
+      >"$output_directory/concurrent-recursive-timeout-$map.json" 2>&1 || true
+  done
 }
 
 wait_running_container_identity() {
@@ -1674,6 +1738,87 @@ wait_running_container_identity() {
     sleep 1
   done
   echo "container $namespace/$pod_name did not publish a running host PID" >&2
+  return 1
+}
+
+capture_entry_role_failure_diagnostics() {
+  local node_name=$1
+  local vm=$2
+  local snapshot
+  local host_pid
+  local map
+
+  for map in \
+    execution_set_bindings \
+    entry_admission_rules \
+    declared_entry_requests \
+    exact_file_objects \
+    canonical_mount_roots \
+    canonical_mount_cache_states; do
+    "$provider" run "$vm" sudo bpftool -j map dump pinned \
+      "/sys/fs/bpf/mithril-convergence/maps/$map" \
+      >"$output_directory/entry-role-failure-$map.json" 2>&1 || true
+  done
+  for map in \
+    mount_global_mutation_epoch \
+    mount_global_pending_mutations \
+    mount_global_activity_sequence; do
+    mount_map_counter "$vm" "$map" \
+      >"$output_directory/entry-role-failure-$map.txt" 2>&1 || true
+  done
+  snapshot=$(wait_running_container_identity \
+    "$vm" "$workload_namespace" entry-roles 2>/dev/null) || return 0
+  host_pid=$(jq -er '.host_pid' <<<"$snapshot") || return 0
+  runtime_task_snapshot "$node_name" "$host_pid" \
+    >"$output_directory/entry-role-failure-task.json" 2>&1 || true
+}
+
+capture_entry_role_kubernetes_failure() {
+  local pod_json
+  local node_name
+  local vm
+
+  remote_kubectl -n "$workload_namespace" get pod entry-roles -o json \
+    >"$output_directory/entry-role-failure-pod.json" 2>&1 || true
+  remote_kubectl -n "$workload_namespace" describe pod entry-roles \
+    >"$output_directory/entry-role-failure-pod.txt" 2>&1 || true
+  remote_kubectl -n "$workload_namespace" logs entry-roles \
+    >"$output_directory/entry-role-failure-current.log" 2>&1 || true
+  remote_kubectl -n "$workload_namespace" logs entry-roles --previous \
+    >"$output_directory/entry-role-failure-previous.log" 2>&1 || true
+  pod_json=$(<"$output_directory/entry-role-failure-pod.json")
+  node_name=$(jq -r '.spec.nodeName // empty' <<<"$pod_json" 2>/dev/null || true)
+  vm=$vm_a
+  [[ $node_name == "$node_a_name" ]] || vm=$vm_b
+  [[ -n $node_name ]] || return 0
+  capture_entry_role_failure_diagnostics "$node_name" "$vm"
+}
+
+wait_for_entry_role_ready() {
+  local pod_json
+  local ready
+  local restarts
+  local phase
+
+  for _attempt in {1..300}; do
+    pod_json=$(remote_kubectl -n "$workload_namespace" get pod entry-roles -o json)
+    ready=$(jq -r '
+      [.status.conditions[]? | select(.type == "Ready") | .status] |
+      first // "False"
+    ' <<<"$pod_json")
+    [[ $ready == True ]] && return 0
+    phase=$(jq -r '.status.phase // "Unknown"' <<<"$pod_json")
+    restarts=$(jq -r '[.status.containerStatuses[]?.restartCount] | add // 0' \
+      <<<"$pod_json")
+    if [[ $phase == Failed || $restarts -gt 0 ]]; then
+      capture_entry_role_kubernetes_failure
+      echo "the entry-role Pod failed before readiness: phase=$phase restarts=$restarts" >&2
+      return 1
+    fi
+    sleep 1
+  done
+  capture_entry_role_kubernetes_failure
+  echo "the entry-role Pod did not become ready" >&2
   return 1
 }
 
@@ -1771,10 +1916,12 @@ start_entry_effect_capture() {
     -o jsonpath='{.items[0].metadata.name}')
   remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
     mithril-inspect effects --socket-path /run/mithril/observation.sock \
-      --cgroup-scope / --samples 6000 --sample-interval-ms 10 \
+      --cgroup-scope / --samples 6000 --sample-interval-ms 100 \
       --reason APPLICATION_DEFAULT_ALLOW \
       --reason PREPARED_RUNTIME_INFRASTRUCTURE \
       --reason RUNTIME_ENTRY_INFRASTRUCTURE \
+      --reason EXECUTION_APPROVAL_VERIFICATION_FAILED \
+      --reason UNSUPPORTED_OBJECT \
       --reason UNRESOLVED_OBJECT \
       --reason PATH_TREE_POLICY_DENY \
       >"$output" 2>/dev/null &
@@ -1829,19 +1976,23 @@ prepare_pod_markers() {
 }
 
 admitted_entry_counts() {
-  awk '
-    /^observed_boottime_ns=/ && / reason=APPLICATION_DEFAULT_ALLOW / {
+  local after_boottime_ns=$1
+  awk -v after_boottime_ns="$after_boottime_ns" '
+    /^observed_boottime_ns=/ {
+      observed_boottime_ns = 0
       role = 0
       admission = 0
       for (field_index = 1; field_index <= NF; field_index++) {
         split($field_index, field, "=")
-        if (field[1] == "active_role_id") {
+        if (field[1] == "observed_boottime_ns") {
+          observed_boottime_ns = field[2]
+        } else if (field[1] == "active_role_id") {
           role = field[2]
         } else if (field[1] == "admitted_entry_rule_id") {
           admission = field[2]
         }
       }
-      if (role > 0 && admission > 0) {
+      if (observed_boottime_ns > after_boottime_ns && role > 0 && admission > 0) {
         roles[role] = 1
         admissions[admission] = 1
         pairs[role ":" admission] = 1
@@ -1856,15 +2007,26 @@ admitted_entry_counts() {
   '
 }
 
+max_effect_boottime() {
+  awk '
+    /^observed_boottime_ns=/ {
+      split($1, field, "=")
+      if (field[2] > maximum) maximum = field[2]
+    }
+    END { printf "%.0f\n", maximum }
+  '
+}
+
 prepare_pod_markers entry-roles
 entry_role_capture_a=$output_directory/declared-entry-role-capture-node-a.txt
 entry_role_capture_b=$output_directory/declared-entry-role-capture-node-b.txt
 start_entry_effect_capture "$node_a_name" "$entry_role_capture_a"
 start_entry_effect_capture "$node_b_name" "$entry_role_capture_b"
 sleep 1
+entry_role_boundary_a=$(max_effect_boottime <"$entry_role_capture_a")
+entry_role_boundary_b=$(max_effect_boottime <"$entry_role_capture_b")
 remote_kubectl create -f "$remote_a/entry-roles.yaml" >/dev/null
-remote_kubectl -n "$workload_namespace" wait \
-  --for=condition=Ready pod/entry-roles --timeout=300s >/dev/null
+wait_for_entry_role_ready
 entry_roles_node=$(remote_kubectl -n "$workload_namespace" get pod entry-roles \
   -o jsonpath='{.spec.nodeName}')
 [[ $entry_roles_node == "$node_a_name" || $entry_roles_node == "$node_b_name" ]] || {
@@ -1886,8 +2048,15 @@ sleep 0.1
 stop_entry_effect_capture
 
 entry_role_capture=$entry_role_capture_a
+entry_role_boundary=$entry_role_boundary_a
 if [[ $entry_roles_node == "$node_b_name" ]]; then
   entry_role_capture=$entry_role_capture_b
+  entry_role_boundary=$entry_role_boundary_b
+fi
+entry_role_count_before_delete=5
+if "$provider" run "$entry_roles_vm" sudo test -e \
+    /var/lib/mithril-convergence/markers/entry-roles.prestop-observed; then
+  entry_role_count_before_delete=6
 fi
 
 entry_role_effects_before=
@@ -1895,12 +2064,23 @@ for _attempt in {1..120}; do
   entry_role_effects_before=$(printf '%s\n%s\n' \
     "$(<"$entry_role_capture")" "$(node_effects "$entry_roles_node")")
   read -r entry_role_count entry_admission_count entry_pair_count \
-    <<<"$(admitted_entry_counts <<<"$entry_role_effects_before")"
-  if [[ $entry_role_count -eq 5 && $entry_admission_count -eq 5 &&
-        $entry_pair_count -eq 5 ]]; then
+    <<<"$(admitted_entry_counts "$entry_role_boundary" <<<"$entry_role_effects_before")"
+  if [[ $entry_role_count -eq $entry_role_count_before_delete &&
+        $entry_admission_count -eq $entry_role_count_before_delete &&
+        $entry_pair_count -eq $entry_role_count_before_delete ]]; then
     break
   fi
   [[ $_attempt -lt 120 ]] || {
+    printf '%s\n' "$entry_role_effects_before" \
+      >"$output_directory/entry-role-failure-effects.txt"
+    jq -cn \
+      --argjson roles "$entry_role_count" \
+      --argjson admissions "$entry_admission_count" \
+      --argjson pairs "$entry_pair_count" \
+      '{roles: $roles, admissions: $admissions, pairs: $pairs}' \
+      >"$output_directory/entry-role-failure-counts.json"
+    capture_entry_role_failure_diagnostics \
+      "$entry_roles_node" "$entry_roles_vm"
     echo "the application, PostStart, and probe entries did not install five independent roles" >&2
     exit 1
   }
@@ -1917,6 +2097,9 @@ entry_role_candidate=$(jq -er --arg profile_id "$profile_id" '
 entry_prestop_capture=$output_directory/declared-entry-role-capture-prestop.txt
 start_entry_effect_capture "$entry_roles_node" "$entry_prestop_capture"
 sleep 0.1
+entry_prestop_boundary=$(max_effect_boottime <"$entry_prestop_capture")
+"$provider" run "$entry_roles_vm" sudo rm -f \
+  /var/lib/mithril-convergence/markers/entry-roles.prestop-observed
 remote_kubectl -n "$workload_namespace" delete pod entry-roles \
   --wait=true --timeout=120s >/dev/null
 sleep 0.1
@@ -1930,13 +2113,17 @@ stop_entry_effect_capture
 entry_role_effects=
 for _attempt in {1..120}; do
   entry_role_effects_after=$(node_effects "$entry_roles_node" 2>/dev/null || true)
+  entry_prestop_effects=$(printf '%s\n%s\n' \
+    "$(<"$entry_prestop_capture")" "$entry_role_effects_after")
   entry_role_effects=$(printf '%s\n%s\n%s\n' \
     "$entry_role_effects_before" "$(<"$entry_prestop_capture")" \
     "$entry_role_effects_after")
   read -r entry_role_count entry_admission_count entry_pair_count \
-    <<<"$(admitted_entry_counts <<<"$entry_role_effects")"
+    <<<"$(admitted_entry_counts "$entry_role_boundary" <<<"$entry_role_effects")"
+  read -r _prestop_role_count _prestop_admission_count prestop_pair_count \
+    <<<"$(admitted_entry_counts "$entry_prestop_boundary" <<<"$entry_prestop_effects")"
   if [[ $entry_role_count -eq 6 && $entry_admission_count -eq 6 &&
-        $entry_pair_count -eq 6 ]]; then
+        $entry_pair_count -eq 6 && $prestop_pair_count -ge 1 ]]; then
     break
   fi
   [[ $_attempt -lt 120 ]] || {
@@ -2064,9 +2251,9 @@ jq -n --argjson before "$concurrent_mount_before" \
 jq -e --argjson before "$concurrent_mount_before" \
   --argjson after "$concurrent_mount_after" '
   ($before.mount_namespace_inode == $after.mount_namespace_inode) and
-  ($before.namespace_event == $after.namespace_event) and
   ($before.mountinfo_sha256 == $after.mountinfo_sha256) and
-  ($before.security_epoch == $after.security_epoch) and
+  ($before.topology_generation == $after.topology_generation) and
+  ($before.ready_snapshot_keys == $after.ready_snapshot_keys) and
   ($after.activity_sequence > $before.activity_sequence)
 ' <<<null >/dev/null || {
   echo "detached containerd exec preparation changed the protected mount view" >&2
@@ -2081,6 +2268,7 @@ for _attempt in {1..120}; do
     2>/dev/null || true)
   [[ $concurrent_recursive_result == PATH_TREE_DENIED ]] && break
   [[ $_attempt -lt 120 ]] || {
+    capture_concurrent_recursive_timeout
     echo "the protected Pod did not complete its concurrent recursive read after the stop marker" >&2
     exit 1
   }

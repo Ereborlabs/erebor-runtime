@@ -178,7 +178,8 @@ fn retained_hostile_denial_logs_its_decision_code() -> TestResult {
 fn unavailable_node_admission_logs_its_decision_code() -> TestResult {
     let directory = TempDir::new()?;
     let bundle = directory.path().join("bundle");
-    fs::create_dir_all(&bundle)?;
+    fs::create_dir_all(bundle.join("rootfs"))?;
+    fs::write(bundle.join("config.json"), br#"{"root":{"path":"rootfs"}}"#)?;
     let manifest = directory.path().join("recovery.json");
     fs::write(&manifest, b"not-read-after-the-first-hook")?;
     let state = serde_json::to_vec(&serde_json::json!({

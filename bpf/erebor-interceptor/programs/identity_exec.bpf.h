@@ -46,6 +46,9 @@ static __noinline int reserve_entry_admission(
     rule = bpf_map_lookup_elem(&entry_admission_rules, key);
     if (!rule)
         return 0;
+    scratch->observation.exact_object_key_id =
+        rule->exact_object_key_id;
+    scratch->observation.file_object = scratch->file_object;
     application = pending->source_role_id == binding->initial_role_id &&
                   id128_equal(&binding->prepared_container_entry_instance_id,
                               &label->entry_instance_id) &&
@@ -55,7 +58,6 @@ static __noinline int reserve_entry_admission(
                        prepared_container_state_v1_exec_pending);
     if (!rule->target_role_id || !rule->target_process_state_vector_id ||
         !rule->admitted_entry_rule_id || rule->reserved ||
-        (!application && !rule->exact_object_key_id) ||
         (rule->exact_object_key_id &&
          (rule->executable_object.profile_generation_ref_id !=
               pending->source_profile_generation_ref_id ||
@@ -269,7 +271,10 @@ static __noinline int observe_declared_entry_admission(
                                         pending, scratch);
     if (admission < 0) {
         clear_runtime_entry_bootstrap(task);
-        return identity_deny(config);
+        scratch->effect_gate_flags = 0;
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_unsupported_object);
     }
     if (admission > 0)
         return 0;

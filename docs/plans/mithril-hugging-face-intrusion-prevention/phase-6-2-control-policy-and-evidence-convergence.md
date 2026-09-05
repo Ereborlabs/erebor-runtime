@@ -4,13 +4,21 @@ Status: Not done. The branch implements the approved capability-grounded
 `WorkloadProtectionPolicy` and separate `WorkloadProtectionException`, their
 Control and node lifecycles, Helm package, automated fixture, and independent
 manual example. An earlier complete automated two-node physical fixture passed
-at its recorded source state. The current working tree has an interim runtime
-row replacement change. The latest fresh-image Kubernetes attempt passed the
-entry-role boundary but stopped later in the protected workload startup. It is
-not a complete physical result. The implementation still couples signed entry
-authority with mutable runtime object evidence. The approved policy and
-runtime-evidence separation below is documentation only. The startup and
-PostStart problem is not solved. The current public policy schema has an explicit
+at its recorded source state. The current working tree keeps ordinary signed
+entry rows and canonical initial mount routes stable across runtime mount
+events. It matches an ordinary entry by its signed canonical invocation path
+and does not bind that entry row to an inode. BPF builds an epoch-qualified
+live mount cache on demand and publishes the cache state only after its final
+epoch, namespace-event, mount-count, and pending-mutation checks pass. The
+current distribution-runc entry-role probe passed on a containerd OverlayFS
+root. The current K3s-runc probe passed the cache-specific concurrent and
+stable-read assertions. It then failed in the later node-owner restart path
+because the runtime cgroup no longer existed. The current fresh-image
+Kubernetes probe observed two of five required independent additional-entry
+roles and failed before the concurrent cache test. These results are not a
+complete physical result. The implementation does not retire unreachable
+mount-cache rows explicitly. The
+current public policy schema has an explicit
 `applicationEntry`, a bounded set of `additionalEntries`, one
 `administrativeEntry`, and `externalRole` as the fail-closed fallback. The
 stock-`runc`, non-Kubernetes VM, and Kubernetes procedures prove independent
@@ -25,6 +33,8 @@ remain `Not run` or `Not done` on the current changed source.
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
+
+Cache design proposal: [Security-epoch-qualified mount cache](./phase-6-2-security-epoch-qualified-mount-cache-design.md)
 
 Closure matrix: [Phase 6.2 closure matrix](./phase-6-2-closure-matrix.md)
 
@@ -1684,7 +1694,8 @@ this documentation decision. Wait for explicit implementation approval.
 
 ## Approved Policy And Runtime-Evidence Separation — 2026-09-04
 
-State: **Architecture correction accepted. Implementation is not done.** This
+State: **Architecture correction accepted. Implementation and qualification
+are partial.** This
 section supersedes every earlier statement in this plan that does one of these
 actions:
 
@@ -1709,20 +1720,23 @@ and retirement rules.
 | Signed policy generation | Signed Control candidate | Accepted policy change only | From verified activation until signed replacement and safe retirement |
 | Signed entry declaration and role | Signed policy generation | Signed policy change; binding materialization does not change its content | Binding and signed-generation lifetime |
 | Signed path graph, decisions, and defaults | Signed policy generation | Accepted policy change only | Signed-generation lifetime |
+| Canonical initial mount route | Signed path graph plus the authenticated OCI root | Binding materialization or signed policy replacement | Binding and signed-generation lifetime |
 | Runtime binding | Authenticated runtime and CRI facts | Container creation, restart, or exit | Exact container and cgroup lifetime |
-| Runtime evidence snapshot | Verified live kernel and runtime facts | Initial view, relevant mount mutation, PID change, or exact-object change | Exact binding and snapshot lifetime |
-| Runtime readiness | Runtime snapshot owner and BPF mutation guard | Snapshot publication, dirty event, failure, or retirement | Mutable state for one binding |
+| Live mount-cache generation | Verified live kernel mount facts | First mount-dependent effect at one BPF-owned global security-view epoch, or a later relevant mount mutation | Security-view epoch, mount namespace, and task-root lifetime |
+| Runtime readiness | BPF mutation guard and mount-cache publisher | Cache publication, dirty event, failure, or retirement | Mutable state for one live mount view |
 
-The signed policy says which declaration, role, path rule, and decision can
-authorize an effect. The runtime snapshot says which live binding, mount
-namespace, topology, executable object, and path object the effect uses. A BPF
-decision joins these two inputs. Neither input substitutes for the other.
+The signed policy says which declaration, role, canonical initial route, path
+rule, and decision can authorize an effect. The live runtime state says which
+binding, mount namespace, topology, executable object, and path object the
+effect uses. A BPF decision joins these two inputs. Neither input substitutes
+for the other.
 
 ```text
 active binding
   -> immutable signed policy generation
   -> signed entry declaration or effect rule
-  -> current binding-scoped runtime snapshot
+  -> stable canonical initial route, when the path requires that route
+  -> current epoch-qualified live mount cache
   -> live executable, path, or target object
   -> target role and physical decision
 ```
@@ -1731,7 +1745,12 @@ Missing signed policy denies because no authority exists. Missing, dirty, or
 unresolved runtime evidence denies because the live object is not proved. A
 runtime-evidence failure must not appear as a missing signed role.
 
-### Runtime snapshot publication
+### Earlier runtime-snapshot publication proposal
+
+The demand-built BPF cache design below supersedes these steps for live mount
+topology. Keep these steps as design input for runtime evidence that userspace
+must publish in the future. Do not use these steps to reinstall a signed entry
+row or a canonical initial route.
 
 Use a separate monotonic runtime snapshot ID for each binding. Do not use the
 signed policy generation as the runtime snapshot ID.
@@ -1758,22 +1777,38 @@ present in both cases.
 
 ### Initial entry and later runtime events
 
-The initial-exec hold remains necessary because the application must not use a
-dirty final mount view. The seccomp notification can provide this hold. Its
-purpose is runtime-evidence convergence. It must not act as a policy
-generation transaction.
+`createContainer` validates the signed candidate, the binding, and all declared
+entries. It materializes stable binding-scoped signed entry rows and stable
+canonical initial mount routes once. It sets no entry inode for an ordinary
+canonical-path declaration. The hook returns with the live mount topology
+uninitialized.
 
-`CreateContainer` validates the signed candidate, the binding, and all declared
-entries. It materializes stable binding-scoped signed entry rows once. The
-post-pivot initial-exec boundary resolves and publishes the first clean runtime
-snapshot. It then releases the held exec. It does not republish the policy.
+runc can then complete `pivot_root`, remounts, and masked-path mounts. Each
+relevant mount operation advances the mutation epoch. The operation does not
+change the signed policy rows or the canonical initial routes.
 
-A later mount event marks only the affected runtime snapshot dirty. The node
-or the bounded BPF reconciliation path builds and publishes a replacement
-runtime snapshot. A later PostStart, probe, lifecycle entry, or ordinary exec
-uses the same signed declarations. If its required runtime view is dirty, it
-cannot use mount-dependent authority until the runtime view is clean. This
-condition does not remove its role declaration.
+The first mount-dependent BPF gate can belong to PID 1 or PostStart. The gate
+snapshots the mutation epoch, mount namespace event, pending-mutation count,
+namespace root, and task root. It builds all candidate mount rows before it
+publishes a ready cache state. It then rechecks the epoch, namespace event, and
+pending-mutation count. A failed recheck denies the original effect. A passed
+recheck publishes one complete cache generation and evaluates the original
+effect. The gate never permits an effect because the view is dirty.
+
+Two concurrent first gates use the same qualified cache key. A gate can use a
+complete ready generation. It must deny if the topology changes during its
+build. The current implementation does not explicitly remove orphaned rows
+from an old cache generation. Capacity-safe retirement remains required.
+
+A later relevant mount event makes the old cache key ineligible because the
+epoch changes. The next mount-dependent effect builds a new qualified cache.
+A later PostStart, probe, lifecycle entry, or ordinary exec uses the same
+signed declarations and canonical routes. A runtime event does not remove its
+role declaration.
+
+The current experiment removes the seccomp notification from the active OCI
+specification. The seccomp server code remains in the fixture for a possible
+future hold. It is not an active policy or topology owner.
 
 Container exit retires the runtime binding and its snapshots. It does not
 retire the signed policy generation while another binding or typed holder uses
@@ -1783,23 +1818,31 @@ uses that policy replacement path.
 
 ### Current implementation gap
 
-The current `EntryAdmissionRuleV1` value contains the signed target role and
-the runtime-resolved executable object. Its key also contains the binding and
-policy generation. `NodePolicyGenerationOwner::reconcile_cri_exact_bindings`
-rebuilds runtime exact objects, mount routes, and mount views through the same
-owner that installs generation rows. It can revoke dynamic rows and call the
-generation install path again after a runtime target changes.
+The current `EntryAdmissionRuleV1` ABI still contains an optional executable-
+object field. The node writes zero to that field for an ordinary declared
+entry. The stable row contains the signed target role, process-state vector,
+admitted rule ID, binding ID, source role, and canonical invocation-path atom.
+An explicit `EXACT` filesystem selector still uses the separate exact-object
+policy path.
 
-The implementation must split these fields and lifecycles before this design
-is complete. One stable signed entry row must contain the signed role and rule
-identity. A separate snapshot-scoped runtime row must contain the current
-executable and mount evidence. BPF must require both rows and the active clean
-runtime snapshot. No current test proves this separation. The startup and
-PostStart problem remains open until the split and its physical qualification
-pass.
+`NodePolicyGenerationOwner::reconcile_cri_exact_bindings` no longer needs an
+entry inode before it publishes ordinary entry rows. Ordinary runtime
+reconciliation keeps the entry rows and canonical initial routes unchanged.
+BPF can now publish an epoch-qualified live mount cache without a userspace
+policy reinstall.
 
-This correction changes documentation only. It does not authorize an
-implementation change or a qualification rerun.
+The cache state publication is atomic, but old candidate rows have no explicit
+retirement owner. The complete lightweight case uses runc 1.3.4. The exact
+K3s-runc 1.4.2 case passed the cache-specific assertions and then failed in a
+later node-owner restart step because the runtime cgroup no longer existed.
+The current fresh-image Kubernetes case failed at its independent-entry
+precondition before it reached the cache test.
+
+The current result proves that an ordinary entry inode was the startup blocker.
+It also proves event-only cache reuse in the distribution-runc case and in the
+ordered K3s-runc cache assertions. It does not complete cache retirement, the
+paired Kubernetes concurrent-read proof, or the complete phase acceptance
+matrix.
 
 ## Checkpoint
 

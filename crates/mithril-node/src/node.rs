@@ -1889,6 +1889,10 @@ impl NodeChassis {
                 &self.bindings,
                 &binding_id,
                 held_initial_pid,
+                envelope.peer_pid(),
+                request.oci_root_fd.context(IdentityStateSnafu {
+                    reason: "declared-entry preparation has no OCI root handle",
+                })?,
                 bundle,
             )?;
             self.bindings
@@ -4027,6 +4031,7 @@ mod tests {
             initial_pid: Some(1),
             cgroup_path: None,
             oci_bundle: None,
+            oci_root_fd: None,
             annotations: BTreeMap::from([
                 (POD_NAMESPACE_ANNOTATION.to_owned(), "default".to_owned()),
                 (POD_UID_ANNOTATION.to_owned(), "pod-a".to_owned()),

@@ -607,11 +607,19 @@ impl ExactFileObjectView {
 }
 
 impl ExactFileObjectView {
-    pub(crate) fn acquire_oci(root_pid: u32, bundle: &Path) -> Result<Self> {
+    pub(crate) fn acquire_oci(
+        root_pid: u32,
+        root_source_pid: u32,
+        root_source_fd: u32,
+        bundle: &Path,
+    ) -> Result<Self> {
         ensure!(
-            root_pid > 0 && clean_absolute_path(bundle),
+            root_pid > 0
+                && root_source_pid > 0
+                && root_source_fd > 2
+                && clean_absolute_path(bundle),
             IdentityStateSnafu {
-                reason: "OCI entry resolution needs a live root PID and a clean absolute bundle",
+                reason: "OCI entry resolution needs a held task, a live root handle, and a clean absolute bundle",
             }
         );
         let process_path = PathBuf::from(format!("/proc/{root_pid}"));
@@ -621,6 +629,29 @@ impl ExactFileObjectView {
         let mount_namespace = open_process_file(&process, root_pid, "ns/mnt")?;
         let mountinfo = open_process_file(&process, root_pid, "mountinfo")?;
         let process_root = open_process_file(&process, root_pid, "root")?;
+        let root_source_path = PathBuf::from(format!("/proc/{root_source_pid}"));
+        let root_source = File::open(&root_source_path).context(IoSnafu {
+            path: &root_source_path,
+        })?;
+        let root_source_mount_namespace =
+            open_process_file(&root_source, root_source_pid, "ns/mnt")?;
+        ensure!(
+            mount_namespace
+                .metadata()
+                .context(IoSnafu {
+                    path: Path::new("held mount namespace"),
+                })?
+                .ino()
+                == root_source_mount_namespace
+                    .metadata()
+                    .context(IoSnafu {
+                        path: Path::new("OCI root-source mount namespace"),
+                    })?
+                    .ino(),
+            IdentityStateSnafu {
+                reason: "OCI root handle is outside the held task mount namespace",
+            }
+        );
         let bundle_directory = openat2(
             &process_root,
             bundle,
@@ -691,10 +722,41 @@ impl ExactFileObjectView {
                 path: &config.root.path,
             })
         };
-        let root = open_root()?;
+        let configured_root = open_root()?;
+        let root = open_process_file(
+            &root_source,
+            root_source_pid,
+            &format!("fd/{root_source_fd}"),
+        )?;
+        let root_matches_config = same_root(&root, &configured_root)?;
+        let root_mount_matches_config = if root_matches_config {
+            true
+        } else {
+            let root_mount_id = MountInfoEntry::mount_id_for(&root)?;
+            let mut source = Vec::new();
+            (&mountinfo).read_to_end(&mut source).context(IoSnafu {
+                path: Path::new("held OCI mountinfo"),
+            })?;
+            parse_mountinfo(&source)?.iter().any(|entry| {
+                entry.mount_id == root_mount_id && entry.mountpoint == namespace_root_path
+            })
+        };
+        ensure!(
+            root_mount_matches_config,
+            IdentityStateSnafu {
+                reason: "held task working directory is not the mounted OCI root",
+            }
+        );
         let final_mount_namespace = open_process_file(&process, root_pid, "ns/mnt")?;
         let final_process_root = open_process_file(&process, root_pid, "root")?;
-        let final_root = open_root()?;
+        let final_configured_root = open_root()?;
+        let final_root_source_mount_namespace =
+            open_process_file(&root_source, root_source_pid, "ns/mnt")?;
+        let final_root = open_process_file(
+            &root_source,
+            root_source_pid,
+            &format!("fd/{root_source_fd}"),
+        )?;
         ensure!(
             mount_namespace
                 .metadata()
@@ -709,6 +771,19 @@ impl ExactFileObjectView {
                     })?
                     .ino()
                 && same_root(&process_root, &final_process_root)?
+                && same_root(&configured_root, &final_configured_root)?
+                && root_source_mount_namespace
+                    .metadata()
+                    .context(IoSnafu {
+                        path: Path::new("OCI root-source mount namespace"),
+                    })?
+                    .ino()
+                    == final_root_source_mount_namespace
+                        .metadata()
+                        .context(IoSnafu {
+                            path: Path::new("rechecked OCI root-source mount namespace"),
+                        })?
+                        .ino()
                 && same_root(&root, &final_root)?,
             IdentityStateSnafu {
                 reason: "task mount namespace, process root, or OCI root changed while its view was acquired",
@@ -733,7 +808,7 @@ impl ExactFileObjectView {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, dead_code)]
     pub(crate) fn try_resolve_declared_entry(
         &self,
         host: &KernelHost,
@@ -1442,7 +1517,8 @@ fn path_components(path: &Path) -> Result<Vec<Vec<u8>>> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::fs;
+    use std::fs::{self, File};
+    use std::os::fd::AsRawFd as _;
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -1464,10 +1540,58 @@ mod tests {
         let config = bundle.path().join("config.json");
         fs::write(&config, br#"{"root":{"path":"rootfs"}}"#).context(IoSnafu { path: &config })?;
 
-        let view = ExactFileObjectView::acquire_oci(std::process::id(), bundle.path())?;
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .current_dir(&root)
+            .spawn()
+            .context(IoSnafu {
+                path: Path::new("/bin/sleep"),
+            })?;
+        let root_handle = File::open(&root).context(IoSnafu { path: &root })?;
+        let view = ExactFileObjectView::acquire_oci(
+            child.id(),
+            std::process::id(),
+            root_handle.as_raw_fd() as u32,
+            bundle.path(),
+        )?;
+        let _ = child.kill();
+        let _ = child.wait();
 
         assert!(view.mount_namespace_inode()? > 0);
         assert!(view.root.metadata().is_ok_and(|metadata| metadata.is_dir()));
+        Ok(())
+    }
+
+    #[test]
+    fn oci_entry_view_rejects_a_task_outside_the_runtime_root() -> crate::Result<()> {
+        let bundle = tempfile::tempdir().context(IoSnafu {
+            path: "temporary OCI bundle",
+        })?;
+        let root = bundle.path().join("rootfs");
+        fs::create_dir(&root).context(IoSnafu { path: &root })?;
+        let config = bundle.path().join("config.json");
+        fs::write(&config, br#"{"root":{"path":"rootfs"}}"#).context(IoSnafu { path: &config })?;
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .current_dir(bundle.path())
+            .spawn()
+            .context(IoSnafu {
+                path: Path::new("/bin/sleep"),
+            })?;
+
+        let wrong_root = File::open(bundle.path()).context(IoSnafu {
+            path: bundle.path(),
+        })?;
+        let result = ExactFileObjectView::acquire_oci(
+            child.id(),
+            std::process::id(),
+            wrong_root.as_raw_fd() as u32,
+            bundle.path(),
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(result.is_err());
         Ok(())
     }
 
@@ -1480,7 +1604,13 @@ mod tests {
         fs::write(&config, br#"{"root":{"path":"../rootfs"}}"#)
             .context(IoSnafu { path: &config })?;
 
-        assert!(ExactFileObjectView::acquire_oci(std::process::id(), bundle.path()).is_err());
+        assert!(ExactFileObjectView::acquire_oci(
+            std::process::id(),
+            std::process::id(),
+            3,
+            bundle.path(),
+        )
+        .is_err());
         Ok(())
     }
 

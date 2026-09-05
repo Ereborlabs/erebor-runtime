@@ -68,8 +68,8 @@ done
   echo "--skip-administrative-exec requires --with-k3s" >&2
   exit 2
 }
-[[ $entry_role_runtime_only == false || ($with_k3s == false && $manual_vm == false) ]] || {
-  echo "--entry-role-runtime-only cannot run with --with-k3s or --manual" >&2
+[[ $entry_role_runtime_only == false || $manual_vm == false ]] || {
+  echo "--entry-role-runtime-only cannot run with --manual" >&2
   exit 2
 }
 [[ -x $provider ]] || {
@@ -333,6 +333,18 @@ for fixture in \
     "$remote_source/crates/mithril-e2e/fixtures/hugging-face/$fixture"
 done
 
+entry_runc_path=/usr/sbin/runc
+entry_containerd_path=/usr/bin/containerd
+if [[ $entry_role_runtime_only == true && $with_k3s == true ]]; then
+  "$provider" put "$vm_name" "$directory/k3s-config-v1.yaml" \
+    "$remote_root/harness/k3s-config-v1.yaml"
+  "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
+    k3s-install "$k3s_version" "$remote_root/harness/k3s-config-v1.yaml" \
+    "$remote_root"
+  entry_runc_path=/var/lib/rancher/k3s/data/current/bin/runc
+  entry_containerd_path=/var/lib/rancher/k3s/data/current/bin/containerd
+fi
+
 if [[ $entry_role_runtime_only == false ]]; then
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
     platform "$remote_bin/mithril-inspect" "$remote_root" \
@@ -354,27 +366,30 @@ entry_role_output=$remote_root/runc-entry-roles
   --output-directory "$entry_role_output" \
   --pin-root "/sys/fs/bpf/$vm_name-runc-entry-roles" \
   --lease-path "$entry_role_output/owner.lock" \
-  --runc-path /usr/sbin/runc --workload-path /usr/bin/busybox \
+  --runc-path "$entry_runc_path" --workload-path /usr/bin/busybox \
   --retained-bpf-object "$remote_bin/retained-identity.bpf.o" \
-  --containerd-path /usr/bin/containerd
+  --containerd-path "$entry_containerd_path"
 "$provider" get "$vm_name" \
   "$entry_role_output/runc-entry-role-runtime-probe.json" \
   "$output_directory/runc-entry-role-runtime-probe.json"
 
 if [[ $entry_role_runtime_only == true ]]; then
   jq -e '
-    .schema_version == 28 and
+    .schema_version == 33 and
     .prepared_state_before_exec == "prepared" and
     .prepared_state_after_exec == "active" and
     .prepared_runtime_effect_observed and
-    .initial_exec_notification_blocked and
+    .seccomp_start_gate_unlinked and
+    .runtime_topology_uninitialized_at_create_container and
+    .stable_entry_policy_preserved_after_mount_mutation and
+    .stable_canonical_mount_policy_preserved_after_mount_mutation and
     .application_entry_allow_observed and
     .application_default_file_allow_observed and
     .application_descendant_default_exec_role_preserved and
     .large_exec_argv_allowed and
     .held_runtime_admission_reconciled and
     .runc_post_create_mount_mutation_observed and
-    .start_container_final_mount_reconciled and
+    .bpf_runtime_topology_initialized and
     .application_exec_transition_event_driven and
     .kubernetes_subpath_alias_path_tree_denied and
     .newer_kubernetes_subpath_alias_path_tree_denied and
@@ -392,7 +407,7 @@ if [[ $entry_role_runtime_only == true ]]; then
       .active_role_id > 0 and
       .profile_generation_ref_id == 2 and
       .admitted_entry_rule_id > 0 and
-      .exact_executable_object_enforced and
+      .literal_path_admission_enforced and
       .own_policy_deny_observed and
       .application_policy_not_inherited
     )) and
@@ -421,7 +436,7 @@ if [[ $entry_role_runtime_only == true ]]; then
     .inactive_generation_retired and
     .external_entry_denied and
     .external_cgroup_entering_process_stays_closed and
-    .entry_executable_exact_objects_enforced and
+    .entry_literal_paths_enforced and
     (.dynamic_loader_paths | length) > 0 and
     .dynamic_loader_paths_absent_from_policy and
     .container_exit_success and

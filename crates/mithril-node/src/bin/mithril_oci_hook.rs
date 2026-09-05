@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
+use std::fs::File;
 use std::io::{self, Read as _, Write as _};
+use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -338,7 +340,15 @@ impl OciHookOwner {
         client: &RuntimeAdmissionClient,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let container_id = state.id.clone();
-        let request = Self::request_for_stage(stage, state, cgroup_root)?;
+        let root = (stage == HookStageV1::PrepareDeclaredEntries)
+            .then(Self::open_oci_root)
+            .transpose()?;
+        let root_fd = root
+            .as_ref()
+            .map(|root| u32::try_from(root.as_raw_fd()))
+            .transpose()
+            .map_err(|error| invalid_data(&format!("OCI root fd is invalid: {error}")))?;
+        let request = Self::request_for_stage(stage, state, cgroup_root, root_fd)?;
         let response = match client.submit(&request).await {
             Ok(response) => response,
             Err(error) => {
@@ -437,6 +447,7 @@ impl OciHookOwner {
         stage: HookStageV1,
         state: OciStateV1,
         cgroup_root: &Path,
+        oci_root_fd: Option<u32>,
     ) -> io::Result<RuntimeAdmissionRequestV1> {
         let cgroup_path = match stage {
             HookStageV1::StageRuntimeFacts => {
@@ -447,13 +458,14 @@ impl OciHookOwner {
             }
             HookStageV1::PrepareContainer | HookStageV1::PrepareDeclaredEntries => None,
         };
-        Self::request_with_cgroup(stage, state, cgroup_path)
+        Self::request_with_cgroup(stage, state, cgroup_path, oci_root_fd)
     }
 
     fn request_with_cgroup(
         stage: HookStageV1,
         state: OciStateV1,
         cgroup_path: Option<PathBuf>,
+        oci_root_fd: Option<u32>,
     ) -> io::Result<RuntimeAdmissionRequestV1> {
         let (operation, initial_pid, cgroup_path, oci_bundle) = match stage {
             HookStageV1::StageRuntimeFacts => (
@@ -487,8 +499,17 @@ impl OciHookOwner {
             initial_pid,
             cgroup_path,
             oci_bundle,
+            oci_root_fd,
             annotations: state.annotations,
         })
+    }
+
+    fn open_oci_root() -> io::Result<File> {
+        let file = File::open(".")?;
+        if !file.metadata()?.is_dir() {
+            return Err(invalid_data("OCI createContainer root is not a directory"));
+        }
+        Ok(file)
     }
 
     fn process_cgroup_path(pid: u32, root: &Path) -> io::Result<PathBuf> {
@@ -584,6 +605,7 @@ mod tests {
             HookStageV1::StageRuntimeFacts,
             state()?,
             Some(Path::new("/sys/fs/cgroup/kubepods/pod-a/container-a").to_path_buf()),
+            None,
         )?;
         assert_eq!(
             staged.operation,
@@ -593,15 +615,19 @@ mod tests {
         assert!(staged.cgroup_path.is_some());
 
         let prepared =
-            OciHookOwner::request_with_cgroup(HookStageV1::PrepareContainer, state()?, None)?;
+            OciHookOwner::request_with_cgroup(HookStageV1::PrepareContainer, state()?, None, None)?;
         assert_eq!(
             prepared.operation,
             RuntimeAdmissionOperationV1::PrepareContainer
         );
         assert_eq!(prepared.initial_pid, Some(42));
 
-        let entries =
-            OciHookOwner::request_with_cgroup(HookStageV1::PrepareDeclaredEntries, state()?, None)?;
+        let entries = OciHookOwner::request_with_cgroup(
+            HookStageV1::PrepareDeclaredEntries,
+            state()?,
+            None,
+            Some(7),
+        )?;
         assert_eq!(
             entries.operation,
             RuntimeAdmissionOperationV1::PrepareDeclaredEntries
@@ -612,6 +638,7 @@ mod tests {
                 "/run/containerd/io.containerd.runtime.v2.task/k8s.io/container-a"
             ))
         );
+        assert_eq!(entries.oci_root_fd, Some(7));
 
         Ok(())
     }

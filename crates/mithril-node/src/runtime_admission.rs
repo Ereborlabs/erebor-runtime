@@ -38,6 +38,8 @@ pub struct RuntimeAdmissionRequestV1 {
     pub cgroup_path: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oci_bundle: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oci_root_fd: Option<u32>,
     pub annotations: BTreeMap<String, String>,
 }
 
@@ -76,6 +78,7 @@ pub(crate) struct ScheduledRuntimeBindingV1 {
 
 pub(crate) struct RuntimeAdmissionEnvelope {
     pub(crate) request: RuntimeAdmissionRequestV1,
+    peer_pid: u32,
     deadline: Instant,
     response: oneshot::Sender<RuntimeAdmissionResponseV1>,
     delivered: oneshot::Receiver<()>,
@@ -114,6 +117,7 @@ impl RuntimeAdmissionRequestV1 {
             && self.initial_pid.is_none()
             && self.cgroup_path.is_none()
             && self.oci_bundle.is_none()
+            && self.oci_root_fd.is_none()
             && self.annotations.is_empty()
     }
 
@@ -124,16 +128,19 @@ impl RuntimeAdmissionRequestV1 {
                 self.initial_pid.is_none()
                     && self.cgroup_path.as_deref().is_some_and(clean_cgroup_path)
                     && self.oci_bundle.is_none()
+                    && self.oci_root_fd.is_none()
             }
             RuntimeAdmissionOperationV1::PrepareContainer => {
                 self.initial_pid.is_some_and(|pid| pid > 0)
                     && self.cgroup_path.is_none()
                     && self.oci_bundle.is_none()
+                    && self.oci_root_fd.is_none()
             }
             RuntimeAdmissionOperationV1::PrepareDeclaredEntries => {
                 self.initial_pid.is_none()
                     && self.cgroup_path.is_none()
                     && self.oci_bundle.as_deref().is_some_and(clean_oci_bundle)
+                    && self.oci_root_fd.is_some_and(|fd| fd > 2)
             }
         };
         ensure!(
@@ -219,6 +226,11 @@ fn clean_oci_bundle(path: &Path) -> bool {
 }
 
 impl RuntimeAdmissionEnvelope {
+    #[must_use]
+    pub(crate) const fn peer_pid(&self) -> u32 {
+        self.peer_pid
+    }
+
     pub(crate) fn ensure_active(&self) -> Result<()> {
         ensure!(
             Instant::now() < self.deadline && !self.response.is_closed(),
@@ -334,6 +346,7 @@ impl RuntimeAdmissionReceiver {
             requests
                 .send(RuntimeAdmissionEnvelope {
                     request,
+                    peer_pid: std::process::id(),
                     deadline,
                     response,
                     delivered: delivery,
@@ -407,6 +420,7 @@ impl RuntimeAdmissionClient {
             initial_pid: None,
             cgroup_path: None,
             oci_bundle: None,
+            oci_root_fd: None,
             annotations: BTreeMap::new(),
         };
         self.submit(&request)
@@ -636,16 +650,20 @@ impl RuntimeAdmissionServer {
         let deadline = Instant::now() + timeout;
         let result = tokio::time::timeout_at(deadline, async {
             // SO_PEERCRED prevents an unprivileged local process from invoking the gate.
+            let credentials = stream.peer_cred().context(IoSnafu { path: socket_path })?;
             ensure!(
-                stream
-                    .peer_cred()
-                    .context(IoSnafu { path: socket_path })?
-                    .uid()
-                    == 0,
+                credentials.uid() == 0,
                 IdentityStateSnafu {
                     reason: "runtime admission peer is not root",
                 }
             );
+            let peer_pid = credentials
+                .pid()
+                .and_then(|pid| u32::try_from(pid).ok())
+                .filter(|pid| *pid > 0)
+                .context(IdentityStateSnafu {
+                    reason: "runtime admission peer has no valid process ID",
+                })?;
             let maximum = u64::try_from(maximum_request_bytes).map_err(|_| {
                 IdentityStateSnafu {
                     reason: "runtime admission request limit is invalid".to_owned(),
@@ -685,7 +703,7 @@ impl RuntimeAdmissionServer {
             }
             let mut trailing = [0_u8; 1];
             let dispatched = tokio::select! {
-                result = Self::dispatch(request, requests, deadline) => result?,
+                result = Self::dispatch(request, peer_pid, requests, deadline) => result?,
                 read = stream.read(&mut trailing) => {
                     let count = read.context(IoSnafu { path: socket_path })?;
                     let reason = if count == 0 {
@@ -747,6 +765,7 @@ impl RuntimeAdmissionServer {
 
     async fn dispatch(
         request: RuntimeAdmissionRequestV1,
+        peer_pid: u32,
         requests: mpsc::Sender<RuntimeAdmissionEnvelope>,
         deadline: Instant,
     ) -> Result<RuntimeAdmissionDispatch> {
@@ -756,6 +775,7 @@ impl RuntimeAdmissionServer {
             requests
                 .send(RuntimeAdmissionEnvelope {
                     request: request.clone(),
+                    peer_pid,
                     deadline,
                     response,
                     delivered: delivery,
@@ -808,6 +828,7 @@ mod tests {
             initial_pid: Some(42),
             cgroup_path: None,
             oci_bundle: None,
+            oci_root_fd: None,
             annotations: BTreeMap::from([
                 (POD_NAMESPACE_ANNOTATION.to_owned(), "tenant-a".to_owned()),
                 (POD_UID_ANNOTATION.to_owned(), "pod-a".to_owned()),
@@ -889,6 +910,7 @@ mod tests {
         entries.operation = RuntimeAdmissionOperationV1::PrepareDeclaredEntries;
         entries.initial_pid = None;
         entries.oci_bundle = Some(PathBuf::from("/run/oci/container-a"));
+        entries.oci_root_fd = Some(3);
         entries.kubernetes_identity()?;
 
         entries.initial_pid = Some(42);
@@ -996,6 +1018,7 @@ mod tests {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
         let task = tokio::spawn(RuntimeAdmissionServer::dispatch(
             request(),
+            std::process::id(),
             sender,
             deadline,
         ));
@@ -1051,6 +1074,7 @@ mod tests {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(20);
         let task = tokio::spawn(RuntimeAdmissionServer::dispatch(
             request(),
+            std::process::id(),
             sender,
             deadline,
         ));

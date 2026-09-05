@@ -1208,6 +1208,11 @@ impl WorkloadBindingOwner {
             .context(IdentityStateSnafu {
                 reason: "declared-entry staging has no published runtime binding",
             })?;
+        let mut entries = 0_usize;
+        let mut admitted_rules = BTreeSet::new();
+        binding.held_initial_pid.context(IdentityStateSnafu {
+            reason: "declared-entry staging has no held initial task",
+        })?;
         for key in host
             .map_keys("entry_admission_rules")
             .context(InterceptorSnafu)?
@@ -1218,14 +1223,47 @@ impl WorkloadBindingOwner {
                 }
                 .build()
             })?;
-            ensure!(
-                key.profile_generation_ref_id != binding.state.active_profile_generation_ref_id
-                    || key.binding_id != binding.state.binding_id,
+            if key.profile_generation_ref_id != binding.state.active_profile_generation_ref_id
+                || key.binding_id != binding.state.binding_id
+            {
+                continue;
+            }
+            let value = host
+                .lookup_map("entry_admission_rules", key.as_bytes())
+                .context(InterceptorSnafu)?
+                .context(IdentityStateSnafu {
+                    reason: "staged declared entry disappeared during readback",
+                })?;
+            let value = EntryAdmissionRuleV1::try_read_from_bytes(&value).map_err(|error| {
                 IdentityStateSnafu {
-                    reason: "binding-specific application entry was published before final exec",
+                    reason: format!("staged declared entry has the wrong ABI: {error}"),
+                }
+                .build()
+            })?;
+            ensure!(
+                matches!(
+                    key.source_role_id,
+                    source if source == binding.state.initial_role_id
+                        || source == binding.state.external_role_id
+                ) && value.target_role_id != 0
+                    && value.target_process_state_vector_id != 0
+                    && value.admitted_entry_rule_id != 0
+                    && value.reserved == 0
+                    && value.exact_object_key_id == 0
+                    && value.executable_object == ExactFileObjectKeyV1::default()
+                    && admitted_rules.insert(value.admitted_entry_rule_id),
+                IdentityStateSnafu {
+                    reason: "declared-entry staging has invalid or colliding signed authority",
                 }
             );
+            entries += 1;
         }
+        ensure!(
+            entries > 0,
+            IdentityStateSnafu {
+                reason: "declared-entry staging has no signed entry authority",
+            }
+        );
         Ok(())
     }
 
@@ -1242,6 +1280,7 @@ impl WorkloadBindingOwner {
             initial_pid: Some(notification_pid),
             cgroup_path: None,
             oci_bundle: None,
+            oci_root_fd: None,
             annotations: process.annotations().clone(),
         };
         let identity = request.kubernetes_identity()?;
@@ -1358,7 +1397,7 @@ impl WorkloadBindingOwner {
         &self,
         host: &KernelHost,
         binding_id: &str,
-        initial_pid: u32,
+        _initial_pid: u32,
     ) -> Result<()> {
         let binding = self
             .bindings
@@ -1369,17 +1408,6 @@ impl WorkloadBindingOwner {
             })?;
         let mut count = 0_usize;
         let mut admitted_rules = BTreeSet::new();
-        let mount_namespace = fs::metadata(format!("/proc/{initial_pid}/ns/mnt"))
-            .context(IoSnafu {
-                path: PathBuf::from(format!("/proc/{initial_pid}/ns/mnt")),
-            })?
-            .ino();
-        let mount_namespace = u32::try_from(mount_namespace).map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("initial exec mount namespace inode exceeds its ABI: {error}"),
-            }
-            .build()
-        })?;
         for key in host
             .map_keys("entry_admission_rules")
             .context(InterceptorSnafu)?
@@ -1408,12 +1436,11 @@ impl WorkloadBindingOwner {
                 .build()
             })?;
             ensure!(
-                value.exact_object_key_id != 0
-                    && value.executable_object != ExactFileObjectKeyV1::default()
-                    && value.executable_object.mount_namespace_inode == mount_namespace
+                value.exact_object_key_id == 0
+                    && value.executable_object == ExactFileObjectKeyV1::default()
                     && admitted_rules.insert(value.admitted_entry_rule_id),
                 IdentityStateSnafu {
-                    reason: "declared-entry table has deferred or colliding executable proof",
+                    reason: "declared-entry table has inode authority or a colliding rule",
                 }
             );
             count += 1;
@@ -1421,7 +1448,7 @@ impl WorkloadBindingOwner {
         ensure!(
             count > 0,
             IdentityStateSnafu {
-                reason: "declared-entry table has no exact executable proof",
+                reason: "declared-entry table has no signed path-and-argument authority",
             }
         );
         Ok(())
@@ -1948,6 +1975,13 @@ impl WorkloadBindingOwner {
                     init_pid,
                 })
             })
+    }
+
+    pub(crate) fn active_binding_ids(&self) -> impl Iterator<Item = &str> {
+        self.bindings
+            .values()
+            .filter(|binding| binding.state.lifecycle_state == BindingLifecycleStateV1::Active)
+            .map(|binding| binding.spec.binding_id.as_str())
     }
 
     pub(crate) async fn reconcile(
@@ -2579,6 +2613,7 @@ mod tests {
             initial_pid: Some(42),
             cgroup_path: None,
             oci_bundle: None,
+            oci_root_fd: None,
             annotations: BTreeMap::from([
                 (POD_NAMESPACE_ANNOTATION.to_owned(), "default".to_owned()),
                 (POD_UID_ANNOTATION.to_owned(), "pod-uid-a".to_owned()),
@@ -2615,6 +2650,7 @@ mod tests {
         entries.operation = RuntimeAdmissionOperationV1::PrepareDeclaredEntries;
         entries.initial_pid = None;
         entries.oci_bundle = Some(PathBuf::from("/run/oci/container-a"));
+        entries.oci_root_fd = Some(3);
         stage.verify_declared_entries("authority-head-a", &entries, now)?;
         assert!(stage
             .verify_preparation("authority-head-b", &request, now)

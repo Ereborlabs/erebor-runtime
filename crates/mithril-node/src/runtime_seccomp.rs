@@ -282,6 +282,19 @@ impl RuntimeSeccompServer {
         );
         let (process, listener) = receive_process_state(&stream, socket_path).await?;
         process.validate()?;
+        let container_id = process.container_id();
+        let process_status = process.status();
+        let process_pid = process.process_pid();
+        let state_pid = process.state_pid();
+        let protected_admission = process.requires_protected_admission();
+        erebor_telemetry::debug!(
+            "received runtime seccomp process state",
+            container_id = %container_id,
+            process_status = %process_status,
+            process_pid = %process_pid,
+            state_pid = %state_pid,
+            protected_admission = %protected_admission
+        );
         let first_noninitial_continued = process.status() == "running"
             && continue_first_noninitial_notification(&listener, timeout)?;
         let listener = AsyncFd::new(listener).context(IoSnafu { path: socket_path })?;
