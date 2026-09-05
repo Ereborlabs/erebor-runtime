@@ -34,6 +34,8 @@ Design: [Validated readable architecture](./policy-and-protection-algorithm-arch
 
 Cache design proposal: [Security-epoch-qualified mount cache](./phase-6-2-security-epoch-qualified-mount-cache-design.md)
 
+OCI route publication proposal: [Held OCI route publication](./phase-6-2-held-oci-route-publication-design.md)
+
 Closure matrix: [Phase 6.2 closure matrix](./phase-6-2-closure-matrix.md)
 
 Manual acceptance: [Phase 6.2 runbook](./manual-testing/phase-6-2-manual-acceptance.md)
