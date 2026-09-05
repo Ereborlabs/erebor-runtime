@@ -2190,27 +2190,6 @@ impl NodeChassis {
             previous_config,
             durable_rollback,
         };
-        let path_preparation = self.reconcile_runtime_exact_bindings().and_then(|()| {
-            self.policy
-                .as_ref()
-                .context(IdentityStateSnafu {
-                    reason: "runtime admission lost its active policy owner",
-                })?
-                .require_held_oci_path_authority_deferred(&commit.runtime_binding_id)
-        });
-        if let Err(error) = path_preparation {
-            return match self.rollback_runtime_preparation(commit) {
-                Ok(()) => Err(error.into()),
-                Err(rollback) => Err(RuntimeAdmissionFailureV1::fatal(
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "exact filesystem binding failed before runtime release: {error}; rollback failed: {rollback}"
-                        ),
-                    }
-                    .build(),
-                )),
-            };
-        }
         if let Err(error) = envelope.ensure_active() {
             return match self.rollback_runtime_preparation(commit) {
                 Ok(()) => Err(error.into()),

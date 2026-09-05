@@ -110,7 +110,7 @@ hook publishes the authoritative OCI path rows before application release.
 The current bounded physical result uses stock Kubernetes and Open Container
 Initiative (OCI) runtime extension points. It passed with Kubernetes
 v1.35.5+k3s1 and containerd v2.2.3-k3s1. Its evidence is
-`/tmp/mithril-held-oci-route-kubernetes-20260905-b`. The harness removed its
+`/tmp/mithril-held-oci-route-kubernetes-20260905-c`. The harness removed its
 owned VMs and scenario resources. The historical complete result is
 `target/mithril-generation-migration-kubernetes-20260902-d`. That result does
 not qualify the current source.
@@ -121,7 +121,7 @@ not qualify the current source.
 | New eligible node | **Pass** | The run observed initial quarantine, ready projection, same-name UID replacement, and host epoch advance. |
 | Two eligible nodes | **Pass** | The scheduler selected `ubuntu-d6fecdb3`. The fixture compared the complete typed target with live Node and Pod facts. |
 | Focused protected start | **Pass** | Kubernetes v1.35.5+k3s1 and containerd 2.2.3-k3s1 enforced held-OCI path deferral, activated the `/bin/sh` application entry, allowed later BusyBox applet execs through the admitted lineage, enforced the explicit file Deny, and denied a direct CRI external entry. This result does not prove the approved additional or administrative entries. |
-| Held OCI path publication | **Pass** | The lightweight case ran production background reconciliation between `createRuntime` and `createContainer`. It preserved the exact signed entry-row keys and values and found no canonical mount route. The paired Kubernetes start succeeded through the production rollback gate and then enforced the OCI-derived path denial. |
+| Held OCI path publication | **Pass** | The production `createRuntime` path does not call exact-binding reconciliation. The lightweight case then ran production background reconciliation before `createContainer`. It preserved the exact signed entry-row keys and values and found no canonical mount route. The paired Kubernetes start enforced the OCI-derived path denial. |
 | Independent entry roles | **Partial** | The prior direct-runc VM and Kubernetes procedures proved five independent additional-entry roles, repeated PostStart, PreStop, all three exec-probe kinds, role isolation, and unmatched external denial. The expanded direct-runc fixture reaches an execution approval slot created by the administrative workflow, then the target exec remains restricted. It does not prove approved administrative exec. |
 | Independent manual case | **Pass** | The case selected `ubuntu-5775b0d0`, proved exact target and prepared-container activation, failed closed when runtime admission was unavailable, replaced the container lifetime and runtime binding, refused stale-root replay, and created a fresh root activation. Its trap removed the namespace and both RuntimeClasses. |
 | Runtime and policy lifecycle | **Pass at recorded source** | The historical complete run proved task replacement, exception target retirement, desired-inventory cleanup, restart, no-root inspection, and fresh-root activation. |
@@ -150,26 +150,26 @@ the physical acceptance owner.
 The current lightweight command passed:
 
 ```text
-rtk bash crates/mithril-e2e/harness/vm/run.sh --with-k3s --entry-role-runtime-only --output-directory /tmp/mithril-held-oci-route-lightweight-20260905-c
+rtk bash crates/mithril-e2e/harness/vm/run.sh --with-k3s --entry-role-runtime-only --output-directory /tmp/mithril-held-oci-route-lightweight-20260905-d
 ```
 
 The result is
-`/tmp/mithril-held-oci-route-lightweight-20260905-c/runc-entry-role-runtime-probe.json`.
+`/tmp/mithril-held-oci-route-lightweight-20260905-d/runc-entry-role-runtime-probe.json`.
 Its SHA-256 is
-`6ae0de7b75ca8b1c1b9c6b3481d1075e9eae67bcb407e30e543e8a7e9f8aecf9`.
+`9a5f229c4ef5629dceee3baa67c602485f145c822fa72158a6fad41d05b70208`.
 It records held-OCI path deferral, unchanged signed entry rows, OCI path
 publication, path-tree denial, cache repair, and owned-resource cleanup.
 
 The paired current Kubernetes command passed after the lightweight command:
 
 ```text
-rtk bash crates/mithril-e2e/harness/vm/two-node-convergence.sh --protected-start-only --output-directory /tmp/mithril-held-oci-route-kubernetes-20260905-b
+rtk bash crates/mithril-e2e/harness/vm/two-node-convergence.sh --protected-start-only --output-directory /tmp/mithril-held-oci-route-kubernetes-20260905-c
 ```
 
 The result is
-`/tmp/mithril-held-oci-route-kubernetes-20260905-b/protected-start-result.json`.
+`/tmp/mithril-held-oci-route-kubernetes-20260905-c/protected-start-result.json`.
 Its SHA-256 is
-`b4e0e54bbe68c05787d9b3064117cb09ec2b70aa8fa10e47a0c563721c7b413a`.
+`7b6699a60bc73b4c50bc28caf98e6a5c384b1d9fbd297964e0feef907012a985`.
 It records held-OCI path deferral, active application admission, explicit path
 denial, external-cgroup denial, six independent entry roles, and cleanup.
 

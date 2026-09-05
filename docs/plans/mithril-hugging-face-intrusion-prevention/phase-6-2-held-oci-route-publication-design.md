@@ -29,9 +29,9 @@ reconciliation cannot make a held `PreparedContainer` path-resolved.
 
 ## Current Defect
 
-The second `createRuntime` hook publishes the held binding and calls the normal
-exact-binding reconciliation path. The periodic node reconciliation can call
-the same path before `createContainer`.
+Before this change, the second `createRuntime` hook published the held binding
+and called the normal exact-binding reconciliation path. The periodic node
+reconciliation could call the same path before `createContainer`.
 
 The current resolver uses the held task process view when that view does not
 look like the host root. A pre-entry runc view can still contain a host-prefixed
@@ -75,11 +75,8 @@ The second `createRuntime` hook prepares the container
   -> `WorkloadBindingOwner` verifies CRI `Created` state and the held task
   -> `WorkloadBindingOwner` publishes the binding as `PreparedContainer`
   -> `NativeSecurityStateOwner` publishes and reads back the BPF identity
-  -> `NodePolicyGenerationOwner` sees that the target requires an OCI entry view
-  -> `NodePolicyGenerationOwner` keeps the signed entry rules staged under the scheduled authority
-  -> routine reconciliation publishes no exact object for that binding
-  -> routine reconciliation publishes no canonical mount route for that binding
-  -> routine reconciliation does not mark that binding path-resolved
+  -> `NodeChassis` does not call the path reconciliation owner
+  -> the signed entry rules remain staged under the scheduled authority
   -> the signed policy generation and the prepared binding stay active
   -> runc can continue to the `createContainer` hook
 
@@ -121,6 +118,7 @@ The OCI request fails, expires, or differs from the held binding
 
 | Owner and file | Required change |
 | --- | --- |
+| `NodeChassis` in `crates/mithril-node/src/node.rs` | Remove the direct exact-binding reconciliation call from `createRuntime`. |
 | `WorkloadBindingOwner` in `crates/mithril-node/src/identity/binding.rs` | Report when an exact-object target is a held `PreparedContainer` that requires an OCI entry view. |
 | `NodePolicyGenerationOwner` in `crates/mithril-node/src/policy.rs` | Skip process-view exact objects and mount routes for that target. Do not retain old path rows for a target that still waits for its OCI view. Continue to accept the matching explicit OCI view. |
 | Direct-runc qualification in `crates/mithril-e2e/src/effect/runc.rs` | Run routine reconciliation before the OCI reconciliation. Require zero binding path rows before the OCI view, complete rows after the OCI view, stable later reconciliation, and the normal path denial. |
@@ -155,32 +153,31 @@ Phase 6.2 closure matrix.
 
 ## Result
 
-Done for this design. The held binding now rejects its process path view during
-`createRuntime`. The node also verifies that no measured exact object or
-canonical mount route exists before it returns allow. The signed entry rows
-keep their existing staged keys and values.
+Done for this design. The `createRuntime` path no longer calls exact-binding
+reconciliation. A periodic reconciliation rejects the held binding's process
+path view. The signed entry rows keep their existing staged keys and values.
 
 The complete lightweight command passed:
 
 ```text
-rtk bash crates/mithril-e2e/harness/vm/run.sh --with-k3s --entry-role-runtime-only --output-directory /tmp/mithril-held-oci-route-lightweight-20260905-c
+rtk bash crates/mithril-e2e/harness/vm/run.sh --with-k3s --entry-role-runtime-only --output-directory /tmp/mithril-held-oci-route-lightweight-20260905-d
 ```
 
 The result is
-`/tmp/mithril-held-oci-route-lightweight-20260905-c/runc-entry-role-runtime-probe.json`.
+`/tmp/mithril-held-oci-route-lightweight-20260905-d/runc-entry-role-runtime-probe.json`.
 Its SHA-256 is
-`6ae0de7b75ca8b1c1b9c6b3481d1075e9eae67bcb407e30e543e8a7e9f8aecf9`.
+`9a5f229c4ef5629dceee3baa67c602485f145c822fa72158a6fad41d05b70208`.
 
 The paired Kubernetes command passed after the lightweight command:
 
 ```text
-rtk bash crates/mithril-e2e/harness/vm/two-node-convergence.sh --protected-start-only --output-directory /tmp/mithril-held-oci-route-kubernetes-20260905-b
+rtk bash crates/mithril-e2e/harness/vm/two-node-convergence.sh --protected-start-only --output-directory /tmp/mithril-held-oci-route-kubernetes-20260905-c
 ```
 
 The result is
-`/tmp/mithril-held-oci-route-kubernetes-20260905-b/protected-start-result.json`.
+`/tmp/mithril-held-oci-route-kubernetes-20260905-c/protected-start-result.json`.
 Its SHA-256 is
-`b4e0e54bbe68c05787d9b3064117cb09ec2b70aa8fa10e47a0c563721c7b413a`.
+`7b6699a60bc73b4c50bc28caf98e6a5c384b1d9fbd297964e0feef907012a985`.
 
 The repository Rust gate passed after the final Rust edit. Explicit cache-row
 garbage collection and the complete two-node stress result remain open.

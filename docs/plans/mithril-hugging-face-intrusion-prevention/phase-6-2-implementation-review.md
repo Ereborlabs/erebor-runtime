@@ -58,9 +58,9 @@ selector continues to use the separate exact-object policy path.
 [`PolicyDesiredStateOwner`](../../../crates/mithril-control/src/policy/reconciliation.rs) Control creates a signed candidate only for a policy change
   -> [`NodePolicyGenerationOwner::install`](../../../crates/mithril-node/src/policy.rs) the node stages, verifies, and publishes the immutable signed generation
   -> [`WorkloadBindingOwner`](../../../crates/mithril-node/src/identity/binding.rs) the node binds the authenticated container to that generation and publishes its stable ordinary entry rows
+  -> [`NodeChassis::prepare_runtime_start`](../../../crates/mithril-node/src/node.rs) `createRuntime` returns without calling the path reconciliation owner
   -> [`WorkloadBindingOwner::exact_object_binding_targets`](../../../crates/mithril-node/src/identity/binding.rs) the node forbids a process path view while the held binding is `PreparedContainer`
   -> [`NodePolicyGenerationOwner::reconcile_cri_exact_bindings`](../../../crates/mithril-node/src/policy.rs) background reconciliation publishes no process-derived path authority for that binding
-  -> [`NodePolicyGenerationOwner::require_held_oci_path_authority_deferred`](../../../crates/mithril-node/src/policy.rs) `createRuntime` verifies that the held binding has no measured exact object or canonical mount route
   -> [`NodePolicyGenerationOwner::reconcile_cri_exact_bindings_for_oci_entries`](../../../crates/mithril-node/src/policy.rs) held admission supplies the authoritative OCI entry view
   -> [`NodePolicyGenerationOwner::reconcile_cri_exact_bindings_inner`](../../../crates/mithril-node/src/policy.rs) the node publishes the first measured exact objects and canonical mount routes for that binding
   -> [`NodePolicyGenerationOwner::reconcile_cri_exact_bindings`](../../../crates/mithril-node/src/policy.rs) later background reconciliation retains the authoritative routes and stable ordinary entry rows
@@ -254,7 +254,7 @@ sequenceDiagram
     Runtime->>Node: createRuntime held initial PID and OCI state
     Node->>Node: Verify CRI and signed target identity
     Node->>Kernel: Publish exact binding and staged entry rules
-    Node->>Node: Verify no measured path authority
+    Node->>Node: Skip createRuntime path reconciliation
     Node-->>Runtime: Allow the next OCI hook
     Runtime->>Node: createContainer OCI root handle
     Node->>Kernel: Publish OCI exact objects and source routes
@@ -440,10 +440,12 @@ host-side volume paths.
   -> [`prepare_runtime_start`](../../../crates/mithril-node/src/node.rs) the node verifies the scheduled Pod binding and active signed policy
   -> [`publish_held_activated_root`](../../../crates/mithril-node/src/identity/binding.rs) the node publishes `PreparedContainer` for the exact binding and held host TGID
   -> [`install_late_activation_target`](../../../crates/mithril-node/src/identity/binding.rs) the node reads back the binding and active generation
-  -> [`WorkloadBindingOwner::exact_object_binding_targets`](../../../crates/mithril-node/src/identity/binding.rs) the prepared binding forbids its process path view
-  -> [`NodePolicyGenerationOwner::reconcile_cri_exact_bindings`](../../../crates/mithril-node/src/policy.rs) routine reconciliation keeps the signed entry rows and publishes no measured path rows
-  -> [`NodePolicyGenerationOwner::require_held_oci_path_authority_deferred`](../../../crates/mithril-node/src/policy.rs) the node reads back the deferred path-authority state
+  -> [`prepare_runtime_start`](../../../crates/mithril-node/src/node.rs) the node does not call exact-binding reconciliation
   -> [`RuntimeAdmissionEnvelope::deliver`](../../../crates/mithril-node/src/runtime_admission.rs) the hook returns allow for runc to continue to `createContainer`
+
+[`NodeChassis::reconcile`](../../../crates/mithril-node/src/node.rs) Periodic reconciliation runs before `createContainer`
+  -> [`WorkloadBindingOwner::exact_object_binding_targets`](../../../crates/mithril-node/src/identity/binding.rs) the prepared binding forbids its process path view
+  -> [`NodePolicyGenerationOwner::reconcile_cri_exact_bindings`](../../../crates/mithril-node/src/policy.rs) reconciliation keeps the signed entry rows and publishes no measured path rows
 
 [`NodeChassis::answer_runtime_entry_preparation`](../../../crates/mithril-node/src/node.rs) The matching `createContainer` hook supplies the OCI bundle and root handle
   -> [`WorkloadBindingOwner::verify_runtime_entry_preparation`](../../../crates/mithril-node/src/identity/binding.rs) the node verifies the held binding and initial task
@@ -823,7 +825,7 @@ and coverage messages remain the Phase 6 types.
 | Another process or exec transition holds the process guard | BPF denies the current effect; that process can retry migration at a later protected effect |
 | First `createRuntime` facts exceed stage bounds | The node records no stage and publishes no kernel state |
 | Early valid second `createRuntime` request | The socket holds the request while the exact candidate converges, within the configured deadline |
-| Routine reconciliation sees a held `PreparedContainer` before `createContainer` | The node keeps the signed entry rows and skips the process path view. The second `createRuntime` hook rolls back the binding if measured path authority is present |
+| Routine reconciliation sees a held `PreparedContainer` before `createContainer` | The node keeps the signed entry rows and skips the process path view |
 | Missing, expired, or changed first stage | The second hook rejects before CRI inspection or kernel publication |
 | Missing candidate, silent node owner, or second socket owner | The bounded socket or OCI deadline returns denial; the runtime does not receive an allow result |
 | Node admission is unavailable during an exact Control or Node recovery | The retained gate permits only a manifest-bound command and security-sensitive OCI shape; it does not check an executable digest |
@@ -1028,11 +1030,10 @@ invalidate the bounded cache result.
 
 The route-replacement correction still permitted a preliminary process route
 before `createContainer`. The held-OCI correction removes that publication.
+`NodeChassis` no longer calls path reconciliation from `createRuntime`.
 `WorkloadBindingOwner` marks the process path view as unavailable while the
 binding state is `PreparedContainer`. Routine policy reconciliation skips that
-view. The second `createRuntime` hook reads back that the binding has no
-measured exact object and no canonical mount route. A failed readback rolls
-back the binding.
+view.
 
 This correction does not remove the signed entry rows. The direct-runc oracle
 requires the same seven entry-rule keys and values before and after routine
@@ -1043,13 +1044,13 @@ the path rows.
 The complete K3s-runc lightweight command passed:
 
 ```text
-rtk bash crates/mithril-e2e/harness/vm/run.sh --with-k3s --entry-role-runtime-only --output-directory /tmp/mithril-held-oci-route-lightweight-20260905-c
+rtk bash crates/mithril-e2e/harness/vm/run.sh --with-k3s --entry-role-runtime-only --output-directory /tmp/mithril-held-oci-route-lightweight-20260905-d
 ```
 
 The result is
-`/tmp/mithril-held-oci-route-lightweight-20260905-c/runc-entry-role-runtime-probe.json`.
+`/tmp/mithril-held-oci-route-lightweight-20260905-d/runc-entry-role-runtime-probe.json`.
 Its SHA-256 is
-`6ae0de7b75ca8b1c1b9c6b3481d1075e9eae67bcb407e30e543e8a7e9f8aecf9`.
+`9a5f229c4ef5629dceee3baa67c602485f145c822fa72158a6fad41d05b70208`.
 The result records route deferral, OCI path publication, stable later
 reconciliation, Kubernetes-subpath denial, container-bind denial, stale-cache
 repair, and owned-resource cleanup.
@@ -1058,13 +1059,13 @@ The paired Kubernetes protected-start command passed after the lightweight
 command:
 
 ```text
-rtk bash crates/mithril-e2e/harness/vm/two-node-convergence.sh --protected-start-only --output-directory /tmp/mithril-held-oci-route-kubernetes-20260905-b
+rtk bash crates/mithril-e2e/harness/vm/two-node-convergence.sh --protected-start-only --output-directory /tmp/mithril-held-oci-route-kubernetes-20260905-c
 ```
 
 The result is
-`/tmp/mithril-held-oci-route-kubernetes-20260905-b/protected-start-result.json`.
+`/tmp/mithril-held-oci-route-kubernetes-20260905-c/protected-start-result.json`.
 Its SHA-256 is
-`b4e0e54bbe68c05787d9b3064117cb09ec2b70aa8fa10e47a0c563721c7b413a`.
+`7b6699a60bc73b4c50bc28caf98e6a5c384b1d9fbd297964e0feef907012a985`.
 The result records the deferral invariant, active admission, six independent
 entry roles, explicit matching denial, external-cgroup denial, and resource
 cleanup.
