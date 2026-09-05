@@ -2045,6 +2045,7 @@ fn install_global_mount_barrier(
         }
     }
     for map in [
+        "canonical_mount_cache_generation",
         "mount_global_activity_sequence",
         "mount_global_ambiguous_epoch",
     ] {
@@ -2064,6 +2065,7 @@ fn install_global_mount_barrier(
         epoch != 0
             && clean <= epoch
             && pending == 0
+            && mount_epoch_from(host, "canonical_mount_cache_generation", &key)? != 0
             && mount_epoch_from(host, "mount_global_activity_sequence", &key)? != 0
             && mount_epoch_from(host, "mount_global_ambiguous_epoch", &key)? != 0,
         IdentityStateSnafu {
@@ -3254,6 +3256,7 @@ fn preflight_policy_map_capacity(
 ) -> Result<()> {
     let mut planned = BTreeMap::<&'static str, BTreeSet<Vec<u8>>>::new();
     for map in [
+        "canonical_mount_cache_generation",
         "mount_global_activity_sequence",
         "mount_global_ambiguous_epoch",
         "mount_global_mutation_epoch",

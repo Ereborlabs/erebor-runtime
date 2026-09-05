@@ -134,7 +134,7 @@ _Static_assert(sizeof(canonical_mount_root_v1) == 88,
                "canonical mount root ABI size");
 _Static_assert(sizeof(mount_security_view_state_v1) == 40,
                "mount view ABI size");
-_Static_assert(sizeof(mount_mutation_attempt_v1) == 8,
+_Static_assert(sizeof(mount_mutation_attempt_v1) == 32,
                "mount mutation attempt ABI size");
 
 #include "identity_task_helpers.h"

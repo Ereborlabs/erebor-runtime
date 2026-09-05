@@ -1728,9 +1728,12 @@ typedef struct network_socket_state_v1 {
 } network_socket_state_v1;
 
 typedef struct mount_mutation_attempt_v1 {
+  uint64_t mount_namespace_address;
+  uint64_t namespace_event;
+  uint32_t namespace_mount_count;
   uint32_t mount_namespace_inode;
   uint8_t active;
-  uint8_t reserved[3];
+  uint8_t reserved[7];
 } mount_mutation_attempt_v1;
 
 typedef struct mount_reconciliation_proposal_v1 {

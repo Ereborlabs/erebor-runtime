@@ -26,6 +26,14 @@ struct cgroup___new {
     struct cgroup *ancestors[];
 } __attribute__((preserve_access_index));
 
+struct mnt_namespace___nr_mounts {
+    unsigned int nr_mounts;
+} __attribute__((preserve_access_index));
+
+struct mnt_namespace___mounts {
+    unsigned int mounts;
+} __attribute__((preserve_access_index));
+
 struct mount_security_view_lock_v1 {
     struct bpf_spin_lock lock;
 };
@@ -70,7 +78,7 @@ struct canonical_mount_cache_key_v1 {
     __u64 mount_namespace_address;
     __u64 namespace_root_mount_id_unique;
     __u64 security_view_epoch;
-    __u64 reserved;
+    __u64 cache_generation;
     __u64 walk_root_mount_address;
     __u64 walk_root_dentry_address;
     __u64 root_dentry_address;
@@ -87,7 +95,7 @@ struct canonical_mount_cache_state_key_v1 {
     __u64 mount_namespace_address;
     __u64 namespace_root_mount_id_unique;
     __u64 security_view_epoch;
-    __u64 reserved;
+    __u64 cache_generation;
     __u64 walk_root_mount_address;
     __u64 walk_root_dentry_address;
 };
@@ -117,6 +125,7 @@ struct canonical_mount_cache_build_state_v1 {
     __u64 namespace_root_mount_id_unique;
     __u64 namespace_event;
     __u64 security_view_epoch;
+    __u64 cache_generation;
     __u64 walk_root_mount_address;
     __u64 walk_root_dentry_address;
     __u64 candidate_mount_address;
@@ -144,6 +153,7 @@ struct canonical_mount_path_walk_state_v1 {
     __u64 selected_mount_id_unique;
     __u64 namespace_event;
     __u64 topology_generation;
+    __u64 cache_generation;
     __u64 namespace_root_mount_id_unique;
     __u64 first_selected_mount_id_unique;
     __u32 component_count;
@@ -232,6 +242,7 @@ struct identity_scratch_v1 {
     __u64 path_tree_deny_operation_mask;
     __u64 mount_topology_generation;
     __u64 mount_transition_version;
+    __u32 mount_cache_generation_key;
     struct canonical_mount_cache_key_v1 mount_cache_key;
     struct canonical_mount_cache_value_v1 mount_cache_value;
     struct canonical_mount_cache_state_key_v1 mount_cache_state_key;
@@ -724,6 +735,13 @@ struct {
     __type(key, __u32);
     __type(value, __u64);
 } mount_global_ambiguous_epoch SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} canonical_mount_cache_generation SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);

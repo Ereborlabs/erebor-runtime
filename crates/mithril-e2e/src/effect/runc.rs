@@ -41,10 +41,10 @@ use snafu::{ensure, OptionExt as _, ResultExt as _};
 use zerocopy::{IntoBytes as _, TryFromBytes as _};
 
 use super::support::{
-    effect_binding_with_identity, effect_node_config, global_mount_activity_sequence,
-    global_mount_mutation_epoch, global_mount_view_is_dirty,
-    ready_canonical_mount_snapshots_at_epoch, wait_for_application_default_effect, wait_for_reason,
-    ExternalMountNamespace,
+    canonical_mount_cache_generation, effect_binding_with_identity, effect_node_config,
+    global_mount_activity_sequence, global_mount_mutation_epoch, global_mount_view_is_dirty,
+    ready_canonical_mount_snapshots_at_generation, wait_for_application_default_effect,
+    wait_for_reason, ExternalMountNamespace,
 };
 use super::{
     sign_generation_artifact, EffectTestRunner, NEXT_PROFILE_GENERATION_REF_ID,
@@ -88,6 +88,7 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub recursive_wildcard_path_tree_denied: bool,
     pub concurrent_exec_detached_mounts_preserved_view: bool,
     pub recursive_wildcard_stable_after_concurrent_exec: bool,
+    pub stale_mount_cache_rebuilt: bool,
     pub other_role_path_tree_allowed: bool,
     pub path_tree_control_allowed: bool,
     pub application_admitted_entry_rule_id: u32,
@@ -2810,10 +2811,13 @@ impl EffectTestRunner {
             }
         );
         let mount_epoch_before_entry_release = global_mount_mutation_epoch(&host)?;
+        let cache_generation_before_entry_release = canonical_mount_cache_generation(&host)?;
         let mount_activity_before_entry_release = global_mount_activity_sequence(&host)?;
         let mount_view_dirty_before_entry_release = global_mount_view_is_dirty(&host)?;
-        let topology_before_entry_release =
-            ready_canonical_mount_snapshots_at_epoch(&host, mount_epoch_before_entry_release)?;
+        let topology_before_entry_release = ready_canonical_mount_snapshots_at_generation(
+            &host,
+            cache_generation_before_entry_release,
+        )?;
         let runtime_topology_uninitialized_at_create_container =
             mount_view_dirty_before_entry_release && topology_before_entry_release.is_empty();
         ensure!(
@@ -2869,22 +2873,47 @@ impl EffectTestRunner {
             path: &request_directory,
         })?;
         let container_root_ready = role_directory.join("container-root-ready");
-        wait_for_path(
+        if let Err(error) = wait_for_path(
             &container_root_ready,
             true,
             "the live container-root readiness marker",
-        )?;
+        ) {
+            reader
+                .poll(Duration::from_millis(25))
+                .context(InterceptorSnafu)?;
+            let diagnostic_epoch = global_mount_mutation_epoch(&host)?;
+            let diagnostic_cache_generation = canonical_mount_cache_generation(&host)?;
+            let diagnostic_activity = global_mount_activity_sequence(&host)?;
+            let diagnostic_dirty = global_mount_view_is_dirty(&host)?;
+            let diagnostic_ready =
+                ready_canonical_mount_snapshots_at_generation(&host, diagnostic_cache_generation)?;
+            let diagnostic_cache_states = canonical_mount_cache_state_summary(&host)?;
+            let diagnostic_mount_count =
+                fs::read_to_string(format!("/proc/{initial_pid}/mountinfo"))
+                    .ok()
+                    .map(|mountinfo| mountinfo.lines().count());
+            return InvalidInputSnafu {
+                path: &container_root_ready,
+                reason: format!(
+                    "{error}; epoch={mount_epoch_before_entry_release}->{diagnostic_epoch}; cache_generation={cache_generation_before_entry_release}->{diagnostic_cache_generation}; activity={mount_activity_before_entry_release}->{diagnostic_activity}; dirty={diagnostic_dirty}; mount_count={diagnostic_mount_count:?}; ready={diagnostic_ready:?}; cache_states={diagnostic_cache_states:?}; effects={:?}",
+                    recent_effect_summary(&observations, marker),
+                ),
+            }
+            .fail();
+        }
         let mount_epoch_at_initial_exec = global_mount_mutation_epoch(&host)?;
+        let cache_generation_at_initial_exec = canonical_mount_cache_generation(&host)?;
         let mount_activity_at_initial_exec = global_mount_activity_sequence(&host)?;
         let runc_post_create_mount_mutation_observed = mount_epoch_at_initial_exec
             > mount_epoch_before_entry_release
+            && cache_generation_at_initial_exec > cache_generation_before_entry_release
             && mount_activity_at_initial_exec > mount_activity_before_entry_release;
         ensure!(
             runc_post_create_mount_mutation_observed,
             InvalidInputSnafu {
                 path: pin_root,
                 reason: format!(
-                    "runc post-create mount work did not advance runtime topology: epoch={mount_epoch_before_entry_release}->{mount_epoch_at_initial_exec}, activity={mount_activity_before_entry_release}->{mount_activity_at_initial_exec}",
+                    "runc post-create mount work did not advance runtime topology: epoch={mount_epoch_before_entry_release}->{mount_epoch_at_initial_exec}, cache_generation={cache_generation_before_entry_release}->{cache_generation_at_initial_exec}, activity={mount_activity_before_entry_release}->{mount_activity_at_initial_exec}",
                 ),
             }
         );
@@ -2913,7 +2942,7 @@ impl EffectTestRunner {
             }
         );
         let topology_after_initial_exec =
-            ready_canonical_mount_snapshots_at_epoch(&host, mount_epoch_at_initial_exec)?;
+            ready_canonical_mount_snapshots_at_generation(&host, cache_generation_at_initial_exec)?;
         let bpf_runtime_topology_initialized = topology_after_initial_exec
             .difference(&topology_before_entry_release)
             .next()
@@ -2923,7 +2952,7 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: Path::new("canonical_mount_cache_states"),
                 reason: format!(
-                    "PID1 did not publish an epoch-qualified BPF topology: before={topology_before_entry_release:?}, after={topology_after_initial_exec:?}",
+                    "PID1 did not publish a cache-generation-qualified BPF topology: before={topology_before_entry_release:?}, after={topology_after_initial_exec:?}",
                 ),
             }
         );
@@ -3067,11 +3096,24 @@ impl EffectTestRunner {
             path: &role_directory,
         })?;
         let path_tree_control_result = role_directory.join("path-tree-control.result");
-        wait_for_path(
+        if let Err(error) = wait_for_path(
             &path_tree_control_result,
             true,
             "the application control result after the mount change",
-        )?;
+        ) {
+            reader
+                .poll(Duration::from_millis(25))
+                .context(InterceptorSnafu)?;
+            return InvalidInputSnafu {
+                path: &path_tree_control_result,
+                reason: format!(
+                    "{error}; cache_states={:?}; effects={:?}",
+                    canonical_mount_cache_state_summary(&host)?,
+                    recent_effect_summary(&observations, marker),
+                ),
+            }
+            .fail();
+        }
         let path_tree_control = fs::read_to_string(&path_tree_control_result).context(IoSnafu {
             path: &path_tree_control_result,
         })?;
@@ -3485,8 +3527,10 @@ impl EffectTestRunner {
             && mount_activity_after_concurrent_exec > concurrent_recursive_mount_activity
             && mount_topology_after_concurrent_exec.mount_namespace_inode
                 == concurrent_recursive_mount_topology.mount_namespace_inode
-            && mount_topology_after_concurrent_exec.topology_generation
-                == concurrent_recursive_mount_topology.topology_generation
+            && mount_topology_after_concurrent_exec.security_view_epoch
+                == concurrent_recursive_mount_topology.security_view_epoch
+            && mount_topology_after_concurrent_exec.cache_generation
+                == concurrent_recursive_mount_topology.cache_generation
             && mount_topology_after_concurrent_exec.mountinfo_sha256
                 == concurrent_recursive_mount_topology.mountinfo_sha256
             && mount_topology_after_concurrent_exec.ready_snapshot_keys
@@ -3501,6 +3545,10 @@ impl EffectTestRunner {
                 ),
             }
         );
+        make_canonical_mount_cache_stale_for_test(
+            &host,
+            &mount_topology_after_concurrent_exec.ready_snapshot_keys,
+        )?;
         let stable_recursive_marker = observations.cursor();
         fs::write(
             role_directory.join("stable-recursive-start.fifo"),
@@ -3518,6 +3566,8 @@ impl EffectTestRunner {
         reader
             .poll(Duration::from_millis(100))
             .context(InterceptorSnafu)?;
+        let rebuilt_mount_topology = mount_topology_snapshot(&host, initial_pid)?;
+        let stable_effects = observations.recent_since(stable_recursive_marker);
         let recursive_wildcard_stable_after_concurrent_exec =
             fs::read_to_string(&stable_recursive_result)
                 .context(IoSnafu {
@@ -3525,18 +3575,17 @@ impl EffectTestRunner {
                 })?
                 .trim()
                 == "PATH_TREE_DENIED"
-                && observations
-                    .recent_since(stable_recursive_marker)
+                && stable_effects.iter().any(|event| {
+                    event.reason == "PATH_TREE_POLICY_DENY"
+                        && event.effect_family == u32::from(KernelEffectFamilyV1::File as u16)
+                        && event.operation == u32::from(KernelEffectOperationV1::OpenRead as u16)
+                        && event.active_role_id == active.active_role_id
+                        && event.admitted_entry_rule_id == active.admitted_entry_rule_id
+                        && event.kernel_result == -13
+                })
+                && stable_effects
                     .iter()
-                    .any(|event| {
-                        event.reason == "PATH_TREE_POLICY_DENY"
-                            && event.effect_family == u32::from(KernelEffectFamilyV1::File as u16)
-                            && event.operation
-                                == u32::from(KernelEffectOperationV1::OpenRead as u16)
-                            && event.active_role_id == active.active_role_id
-                            && event.admitted_entry_rule_id == active.admitted_entry_rule_id
-                            && event.kernel_result == -13
-                    });
+                    .all(|event| event.reason != "UNRESOLVED_OBJECT");
         ensure!(
             recursive_wildcard_stable_after_concurrent_exec,
             InvalidInputSnafu {
@@ -3544,6 +3593,25 @@ impl EffectTestRunner {
                 reason: format!(
                     "the recursive-wildcard read did not return to its path-policy denial after containerd exec preparation: effects={:?}",
                     recent_effect_summary(&observations, stable_recursive_marker),
+                ),
+            }
+        );
+        let stale_mount_cache_rebuilt = rebuilt_mount_topology.security_view_epoch
+            == mount_topology_after_concurrent_exec.security_view_epoch
+            && rebuilt_mount_topology.cache_generation
+                > mount_topology_after_concurrent_exec.cache_generation
+            && rebuilt_mount_topology.mount_namespace_inode
+                == mount_topology_after_concurrent_exec.mount_namespace_inode
+            && rebuilt_mount_topology.mountinfo_sha256
+                == mount_topology_after_concurrent_exec.mountinfo_sha256
+            && rebuilt_mount_topology.ready_snapshot_keys
+                != mount_topology_after_concurrent_exec.ready_snapshot_keys;
+        ensure!(
+            stale_mount_cache_rebuilt,
+            InvalidInputSnafu {
+                path: Path::new("canonical_mount_cache_states"),
+                reason: format!(
+                    "BPF did not replace the stale cache generation from the unchanged live topology: before={mount_topology_after_concurrent_exec:?}, after={rebuilt_mount_topology:?}"
                 ),
             }
         );
@@ -4894,6 +4962,18 @@ impl EffectTestRunner {
         );
 
         let cgroup_entry_marker = observations.cursor();
+        let live_initial_cgroup = fs::read_to_string(format!("/proc/{initial_pid}/cgroup"))
+            .unwrap_or_else(|error| format!("unavailable: {error}"));
+        ensure!(
+            cgroup_path.exists(),
+            InvalidInputSnafu {
+                path: &cgroup_path,
+                reason: format!(
+                    "the protected cgroup disappeared before the external-entry check: initial_pid={initial_pid}, live_cgroup={:?}",
+                    live_initial_cgroup.trim(),
+                ),
+            }
+        );
         let cgroup_entry_stderr = output_directory.join("cgroup-entry.stderr");
         let mut cgroup_entry = Command::new("/bin/sh")
             .args(["-c", "/bin/sleep 1; exec /bin/true"])
@@ -5112,7 +5192,7 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 33,
+            schema_version: 34,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
@@ -5139,6 +5219,7 @@ impl EffectTestRunner {
             recursive_wildcard_path_tree_denied: true,
             concurrent_exec_detached_mounts_preserved_view,
             recursive_wildcard_stable_after_concurrent_exec,
+            stale_mount_cache_rebuilt,
             other_role_path_tree_allowed,
             path_tree_control_allowed: true,
             application_admitted_entry_rule_id: active.admitted_entry_rule_id,
@@ -5560,10 +5641,90 @@ fn recent_effect_summary(observations: &EffectObservationStore, marker: u64) -> 
         .collect()
 }
 
+fn canonical_mount_cache_state_summary(host: &KernelHost) -> Result<Vec<String>> {
+    host.map_keys("canonical_mount_cache_states")
+        .context(InterceptorSnafu)?
+        .into_iter()
+        .map(|key| {
+            let value = host
+                .lookup_map("canonical_mount_cache_states", &key)
+                .context(InterceptorSnafu)?
+                .ok_or_else(|| {
+                    InvalidInputSnafu {
+                        path: Path::new("canonical_mount_cache_states"),
+                        reason: "a diagnostic cache state disappeared during readback",
+                    }
+                    .build()
+                })?;
+            let epoch = key
+                .get(16..24)
+                .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+                .map(u64::from_ne_bytes);
+            let generation = key
+                .get(24..32)
+                .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+                .map(u64::from_ne_bytes);
+            let count = value
+                .get(..4)
+                .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+                .map(u32::from_ne_bytes);
+            let state = value
+                .get(4..8)
+                .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+                .map(u32::from_ne_bytes);
+            Ok(format!(
+                "generation={generation:?} epoch={epoch:?} count={count:?} state={state:?}"
+            ))
+        })
+        .collect()
+}
+
+fn make_canonical_mount_cache_stale_for_test(
+    host: &KernelHost,
+    keys: &BTreeSet<Vec<u8>>,
+) -> Result<()> {
+    ensure!(
+        !keys.is_empty(),
+        InvalidInputSnafu {
+            path: Path::new("canonical_mount_cache_states"),
+            reason: "the stale-cache test has no ready cache state",
+        }
+    );
+    for key in keys {
+        let mut value = host
+            .lookup_map("canonical_mount_cache_states", key)
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: Path::new("canonical_mount_cache_states"),
+                    reason: "a ready cache state disappeared before the stale-cache test",
+                }
+                .build()
+            })?;
+        let count = value
+            .get(..4)
+            .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+            .map(u32::from_ne_bytes)
+            .filter(|count| *count > 1)
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: Path::new("canonical_mount_cache_states"),
+                    reason: "a ready cache state has no valid mount count",
+                }
+                .build()
+            })?;
+        value[..4].copy_from_slice(&(count - 1).to_ne_bytes());
+        host.update_map("canonical_mount_cache_states", key, &value)
+            .context(InterceptorSnafu)?;
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct MountTopologySnapshotV1 {
     mount_namespace_inode: u32,
-    topology_generation: u64,
+    security_view_epoch: u64,
+    cache_generation: u64,
     ready_snapshot_keys: BTreeSet<Vec<u8>>,
     mountinfo_sha256: String,
 }
@@ -5609,14 +5770,16 @@ fn mount_topology_snapshot(host: &KernelHost, host_pid: u32) -> Result<MountTopo
             ),
         }
     );
-    let topology_generation = global_mount_mutation_epoch(host)?;
-    let ready_snapshot_keys = ready_canonical_mount_snapshots_at_epoch(host, topology_generation)?;
+    let security_view_epoch = global_mount_mutation_epoch(host)?;
+    let cache_generation = canonical_mount_cache_generation(host)?;
+    let ready_snapshot_keys =
+        ready_canonical_mount_snapshots_at_generation(host, cache_generation)?;
     ensure!(
         !ready_snapshot_keys.is_empty(),
         InvalidInputSnafu {
             path: Path::new("canonical_mount_cache_states"),
             reason: format!(
-                "the target mount topology has no BPF-ready snapshot at epoch {topology_generation}"
+                "the target mount topology has no BPF-ready snapshot at cache generation {cache_generation}"
             ),
         }
     );
@@ -5626,7 +5789,8 @@ fn mount_topology_snapshot(host: &KernelHost, host_pid: u32) -> Result<MountTopo
     })?;
     Ok(MountTopologySnapshotV1 {
         mount_namespace_inode,
-        topology_generation,
+        security_view_epoch,
+        cache_generation,
         ready_snapshot_keys,
         mountinfo_sha256: hex::encode(Sha256::digest(mountinfo)),
     })

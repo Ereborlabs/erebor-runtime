@@ -45,8 +45,9 @@ static __always_inline int begin_global_mount_mutation(void)
     if (!label &&
         (!mount_namespace_inode ||
          !bpf_map_lookup_elem(&mount_security_views,
-                              &mount_namespace_inode)))
+                              &mount_namespace_inode))) {
         return 0;
+    }
     global_epoch = bpf_map_lookup_elem(&mount_global_mutation_epoch,
                                        &global_key);
     global_pending = bpf_map_lookup_elem(&mount_global_pending_mutations,
@@ -62,8 +63,9 @@ static __always_inline int begin_global_mount_mutation(void)
         __sync_fetch_and_add(ambiguous, 1);
         return -EACCES;
     }
-    if (attempt->active)
+    if (attempt->active) {
         return 0;
+    }
     __builtin_memset(attempt, 0, sizeof(*attempt));
     __sync_fetch_and_add(global_pending, 1);
     __sync_fetch_and_add(global_epoch, 1);
@@ -72,9 +74,30 @@ static __always_inline int begin_global_mount_mutation(void)
     return 0;
 }
 
+static __always_inline int read_mount_namespace_count(
+    struct mnt_namespace *mount_namespace, __u32 *mount_count)
+{
+    struct mnt_namespace___nr_mounts *namespace_with_nr_mounts =
+        (void *)mount_namespace;
+    struct mnt_namespace___mounts *namespace_with_mounts =
+        (void *)mount_namespace;
+
+    if (!mount_namespace || !mount_count)
+        return -EACCES;
+    if (bpf_core_field_exists(namespace_with_nr_mounts->nr_mounts))
+        return BPF_CORE_READ_INTO(mount_count, namespace_with_nr_mounts,
+                                  nr_mounts);
+    if (bpf_core_field_exists(namespace_with_mounts->mounts))
+        return BPF_CORE_READ_INTO(mount_count, namespace_with_mounts,
+                                  mounts);
+    return -EACCES;
+}
+
 static __always_inline int begin_mount_mutation(void)
 {
     struct task_struct *task;
+    struct nsproxy *nsproxy = NULL;
+    struct mnt_namespace *mount_namespace = NULL;
     task_label_v1 *label;
     mount_mutation_attempt_v1 *attempt;
     __u32 mount_namespace_inode;
@@ -97,6 +120,15 @@ static __always_inline int begin_mount_mutation(void)
         !bpf_map_lookup_elem(&mount_mutation_epochs,
                              &mount_namespace_inode))
         return label ? -EACCES : 0;
+    if (BPF_CORE_READ_INTO(&nsproxy, task, nsproxy) || !nsproxy ||
+        BPF_CORE_READ_INTO(&mount_namespace, nsproxy, mnt_ns) ||
+        !mount_namespace ||
+        BPF_CORE_READ_INTO(&attempt->namespace_event,
+                           mount_namespace, event) ||
+        read_mount_namespace_count(
+            mount_namespace, &attempt->namespace_mount_count))
+        return label ? -EACCES : 0;
+    attempt->mount_namespace_address = (__u64)mount_namespace;
     attempt->mount_namespace_inode = mount_namespace_inode;
     return 0;
 }
@@ -106,11 +138,28 @@ static __always_inline void finish_mount_mutation(void)
     const __u32 global_key = 0;
     struct task_struct *task = bpf_get_current_task_btf();
     mount_mutation_attempt_v1 *attempt;
+    struct mnt_namespace *mount_namespace;
+    __u64 namespace_event = 0;
+    __u64 *cache_generation;
+    __u32 namespace_mount_count = 0;
     __u64 *global_pending;
 
     attempt = bpf_task_storage_get(&mount_mutation_attempts, task, 0, 0);
     if (!attempt || !attempt->active)
         return;
+    mount_namespace =
+        (struct mnt_namespace *)attempt->mount_namespace_address;
+    if (!mount_namespace ||
+        BPF_CORE_READ_INTO(&namespace_event, mount_namespace, event) ||
+        read_mount_namespace_count(mount_namespace,
+                                   &namespace_mount_count) ||
+        namespace_event != attempt->namespace_event ||
+        namespace_mount_count != attempt->namespace_mount_count) {
+        cache_generation = bpf_map_lookup_elem(
+            &canonical_mount_cache_generation, &global_key);
+        if (cache_generation)
+            __sync_fetch_and_add(cache_generation, 1);
+    }
     if (attempt->mount_namespace_inode)
         (void)bpf_map_lookup_elem(&mount_security_views,
                                   &attempt->mount_namespace_inode);
@@ -169,6 +218,60 @@ static __always_inline int global_mount_epoch_unchanged(__u64 epoch)
                                                                : -EACCES;
 }
 
+static __noinline __attribute__((unused)) __u64
+canonical_mount_cache_generation_snapshot(struct identity_scratch_v1 *scratch)
+{
+    scratch->mount_cache_generation_key = 0;
+    __u64 *current = bpf_map_lookup_elem(
+        &canonical_mount_cache_generation,
+        &scratch->mount_cache_generation_key);
+
+    if (!current)
+        return 0;
+    return __sync_fetch_and_add(current, 0);
+}
+
+static __noinline __attribute__((unused)) int
+canonical_mount_cache_generation_unchanged(
+    struct identity_scratch_v1 *scratch, __u64 generation)
+{
+    scratch->mount_cache_generation_key = 0;
+    __u64 *current = bpf_map_lookup_elem(
+        &canonical_mount_cache_generation,
+        &scratch->mount_cache_generation_key);
+
+    return current && generation &&
+                   __sync_fetch_and_add(current, 0) == generation
+               ? 0
+               : -EACCES;
+}
+
+static __noinline __attribute__((unused)) int
+advance_canonical_mount_cache_generation(
+    struct identity_scratch_v1 *scratch, __u64 expected)
+{
+    scratch->mount_cache_generation_key = 0;
+    __u64 *current = bpf_map_lookup_elem(
+        &canonical_mount_cache_generation,
+        &scratch->mount_cache_generation_key);
+
+    if (!current || !expected || expected == ~0ULL)
+        return -EACCES;
+    return __sync_val_compare_and_swap(current, expected, expected + 1) ==
+                   expected
+               ? 0
+               : -EACCES;
+}
+
+static __always_inline int mount_cache_build_failure(
+    struct identity_scratch_v1 *scratch, __u32 stage, __u64 detail,
+    __u64 cache_generation)
+{
+    (void)advance_canonical_mount_cache_generation(scratch,
+                                                   cache_generation);
+    return mount_cache_trace_failure(scratch, stage, detail);
+}
+
 static __always_inline int synchronous_mount_snapshot_unchanged(
     struct identity_scratch_v1 *scratch)
 {
@@ -182,8 +285,10 @@ static __always_inline int synchronous_mount_snapshot_unchanged(
         BPF_CORE_READ_INTO(&namespace_event, mount_namespace, event) ||
         namespace_event != walk->namespace_event)
         return -EACCES;
-    return global_mount_epoch_unchanged(
-        scratch->mount_topology_generation);
+    if (canonical_mount_cache_generation_unchanged(
+            scratch, walk->cache_generation))
+        return -EACCES;
+    return global_mount_epoch_unchanged(scratch->mount_topology_generation);
 }
 
 static __always_inline int global_mount_epoch_is_clean(__u64 epoch)
@@ -408,7 +513,7 @@ static long canonical_mount_cache_build_step(__u32 offset, void *data)
     key->namespace_root_mount_id_unique =
         build->namespace_root_mount_id_unique;
     key->security_view_epoch = build->security_view_epoch;
-    key->reserved = 0;
+    key->cache_generation = build->cache_generation;
     key->walk_root_mount_address = build->walk_root_mount_address;
     key->walk_root_dentry_address = build->walk_root_dentry_address;
     key->root_dentry_address = build->candidate_root_address;
@@ -475,14 +580,14 @@ static __always_inline int ensure_canonical_mount_cache(
             &scratch->mount_cache_state_key
                  .namespace_root_mount_id_unique))
         return mount_cache_trace_failure(scratch, 3, 0);
-    if (BPF_CORE_READ_INTO(&ready->namespace_mount_count, mount_namespace,
-                           nr_mounts))
+    if (read_mount_namespace_count(mount_namespace,
+                                   &ready->namespace_mount_count))
         return mount_cache_trace_failure(scratch, 4, 0);
     if (!ready->namespace_mount_count ||
         ready->namespace_mount_count > MAX_CANONICAL_MOUNTS_V1)
         return mount_cache_trace_failure(
             scratch, 5, ready->namespace_mount_count);
-    if (BPF_CORE_READ_INTO(&scratch->mount_cache_state_key.reserved,
+    if (BPF_CORE_READ_INTO(&scratch->mount_path_walk.namespace_event,
                            mount_namespace, event))
         return mount_cache_trace_failure(scratch, 6, 0);
     scratch->mount_cache_state_key.mount_namespace_address =
@@ -492,22 +597,34 @@ static __always_inline int ensure_canonical_mount_cache(
         (__u64)walk_root_mount;
     scratch->mount_cache_state_key.walk_root_dentry_address =
         (__u64)walk_root_dentry;
-    scratch->mount_path_walk.namespace_event =
-        scratch->mount_cache_state_key.reserved;
-    scratch->mount_cache_state_key.reserved = 0;
     scratch->mount_path_walk.namespace_root_mount_id_unique =
         scratch->mount_cache_state_key.namespace_root_mount_id_unique;
+    scratch->mount_path_walk.cache_generation =
+        canonical_mount_cache_generation_snapshot(scratch);
+    if (!scratch->mount_path_walk.cache_generation)
+        return mount_cache_trace_failure(scratch, 17, 0);
+    scratch->mount_cache_state_key.cache_generation =
+        scratch->mount_path_walk.cache_generation;
     state = bpf_map_lookup_elem(
         &canonical_mount_cache_states, &scratch->mount_cache_state_key);
     if (state && state->state == CANONICAL_MOUNT_CACHE_READY_V1 &&
-        state->namespace_mount_count) {
-        if (state->namespace_mount_count !=
-            ready->namespace_mount_count)
-            return mount_cache_trace_failure(
-                scratch, 15,
-                ((__u64)state->namespace_mount_count << 32) |
-                    ready->namespace_mount_count);
+        state->namespace_mount_count == ready->namespace_mount_count) {
+        if (canonical_mount_cache_generation_unchanged(
+                scratch, scratch->mount_path_walk.cache_generation))
+            return mount_cache_trace_failure(scratch, 19,
+                                             scratch->mount_path_walk
+                                                 .cache_generation);
         goto ready;
+    }
+    if (state) {
+        if (advance_canonical_mount_cache_generation(
+                scratch, scratch->mount_path_walk.cache_generation))
+            return mount_cache_trace_failure(scratch, 18,
+                                             scratch->mount_path_walk
+                                                 .cache_generation);
+        scratch->mount_path_walk.cache_generation++;
+        scratch->mount_cache_state_key.cache_generation =
+            scratch->mount_path_walk.cache_generation;
     }
     __builtin_memset(build, 0, sizeof(*build));
     build->mount_namespace_address = (__u64)mount_namespace;
@@ -515,6 +632,7 @@ static __always_inline int ensure_canonical_mount_cache(
         scratch->mount_path_walk.namespace_root_mount_id_unique;
     build->namespace_event = scratch->mount_path_walk.namespace_event;
     build->security_view_epoch = global_epoch;
+    build->cache_generation = scratch->mount_path_walk.cache_generation;
     build->walk_root_mount_address = (__u64)walk_root_mount;
     build->walk_root_dentry_address = (__u64)walk_root_dentry;
     if (mount_scan_push(scratch, build, walk_root_mount))
@@ -522,34 +640,57 @@ static __always_inline int ensure_canonical_mount_cache(
     steps = bpf_loop(MAX_CANONICAL_MOUNTS_V1,
                      canonical_mount_cache_build_step, &context, 0);
     if (steps != build->processed_mounts)
-        return mount_cache_trace_failure(scratch, 8, (__u64)steps);
+        return mount_cache_build_failure(
+            scratch, 8, (__u64)steps,
+            scratch->mount_path_walk.cache_generation);
     if (!build->processed_mounts ||
         build->processed_mounts > ready->namespace_mount_count)
-        return mount_cache_trace_failure(scratch, 9, build->processed_mounts);
+        return mount_cache_build_failure(
+            scratch, 9, build->processed_mounts,
+            scratch->mount_path_walk.cache_generation);
     if (build->failed || build->stack_depth)
-        return mount_cache_trace_failure(
+        return mount_cache_build_failure(
             scratch, 10,
-            ((__u64)build->failed << 32) | build->stack_depth);
-    if (BPF_CORE_READ_INTO(&ready->namespace_mount_count,
-                           mount_namespace, nr_mounts) ||
+            ((__u64)build->failed << 32) | build->stack_depth,
+            scratch->mount_path_walk.cache_generation);
+    if (read_mount_namespace_count(mount_namespace,
+                                   &ready->namespace_mount_count) ||
         !ready->namespace_mount_count ||
         build->processed_mounts > ready->namespace_mount_count)
-        return mount_cache_trace_failure(
+        return mount_cache_build_failure(
             scratch, 16,
             ((__u64)build->processed_mounts << 32) |
-                ready->namespace_mount_count);
+                ready->namespace_mount_count,
+            scratch->mount_path_walk.cache_generation);
     if (BPF_CORE_READ_INTO(&build->candidate_namespace_address,
                            mount_namespace, event))
-        return mount_cache_trace_failure(scratch, 11, 0);
+        return mount_cache_build_failure(
+            scratch, 11, 0,
+            scratch->mount_path_walk.cache_generation);
     if (build->candidate_namespace_address !=
         scratch->mount_path_walk.namespace_event)
-        return mount_cache_trace_failure(
-            scratch, 12, build->candidate_namespace_address);
+        return mount_cache_build_failure(
+            scratch, 12, build->candidate_namespace_address,
+            scratch->mount_path_walk.cache_generation);
     if (global_mount_epoch_unchanged(global_epoch))
-        return mount_cache_trace_failure(scratch, 13, global_epoch);
+        return mount_cache_build_failure(
+            scratch, 13, global_epoch,
+            scratch->mount_path_walk.cache_generation);
+    if (canonical_mount_cache_generation_unchanged(
+            scratch, scratch->mount_path_walk.cache_generation))
+        return mount_cache_build_failure(
+            scratch, 27, scratch->mount_path_walk.cache_generation,
+            scratch->mount_path_walk.cache_generation);
     ready->state = CANONICAL_MOUNT_CACHE_READY_V1;
     if (publish_canonical_mount_cache_state(scratch))
-        return mount_cache_trace_failure(scratch, 14, global_epoch);
+        return mount_cache_build_failure(
+            scratch, 14, global_epoch,
+            scratch->mount_path_walk.cache_generation);
+    if (canonical_mount_cache_generation_unchanged(
+            scratch, scratch->mount_path_walk.cache_generation))
+        return mount_cache_build_failure(
+            scratch, 28, scratch->mount_path_walk.cache_generation,
+            scratch->mount_path_walk.cache_generation);
 
 ready:
     return 0;
@@ -637,7 +778,7 @@ static __always_inline int selected_mount_for_root(
         walk->namespace_root_mount_id_unique;
     scratch->mount_cache_key.security_view_epoch =
         walk->topology_generation;
-    scratch->mount_cache_key.reserved = 0;
+    scratch->mount_cache_key.cache_generation = walk->cache_generation;
     scratch->mount_cache_key.walk_root_mount_address =
         walk->walk_root_mount_address;
     scratch->mount_cache_key.walk_root_dentry_address =

@@ -140,9 +140,12 @@ pub struct PathTreeDenyKeyV1 {
     Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
 )]
 pub struct MountMutationAttemptV1 {
+    pub mount_namespace_address: u64,
+    pub namespace_event: u64,
+    pub namespace_mount_count: u32,
     pub mount_namespace_inode: u32,
     pub active: u8,
-    pub reserved: [u8; 3],
+    pub reserved: [u8; 7],
 }
 
 #[cfg(test)]
@@ -164,7 +167,7 @@ mod tests {
         assert_eq!(size_of::<PathGraphTransitionV1>(), 8);
         assert_eq!(size_of::<PathGraphTerminalV1>(), 16);
         assert_eq!(size_of::<PathTreeDenyKeyV1>(), 16);
-        assert_eq!(size_of::<MountMutationAttemptV1>(), 8);
+        assert_eq!(size_of::<MountMutationAttemptV1>(), 32);
     }
 
     #[test]

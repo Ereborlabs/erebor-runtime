@@ -1615,17 +1615,21 @@ mount_topology_snapshot() {
   local host_pid=$2
   local mount_namespace_inode
   local mountinfo_sha256
-  local topology_generation
+  local security_view_epoch
+  local cache_generation
   local activity_sequence
   local cache_states
   local ready_snapshot_keys
 
   mount_namespace_inode=$("$provider" run "$vm" sudo stat -Lc %i \
     "/proc/$host_pid/ns/mnt")
-  topology_generation=$(mount_map_counter "$vm" mount_global_mutation_epoch)
+  security_view_epoch=$(mount_map_counter "$vm" mount_global_mutation_epoch)
+  cache_generation=$(mount_map_counter "$vm" canonical_mount_cache_generation)
   cache_states=$("$provider" run "$vm" sudo bpftool -j map dump pinned \
     /sys/fs/bpf/mithril-convergence/maps/canonical_mount_cache_states)
-  ready_snapshot_keys=$(jq -cer --argjson generation "$topology_generation" '
+  ready_snapshot_keys=$(jq -cer \
+    --argjson security_view_epoch "$security_view_epoch" \
+    --argjson cache_generation "$cache_generation" '
     def hex_byte:
       if type == "number" then .
       else ascii_downcase | ltrimstr("0x") |
@@ -1637,27 +1641,29 @@ mount_topology_snapshot() {
         (0; . + (($byte.value | hex_byte) * pow(256; $byte.key)));
     [
       .[] |
-      select((.key[16:24] | little_endian) == $generation) |
-      select((.key[24:32] | little_endian) == 0) |
+      select((.key[16:24] | little_endian) == $security_view_epoch) |
+      select((.key[24:32] | little_endian) == $cache_generation) |
       select((.value[0:4] | little_endian) > 0) |
       select((.value[4:8] | little_endian) == 1) |
       (.key | map(hex_byte))
     ] | unique | sort |
     if length > 0 then .
-    else error("the current mount epoch has no BPF-ready topology snapshot")
+    else error("the current mount cache generation has no BPF-ready topology snapshot")
     end
   ' <<<"$cache_states")
   mountinfo_sha256=$("$provider" run "$vm" sudo sha256sum \
     "/proc/$host_pid/mountinfo" | awk '{print $1}')
   activity_sequence=$(mount_map_counter "$vm" mount_global_activity_sequence)
   jq -cn --argjson mount_namespace_inode "$mount_namespace_inode" \
-    --argjson topology_generation "$topology_generation" \
+    --argjson security_view_epoch "$security_view_epoch" \
+    --argjson cache_generation "$cache_generation" \
     --argjson ready_snapshot_keys "$ready_snapshot_keys" \
     --arg mountinfo_sha256 "$mountinfo_sha256" \
     --argjson activity_sequence "$activity_sequence" '
     {
       mount_namespace_inode: $mount_namespace_inode,
-      topology_generation: $topology_generation,
+      security_view_epoch: $security_view_epoch,
+      cache_generation: $cache_generation,
       ready_snapshot_keys: $ready_snapshot_keys,
       mountinfo_sha256: $mountinfo_sha256,
       activity_sequence: $activity_sequence
@@ -1694,6 +1700,7 @@ capture_concurrent_recursive_timeout() {
     >"$output_directory/concurrent-recursive-process-wchan.txt" 2>&1 || true
   for map in \
     canonical_mount_cache_states \
+    canonical_mount_cache_generation \
     exact_mount_events \
     mount_global_mutation_epoch \
     mount_global_pending_mutations \
@@ -1760,6 +1767,7 @@ capture_entry_role_failure_diagnostics() {
       >"$output_directory/entry-role-failure-$map.json" 2>&1 || true
   done
   for map in \
+    canonical_mount_cache_generation \
     mount_global_mutation_epoch \
     mount_global_pending_mutations \
     mount_global_activity_sequence; do
@@ -2252,7 +2260,8 @@ jq -e --argjson before "$concurrent_mount_before" \
   --argjson after "$concurrent_mount_after" '
   ($before.mount_namespace_inode == $after.mount_namespace_inode) and
   ($before.mountinfo_sha256 == $after.mountinfo_sha256) and
-  ($before.topology_generation == $after.topology_generation) and
+  ($before.security_view_epoch == $after.security_view_epoch) and
+  ($before.cache_generation == $after.cache_generation) and
   ($before.ready_snapshot_keys == $after.ready_snapshot_keys) and
   ($after.activity_sequence > $before.activity_sequence)
 ' <<<null >/dev/null || {

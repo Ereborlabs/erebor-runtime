@@ -1,20 +1,22 @@
 # Phase 6.2 Implementation Review Guide
 
-Status: Current implementation guide with an unresolved cache-retirement gap.
+Status: Current implementation guide with unresolved cache retirement and
+physical qualification gaps.
 The source implements the separate `WorkloadProtectionPolicy` and
 `WorkloadProtectionException` APIs. Earlier recorded lightweight and
 Kubernetes results prove guarded migration for an actual signed policy
 replacement. The current working tree keeps ordinary signed entry rows and
 canonical initial mount routes stable across runtime mount events. BPF builds
-the live mount cache on demand under a BPF-owned security-view epoch. The
-current distribution-runc probe passed. The cache-specific K3s-runc probe
-passed before a later owner-restart cgroup failure. The latest fresh-image
-Kubernetes attempt failed at the independent-entry precondition before the
-concurrent cache test. No current Kubernetes result qualifies this change.
+the live mount cache on demand under a separate BPF-owned runtime cache
+generation. Focused distribution-runc and K3s-runc runs passed the cache
+transitions. Both runs stopped in later lifecycle cases. No current complete
+direct-runc or Kubernetes result qualifies this change.
 
 Plan: [Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
 
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
+
+Mount-cache design: [Independent runtime mount-cache generation](./phase-6-2-security-epoch-qualified-mount-cache-design.md)
 
 ## Review Goal
 
@@ -54,24 +56,47 @@ selector continues to use the separate exact-object policy path.
   -> [`WorkloadBindingOwner`](../../../crates/mithril-node/src/identity/binding.rs) the node binds the authenticated container to that generation and publishes its stable ordinary entry rows
   -> [`NodePolicyGenerationOwner::reconcile_cri_exact_bindings`](../../../crates/mithril-node/src/policy.rs) ordinary runtime reconciliation retains the entry rows and canonical initial mount routes
   -> [`global_mount_epoch_snapshot`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) the first mount-dependent BPF gate reads the BPF-owned security-view epoch and requires zero pending mutations
+  -> [`canonical_mount_cache_generation_snapshot`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF reads the independent runtime cache generation
   -> [`ensure_canonical_mount_cache`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF reads the kernel namespace event, namespace identity, namespace mount count, and task walk root
-  -> [`canonical_mount_cache_build_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF inserts the complete candidate row set under the captured security-view epoch
-  -> [`publish_canonical_mount_cache_state`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF publishes `READY` only after the namespace event, security-view epoch, pending count, and namespace mount count remain valid
-  -> [`selected_mount_for_root`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF selects rows only through the ready epoch-qualified cache
-  -> [`synchronous_mount_snapshot_unchanged`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF rechecks the namespace event, security-view epoch, and pending count before it applies the policy result
-  -> Not implemented: a lifecycle owner retires candidate and ready rows that no current security-view epoch can select
+  -> [`canonical_mount_cache_build_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF inserts the complete candidate row set under the captured security-view epoch and runtime cache generation
+  -> [`publish_canonical_mount_cache_state`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF publishes `READY` only after the namespace event, security-view epoch, cache generation, pending count, and namespace mount count remain valid
+  -> [`selected_mount_for_root`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF selects rows only through the current ready cache generation
+  -> [`synchronous_mount_snapshot_unchanged`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF rechecks the namespace event, security-view epoch, cache generation, and pending count before it applies the policy result
+  -> Not implemented: a lifecycle owner retires candidate and ready rows that no current runtime cache generation can select
+
+[`mount_mutation_effect`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h) An LSM mount hook accepts one tracked mutation
+  -> [`begin_global_mount_mutation`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF increments the pending-mutation count and then advances the security-view epoch before the kernel operation
+  -> [`begin_mount_mutation`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF records the namespace address, namespace event, namespace mount count, and namespace inode in task storage
+  -> [`erebor_mount_mutation_sys_exit`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) the raw syscall exit hook finishes the same task's mutation attempt
+  -> [`finish_mount_mutation`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF advances the runtime cache generation when the namespace event or mount count changed
+  -> [`finish_mount_mutation`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF clears the pending-mutation count after the generation change
+  -> [`ensure_canonical_mount_cache`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) the next mount-dependent effect builds the current runtime cache generation
+
+[`ensure_canonical_mount_cache`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) A cache hit finds a `READY` state with a stale namespace mount count
+  -> [`advance_canonical_mount_cache_generation`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) one compare-and-swap winner advances the runtime cache generation
+  -> [`canonical_mount_cache_build_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) the winner inserts a complete replacement row set under the new generation
+  -> [`publish_canonical_mount_cache_state`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) the winner publishes the replacement `READY` state after all race checks pass
+  -> [`synchronous_mount_snapshot_unchanged`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) the original effect rechecks the replacement generation before it applies the policy result
+
+[`mount_cache_build_failure`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) A cache build fails after candidate insertion
+  -> [`advance_canonical_mount_cache_generation`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF advances the generation again and makes the failed candidate rows unreachable
+  -> Not implemented: a lifecycle owner retires the unreachable candidate rows
+
+[`ensure_canonical_mount_cache`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) A concurrent stale-cache repair loses the compare-and-swap
+  -> Partial [`mount_cache_trace_failure`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF denies the current effect at stage 18, and an external caller can retry
 
 The ready state is the atomic publication point. A candidate row does not
 authorize an effect without that state. A concurrent PostStart, PID 1, or exec
-gate can build or use the same complete epoch-qualified cache. A changed kernel
-namespace event during one operation denies that operation. The event is not
-part of persistent cache identity.
+gate can build or use the same complete generation-qualified cache. A changed
+kernel namespace event during one operation denies that operation. The event
+is not part of persistent cache identity.
 
-`mount_global_mutation_epoch` is the BPF-owned monotonic cache generation. Its
-captured key field is `security_view_epoch`. The raw kernel namespace event is
-a transient race fence. The current security-view epoch is global. This scope
-can cause an unrelated represented namespace to rebuild its cache after a
-relevant mutation. It cannot make an old generation current.
+`mount_global_mutation_epoch` is the BPF-owned security-view mutation fence.
+`canonical_mount_cache_generation` is the BPF-owned runtime cache publication
+identity. The raw kernel namespace event is a transient race fence. Both BPF
+identifiers are global. This scope can cause an unrelated represented namespace
+to rebuild its cache after a relevant mutation or cache repair. It cannot make
+an old generation current.
 
 The active OCI path does not use the retained seccomp server. The BPF gate
 owns runtime topology initialization. Only a signed policy replacement creates
@@ -141,9 +166,9 @@ a new policy generation and invokes guarded running-process migration.
 | Node policy, exception, transfer, and cleanup state | `NodePolicyDeliveryOwner` | `NodePolicyDeliveryOwner` | Node state directory | Incremental transfer, complete desired inventory, exact readback, restart, session retirement, and stale-profile cleanup tests |
 | Active signed node generation and BPF policy rows | `NodePolicyGenerationOwner` and existing activation path | `mithril-node` only after a signed policy candidate | Node-local inactive generation and one active-pointer publication after expected-pointer readback | Readback, probe, pointer, retained-generation, and stable-entry-row tests |
 | Live process generation migration | `NodePolicyGenerationOwner` creates semantic old-to-new rows | BPF updates one process and state vector under its transition guard | `process_generation_migrations`, `process_states`, and `process_state_vectors` | Migration-row unit tests, replacement-generation lightweight probes, and the complete Kubernetes fixture |
-| Binding-scoped runtime evidence | Held OCI admission creates the binding and canonical initial routes | BPF mutation hooks and the path resolver create live cache generations | Binding rows, canonical initial routes, and the BPF-owned epoch-qualified mount cache | Stable-row readback and direct-runc cache tests; explicit unreachable-cache-row retirement is not implemented |
+| Binding-scoped runtime evidence | Held OCI admission creates the binding and canonical initial routes | BPF mutation hooks and the path resolver create live cache generations | Binding rows, canonical initial routes, and the BPF-owned cache-generation-qualified mount cache | Stable-row readback and focused direct-runc cache tests; explicit unreachable-cache-row retirement is not implemented |
 | Entry-time known-source routes | Held OCI admission and `NodePolicyGenerationOwner` | `mithril-node` changes rows only for binding materialization or a signed policy replacement | Binding-scoped `canonical_mount_roots` rows | Route-order tests and stable canonical-route readback in the direct-runc probe |
-| Post-start live mount topology | BPF file or executable hook chain | BPF mutation hooks and path resolver | Live kernel mount namespace, transient namespace event, BPF-owned security-view epoch, pending count, and ready cache | Distribution-runc cache test passed; the K3s cache oracle passed before a later lifecycle failure; current Kubernetes proof is incomplete |
+| Post-start live mount topology | BPF file or executable hook chain | BPF mutation hooks and path resolver | Live kernel mount namespace, transient namespace event, BPF-owned security-view epoch, runtime cache generation, pending count, and ready cache | Distribution-runc and K3s-runc cache transitions passed before later lifecycle failures; current Kubernetes proof is incomplete |
 | Retained runtime integration and recovery manifest | `RuntimeIntegrationOwner` | `RuntimeIntegrationOwner`; signed node decommission owns final removal | Host containerd fragment, OCI base spec, hook binary, and recovery manifest | Runtime integration unit tests, direct-runc retained-gate probe, and two-node reinstall |
 | Runtime admission request | `mithril-oci-hook` and `RuntimeAdmissionClient` | `RuntimeAdmissionServer` | Root-owned mode-0600 Unix socket | Stock-state parser, active-owner, unavailable endpoint, convergence hold, and timeout tests |
 | Staged runtime facts | First `createRuntime` request | `WorkloadBindingOwner` | Bounded node memory only; no kernel authority | Missing, expiry, changed-head, changed-cgroup, and no-PID-authority tests |
@@ -281,12 +306,15 @@ At held entry admission, Node opens the OCI bundle root through the held mount
 namespace. Node rebases container mountpoints and installs existing graph-prefix
 states for known source roots. Node does not rebuild these routes after start.
 For each later file or executable decision, BPF snapshots the global
-security-view epoch and requires zero pending mutations. BPF reads the live
-namespace event and uses the ready cache for that epoch and task walk root. A
-cache miss builds all rows before BPF publishes the ready state. BPF uses an
-admitted route before the oldest-mount fallback. BPF rechecks the namespace
-event, security-view epoch, and pending count before the decision. A race or
-unresolved path denies. The observation ring records evidence only.
+security-view epoch and runtime cache generation. BPF requires zero pending
+mutations. BPF reads the live namespace event and uses the ready cache for that
+epoch, generation, and task walk root. A cache miss builds all rows before BPF
+publishes the ready state. A ready-state mount-count mismatch lets one
+compare-and-swap winner advance the cache generation and build a replacement.
+BPF uses an admitted route before the oldest-mount fallback. BPF rechecks the
+namespace event, security-view epoch, cache generation, and pending count before
+the decision. A race or unresolved path denies. The observation ring records
+evidence only.
 
 ## Exception Convergence Flow
 
@@ -657,7 +685,9 @@ in place.
 ## BPF Boundary
 
 This phase adds the bounded `PreparedContainer` state to the BPF ABI and the
-existing identity BPF object. Userspace publishes it through the existing
+existing identity BPF object. The current cache change also expands
+`MountMutationAttemptV1` to preserve one mutation's namespace evidence until
+syscall exit. Userspace publishes prepared state through the existing
 [`KernelHost`](../../../crates/erebor-interceptor/src/host.rs). BPF owns the
 initial-entry claim, deadline, exec reservation, and application activation.
 The Linux Security Module (LSM) effect programs remain in the
@@ -686,19 +716,24 @@ flowchart LR
 | `exact_file_objects` | `ExactFileObjectKeyV1 -> ExactObjectBindingV1` | Node policy generation owner for explicit exact-object selectors | None | BPF effect and device gates | An explicit exact-object row follows its selector and binding lifetime. It does not supply ordinary entry admission. |
 | `canonical_mount_roots` | `CanonicalMountRootKeyV1 -> CanonicalMountRootV1` | Node held-entry admission | None | BPF known-route walker | A row is stable across ordinary runtime mount events. Binding retirement or a signed policy replacement can change its reachable set. |
 | `mount_security_views` | `u32 mount namespace inode -> MountSecurityViewStateV1` | Node initializes the represented view | BPF mount hooks update mutation state | Node reconciliation and BPF path gates | The represented namespace and binding own the row lifetime. |
-| `canonical_mount_cache` and `canonical_mount_cache_states` | Private native-endian key with namespace address, namespace-root unique mount ID, `security_view_epoch`, reserved zero, task walk root, and optional candidate root; selected mount or namespace mount count plus ready state | None | BPF path resolver | BPF path resolver and qualification readers | Pinned bounded caches. BPF publishes a ready state after complete row insertion and final race checks. No owner explicitly retires unreachable generations. |
-| `mount_global_mutation_epoch`, `mount_global_clean_epoch`, and `mount_global_pending_mutations` | Native-endian zero `u32 -> u64` | Node initializes the rows | BPF mount hooks update the monotonic epoch and pending count; reconciliation updates the clean epoch | BPF synchronous path and exact-object stability checks | Pinned for the kernel-owner lifetime. The mutation epoch supplies `security_view_epoch`; the kernel namespace event remains a transient race fence. |
+| `canonical_mount_cache` and `canonical_mount_cache_states` | Private native-endian key with namespace address, namespace-root unique mount ID, `security_view_epoch`, `cache_generation`, task walk root, and optional candidate root; selected mount or namespace mount count plus ready state | None | BPF path resolver | BPF path resolver and qualification readers | Pinned bounded caches. BPF publishes a ready state after complete row insertion and final race checks. No owner explicitly retires unreachable generations. |
+| `canonical_mount_cache_generation` | Native-endian zero `u32 -> u64` | Node initializes the row to one if it is absent | BPF mutation completion and stale-cache repair advance the value | BPF path resolver and qualification readers | Pinned for the kernel-owner lifetime. The current value makes all prior cache generations unreachable. |
+| `mount_global_mutation_epoch`, `mount_global_clean_epoch`, and `mount_global_pending_mutations` | Native-endian zero `u32 -> u64` | Node initializes the rows | BPF mount hooks update the security-view epoch and pending count; reconciliation updates the clean epoch | BPF synchronous path and exact-object stability checks | Pinned for the kernel-owner lifetime. The mutation epoch supplies `security_view_epoch`; the kernel namespace event remains a transient race fence. |
+| `mount_mutation_attempts` | BPF task-storage key to native-endian 32-byte `MountMutationAttemptV1` | None | BPF mount hooks create and finish one task-scoped attempt | BPF raw syscall exit and task-exit hooks | BPF task storage. The kernel removes the value with the task. A completed attempt clears its active field. |
 | `exception_runtime_states` | `ExceptionRuntimeStateKeyV1 -> ExceptionRuntimeStateV1` | Node exception owner | Effect gate consumes uses under the map value lock | Node recovery and exception gate | Pinned until the instance is terminal and durable receipts permit cleanup |
 | `exception_handle_bindings` | `ExceptionHandleBindingKeyV1 -> ExceptionHandleBindingV1` | Node policy and exception owners | None | Exception gate and recovery | Pinned for the exact compiled handle and active instance |
 | `exception_use_receipts` | Receipt identity -> bounded use receipt | Node exception receipt owner | Effect gate emits use receipts | Node receipt recovery | Pinned until the durable exception WAL records the receipt |
 
-| Prepared-container program group | Hook and context | Reads and writes | Physical result |
+| BPF program group | Hook and context | Reads and writes | Physical result |
 | --- | --- | --- | --- |
 | Initial-entry claim | `lsm/task_alloc` and the first protected effect | Reads the cgroup binding and held host TGID. Writes the task, entry, process, and exact prepared-entry identity. | A TGID mismatch or failed state publication returns the configured denial. |
 | Runtime effect gate | Existing file, network, IPC, process, device, privilege, and mount LSM hooks | Reads the exact binding, entry, generation, and deadline. It writes no runtime-object authority. | The exact prepared entry can finish setup. All other protected actors use normal policy or receive the configured denial. |
 | Exec evaluation | `lsm/bprm_check_security` | Reads the active signed policy. Writes the pending exec and reserves the exact task only for a policy-permitted exec. | A runtime-internal policy miss stays `PREPARED`. A policy-permitted exec can continue as `EXEC_PENDING`. |
 | Exec completion | `tracepoint/sched/sched_process_exec` and exec syscall exit tracepoints | Commits `ACTIVE` after a successful exec or restores `PREPARED` after a pre-commit failure. | `ACTIVE` closes prepared-runtime trust. A corrupt or expired transition stays fail-closed. |
 | Active application effect | Existing file, network, IPC, process, device, privilege, mount, exec, and io_uring hooks | Compares the active process generation with the published binding generation. A mismatch resolves one precompiled migration row and updates the process plus state vector under the process transition guard. File and executable hooks then rebuild and verify the live mount topology synchronously. | The same effect uses the replacement generation after migration. An explicit matching Deny blocks before the default. An applicable exception can authorize that Deny. A missing migration or unresolved path denies. |
+| Mount-mutation entry | `lsm/sb_mount`, `lsm/sb_umount`, `lsm/pivot_root`, and `lsm/move_mount` | Records activity. Increments the global pending count and security-view epoch. Stores the namespace address, event, mount count, and inode for the task. | A denied policy result blocks the kernel operation. An accepted result keeps later mount-dependent effects fail-closed until mutation completion. |
+| Mount-mutation completion | `tracepoint/raw_syscalls/sys_exit` and `tracepoint/sched/sched_process_exit` | Compares the current namespace event and mount count with the task-scoped attempt. Advances the runtime cache generation after a confirmed change. Clears the pending count. | A changed topology makes the prior cache generation unreachable before a later effect can use it. |
+| Mount-cache build and repair | Existing file and executable LSM hooks | Reads the security-view epoch, runtime cache generation, pending count, namespace event, mount count, and walk root. Inserts candidate rows and publishes one complete ready state. A stale ready count lets one compare-and-swap winner rotate the generation. | The hook evaluates the original effect only with a complete current cache. A race, failed build, or concurrent repair loser denies the effect. |
 | Binding retirement | `raw_tracepoint/cgroup_release` | Changes a non-active prepared state to `EXPIRED` and clears the exec cookie. | The released cgroup cannot start or continue prepared-runtime work. |
 
 A bpffs pin keeps a map or link alive after the loader process exits. A
@@ -728,6 +763,13 @@ handle. The value supplies the target state bits, target role, and target
 process-state-vector handle. It uses the generated
 `erebor.mithril.control.v1` contract. It does not add a public policy field,
 generic envelope, frame protocol, or compatibility dispatcher.
+
+The runtime cache amendment expands `MountMutationAttemptV1` from 8 bytes to
+32 bytes. The native-endian value stores the mount namespace address, raw
+namespace event, namespace mount count, namespace inode, active field, and
+explicit reserved bytes. The Rust size test, generated C header, and BPF static
+assertion require the exact 32-byte layout. BPF task storage is the producer and
+consumer. Userspace does not parse or authorize from this value.
 
 The BPF change reuses existing Linux Security Module (LSM), lifecycle, and
 exec hooks. It adds checked fields to the existing execution-set binding and
@@ -799,8 +841,8 @@ and coverage messages remain the Phase 6 types.
 | OCI state parsing, cgroup-v2 path parsing, fact-only first hook, and held-PID second hook | [OCI adapter tests](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) |
 | Retained integration publication, readback, exact Control and Node recovery shapes, version-independent matching, and changed-shape rejection | [Runtime integration tests](../../../crates/mithril-node/src/runtime_integration.rs), [runtime gate tests](../../../crates/mithril-node/src/runtime_gate.rs), and [retained-gate VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) |
 | Direct-runc PREPARED-to-ACTIVE transition, stable ordinary entry rows, stable canonical initial routes, guarded running-process migration, replacement-generation child exec, owner restart, terminal exec-failure evidence, generation retirement, independent roles, external-entry denial, and cleanup | [Runc entry-role VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) |
-| Security-epoch cache key parsing, ready-state parsing, and exact ready-key selection | [Mount-cache qualification helpers](../../../crates/mithril-e2e/src/effect/support.rs) |
-| Known-route selection before mount age, BPF-owned topology initialization, both Kubernetes mount orders, later in-container bind, event-only cache reuse, exact ready-key stability, wildcard denials, synchronous control allow, and exact evidence parsing | [Runc entry-role VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) and [protected-start lane](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
+| Security-view epoch and runtime cache-generation key parsing, ready-state parsing, and exact ready-key selection | [Mount-cache qualification helpers](../../../crates/mithril-e2e/src/effect/support.rs) |
+| Known-route selection before mount age, BPF-owned topology initialization, confirmed-mutation generation advance, event-only cache reuse, exact ready-key stability, stale ready-state repair, wildcard denials, synchronous control allow, and exact evidence parsing | [Runc entry-role VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) and [protected-start lane](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
 | Fresh protected Pod, exact target and runtime binding, sole shell entry selector, later BusyBox applet default, explicit matching Deny, direct CRI external-entry denial, and retained-cluster resource replacement | [Protected-start lane](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
 | Webhook TLS, rules, deadlines, health probes, DaemonSet identity and hook inputs, and least-privilege RBAC | [Helm render test](../../../packaging/mithril/helm/tests/verify.sh) |
 | Exact two-node target, live running-process migration, task lifetime, Node UID replacement, host epoch, selector lifecycle, exception target retirement, desired-inventory cleanup, retained integration recovery, and no-root inspection | [Physical fixture](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
@@ -861,24 +903,34 @@ fresh-root activation.
 These recorded results predate the current policy and runtime-evidence
 separation.
 
-The current distribution-runc probe passed from the current cache source. Its
-result is
-`target/mithril-r138-entry-security-epoch-retained/runc-entry-role-runtime-probe.json`.
-The result records an unchanged security epoch and exact ready-key set across
-32 concurrent detached `runc exec` preparations. It also records a normal
-path-policy denial during that activity and a normal stable follow-up denial.
+The mount-hook trace records the protected `/proc/scsi` mount. The trace shows
+the runc `mount` syscall, the `security_sb_mount` hook, the tracked mutation
+branch, the committed mount, and advances in the namespace event, namespace
+mount count, and global security-view epoch. The normal `/proc/scsi` operation
+is not outside the BPF hook set. The trace does not identify the intermittent
+condition that produced the earlier 30-to-31 stale ready state.
 
-The current K3s-runc 1.4.2 probe passed the same cache assertions. It then
-failed in the later node-owner restart path because the runtime cgroup no
-longer existed. Its retained output is `/var/tmp/mithril-r141/output` on VM
-`mithril-runtime-qualification-3098320`. This result qualifies the ordered
-cache assertions. It does not qualify the complete direct-runc lifecycle.
+The distribution-runc probe with BPF object `r185` loaded through the real
+kernel verifier. It passed detached-exec cache stability and deterministic
+stale ready-state repair. The repair kept the security-view epoch and
+`mountinfo` digest stable. It advanced the runtime cache generation, published
+a new protected ready-key set, returned `PATH_TREE_POLICY_DENY`, and reported
+no `UNRESOLVED_OBJECT`. The probe then stopped in the later external-cgroup
+case because the expected cgroup path was absent. Its partial output is
+`/var/tmp/mithril-runtime-qualification-3098320/r185-stock-runc` on VM
+`mithril-runtime-qualification-3098320`.
 
-The current fresh-image Kubernetes attempt failed before the concurrent cache
-test. It observed two of the required five independent additional-entry roles.
-Its diagnostics are in
-`target/mithril-r143-kubernetes-security-epoch`. This result does not qualify
-or reject the cache behavior on Kubernetes.
+The K3s-runc probe with BPF object `r188` also loaded through the real kernel
+verifier. It passed the prepublication generation check, confirmed post-create
+cache-generation advance, detached-exec stability, and deterministic
+stale-cache repair. It then stopped in the later external-cgroup case because
+the expected runtime cgroup was absent. Its partial output is
+`/var/tmp/mithril-runtime-qualification-3098320/r188-k3s-prepublication` on the
+same retained VM.
+
+These partial runs prove the cache transitions. They do not prove the complete
+direct-runc lifecycle. The paired Kubernetes case has not run with this
+implementation.
 
 The retained runtime gate result is
 `target/mithril-generation-migration-kubernetes-20260902-d/runc-retained-runtime-gate-probe.json`.
@@ -908,11 +960,11 @@ design.
 The two retained Kubernetes VMs and the lightweight VM remain available. No
 verification step destroyed them.
 
-The current distribution-runc fixture passes its complete lifecycle. The
-current K3s-runc fixture fails later at node-owner restart after the cache
-assertions pass. The current Kubernetes fixture fails at the independent-entry
-precondition before the cache test. The K3s and Kubernetes failures remain
-open and keep the complete physical result not done.
+The current distribution-runc fixture passes the cache assertions and then
+stops at the later external-cgroup precondition. The current K3s-runc fixture
+passes the cache assertions and then stops at the later administrative exec.
+The current Kubernetes fixture has not run with the runtime cache generation.
+These gaps keep the complete physical result not done.
 
 The direct lane and Kubernetes fixture close the previous stock-runtime
 regression without a runtime-specific operation list, dependency allow rules,
@@ -942,10 +994,12 @@ not present.
 - [ ] Trace one running process through guarded migration to a replacement generation at its next protected effect.
 - [ ] Trace one held OCI PID through CRI verification and exact cgroup publication.
 - [ ] Verify that a runtime event does not delete, overwrite, reinstall, or republish a signed policy row.
-- [ ] Trace one cache key through namespace identity, security-view epoch, task walk root, candidate-row insertion, ready-state publication, and selected-row validation.
+- [ ] Trace one cache key through namespace identity, security-view epoch, runtime cache generation, task walk root, candidate-row insertion, ready-state publication, and selected-row validation.
 - [ ] Race PostStart and a later exec against cache construction. Verify that each request uses one complete ready cache or denies after a changed race fence.
 - [ ] Change only the raw namespace event. Verify that the next request uses the same ready key and rechecks the new event before its decision.
-- [ ] Advance the security-view epoch. Verify that the old ready key becomes unreachable before the changed topology can authorize an effect.
+- [ ] Complete a tracked topology mutation. Verify that the security-view epoch and runtime cache generation advance before the pending count clears.
+- [ ] Corrupt only a ready-state mount count. Verify that one compare-and-swap winner advances the runtime cache generation and publishes a complete replacement.
+- [ ] Verify that a failed replacement build advances the runtime cache generation and does not publish its candidate rows.
 - [ ] Confirm that unreachable cache rows do not authorize an effect and record that their explicit retirement is not implemented.
 - [ ] Trace the held entry-time view into one `canonical_mount_roots` row.
 - [ ] Trace one later bind through the BPF mutation guard and live mount scan.
@@ -974,13 +1028,13 @@ not present.
 
 ## Source State
 
-This guide covers the dirty working tree based on
-`7f02b11ae570172bcb5903cd43efae7768f9302f` on 2026-09-04. Git stash object
+This guide covers the source state committed with this guide. Its parent
+checkpoint is `8c66f0c3`. Git stash object
 `487a32fcdd873f43b84c9a157fa0a8e9d3b5e793` preserves the tracked state before
-the security-epoch cache experiment. The working tree implements stable
-ordinary entry rows, stable canonical initial routes, and the BPF-owned
-epoch-qualified cache. Explicit unreachable-cache-row retirement is not
-implemented. The current Kubernetes proof is incomplete. Reviewers must
-compare this guide with the checked-out source.
+the earlier security-epoch cache experiment. The source implements stable
+ordinary entry rows, stable canonical initial routes, and the independent
+BPF-owned runtime cache generation. Explicit unreachable-cache-row retirement
+is not implemented. The current Kubernetes proof is incomplete. Reviewers
+must compare this guide with the checked-out source.
 
 Completion of this work does not authorize the next phase.

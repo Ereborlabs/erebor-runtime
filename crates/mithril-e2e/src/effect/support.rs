@@ -209,6 +209,14 @@ pub(super) fn global_mount_mutation_epoch(host: &KernelHost) -> Result<u64> {
     mount_counter(host, "mount_global_mutation_epoch", &0_u32.to_ne_bytes())
 }
 
+pub(super) fn canonical_mount_cache_generation(host: &KernelHost) -> Result<u64> {
+    mount_counter(
+        host,
+        "canonical_mount_cache_generation",
+        &0_u32.to_ne_bytes(),
+    )
+}
+
 pub(super) fn global_mount_activity_sequence(host: &KernelHost) -> Result<u64> {
     mount_counter(host, "mount_global_activity_sequence", &0_u32.to_ne_bytes())
 }
@@ -243,7 +251,7 @@ pub(super) fn ready_canonical_mount_snapshots(host: &KernelHost) -> Result<BTree
             }
             .build()
         })?);
-        let state = u32::from_ne_bytes(value[4..].try_into().map_err(|error| {
+        let state = u32::from_ne_bytes(value[4..8].try_into().map_err(|error| {
             InvalidInputSnafu {
                 path: Path::new("canonical_mount_cache_states"),
                 reason: format!("the canonical mount state is invalid: {error}"),
@@ -257,28 +265,30 @@ pub(super) fn ready_canonical_mount_snapshots(host: &KernelHost) -> Result<BTree
     Ok(ready)
 }
 
-pub(super) fn ready_canonical_mount_snapshots_at_epoch(
+pub(super) fn ready_canonical_mount_snapshots_at_generation(
     host: &KernelHost,
-    topology_generation: u64,
+    cache_generation: u64,
 ) -> Result<BTreeSet<Vec<u8>>> {
     ready_canonical_mount_snapshots(host)?
         .into_iter()
         .filter_map(|key| {
             let key_generation = key
-                .get(16..24)
-                .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
-                .map(u64::from_ne_bytes);
-            let reserved = key
                 .get(24..32)
                 .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
                 .map(u64::from_ne_bytes);
-            match (reserved, key_generation) {
-                (Some(0), Some(generation)) if generation == topology_generation => Some(Ok(key)),
-                (Some(0), Some(_)) => None,
+            let security_view_epoch = key
+                .get(16..24)
+                .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+                .map(u64::from_ne_bytes);
+            match (security_view_epoch, key_generation) {
+                (Some(epoch), Some(generation)) if epoch > 0 && generation == cache_generation => {
+                    Some(Ok(key))
+                }
+                (Some(epoch), Some(_)) if epoch > 0 => None,
                 (Some(_), Some(_)) => Some(
                     InvalidInputSnafu {
                         path: Path::new("canonical_mount_cache_states"),
-                        reason: "a canonical mount snapshot key uses its reserved field",
+                        reason: "a canonical mount snapshot key has no security-view epoch",
                     }
                     .fail(),
                 ),
