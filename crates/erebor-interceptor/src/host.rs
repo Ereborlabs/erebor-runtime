@@ -1368,6 +1368,19 @@ impl KernelHost {
         })
     }
 
+    pub fn delete_map_entry_if_present(&self, name: &str, key: &[u8]) -> Result<()> {
+        match self.map(name)?.delete(key) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == libbpf_rs::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(crate::Error::Libbpf {
+                action: "delete BPF map entry",
+                path: PathBuf::from(name),
+                source,
+                location: snafu::Location::default(),
+            }),
+        }
+    }
+
     pub fn stage_exact_file_measurement(&self, pid_tgid: u64, request_nonce: u64) -> Result<()> {
         ensure!(
             pid_tgid != 0 && request_nonce != 0,

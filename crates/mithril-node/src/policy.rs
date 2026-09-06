@@ -63,6 +63,10 @@ use self::ipc::lower_ipc_relationships;
 use self::network::LoweredNetworkPolicy;
 
 const LINUX_CAPABILITY_SELECTOR_PREFIX: &str = "SECURITY:LINUX_CAPABILITY:";
+const CANONICAL_MOUNT_CACHE_KEY_SIZE_V1: usize = 56;
+const CANONICAL_MOUNT_CACHE_STATE_KEY_SIZE_V1: usize = 48;
+const CANONICAL_MOUNT_CACHE_SECURITY_VIEW_EPOCH_OFFSET_V1: usize = 16;
+const CANONICAL_MOUNT_CACHE_GENERATION_OFFSET_V1: usize = 24;
 
 pub struct NodePolicyGenerationOwner {
     node_boot_id: Id128V1,
@@ -1205,7 +1209,8 @@ impl NodePolicyGenerationOwner {
         host: &mut KernelHost,
         bindings: &WorkloadBindingOwner,
     ) -> Result<()> {
-        self.reconcile_cri_exact_bindings_inner(config, host, bindings, None)
+        self.reconcile_cri_exact_bindings_inner(config, host, bindings, None)?;
+        retire_unreachable_mount_cache_rows(host)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4662,6 +4667,78 @@ fn mount_epoch_from(host: &KernelHost, map: &str, key: &[u8]) -> Result<u64> {
     })
 }
 
+fn retire_unreachable_mount_cache_rows(host: &KernelHost) -> Result<()> {
+    let global_key = 0_u32.to_ne_bytes();
+    let security_view_epoch = mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)?;
+    let cache_generation = mount_epoch_from(host, "canonical_mount_cache_generation", &global_key)?;
+    for (map, key_size) in [
+        (
+            "canonical_mount_cache_states",
+            CANONICAL_MOUNT_CACHE_STATE_KEY_SIZE_V1,
+        ),
+        ("canonical_mount_cache", CANONICAL_MOUNT_CACHE_KEY_SIZE_V1),
+    ] {
+        for key in host.map_keys(map).context(InterceptorSnafu)? {
+            if mount_cache_row_is_unreachable(
+                map,
+                &key,
+                key_size,
+                security_view_epoch,
+                cache_generation,
+            )? {
+                host.delete_map_entry_if_present(map, &key)
+                    .context(InterceptorSnafu)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn mount_cache_row_is_unreachable(
+    map: &str,
+    key: &[u8],
+    expected_key_size: usize,
+    security_view_epoch: u64,
+    cache_generation: u64,
+) -> Result<bool> {
+    ensure!(
+        key.len() == expected_key_size,
+        IdentityStateSnafu {
+            reason: format!(
+                "mount cache map `{map}` has a key of size {}, expected {expected_key_size}",
+                key.len()
+            ),
+        }
+    );
+    let row_security_view_epoch = u64::from_ne_bytes(
+        key[CANONICAL_MOUNT_CACHE_SECURITY_VIEW_EPOCH_OFFSET_V1
+            ..CANONICAL_MOUNT_CACHE_SECURITY_VIEW_EPOCH_OFFSET_V1 + size_of::<u64>()]
+            .try_into()
+            .map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!(
+                        "mount cache map `{map}` has an invalid security-view epoch: {error}"
+                    ),
+                }
+                .build()
+            })?,
+    );
+    let row_cache_generation = u64::from_ne_bytes(
+        key[CANONICAL_MOUNT_CACHE_GENERATION_OFFSET_V1
+            ..CANONICAL_MOUNT_CACHE_GENERATION_OFFSET_V1 + size_of::<u64>()]
+            .try_into()
+            .map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!(
+                        "mount cache map `{map}` has an invalid cache generation: {error}"
+                    ),
+                }
+                .build()
+            })?,
+    );
+    Ok(row_security_view_epoch < security_view_epoch || row_cache_generation < cache_generation)
+}
+
 fn read_abi_value<T: KnownLayout + TryFromBytes>(bytes: &[u8], name: &str) -> Result<T> {
     T::try_read_from_bytes(bytes).map_err(|error| {
         IdentityStateSnafu {
@@ -6014,15 +6091,70 @@ mod tests {
         add_binding_activation, build_process_generation_migrations,
         ensure_active_generation_unchanged, ensure_committed_generation, ensure_map_capacity,
         entry_admission_path_selector_ids, exception_counter_is_consistent,
-        generation_retirement_needs_tombstone, handles, parse_id,
+        generation_retirement_needs_tombstone, handles, mount_cache_row_is_unreachable, parse_id,
         pending_exec_retains_generation_authority, read_abi_value, same_exact_file,
         GenerationSemantics, LoweredGeneration, MeasuredMountRouteV1, ProfileActivation,
+        CANONICAL_MOUNT_CACHE_KEY_SIZE_V1,
     };
     use crate::error::IdentityStateSnafu;
     use crate::{
         ContainerKindV1, ExactDeviceConfig, ExactDeviceType, ExactFileObjectConfig,
         WorkloadBindingConfig,
     };
+
+    #[test]
+    fn mount_cache_retirement_only_selects_older_rows() -> crate::Result<()> {
+        let key = |security_view_epoch: u64, cache_generation: u64| {
+            let mut key = vec![0_u8; CANONICAL_MOUNT_CACHE_KEY_SIZE_V1];
+            key[16..24].copy_from_slice(&security_view_epoch.to_ne_bytes());
+            key[24..32].copy_from_slice(&cache_generation.to_ne_bytes());
+            key
+        };
+        assert!(mount_cache_row_is_unreachable(
+            "canonical_mount_cache",
+            &key(6, 9),
+            CANONICAL_MOUNT_CACHE_KEY_SIZE_V1,
+            7,
+            9,
+        )?);
+        assert!(mount_cache_row_is_unreachable(
+            "canonical_mount_cache",
+            &key(7, 8),
+            CANONICAL_MOUNT_CACHE_KEY_SIZE_V1,
+            7,
+            9,
+        )?);
+        assert!(!mount_cache_row_is_unreachable(
+            "canonical_mount_cache",
+            &key(7, 9),
+            CANONICAL_MOUNT_CACHE_KEY_SIZE_V1,
+            7,
+            9,
+        )?);
+        assert!(!mount_cache_row_is_unreachable(
+            "canonical_mount_cache",
+            &key(8, 10),
+            CANONICAL_MOUNT_CACHE_KEY_SIZE_V1,
+            7,
+            9,
+        )?);
+        assert!(mount_cache_row_is_unreachable(
+            "canonical_mount_cache",
+            &key(8, 8),
+            CANONICAL_MOUNT_CACHE_KEY_SIZE_V1,
+            7,
+            9,
+        )?);
+        assert!(mount_cache_row_is_unreachable(
+            "canonical_mount_cache",
+            &[0_u8; 32],
+            CANONICAL_MOUNT_CACHE_KEY_SIZE_V1,
+            7,
+            9,
+        )
+        .is_err());
+        Ok(())
+    }
 
     #[test]
     fn live_process_migration_translates_generation_local_handles() -> crate::Result<()> {

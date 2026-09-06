@@ -375,7 +375,7 @@ entry_role_output=$remote_root/runc-entry-roles
 
 if [[ $entry_role_runtime_only == true ]]; then
   jq -e '
-    .schema_version == 35 and
+    .schema_version == 36 and
     .prepared_state_before_exec == "prepared" and
     .prepared_state_after_exec == "active" and
     .prepared_runtime_effect_observed and
@@ -402,6 +402,7 @@ if [[ $entry_role_runtime_only == true ]]; then
     .bounded_reader_queue_preserved_concurrent_burst and
     .recursive_wildcard_stable_after_concurrent_exec and
     .stale_mount_cache_rebuilt and
+    .unreachable_mount_cache_rows_collected and
     .other_role_path_tree_allowed and
     .path_tree_control_allowed and
     .application_admitted_entry_rule_id > 0 and

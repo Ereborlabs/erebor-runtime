@@ -245,6 +245,40 @@ workload_startup_gate_should_be_open() {
   [[ $pod_name != protected || $hold_protected_startup == false ]]
 }
 
+mount_cache_obsolete_row_count() {
+  local rows=$1
+  local security_view_epoch=$2
+  local cache_generation=$3
+  [[ $security_view_epoch =~ ^[1-9][0-9]*$ &&
+     $cache_generation =~ ^[1-9][0-9]*$ ]] || {
+    echo "invalid current mount cache version" >&2
+    return 2
+  }
+  jq -er --argjson security_view_epoch "$security_view_epoch" \
+    --argjson cache_generation "$cache_generation" '
+    def hex_byte:
+      if type == "number" then .
+      else ascii_downcase | ltrimstr("0x") |
+        reduce (explode[]) as $code
+          (0; . * 16 + if $code >= 97 then $code - 87 else $code - 48 end)
+      end;
+    def little_endian:
+      reduce to_entries[] as $byte
+        (0; . + (($byte.value | hex_byte) * pow(256; $byte.key)));
+    if all(.[]; (.key | type) == "array" and (.key | length) >= 32) then
+      [
+        .[] |
+        select(
+          (.key[16:24] | little_endian) < $security_view_epoch or
+          (.key[24:32] | little_endian) < $cache_generation
+        )
+      ] | length
+    else
+      error("a mount cache row has an invalid key")
+    end
+  ' <<<"$rows"
+}
+
 assert_exact_policy_target() {
   local status_json=$1
   local node_json=$2

@@ -3,19 +3,19 @@
 Status: Not done. The branch implements the approved capability-grounded
 `WorkloadProtectionPolicy` and separate `WorkloadProtectionException`, their
 Control and node lifecycles, Helm package, automated fixture, and independent
-manual example. An earlier complete automated two-node physical fixture passed
-at its recorded source state. The current working tree keeps ordinary signed
+manual example. The complete current-source two-node physical fixture passes.
+The current working tree keeps ordinary signed
 entry rows and canonical initial mount routes stable across runtime mount
 events. It matches an ordinary entry by its signed canonical invocation path
 and does not bind that entry row to an inode. BPF builds a live mount cache on
 demand under a security-view epoch and separate runtime cache generation. BPF
 publishes the cache state only after its security-view epoch, cache generation,
-namespace-event, mount-count, and pending-mutation checks pass. Focused
-distribution-runc and K3s-runc runs passed confirmed-mutation generation
-advance, detached-event reuse, and stale-cache repair. Both runs stopped in
-later lifecycle cases. No current Kubernetes run qualifies the runtime cache
-generation. These results are not a complete physical result. The
-implementation does not retire unreachable mount-cache rows explicitly. The
+namespace-event, mount-count, and pending-mutation checks pass. The complete
+direct-runc and Kubernetes runs pass confirmed-mutation generation advance,
+detached-event reuse, stale-cache repair, and routine retirement of older cache
+rows. Routine Mithril Node reconciliation deletes rows with a security-view
+epoch or cache generation below the current value. It does not delete a row
+with a future value from a concurrent mutation. The
 current public policy schema has an explicit
 `applicationEntry`, a bounded set of `additionalEntries`, one
 `administrativeEntry`, and `externalRole` as the fail-closed fallback. The

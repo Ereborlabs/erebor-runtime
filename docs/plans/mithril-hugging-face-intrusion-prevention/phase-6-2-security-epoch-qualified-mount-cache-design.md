@@ -439,3 +439,29 @@ not invalidate the bounded cache result. They also do not qualify the complete
 two-node lifecycle. Explicit retirement of unreachable cache rows and the
 complete phase acceptance matrix remain `Not done`. No qualification VM
 remains.
+
+### 2026-09-05 Cache-Row Retirement
+
+Routine Mithril Node reconciliation now reads the current security-view epoch
+and cache generation. It deletes a cache state or route row only when the row
+has an older security-view epoch or an older cache generation. It does not
+delete a row with a future value. This rule lets a concurrent BPF mutation move
+forward without user-space deletion of its candidate rows. A later
+reconciliation pass collects a candidate that became unreachable after the
+snapshot.
+
+The lightweight test first failed with 128 old route rows and four old state
+rows after BPF repaired a stale READY count. The same production reconciliation
+call then passed after the change. Its result is
+`/tmp/mithril-phase62-mount-cache-gc-lightweight-20260905/runc-entry-role-runtime-probe.json`.
+
+The paired Kubernetes test forced the same READY count mismatch. BPF kept the
+security-view epoch at 44, advanced the cache generation from 42 to 43, and
+published a new READY snapshot. Routine Node reconciliation left zero older
+route rows and zero older state rows. The protected path still returned
+`PATH_TREE_POLICY_DENY`. Its result is
+`/tmp/mithril-phase62-mount-cache-gc-kubernetes-20260905-a/mount-cache-garbage-collection.json`.
+
+The complete current-source two-node suite also passed. It includes the later
+evidence-health and final node-projection stress checks. Its result is
+`/tmp/mithril-phase62-mount-cache-gc-full-kubernetes-20260905-b`.

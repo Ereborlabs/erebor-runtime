@@ -26,16 +26,17 @@ transaction before the node truncates its WAL.
 
 ## Current Physical Result
 
-The complete automated fixture passed with Kubernetes v1.35.5+k3s1 and
-containerd v2.2.3-k3s1. It proved scheduler-selected exact delivery,
+The complete current-source automated fixture passed with Kubernetes
+v1.35.5+k3s1 and containerd v2.2.3-k3s1. It proved scheduler-selected exact delivery,
 `PreparedContainer` activation, independent entry roles, bounded exception use
 and retirement, task and Pod lifetime replacement, Control and Node restart
 recovery, same-name Node UID replacement, host epoch advance,
-desired-inventory cleanup, and fresh root activation. The healthy evidence
+desired-inventory cleanup, fresh root activation, stale mount-cache repair, and
+retirement of older mount-cache rows. The healthy evidence
 stream had no lost events, reader-queue drops, WAL capacity block, WAL rewrite,
 or repeated Control connection. The final fresh Node Pods were ready with zero
 container restarts and one Control connection each. The result is
-`/tmp/mithril-phase-6-2-full-convergence-reuse49-20260828`.
+`/tmp/mithril-phase62-mount-cache-gc-full-kubernetes-20260905-b`.
 
 The scenario removed its workload namespace, policy, exception, Pods, and
 marker state. It retained the two owned VMs, K3s cluster, and installed Mithril

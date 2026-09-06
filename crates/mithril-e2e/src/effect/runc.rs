@@ -92,6 +92,7 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub bounded_reader_queue_preserved_concurrent_burst: bool,
     pub recursive_wildcard_stable_after_concurrent_exec: bool,
     pub stale_mount_cache_rebuilt: bool,
+    pub unreachable_mount_cache_rows_collected: bool,
     pub other_role_path_tree_allowed: bool,
     pub path_tree_control_allowed: bool,
     pub application_admitted_entry_rule_id: u32,
@@ -3689,6 +3690,39 @@ impl EffectTestRunner {
                 ),
             }
         );
+        let obsolete_cache_rows_before = obsolete_mount_cache_row_count(&host)?;
+        ensure!(
+            obsolete_cache_rows_before.cache_rows > 0
+                && obsolete_cache_rows_before.state_rows > 0,
+            InvalidInputSnafu {
+                path: Path::new("canonical_mount_cache"),
+                reason: format!(
+                    "the stale-cache replacement did not leave both cache row types for lifecycle retirement: {obsolete_cache_rows_before:?}"
+                ),
+            }
+        );
+        policy_owner
+            .reconcile_cri_exact_bindings(&node_config, &mut host, &bindings)
+            .context(NodeSnafu)?;
+        let obsolete_cache_rows_after = obsolete_mount_cache_row_count(&host)?;
+        let mount_topology_after_cache_collection = mount_topology_snapshot(&host, initial_pid)?;
+        let unreachable_mount_cache_rows_collected = obsolete_cache_rows_after.cache_rows == 0
+            && obsolete_cache_rows_after.state_rows == 0
+            && mount_topology_after_cache_collection.security_view_epoch
+                == rebuilt_mount_topology.security_view_epoch
+            && mount_topology_after_cache_collection.cache_generation
+                == rebuilt_mount_topology.cache_generation
+            && mount_topology_after_cache_collection.ready_snapshot_keys
+                == rebuilt_mount_topology.ready_snapshot_keys;
+        ensure!(
+            unreachable_mount_cache_rows_collected,
+            InvalidInputSnafu {
+                path: Path::new("canonical_mount_cache"),
+                reason: format!(
+                    "routine Mithril Node reconciliation did not retire the unreachable mount cache rows without changing the current READY generation: before={obsolete_cache_rows_before:?}, after={obsolete_cache_rows_after:?}, ready_before={rebuilt_mount_topology:?}, ready_after={mount_topology_after_cache_collection:?}"
+                ),
+            }
+        );
         let reader_queue_burst_marker = observations.cursor();
         fs::write(
             role_directory.join("reader-queue-burst-start.fifo"),
@@ -5331,7 +5365,7 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 35,
+            schema_version: 36,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
@@ -5361,6 +5395,7 @@ impl EffectTestRunner {
             bounded_reader_queue_preserved_concurrent_burst,
             recursive_wildcard_stable_after_concurrent_exec,
             stale_mount_cache_rebuilt,
+            unreachable_mount_cache_rows_collected,
             other_role_path_tree_allowed,
             path_tree_control_allowed: true,
             application_admitted_entry_rule_id: active.admitted_entry_rule_id,
@@ -5819,6 +5854,60 @@ fn canonical_mount_cache_state_summary(host: &KernelHost) -> Result<Vec<String>>
             ))
         })
         .collect()
+}
+
+#[derive(Debug)]
+struct ObsoleteMountCacheRowsV1 {
+    cache_rows: usize,
+    state_rows: usize,
+}
+
+fn obsolete_mount_cache_row_count(host: &KernelHost) -> Result<ObsoleteMountCacheRowsV1> {
+    let security_view_epoch = global_mount_mutation_epoch(host)?;
+    let cache_generation = canonical_mount_cache_generation(host)?;
+    let mut snapshot = ObsoleteMountCacheRowsV1 {
+        cache_rows: 0,
+        state_rows: 0,
+    };
+    for (map, expected_key_size, count) in [
+        ("canonical_mount_cache", 56_usize, &mut snapshot.cache_rows),
+        (
+            "canonical_mount_cache_states",
+            48_usize,
+            &mut snapshot.state_rows,
+        ),
+    ] {
+        for key in host.map_keys(map).context(InterceptorSnafu)? {
+            ensure!(
+                key.len() == expected_key_size,
+                InvalidInputSnafu {
+                    path: Path::new(map),
+                    reason: format!(
+                        "a mount cache key has size {}, expected {expected_key_size}",
+                        key.len()
+                    ),
+                }
+            );
+            let row_epoch = u64::from_ne_bytes(key[16..24].try_into().map_err(|error| {
+                InvalidInputSnafu {
+                    path: Path::new(map),
+                    reason: format!("a mount cache security-view epoch is invalid: {error}"),
+                }
+                .build()
+            })?);
+            let row_generation = u64::from_ne_bytes(key[24..32].try_into().map_err(|error| {
+                InvalidInputSnafu {
+                    path: Path::new(map),
+                    reason: format!("a mount cache generation is invalid: {error}"),
+                }
+                .build()
+            })?);
+            if row_epoch < security_view_epoch || row_generation < cache_generation {
+                *count += 1;
+            }
+        }
+    }
+    Ok(snapshot)
 }
 
 fn make_canonical_mount_cache_stale_for_test(

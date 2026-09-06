@@ -1689,6 +1689,124 @@ mount_topology_snapshot() {
   '
 }
 
+make_current_mount_cache_state_stale() {
+  local vm=$1
+  local snapshot=$2
+  local security_view_epoch
+  local cache_generation
+  local cache_states
+  local row
+  local count
+  local byte
+  local normalized
+  local -a key_bytes
+  local -a value_bytes
+  local -a command
+
+  security_view_epoch=$(jq -er '.security_view_epoch' <<<"$snapshot")
+  cache_generation=$(jq -er '.cache_generation' <<<"$snapshot")
+  cache_states=$("$provider" run "$vm" sudo bpftool -j map dump pinned \
+    /sys/fs/bpf/mithril-convergence/maps/canonical_mount_cache_states)
+  row=$(jq -cer --argjson security_view_epoch "$security_view_epoch" \
+    --argjson cache_generation "$cache_generation" '
+    def hex_byte:
+      if type == "number" then .
+      else ascii_downcase | ltrimstr("0x") |
+        reduce (explode[]) as $code
+          (0; . * 16 + if $code >= 97 then $code - 87 else $code - 48 end)
+      end;
+    def little_endian:
+      reduce to_entries[] as $byte
+        (0; . + (($byte.value | hex_byte) * pow(256; $byte.key)));
+    first(
+      .[] |
+      select((.key[16:24] | little_endian) == $security_view_epoch) |
+      select((.key[24:32] | little_endian) == $cache_generation) |
+      select((.value[0:4] | little_endian) > 0) |
+      select((.value[4:8] | little_endian) == 1)
+    )
+  ' <<<"$cache_states")
+  mapfile -t key_bytes < <(jq -r '
+    def hex_byte:
+      if type == "number" then .
+      else ascii_downcase | ltrimstr("0x") |
+        reduce (explode[]) as $code
+          (0; . * 16 + if $code >= 97 then $code - 87 else $code - 48 end)
+      end;
+    .key[] | hex_byte
+  ' <<<"$row")
+  mapfile -t value_bytes < <(jq -r '
+    def hex_byte:
+      if type == "number" then .
+      else ascii_downcase | ltrimstr("0x") |
+        reduce (explode[]) as $code
+          (0; . * 16 + if $code >= 97 then $code - 87 else $code - 48 end)
+      end;
+    .value[] | hex_byte
+  ' <<<"$row")
+  [[ ${#key_bytes[@]} -eq 48 && ${#value_bytes[@]} -eq 8 ]] || {
+    echo "the current READY mount cache state has an invalid ABI size" >&2
+    return 1
+  }
+  count=$((
+    value_bytes[0] +
+    (value_bytes[1] << 8) +
+    (value_bytes[2] << 16) +
+    (value_bytes[3] << 24)
+  ))
+  ((count > 0 && count < 4294967295)) || {
+    echo "the current READY mount cache count cannot be made stale" >&2
+    return 1
+  }
+  ((count += 1))
+  value_bytes[0]=$((count & 255))
+  value_bytes[1]=$(((count >> 8) & 255))
+  value_bytes[2]=$(((count >> 16) & 255))
+  value_bytes[3]=$(((count >> 24) & 255))
+  command=(sudo bpftool map update pinned
+    /sys/fs/bpf/mithril-convergence/maps/canonical_mount_cache_states key hex)
+  for byte in "${key_bytes[@]}"; do
+    printf -v normalized '%02x' "$byte"
+    command+=("$normalized")
+  done
+  command+=(value hex)
+  for byte in "${value_bytes[@]}"; do
+    printf -v normalized '%02x' "$byte"
+    command+=("$normalized")
+  done
+  "$provider" run "$vm" "${command[@]}"
+}
+
+mount_cache_row_counts() {
+  local vm=$1
+  local security_view_epoch=$2
+  local cache_generation=$3
+  local cache_rows
+  local state_rows
+  local cache_obsolete
+  local state_obsolete
+
+  cache_rows=$("$provider" run "$vm" sudo bpftool -j map dump pinned \
+    /sys/fs/bpf/mithril-convergence/maps/canonical_mount_cache)
+  state_rows=$("$provider" run "$vm" sudo bpftool -j map dump pinned \
+    /sys/fs/bpf/mithril-convergence/maps/canonical_mount_cache_states)
+  cache_obsolete=$(mount_cache_obsolete_row_count "$cache_rows" \
+    "$security_view_epoch" "$cache_generation")
+  state_obsolete=$(mount_cache_obsolete_row_count "$state_rows" \
+    "$security_view_epoch" "$cache_generation")
+  jq -cn --argjson cache_rows "$(jq 'length' <<<"$cache_rows")" \
+    --argjson state_rows "$(jq 'length' <<<"$state_rows")" \
+    --argjson obsolete_cache_rows "$cache_obsolete" \
+    --argjson obsolete_state_rows "$state_obsolete" '
+    {
+      cache_rows: $cache_rows,
+      state_rows: $state_rows,
+      obsolete_cache_rows: $obsolete_cache_rows,
+      obsolete_state_rows: $obsolete_state_rows
+    }
+  '
+}
+
 capture_concurrent_recursive_timeout() {
   local after_stop=null
   local map
@@ -2304,8 +2422,60 @@ for _attempt in {1..120}; do
 done
 remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
   --timeout=300s >/dev/null
+mount_cache_repair_before=$(mount_topology_snapshot \
+  "$selected_vm" "$concurrent_host_pid")
+mount_cache_rows_before=$(mount_cache_row_counts "$selected_vm" \
+  "$(jq -er '.security_view_epoch' <<<"$mount_cache_repair_before")" \
+  "$(jq -er '.cache_generation' <<<"$mount_cache_repair_before")")
+jq -e '.cache_rows > 0 and .state_rows > 0' \
+  <<<"$mount_cache_rows_before" >/dev/null
+make_current_mount_cache_state_stale "$selected_vm" "$mount_cache_repair_before"
 "$provider" run "$selected_vm" \
   "printf 'start\\n' | sudo timeout 30s tee /var/lib/mithril-convergence/markers/protected.stable-recursive-start >/dev/null"
+mount_cache_repair_after=
+mount_cache_rows_after=
+for _attempt in {1..120}; do
+  mount_cache_repair_after=$(mount_topology_snapshot \
+    "$selected_vm" "$concurrent_host_pid" 2>/dev/null || true)
+  if [[ -n $mount_cache_repair_after ]] && jq -e \
+      --argjson before "$mount_cache_repair_before" \
+      --argjson after "$mount_cache_repair_after" '
+      ($after.mount_namespace_inode == $before.mount_namespace_inode) and
+      ($after.mountinfo_sha256 == $before.mountinfo_sha256) and
+      ($after.security_view_epoch == $before.security_view_epoch) and
+      ($after.cache_generation > $before.cache_generation) and
+      ($after.ready_snapshot_keys != $before.ready_snapshot_keys)
+    ' <<<null >/dev/null; then
+    mount_cache_rows_after=$(mount_cache_row_counts "$selected_vm" \
+      "$(jq -er '.security_view_epoch' <<<"$mount_cache_repair_after")" \
+      "$(jq -er '.cache_generation' <<<"$mount_cache_repair_after")")
+    if jq -e '
+        .cache_rows > 0 and
+        .state_rows > 0 and
+        .obsolete_cache_rows == 0 and
+        .obsolete_state_rows == 0
+      ' <<<"$mount_cache_rows_after" >/dev/null; then
+      break
+    fi
+  fi
+  [[ $_attempt -lt 120 ]] || {
+    echo "Mithril Node did not retire the unreachable mount cache rows" >&2
+    exit 1
+  }
+  sleep 0.25
+done
+jq -n --argjson before "$mount_cache_repair_before" \
+  --argjson rows_before "$mount_cache_rows_before" \
+  --argjson after "$mount_cache_repair_after" \
+  --argjson rows_after "$mount_cache_rows_after" '
+  {
+    before: $before,
+    rows_before: $rows_before,
+    after: $after,
+    rows_after: $rows_after,
+    unreachable_rows_collected: true
+  }
+' >"$output_directory/mount-cache-garbage-collection.json"
 
 assert_prepared_container_activation() {
   local task_json=$1
@@ -2898,6 +3068,7 @@ if [[ $protected_start_only == true ]]; then
       liveness_probe_entry_allowed: true,
       declared_entry_roles_independent: ($declared_entry_role_count == 6),
       declared_entry_role_count: $declared_entry_role_count,
+      unreachable_mount_cache_rows_collected: true,
       repository_owned_test_resources_removed: false
     }' >"$output_directory/protected-start-result.json"
   install -m 0600 "$kubeconfig" "$output_directory/kubeconfig.yaml"
@@ -3485,6 +3656,7 @@ jq -n \
     pod_uid_replaced: true,
     policy_update_and_recreate: true,
     running_policy_update: true,
+    unreachable_mount_cache_rows_collected: true,
     exception_one_use_consumed: true,
     exception_expired: true,
     exception_revoked: true,

@@ -483,6 +483,21 @@ if external_cgroup_exec_denial_after \
   echo "an allowed external-cgroup effect satisfied the denial oracle" >&2
   exit 1
 fi
+mount_cache_rows='[
+  {"key":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6,0,0,0,0,0,0,0,9,0,0,0,0,0,0,0]},
+  {"key":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,0,0,0,0,0,0,0,8,0,0,0,0,0,0,0]},
+  {"key":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,0,0,0,0,0,0,0,9,0,0,0,0,0,0,0]},
+  {"key":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,8,0,0,0,0,0,0,0,10,0,0,0,0,0,0,0]}
+]'
+[[ $(mount_cache_obsolete_row_count "$mount_cache_rows" 7 9) -eq 2 ]]
+if mount_cache_obsolete_row_count "$mount_cache_rows" 0 9 >/dev/null 2>&1; then
+  echo "a zero mount cache version satisfied the garbage-collection oracle" >&2
+  exit 1
+fi
+if mount_cache_obsolete_row_count '[{"key":[0]}]' 7 9 >/dev/null 2>&1; then
+  echo "an invalid mount cache key satisfied the garbage-collection oracle" >&2
+  exit 1
+fi
 retained_environment=$test_root/retained-environment.json
 write_retained_environment "$retained_environment" true \
   mithril-runtime-qualification-1 /tmp/mithril-vm-test.a \
