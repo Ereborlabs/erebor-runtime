@@ -6,6 +6,7 @@ trap 'echo "outage recovery failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 fixture_directory=$(cd -- "$directory/../../fixtures/convergence" && pwd)
+source "$directory/../kubernetes-oracles.sh"
 environment=
 provider=
 output_directory=
@@ -67,7 +68,7 @@ for command in jq sed timeout wc; do
 done
 
 environment=$(cd -- "$(dirname -- "$environment")" && pwd)/$(basename -- "$environment")
-jq -e '.schema_version == 1' "$environment" >/dev/null
+jq -e '.schema_version == 2' "$environment" >/dev/null
 vm_a=$(jq -er '.node_a' "$environment")
 vm_b=$(jq -er '.node_b' "$environment")
 work_a=$(jq -er '.node_a_work_directory' "$environment")
@@ -190,6 +191,23 @@ wait_api() {
   return 1
 }
 
+capture_failure_diagnostics() {
+  local pod
+  remote_kubectl -n "$scenario_namespace" get \
+    pods,workloadprotectionpolicies -o yaml \
+    >"$output_directory/failure-resources.yaml" 2>&1 || true
+  remote_kubectl -n "$scenario_namespace" get events \
+    --sort-by=.lastTimestamp \
+    >"$output_directory/failure-events.txt" 2>&1 || true
+  for pod in outage-a outage-b outage-new; do
+    remote_kubectl -n "$scenario_namespace" describe pod "$pod" \
+      >"$output_directory/$pod-describe.txt" 2>&1 || true
+    remote_kubectl -n "$scenario_namespace" logs "$pod" \
+      --all-containers --previous \
+      >"$output_directory/$pod-previous.log" 2>&1 || true
+  done
+}
+
 cleanup() {
   local original_status=$?
   local cleanup_failed=false
@@ -203,6 +221,9 @@ cleanup() {
     wait_api || cleanup_failed=true
   fi
   if remote_kubectl get --raw=/readyz >/dev/null 2>&1; then
+    if ((original_status != 0)) && [[ $owns_namespace == true ]]; then
+      capture_failure_diagnostics
+    fi
     restore_control_storage || cleanup_failed=true
     remote_kubectl -n "$system_namespace" scale deployment/mithril-control \
       --replicas=1 >/dev/null 2>&1 || cleanup_failed=true
@@ -865,6 +886,22 @@ remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
   --timeout=300s >/dev/null
 wait_node_ready "$node_a_name" true
 wait_node_ready "$node_b_name" true
+pod_a_after_api_restart=$(remote_kubectl -n "$scenario_namespace" get \
+  pod outage-a -o json)
+if pod_needs_api_restart_recreation "$pod_a_after_api_restart"; then
+  remote_kubectl -n "$scenario_namespace" delete pod outage-a \
+    --wait=true --timeout=120s >/dev/null
+  "$provider" run "$vm_a" sudo rm -f \
+    "$marker_root/outage-a.started" "$marker_root/outage-a.result"
+  remote_kubectl create -f /var/tmp/mithril-outage-pod-a.yaml >/dev/null
+  remote_kubectl -n "$scenario_namespace" wait --for=condition=Ready \
+    pod/outage-a --timeout=300s >/dev/null
+  wait_application_started "$vm_a" outage-a
+elif ! jq -e '.status.phase == "Running"' \
+    <<<"$pod_a_after_api_restart" >/dev/null; then
+  echo "protected Pod outage-a entered an unrelated state after API recovery" >&2
+  exit 1
+fi
 wait_control_session mithril-node-a
 wait_control_session mithril-node-b
 wait_node_control_acknowledgement "$node_a_name"
@@ -875,6 +912,12 @@ candidate_a_recovered=$(active_candidate "$node_a_name")
 candidate_b_recovered=$(active_candidate "$node_b_name")
 request_denial "$vm_b" outage-b recovered-b
 
+compacted_watch_event=$(remote_kubectl get --raw \
+  '/apis/mithril.erebor.dev/v1alpha1/workloadprotectionpolicies?watch=true&resourceVersion=1&timeoutSeconds=5')
+kubernetes_watch_cursor_is_compacted "$compacted_watch_event" || {
+  echo "Kubernetes did not reject the compacted policy watch cursor" >&2
+  exit 1
+}
 control_pod_json=$(remote_kubectl -n "$system_namespace" get pods \
   -l app.kubernetes.io/name=mithril-control -o json)
 control_pod_uid_before_relist=$(jq -er '.items[0].metadata.uid' <<<"$control_pod_json")
@@ -1054,6 +1097,8 @@ jq -n \
     reconnect_converged: true,
     api_outage_kept_worker_denial: true,
     api_recovery_converged: true,
+    watch_compaction_observed: true,
+    watch_relist_converged: true,
     candidates: {
       node_a: {
         before_partition: $candidate_a_v1,

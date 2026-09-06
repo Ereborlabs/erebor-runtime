@@ -159,6 +159,18 @@ status=$?
 set -e
 [[ $status -eq 2 && $outage_without_environment == \
   "retained environment is not readable: " ]]
+outage_schema_2_environment=$test_root/outage-schema-2-environment.json
+printf '%s\n' '{"schema_version":2,"node_a":"mithril-runtime-qualification-1","node_a_work_directory":"/tmp/mithril-vm-test.a","node_b":"mithril-runtime-qualification-2","node_b_work_directory":"/tmp/mithril-vm-test.b","provider":"/not/an/executable/provider","known_hosts":"/tmp/mithril-vm-test.a/known_hosts","mithril":{"control_state_claim":"state","control_config_secret":"config","admission_tls_secret":"tls"}}' \
+  >"$outage_schema_2_environment"
+set +e
+outage_schema_2=$(
+  "$directory/two-node-outage-recovery.sh" \
+    --environment "$outage_schema_2_environment" 2>&1
+)
+status=$?
+set -e
+[[ $status -eq 2 && $outage_schema_2 == \
+  "provider does not match the retained environment: /not/an/executable/provider" ]]
 set +e
 protected_manual=$("$directory/two-node-convergence.sh" \
   --protected-start-only --manual-environment 2>&1)
@@ -426,6 +438,22 @@ EOF
 chmod +x "$oracle_bin/kubectl"
 # These checks execute the command path. They do not inspect either fixture script.
 source "$directory/../kubernetes-oracles.sh"
+
+compacted_watch_event='{"type":"ERROR","object":{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"too old resource version: 1 (26712)","reason":"Expired","code":410}}'
+kubernetes_watch_cursor_is_compacted "$compacted_watch_event"
+if kubernetes_watch_cursor_is_compacted \
+    '{"type":"ERROR","object":{"status":"Failure","reason":"Timeout","code":504}}'; then
+  echo "a non-compaction watch error satisfied the compaction oracle" >&2
+  exit 1
+fi
+
+api_restart_evicted_pod='{"metadata":{"deletionTimestamp":null},"spec":{"nodeSelector":{"mithril.erebor.dev/ready":"true"}},"status":{"phase":"Failed","reason":"NodeAffinity"}}'
+api_restart_running_pod='{"metadata":{"deletionTimestamp":null},"spec":{"nodeSelector":{"mithril.erebor.dev/ready":"true"}},"status":{"phase":"Running"}}'
+pod_needs_api_restart_recreation "$api_restart_evicted_pod"
+if pod_needs_api_restart_recreation "$api_restart_running_pod"; then
+  echo "a running protected Pod required API-restart recreation" >&2
+  exit 1
+fi
 
 split_selected_status='{"active_candidate_content_id":"candidate-node-b","active_profile_ids":["profile-a"],"active_target_count":1,"active_targets_truncated":false,"active_targets":[{"candidate_content_id":"candidate-node-b","operation":"REPLACE","predecessor_candidate_content_id":"candidate-protected","kubernetes_node_name":"node-b"}],"scheduled_binding_count":0,"runtime_binding_count":1,"activation_pending":false,"control_acknowledged":true}'
 split_gate_status='{"active_candidate_content_id":"candidate-node-a","active_profile_ids":["profile-a"],"active_target_count":1,"active_targets_truncated":false,"active_targets":[{"candidate_content_id":"candidate-node-a","operation":"ACTIVATE","predecessor_candidate_content_id":null,"kubernetes_node_name":"node-a"}],"scheduled_binding_count":1,"runtime_binding_count":0,"activation_pending":false,"control_acknowledged":true}'

@@ -357,6 +357,28 @@ workload_startup_gate_should_be_open() {
   [[ $pod_name != protected || $hold_protected_startup == false ]]
 }
 
+kubernetes_watch_cursor_is_compacted() {
+  local event_json=$1
+  jq -e '
+    .type == "ERROR" and
+    .object.kind == "Status" and
+    .object.status == "Failure" and
+    .object.reason == "Expired" and
+    .object.code == 410 and
+    (.object.message | contains("too old resource version"))
+  ' <<<"$event_json" >/dev/null
+}
+
+pod_needs_api_restart_recreation() {
+  local pod_json=$1
+  jq -e '
+    .metadata.deletionTimestamp == null and
+    .spec.nodeSelector["mithril.erebor.dev/ready"] == "true" and
+    .status.phase == "Failed" and
+    .status.reason == "NodeAffinity"
+  ' <<<"$pod_json" >/dev/null
+}
+
 mount_cache_obsolete_row_count() {
   local rows=$1
   local security_view_epoch=$2

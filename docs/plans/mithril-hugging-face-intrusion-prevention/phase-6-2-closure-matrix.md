@@ -24,9 +24,10 @@ and retains `externalRole`. The Kubernetes fixture uses this schema and proved
 its declared entries under the earlier contract. It does not prove the approved
 administrative entry or the new probe argv-verification requirement. The
 historical complete fixture also proves guarded migration of one running
-process to a replacement base-policy generation. The physical
-evidence-failure, watch-compaction, network-partition, storage-outage,
-version-changed Kubernetes recovery, and authorized final-decommission cases
+process to a replacement base-policy generation. The current physical outage
+fixture passed evidence-stream interruption and recovery, storage failure,
+network partition, API outage, an expired Kubernetes watch cursor, and Control
+relist. Version-changed Kubernetes recovery and authorized final decommission
 remain `Not run`.
 
 The direct stock-`runc` application-start lane proves the `PREPARED` to
@@ -70,7 +71,7 @@ hook publishes the authoritative OCI path rows before application release.
 | `D6.2.2` | **Implemented and automated.** | One desired-state owner reconciles both source kinds. The store proves atomic source and artifact acceptance, restart, complete relist retirement, partial relist safety, and separate exception retirement. |
 | `D6.2.3` | **Implemented and automated.** | API-only workload inventory binds exact scheduler, Pod, container, Node, Node UID, boot, and label facts. Node claims cannot create a Kubernetes target. |
 | `D6.2.4` | **Implemented, automated, and physically exercised.** | Policy inventory returns the complete authenticated desired bundle set and skips superseded candidates. Policy transfer is resumable. Activation acknowledgements are exact. Exception candidates keep their bounded activation and revocation order. The selected-node transaction passed physically. |
-| `D6.2.5` | **Partial.** | Automated intake failure, duplicate, gap, reorder, replay, storage, restart, binary WAL migration, capacity policy, and connection-reuse tests pass. The healthy physical stream passed with no lost events, queue drops, WAL rewrite, or repeated Control connection. The physical failure variants remain `Not run`. |
+| `D6.2.5` | **Implemented, automated, and physically exercised.** | Automated intake failure, duplicate, gap, reorder, replay, storage, restart, binary WAL migration, capacity policy, and connection-reuse tests pass. The physical outage fixture retained unacknowledged records across Control and Node restart, withheld acknowledgement while Control storage was read-only, replayed the records after recovery, preserved existing Control and Node WAL prefixes, and truncated Node WAL data only after durable acknowledgement. |
 | `D6.2.6` | **Implemented, automated, and physically exercised.** | The current fixture passed target withdrawal, complete desired inventory, live-runtime retention, exception use, expiry, revocation, target retirement, restart, reconnect, and physical-session settlement. |
 | `D6.2.7` | **Implemented, automated, and physically exercised.** | Both statuses are bounded and contain no authority material. Separate writer roles and Control status-only permissions passed typed authorization reviews against the installed CRDs. |
 | `D6.2.8` | **Partial.** | The non-Kubernetes VM and complete Kubernetes fixtures proved independent and reusable declared entry roles, application start, PostStart, PreStop, exec probes, external-entry denial, and scenario cleanup under the earlier contract. The administrative reservation and late kernel-owned argv checks are not qualified. Declared probe entries must use the same per-exec checks before this result closes. |
@@ -104,11 +105,12 @@ hook publishes the authoritative OCI path rows before application release.
 
 ## Physical Proof Matrix
 
-The current complete physical result uses stock Kubernetes and Open Container
-Initiative (OCI) runtime extension points. It passed with Kubernetes
-v1.35.5+k3s1 and containerd v2.2.3-k3s1. Its evidence is
-`/tmp/mithril-phase62-mount-cache-gc-full-kubernetes-20260905-b`. The harness
-removed its scenario resources and retained its two healthy VMs and K3s
+The current complete physical results use stock Kubernetes and Open Container
+Initiative (OCI) runtime extension points. They passed with Kubernetes
+v1.35.5+k3s1 and containerd v2.2.3-k3s1. The convergence evidence is
+`/tmp/mithril-phase62-projected-epoch-full-kubernetes-20260906-g`. The outage
+evidence is `/tmp/mithril-phase62-outage-recovery-20260906-j`. Both harnesses
+removed their scenario resources and retained the two healthy VMs and K3s
 cluster.
 
 | Scenario | Result | Observation |
@@ -124,8 +126,8 @@ cluster.
 | Runtime and policy lifecycle | **Pass** | The complete current-source run proved task replacement, exception target retirement, desired-inventory cleanup, restart, no-root inspection, and fresh-root activation. |
 | Running policy update | **Pass** | The complete current-source run published one replacement generation for the live binding. The same running application migrated at its next protected effect. A later child exec used the replacement generation. |
 | Node lifecycle | **Pass** | The complete current-source run proved session loss, quarantine, same-name Node UID replacement, DaemonSet exclusion and re-entry, node process restart, and host reboot. |
-| Evidence failure variants | **Not run** | Automated tests pass. Physical duplicate, gap, reorder, storage failure, restart, and WAL truncation remain required. |
-| Watch and outage variants | **Not run** | Physical complete and partial relist, Control outage, API outage, and mixed rollout remain required. |
+| Evidence failure variants | **Pass** | During a Control outage, both Nodes retained unacknowledged records and one Node retained them across restart. A read-only Control evidence volume withheld acknowledgement. After storage recovery, Control accepted the retained records without changing stored segment prefixes, and both Nodes truncated acknowledged WAL data. |
+| Watch and outage variants | **Pass** | K3s returned `410 Expired` for resource version 1. Control then recovered after its policy watch missed a deletion and creation. The same run kept local denial during Control and API outages, blocked new protected work while Control was absent, retained the predecessor on one partitioned Node, reported a mixed rollout, and converged after reconnection. |
 | Retained runtime integration | **Partial** | The current run removed the Helm release, retained and read back the host integration, and recovered the exact current Control and Node shapes. Its direct-runc probe allowed version-changed binaries for exact shapes and rejected changed recovery shapes. A Kubernetes run with version-changed images and the authorized final-decommission case remain required. |
 
 The procedure cleanup removed the test namespace and runtime classes. Control
@@ -200,12 +202,10 @@ The historical focused replacement-exception result is
 
 ## Remaining Closure Work
 
-The physical evidence-failure, watch-compaction, network-partition,
-storage-outage, version-changed Kubernetes recovery, and authorized final
-decommission cases remain `Not run`. The approved administrative-entry
-transaction and late kernel-owned argument checks for administrative and probe
-entries remain unqualified. The physical direct non-CRI BPF fallback also
-remains unproved.
+Version-changed Kubernetes recovery and authorized final decommission remain
+`Not run`. The approved administrative-entry transaction and late kernel-owned
+argument checks for administrative and probe entries remain unqualified. The
+physical direct non-CRI BPF fallback also remains unproved.
 
 ## Unadvertised Work
 
