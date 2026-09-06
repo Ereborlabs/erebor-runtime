@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -552,6 +552,7 @@ impl EvidenceWalSegment {
     }
 
     fn seal(&mut self, root: &Path) -> Result<()> {
+        self.sync()?;
         let last_cursor = self.last_cursor.ok_or_else(|| {
             EvidenceStateSnafu {
                 reason: "an empty evidence WAL segment cannot be sealed".to_owned(),
@@ -566,18 +567,30 @@ impl EvidenceWalSegment {
         Ok(())
     }
 
-    fn append(&mut self, frame: &[u8], cursor: u64) -> Result<()> {
+    fn append(&mut self, frame: &[u8], cursor: u64, sync: bool) -> Result<()> {
         let mut file = OpenOptions::new()
             .append(true)
             .open(&self.path)
             .context(IoSnafu { path: &self.path })?;
         file.write_all(frame)
             .context(IoSnafu { path: &self.path })?;
-        file.sync_all().context(IoSnafu { path: &self.path })?;
+        if sync {
+            file.sync_all().context(IoSnafu { path: &self.path })?;
+        }
         self.last_cursor = Some(cursor);
         self.record_count = self.record_count.saturating_add(1);
         self.bytes = self.bytes.saturating_add(frame.len() as u64);
         Ok(())
+    }
+
+    fn sync(&self) -> Result<()> {
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&self.path)
+            .context(IoSnafu { path: &self.path })?
+            .sync_all()
+            .context(IoSnafu { path: &self.path })
     }
 }
 
@@ -680,9 +693,37 @@ impl EvidenceWalOwner {
         Ok(owner)
     }
 
-    pub(super) fn append_classified(
+    pub(super) fn append_classified_batch(
+        &mut self,
+        observations: &[ObservationEnvelopeV1],
+    ) -> std::result::Result<(), EvidenceWalAppendFailure> {
+        let mut touched = BTreeSet::new();
+        for observation in observations {
+            let identity = EvidenceWalStreamIdentityV1::from_observation(observation)
+                .map_err(EvidenceWalAppendFailure::from)?;
+            if let Err(failure) = self.append_classified_with_sync(observation, false) {
+                self.sync_streams(&touched)
+                    .map_err(EvidenceWalAppendFailure::from)?;
+                return Err(failure);
+            }
+            touched.insert(identity);
+        }
+        self.sync_streams(&touched)
+            .map_err(EvidenceWalAppendFailure::from)
+    }
+
+    #[cfg(test)]
+    fn append_classified(
         &mut self,
         observation: &ObservationEnvelopeV1,
+    ) -> std::result::Result<u64, EvidenceWalAppendFailure> {
+        self.append_classified_with_sync(observation, true)
+    }
+
+    fn append_classified_with_sync(
+        &mut self,
+        observation: &ObservationEnvelopeV1,
+        sync: bool,
     ) -> std::result::Result<u64, EvidenceWalAppendFailure> {
         let identity = EvidenceWalStreamIdentityV1::from_observation(observation)
             .map_err(EvidenceWalAppendFailure::from)?;
@@ -718,9 +759,24 @@ impl EvidenceWalOwner {
             wal.limits.maximum_retained_records = usize::MAX;
             wal.limits.maximum_retained_bytes = u64::MAX;
         }
-        let result = wal.append_classified(observation);
+        let result = wal.append_classified_with_sync(observation, sync);
         wal.limits = self.limits;
         result
+    }
+
+    fn sync_streams(&self, identities: &BTreeSet<EvidenceWalStreamIdentityV1>) -> Result<()> {
+        for identity in identities {
+            self.streams
+                .get(identity)
+                .ok_or_else(|| {
+                    EvidenceStateSnafu {
+                        reason: "the evidence WAL stream disappeared before batch sync".to_owned(),
+                    }
+                    .build()
+                })?
+                .sync_active()?;
+        }
+        Ok(())
     }
 
     pub(super) fn next_batch(&mut self) -> Option<EvidenceBatchV1> {
@@ -1069,6 +1125,14 @@ impl EvidenceWal {
         &mut self,
         observation: &ObservationEnvelopeV1,
     ) -> std::result::Result<u64, EvidenceWalAppendFailure> {
+        self.append_classified_with_sync(observation, true)
+    }
+
+    fn append_classified_with_sync(
+        &mut self,
+        observation: &ObservationEnvelopeV1,
+        sync: bool,
+    ) -> std::result::Result<u64, EvidenceWalAppendFailure> {
         let identity = EvidenceWalStreamIdentityV1::from_observation(observation)?;
         if self
             .stream_identity
@@ -1153,7 +1217,7 @@ impl EvidenceWal {
             }
             .build()
         })?;
-        active.append(&record.frame, cursor)?;
+        active.append(&record.frame, cursor, sync)?;
         self.stream_identity = Some(identity);
         self.retained_bytes = self
             .retained_bytes
@@ -1172,6 +1236,13 @@ impl EvidenceWal {
         })?;
         self.records.push(record);
         Ok(cursor)
+    }
+
+    fn sync_active(&self) -> Result<()> {
+        if let Some(active) = self.segments.last().filter(|segment| segment.active) {
+            active.sync()?;
+        }
+        Ok(())
     }
 
     fn next_cursor(&self) -> Result<u64> {
@@ -1717,6 +1788,30 @@ mod tests {
         // A live-file manifest must hash its captured length because the writer can append next.
         assert_eq!(&after_restart[..captured_size], before_restart);
         assert_eq!(restarted.pending_records(), 5);
+        Ok(())
+    }
+
+    #[test]
+    fn batched_append_is_available_after_restart() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let retain_limits = EvidenceWalLimits {
+            maximum_batch_records: 3,
+            capacity_policy: EvidenceWalCapacityPolicyV1::Retain,
+            ..limits()
+        };
+        let mut owner = EvidenceWalOwner::open(directory.path(), retain_limits)?;
+        let observations = (1..=3).map(observation).collect::<Result<Vec<_>, _>>()?;
+        owner
+            .append_classified_batch(&observations)
+            .map_err(|failure| failure.error)?;
+        drop(owner);
+
+        let mut reopened = EvidenceWalOwner::open(directory.path(), retain_limits)?;
+        let batch = reopened
+            .next_batch()
+            .ok_or("batched evidence did not survive restart")?;
+        assert_eq!((batch.first_cursor, batch.last_cursor), (1, 3));
+        assert_eq!(batch.record_count(), 3);
         Ok(())
     }
 

@@ -57,7 +57,7 @@ pub(super) fn effect_node_config(
             maximum_retained_records: 10_000,
             maximum_batch_records: 256,
             maximum_control_delay_ms: 30_000,
-            maximum_reader_queue_records: 65_535,
+            maximum_reader_queue_records: 262_144,
             capacity_policy: mithril_node::EvidenceWalCapacityPolicyV1::Block,
         }),
         runtime_observation: None,

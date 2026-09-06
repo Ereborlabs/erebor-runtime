@@ -486,10 +486,15 @@ docker run --rm --entrypoint /bin/cp \
   /usr/local/bin/mithril-oci-hook /output/mithril-oci-hook
 docker run --rm --entrypoint /bin/cp \
   --user "$(id -u):$(id -g)" \
+  --volume "$work_a:/output" mithril-node:convergence \
+  /usr/local/bin/mithril-inspect /output/mithril-inspect
+docker run --rm --entrypoint /bin/cp \
+  --user "$(id -u):$(id -g)" \
   --volume "$work_a:/output" mithril-node:upgrade-baseline \
   /usr/local/bin/mithril-oci-hook /output/mithril-oci-hook-upgrade-baseline
 chmod 755 "$work_a/mithril-oci-hook"
 chmod 755 "$work_a/mithril-oci-hook-upgrade-baseline"
+chmod 755 "$work_a/mithril-inspect"
 current_hook_digest=$(sha256sum "$work_a/mithril-oci-hook" | awk '{print $1}')
 baseline_hook_digest=$(sha256sum "$work_a/mithril-oci-hook-upgrade-baseline" | awk '{print $1}')
 [[ $current_hook_digest != "$baseline_hook_digest" ]] || {
@@ -583,6 +588,7 @@ for node in "$vm_a" "$vm_b"; do
   "$provider" put "$node" "$directory/k3s-config-v1.yaml" \
     "$remote/harness/k3s-config-v1.yaml"
   "$provider" put "$node" "$image_archive" "$remote/mithril-images.tar"
+  "$provider" put "$node" "$work_a/mithril-inspect" "$remote/mithril-inspect"
   if ! "$provider" run "$node" \
       'command -v jq >/dev/null && command -v openssl >/dev/null'; then
     "$provider" run "$node" \
@@ -712,6 +718,21 @@ node_b_name=$(jq -er --arg address "$address_b" '
 [[ $node_a_name != "$node_b_name" ]] || {
   echo "the scheduler does not have two distinct Kubernetes Nodes" >&2
   exit 1
+}
+
+node_inspect() {
+  local node_name=$1
+  shift
+  local node=$vm_a
+  local remote=$remote_a
+  if [[ $node_name == "$node_b_name" ]]; then
+    node=$vm_b
+    remote=$remote_b
+  elif [[ $node_name != "$node_a_name" ]]; then
+    echo "Mithril inspection requested an unknown Kubernetes Node: $node_name" >&2
+    return 2
+  fi
+  "$provider" run "$node" sudo "$remote/mithril-inspect" "$@"
 }
 
 replace_retained_test_resources() {
@@ -851,7 +872,7 @@ make_node_config() {
         maximum_retained_records: 2,
         maximum_batch_records: 4096,
         maximum_control_delay_ms: 30000,
-        maximum_reader_queue_records: 65535,
+        maximum_reader_queue_records: 262144,
         capacity_policy: "RETAIN"
       },
       runtime_observation: {
@@ -1458,13 +1479,8 @@ assert_mithril_node_name_denial remote_kubectl create \
 
 node_status() {
   local node_name=$1
-  local pod
-  pod=$(remote_kubectl -n "$system_namespace" get pods \
-    -l app.kubernetes.io/name=mithril-node \
-    --field-selector "spec.nodeName=$node_name" \
-    -o jsonpath='{.items[0].metadata.name}')
-  remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
-    mithril-inspect policy-delivery --state-directory /var/lib/mithril
+  node_inspect "$node_name" policy-delivery \
+    --state-directory "$node_state_host_path"
 }
 
 assert_live_exact_target() {
@@ -1479,10 +1495,14 @@ assert_live_exact_target() {
   local expected_operation
   local expected_predecessor
   for _attempt in {1..180}; do
-    status_json=$(node_status "$node_name" 2>/dev/null || true)
     node_json=$(remote_kubectl get node "$node_name" -o json 2>/dev/null || true)
+    if ! node_has_mithril_projection "$node_json"; then
+      sleep 1
+      continue
+    fi
     pod_json=$(remote_kubectl -n "$workload_namespace" get pod protected \
       -o json 2>/dev/null || true)
+    status_json=$(node_status "$node_name" 2>/dev/null || true)
     expected_operation=$operation
     expected_predecessor=$predecessor
     if [[ -z $expected_operation && -n $status_json ]]; then
@@ -1519,10 +1539,14 @@ wait_stable_live_replacement() {
   local predecessor
   local source_revision
   for _attempt in {1..180}; do
-    status_json=$(node_status "$node_name" 2>/dev/null || true)
     node_json=$(remote_kubectl get node "$node_name" -o json 2>/dev/null || true)
+    if ! node_has_mithril_projection "$node_json"; then
+      sleep 1
+      continue
+    fi
     pod_json=$(remote_kubectl -n "$workload_namespace" get pod protected \
       -o json 2>/dev/null || true)
+    status_json=$(node_status "$node_name" 2>/dev/null || true)
     candidate=$(jq -r '.active_candidate_content_id // ""' <<<"$status_json")
     predecessor=$(jq -r \
       '.active_targets[0].predecessor_candidate_content_id // ""' \
@@ -1583,14 +1607,8 @@ wait_policy_delivery_empty() {
 runtime_task_snapshot() {
   local node_name=$1
   local host_pid=$2
-  local pod
-  pod=$(remote_kubectl -n "$system_namespace" get pods \
-    -l app.kubernetes.io/name=mithril-node \
-    --field-selector "spec.nodeName=$node_name" \
-    -o jsonpath='{.items[0].metadata.name}')
-  remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
-    mithril-inspect --pin-root /sys/fs/bpf/mithril-convergence \
-      task --host-pid "$host_pid"
+  node_inspect "$node_name" --pin-root /sys/fs/bpf/mithril-convergence \
+    task --host-pid "$host_pid"
 }
 
 mount_map_counter() {
@@ -1832,16 +1850,33 @@ wait_for_entry_role_ready() {
 
 node_effects() {
   local node_name=$1
-  local pod
-  pod=$(remote_kubectl -n "$system_namespace" get pods \
-    -l app.kubernetes.io/name=mithril-node \
-    --field-selector "spec.nodeName=$node_name" \
-    -o jsonpath='{.items[0].metadata.name}')
-  remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
-    mithril-inspect effects --socket-path /run/mithril/observation.sock \
-      --cgroup-scope / --reason APPLICATION_DEFAULT_ALLOW \
-      --reason UNSUPPORTED_OBJECT --reason UNRESOLVED_OBJECT \
-      --reason PATH_TREE_POLICY_DENY
+  node_inspect "$node_name" effects \
+    --socket-path /run/mithril/observation.sock \
+    --cgroup-scope / --reason APPLICATION_DEFAULT_ALLOW \
+    --reason UNSUPPORTED_OBJECT --reason UNRESOLVED_OBJECT \
+    --reason PATH_TREE_POLICY_DENY
+}
+
+node_effect_health() {
+  local node_name=$1
+  node_inspect "$node_name" effects \
+    --socket-path /run/mithril/observation.sock \
+    --cgroup-scope / --reason __HEALTH_ONLY__
+}
+
+wait_effect_pipeline_ready_for_marker() {
+  local node_name=$1
+  local health=
+  for _attempt in {1..5}; do
+    sleep 30
+    health=$(node_effect_health "$node_name")
+    if effect_pipeline_ready_for_marker "$health"; then
+      return 0
+    fi
+  done
+  printf '%s\n' "$health" >&2
+  echo "node $node_name did not drain its effect pipeline before the marker" >&2
+  return 1
 }
 
 effect_health_value() {
@@ -1864,8 +1899,8 @@ assert_node_evidence_health_clean() {
   local node_name=$1
   local pod
   local pod_json
+  local node_json
   local restart_count
-  local health
   local logs
   pod_json=$(remote_kubectl -n "$system_namespace" get pods \
     -l app.kubernetes.io/name=mithril-node \
@@ -1881,33 +1916,20 @@ assert_node_evidence_health_clean() {
     echo "node $node_name restarted $restart_count times in its current Pod" >&2
     return 1
   fi
-  health=$(remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
-    mithril-inspect effects --socket-path /run/mithril/observation.sock \
-      --cgroup-scope /)
-  for expected in \
-    'lost=0' \
-    'evidence_errors=0' \
-    'wal_capacity_blocked=0' \
-    'reader_queue_dropped_events=0'; do
-    if ! grep -Eq "(^| )$expected( |$)" <<<"$health"; then
-      printf '%s\n' "$health" >&2
-      echo "node $node_name has unhealthy effect evidence: $expected is absent" >&2
-      return 1
-    fi
+  for _attempt in {1..5}; do
+    node_json=$(remote_kubectl get node "$node_name" -o json)
+    node_has_mithril_projection "$node_json" && break
+    [[ $_attempt -lt 5 ]] || break
+    sleep 30
   done
-  if ! grep -F \
-      'capability=LOCAL_EFFECT_OBSERVATION state=SUPPORTED' \
-      <<<"$health" >/dev/null; then
-    printf '%s\n' "$health" >&2
-    echo "node $node_name does not have healthy effect observation" >&2
+  if ! node_has_mithril_projection "$node_json"; then
+    printf '%s\n' "$node_json" >&2
+    echo "node $node_name does not have a healthy Mithril projection" >&2
     return 1
   fi
 
   logs=$(remote_kubectl -n "$system_namespace" logs "$pod" -c mithril-node)
-  if [[ $(grep -Fc 'connected to Mithril Control' <<<"$logs") -ne 1 ]] ||
-    grep -Eq \
-      'lost the Mithril Control stream|Mithril Node stopped with an error|Mithril node control protocol failed|WAL_FAILURE|out-of-order evidence|durable evidence operation failed|evidence reconciliation became unhealthy' \
-      <<<"$logs"; then
+  if ! node_evidence_stream_log_is_healthy "$logs"; then
     printf '%s\n' "$logs" >&2
     echo "node $node_name did not retain one healthy Control evidence stream" >&2
     return 1
@@ -1917,27 +1939,23 @@ assert_node_evidence_health_clean() {
 start_entry_effect_capture() {
   local node_name=$1
   local output=$2
-  local pod
-  pod=$(remote_kubectl -n "$system_namespace" get pods \
-    -l app.kubernetes.io/name=mithril-node \
-    --field-selector "spec.nodeName=$node_name" \
-    -o jsonpath='{.items[0].metadata.name}')
-  remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
-    mithril-inspect effects --socket-path /run/mithril/observation.sock \
-      --cgroup-scope / --samples 6000 --sample-interval-ms 100 \
-      --reason APPLICATION_DEFAULT_ALLOW \
-      --reason PREPARED_RUNTIME_INFRASTRUCTURE \
-      --reason RUNTIME_ENTRY_INFRASTRUCTURE \
-      --reason EXECUTION_APPROVAL_VERIFICATION_FAILED \
-      --reason UNSUPPORTED_OBJECT \
-      --reason UNRESOLVED_OBJECT \
-      --reason PATH_TREE_POLICY_DENY \
-      >"$output" 2>/dev/null &
+  node_inspect "$node_name" effects \
+    --socket-path /run/mithril/observation.sock \
+    --cgroup-scope / --samples 6000 --sample-interval-ms 100 \
+    --reason APPLICATION_DEFAULT_ALLOW \
+    --reason PREPARED_RUNTIME_INFRASTRUCTURE \
+    --reason RUNTIME_ENTRY_INFRASTRUCTURE \
+    --reason EXECUTION_APPROVAL_VERIFICATION_FAILED \
+    --reason UNSUPPORTED_OBJECT \
+    --reason UNRESOLVED_OBJECT \
+    --reason PATH_TREE_POLICY_DENY \
+    >"$output" 2>/dev/null &
   entry_effect_capture_pids+=("$!")
 }
 
 prepare_pod_markers() {
   local pod_name=$1
+  local hold_protected_startup=${2:-false}
   local node
   local marker_root=/var/lib/mithril-convergence/markers
   for node in "$vm_a" "$vm_b"; do
@@ -1968,7 +1986,8 @@ prepare_pod_markers() {
       "$marker_root/$pod_name.prestop-observed"
     "$provider" run "$node" sudo touch \
       "$marker_root/$pod_name.exception-target"
-    if [[ $pod_name != protected ]]; then
+    if workload_startup_gate_should_be_open \
+        "$pod_name" "$hold_protected_startup"; then
       "$provider" run "$node" sudo touch \
         "$marker_root/$pod_name.concurrent-startup-gate"
     fi
@@ -2149,7 +2168,7 @@ install -m 0600 "$work_a/policy-v1.yaml" \
 wait_policy_delivery_empty "$entry_roles_node"
 
 # Both possible scheduler targets receive the same inert files, not policy authority.
-prepare_pod_markers protected
+prepare_pod_markers protected true
 protected_effect_capture_a=$output_directory/protected-effect-capture-node-a.txt
 protected_effect_capture_b=$output_directory/protected-effect-capture-node-b.txt
 start_entry_effect_capture "$node_a_name" "$protected_effect_capture_a"
@@ -2692,6 +2711,7 @@ for _attempt in {1..120}; do
   sleep 1
 done
 
+wait_effect_pipeline_ready_for_marker "$selected_node"
 application_effects=$(node_effects "$selected_node")
 application_effect_marker=$(awk '
   /^observed_boottime_ns=/ {

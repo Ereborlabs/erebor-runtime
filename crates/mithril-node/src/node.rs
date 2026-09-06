@@ -540,8 +540,14 @@ impl NodeChassis {
             let queue_capacity = config
                 .evidence
                 .as_ref()
-                .map_or(65_535, |evidence| evidence.maximum_reader_queue_records);
-            let (ingress, worker) = observations.bounded_ingestion_queue(queue_capacity)?;
+                .map_or(262_144, |evidence| evidence.maximum_reader_queue_records);
+            let batch_capacity = config
+                .evidence
+                .as_ref()
+                .map_or(256, |evidence| evidence.maximum_batch_records)
+                .min(queue_capacity);
+            let (ingress, worker) =
+                observations.bounded_ingestion_queue(queue_capacity, batch_capacity)?;
             let reader = host
                 .effect_observation_reader(move |bytes| {
                     ingress.record_bytes(bytes);

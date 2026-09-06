@@ -89,18 +89,19 @@ pub struct EffectObservationHealth {
     pub reader_queue_dropped_events: u64,
 }
 
-pub(crate) struct EffectObservationIngress {
+pub struct EffectObservationIngress {
     sender: SyncSender<Box<[u8]>>,
     observations: EffectObservationStore,
 }
 
-pub(crate) struct EffectObservationWorker {
+pub struct EffectObservationWorker {
     receiver: Receiver<Box<[u8]>>,
     observations: EffectObservationStore,
+    batch_capacity: usize,
 }
 
 impl EffectObservationIngress {
-    pub(crate) fn record_bytes(&self, bytes: &[u8]) {
+    pub fn record_bytes(&self, bytes: &[u8]) {
         self.observations
             .inner
             .reader_queue_pending_records
@@ -122,13 +123,21 @@ impl EffectObservationIngress {
 }
 
 impl EffectObservationWorker {
-    pub(crate) fn run(self) {
-        while let Ok(bytes) = self.receiver.recv() {
-            self.observations.record_bytes(&bytes);
+    pub fn run(self) {
+        while let Ok(first) = self.receiver.recv() {
+            let mut batch = Vec::with_capacity(self.batch_capacity);
+            batch.push(first);
+            while batch.len() < self.batch_capacity {
+                let Ok(bytes) = self.receiver.try_recv() else {
+                    break;
+                };
+                batch.push(bytes);
+            }
+            self.observations.record_byte_batch(&batch);
             self.observations
                 .inner
                 .reader_queue_pending_records
-                .fetch_sub(1, Ordering::Relaxed);
+                .fetch_sub(batch.len() as u64, Ordering::Relaxed);
             self.observations.persist_reader_queue_loss();
         }
         self.observations.persist_reader_queue_loss();
@@ -205,55 +214,88 @@ impl EffectObservationStore {
     }
 
     pub fn record_bytes(&self, bytes: &[u8]) {
-        let Ok(event) = EffectObservationV1::read_from_bytes(bytes) else {
-            self.inner.decoder_errors.fetch_add(1, Ordering::Relaxed);
-            if let Some(durable) = &self.inner.durable {
-                self.record_evidence_error("effect observation bytes are invalid");
-                let _result = durable
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .coverage
-                    .mark_all_gapped(CoverageGapReasonV1::DecoderError);
-            }
-            return;
-        };
+        self.record_byte_batch(&[Box::<[u8]>::from(bytes)]);
+    }
+
+    fn record_byte_batch(&self, bytes: &[Box<[u8]>]) {
+        let mut events = Vec::with_capacity(bytes.len());
+        for bytes in bytes {
+            let Ok(event) = EffectObservationV1::read_from_bytes(bytes) else {
+                self.inner.decoder_errors.fetch_add(1, Ordering::Relaxed);
+                if let Some(durable) = &self.inner.durable {
+                    self.record_evidence_error("effect observation bytes are invalid");
+                    let _result = durable
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .coverage
+                        .mark_all_gapped(CoverageGapReasonV1::DecoderError);
+                }
+                continue;
+            };
+            events.push(event);
+        }
+        self.record_events(&events);
+    }
+
+    fn record_events(&self, events: &[EffectObservationV1]) {
         {
             let mut recent = self.lock_recent();
-            recent.cursor = recent.cursor.saturating_add(1);
-            if self.inner.capacity > 0 {
-                if recent.events.len() == self.inner.capacity {
-                    recent.events.pop_front();
+            for event in events {
+                recent.cursor = recent.cursor.saturating_add(1);
+                if self.inner.capacity > 0 {
+                    if recent.events.len() == self.inner.capacity {
+                        recent.events.pop_front();
+                    }
+                    recent.events.push_back(to_ipc(*event));
                 }
-                recent.events.push_back(to_ipc(event));
             }
         }
-        if event.effect_family == KernelEffectFamilyV1::Mount as u16 {
+        let mount_events = events
+            .iter()
+            .filter(|event| event.effect_family == KernelEffectFamilyV1::Mount as u16)
+            .count();
+        if mount_events > 0 {
             self.inner
                 .mount_change_sequence
-                .fetch_add(1, Ordering::Release);
+                .fetch_add(mount_events as u64, Ordering::Release);
             self.inner.mount_change_notify.notify_one();
         }
         if let Some(durable) = &self.inner.durable {
-            let result: std::result::Result<Option<u64>, (Box<crate::Error>, bool)> = (|| {
+            let result: std::result::Result<(), (Box<crate::Error>, bool)> = (|| {
                 let mut durable = durable.lock().unwrap_or_else(PoisonError::into_inner);
-                let Some((coverage_interval_id, temporal_coverage)) = durable
+                let coverage = durable
                     .coverage
-                    .observe(event.source_cpu_id, event.source_sequence)
-                    .map_err(|error| (Box::new(error), false))?
-                else {
-                    erebor_telemetry::debug!(
-                        "ignored a replayed effect observation",
-                        cpu_id = %event.source_cpu_id,
-                        source_sequence = %event.source_sequence
-                    );
-                    return Ok(None);
-                };
-                let observation = durable
-                    .canonicalizer
-                    .normalize_kernel(event, coverage_interval_id, temporal_coverage, utc_now_ns())
+                    .observe_batch(
+                        &events
+                            .iter()
+                            .map(|event| (event.source_cpu_id, event.source_sequence))
+                            .collect::<Vec<_>>(),
+                    )
                     .map_err(|error| (Box::new(error), false))?;
-                match durable.wal.append_classified(&observation) {
-                    Ok(cursor) => Ok(Some(cursor)),
+                let mut observations = Vec::with_capacity(events.len());
+                for (event, coverage) in events.iter().zip(coverage) {
+                    let Some((coverage_interval_id, temporal_coverage)) = coverage else {
+                        erebor_telemetry::debug!(
+                            "ignored a replayed effect observation",
+                            cpu_id = %event.source_cpu_id,
+                            source_sequence = %event.source_sequence
+                        );
+                        continue;
+                    };
+                    observations.push(
+                        durable
+                            .canonicalizer
+                            .normalize_kernel(
+                                *event,
+                                coverage_interval_id,
+                                temporal_coverage,
+                                utc_now_ns(),
+                            )
+                            .map_err(|error| (Box::new(error), false))?,
+                    );
+                }
+                match durable.wal.append_classified_batch(&observations) {
+                    Ok(()) => Ok(()),
                     Err(failure) => {
                         let reason = if failure.capacity {
                             CoverageGapReasonV1::WalCapacity
@@ -267,10 +309,9 @@ impl EffectObservationStore {
                         Err((failure.error, failure.capacity))
                     }
                 }
-            })(
-            );
+            })();
             match result {
-                Ok(_appended) => self.clear_wal_capacity_error(),
+                Ok(()) => self.clear_wal_capacity_error(),
                 Err((error, true)) => {
                     self.inner
                         .wal_capacity_blocked
@@ -298,13 +339,15 @@ impl EffectObservationStore {
         }
     }
 
-    pub(crate) fn bounded_ingestion_queue(
+    pub fn bounded_ingestion_queue(
         &self,
         capacity: usize,
+        batch_capacity: usize,
     ) -> crate::Result<(EffectObservationIngress, EffectObservationWorker)> {
-        if capacity == 0 {
+        if capacity == 0 || batch_capacity == 0 || batch_capacity > capacity {
             return Err(crate::Error::EvidenceState {
-                reason: "effect observation reader queue capacity must be nonzero".to_owned(),
+                reason: "effect observation reader queue and batch capacities are invalid"
+                    .to_owned(),
                 location: snafu::Location::new(file!(), line!(), column!()),
             });
         }
@@ -317,6 +360,7 @@ impl EffectObservationStore {
             EffectObservationWorker {
                 receiver,
                 observations: self.clone(),
+                batch_capacity,
             },
         ))
     }
@@ -1093,7 +1137,7 @@ mod tests {
     #[test]
     fn bounded_reader_queue_drops_only_after_capacity() -> crate::Result<()> {
         let store = EffectObservationStore::new(2);
-        let (ingress, worker) = store.bounded_ingestion_queue(1)?;
+        let (ingress, worker) = store.bounded_ingestion_queue(1, 1)?;
         ingress.record_bytes(
             EffectObservationV1 {
                 source_sequence: 1,
@@ -1137,7 +1181,7 @@ mod tests {
             )?,
         )?;
         store.sample_coverage_health(EffectObservationHealthV1::default().as_bytes())?;
-        let (ingress, worker) = store.bounded_ingestion_queue(1)?;
+        let (ingress, worker) = store.bounded_ingestion_queue(1, 1)?;
         for source_sequence in [1, 2] {
             ingress.record_bytes(
                 EffectObservationV1 {

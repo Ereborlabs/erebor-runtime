@@ -424,54 +424,19 @@ impl CoverageHealthOwner {
         cpu_id: u32,
         sequence: u64,
     ) -> Result<Option<(EvidenceIdV1, TemporalCoverageV1)>> {
-        if sequence == 0 {
-            return EvidenceStateSnafu {
-                reason: "coverage observation sequence must be nonzero".to_owned(),
-            }
-            .fail();
-        }
+        Ok(self.observe_batch(&[(cpu_id, sequence)])?.remove(0))
+    }
+
+    pub(super) fn observe_batch(
+        &self,
+        observations: &[(u32, u64)],
+    ) -> Result<Vec<Option<(EvidenceIdV1, TemporalCoverageV1)>>> {
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         inner.commit(|inner| {
-            let baseline = EffectObservationCpuHealth {
-                cpu_id,
-                counters: CoverageCountersV1 {
-                    next_sequence: sequence - 1,
-                    ..CoverageCountersV1::default()
-                },
-            };
-            let (completed, interval_id, coverage) = {
-                let source = ensure_source(inner, baseline)?;
-                if source
-                    .last_observed_sequence
-                    .is_some_and(|last| sequence <= last)
-                {
-                    return Ok(None);
-                }
-                let expected = source
-                    .last_observed_sequence
-                    .unwrap_or(source.current.opening_counters.next_sequence)
-                    .checked_add(1);
-                let completed = if expected != Some(sequence) {
-                    mark_source_gap(
-                        source,
-                        CoverageGapReasonV1::SourceSequenceGap,
-                        source.last_health.unwrap_or_default(),
-                    )
-                } else {
-                    None
-                };
-                source.last_observed_sequence = Some(sequence);
-                source.current.last_sequence = Some(sequence);
-                let interval_id = source.current.interval_id;
-                let coverage = if source.current.supports_negative_claim() {
-                    TemporalCoverageV1::Complete
-                } else {
-                    TemporalCoverageV1::Gapped
-                };
-                (completed, interval_id, coverage)
-            };
-            append_history(inner, completed)?;
-            Ok(Some((interval_id, coverage)))
+            observations
+                .iter()
+                .map(|&(cpu_id, sequence)| observe_one(inner, cpu_id, sequence))
+                .collect()
         })
     }
 
@@ -695,6 +660,59 @@ impl CoverageHealthOwner {
         let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         persist_snapshot(&inner.path, &inner.snapshot)
     }
+}
+
+fn observe_one(
+    inner: &mut CoverageInner,
+    cpu_id: u32,
+    sequence: u64,
+) -> Result<Option<(EvidenceIdV1, TemporalCoverageV1)>> {
+    if sequence == 0 {
+        return EvidenceStateSnafu {
+            reason: "coverage observation sequence must be nonzero".to_owned(),
+        }
+        .fail();
+    }
+    let baseline = EffectObservationCpuHealth {
+        cpu_id,
+        counters: CoverageCountersV1 {
+            next_sequence: sequence - 1,
+            ..CoverageCountersV1::default()
+        },
+    };
+    let (completed, interval_id, coverage) = {
+        let source = ensure_source(inner, baseline)?;
+        if source
+            .last_observed_sequence
+            .is_some_and(|last| sequence <= last)
+        {
+            return Ok(None);
+        }
+        let expected = source
+            .last_observed_sequence
+            .unwrap_or(source.current.opening_counters.next_sequence)
+            .checked_add(1);
+        let completed = if expected != Some(sequence) {
+            mark_source_gap(
+                source,
+                CoverageGapReasonV1::SourceSequenceGap,
+                source.last_health.unwrap_or_default(),
+            )
+        } else {
+            None
+        };
+        source.last_observed_sequence = Some(sequence);
+        source.current.last_sequence = Some(sequence);
+        let interval_id = source.current.interval_id;
+        let coverage = if source.current.supports_negative_claim() {
+            TemporalCoverageV1::Complete
+        } else {
+            TemporalCoverageV1::Gapped
+        };
+        (completed, interval_id, coverage)
+    };
+    append_history(inner, completed)?;
+    Ok(Some((interval_id, coverage)))
 }
 
 fn ensure_source(
@@ -1034,6 +1052,37 @@ mod tests {
         owner.observe(2, 4)?;
         owner.sample_health(&[health(4, 1)])?;
         assert!(!owner.snapshot().supports_negative_claim());
+        Ok(())
+    }
+
+    #[test]
+    fn batch_observation_preserves_sequence_and_replay_rules(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("coverage.json");
+        let owner = open_owner(&path, 1)?;
+        owner.sample_health(&[health(0, 0)])?;
+
+        let observed = owner.observe_batch(&[(2, 1), (2, 2), (2, 2), (2, 3)])?;
+        assert_eq!(observed.len(), 4);
+        assert_eq!(
+            observed[0].map(|entry| entry.1),
+            Some(TemporalCoverageV1::Complete)
+        );
+        assert_eq!(
+            observed[1].map(|entry| entry.1),
+            Some(TemporalCoverageV1::Complete)
+        );
+        assert_eq!(observed[2], None);
+        assert_eq!(
+            observed[3].map(|entry| entry.1),
+            Some(TemporalCoverageV1::Complete)
+        );
+        drop(owner);
+
+        let restarted = open_owner(&path, 1)?;
+        assert_eq!(restarted.observe(2, 3)?, None);
+        assert!(restarted.observe(2, 4)?.is_some());
         Ok(())
     }
 

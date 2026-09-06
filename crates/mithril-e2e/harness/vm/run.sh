@@ -399,6 +399,7 @@ if [[ $entry_role_runtime_only == true ]]; then
     .single_wildcard_path_tree_denied and
     .recursive_wildcard_path_tree_denied and
     .concurrent_exec_detached_mounts_preserved_view and
+    .bounded_reader_queue_preserved_concurrent_burst and
     .recursive_wildcard_stable_after_concurrent_exec and
     .stale_mount_cache_rebuilt and
     .other_role_path_tree_allowed and

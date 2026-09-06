@@ -107,6 +107,45 @@ external_cgroup_exec_denial_after() {
   ((count > 0))
 }
 
+node_evidence_stream_log_is_healthy() {
+  local logs=$1
+  local transition
+  [[ $(grep -Fc 'connected to Mithril Control' <<<"$logs") -eq 1 ]] || return 1
+  if grep -Eq \
+      'lost the Mithril Control stream|Mithril Node stopped with an error|Mithril node control protocol failed|WAL_FAILURE|out-of-order evidence|durable evidence operation failed' \
+      <<<"$logs"; then
+    return 1
+  fi
+  transition=$(awk '
+    /evidence reconciliation became unhealthy/ { state = "unhealthy" }
+    /recovered Mithril Node readiness/ { state = "healthy" }
+    END { print state }
+  ' <<<"$logs")
+  [[ $transition != unhealthy ]]
+}
+
+node_effect_health_is_clean() {
+  local health=$1
+  for expected in \
+    'lost=0' \
+    'decoder_errors=0' \
+    'evidence_errors=0' \
+    'wal_capacity_blocked=0' \
+    'reader_queue_dropped_events=0' \
+    'health_available=true'; do
+    grep -Eq "(^| )$expected( |$)" <<<"$health" || return 1
+  done
+  grep -F \
+    'capability=LOCAL_EFFECT_OBSERVATION state=SUPPORTED' \
+    <<<"$health" >/dev/null
+}
+
+effect_pipeline_ready_for_marker() {
+  local health=$1
+  node_effect_health_is_clean "$health" || return 1
+  grep -Eq '(^| )pending_evidence_records=0( |$)' <<<"$health"
+}
+
 retained_mithril_state() {
   local environment=$1
 
@@ -180,6 +219,30 @@ write_retained_environment() {
         admission_tls_secret: $admission_tls_secret
       } else null end)
     }' >"$output"
+}
+
+node_has_mithril_projection() {
+  local node_json=$1
+  jq -e '
+    .metadata.labels["mithril.erebor.dev/ready"] == "true" and
+    (.metadata.annotations["mithril.erebor.dev/node-id"] | length) > 0 and
+    .metadata.annotations["mithril.erebor.dev/node-uid"] == .metadata.uid and
+    (.metadata.annotations["mithril.erebor.dev/node-boot-id"] |
+      test("^[0-9a-f]{32}$")) and
+    (.metadata.annotations["mithril.erebor.dev/label-epoch"] |
+      test("^[1-9][0-9]*$"))
+  ' <<<"$node_json" >/dev/null
+}
+
+workload_startup_gate_should_be_open() {
+  local pod_name=$1
+  local hold_protected_startup=${2:-false}
+  [[ -n $pod_name &&
+     ( $hold_protected_startup == true || $hold_protected_startup == false ) ]] || {
+    echo "invalid workload startup-gate input" >&2
+    return 2
+  }
+  [[ $pod_name != protected || $hold_protected_startup == false ]]
 }
 
 assert_exact_policy_target() {

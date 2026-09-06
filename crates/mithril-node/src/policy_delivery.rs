@@ -6794,7 +6794,7 @@ mod tests {
                 maximum_retained_records: 10_000,
                 maximum_batch_records: 256,
                 maximum_control_delay_ms: 30_000,
-                maximum_reader_queue_records: 65_535,
+                maximum_reader_queue_records: 262_144,
                 capacity_policy: crate::EvidenceWalCapacityPolicyV1::Block,
             }),
             runtime_observation: None,

@@ -98,6 +98,12 @@ grep -Fq 'control_state_claim=mithril-control-state-$run_id' \
 grep -Fq 'capacity_policy: "RETAIN"' "$directory/two-node-convergence.sh"
 grep -Fq 'maximum_retained_records: 2' "$directory/two-node-convergence.sh"
 grep -Fq 'maximum_batch_records: 4096' "$directory/two-node-convergence.sh"
+grep -Fq '/usr/local/bin/mithril-inspect /output/mithril-inspect' \
+  "$directory/two-node-convergence.sh"
+grep -Fq 'node_inspect "$node_name" policy-delivery' \
+  "$directory/two-node-convergence.sh"
+grep -Fq 'node_inspect "$node_name" effects' \
+  "$directory/two-node-convergence.sh"
 grep -Fq 'node_retain_exceeded_soft_bound_without_loss: true' \
   "$directory/two-node-outage-recovery.sh"
 grep -Fq 'pending_evidence_records=' \
@@ -420,6 +426,38 @@ EOF
 chmod +x "$oracle_bin/kubectl"
 # These checks execute the command path. They do not inspect either fixture script.
 source "$directory/../kubernetes-oracles.sh"
+
+workload_startup_gate_should_be_open entry-roles true
+workload_startup_gate_should_be_open protected false
+if workload_startup_gate_should_be_open protected true; then
+  echo "a held protected startup gate was reported as open" >&2
+  exit 1
+fi
+recovered_evidence_log=$'connected to Mithril Control\nevidence reconciliation became unhealthy\nrecovered evidence coverage\nrecovered Mithril Node readiness'
+node_evidence_stream_log_is_healthy "$recovered_evidence_log"
+if node_evidence_stream_log_is_healthy \
+    $'connected to Mithril Control\nlost the Mithril Control stream'; then
+  echo "a lost evidence stream satisfied the recovered-stream oracle" >&2
+  exit 1
+fi
+if node_evidence_stream_log_is_healthy \
+    $'connected to Mithril Control\ndurable evidence operation failed'; then
+  echo "a durable evidence failure satisfied the recovered-stream oracle" >&2
+  exit 1
+fi
+backlogged_effect_pipeline=$'attempted=75757 emitted=75757 lost=0 decoder_errors=0 evidence_errors=0 wal_capacity_blocked=0 reader_queue_dropped_events=0 pending_evidence_records=6073 health_available=true\ncapability=LOCAL_EFFECT_OBSERVATION state=UNHEALTHY reason=DURABLE_EVIDENCE_COVERAGE_GAPPED'
+if effect_pipeline_ready_for_marker "$backlogged_effect_pipeline"; then
+  echo "a backlogged effect pipeline was ready for a new marker" >&2
+  exit 1
+fi
+drained_effect_pipeline=$'attempted=75757 emitted=75757 lost=0 decoder_errors=0 evidence_errors=0 wal_capacity_blocked=0 reader_queue_dropped_events=0 pending_evidence_records=0 health_available=true\ncapability=LOCAL_EFFECT_OBSERVATION state=SUPPORTED reason=DURABLE_LOSS_AWARE_KERNEL_COVERAGE'
+effect_pipeline_ready_for_marker "$drained_effect_pipeline"
+recovering_effect_health=$'attempted=80721 emitted=80721 lost=0 decoder_errors=0 evidence_errors=0 wal_capacity_blocked=0 reader_queue_dropped_events=0 pending_evidence_records=0 health_available=true\ncapability=LOCAL_EFFECT_OBSERVATION state=UNHEALTHY reason=DURABLE_EVIDENCE_COVERAGE_GAPPED'
+if node_effect_health_is_clean "$recovering_effect_health"; then
+  echo "transiently gapped effect coverage satisfied the clean-health oracle" >&2
+  exit 1
+fi
+node_effect_health_is_clean "$drained_effect_pipeline"
 retained_exception_status='{"consumed_exception_count":0,"expired_exception_count":0,"revoked_exception_count":3}'
 exception_status_counter_advanced_by "$retained_exception_status" \
   revoked_exception_count 2 1
@@ -529,9 +567,16 @@ if assert_recreated_node_unbound \
   exit 1
 fi
 
-node_json='{"metadata":{"name":"node-a","uid":"node-uid-a","annotations":{"mithril.erebor.dev/node-id":"node-id-a","mithril.erebor.dev/node-uid":"node-uid-a","mithril.erebor.dev/node-boot-id":"boot-a","mithril.erebor.dev/label-epoch":"7"}}}'
+node_json='{"metadata":{"name":"node-a","uid":"node-uid-a","labels":{"mithril.erebor.dev/ready":"true"},"annotations":{"mithril.erebor.dev/node-id":"node-id-a","mithril.erebor.dev/node-uid":"node-uid-a","mithril.erebor.dev/node-boot-id":"0123456789abcdef0123456789abcdef","mithril.erebor.dev/label-epoch":"7"}}}'
+node_has_mithril_projection "$node_json"
+if node_has_mithril_projection "$recreated_node_quarantined"; then
+  echo "an unprojected Kubernetes Node satisfied the Mithril projection oracle" >&2
+  exit 1
+fi
+grep -Fq 'if ! node_has_mithril_projection "$node_json"; then' \
+  "$directory/two-node-convergence.sh"
 pod_json='{"metadata":{"name":"protected","namespace":"tenant-a","uid":"pod-uid-a","annotations":{"mithril.erebor.dev/policy-source-revision":"source-a"}},"spec":{"nodeName":"node-a","containers":[{"name":"app","image":"busybox@sha256:image-a"}]},"status":{"containerStatuses":[{"name":"app","containerID":"containerd://container-a"}]}}'
-status_json='{"active_candidate_content_id":"candidate-a","active_target_count":1,"active_targets_truncated":false,"active_targets":[{"profile_id":"profile-a","candidate_content_id":"candidate-a","operation":"ACTIVATE","predecessor_candidate_content_id":null,"policy_source_revision_id":"source-a","workload_binding_generation_digest":"binding-generation-a","node_id":"node-id-a","kubernetes_node_name":"node-a","kubernetes_node_uid":"node-uid-a","node_boot_id":"boot-a","label_epoch":7,"namespace_name":"tenant-a","pod_name":"protected","pod_uid":"pod-uid-a","container_name":"app","image_digest":"sha256:image-a","runtime_container_id":"container-a","runtime_binding_id":"runtime-binding-a","container_generation":1}]}'
+status_json='{"active_candidate_content_id":"candidate-a","active_target_count":1,"active_targets_truncated":false,"active_targets":[{"profile_id":"profile-a","candidate_content_id":"candidate-a","operation":"ACTIVATE","predecessor_candidate_content_id":null,"policy_source_revision_id":"source-a","workload_binding_generation_digest":"binding-generation-a","node_id":"node-id-a","kubernetes_node_name":"node-a","kubernetes_node_uid":"node-uid-a","node_boot_id":"0123456789abcdef0123456789abcdef","label_epoch":7,"namespace_name":"tenant-a","pod_name":"protected","pod_uid":"pod-uid-a","container_name":"app","image_digest":"sha256:image-a","runtime_container_id":"container-a","runtime_binding_id":"runtime-binding-a","container_generation":1}]}'
 assert_exact_policy_target "$status_json" "$node_json" "$pod_json" \
   profile-a app ACTIVATE
 if assert_exact_policy_target "$(jq -c '.active_targets[0].runtime_container_id = "wrong"' \

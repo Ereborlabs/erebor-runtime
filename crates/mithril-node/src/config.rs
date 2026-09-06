@@ -686,7 +686,7 @@ const fn default_evidence_control_delay_ms() -> u64 {
 }
 
 const fn default_evidence_reader_queue_records() -> usize {
-    65_535
+    262_144
 }
 
 fn canonical_uuid(value: &str) -> bool {
@@ -726,7 +726,7 @@ mod tests {
             block.capacity_policy,
             crate::EvidenceWalCapacityPolicyV1::Block
         );
-        assert_eq!(block.maximum_reader_queue_records, 65_535);
+        assert_eq!(block.maximum_reader_queue_records, 262_144);
 
         let mut retain = base;
         retain["capacity_policy"] = serde_json::json!("RETAIN");
@@ -768,7 +768,7 @@ mod tests {
                 maximum_retained_records: 10_000,
                 maximum_batch_records: 256,
                 maximum_control_delay_ms: 30_000,
-                maximum_reader_queue_records: 65_535,
+                maximum_reader_queue_records: 262_144,
                 capacity_policy: crate::EvidenceWalCapacityPolicyV1::Block,
             }),
             runtime_observation: None,
