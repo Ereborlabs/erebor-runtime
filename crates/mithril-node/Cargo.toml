@@ -40,6 +40,7 @@ uuid.workspace = true
 zerocopy.workspace = true
 
 [dev-dependencies]
+http-body = "1.0"
 tempfile = "3.23.0"
 
 [[bin]]

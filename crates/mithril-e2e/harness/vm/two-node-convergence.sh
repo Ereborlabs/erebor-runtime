@@ -1166,11 +1166,8 @@ wait_node_projection() {
   local node_json
   for _attempt in {1..300}; do
     node_json=$(remote_kubectl get node "$node_name" -o json 2>/dev/null || true)
-    if [[ -n $node_json ]] && jq -e \
-      --arg ready "$ready" --argjson quarantined "$quarantined" '
-        ((.metadata.labels["mithril.erebor.dev/ready"] // "") == $ready) and
-        ([.spec.taints[]? | select(.key == "mithril.erebor.dev/not-ready" and .effect == "NoSchedule")] | length > 0) == $quarantined
-      ' <<<"$node_json" >/dev/null; then
+    if [[ -n $node_json ]] &&
+        node_projection_matches "$node_json" "$ready" "$quarantined"; then
       return 0
     fi
     sleep 1
@@ -2019,7 +2016,8 @@ assert_node_evidence_health_clean() {
   local pod_json
   local node_json
   local restart_count
-  local logs
+  local logs=
+  local health=
   pod_json=$(remote_kubectl -n "$system_namespace" get pods \
     -l app.kubernetes.io/name=mithril-node \
     --field-selector "spec.nodeName=$node_name" \
@@ -2034,24 +2032,20 @@ assert_node_evidence_health_clean() {
     echo "node $node_name restarted $restart_count times in its current Pod" >&2
     return 1
   fi
-  for _attempt in {1..5}; do
+  for _attempt in {1..30}; do
     node_json=$(remote_kubectl get node "$node_name" -o json)
-    node_has_mithril_projection "$node_json" && break
-    [[ $_attempt -lt 5 ]] || break
-    sleep 30
+    logs=$(remote_kubectl -n "$system_namespace" logs "$pod" -c mithril-node)
+    health=$(node_effect_health "$node_name")
+    if node_evidence_health_sample_is_clean "$restart_count" \
+        "$node_json" "$logs" "$health"; then
+      return 0
+    fi
+    [[ $_attempt -lt 30 ]] || break
+    sleep 1
   done
-  if ! node_has_mithril_projection "$node_json"; then
-    printf '%s\n' "$node_json" >&2
-    echo "node $node_name does not have a healthy Mithril projection" >&2
-    return 1
-  fi
-
-  logs=$(remote_kubectl -n "$system_namespace" logs "$pod" -c mithril-node)
-  if ! node_evidence_stream_log_is_healthy "$logs"; then
-    printf '%s\n' "$logs" >&2
-    echo "node $node_name did not retain one healthy Control evidence stream" >&2
-    return 1
-  fi
+  printf '%s\n%s\n%s\n' "$node_json" "$logs" "$health" >&2
+  echo "node $node_name did not reach a clean evidence-health sample" >&2
+  return 1
 }
 
 start_entry_effect_capture() {
@@ -2504,32 +2498,46 @@ wait_runtime_delivery() {
   local status_json
   for _attempt in {1..180}; do
     status_json=$(node_status "$node_name" 2>/dev/null || true)
-    if [[ -n $status_json ]] && jq -e --arg profile_id "$profile" \
-      --arg excluded_candidate "$excluded_candidate" \
-      --arg expected_container_id "$expected_container_id" \
-      --argjson target_count "$expected_target_count" \
-      --argjson scheduled_count "$expected_scheduled_count" \
-      --argjson runtime_count "$expected_runtime_count" '
-      .active_candidate_content_id != null and
-      ($excluded_candidate == "" or
-        .active_candidate_content_id != $excluded_candidate) and
-      .active_profile_ids == [$profile_id] and
-      .active_target_count == $target_count and
-      .active_targets_truncated == false and
-      (.active_targets | length) == $target_count and
-      ($expected_container_id == "" or
-        all(.active_targets[]; .runtime_container_id == $expected_container_id)) and
-      .scheduled_binding_count == $scheduled_count and
-      .runtime_binding_count == $runtime_count and
-      .activation_pending == false and
-      .control_acknowledged == true
-    ' <<<"$status_json" >/dev/null; then
+    if [[ -n $status_json ]] && runtime_delivery_matches "$status_json" \
+      "$profile" "$expected_target_count" "$expected_scheduled_count" \
+      "$expected_runtime_count" "$excluded_candidate" \
+      "$expected_container_id"; then
       printf '%s\n' "$status_json"
       return 0
     fi
     sleep 1
   done
   echo "selected-node runtime delivery did not converge: $status_json" >&2
+  return 1
+}
+
+wait_runtime_gate_delivery() {
+  local selected_node=$1
+  local gate_node=$2
+  local profile=$3
+  local protected_candidate=$4
+  local selected_status=
+  local gate_status=
+  for _attempt in {1..180}; do
+    selected_status=$(node_status "$selected_node" 2>/dev/null || true)
+    if [[ $selected_node == "$gate_node" ]]; then
+      gate_status=$selected_status
+    else
+      gate_status=$(node_status "$gate_node" 2>/dev/null || true)
+    fi
+    if [[ -n $selected_status && -n $gate_status ]] &&
+        runtime_gate_delivery_matches "$selected_node" "$gate_node" \
+          "$selected_status" "$gate_status" "$profile" \
+          "$protected_candidate"; then
+      printf '%s\n' "$selected_status"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "runtime-gate delivery did not converge on selected Node $selected_node: $selected_status" >&2
+  if [[ $selected_node != "$gate_node" ]]; then
+    echo "runtime-gate delivery did not converge on gate Node $gate_node: $gate_status" >&2
+  fi
   return 1
 }
 
@@ -3225,11 +3233,13 @@ for node in "$vm_a" "$vm_b"; do
 done
 runtime_sockets_held=true
 remote_kubectl create -f "$remote_a/gate-failure.yaml" >/dev/null
+gate_node=
 for _attempt in {1..120}; do
   failure_json=$(remote_kubectl -n "$workload_namespace" get pod gate-failure -o json)
   if jq -e 'any(.status.containerStatuses[]?.state.waiting.reason;
       . == "CreateContainerError" or . == "RunContainerError")' \
       <<<"$failure_json" >/dev/null; then
+    gate_node=$(jq -er '.spec.nodeName' <<<"$failure_json")
     break
   fi
   [[ $_attempt -lt 120 ]] || {
@@ -3238,16 +3248,13 @@ for _attempt in {1..120}; do
   }
   sleep 1
 done
-gate_status=$(wait_runtime_delivery "$selected_node" "$profile_id" \
-  2 1 1 "$protected_candidate")
+[[ $gate_node == "$node_a_name" || $gate_node == "$node_b_name" ]] || {
+  echo "the runtime-gate Pod was scheduled outside the Mithril Node set" >&2
+  exit 1
+}
+gate_status=$(wait_runtime_gate_delivery "$selected_node" "$gate_node" \
+  "$profile_id" "$protected_candidate")
 gate_candidate=$(jq -er '.active_candidate_content_id' <<<"$gate_status")
-jq -e --arg predecessor "$protected_candidate" '
-  .active_candidate_content_id as $candidate |
-  all(.active_targets[];
-    .candidate_content_id == $candidate and
-    .operation == "REPLACE" and
-    .predecessor_candidate_content_id == $predecessor)
-' <<<"$gate_status" >/dev/null
 "$provider" run "$vm_a" sudo test ! -e \
   /var/lib/mithril-convergence/markers/gate-failure.started
 "$provider" run "$vm_b" sudo test ! -e \
@@ -3255,6 +3262,9 @@ jq -e --arg predecessor "$protected_candidate" '
 remote_kubectl -n "$workload_namespace" delete pod gate-failure \
   --wait=true --timeout=120s >/dev/null
 restore_runtime_sockets
+if [[ $gate_node != "$selected_node" ]]; then
+  wait_policy_delivery_empty "$gate_node"
+fi
 
 restart_baseline=$(wait_runtime_delivery "$selected_node" "$profile_id" \
   1 0 1 "$gate_candidate")
@@ -3448,12 +3458,20 @@ remote_kubectl create --dry-run=client -f "$remote_a/protected.yaml" -o json | j
     {"mithril.erebor.dev/fixture": "selected"})
 ' >"$reboot_pod"
 "$provider" put "$vm_a" "$reboot_pod" "$remote_a/protected-after-reboot.json"
-pre_reboot_node=$(remote_kubectl get node "$selected_node" -o json)
-pre_reboot_boot_id=$(jq -er \
-  '.metadata.annotations["mithril.erebor.dev/node-boot-id"]' <<<"$pre_reboot_node")
-pre_reboot_label_epoch=$(jq -er \
-  '.metadata.annotations["mithril.erebor.dev/label-epoch"] | tonumber' \
-  <<<"$pre_reboot_node")
+pre_reboot_epoch=
+for _attempt in {1..300}; do
+  pre_reboot_node=$(remote_kubectl get node "$selected_node" -o json \
+    2>/dev/null || true)
+  pre_reboot_epoch=$(node_projected_epoch "$pre_reboot_node" 2>/dev/null || true)
+  [[ -n $pre_reboot_epoch ]] && break
+  [[ $_attempt -lt 300 ]] || {
+    echo "the selected Node did not publish a projected pre-reboot epoch" >&2
+    exit 1
+  }
+  sleep 1
+done
+IFS=$'\t' read -r pre_reboot_boot_id pre_reboot_label_epoch \
+  <<<"$pre_reboot_epoch"
 request_vm_reboot "$selected_vm"
 for _attempt in {1..300}; do
   if remote_kubectl get --raw=/readyz >/dev/null 2>&1; then

@@ -427,6 +427,21 @@ chmod +x "$oracle_bin/kubectl"
 # These checks execute the command path. They do not inspect either fixture script.
 source "$directory/../kubernetes-oracles.sh"
 
+split_selected_status='{"active_candidate_content_id":"candidate-node-b","active_profile_ids":["profile-a"],"active_target_count":1,"active_targets_truncated":false,"active_targets":[{"candidate_content_id":"candidate-node-b","operation":"REPLACE","predecessor_candidate_content_id":"candidate-protected","kubernetes_node_name":"node-b"}],"scheduled_binding_count":0,"runtime_binding_count":1,"activation_pending":false,"control_acknowledged":true}'
+split_gate_status='{"active_candidate_content_id":"candidate-node-a","active_profile_ids":["profile-a"],"active_target_count":1,"active_targets_truncated":false,"active_targets":[{"candidate_content_id":"candidate-node-a","operation":"ACTIVATE","predecessor_candidate_content_id":null,"kubernetes_node_name":"node-a"}],"scheduled_binding_count":1,"runtime_binding_count":0,"activation_pending":false,"control_acknowledged":true}'
+runtime_gate_delivery_matches node-b node-a \
+  "$split_selected_status" "$split_gate_status" profile-a candidate-protected
+same_node_gate_status='{"active_candidate_content_id":"candidate-next","active_profile_ids":["profile-a"],"active_target_count":2,"active_targets_truncated":false,"active_targets":[{"candidate_content_id":"candidate-next","operation":"REPLACE","predecessor_candidate_content_id":"candidate-protected","kubernetes_node_name":"node-b"},{"candidate_content_id":"candidate-next","operation":"REPLACE","predecessor_candidate_content_id":"candidate-protected","kubernetes_node_name":"node-b"}],"scheduled_binding_count":1,"runtime_binding_count":1,"activation_pending":false,"control_acknowledged":true}'
+runtime_gate_delivery_matches node-b node-b \
+  "$same_node_gate_status" "$same_node_gate_status" \
+  profile-a candidate-protected
+if runtime_gate_delivery_matches node-b node-b \
+    "$split_selected_status" "$split_selected_status" \
+    profile-a candidate-protected; then
+  echo "split runtime-gate targets satisfied a same-Node oracle" >&2
+  exit 1
+fi
+
 workload_startup_gate_should_be_open entry-roles true
 workload_startup_gate_should_be_open protected false
 if workload_startup_gate_should_be_open protected true; then
@@ -584,6 +599,41 @@ fi
 
 node_json='{"metadata":{"name":"node-a","uid":"node-uid-a","labels":{"mithril.erebor.dev/ready":"true"},"annotations":{"mithril.erebor.dev/node-id":"node-id-a","mithril.erebor.dev/node-uid":"node-uid-a","mithril.erebor.dev/node-boot-id":"0123456789abcdef0123456789abcdef","mithril.erebor.dev/label-epoch":"7"}}}'
 node_has_mithril_projection "$node_json"
+IFS=$'\t' read -r projected_boot_id projected_label_epoch \
+  <<<"$(node_projected_epoch "$node_json")"
+[[ $projected_boot_id == 0123456789abcdef0123456789abcdef &&
+   $projected_label_epoch -eq 7 ]]
+if node_projected_epoch \
+    "$(jq -c 'del(.metadata.annotations["mithril.erebor.dev/node-boot-id"])' \
+      <<<"$node_json")" >/dev/null; then
+  echo "an incomplete Node projection published a reboot baseline" >&2
+  exit 1
+fi
+recovering_evidence_log=$'connected to Mithril Control\nevidence reconciliation became unhealthy'
+if node_evidence_health_sample_is_clean 0 "$node_json" \
+    "$recovering_evidence_log" "$recovering_effect_health"; then
+  echo "a ready Node projection hid evidence recovery in progress" >&2
+  exit 1
+fi
+node_evidence_health_sample_is_clean 0 "$node_json" \
+  "$recovered_evidence_log" "$drained_effect_pipeline"
+if node_evidence_health_sample_is_clean 1 "$node_json" \
+    "$recovered_evidence_log" "$drained_effect_pipeline"; then
+  echo "a restarted Mithril Node satisfied the clean evidence sample" >&2
+  exit 1
+fi
+grep -Fq 'node_evidence_health_sample_is_clean "$restart_count"' \
+  "$directory/two-node-convergence.sh"
+grep -Fq 'node_projected_epoch "$pre_reboot_node"' \
+  "$directory/two-node-convergence.sh"
+node_projection_matches "$node_json" true false
+incomplete_ready_node=$(jq -c \
+  'del(.metadata.annotations["mithril.erebor.dev/node-boot-id"])' \
+  <<<"$node_json")
+if node_projection_matches "$incomplete_ready_node" true false; then
+  echo "a ready label without a boot identity satisfied the Node projection oracle" >&2
+  exit 1
+fi
 if node_has_mithril_projection "$recreated_node_quarantined"; then
   echo "an unprojected Kubernetes Node satisfied the Mithril projection oracle" >&2
   exit 1

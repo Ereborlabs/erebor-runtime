@@ -121,8 +121,9 @@ impl ContainerRuntimeInventory {
         let fallback_at = tokio::time::Instant::now() + self.fallback_scan_interval;
         loop {
             if let Some(events) = self.event_stream.as_mut() {
-                match events.message().await {
-                    Ok(Some(event))
+                match tokio::time::timeout_at(fallback_at, events.message()).await {
+                    Err(_) => return,
+                    Ok(Ok(Some(event)))
                         if matches!(
                             event.topic.as_str(),
                             "/containers/create"
@@ -136,8 +137,8 @@ impl ContainerRuntimeInventory {
                     {
                         return
                     }
-                    Ok(Some(_event)) => continue,
-                    Ok(None) | Err(_) => {
+                    Ok(Ok(Some(_event))) => continue,
+                    Ok(Ok(None) | Err(_)) => {
                         self.event_stream = None;
                         self.event_reconnect_delay = EVENT_RECONNECT_MINIMUM;
                         self.event_reconnect_at =
@@ -686,11 +687,16 @@ fn systemd_slice_path(slice: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::convert::Infallible;
     use std::path::PathBuf;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
     use std::time::Duration;
 
+    use containerd_client::types::Envelope;
     use k8s_cri::v1::runtime_service_client::RuntimeServiceClient;
     use k8s_cri::v1::ContainerState;
+    use tonic::codec::{Codec, ProstCodec};
     use tonic::transport::Endpoint;
 
     use super::{
@@ -699,6 +705,52 @@ mod tests {
         RuntimeContainerState,
     };
     use crate::{ContainerKindV1, WorkloadBindingConfig};
+
+    #[derive(Debug)]
+    struct QuietEventBody;
+
+    impl tonic::codegen::Body for QuietEventBody {
+        type Data = tonic::codegen::Bytes;
+        type Error = Infallible;
+
+        fn poll_frame(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+            Poll::Pending
+        }
+    }
+
+    fn quiet_event_stream() -> tonic::Streaming<Envelope> {
+        let mut codec = ProstCodec::<Envelope, Envelope>::default();
+        tonic::Streaming::new_response(
+            codec.decoder(),
+            QuietEventBody,
+            tonic::codegen::http::StatusCode::OK,
+            None,
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn connected_quiet_event_stream_uses_inventory_fallback(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let channel = Endpoint::from_static("http://[::]").connect_lazy();
+        let directory = tempfile::tempdir()?;
+        let mut inventory = ContainerRuntimeInventory {
+            client: RuntimeServiceClient::new(channel),
+            cgroup_root: PathBuf::from("/sys/fs/cgroup"),
+            runtime_socket_path: directory.path().join("unused.sock"),
+            event_stream: Some(quiet_event_stream()),
+            fallback_scan_interval: Duration::from_millis(1),
+            event_reconnect_delay: super::EVENT_RECONNECT_MINIMUM,
+            event_reconnect_at: tokio::time::Instant::now(),
+        };
+
+        tokio::time::timeout(Duration::from_millis(100), inventory.wait_for_change()).await?;
+        assert!(inventory.event_stream.is_some());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn unavailable_event_api_uses_backoff_and_inventory_fallback(

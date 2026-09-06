@@ -1532,17 +1532,13 @@ impl NodePolicyGenerationOwner {
             if route_view.is_some() {
                 resolved_path_binding_ids.insert(binding.binding_id.clone());
             }
-            if !artifact.policy_document.path_tree_deny_floors.is_empty() {
-                if let Some(route_view) = route_view {
-                    measured_mount_routes.extend(route_view.mount_root_routes()?.into_iter().map(
-                        |route| MeasuredMountRouteV1 {
-                            binding_id: binding.binding_id.clone(),
-                            mount_view_root_pid: target.init_pid,
-                            mount_topology_generation: topology_generation,
-                            route,
-                        },
-                    ));
-                }
+            if let Some(route_view) = route_view {
+                measured_mount_routes.extend(Self::authoritative_mount_routes(
+                    binding,
+                    target.init_pid,
+                    topology_generation,
+                    route_view.mount_root_routes()?,
+                ));
             }
             for selector in selectors {
                 let canonical_path = selector.path_expression();
@@ -1608,6 +1604,23 @@ impl NodePolicyGenerationOwner {
             measured_mount_views,
             resolved_path_binding_ids,
         ))
+    }
+
+    fn authoritative_mount_routes(
+        binding: &WorkloadBindingConfig,
+        mount_view_root_pid: u32,
+        mount_topology_generation: u64,
+        routes: Vec<crate::exact_object::LiveMountRootRouteV1>,
+    ) -> Vec<MeasuredMountRouteV1> {
+        routes
+            .into_iter()
+            .map(|route| MeasuredMountRouteV1 {
+                binding_id: binding.binding_id.clone(),
+                mount_view_root_pid,
+                mount_topology_generation,
+                route,
+            })
+            .collect()
     }
 
     #[cfg(feature = "test-support")]
@@ -7276,6 +7289,31 @@ mod tests {
                     && mask & open_read_mask != 0
             })
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn authoritative_exact_only_view_keeps_its_canonical_root_route() -> crate::Result<()> {
+        let (artifact, binding, _) = exact_artifact(ProfileModeV1::Protect)?;
+        assert!(artifact.policy_document.path_tree_deny_floors.is_empty());
+        let routes = super::NodePolicyGenerationOwner::authoritative_mount_routes(
+            &binding,
+            10,
+            17,
+            vec![crate::exact_object::LiveMountRootRouteV1 {
+                mount_namespace_inode: 41,
+                mountpoint_components: Vec::new(),
+                filesystem_device: 8,
+                root_inode: 9,
+                selected_mount_id_unique: 12,
+                mount_snapshot_digest_id: 13,
+            }],
+        );
+
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].binding_id, binding.binding_id);
+        assert_eq!(routes[0].mount_view_root_pid, 10);
+        assert_eq!(routes[0].mount_topology_generation, 17);
         Ok(())
     }
 

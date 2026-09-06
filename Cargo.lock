@@ -3275,6 +3275,7 @@ dependencies = [
  "erebor-runtime-ipc",
  "erebor-telemetry",
  "hex",
+ "http-body",
  "hyper-util",
  "k8s-cri",
  "libc",

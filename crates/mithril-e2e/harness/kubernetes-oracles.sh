@@ -140,6 +140,18 @@ node_effect_health_is_clean() {
     <<<"$health" >/dev/null
 }
 
+node_evidence_health_sample_is_clean() {
+  local restart_count=$1
+  local node_json=$2
+  local logs=$3
+  local health=$4
+  [[ $restart_count =~ ^[0-9]+$ ]] || return 2
+  ((restart_count == 0)) &&
+    node_has_mithril_projection "$node_json" &&
+    node_evidence_stream_log_is_healthy "$logs" &&
+    node_effect_health_is_clean "$health"
+}
+
 effect_pipeline_ready_for_marker() {
   local health=$1
   node_effect_health_is_clean "$health" || return 1
@@ -227,11 +239,111 @@ node_has_mithril_projection() {
     .metadata.labels["mithril.erebor.dev/ready"] == "true" and
     (.metadata.annotations["mithril.erebor.dev/node-id"] | length) > 0 and
     .metadata.annotations["mithril.erebor.dev/node-uid"] == .metadata.uid and
-    (.metadata.annotations["mithril.erebor.dev/node-boot-id"] |
+    ((.metadata.annotations["mithril.erebor.dev/node-boot-id"] // "") |
       test("^[0-9a-f]{32}$")) and
-    (.metadata.annotations["mithril.erebor.dev/label-epoch"] |
+    ((.metadata.annotations["mithril.erebor.dev/label-epoch"] // "") |
       test("^[1-9][0-9]*$"))
   ' <<<"$node_json" >/dev/null
+}
+
+node_projection_matches() {
+  local node_json=$1
+  local ready=$2
+  local quarantined=$3
+  jq -e --arg ready "$ready" --argjson quarantined "$quarantined" '
+    ((.metadata.labels["mithril.erebor.dev/ready"] // "") == $ready) and
+    ([.spec.taints[]? |
+      select(.key == "mithril.erebor.dev/not-ready" and
+             .effect == "NoSchedule")] | length > 0) == $quarantined
+  ' <<<"$node_json" >/dev/null || return 1
+  if [[ $ready == true ]]; then
+    node_has_mithril_projection "$node_json"
+  fi
+}
+
+node_projected_epoch() {
+  local node_json=$1
+  node_projection_matches "$node_json" true false || return 1
+  jq -er '[
+    .metadata.annotations["mithril.erebor.dev/node-boot-id"],
+    (.metadata.annotations["mithril.erebor.dev/label-epoch"] | tonumber)
+  ] | @tsv' <<<"$node_json"
+}
+
+runtime_delivery_matches() {
+  local status_json=$1
+  local profile_id=$2
+  local expected_target_count=$3
+  local expected_scheduled_count=$4
+  local expected_runtime_count=$5
+  local excluded_candidate=${6:-}
+  local expected_container_id=${7:-}
+
+  jq -e --arg profile_id "$profile_id" \
+    --arg excluded_candidate "$excluded_candidate" \
+    --arg expected_container_id "$expected_container_id" \
+    --argjson target_count "$expected_target_count" \
+    --argjson scheduled_count "$expected_scheduled_count" \
+    --argjson runtime_count "$expected_runtime_count" '
+    .active_candidate_content_id != null and
+    ($excluded_candidate == "" or
+      .active_candidate_content_id != $excluded_candidate) and
+    .active_profile_ids == [$profile_id] and
+    .active_target_count == $target_count and
+    .active_targets_truncated == false and
+    (.active_targets | length) == $target_count and
+    ($expected_container_id == "" or
+      all(.active_targets[]; .runtime_container_id == $expected_container_id)) and
+    .scheduled_binding_count == $scheduled_count and
+    .runtime_binding_count == $runtime_count and
+    .activation_pending == false and
+    .control_acknowledged == true
+  ' <<<"$status_json" >/dev/null
+}
+
+runtime_gate_delivery_matches() {
+  local selected_node=$1
+  local gate_node=$2
+  local selected_status=$3
+  local gate_status=$4
+  local profile_id=$5
+  local protected_candidate=$6
+
+  if [[ $selected_node == "$gate_node" ]]; then
+    runtime_delivery_matches "$selected_status" "$profile_id" \
+      2 1 1 "$protected_candidate" || return 1
+    jq -e --arg node "$selected_node" \
+      --arg predecessor "$protected_candidate" '
+      .active_candidate_content_id as $candidate |
+      all(.active_targets[];
+        .candidate_content_id == $candidate and
+        .kubernetes_node_name == $node and
+        .operation == "REPLACE" and
+        .predecessor_candidate_content_id == $predecessor)
+    ' <<<"$selected_status" >/dev/null
+    return
+  fi
+
+  runtime_delivery_matches "$selected_status" "$profile_id" \
+    1 0 1 "$protected_candidate" || return 1
+  runtime_delivery_matches "$gate_status" "$profile_id" 1 1 0 || return 1
+  jq -e --arg node "$selected_node" \
+    --arg predecessor "$protected_candidate" '
+    .active_candidate_content_id as $candidate |
+    all(.active_targets[];
+      .candidate_content_id == $candidate and
+      .kubernetes_node_name == $node and
+      .operation == "REPLACE" and
+      .predecessor_candidate_content_id == $predecessor)
+  ' <<<"$selected_status" >/dev/null || return 1
+  jq -e --arg node "$gate_node" '
+    .active_candidate_content_id as $candidate |
+    all(.active_targets[];
+      .candidate_content_id == $candidate and
+      .kubernetes_node_name == $node and
+      .operation == "ACTIVATE" and
+      .predecessor_candidate_content_id == null)
+  ' <<<"$gate_status" >/dev/null
 }
 
 workload_startup_gate_should_be_open() {

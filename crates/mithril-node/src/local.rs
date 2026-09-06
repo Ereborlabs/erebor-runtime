@@ -294,12 +294,12 @@ fn update_coverage(
     };
     let evidence_failed = observations.evidence_errors() > 0;
     snapshot.negative_claim_eligible = !evidence_failed && coverage.supports_negative_claim();
-    if !snapshot.negative_claim_eligible {
-        if let Some(capability) = snapshot
-            .capabilities
-            .iter_mut()
-            .find(|capability| capability.capability_id == "LOCAL_EFFECT_OBSERVATION")
-        {
+    if let Some(capability) = snapshot
+        .capabilities
+        .iter_mut()
+        .find(|capability| capability.capability_id == "LOCAL_EFFECT_OBSERVATION")
+    {
+        if !snapshot.negative_claim_eligible {
             capability.state = "UNHEALTHY".to_owned();
             capability.reason_code = if evidence_failed {
                 "DURABLE_EVIDENCE_WRITE_FAILED"
@@ -307,6 +307,9 @@ fn update_coverage(
                 "DURABLE_EVIDENCE_COVERAGE_GAPPED"
             }
             .to_owned();
+        } else if capability.reason_code == "DURABLE_EVIDENCE_COVERAGE_GAPPED" {
+            capability.state = "SUPPORTED".to_owned();
+            capability.reason_code = "DURABLE_LOSS_AWARE_KERNEL_COVERAGE".to_owned();
         }
     }
     snapshot.coverage_intervals = coverage
@@ -370,6 +373,7 @@ fn peer_in_cgroup_scope(pid: i32, allowed_scope: &str) -> bool {
 mod tests {
     use std::{cell::Cell, sync::Arc};
 
+    use erebor_interceptor_abi::EffectObservationHealthV1;
     use erebor_runtime_ipc::{
         transport::{UnixPeerIdentity, MAX_GRPC_MESSAGE_BYTES},
         v1::{
@@ -380,11 +384,52 @@ mod tests {
     };
     use prost::Message as _;
     use tonic::{Code, Request};
+    use zerocopy::IntoBytes as _;
 
     use super::{
-        apply_readiness, bounded_observation_response, update_effect_health, ObservationGrpc,
+        apply_readiness, bounded_observation_response, update_coverage, update_effect_health,
+        ObservationGrpc,
     };
-    use crate::{EffectObservationStore, NodeReadinessV1};
+    use crate::{
+        EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, NodeReadinessV1,
+        ObservationCanonicalizer,
+    };
+
+    #[test]
+    fn recovered_coverage_restores_the_local_observation_capability(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let observations = EffectObservationStore::durable(
+            2,
+            directory.path().join("wal"),
+            EvidenceWalLimits::default(),
+            ObservationCanonicalizer::new(
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(3, 4),
+                1,
+                EvidenceIdV1::new(5, 6),
+            )?,
+        )?;
+        observations.sample_coverage_health(EffectObservationHealthV1::default().as_bytes())?;
+        let mut snapshot = MithrilObservationSnapshot {
+            capabilities: vec![MithrilCapabilityRecord {
+                capability_id: "LOCAL_EFFECT_OBSERVATION".to_owned(),
+                state: "UNHEALTHY".to_owned(),
+                reason_code: "DURABLE_EVIDENCE_COVERAGE_GAPPED".to_owned(),
+            }],
+            ..MithrilObservationSnapshot::default()
+        };
+
+        update_coverage(&mut snapshot, &observations);
+
+        assert!(snapshot.negative_claim_eligible);
+        assert_eq!(snapshot.capabilities[0].state, "SUPPORTED");
+        assert_eq!(
+            snapshot.capabilities[0].reason_code,
+            "DURABLE_LOSS_AWARE_KERNEL_COVERAGE"
+        );
+        Ok(())
+    }
 
     #[test]
     fn observation_response_retains_the_newest_events_within_the_grpc_bound() {
