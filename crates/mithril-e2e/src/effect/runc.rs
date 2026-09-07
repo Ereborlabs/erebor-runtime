@@ -2218,30 +2218,21 @@ impl EffectTestRunner {
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned();
         binding.initial_role_id = policy.initial_role_id;
         binding.external_role_id = policy.external_role_id;
-        let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
-        bindings
-            .publish_running_recovery_candidate_for_test(&host, &binding)
-            .context(NodeSnafu)?;
-        bindings
-            .attach_running_runtime_identity_for_test(
-                &binding.binding_id,
-                initial_host_pid,
-                PathBuf::from("/"),
-                vec![PathBuf::from("/bin"), PathBuf::from("/usr/bin")],
-            )
-            .context(NodeSnafu)?;
+        let scheduled_binding =
+            WorkloadBindingOwner::scheduled_recovery_candidate_for_test(&binding);
         let policy_fixture = self
             .repo_root
             .join("crates/mithril-e2e/fixtures/mithril-policy");
-        let node_config = effect_node_config(
+        let mut node_config = effect_node_config(
             &fixture_root,
             pin_root,
             lease_path,
             &policy_fixture,
             policy.artifact_path.clone(),
-            vec![binding.clone()],
+            vec![scheduled_binding.clone()],
         );
-        let _policy_owner = NodePolicyGenerationOwner::load_and_install_for_bindings(
+        let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
+        let mut policy_owner = NodePolicyGenerationOwner::load_and_install_for_bindings(
             &node_config,
             &mut host,
             &bindings,
@@ -2249,6 +2240,23 @@ impl EffectTestRunner {
             1,
         )
         .context(NodeSnafu)?;
+        let recovered_binding = bindings
+            .publish_scheduled_running_recovery_for_test(
+                &host,
+                &scheduled_binding,
+                container_id.clone(),
+                sandbox_id.clone(),
+                binding.container_generation,
+                cgroup_path.clone(),
+                initial_host_pid,
+                PathBuf::from("/"),
+                vec![PathBuf::from("/bin"), PathBuf::from("/usr/bin")],
+            )
+            .context(NodeSnafu)?;
+        node_config.workload_bindings = vec![recovered_binding];
+        policy_owner
+            .reconcile_cri_exact_bindings(&node_config, &mut host, &bindings)
+            .context(NodeSnafu)?;
         bindings
             .adopt_activated_profiles(&host, &node_config.workload_bindings)
             .context(NodeSnafu)?;

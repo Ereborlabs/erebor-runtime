@@ -6,7 +6,9 @@ use std::time::Duration;
 use containerd_client::services::v1::{events_client::EventsClient, SubscribeRequest};
 use hyper_util::rt::TokioIo;
 use k8s_cri::v1::runtime_service_client::RuntimeServiceClient;
-use k8s_cri::v1::{ContainerState, ContainerStatusRequest, ListContainersRequest, VersionRequest};
+use k8s_cri::v1::{
+    Container, ContainerState, ContainerStatusRequest, ListContainersRequest, VersionRequest,
+};
 use procfs::process::Process;
 use snafu::{ensure, ResultExt as _};
 use tokio::net::UnixStream;
@@ -49,12 +51,58 @@ pub(super) struct RuntimeContainerIdentity {
 }
 
 impl RuntimeContainerIdentity {
-    pub(super) fn resolve(&self, configured: &WorkloadBindingConfig) -> WorkloadBindingConfig {
+    pub(super) fn resolve(
+        &self,
+        configured: &WorkloadBindingConfig,
+    ) -> Result<WorkloadBindingConfig> {
         let mut resolved = configured.clone();
+        if configured.container_id.starts_with("scheduled:") {
+            let authority = configured
+                .scheduled_binding_authority_id
+                .as_deref()
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: "scheduled runtime binding has no signed authority".to_owned(),
+                    }
+                    .build()
+                })?;
+            ensure!(
+                self.state == RuntimeContainerState::Running
+                    && configured.binding_id == authority
+                    && authority
+                        == crate::runtime_admission::ScheduledRuntimeBindingV1::authority_binding_id(
+                            &configured.pod_uid,
+                            &configured.container_name,
+                        )
+                    && configured.root_cgroup_path.is_none()
+                    && configured.arm_initial_root
+                    && self.matches_scheduled(configured),
+                IdentityStateSnafu {
+                    reason: "running CRI identity differs from its signed scheduled target",
+                }
+            );
+            resolved.binding_id =
+                crate::runtime_admission::ScheduledRuntimeBindingV1::runtime_binding_id(
+                    authority,
+                    &self.full_container_id,
+                );
+            resolved.container_id.clone_from(&self.full_container_id);
+            resolved.sandbox_id.clone_from(&self.sandbox_id);
+            resolved.container_generation = self.generation;
+        }
         resolved.root_cgroup_path = Some(self.cgroup_path.clone());
         resolved.arm_initial_root =
             configured.arm_initial_root && self.state == RuntimeContainerState::Created;
-        resolved
+        Ok(resolved)
+    }
+
+    pub(super) fn matches_scheduled(&self, configured: &WorkloadBindingConfig) -> bool {
+        configured.container_id.starts_with("scheduled:")
+            && self.state == RuntimeContainerState::Running
+            && self.namespace == configured.namespace
+            && self.pod_uid == configured.pod_uid
+            && self.container_name == configured.container_name
+            && self.image_digest == configured.image_digest
     }
 
     pub(super) fn accepts_observed_lifetime(&self, observed: &Self) -> bool {
@@ -191,6 +239,7 @@ impl ContainerRuntimeInventory {
     ) -> Result<Vec<RuntimeContainerIdentity>> {
         let expected: BTreeMap<&str, &WorkloadBindingConfig> = configured
             .iter()
+            .filter(|binding| !binding.container_id.starts_with("scheduled:"))
             .map(|binding| (binding.container_id.as_str(), binding))
             .collect();
         let listed = self
@@ -203,7 +252,11 @@ impl ContainerRuntimeInventory {
         let mut seen = BTreeSet::new();
         let mut identities = Vec::with_capacity(expected.len());
         for container in listed {
-            let Some(expected) = expected.get(container.id.as_str()) else {
+            let expected = match expected.get(container.id.as_str()) {
+                Some(expected) => Some(*expected),
+                None => scheduled_recovery_target(&container, configured)?,
+            };
+            let Some(expected) = expected else {
                 continue;
             };
             ensure!(
@@ -359,10 +412,11 @@ impl ContainerRuntimeInventory {
         container: k8s_cri::v1::Container,
         expected: &WorkloadBindingConfig,
     ) -> Result<Option<RuntimeContainerIdentity>> {
+        let requested_container_id = container.id.clone();
         let response = match self
             .client
             .container_status(ContainerStatusRequest {
-                container_id: expected.container_id.clone(),
+                container_id: requested_container_id.clone(),
                 verbose: true,
             })
             .await
@@ -375,7 +429,7 @@ impl ContainerRuntimeInventory {
             IdentityStateSnafu {
                 reason: format!(
                     "CRI returned no status for container `{}`",
-                    expected.container_id
+                    requested_container_id
                 ),
             }
             .build()
@@ -384,7 +438,7 @@ impl ContainerRuntimeInventory {
             IdentityStateSnafu {
                 reason: format!(
                     "CRI returned no metadata for container `{}`",
-                    expected.container_id
+                    requested_container_id
                 ),
             }
             .build()
@@ -416,19 +470,25 @@ impl ContainerRuntimeInventory {
         let Some(status_state) = runtime_state(status.state) else {
             return Ok(None);
         };
+        let scheduled = expected.container_id.starts_with("scheduled:");
         ensure!(
-            status.id == expected.container_id
-                && generation == expected.container_generation
+            status.id == requested_container_id
                 && namespace == &expected.namespace
                 && pod_uid == &expected.pod_uid
-                && container.pod_sandbox_id == expected.sandbox_id
                 && container_name == &expected.container_name
                 && metadata.name == expected.container_name
-                && status.image_ref.ends_with(&expected.image_digest),
+                && status.image_ref.ends_with(&expected.image_digest)
+                && if scheduled {
+                    status_state == RuntimeContainerState::Running
+                } else {
+                    status.id == expected.container_id
+                        && generation == expected.container_generation
+                        && container.pod_sandbox_id == expected.sandbox_id
+                },
             IdentityStateSnafu {
                 reason: format!(
                     "CRI identity for `{}` differs from its workload binding",
-                    expected.container_id
+                    requested_container_id
                 ),
             }
         );
@@ -448,6 +508,48 @@ impl ContainerRuntimeInventory {
             state: status_state,
         }))
     }
+}
+
+fn scheduled_recovery_target<'a>(
+    container: &Container,
+    configured: &'a [WorkloadBindingConfig],
+) -> Result<Option<&'a WorkloadBindingConfig>> {
+    if container.state != ContainerState::ContainerRunning as i32 {
+        return Ok(None);
+    }
+    let matches = configured
+        .iter()
+        .filter(|binding| {
+            binding.container_id.starts_with("scheduled:")
+                && container
+                    .labels
+                    .get(POD_NAMESPACE_LABEL)
+                    .is_some_and(|namespace| namespace == &binding.namespace)
+                && container
+                    .labels
+                    .get(POD_UID_LABEL)
+                    .is_some_and(|pod_uid| pod_uid == &binding.pod_uid)
+                && container
+                    .labels
+                    .get(CONTAINER_NAME_LABEL)
+                    .is_some_and(|name| name == &binding.container_name)
+                && container
+                    .metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.name == binding.container_name)
+                && container.image_ref.ends_with(&binding.image_digest)
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        matches.len() <= 1,
+        IdentityStateSnafu {
+            reason: format!(
+                "running CRI container `{}` matches more than one signed scheduled target",
+                container.id
+            ),
+        }
+    );
+    Ok(matches.into_iter().next())
 }
 
 const fn runtime_state(raw: i32) -> Option<RuntimeContainerState> {
@@ -695,14 +797,15 @@ mod tests {
 
     use containerd_client::types::Envelope;
     use k8s_cri::v1::runtime_service_client::RuntimeServiceClient;
-    use k8s_cri::v1::ContainerState;
+    use k8s_cri::v1::{Container, ContainerMetadata, ContainerState};
     use tonic::codec::{Codec, ProstCodec};
     use tonic::transport::Endpoint;
 
     use super::{
         parse_cgroup_path, runtime_cgroup_source, runtime_state, runtime_state_for_reconciliation,
-        ContainerRuntimeInventory, RuntimeCgroupSource, RuntimeContainerIdentity,
-        RuntimeContainerState,
+        scheduled_recovery_target, ContainerRuntimeInventory, RuntimeCgroupSource,
+        RuntimeContainerIdentity, RuntimeContainerState, CONTAINER_NAME_LABEL, POD_NAMESPACE_LABEL,
+        POD_UID_LABEL,
     };
     use crate::{ContainerKindV1, WorkloadBindingConfig};
 
@@ -881,7 +984,9 @@ mod tests {
             state: RuntimeContainerState::Running,
         };
 
-        let resolved = identity.resolve(&configured);
+        let resolved = identity
+            .resolve(&configured)
+            .expect("resolve running container");
         assert_eq!(
             resolved.root_cgroup_path.as_ref(),
             Some(&identity.cgroup_path)
@@ -891,7 +996,12 @@ mod tests {
         let mut created = identity;
         created.state = RuntimeContainerState::Created;
         created.init_pid = 0;
-        assert!(created.resolve(&configured).arm_initial_root);
+        assert!(
+            created
+                .resolve(&configured)
+                .expect("resolve created container")
+                .arm_initial_root
+        );
         assert!(
             created.accepts_observed_lifetime(&RuntimeContainerIdentity {
                 init_pid: 42,
@@ -899,5 +1009,97 @@ mod tests {
                 ..created.clone()
             })
         );
+    }
+
+    #[test]
+    fn cri_running_container_resolves_one_signed_scheduled_target() -> crate::Result<()> {
+        let authority = crate::runtime_admission::ScheduledRuntimeBindingV1::authority_binding_id(
+            "pod-a", "worker",
+        );
+        let configured = WorkloadBindingConfig {
+            binding_id: authority.clone(),
+            scheduled_binding_authority_id: Some(authority.clone()),
+            scheduled_target_digest: Some("f".repeat(64)),
+            execution_set_id: "22222222-2222-4222-8222-222222222222".to_owned(),
+            protected_scope_id: "44444444-4444-4444-8444-444444444444".to_owned(),
+            workload_selector_id: "worker".to_owned(),
+            profile_id: "33333333-3333-4333-8333-333333333333".to_owned(),
+            container_id: format!("scheduled:{}", "d".repeat(64)),
+            namespace: "default".to_owned(),
+            cluster_uid: String::new(),
+            namespace_uid: String::new(),
+            controller_uid: String::new(),
+            service_account_uid: String::new(),
+            pod_labels: BTreeMap::new(),
+            pod_uid: "pod-a".to_owned(),
+            sandbox_id: format!("scheduled:{}", "e".repeat(64)),
+            container_name: "worker".to_owned(),
+            image_digest: "sha256:image-a".to_owned(),
+            container_kind: ContainerKindV1::Application,
+            container_generation: 1,
+            root_cgroup_path: None,
+            lifecycle_generation: 1,
+            active_profile_generation_ref_id: 1,
+            initial_role_id: 1,
+            external_role_id: 2,
+            arm_initial_root: true,
+        };
+        let container_id = "a".repeat(64);
+        let sandbox_id = "b".repeat(64);
+        let container = Container {
+            id: container_id.clone(),
+            pod_sandbox_id: sandbox_id.clone(),
+            metadata: Some(ContainerMetadata {
+                name: "worker".to_owned(),
+                attempt: 0,
+            }),
+            image_ref: "registry.invalid/image@sha256:image-a".to_owned(),
+            state: ContainerState::ContainerRunning as i32,
+            labels: [
+                (POD_NAMESPACE_LABEL.to_owned(), "default".to_owned()),
+                (POD_UID_LABEL.to_owned(), "pod-a".to_owned()),
+                (CONTAINER_NAME_LABEL.to_owned(), "worker".to_owned()),
+            ]
+            .into_iter()
+            .collect(),
+            ..Container::default()
+        };
+        assert_eq!(
+            scheduled_recovery_target(&container, std::slice::from_ref(&configured))?
+                .map(|binding| binding.binding_id.as_str()),
+            Some(authority.as_str())
+        );
+
+        let identity = RuntimeContainerIdentity {
+            full_container_id: container_id.clone(),
+            namespace: configured.namespace.clone(),
+            pod_uid: configured.pod_uid.clone(),
+            sandbox_id: sandbox_id.clone(),
+            container_name: configured.container_name.clone(),
+            image_digest: configured.image_digest.clone(),
+            generation: 42,
+            cgroup_path: PathBuf::from("/sys/fs/cgroup/workload"),
+            init_pid: 7,
+            working_directory: PathBuf::from("/"),
+            path_entries: vec![PathBuf::from("/bin")],
+            state: RuntimeContainerState::Running,
+        };
+        let resolved = identity.resolve(&configured)?;
+        assert_eq!(resolved.container_id, container_id);
+        assert_eq!(resolved.sandbox_id, sandbox_id);
+        assert_eq!(resolved.container_generation, 42);
+        assert_eq!(
+            resolved.binding_id,
+            crate::runtime_admission::ScheduledRuntimeBindingV1::runtime_binding_id(
+                &authority,
+                &resolved.container_id,
+            )
+        );
+        assert_eq!(
+            resolved.root_cgroup_path,
+            Some(PathBuf::from("/sys/fs/cgroup/workload"))
+        );
+        assert!(!resolved.arm_initial_root);
+        Ok(())
     }
 }

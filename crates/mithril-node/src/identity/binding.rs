@@ -571,6 +571,7 @@ impl RuntimeReconciliationPlan {
 #[derive(Default)]
 pub(crate) struct RuntimeReconciliationResultV1 {
     pub retired_binding_ids: Vec<String>,
+    pub recovered_bindings: Vec<WorkloadBindingConfig>,
 }
 
 impl WorkloadBindingOwner {
@@ -755,6 +756,67 @@ impl WorkloadBindingOwner {
         spec: &WorkloadBindingConfig,
     ) -> Result<()> {
         self.publish(host, [(spec, None, true)])
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn scheduled_recovery_candidate_for_test(
+        spec: &WorkloadBindingConfig,
+    ) -> WorkloadBindingConfig {
+        let mut scheduled = spec.clone();
+        let authority = ScheduledRuntimeBindingV1::authority_binding_id(
+            &scheduled.pod_uid,
+            &scheduled.container_name,
+        );
+        scheduled.binding_id.clone_from(&authority);
+        scheduled.scheduled_binding_authority_id = Some(authority);
+        scheduled.scheduled_target_digest = Some("f".repeat(64));
+        scheduled.container_id = format!("scheduled:{}", "e".repeat(64));
+        scheduled.sandbox_id = format!("scheduled:{}", "d".repeat(64));
+        scheduled.container_generation = 1;
+        scheduled.root_cgroup_path = None;
+        scheduled.arm_initial_root = true;
+        scheduled
+    }
+
+    #[cfg(feature = "test-support")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn publish_scheduled_running_recovery_for_test(
+        &mut self,
+        host: &KernelHost,
+        scheduled: &WorkloadBindingConfig,
+        container_id: String,
+        sandbox_id: String,
+        container_generation: u64,
+        cgroup_path: PathBuf,
+        init_pid: u32,
+        working_directory: PathBuf,
+        path_entries: Vec<PathBuf>,
+    ) -> Result<WorkloadBindingConfig> {
+        let identity = RuntimeContainerIdentity {
+            full_container_id: container_id,
+            namespace: scheduled.namespace.clone(),
+            pod_uid: scheduled.pod_uid.clone(),
+            sandbox_id,
+            container_name: scheduled.container_name.clone(),
+            image_digest: scheduled.image_digest.clone(),
+            generation: container_generation,
+            cgroup_path,
+            init_pid,
+            working_directory,
+            path_entries,
+            state: super::runtime::RuntimeContainerState::Running,
+        };
+        let resolved = identity.resolve(scheduled)?;
+        self.publish(host, [(&resolved, None, true)])?;
+        let binding = self
+            .bindings
+            .values_mut()
+            .find(|binding| binding.spec.binding_id == resolved.binding_id)
+            .context(IdentityStateSnafu {
+                reason: "test recovery lost its resolved running binding",
+            })?;
+        binding.runtime_identity = Some(identity);
+        Ok(resolved)
     }
 
     #[cfg(feature = "test-support")]
@@ -2352,6 +2414,15 @@ impl WorkloadBindingOwner {
             .into_iter()
             .map(|identity| (identity.full_container_id.clone(), identity))
             .collect();
+        let recovered_bindings = observed
+            .values()
+            .filter_map(|identity| {
+                configured
+                    .iter()
+                    .find(|binding| identity.matches_scheduled(binding))
+                    .map(|binding| identity.resolve(binding))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let mut retired_binding_ids = self.retired_configured_binding_ids(configured, &observed)?;
         let plan = self.plan_runtime_reconciliation(observed)?;
         retired_binding_ids.extend(plan.retired_binding_ids.iter().cloned());
@@ -2370,7 +2441,10 @@ impl WorkloadBindingOwner {
         for identity in plan.new_identities {
             let configured = configured
                 .iter()
-                .find(|binding| binding.container_id == identity.full_container_id)
+                .find(|binding| {
+                    binding.container_id == identity.full_container_id
+                        || identity.matches_scheduled(binding)
+                })
                 .context(IdentityStateSnafu {
                     reason: "CRI returned a container without a configured binding",
                 })?;
@@ -2389,7 +2463,7 @@ impl WorkloadBindingOwner {
                     }
                 );
             }
-            let resolved = identity.resolve(configured);
+            let resolved = identity.resolve(configured)?;
             self.publish(host, [(&resolved, None, true)])?;
             let binding = self
                 .bindings
@@ -2403,6 +2477,7 @@ impl WorkloadBindingOwner {
         self.retain_only_configured(host)?;
         Ok(RuntimeReconciliationResultV1 {
             retired_binding_ids: retired_binding_ids.into_iter().collect(),
+            recovered_bindings,
         })
     }
 
@@ -3474,7 +3549,7 @@ mod tests {
             path_entries: vec![PathBuf::from("/usr/bin")],
             state: RuntimeContainerState::Created,
         };
-        let mut binding = owner.prepare(&identity.resolve(&configured))?;
+        let mut binding = owner.prepare(&identity.resolve(&configured)?)?;
         let root_id = binding.root_cgroup_id;
         binding.runtime_identity = Some(identity.clone());
         owner.bindings.insert(root_id, binding);

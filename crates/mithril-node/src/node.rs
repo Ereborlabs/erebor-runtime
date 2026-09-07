@@ -2437,6 +2437,16 @@ impl NodeChassis {
                 };
             }
         };
+        if !runtime_reconciliation.recovered_bindings.is_empty() {
+            for binding in &runtime_reconciliation.recovered_bindings {
+                if let Err(error) = self.policy_delivery.record_runtime_binding(binding) {
+                    return ReconciliationOutcome::IdentityUnhealthy {
+                        owner: "runtime binding delivery",
+                        reason: error.to_string(),
+                    };
+                }
+            }
+        }
         if !runtime_reconciliation.retired_binding_ids.is_empty() {
             if let Err(error) = self
                 .policy_delivery
@@ -2447,6 +2457,10 @@ impl NodeChassis {
                     reason: error.to_string(),
                 };
             }
+        }
+        if !runtime_reconciliation.recovered_bindings.is_empty()
+            || !runtime_reconciliation.retired_binding_ids.is_empty()
+        {
             let mut config = self.base_config.clone();
             if let Err(error) = self.policy_delivery.restore_config_for_session(
                 &mut config,
@@ -2462,20 +2476,20 @@ impl NodeChassis {
             self.config = config;
         }
         if let Some(policy) = self.policy.as_mut() {
+            if let Err(error) =
+                policy.reconcile_cri_exact_bindings(&self.config, host, &self.bindings)
+            {
+                return ReconciliationOutcome::IdentityUnhealthy {
+                    owner: "policy runtime binding",
+                    reason: error.to_string(),
+                };
+            }
             if let Err(error) = self
                 .bindings
                 .adopt_activated_profiles(host, &self.config.workload_bindings)
             {
                 return ReconciliationOutcome::IdentityUnhealthy {
                     owner: "activated profile",
-                    reason: error.to_string(),
-                };
-            }
-            if let Err(error) =
-                policy.reconcile_cri_exact_bindings(&self.config, host, &self.bindings)
-            {
-                return ReconciliationOutcome::IdentityUnhealthy {
-                    owner: "policy runtime binding",
                     reason: error.to_string(),
                 };
             }
