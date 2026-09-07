@@ -57,11 +57,115 @@ through runc infrastructure until the final entry executable reaches BPF.
 
 A recovered container has no such anchor. Its binding has an unarmed prepared
 state, its existing root has no admitted entry rule, and the runtime controller
-cannot receive the marker. K3s runc can then reach an anonymous internal exec
-before it executes the requested command. BPF denies that internal exec, so it
-never evaluates the declared probe or administrative rule.
+cannot receive the marker. BPF then treats runc's internal current-image exec
+as a possible declared entry instead of runtime infrastructure. The runc image
+does not match the declared probe or administrative entry, so BPF denies the
+exec before runc executes the requested command.
 
 The final entry lookup is not defective. The runtime cannot reach that lookup.
+
+## Exact Later-Entry Dependency
+
+The governed and recovered paths differ at `lsm/ptrace_access_check`. They do
+not differ at the final probe-rule lookup.
+
+### Container governed from creation
+
+The runtime controller inspects the admitted initial container task
+  -> `identity_process_control_gate` calls
+  `runtime_entry_may_control_initial_target`
+  -> BPF requires prepared-container state `ACTIVE`
+  -> BPF requires `prepared_container_entry_instance_id` to equal the target
+  task's entry ID
+  -> BPF requires the target entry to have a nonzero
+  `admitted_entry_rule_id`
+  -> BPF calls `mark_runtime_entry_bootstrap` for the exact controller thread
+  group
+
+The runtime controller creates runc
+  -> `task_alloc` copies the task-local bootstrap state to the exact child
+  lineage
+  -> BPF creates runc's `external_runtime_root` after cgroup attachment
+  -> the runc process starts with `externalRole`, entry rule ID `0`, and
+  `runtime_entry_bootstrap_prepared = 1`
+
+runc executes its internal current image
+  -> `lsm/bprm_check_security` calls
+  `runtime_entry_bootstrap_actor_is_exact`
+  -> the predicate accepts the exact active binding and bootstrap lineage
+  -> `image_contains_candidate` confirms that the executable candidate belongs
+  to runc's current image
+  -> BPF sets `pending.prepared_runtime_exec` to
+  `PREPARED_RUNTIME_EXEC_ENTRY_V1`
+  -> BPF keeps `pending.admitted_entry_rule_id = 0`
+  -> the exec is runtime infrastructure and does not become an admitted entry
+
+runc executes the requested probe
+  -> the next `lsm/bprm_check_security` resolves the requested executable and
+  complete arguments
+  -> BPF selects the signed probe rule
+  -> successful exec commits only the probe's role and rule ID
+
+### Container recovered while running
+
+The runtime controller inspects the unarmed container task
+  -> BPF sees prepared-container state `UNARMED`
+  -> `prepared_container_entry_instance_id` is zero
+  -> the target entry has `admitted_entry_rule_id = 0`
+  -> `runtime_entry_may_control_initial_target` returns false
+  -> BPF does not call `mark_runtime_entry_bootstrap`
+
+runc reaches its internal current-image exec without the marker
+  -> `runtime_entry_bootstrap_prepared = 0`
+  -> `runtime_entry_bootstrap_actor_is_exact` returns false
+  -> BPF cannot classify the exec as runtime infrastructure
+  -> no declared probe or administrative rule matches the runc image
+  -> BPF denies the internal exec
+  -> runc never executes the requested probe
+  -> BPF never reaches the final probe-rule selection
+
+### Required recovered behavior
+
+After BPF publishes `ACTIVE_RECOVERED`, the recovered application entry must be
+a valid initial anchor for the same later-entry bootstrap path:
+
+```text
+BPF-admitted recovered application anchor
+    -> ptrace control creates the exact bootstrap marker
+    -> the runc child inherits the marker
+    -> runc's matching current-image exec passes with rule ID 0
+    -> the requested probe exec reaches BPRM
+    -> BPF selects and commits the signed probe rule
+```
+
+Recovery does not create a second probe admission path. It supplies the
+missing initial anchor and makes `ACTIVE_RECOVERED` valid wherever the normal
+later-entry bootstrap requires an active admitted initial anchor.
+
+### Active-anchor predicate scope
+
+The implementation must use one BPF helper for the state part of an active
+admitted-anchor check:
+
+```text
+prepared-container state is ACTIVE or ACTIVE_RECOVERED
+```
+
+`runtime_entry_may_control_initial_target` uses this helper for the inspected
+application target. `runtime_entry_bootstrap_actor_is_exact` uses it for the
+external runtime actor. Both predicates retain all existing binding, entry,
+role, classification, task, boot, and policy-generation checks.
+
+This equivalence applies only to forward later-entry bootstrap. It does not
+make `ACTIVE_RECOVERED` proof of the original application exec. It does not
+change `PREPARED`, `EXEC_PENDING`, `UNARMED`, or `RECOVERING` behavior. The
+implementation must review every direct comparison with `ACTIVE`; it must not
+replace comparisons whose purpose is original-start admission or evidence.
+
+The temporary diagnostic only traced the existing predicate inputs and result.
+It did not change `runtime_entry_may_control_initial_target`,
+`runtime_entry_bootstrap_actor_is_exact`, or an authorization decision. The
+diagnostic is not part of this design and is not evidence of a fix.
 
 ## Existing Normal-Start Ownership
 
@@ -280,10 +384,13 @@ An existing external task exits
 
 Kubelet requests a new exec probe after `ACTIVE_RECOVERED`
   -> containerd sends the request to the exact live container shim
-  -> a runtime controller performs the qualified control operation against the
-  recovered application anchor
-  -> BPF verifies the active recovered binding, exact anchor entry, current
-  node boot, and current policy generation
+  -> a runtime controller performs the qualified read-only ptrace operation
+  against the recovered application anchor
+  -> at `lsm/ptrace_access_check`, BPF verifies the active recovered binding,
+  exact anchor entry, nonzero anchor rule, current node boot, and current policy
+  generation
+  -> `runtime_entry_may_control_initial_target` accepts
+  `ACTIVE_RECOVERED` as an active admitted initial anchor
   -> BPF creates one task-local runtime-bootstrap marker on the observed
   controller thread group
 
@@ -296,12 +403,16 @@ The marked runtime controller creates a child
   authority
 
 runc performs an internal executable transition
-  -> BPF verifies the exact runtime-bootstrap marker and current binding
-  -> BPF accepts a mounted same-image transition as runtime infrastructure
-  -> BPF accepts an anonymous transition only when the same exact marker is
-  valid
-  -> BPF keeps the external role and rule ID `0`
-  -> BPF retains the marker only for the same task lineage and binding
+  -> at `lsm/bprm_check_security`,
+  `runtime_entry_bootstrap_actor_is_exact` verifies the marker, external runc
+  root, active recovered binding, and current policy generation
+  -> `image_contains_candidate` verifies that the candidate belongs to runc's
+  current image
+  -> BPF sets `pending.prepared_runtime_exec` to
+  `PREPARED_RUNTIME_EXEC_ENTRY_V1`
+  -> BPF keeps the external role and `pending.admitted_entry_rule_id = 0`
+  -> successful internal exec retains the marker for the same task lineage and
+  binding
 
 runc executes the requested probe command
   -> the exec syscall hook captures the logical invocation path and complete
@@ -371,7 +482,7 @@ status must not convert that interval into a protected result.
 | `NativeSecurityStateOwner` | Invoke the BPF recovery and validation iterators. Read health and completion output. Do not write identity rows or lifecycle transitions. |
 | BPF recovery owner | Claim tasks, allocate identities, select the init tree, assign roles and rule IDs, validate the complete task set, store the application anchor, and publish `ACTIVE_RECOVERED` or `CORRUPT`. |
 | BPF task lifecycle | Deny during `RECOVERING`, advance the recovery task-set generation for every task change, accept only complete recovered rows at `ACTIVE_RECOVERED`, and classify every new root after the cutover. |
-| BPF runtime-bootstrap owner | Accept the recovered application anchor, keep marker inheritance task-local, and accept exact anonymous runtime-internal execs without assigning an entry role. |
+| BPF runtime-bootstrap owner | Make `ACTIVE_RECOVERED` a valid admitted initial anchor in `runtime_entry_may_control_initial_target` and `runtime_entry_bootstrap_actor_is_exact`. Keep marker inheritance task-local. Permit only the same current-image runtime-internal transition that the normal active path permits, without assigning an entry role. |
 | BPF exec owner | Keep the new root external until its own executable and arguments reserve and commit one declared or approved entry. |
 | Node evidence owner | Record the recovery gap, task partition, cutover, and failure state without claiming original-start coverage. |
 | Lightweight qualification | Start a fresh container and shim before Mithril binds them. Prove recovery and later-entry behavior with the K3s runtime versions. |
@@ -401,8 +512,10 @@ status must not convert that interval into a protected result.
    probe starts as an external root and commits only its declared rule and
    role.
 8. A future runtime controller receives the bootstrap marker from the exact
-   recovered application anchor. Its child inherits the marker, and an exact
-   anonymous runc internal exec grants no entry role.
+   recovered application anchor. Its child inherits the marker. The matching
+   current-image runc internal exec sets `prepared_runtime_exec` to `ENTRY`,
+   keeps admitted rule ID `0`, and grants no entry role. The next BPRM check
+   selects and commits the signed probe rule.
 9. An unmatched `kubectl exec`, direct `crictl exec`, cgroup-entering task,
    wrong executable, wrong arguments, wrong binding, and replay remain denied.
 10. One approved administrative exec consumes its exact one-use slot and
