@@ -7,13 +7,20 @@ use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
 use containerd_client::services::v1::{
-    container::Runtime as ContainerRuntime, containers_client::ContainersClient,
-    tasks_client::TasksClient, Container, CreateContainerRequest, CreateTaskRequest,
-    DeleteContainerRequest, DeleteProcessRequest, DeleteTaskRequest, ExecProcessRequest,
-    KillRequest, StartRequest, WaitRequest,
+    container::Runtime as ContainerRuntime,
+    containers_client::ContainersClient,
+    sandbox::{
+        store_client::StoreClient as SandboxStoreClient, StoreCreateRequest, StoreDeleteRequest,
+    },
+    tasks_client::TasksClient,
+    Container, CreateContainerRequest, CreateTaskRequest, DeleteContainerRequest,
+    DeleteProcessRequest, DeleteTaskRequest, ExecProcessRequest, KillRequest, StartRequest,
+    WaitRequest,
 };
 use containerd_client::tonic::Request;
-use containerd_client::types::Mount as ContainerdMount;
+use containerd_client::types::{
+    sandbox::Runtime as SandboxRuntime, Mount as ContainerdMount, Sandbox,
+};
 use containerd_client::with_namespace;
 use mithril_e2e::{
     run_effect_child, run_mount_move_child, run_mount_reconfigure_child, run_mount_setattr_child,
@@ -86,6 +93,22 @@ enum Command {
         #[arg(long)]
         containerd_path: Option<PathBuf>,
     },
+    RecoveredContainerEntryProbe {
+        #[arg(long)]
+        output_directory: PathBuf,
+        #[arg(long)]
+        pin_root: PathBuf,
+        #[arg(long)]
+        lease_path: PathBuf,
+        #[arg(long)]
+        runc_path: PathBuf,
+        #[arg(long, default_value = "/usr/bin/sleep")]
+        workload_path: PathBuf,
+        #[arg(long)]
+        retained_bpf_object: PathBuf,
+        #[arg(long)]
+        containerd_path: PathBuf,
+    },
     RuncRetainedRuntimeGateProbe {
         #[arg(long)]
         output_directory: PathBuf,
@@ -139,6 +162,8 @@ enum Command {
         #[arg(long)]
         container_id: String,
         #[arg(long)]
+        sandbox_id: String,
+        #[arg(long)]
         spec_path: PathBuf,
         #[arg(long)]
         rootfs_lower_path: PathBuf,
@@ -146,8 +171,6 @@ enum Command {
         rootfs_upper_path: PathBuf,
         #[arg(long)]
         rootfs_work_path: PathBuf,
-        #[arg(long)]
-        runc_path: PathBuf,
         #[arg(long)]
         pid_path: PathBuf,
         #[arg(long)]
@@ -182,6 +205,8 @@ enum Command {
         namespace: String,
         #[arg(long)]
         container_id: String,
+        #[arg(long)]
+        sandbox_id: String,
     },
 }
 
@@ -214,14 +239,29 @@ struct ContainerdStartFixture {
     socket_path: PathBuf,
     namespace: String,
     container_id: String,
+    sandbox_id: String,
     spec_path: PathBuf,
     rootfs_lower_path: PathBuf,
     rootfs_upper_path: PathBuf,
     rootfs_work_path: PathBuf,
-    runc_path: PathBuf,
     pid_path: PathBuf,
     stdout_path: PathBuf,
     stderr_path: PathBuf,
+}
+
+fn containerd_overlay_mount(lower: &Path, upper: &Path, work: &Path) -> ContainerdMount {
+    ContainerdMount {
+        r#type: "overlay".to_owned(),
+        source: "overlay".to_owned(),
+        target: String::new(),
+        options: vec![
+            format!("workdir={}", work.display()),
+            format!("upperdir={}", upper.display()),
+            format!("lowerdir={}", lower.display()),
+            "uuid=on".to_owned(),
+            "nouserxattr".to_owned(),
+        ],
+    }
 }
 
 struct ContainerdExecFixture {
@@ -246,23 +286,114 @@ async fn run_containerd_start_fixture(
         value: fs::read(&fixture.spec_path)?,
     };
     let options = RuncOptions {
-        binary_name: fixture.runc_path.display().to_string(),
+        binary_name: "runc".to_owned(),
         systemd_cgroup: true,
     };
     let runtime_options = ProtobufAny {
         type_url: "types.containerd.io/containerd.runc.v1.Options".to_owned(),
         value: options.encode_to_vec(),
     };
+    let runtime = ContainerRuntime {
+        name: "io.containerd.runc.v2".to_owned(),
+        options: Some(runtime_options.clone()),
+    };
+    let sandbox_runtime = SandboxRuntime {
+        name: runtime.name.clone(),
+        options: Some(runtime_options),
+    };
+    let mut sandbox_config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture.spec_path)?)?;
+    sandbox_config["process"]["args"] = serde_json::json!(["/bin/busybox", "sleep", "300"]);
+    sandbox_config["hooks"] = serde_json::json!({});
+    sandbox_config["linux"]["cgroupsPath"] = serde_json::json!(format!(
+        "system.slice:mithril-containerd-sandbox:{}",
+        std::process::id()
+    ));
+    sandbox_config["annotations"] = serde_json::json!({
+        "io.kubernetes.cri.container-type": "sandbox",
+        "io.kubernetes.cri.sandbox-id": fixture.sandbox_id,
+    });
+    let sandbox_spec = ProtobufAny {
+        type_url: "types.containerd.io/opencontainers/runtime-spec/1/Spec".to_owned(),
+        value: serde_json::to_vec(&sandbox_config)?,
+    };
+    let mut sandbox_store = SandboxStoreClient::new(channel.clone());
+    sandbox_store
+        .create(with_namespace!(
+            StoreCreateRequest {
+                sandbox: Some(Sandbox {
+                    sandbox_id: fixture.sandbox_id.clone(),
+                    runtime: Some(sandbox_runtime),
+                    spec: Some(sandbox_spec.clone()),
+                    sandboxer: "podsandbox".to_owned(),
+                    ..Default::default()
+                }),
+            },
+            fixture.namespace
+        ))
+        .await
+        .map_err(|error| containerd_error("sandbox store create", error))?;
+
+    let sandbox_upper_path = fixture
+        .rootfs_upper_path
+        .with_file_name("sandbox-overlay-upper");
+    let sandbox_work_path = fixture
+        .rootfs_work_path
+        .with_file_name("sandbox-overlay-work");
+    fs::create_dir(&sandbox_upper_path)?;
+    fs::create_dir(&sandbox_work_path)?;
+    let mut containers = ContainersClient::new(channel.clone());
+    containers
+        .create(with_namespace!(
+            CreateContainerRequest {
+                container: Some(Container {
+                    id: fixture.sandbox_id.clone(),
+                    runtime: Some(runtime.clone()),
+                    spec: Some(sandbox_spec),
+                    ..Default::default()
+                }),
+            },
+            fixture.namespace
+        ))
+        .await
+        .map_err(|error| containerd_error("sandbox container create", error))?;
+    let mut tasks = TasksClient::new(channel.clone());
+    tasks
+        .create(with_namespace!(
+            CreateTaskRequest {
+                container_id: fixture.sandbox_id.clone(),
+                rootfs: vec![containerd_overlay_mount(
+                    &fixture.rootfs_lower_path,
+                    &sandbox_upper_path,
+                    &sandbox_work_path,
+                )],
+                stdin: "/dev/null".to_owned(),
+                stdout: "/dev/null".to_owned(),
+                stderr: "/dev/null".to_owned(),
+                ..Default::default()
+            },
+            fixture.namespace
+        ))
+        .await
+        .map_err(|error| containerd_error("sandbox task create", error))?;
+    tasks
+        .start(with_namespace!(
+            StartRequest {
+                container_id: fixture.sandbox_id.clone(),
+                exec_id: String::new(),
+            },
+            fixture.namespace
+        ))
+        .await
+        .map_err(|error| containerd_error("sandbox task start", error))?;
+
     let container = Container {
         id: fixture.container_id.clone(),
-        runtime: Some(ContainerRuntime {
-            name: "io.containerd.runc.v2".to_owned(),
-            options: Some(runtime_options),
-        }),
+        runtime: Some(runtime),
         spec: Some(spec),
+        sandbox: fixture.sandbox_id.clone(),
         ..Default::default()
     };
-    let mut containers = ContainersClient::new(channel.clone());
     containers
         .create(with_namespace!(
             CreateContainerRequest {
@@ -278,18 +409,11 @@ async fn run_containerd_start_fixture(
         .create(with_namespace!(
             CreateTaskRequest {
                 container_id: fixture.container_id.clone(),
-                rootfs: vec![ContainerdMount {
-                    r#type: "overlay".to_owned(),
-                    source: "overlay".to_owned(),
-                    target: String::new(),
-                    options: vec![
-                        format!("workdir={}", fixture.rootfs_work_path.display()),
-                        format!("upperdir={}", fixture.rootfs_upper_path.display()),
-                        format!("lowerdir={}", fixture.rootfs_lower_path.display()),
-                        "uuid=on".to_owned(),
-                        "nouserxattr".to_owned(),
-                    ],
-                }],
+                rootfs: vec![containerd_overlay_mount(
+                    &fixture.rootfs_lower_path,
+                    &fixture.rootfs_upper_path,
+                    &fixture.rootfs_work_path,
+                )],
                 stdin: "/dev/null".to_owned(),
                 stdout: fixture.stdout_path.display().to_string(),
                 stderr: fixture.stderr_path.display().to_string(),
@@ -405,10 +529,35 @@ async fn run_containerd_cleanup_fixture(
     socket_path: &Path,
     namespace: &str,
     container_id: &str,
+    sandbox_id: &str,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let channel = containerd_client::connect(socket_path)
         .await
         .map_err(|error| containerd_error("connect", error))?;
+    cleanup_containerd_container(channel.clone(), namespace, container_id).await?;
+    cleanup_containerd_container(channel.clone(), namespace, sandbox_id).await?;
+    let mut sandbox_store = SandboxStoreClient::new(channel);
+    let delete = sandbox_store
+        .delete(with_namespace!(
+            StoreDeleteRequest {
+                sandbox_id: sandbox_id.to_owned(),
+            },
+            namespace
+        ))
+        .await;
+    if let Err(error) = delete {
+        if error.code() != containerd_client::tonic::Code::NotFound {
+            return Err(containerd_error("sandbox store delete", error).into());
+        }
+    }
+    Ok(())
+}
+
+async fn cleanup_containerd_container(
+    channel: containerd_client::tonic::transport::Channel,
+    namespace: &str,
+    container_id: &str,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut tasks = TasksClient::new(channel.clone());
     let kill = tasks
         .kill(with_namespace!(
@@ -718,15 +867,41 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
             println!("Mithril direct runc entry-role probe passed");
             Ok(())
         }
+        Command::RecoveredContainerEntryProbe {
+            output_directory,
+            pin_root,
+            lease_path,
+            runc_path,
+            workload_path,
+            retained_bpf_object,
+            containerd_path,
+        } => {
+            let runner = EffectTestRunner::new(cli.repo_root);
+            let result = runner.recovered_container_entry_probe(
+                &output_directory,
+                &pin_root,
+                &lease_path,
+                &runc_path,
+                &workload_path,
+                &retained_bpf_object,
+                &containerd_path,
+            )?;
+            runner.write_json(
+                &output_directory.join("recovered-container-entry-probe.json"),
+                &result,
+            )?;
+            println!("Mithril recovered-container entry probe passed");
+            Ok(())
+        }
         Command::ContainerdStartFixture {
             socket_path,
             namespace,
             container_id,
+            sandbox_id,
             spec_path,
             rootfs_lower_path,
             rootfs_upper_path,
             rootfs_work_path,
-            runc_path,
             pid_path,
             stdout_path,
             stderr_path,
@@ -737,11 +912,11 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 socket_path,
                 namespace,
                 container_id,
+                sandbox_id,
                 spec_path,
                 rootfs_lower_path,
                 rootfs_upper_path,
                 rootfs_work_path,
-                runc_path,
                 pid_path,
                 stdout_path,
                 stderr_path,
@@ -772,6 +947,7 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
             socket_path,
             namespace,
             container_id,
+            sandbox_id,
         } => tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?
@@ -779,6 +955,7 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 &socket_path,
                 &namespace,
                 &container_id,
+                &sandbox_id,
             )),
         Command::RuncRetainedRuntimeGateProbe {
             output_directory,

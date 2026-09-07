@@ -15,8 +15,9 @@ use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::{
     CanonicalMountRootKeyV1, CanonicalMountRootV1, EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1,
     ExactFileObjectKeyV1, ExecGuardStateV1, ExecutionApprovalSlotStateV1, ExecutionApprovalSlotV1,
-    Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1, PendingExecStateV1, PendingExecV1,
-    ProcessSecurityStateV1, TaskCoordinateStateV1,
+    ExecutionSetBindingStateV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
+    PendingExecStateV1, PendingExecV1, PreparedContainerStateV1, ProcessSecurityStateV1,
+    RecoveredContainerActivationPhaseV1, RecoveredContainerActivationV1, TaskCoordinateStateV1,
     EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ARGV_V1,
     EXECUTION_APPROVAL_TRACE_STAGE_EXECVEAT_ENTRY_V1,
     EXECUTION_APPROVAL_TRACE_STAGE_EXECVE_ENTRY_V1,
@@ -59,6 +60,28 @@ use crate::physical::{boot_identity, ProbeDirectory, ProbeFile};
 use crate::{DigestV1, Result};
 
 const WAIT_LIMIT: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RecoveredContainerEntryProbeV1 {
+    pub schema_version: u32,
+    pub initial_host_pid: u32,
+    pub container_started_before_bpf: bool,
+    pub recovering_before_iterator: bool,
+    pub active_recovered_before_ptrace: bool,
+    pub recovered_application_role_id: u32,
+    pub recovered_application_rule_id: u32,
+    pub recovered_application_task_count: u64,
+    pub recovered_external_task_count: u64,
+    pub ptrace_bootstrap_marker_observed: bool,
+    pub runtime_internal_exec_observed_with_rule_zero: bool,
+    pub declared_probe_role_id: u32,
+    pub declared_probe_rule_id: u32,
+    pub unmatched_exec_denied: bool,
+    pub pin_root_removed: bool,
+    pub lease_removed: bool,
+    pub cgroup_removed: bool,
+    pub fixture_root_removed: bool,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RuncEntryRoleRuntimeProbeV1 {
@@ -212,10 +235,12 @@ struct RuncContainer {
     containerd: Option<ContainerdRuntime>,
 }
 
+#[derive(Clone)]
 struct ContainerdRuntime {
     runner_path: PathBuf,
     socket_path: PathBuf,
     namespace: String,
+    sandbox_id: String,
 }
 
 struct ContainerdServer {
@@ -1674,6 +1699,7 @@ impl RuncContainer {
                 ])
                 .args(["--namespace", &containerd.namespace])
                 .args(["--container-id", &self.container_id])
+                .args(["--sandbox-id", &containerd.sandbox_id])
                 .output()
                 .context(IoSnafu {
                     path: &containerd.runner_path,
@@ -1910,6 +1936,561 @@ impl EffectTestRunner {
         Ok(RuncRetainedRuntimeGateProbeV1 {
             fixture_root_removed: !fixture.fixture_root.exists(),
             ..result
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn recovered_container_entry_probe(
+        &self,
+        output_directory: &Path,
+        pin_root: &Path,
+        lease_path: &Path,
+        runc_path: &Path,
+        workload_path: &Path,
+        retained_bpf_object: &Path,
+        containerd_path: &Path,
+    ) -> Result<RecoveredContainerEntryProbeV1> {
+        for path in [pin_root, lease_path] {
+            ensure!(
+                !path.exists(),
+                InvalidInputSnafu {
+                    path,
+                    reason: "the recovered-entry probe requires fresh Mithril ownership",
+                }
+            );
+        }
+        for path in [
+            runc_path,
+            workload_path,
+            retained_bpf_object,
+            containerd_path,
+        ] {
+            ensure!(
+                path.is_absolute() && path.is_file(),
+                InvalidInputSnafu {
+                    path,
+                    reason: "the recovered-entry input must be an existing absolute file",
+                }
+            );
+        }
+        fs::create_dir_all(output_directory).context(IoSnafu {
+            path: output_directory,
+        })?;
+        let fixture_root = output_directory.join("recovered-container-entry-fixture");
+        ensure!(
+            !fixture_root.exists(),
+            InvalidInputSnafu {
+                path: &fixture_root,
+                reason: "the recovered-entry fixture must start absent",
+            }
+        );
+        fs::create_dir(&fixture_root).context(IoSnafu {
+            path: &fixture_root,
+        })?;
+        let pin_cleanup = ProbeDirectory::new(pin_root);
+        let lease_cleanup = ProbeFile::new(lease_path);
+        let bundle = fixture_root.join("bundle");
+        let rootfs = bundle.join("rootfs");
+        let overlay_upper = fixture_root.join("overlay-upper");
+        let overlay_work = fixture_root.join("overlay-work");
+        let role_directory = fixture_root.join("runtime-markers");
+        let state_root = fixture_root.join("runc-state");
+        fs::create_dir_all(rootfs.join("bin")).context(IoSnafu { path: &rootfs })?;
+        fs::create_dir(&overlay_upper).context(IoSnafu {
+            path: &overlay_upper,
+        })?;
+        fs::create_dir(&overlay_work).context(IoSnafu {
+            path: &overlay_work,
+        })?;
+        fs::create_dir(&state_root).context(IoSnafu { path: &state_root })?;
+        let dynamic_loader_paths =
+            prepare_entry_role_root(&rootfs, workload_path, &role_directory)?;
+        let policy = self.build_runc_artifact(&fixture_root, &dynamic_loader_paths)?;
+        let mut containerd_server =
+            ContainerdServer::start(containerd_path, runc_path, &fixture_root, output_directory)?;
+
+        run_checked(
+            Command::new(runc_path).args(["spec", "--bundle", bundle.to_string_lossy().as_ref()]),
+            runc_path,
+        )?;
+        let config_path = bundle.join("config.json");
+        let mut config: serde_json::Value = serde_json::from_slice(
+            &fs::read(&config_path).context(IoSnafu { path: &config_path })?,
+        )
+        .context(JsonSnafu { path: &config_path })?;
+        let container_id = format!(
+            "{:x}",
+            Sha256::digest(format!("recovered-entry-{}", std::process::id()).as_bytes())
+        );
+        let sandbox_id = format!(
+            "{:x}",
+            Sha256::digest(format!("recovered-entry-sandbox-{container_id}").as_bytes())
+        );
+        let cgroup_name = format!("mithril-recovered-entry-{}", std::process::id());
+        let cgroup_path =
+            PathBuf::from("/sys/fs/cgroup/system.slice").join(format!("{cgroup_name}.scope"));
+        ensure!(
+            !cgroup_path.exists(),
+            InvalidInputSnafu {
+                path: &cgroup_path,
+                reason: "the recovered-entry cgroup already exists",
+            }
+        );
+        config["process"]["terminal"] = json!(false);
+        config["process"]["cwd"] = json!("/");
+        config["process"]["args"] = json!(["/bin/busybox", "sleep", "300"]);
+        config["process"]["env"] =
+            json!(["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"]);
+        config["process"]["capabilities"] = json!({
+            "bounding": privileged_capabilities(),
+            "effective": privileged_capabilities(),
+            "permitted": privileged_capabilities()
+        });
+        config["root"]["path"] = json!("rootfs");
+        config["root"]["readonly"] = json!(false);
+        config["hooks"] = json!({});
+        config["linux"]["cgroupsPath"] = json!(format!(
+            "system.slice:mithril-recovered-entry:{}",
+            std::process::id()
+        ));
+        config["annotations"] = json!({
+            "io.kubernetes.cri.container-type": "container",
+            "io.kubernetes.cri.container-id": container_id,
+            (POD_NAMESPACE_ANNOTATION): "default",
+            (POD_UID_ANNOTATION): "recovered-entry-pod",
+            (CONTAINER_NAME_ANNOTATION): "direct-runc",
+            (IMAGE_NAME_ANNOTATION): format!("direct-runc@sha256:{}", "a".repeat(64)),
+            (SANDBOX_ID_ANNOTATION): sandbox_id,
+            (PROFILE_ID_ANNOTATION): policy.profile_id.clone(),
+            (POLICY_SOURCE_REVISION_ANNOTATION): "d".repeat(64),
+        });
+        config["mounts"]
+            .as_array_mut()
+            .context(InvalidInputSnafu {
+                path: &config_path,
+                reason: "the recovered-entry spec has no mount array",
+            })?
+            .push(json!({
+                "destination": "/var/lib/mithril-convergence",
+                "type": "bind",
+                "source": role_directory.to_string_lossy(),
+                "options": ["rbind", "rprivate", "rw"]
+            }));
+        fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&config).context(JsonSnafu { path: &config_path })?,
+        )
+        .context(IoSnafu { path: &config_path })?;
+
+        let runtime = ContainerdRuntime {
+            runner_path: std::env::current_exe().context(IoSnafu {
+                path: Path::new("the current Mithril effect-test executable"),
+            })?,
+            socket_path: containerd_server.socket_path(),
+            namespace: "mithril-recovered-entry".to_owned(),
+            sandbox_id: sandbox_id.clone(),
+        };
+        let initial_pid_path = fixture_root.join("initial.pid");
+        let initial_stdout = output_directory.join("recovered-entry-initial.stdout");
+        let initial_stderr = output_directory.join("recovered-entry-initial.stderr");
+        fs::File::create(&initial_stdout).context(IoSnafu {
+            path: &initial_stdout,
+        })?;
+        fs::File::create(&initial_stderr).context(IoSnafu {
+            path: &initial_stderr,
+        })?;
+        let runner_stdout = output_directory.join("recovered-entry-runner.stdout");
+        let runner_stderr = output_directory.join("recovered-entry-runner.stderr");
+        let mut initial_child = Command::new(&runtime.runner_path)
+            .arg("containerd-start-fixture")
+            .args([
+                "--socket-path",
+                runtime.socket_path.to_string_lossy().as_ref(),
+            ])
+            .args(["--namespace", &runtime.namespace])
+            .args(["--container-id", &container_id])
+            .args(["--sandbox-id", &runtime.sandbox_id])
+            .args(["--spec-path", config_path.to_string_lossy().as_ref()])
+            .args(["--rootfs-lower-path", rootfs.to_string_lossy().as_ref()])
+            .args([
+                "--rootfs-upper-path",
+                overlay_upper.to_string_lossy().as_ref(),
+            ])
+            .args([
+                "--rootfs-work-path",
+                overlay_work.to_string_lossy().as_ref(),
+            ])
+            .args(["--pid-path", initial_pid_path.to_string_lossy().as_ref()])
+            .args(["--stdout-path", initial_stdout.to_string_lossy().as_ref()])
+            .args(["--stderr-path", initial_stderr.to_string_lossy().as_ref()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(fs::File::create(&runner_stdout).context(
+                IoSnafu {
+                    path: &runner_stdout,
+                },
+            )?))
+            .stderr(Stdio::from(fs::File::create(&runner_stderr).context(
+                IoSnafu {
+                    path: &runner_stderr,
+                },
+            )?))
+            .spawn()
+            .context(IoSnafu {
+                path: &runtime.runner_path,
+            })?;
+        let initial_host_pid = wait_for_pid_file(&initial_pid_path, &mut initial_child)?.context(
+            InvalidInputSnafu {
+                path: &initial_stderr,
+                reason: "the recovered container exited before it published its PID",
+            },
+        )?;
+        let container_started_before_bpf = !pin_root.exists();
+        ensure!(
+            container_started_before_bpf,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "Mithril owned BPF before the recovery container started",
+            }
+        );
+        let mut container = RuncContainer {
+            child: Some(initial_child),
+            runc_path: runc_path.to_path_buf(),
+            state_root,
+            bundle,
+            container_id: container_id.clone(),
+            cgroup_path: cgroup_path.clone(),
+            containerd: Some(runtime.clone()),
+        };
+
+        let (boot_id, node_boot_id) = boot_identity()?;
+        let retained_bpf_sha256 = DigestV1::of(fs::read(retained_bpf_object).context(IoSnafu {
+            path: retained_bpf_object,
+        })?)
+        .to_hex();
+        let mut host = KernelHostOwner::new(KernelHostConfig::retained_identity_qualification(
+            retained_bpf_object,
+            retained_bpf_sha256,
+            "/sys/kernel/btf/vmlinux",
+            lease_path,
+            Some(pin_root.to_path_buf()),
+            &boot_id,
+            1,
+        ))
+        .start()
+        .context(InterceptorSnafu)?;
+        let observations = EffectObservationStore::default();
+        let sink = observations.clone();
+        let reader = host
+            .effect_observation_reader(move |bytes| {
+                sink.record_bytes(bytes);
+                0
+            })
+            .context(InterceptorSnafu)?;
+        let mut binding = effect_binding_with_identity(
+            &cgroup_path,
+            "99999999-9999-4999-8999-999999999993",
+            'e',
+            "direct-runc",
+            false,
+        );
+        binding.container_id.clone_from(&container_id);
+        binding.sandbox_id.clone_from(&sandbox_id);
+        binding.pod_uid = "recovered-entry-pod".to_owned();
+        binding.profile_id.clone_from(&policy.profile_id);
+        binding
+            .protected_scope_id
+            .clone_from(&policy.protected_scope_id);
+        binding
+            .execution_set_id
+            .clone_from(&policy.execution_set_id);
+        binding
+            .workload_selector_id
+            .clone_from(&policy.workload_selector_id);
+        binding.cluster_uid = "10000000-0000-4000-8000-000000000002".to_owned();
+        binding.namespace_uid = "10000000-0000-4000-8000-000000000003".to_owned();
+        binding.pod_labels = [(
+            "app.kubernetes.io/name".to_owned(),
+            "direct-runc".to_owned(),
+        )]
+        .into_iter()
+        .collect();
+        binding.image_digest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned();
+        binding.initial_role_id = policy.initial_role_id;
+        binding.external_role_id = policy.external_role_id;
+        let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
+        bindings
+            .publish_running_recovery_candidate_for_test(&host, &binding)
+            .context(NodeSnafu)?;
+        bindings
+            .attach_running_runtime_identity_for_test(
+                &binding.binding_id,
+                initial_host_pid,
+                PathBuf::from("/"),
+                vec![PathBuf::from("/bin"), PathBuf::from("/usr/bin")],
+            )
+            .context(NodeSnafu)?;
+        let policy_fixture = self
+            .repo_root
+            .join("crates/mithril-e2e/fixtures/mithril-policy");
+        let node_config = effect_node_config(
+            &fixture_root,
+            pin_root,
+            lease_path,
+            &policy_fixture,
+            policy.artifact_path.clone(),
+            vec![binding.clone()],
+        );
+        let _policy_owner = NodePolicyGenerationOwner::load_and_install_for_bindings(
+            &node_config,
+            &mut host,
+            &bindings,
+            node_boot_id,
+            1,
+        )
+        .context(NodeSnafu)?;
+        bindings
+            .adopt_activated_profiles(&host, &node_config.workload_bindings)
+            .context(NodeSnafu)?;
+        let binding_key = fs::metadata(&cgroup_path)
+            .context(IoSnafu { path: &cgroup_path })?
+            .ino()
+            .to_ne_bytes();
+        let recovering = host
+            .lookup_map("execution_set_bindings", &binding_key)
+            .context(InterceptorSnafu)?
+            .context(InvalidInputSnafu {
+                path: pin_root,
+                reason: "the recovering binding disappeared before the iterator",
+            })?;
+        let recovering =
+            ExecutionSetBindingStateV1::try_read_from_bytes(&recovering).map_err(|error| {
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: format!("the recovering binding has an invalid ABI: {error}"),
+                }
+                .build()
+            })?;
+        let recovering_before_iterator = recovering.prepared_container_state
+            == PreparedContainerStateV1::Recovering
+            && recovering.prepared_container_entry_instance_id.is_zero();
+        ensure!(
+            recovering_before_iterator,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "Node did not install the authority-free RECOVERING state",
+            }
+        );
+
+        let identity = NativeSecurityStateOwner::new(node_boot_id, 1);
+        let reconciliation = identity
+            .activate_initial_with_effect_policy(&mut host, true)
+            .context(NodeSnafu)?;
+        ensure!(
+            reconciliation == Default::default(),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: format!("BPF recovery changed identity health: {reconciliation:?}"),
+            }
+        );
+        let inspector = NativeIdentityInspector::new(pin_root);
+        let recovered_initial = inspector
+            .snapshot(initial_host_pid)
+            .context(NodeSnafu)?
+            .context(InvalidInputSnafu {
+                path: pin_root,
+                reason: "BPF did not assign the recovered init task",
+            })?;
+        let recovered_binding =
+            recovered_initial
+                .runtime_binding
+                .as_ref()
+                .context(InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "the recovered init task has no runtime binding",
+                })?;
+        let active_recovered_before_ptrace = recovered_binding.prepared_container_state
+            == "active_recovered"
+            && recovered_initial.active_role_id == binding.initial_role_id
+            && recovered_initial.admitted_entry_rule_id != 0
+            && recovered_initial.root_class.as_deref() == Some("recovered_application_root")
+            && recovered_binding.prepared_container_entry_instance_id
+                == recovered_initial.entry_instance_id;
+        ensure!(
+            active_recovered_before_ptrace,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: format!(
+                    "BPF did not publish the ptrace anchor before the later entry: {recovered_initial:?}"
+                ),
+            }
+        );
+        let recovery = host
+            .lookup_map("recovered_container_activations", &binding_key)
+            .context(InterceptorSnafu)?
+            .context(InvalidInputSnafu {
+                path: pin_root,
+                reason: "the BPF recovery result disappeared",
+            })?;
+        let recovery =
+            RecoveredContainerActivationV1::try_read_from_bytes(&recovery).map_err(|error| {
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: format!("the BPF recovery result has an invalid ABI: {error}"),
+                }
+                .build()
+            })?;
+        ensure!(
+            recovery.phase == RecoveredContainerActivationPhaseV1::Complete
+                && !recovery.application_entry_instance_id.is_zero()
+                && recovery.validation_application_task_count > 0,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: format!("the BPF recovery result is incomplete: {recovery:?}"),
+            }
+        );
+
+        let probe_marker = observations.cursor();
+        let probe_pid_path = fixture_root.join("startup-probe.pid");
+        let probe_stdout = output_directory.join("recovered-startup-probe.stdout");
+        let probe_stderr = output_directory.join("recovered-startup-probe.stderr");
+        let mut probe = container.spawn_exec(
+            "/bin/cat",
+            &[
+                "/var/lib/mithril-convergence/protected.lifecycle-ready",
+                "/var/lib/mithril-convergence/application.denied",
+            ],
+            &probe_pid_path,
+            &probe_stdout,
+            &probe_stderr,
+        )?;
+        let probe_pid =
+            wait_for_pid_file(&probe_pid_path, &mut probe)?.context(InvalidInputSnafu {
+                path: &probe_stderr,
+                reason: "the recovered startup probe did not reach its declared executable",
+            })?;
+        let probe_snapshot = wait_for_task_snapshot(
+            &inspector,
+            probe_pid,
+            &mut probe,
+            &reader,
+            &observations,
+            probe_marker,
+            &probe_stderr,
+        )?;
+        fs::write(role_directory.join("application.denied"), b"release\n").context(IoSnafu {
+            path: &role_directory,
+        })?;
+        let probe_status = wait_for_child(&mut probe)?;
+        reader
+            .poll(Duration::from_millis(100))
+            .context(InterceptorSnafu)?;
+        let probe_effects = observations.recent_since(probe_marker);
+        let ptrace_bootstrap_marker_observed = probe_effects.iter().any(|event| {
+            event.reason == "RUNTIME_ENTRY_INFRASTRUCTURE"
+                && event.effect_family == u32::from(KernelEffectFamilyV1::Privilege as u16)
+                && event.target_task_cookie == recovered_initial.task_cookie
+                && event.admitted_entry_rule_id == 0
+        });
+        let runtime_internal_exec_observed_with_rule_zero = probe_effects.iter().any(|event| {
+            event.reason == "RUNTIME_ENTRY_INFRASTRUCTURE"
+                && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
+                && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
+                && event.admitted_entry_rule_id == 0
+        });
+        ensure!(
+            probe_status.success()
+                && probe_snapshot.active_role_id == policy.role_ids["startup"]
+                && probe_snapshot.admitted_entry_rule_id != 0
+                && ptrace_bootstrap_marker_observed
+                && runtime_internal_exec_observed_with_rule_zero,
+            InvalidInputSnafu {
+                path: &probe_stderr,
+                reason: format!(
+                    "the recovered later-entry sequence failed: status={probe_status}, snapshot={probe_snapshot:?}, effects={:?}",
+                    recent_effect_summary(&observations, probe_marker)
+                ),
+            }
+        );
+
+        let denied_marker = observations.cursor();
+        let denied_pid_path = fixture_root.join("unmatched.pid");
+        let denied_stdout = output_directory.join("recovered-unmatched.stdout");
+        let denied_stderr = output_directory.join("recovered-unmatched.stderr");
+        let mut denied = container.spawn_exec(
+            "/bin/mkdir",
+            &["/tmp/unmatched"],
+            &denied_pid_path,
+            &denied_stdout,
+            &denied_stderr,
+        )?;
+        let denied_status = wait_for_child(&mut denied)?;
+        reader
+            .poll(Duration::from_millis(100))
+            .context(InterceptorSnafu)?;
+        wait_for_reason(&reader, &observations, denied_marker, "UNSUPPORTED_OBJECT")?;
+        let unmatched_exec_denied = !denied_status.success()
+            && observations
+                .recent_since(denied_marker)
+                .iter()
+                .any(|event| {
+                    event.reason == "UNSUPPORTED_OBJECT"
+                        && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
+                        && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
+                        && event.active_role_id == binding.external_role_id
+                        && event.admitted_entry_rule_id == 0
+                        && event.kernel_result == -13
+                });
+        ensure!(
+            unmatched_exec_denied,
+            InvalidInputSnafu {
+                path: &denied_stderr,
+                reason: format!(
+                    "an unmatched later entry passed after recovery: status={denied_status}, effects={:?}",
+                    recent_effect_summary(&observations, denied_marker)
+                ),
+            }
+        );
+
+        container.cleanup()?;
+        bindings
+            .retire_binding_id_for_test(&host, &binding.binding_id)
+            .context(NodeSnafu)?;
+        drop(reader);
+        host.shutdown().context(InterceptorSnafu)?;
+        pin_cleanup.cleanup()?;
+        lease_cleanup.cleanup()?;
+        containerd_server.cleanup()?;
+        let cgroup_removed = !cgroup_path.exists();
+        ensure!(
+            cgroup_removed,
+            InvalidInputSnafu {
+                path: &cgroup_path,
+                reason: "the recovered-entry cgroup survived cleanup",
+            }
+        );
+        fs::remove_dir_all(&fixture_root).context(IoSnafu {
+            path: &fixture_root,
+        })?;
+        Ok(RecoveredContainerEntryProbeV1 {
+            schema_version: 1,
+            initial_host_pid,
+            container_started_before_bpf,
+            recovering_before_iterator,
+            active_recovered_before_ptrace,
+            recovered_application_role_id: recovered_initial.active_role_id,
+            recovered_application_rule_id: recovered_initial.admitted_entry_rule_id,
+            recovered_application_task_count: recovery.validation_application_task_count,
+            recovered_external_task_count: recovery.validation_external_task_count,
+            ptrace_bootstrap_marker_observed,
+            runtime_internal_exec_observed_with_rule_zero,
+            declared_probe_role_id: probe_snapshot.active_role_id,
+            declared_probe_rule_id: probe_snapshot.admitted_entry_rule_id,
+            unmatched_exec_denied,
+            pin_root_removed: !pin_root.exists(),
+            lease_removed: !lease_path.exists(),
+            cgroup_removed,
+            fixture_root_removed: !fixture_root.exists(),
         })
     }
 
@@ -2350,6 +2931,10 @@ impl EffectTestRunner {
             runner_path: oci_stage_hook.clone(),
             socket_path: server.socket_path(),
             namespace: "mithril-entry-role".to_owned(),
+            sandbox_id: format!(
+                "{:x}",
+                Sha256::digest(format!("sandbox-{container_id}").as_bytes())
+            ),
         });
         let containerd_initial_pid_path = fixture_root.join("containerd-initial.pid");
         let child = if let Some(runtime) = &containerd {
@@ -2371,6 +2956,7 @@ impl EffectTestRunner {
                 ])
                 .args(["--namespace", &runtime.namespace])
                 .args(["--container-id", &container_id])
+                .args(["--sandbox-id", &runtime.sandbox_id])
                 .args(["--spec-path", config_path.to_string_lossy().as_ref()])
                 .args(["--rootfs-lower-path", rootfs.to_string_lossy().as_ref()])
                 .args([
@@ -2381,7 +2967,6 @@ impl EffectTestRunner {
                     "--rootfs-work-path",
                     overlay_work.to_string_lossy().as_ref(),
                 ])
-                .args(["--runc-path", runc_path.to_string_lossy().as_ref()])
                 .args([
                     "--pid-path",
                     containerd_initial_pid_path.to_string_lossy().as_ref(),

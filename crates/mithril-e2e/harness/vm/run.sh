@@ -11,11 +11,12 @@ keep_vm=false
 skip_administrative_exec=false
 manual_vm=false
 entry_role_runtime_only=false
+recovered_entry_only=false
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
 source_mount=${MITHRIL_VM_SOURCE_MOUNT:-}
 
 usage() {
-  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--skip-administrative-exec] [--entry-role-runtime-only] [--keep-vm] [--manual]" >&2
+  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--skip-administrative-exec] [--entry-role-runtime-only] [--recovered-entry-only] [--keep-vm] [--manual]" >&2
 }
 
 while (($#)); do
@@ -40,6 +41,10 @@ while (($#)); do
       ;;
     --entry-role-runtime-only)
       entry_role_runtime_only=true
+      shift
+      ;;
+    --recovered-entry-only)
+      recovered_entry_only=true
       shift
       ;;
     --keep-vm)
@@ -70,6 +75,14 @@ done
 }
 [[ $entry_role_runtime_only == false || $manual_vm == false ]] || {
   echo "--entry-role-runtime-only cannot run with --manual" >&2
+  exit 2
+}
+[[ $recovered_entry_only == false || $manual_vm == false ]] || {
+  echo "--recovered-entry-only cannot run with --manual" >&2
+  exit 2
+}
+[[ $entry_role_runtime_only == false || $recovered_entry_only == false ]] || {
+  echo "--entry-role-runtime-only and --recovered-entry-only are mutually exclusive" >&2
   exit 2
 }
 [[ -x $provider ]] || {
@@ -335,7 +348,8 @@ done
 
 entry_runc_path=/usr/sbin/runc
 entry_containerd_path=/usr/bin/containerd
-if [[ $entry_role_runtime_only == true && $with_k3s == true ]]; then
+if [[ ( $entry_role_runtime_only == true || $recovered_entry_only == true ) &&
+      $with_k3s == true ]]; then
   "$provider" put "$vm_name" "$directory/k3s-config-v1.yaml" \
     "$remote_root/harness/k3s-config-v1.yaml"
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
@@ -345,7 +359,7 @@ if [[ $entry_role_runtime_only == true && $with_k3s == true ]]; then
   entry_containerd_path=/var/lib/rancher/k3s/data/current/bin/containerd
 fi
 
-if [[ $entry_role_runtime_only == false ]]; then
+if [[ $entry_role_runtime_only == false && $recovered_entry_only == false ]]; then
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
     platform "$remote_bin/mithril-inspect" "$remote_root" \
     >"$output_directory/platform.txt"
@@ -358,6 +372,43 @@ if [[ $entry_role_runtime_only == false ]]; then
     --cgroup-path "/sys/fs/cgroup/$vm_name-identity"
   "$provider" get "$vm_name" "$identity_output/identity-physical-probe.json" \
     "$output_directory/identity-physical-probe.json"
+fi
+
+if [[ $recovered_entry_only == true ]]; then
+  recovered_entry_output=$remote_root/recovered-container-entry
+  "$provider" run "$vm_name" sudo "$remote_bin/mithril-effect-test" \
+    --repo-root "$remote_source" recovered-container-entry-probe \
+    --output-directory "$recovered_entry_output" \
+    --pin-root "/sys/fs/bpf/$vm_name-recovered-entry" \
+    --lease-path "$recovered_entry_output/owner.lock" \
+    --runc-path "$entry_runc_path" --workload-path /usr/bin/busybox \
+    --retained-bpf-object "$remote_bin/retained-identity.bpf.o" \
+    --containerd-path "$entry_containerd_path"
+  "$provider" get "$vm_name" \
+    "$recovered_entry_output/recovered-container-entry-probe.json" \
+    "$output_directory/recovered-container-entry-probe.json"
+  jq -e '
+    .schema_version == 1 and
+    .container_started_before_bpf and
+    .recovering_before_iterator and
+    .active_recovered_before_ptrace and
+    .recovered_application_role_id > 0 and
+    .recovered_application_rule_id > 0 and
+    .recovered_application_task_count > 0 and
+    .ptrace_bootstrap_marker_observed and
+    .runtime_internal_exec_observed_with_rule_zero and
+    .declared_probe_role_id > 0 and
+    .declared_probe_rule_id > 0 and
+    .declared_probe_role_id != .recovered_application_role_id and
+    .declared_probe_rule_id != .recovered_application_rule_id and
+    .unmatched_exec_denied and
+    .pin_root_removed and
+    .lease_removed and
+    .cgroup_removed and
+    .fixture_root_removed
+  ' "$output_directory/recovered-container-entry-probe.json" >/dev/null
+  echo "Recovered-container lightweight entry probe passed"
+  exit 0
 fi
 
 entry_role_output=$remote_root/runc-entry-roles
