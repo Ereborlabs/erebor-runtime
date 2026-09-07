@@ -81,6 +81,10 @@ must remain a stable method for finding and reading them.
 - Put lightweight end-to-end qualification in `crates/mithril-e2e/src` and
   its command entry points in `crates/mithril-e2e/src/bin`. It must run the
   production owners without a Kubernetes cluster.
+- Make lightweight qualification call the supported production owner APIs.
+  Do not reproduce a production owner's internal operation sequence with
+  test-only helpers. Test doubles can supply external runtime, Control, clock,
+  and filesystem inputs.
 - Put automated physical Kubernetes qualification in
   `crates/mithril-e2e/harness` and its inputs in
   `crates/mithril-e2e/fixtures`. A harness can use Bash or Python.
