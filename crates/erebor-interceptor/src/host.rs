@@ -34,6 +34,13 @@ const BUNDLED_OBJECT_NAME: &str = "embedded erebor-interceptor.bpf.o";
 const KERNEL_PROGRAM_NAME_BYTES: usize = libbpf_rs::libbpf_sys::BPF_OBJ_NAME_LEN as usize - 1;
 const RETAINED_LINK_UPGRADE_SUFFIX: &str = "-mithril-upgrade";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecoveredContainerActivationCommandResultV1 {
+    Complete,
+    RetryScan,
+    Validate,
+}
+
 pub struct EffectObservationReader {
     ring: RingBuffer<'static>,
 }
@@ -1581,6 +1588,50 @@ impl KernelHost {
             ),
         }
         .build())
+    }
+
+    pub fn advance_recovered_container_activation(
+        &mut self,
+        root_cgroup_id: u64,
+        recovery_attempt_id: Id128V1,
+    ) -> Result<RecoveredContainerActivationCommandResultV1> {
+        ensure!(
+            root_cgroup_id != 0 && !recovery_attempt_id.is_zero(),
+            ManifestMismatchSnafu {
+                path: PathBuf::from("recovered_container_activations"),
+                reason: "container recovery needs an exact cgroup and attempt identity".to_owned(),
+            }
+        );
+        let mut key = [0_u8; MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1];
+        key[..8].copy_from_slice(&root_cgroup_id.to_ne_bytes());
+        key[8..24].copy_from_slice(recovery_attempt_id.as_bytes());
+        let request = PolicyActivationProbeV1 {
+            map_kind: PolicyActivationProbeMapKindV1::RecoveredContainerActivation,
+            reserved: [0; 7],
+            key_size: 24,
+            reserved_alignment: 0,
+            key,
+            expected: PhysicalDecisionV1 {
+                decision: PhysicalDecisionKindV1::Allow,
+                reserved: 0,
+                errno: 0,
+                evidence_class_id: 0,
+                transition_id: 0,
+                exception_numeric_handle: 0,
+            },
+        };
+        match self.run_policy_activation_command(request.as_bytes())? {
+            1 => Ok(RecoveredContainerActivationCommandResultV1::Complete),
+            13 => Ok(RecoveredContainerActivationCommandResultV1::RetryScan),
+            14 => Ok(RecoveredContainerActivationCommandResultV1::Validate),
+            code => ManifestMismatchSnafu {
+                path: PathBuf::from("recovered_container_activations"),
+                reason: format!(
+                    "kernel container recovery command failed closed with probe code {code}"
+                ),
+            }
+            .fail(),
+        }
     }
 
     pub fn cancel_execution_approval_slot(

@@ -316,6 +316,7 @@ fn root_class_name(value: ExternalRootClassV1) -> &'static str {
         ExternalRootClassV1::ExternalRuntimeRoot => "external_runtime_root",
         ExternalRootClassV1::RestoredOrUnknownRoot => "restored_or_unknown_root",
         ExternalRootClassV1::UnresolvedProtected => "unresolved_protected",
+        ExternalRootClassV1::RecoveredApplicationRoot => "recovered_application_root",
         ExternalRootClassV1::Unknown => "unknown",
     }
 }
@@ -339,5 +340,7 @@ fn prepared_container_state_name(value: PreparedContainerStateV1) -> &'static st
         PreparedContainerStateV1::Active => "active",
         PreparedContainerStateV1::Expired => "expired",
         PreparedContainerStateV1::Corrupt => "corrupt",
+        PreparedContainerStateV1::Recovering => "recovering",
+        PreparedContainerStateV1::ActiveRecovered => "active_recovered",
     }
 }

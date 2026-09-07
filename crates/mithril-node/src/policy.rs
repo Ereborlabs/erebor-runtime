@@ -1505,11 +1505,19 @@ impl NodePolicyGenerationOwner {
                         binding.binding_id
                     ),
                 })?;
+            let entry_selector_ids = if binding.arm_initial_root {
+                BTreeSet::new()
+            } else {
+                entry_admission_path_selector_ids(artifact, binding)?
+            };
             let selectors = artifact
                 .policy_document
                 .path_selectors
                 .iter()
-                .filter(|selector| selector.requires_exact_object());
+                .filter(|selector| {
+                    selector.requires_exact_object()
+                        || entry_selector_ids.contains(&selector.path_selector_id)
+                });
             let target_oci_entry_view =
                 oci_entry_view.filter(|(binding_id, _, _)| *binding_id == target.binding_id);
             if !target.process_path_view_allowed && target_oci_entry_view.is_none() {
@@ -2147,6 +2155,7 @@ struct LoweredGeneration {
     descriptor: ProfileGenerationDescriptorV1,
     semantics: GenerationSemantics,
     entry_admissions: BTreeMap<Vec<u8>, Vec<u8>>,
+    recovered_entry_admissions: BTreeMap<Vec<u8>, Vec<u8>>,
     decisions: BTreeMap<Vec<u8>, Vec<u8>>,
     defaults: BTreeMap<Vec<u8>, Vec<u8>>,
     device_decisions: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -2400,12 +2409,13 @@ impl LoweredGeneration {
             .filter(|object| exact_handles.contains(&object.exact_object_key_id))
             .collect::<Vec<_>>();
         validate_binding_roles(artifact, binding, &role_handles, &process_state_handles)?;
-        let entry_admissions = lower_entry_admissions(
+        let (entry_admissions, recovered_entry_admissions) = lower_entry_admissions(
             artifact,
             binding,
             &role_handles,
             &process_state_handles,
             &composite_handles,
+            &generation_objects,
             defer_entry_admissions,
         )?;
         let entry_admission_authority = entry_admission_authority_rows(&entry_admissions)?;
@@ -2853,6 +2863,7 @@ impl LoweredGeneration {
             descriptor,
             semantics,
             entry_admissions,
+            recovered_entry_admissions,
             decisions,
             defaults,
             device_decisions,
@@ -2892,6 +2903,10 @@ impl LoweredGeneration {
             }
         );
         merge_rows(&mut self.entry_admissions, other.entry_admissions)?;
+        merge_rows(
+            &mut self.recovered_entry_admissions,
+            other.recovered_entry_admissions,
+        )?;
         merge_rows(&mut self.decisions, other.decisions)?;
         merge_rows(&mut self.defaults, other.defaults)?;
         merge_rows(&mut self.device_decisions, other.device_decisions)?;
@@ -2962,6 +2977,10 @@ impl LoweredGeneration {
     fn planned_rows(&self) -> Vec<PlannedGenerationRow<'_>> {
         vec![
             ("entry_admission_rules", &self.entry_admissions),
+            (
+                "recovered_container_entry_rules",
+                &self.recovered_entry_admissions,
+            ),
             ("effect_decisions", &self.decisions),
             ("effect_defaults", &self.defaults),
             ("device_effect_decisions", &self.device_decisions),
@@ -3233,27 +3252,44 @@ impl LoweredGeneration {
 
     fn install_entry_admissions(&self, host: &KernelHost) -> Result<()> {
         install_rows(host, "entry_admission_rules", &self.entry_admissions)?;
-        verify_rows(host, "entry_admission_rules", &self.entry_admissions)
+        verify_rows(host, "entry_admission_rules", &self.entry_admissions)?;
+        install_rows(
+            host,
+            "recovered_container_entry_rules",
+            &self.recovered_entry_admissions,
+        )?;
+        verify_rows(
+            host,
+            "recovered_container_entry_rules",
+            &self.recovered_entry_admissions,
+        )
     }
 
     fn revoke_entry_admissions(&self, host: &KernelHost) -> Result<()> {
-        for key in self.entry_admissions.keys() {
-            if host
-                .lookup_map("entry_admission_rules", key)
-                .context(InterceptorSnafu)?
-                .is_some()
-            {
-                host.delete_map_entry("entry_admission_rules", key)
-                    .context(InterceptorSnafu)?;
-            }
-            ensure!(
-                host.lookup_map("entry_admission_rules", key)
+        for (map, rows) in [
+            ("entry_admission_rules", &self.entry_admissions),
+            (
+                "recovered_container_entry_rules",
+                &self.recovered_entry_admissions,
+            ),
+        ] {
+            for key in rows.keys() {
+                if host
+                    .lookup_map(map, key)
                     .context(InterceptorSnafu)?
-                    .is_none(),
-                IdentityStateSnafu {
-                    reason: "entry admission survived failed publication cleanup",
+                    .is_some()
+                {
+                    host.delete_map_entry(map, key).context(InterceptorSnafu)?;
                 }
-            );
+                ensure!(
+                    host.lookup_map(map, key)
+                        .context(InterceptorSnafu)?
+                        .is_none(),
+                    IdentityStateSnafu {
+                        reason: "entry admission survived failed publication cleanup",
+                    }
+                );
+            }
         }
         Ok(())
     }
@@ -4866,8 +4902,9 @@ fn lower_entry_admissions(
     role_handles: &BTreeMap<String, u32>,
     process_state_handles: &BTreeMap<String, u32>,
     composite_handles: &BTreeMap<String, u64>,
+    measured_objects: &[&ExactFileObjectConfig],
     defer_non_initial_entries: bool,
-) -> Result<GenerationRows> {
+) -> Result<(GenerationRows, GenerationRows)> {
     let assignment_handles = handles(
         artifact
             .policy_document
@@ -4892,6 +4929,7 @@ fn lower_entry_admissions(
             reason: "configured external role has no signed role ID",
         })?;
     let mut rows = GenerationRows::new();
+    let mut recovered_rows = GenerationRows::new();
     for assignment in artifact
         .policy_document
         .entry_role_assignments
@@ -5019,8 +5057,46 @@ fn lower_entry_admissions(
             executable_object: ExactFileObjectKeyV1::default(),
         };
         insert_exact(&mut rows, key.as_bytes(), value.as_bytes())?;
+        if *policy_entry_kind == EntryKindV1::ContainerStart
+            && binding.root_cgroup_path.is_some()
+            && !binding.arm_initial_root
+        {
+            let measured = measured_objects
+                .iter()
+                .filter(|object| object.exact_object_key_id == selector.kernel_handle())
+                .copied()
+                .collect::<Vec<_>>();
+            let [measured] = measured.as_slice() else {
+                return IdentityStateSnafu {
+                    reason: format!(
+                        "recovered binding `{}` needs one measured application executable",
+                        binding.binding_id
+                    ),
+                }
+                .fail();
+            };
+            let mut recovered = value;
+            recovered.exact_object_key_id = selector.kernel_handle();
+            recovered.executable_object = ExactFileObjectKeyV1 {
+                profile_generation_ref_id: measured.profile_generation_ref_id,
+                mount_namespace_inode: measured.mount_namespace_inode,
+                mount_id_unique: measured.selected_mount_id_unique,
+                filesystem_device: measured.filesystem_device,
+                inode: measured.inode,
+                inode_generation: measured.inode_generation,
+            };
+            let recovery_key = BindingActivationTargetKeyV1 {
+                binding_id: parse_id("binding_id", &binding.binding_id)?,
+                profile_generation_ref_id: binding.active_profile_generation_ref_id,
+            };
+            insert_exact(
+                &mut recovered_rows,
+                recovery_key.as_bytes(),
+                recovered.as_bytes(),
+            )?;
+        }
     }
-    Ok(rows)
+    Ok((rows, recovered_rows))
 }
 
 fn entry_admission_authority_rows(rows: &GenerationRows) -> Result<GenerationRows> {

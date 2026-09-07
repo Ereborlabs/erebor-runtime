@@ -54,6 +54,11 @@ include = [
   "ImageProvenanceV1",
   "ExecGuardStateV1",
   "BindingActivationTargetKeyV1",
+  "RecoveredContainerActivationPhaseV1",
+  "RecoveredTaskClassV1",
+  "RecoveredContainerInitTaskV1",
+  "RecoveredTaskProvenanceV1",
+  "RecoveredContainerActivationV1",
   "ProcessGenerationMigrationKeyV1",
   "ProcessGenerationMigrationV1",
   "ExecutionSetBindingStateV1",
@@ -192,6 +197,11 @@ include = [
 "ImageProvenanceV1" = "image_provenance_v1"
 "ExecGuardStateV1" = "exec_guard_state_v1"
 "BindingActivationTargetKeyV1" = "binding_activation_target_key_v1"
+"RecoveredContainerActivationPhaseV1" = "recovered_container_activation_phase_v1"
+"RecoveredTaskClassV1" = "recovered_task_class_v1"
+"RecoveredContainerInitTaskV1" = "recovered_container_init_task_v1"
+"RecoveredTaskProvenanceV1" = "recovered_task_provenance_v1"
+"RecoveredContainerActivationV1" = "recovered_container_activation_v1"
 "ProcessGenerationMigrationKeyV1" = "process_generation_migration_key_v1"
 "ProcessGenerationMigrationV1" = "process_generation_migration_v1"
 "ExecutionSetBindingStateV1" = "execution_set_binding_state_v1"

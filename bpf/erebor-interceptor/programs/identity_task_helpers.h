@@ -170,8 +170,7 @@ static __noinline bool runtime_entry_bootstrap_actor_is_exact(
     classification = entry_root_classification(label, entry);
     if (!config || !binding || !label || !process || !entry ||
         !classification ||
-        binding->prepared_container_state !=
-            prepared_container_state_v1_active ||
+        !prepared_container_has_active_anchor(binding) ||
         !binding_matches_label(binding, label) ||
         process->runtime_entry_bootstrap_prepared != 1 ||
         entry->admitted_entry_rule_id ||

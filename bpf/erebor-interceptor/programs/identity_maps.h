@@ -197,6 +197,7 @@ struct identity_scratch_v1 {
     entry_security_state_v1 entry;
     authority_domain_state_v1 domain;
     task_reference_tombstone_v1 tombstone;
+    recovered_task_provenance_v1 recovery_provenance;
     external_root_classification_v1 classification;
     pending_exec_v1 pending_exec;
     image_provenance_v1 image;
@@ -500,6 +501,34 @@ struct {
     __type(key, binding_activation_target_key_v1);
     __type(value, execution_set_binding_state_v1);
 } binding_activation_targets SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, binding_activation_target_key_v1);
+    __type(value, entry_admission_rule_v1);
+} recovered_container_entry_rules SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, __u64);
+    __type(value, recovered_container_activation_v1);
+} recovered_container_activations SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+    __type(key, int);
+    __type(value, recovered_container_init_task_v1);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+} recovered_container_init_tasks SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, __u64);
+    __type(value, recovered_task_provenance_v1);
+} recovered_task_provenance SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -1406,7 +1435,7 @@ static __always_inline bool task_label_is_uninitialized(
     return true;
 }
 
-static __always_inline bool binding_matches_label(
+static __always_inline bool binding_identity_matches_label(
     const execution_set_binding_state_v1 *binding, const task_label_v1 *label)
 {
     return binding && label &&
@@ -1415,6 +1444,26 @@ static __always_inline bool binding_matches_label(
            id128_equal(&binding->binding_nonce,
                        &label->placement.protected_root_binding_nonce) &&
            binding->lifecycle_state == binding_lifecycle_state_v1_active;
+}
+
+static __always_inline bool binding_matches_label(
+    const execution_set_binding_state_v1 *binding, const task_label_v1 *label)
+{
+    return binding_identity_matches_label(binding, label) &&
+           binding->prepared_container_state !=
+               prepared_container_state_v1_recovering &&
+           binding->prepared_container_state !=
+               prepared_container_state_v1_corrupt;
+}
+
+static __always_inline bool prepared_container_has_active_anchor(
+    const execution_set_binding_state_v1 *binding)
+{
+    return binding &&
+           (binding->prepared_container_state ==
+                prepared_container_state_v1_active ||
+            binding->prepared_container_state ==
+                prepared_container_state_v1_active_recovered);
 }
 
 static __always_inline bool binding_retains_label(

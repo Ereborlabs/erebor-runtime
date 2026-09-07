@@ -1686,6 +1686,12 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
             health->placement_mismatches++;
         return identity_deny(config);
     }
+    if (binding &&
+        binding->prepared_container_state ==
+            prepared_container_state_v1_recovering) {
+        recovered_container_task_set_changed(binding, config);
+        return identity_deny(config);
+    }
     if (!label) {
         if (binding) {
             if (label_external_root(task, binding, config)) {

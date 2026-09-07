@@ -101,6 +101,12 @@ int BPF_PROG(erebor_task_alloc, struct task_struct *task,
             health->placement_mismatches++;
         return identity_deny(config);
     }
+    if (creator_binding &&
+        creator_binding->prepared_container_state ==
+            prepared_container_state_v1_recovering) {
+        recovered_container_task_set_changed(creator_binding, config);
+        return identity_deny(config);
+    }
     if (parent_label) {
         if (!label_matches_runtime(parent_label, config) ||
             !binding_matches_label(creator_binding, parent_label)) {
@@ -165,6 +171,12 @@ int BPF_PROG(erebor_cgroup_attach_task, struct cgroup *cgroup,
         }
         return 0;
     }
+    if (binding &&
+        binding->prepared_container_state ==
+            prepared_container_state_v1_recovering) {
+        recovered_container_task_set_changed(binding, config);
+        return 0;
+    }
     if (label) {
         if (!binding_retains_label(binding, label)) {
             task_coordinate_v1 *coordinate =
@@ -198,8 +210,7 @@ int erebor_cgroup_release(struct bpf_raw_tracepoint_args *context)
     if (binding) {
         binding->lifecycle_state = binding_lifecycle_state_v1_tombstoned;
         binding->initial_root_state = initial_root_state_v1_consumed;
-        if (binding->prepared_container_state !=
-            prepared_container_state_v1_active)
+        if (!prepared_container_has_active_anchor(binding))
             binding->prepared_container_state =
                 prepared_container_state_v1_expired;
         binding->prepared_container_exec_task_cookie = 0;
@@ -229,6 +240,12 @@ int BPF_PROG(erebor_wake_up_new_task, struct task_struct *task)
         if (task_cgroup(task, &cgroup))
             return 0;
         binding = binding_for_cgroup(cgroup, &binding_lookup);
+        if (!binding_lookup && binding &&
+            binding->prepared_container_state ==
+                prepared_container_state_v1_recovering) {
+            recovered_container_task_set_changed(binding, config);
+            return 0;
+        }
         if (!binding_lookup && binding)
             label_external_root(task, binding, config);
         return 0;
@@ -278,6 +295,17 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
         binding = binding_for_cgroup(cgroup, &binding_lookup);
     if (task_label_is_uninitialized(label))
         label = NULL;
+    if (!binding_lookup && binding &&
+        binding->prepared_container_state ==
+            prepared_container_state_v1_recovering) {
+        result = reconcile_recovered_task(task, config, binding);
+        if (result && result != PREPARED_CONTAINER_IDENTITY_DEFER_V1) {
+            health = identity_health_record();
+            if (health)
+                health->reconciliation_required++;
+        }
+        return 0;
+    }
     if (label) {
         coordinate = bpf_map_lookup_elem(&task_coordinates,
                                          &label->task_cookie);

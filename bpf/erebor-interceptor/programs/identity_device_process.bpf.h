@@ -373,7 +373,7 @@ static __noinline bool runtime_entry_may_control_initial_target(
                                              &target_label->entry_instance_id)
                        : NULL;
     if (binding_lookup || !binding || !target_label || !target_entry ||
-        binding->prepared_container_state != prepared_container_state_v1_active ||
+        !prepared_container_has_active_anchor(binding) ||
         !binding_matches_label(binding, target_label))
         return false;
     admitted_initial_target =

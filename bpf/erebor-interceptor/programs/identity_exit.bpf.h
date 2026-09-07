@@ -17,6 +17,9 @@ SEC("tracepoint/sched/sched_process_exit")
 int erebor_sched_process_exit(struct trace_event_raw_sched_process_template *context)
 {
     struct task_struct *task;
+    struct cgroup *cgroup = NULL;
+    identity_runtime_config_v1 *config;
+    execution_set_binding_state_v1 *binding;
     task_label_v1 *label;
     task_coordinate_v1 *coordinate;
     task_reference_tombstone_v1 *tombstone;
@@ -29,9 +32,18 @@ int erebor_sched_process_exit(struct trace_event_raw_sched_process_template *con
     __u64 previous;
     __u64 task_cookie;
     bool released = true;
+    int binding_lookup = -EACCES;
 
     finish_mount_mutation();
     task = bpf_get_current_task_btf();
+    config = identity_runtime_config();
+    if (config && !task_cgroup(task, &cgroup)) {
+        binding = binding_for_cgroup(cgroup, &binding_lookup);
+        if (!binding_lookup && binding &&
+            binding->prepared_container_state ==
+                prepared_container_state_v1_recovering)
+            recovered_container_task_set_changed(binding, config);
+    }
     exit_task_effect_attempts(task);
     clear_provisional_exec_request(task);
     label = bpf_task_storage_get(&task_labels, task, 0, 0);

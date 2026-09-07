@@ -184,8 +184,7 @@ static __always_inline bool prepared_container_admitted_actor_is_exact(
                 prepared_container_state_v1_prepared ||
             binding->prepared_container_state ==
                 prepared_container_state_v1_exec_pending ||
-            binding->prepared_container_state ==
-                prepared_container_state_v1_active) &&
+            prepared_container_has_active_anchor(binding)) &&
            binding_matches_label(binding, label) &&
            id128_equal(&binding->execution_set_id,
                        &label->execution_set_id) &&
@@ -225,8 +224,7 @@ static __always_inline int prepared_container_reserve_activation(
                    : -EACCES;
     if (binding->prepared_container_state ==
             prepared_container_state_v1_unarmed ||
-        binding->prepared_container_state ==
-            prepared_container_state_v1_active)
+        prepared_container_has_active_anchor(binding))
         return 0;
     if (binding->prepared_container_bootstrap_state ==
             PREPARED_CONTAINER_BOOTSTRAP_PENDING_V1 ||

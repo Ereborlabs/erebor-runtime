@@ -135,6 +135,7 @@ pub enum KernelRealParentChangeReasonV1 {
     Birth = 1,
     CloneParent = 2,
     ParentExitOrReparent = 3,
+    RecoverySnapshot = 4,
 }
 
 #[repr(u8)]
@@ -213,6 +214,7 @@ pub enum ProcessExecutionStartedByV1 {
     Unknown = 0,
     ProcessBirth = 1,
     ExecCommit = 2,
+    RecoverySnapshot = 3,
 }
 
 #[repr(u8)]
@@ -278,6 +280,7 @@ pub enum ExternalRootClassV1 {
     ExternalRuntimeRoot = 2,
     RestoredOrUnknownRoot = 3,
     UnresolvedProtected = 4,
+    RecoveredApplicationRoot = 5,
 }
 
 #[repr(u8)]
@@ -343,6 +346,32 @@ pub enum PreparedContainerStateV1 {
     Active = 3,
     Expired = 4,
     Corrupt = 5,
+    Recovering = 6,
+    ActiveRecovered = 7,
+}
+
+#[repr(u8)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
+pub enum RecoveredContainerActivationPhaseV1 {
+    #[default]
+    Unknown = 0,
+    Scanning = 1,
+    Validating = 2,
+    Complete = 3,
+    Corrupt = 4,
+}
+
+#[repr(u8)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
+pub enum RecoveredTaskClassV1 {
+    #[default]
+    Unknown = 0,
+    Application = 1,
+    External = 2,
 }
 
 // BPF compare-and-swap is 64-bit on every supported target. Keep the slot
@@ -665,6 +694,67 @@ pub struct ExecutionSetBindingStateV1 {
 pub struct BindingActivationTargetKeyV1 {
     pub binding_id: Id128V1,
     pub profile_generation_ref_id: u64,
+}
+
+#[repr(C)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
+pub struct RecoveredContainerInitTaskV1 {
+    pub node_boot_id: Id128V1,
+    pub binding_id: Id128V1,
+    pub recovery_attempt_id: Id128V1,
+    pub label_epoch: u64,
+    pub root_cgroup_id: u64,
+    pub expected_binding_transition_version: u64,
+    pub init_host_tgid: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
+pub struct RecoveredTaskProvenanceV1 {
+    pub node_boot_id: Id128V1,
+    pub binding_id: Id128V1,
+    pub recovery_attempt_id: Id128V1,
+    pub task_cookie: u64,
+    pub class: RecoveredTaskClassV1,
+    pub reserved: [u8; 7],
+}
+
+#[repr(C)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
+pub struct RecoveredContainerActivationV1 {
+    pub node_boot_id: Id128V1,
+    pub binding_id: Id128V1,
+    pub binding_nonce: Id128V1,
+    pub recovery_attempt_id: Id128V1,
+    pub root_cgroup_live_interval_id: Id128V1,
+    pub application_entry_instance_id: Id128V1,
+    pub label_epoch: u64,
+    pub profile_generation_ref_id: u64,
+    pub root_cgroup_id: u64,
+    pub expected_binding_transition_version: u64,
+    pub task_set_generation: u64,
+    pub scan_generation: u64,
+    pub scan_task_count: u64,
+    pub scan_candidate_count: u64,
+    pub scan_application_task_count: u64,
+    pub scan_external_task_count: u64,
+    pub expected_task_count: u64,
+    pub validation_task_count: u64,
+    pub validation_application_task_count: u64,
+    pub validation_external_task_count: u64,
+    pub transition_version: u64,
+    pub transition_guard: u64,
+    pub init_host_tgid: u32,
+    pub invalid_task_count: u32,
+    pub phase: RecoveredContainerActivationPhaseV1,
+    pub reserved: [u8; 7],
 }
 
 #[repr(C)]

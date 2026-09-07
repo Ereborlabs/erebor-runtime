@@ -188,8 +188,7 @@ static __always_inline bool io_uring_admitted_actor_is_exact(
 {
     return actor && binding &&
            binding->lifecycle_state == binding_lifecycle_state_v1_active &&
-           binding->prepared_container_state ==
-               prepared_container_state_v1_active &&
+           prepared_container_has_active_anchor(binding) &&
            actor->admitted_entry_rule_id &&
            id128_equal(&binding->binding_id, &actor->binding_id) &&
            id128_equal(&binding->binding_nonce, &actor->binding_nonce) &&

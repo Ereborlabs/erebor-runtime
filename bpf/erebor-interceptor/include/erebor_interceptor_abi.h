@@ -167,6 +167,7 @@ enum external_root_class_v1
   external_root_class_v1_external_runtime_root = 2,
   external_root_class_v1_restored_or_unknown_root = 3,
   external_root_class_v1_unresolved_protected = 4,
+  external_root_class_v1_recovered_application_root = 5,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum external_root_class_v1 external_root_class_v1;
@@ -273,6 +274,38 @@ typedef enum exec_guard_state_v1 exec_guard_state_v1;
 typedef uint8_t exec_guard_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
+enum recovered_container_activation_phase_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  recovered_container_activation_phase_v1_unknown = 0,
+  recovered_container_activation_phase_v1_scanning = 1,
+  recovered_container_activation_phase_v1_validating = 2,
+  recovered_container_activation_phase_v1_complete = 3,
+  recovered_container_activation_phase_v1_corrupt = 4,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum recovered_container_activation_phase_v1 recovered_container_activation_phase_v1;
+#else
+typedef uint8_t recovered_container_activation_phase_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum recovered_task_class_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  recovered_task_class_v1_unknown = 0,
+  recovered_task_class_v1_application = 1,
+  recovered_task_class_v1_external = 2,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum recovered_task_class_v1 recovered_task_class_v1;
+#else
+typedef uint8_t recovered_task_class_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
 enum initial_root_state_v1
 #if __STDC_VERSION__ >= 202311L
   : uint64_t
@@ -299,6 +332,8 @@ enum prepared_container_state_v1
   prepared_container_state_v1_active = 3,
   prepared_container_state_v1_expired = 4,
   prepared_container_state_v1_corrupt = 5,
+  prepared_container_state_v1_recovering = 6,
+  prepared_container_state_v1_active_recovered = 7,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum prepared_container_state_v1 prepared_container_state_v1;
@@ -630,6 +665,7 @@ enum kernel_real_parent_change_reason_v1
   kernel_real_parent_change_reason_v1_birth = 1,
   kernel_real_parent_change_reason_v1_clone_parent = 2,
   kernel_real_parent_change_reason_v1_parent_exit_or_reparent = 3,
+  kernel_real_parent_change_reason_v1_recovery_snapshot = 4,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum kernel_real_parent_change_reason_v1 kernel_real_parent_change_reason_v1;
@@ -850,6 +886,7 @@ enum policy_activation_probe_map_kind_v1
   policy_activation_probe_map_kind_v1_execution_approval_slot_cancel = 6,
   policy_activation_probe_map_kind_v1_mount_reconciliation = 7,
   policy_activation_probe_map_kind_v1_network_destination = 8,
+  policy_activation_probe_map_kind_v1_recovered_container_activation = 9,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum policy_activation_probe_map_kind_v1 policy_activation_probe_map_kind_v1;
@@ -934,6 +971,7 @@ enum process_execution_started_by_v1
   process_execution_started_by_v1_unknown = 0,
   process_execution_started_by_v1_process_birth = 1,
   process_execution_started_by_v1_exec_commit = 2,
+  process_execution_started_by_v1_recovery_snapshot = 3,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum process_execution_started_by_v1 process_execution_started_by_v1;
@@ -1215,6 +1253,55 @@ typedef struct binding_activation_target_key_v1 {
   struct id128_v1 binding_id;
   uint64_t profile_generation_ref_id;
 } binding_activation_target_key_v1;
+
+typedef struct recovered_container_init_task_v1 {
+  struct id128_v1 node_boot_id;
+  struct id128_v1 binding_id;
+  struct id128_v1 recovery_attempt_id;
+  uint64_t label_epoch;
+  uint64_t root_cgroup_id;
+  uint64_t expected_binding_transition_version;
+  uint32_t init_host_tgid;
+  uint32_t reserved;
+} recovered_container_init_task_v1;
+
+typedef struct recovered_task_provenance_v1 {
+  struct id128_v1 node_boot_id;
+  struct id128_v1 binding_id;
+  struct id128_v1 recovery_attempt_id;
+  uint64_t task_cookie;
+  recovered_task_class_v1 class_;
+  uint8_t reserved[7];
+} recovered_task_provenance_v1;
+
+typedef struct recovered_container_activation_v1 {
+  struct id128_v1 node_boot_id;
+  struct id128_v1 binding_id;
+  struct id128_v1 binding_nonce;
+  struct id128_v1 recovery_attempt_id;
+  struct id128_v1 root_cgroup_live_interval_id;
+  struct id128_v1 application_entry_instance_id;
+  uint64_t label_epoch;
+  uint64_t profile_generation_ref_id;
+  uint64_t root_cgroup_id;
+  uint64_t expected_binding_transition_version;
+  uint64_t task_set_generation;
+  uint64_t scan_generation;
+  uint64_t scan_task_count;
+  uint64_t scan_candidate_count;
+  uint64_t scan_application_task_count;
+  uint64_t scan_external_task_count;
+  uint64_t expected_task_count;
+  uint64_t validation_task_count;
+  uint64_t validation_application_task_count;
+  uint64_t validation_external_task_count;
+  uint64_t transition_version;
+  uint64_t transition_guard;
+  uint32_t init_host_tgid;
+  uint32_t invalid_task_count;
+  recovered_container_activation_phase_v1 phase;
+  uint8_t reserved[7];
+} recovered_container_activation_v1;
 
 typedef struct process_generation_migration_key_v1 {
   uint64_t source_profile_generation_ref_id;

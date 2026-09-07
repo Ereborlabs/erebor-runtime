@@ -243,6 +243,7 @@ pub enum PolicyActivationProbeMapKindV1 {
     ExecutionApprovalSlotCancel = 6,
     MountReconciliation = 7,
     NetworkDestination = 8,
+    RecoveredContainerActivation = 9,
 }
 
 #[repr(C)]

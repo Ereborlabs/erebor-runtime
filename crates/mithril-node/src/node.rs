@@ -516,6 +516,7 @@ impl NodeChassis {
         } else {
             identity.activate_held_initial_admission(&mut host, policy_loaded)?
         };
+        bindings.read_back_recovered_activations(&host)?;
         let observations = if policy_observation_enabled {
             let evidence = config.evidence.as_ref().ok_or_else(|| {
                 IdentityStateSnafu {
@@ -2493,6 +2494,16 @@ impl NodeChassis {
                 };
             }
         }
+        if let Err(error) = self
+            .identity
+            .recover_tasks(host, policy_authority_present)
+            .and_then(|_report| self.bindings.read_back_recovered_activations(host))
+        {
+            return ReconciliationOutcome::IdentityUnhealthy {
+                owner: "recovered container identity",
+                reason: error.to_string(),
+            };
+        }
         ReconciliationOutcome::Healthy
     }
 
@@ -2796,6 +2807,8 @@ impl NodeChassis {
         self.identity.set_effect_policy(host, true)?;
         self.bindings
             .adopt_activated_profiles(host, &prepared.config.workload_bindings)?;
+        self.identity.recover_tasks(host, true)?;
+        self.bindings.read_back_recovered_activations(host)?;
         // Exact active-pointer readback separates activation from staging success.
         let receipt = crate::NodePolicyGenerationOwner::activation_receipt(
             host,

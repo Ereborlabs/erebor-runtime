@@ -141,12 +141,14 @@ _Static_assert(sizeof(mount_mutation_attempt_v1) == 32,
 #include "identity_prepared_container.h"
 #include "identity_root_helpers.h"
 #include "identity_path.bpf.h"
+#include "identity_recovery.bpf.h"
 
 SEC("classifier")
 int erebor_policy_activation_probe(struct __sk_buff *context)
 {
     __u32 request_key = 0;
     policy_activation_probe_v1 *request;
+    identity_runtime_config_v1 *config;
     struct identity_scratch_v1 *scratch;
     physical_decision_v1 *decision = NULL;
     execution_approval_slot_v1 *execution_approval_slot;
@@ -159,6 +161,7 @@ int erebor_policy_activation_probe(struct __sk_buff *context)
     scratch = identity_scratch_record();
     if (!scratch)
         return 3;
+    config = identity_runtime_config();
     switch (request->map_kind) {
     case policy_activation_probe_map_kind_v1_effect_decision:
         if (request->key_size != sizeof(scratch->effect_key))
@@ -269,6 +272,8 @@ int erebor_policy_activation_probe(struct __sk_buff *context)
                 scratch->file_object.mount_namespace_inode))
             return 12;
         return 1;
+    case policy_activation_probe_map_kind_v1_recovered_container_activation:
+        return advance_recovered_container_activation(request, config);
     default:
         return 4;
     }

@@ -3,11 +3,14 @@ use std::mem::size_of;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
-use erebor_interceptor::KernelHost;
-use erebor_interceptor_abi::{Id128V1, IdentityHealthV1, IdentityRuntimeConfigV1};
+use erebor_interceptor::{KernelHost, RecoveredContainerActivationCommandResultV1};
+use erebor_interceptor_abi::{
+    Id128V1, IdentityHealthV1, IdentityRuntimeConfigV1, RecoveredContainerActivationPhaseV1,
+    RecoveredContainerActivationV1,
+};
 use serde::Serialize;
-use snafu::{ensure, ResultExt as _};
-use zerocopy::{FromBytes as _, IntoBytes as _};
+use snafu::{ensure, OptionExt as _, ResultExt as _};
+use zerocopy::{FromBytes as _, IntoBytes as _, TryFromBytes as _};
 
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu};
 use crate::Result;
@@ -253,7 +256,12 @@ impl NativeSecurityStateOwner {
         host: &mut KernelHost,
         effect_policy_required: bool,
     ) -> Result<ReconciliationReportV1> {
-        self.scan_tasks(host, effect_policy_required)
+        let before = self.verify(host, effect_policy_required)?;
+        host.reconcile_tasks().context(InterceptorSnafu)?;
+        self.recover_containers(host)?;
+        let report = self.health(host)?;
+        report.ensure_no_new_failures_since(before)?;
+        Ok(report)
     }
 
     fn scan_tasks(
@@ -314,10 +322,72 @@ impl NativeSecurityStateOwner {
         let before = self.health(host)?;
         if reconcile_tasks {
             host.reconcile_tasks().context(InterceptorSnafu)?;
+            self.recover_containers(host)?;
         }
         let report = self.health(host)?;
         report.ensure_no_new_failures_since(before)?;
         Ok(report)
+    }
+
+    fn recover_containers(&self, host: &mut KernelHost) -> Result<()> {
+        for key in host
+            .map_keys("recovered_container_activations")
+            .context(InterceptorSnafu)?
+        {
+            let root_cgroup_id = u64::read_from_bytes(&key).map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("container recovery key has an invalid ABI: {error}"),
+                }
+                .build()
+            })?;
+            let value = host
+                .lookup_map("recovered_container_activations", &key)
+                .context(InterceptorSnafu)?
+                .context(IdentityStateSnafu {
+                    reason: "container recovery disappeared during readback",
+                })?;
+            let recovery =
+                RecoveredContainerActivationV1::try_read_from_bytes(&value).map_err(|error| {
+                    IdentityStateSnafu {
+                        reason: format!("container recovery has an invalid ABI: {error}"),
+                    }
+                    .build()
+                })?;
+            if recovery.phase == RecoveredContainerActivationPhaseV1::Complete {
+                continue;
+            }
+            ensure!(
+                recovery.phase != RecoveredContainerActivationPhaseV1::Corrupt,
+                IdentityStateSnafu {
+                    reason: "BPF marked the recovered container identity corrupt",
+                }
+            );
+            let mut complete = false;
+            for _ in 0..16 {
+                host.reconcile_tasks().context(InterceptorSnafu)?;
+                match host
+                    .advance_recovered_container_activation(
+                        root_cgroup_id,
+                        recovery.recovery_attempt_id,
+                    )
+                    .context(InterceptorSnafu)?
+                {
+                    RecoveredContainerActivationCommandResultV1::Complete => {
+                        complete = true;
+                        break;
+                    }
+                    RecoveredContainerActivationCommandResultV1::RetryScan
+                    | RecoveredContainerActivationCommandResultV1::Validate => {}
+                }
+            }
+            ensure!(
+                complete,
+                IdentityStateSnafu {
+                    reason: "BPF could not obtain one stable recovered container task set",
+                }
+            );
+        }
+        Ok(())
     }
 
     pub fn health(&self, host: &KernelHost) -> Result<ReconciliationReportV1> {

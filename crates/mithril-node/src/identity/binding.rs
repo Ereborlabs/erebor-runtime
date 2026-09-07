@@ -12,7 +12,8 @@ use erebor_interceptor_abi::{
     BindingActivationTargetKeyV1, BindingLifecycleStateV1, DeclaredEntryRequestV1,
     EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExactFileObjectKeyV1,
     ExecutionSetBindingStateV1, Id128V1, InitialRootStateV1, PolicyGenerationStateV1,
-    PreparedContainerStateV1, ProfileGenerationDescriptorV1, TaskCoordinateStateV1,
+    PreparedContainerStateV1, ProfileGenerationDescriptorV1, RecoveredContainerActivationPhaseV1,
+    RecoveredContainerActivationV1, RecoveredContainerInitTaskV1, TaskCoordinateStateV1,
     TaskCoordinateV1, TaskLabelV1,
 };
 use erebor_runtime_error::{ErrorExt as _, RetryHint};
@@ -67,6 +68,155 @@ pub struct AdministrativeBindingTargetV1 {
 }
 
 impl PublishedBinding {
+    fn install_recovery(&mut self, host: &KernelHost) -> Result<()> {
+        let Some(runtime) = self.runtime_identity.as_ref() else {
+            return Ok(());
+        };
+        if self.spec.arm_initial_root
+            || runtime.state != super::runtime::RuntimeContainerState::Running
+            || self.state.prepared_container_state != PreparedContainerStateV1::Unarmed
+        {
+            return Ok(());
+        }
+        ensure!(
+            runtime.init_pid > 0
+                && self.state.prepared_container_entry_instance_id.is_zero()
+                && self.state.prepared_container_exec_task_cookie == 0
+                && self.state.prepared_container_initial_host_tgid == 0
+                && self.state.prepared_container_bootstrap_state == 0,
+            IdentityStateSnafu {
+                reason: "running container recovery has invalid initial state",
+            }
+        );
+        let policy_key = BindingActivationTargetKeyV1 {
+            binding_id: self.state.binding_id,
+            profile_generation_ref_id: self.state.active_profile_generation_ref_id,
+        };
+        ensure!(
+            host.lookup_map("recovered_container_entry_rules", policy_key.as_bytes())
+                .context(InterceptorSnafu)?
+                .is_some(),
+            IdentityStateSnafu {
+                reason: "running container recovery has no signed application entry",
+            }
+        );
+        let raw_pid = i32::try_from(runtime.init_pid).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("container init PID is invalid: {error}"),
+            }
+            .build()
+        })?;
+        let pid = Pid::from_raw(raw_pid).context(IdentityStateSnafu {
+            reason: "container recovery has a zero init PID",
+        })?;
+        let pidfd = pidfd_open(pid, PidfdFlags::empty())
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: PathBuf::from(format!("/proc/{}", runtime.init_pid)),
+            })?;
+        let recovery_attempt_id = id_from_uuid(Uuid::new_v4());
+        let mut recovering = self.state;
+        recovering.initial_root_state = InitialRootStateV1::Consumed;
+        recovering.prepared_container_state = PreparedContainerStateV1::Recovering;
+        recovering.prepared_container_initial_host_tgid = runtime.init_pid;
+        recovering.transition_version =
+            recovering
+                .transition_version
+                .checked_add(1)
+                .context(IdentityStateSnafu {
+                    reason: "container recovery binding transition overflowed",
+                })?;
+        let recovery = RecoveredContainerActivationV1 {
+            node_boot_id: recovering.node_boot_id,
+            binding_id: recovering.binding_id,
+            binding_nonce: recovering.binding_nonce,
+            recovery_attempt_id,
+            root_cgroup_live_interval_id: recovering.root_cgroup_live_interval_id,
+            application_entry_instance_id: Id128V1::ZERO,
+            label_epoch: recovering.label_epoch,
+            profile_generation_ref_id: recovering.active_profile_generation_ref_id,
+            root_cgroup_id: recovering.root_cgroup_id,
+            expected_binding_transition_version: recovering.transition_version,
+            task_set_generation: 1,
+            scan_generation: 1,
+            scan_task_count: 0,
+            scan_candidate_count: 0,
+            scan_application_task_count: 0,
+            scan_external_task_count: 0,
+            expected_task_count: 0,
+            validation_task_count: 0,
+            validation_application_task_count: 0,
+            validation_external_task_count: 0,
+            transition_version: 1,
+            transition_guard: 0,
+            init_host_tgid: runtime.init_pid,
+            invalid_task_count: 0,
+            phase: RecoveredContainerActivationPhaseV1::Scanning,
+            reserved: [0; 7],
+        };
+        let init_request = RecoveredContainerInitTaskV1 {
+            node_boot_id: recovery.node_boot_id,
+            binding_id: recovery.binding_id,
+            recovery_attempt_id,
+            label_epoch: recovery.label_epoch,
+            root_cgroup_id: recovery.root_cgroup_id,
+            expected_binding_transition_version: recovery.expected_binding_transition_version,
+            init_host_tgid: runtime.init_pid,
+            reserved: 0,
+        };
+        let recovery_key = recovering.root_cgroup_id.to_ne_bytes();
+        ensure!(
+            host.lookup_map("recovered_container_activations", &recovery_key)
+                .context(InterceptorSnafu)?
+                .is_none(),
+            IdentityStateSnafu {
+                reason: "container recovery already has a transaction",
+            }
+        );
+        host.update_map(
+            "recovered_container_activations",
+            &recovery_key,
+            recovery.as_bytes(),
+        )
+        .context(InterceptorSnafu)?;
+        host.update_map(
+            "recovered_container_init_tasks",
+            &pidfd.as_raw_fd().to_ne_bytes(),
+            init_request.as_bytes(),
+        )
+        .context(InterceptorSnafu)?;
+        host.update_map(
+            "execution_set_bindings",
+            &recovery_key,
+            recovering.as_bytes(),
+        )
+        .context(InterceptorSnafu)?;
+        ensure!(
+            host.lookup_map("execution_set_bindings", &recovery_key)
+                .context(InterceptorSnafu)?
+                .as_deref()
+                == Some(recovering.as_bytes())
+                && host
+                    .lookup_map("recovered_container_activations", &recovery_key)
+                    .context(InterceptorSnafu)?
+                    .as_deref()
+                    == Some(recovery.as_bytes())
+                && host
+                    .lookup_map(
+                        "recovered_container_init_tasks",
+                        &pidfd.as_raw_fd().to_ne_bytes(),
+                    )
+                    .context(InterceptorSnafu)?
+                    .as_deref()
+                    == Some(init_request.as_bytes()),
+            IdentityStateSnafu {
+                reason: "container recovery installation failed exact readback",
+            }
+        );
+        self.state = recovering;
+        Ok(())
+    }
+
     fn verify_activated_profile(
         &self,
         spec: &WorkloadBindingConfig,
@@ -174,6 +324,30 @@ impl PublishedBinding {
                             reason: "prepared-container recovery transition overflowed",
                         })?;
                 Ok(true)
+            }
+            PreparedContainerStateV1::Recovering => {
+                ensure!(
+                    state.prepared_container_entry_instance_id.is_zero()
+                        && state.prepared_container_exec_task_cookie == 0
+                        && state.prepared_container_initial_host_tgid != 0
+                        && state.prepared_container_bootstrap_state == 0,
+                    IdentityStateSnafu {
+                        reason: "recovering container has BPF output before commit",
+                    }
+                );
+                Ok(false)
+            }
+            PreparedContainerStateV1::ActiveRecovered => {
+                ensure!(
+                    !state.prepared_container_entry_instance_id.is_zero()
+                        && state.prepared_container_exec_task_cookie == 0
+                        && state.prepared_container_initial_host_tgid != 0
+                        && state.prepared_container_bootstrap_state == 0,
+                    IdentityStateSnafu {
+                        reason: "active recovered container has incomplete BPF identity",
+                    }
+                );
+                Ok(false)
             }
             PreparedContainerStateV1::Expired => {
                 ensure!(
@@ -456,7 +630,7 @@ impl WorkloadBindingOwner {
             configured
                 .iter()
                 .filter(|binding| binding.root_cgroup_path.is_some())
-                .map(|binding| (binding, None)),
+                .map(|binding| (binding, None, false)),
         )?;
         self.retain_only_configured(host)?;
         Ok(RuntimeReconciliationResultV1::default())
@@ -558,7 +732,7 @@ impl WorkloadBindingOwner {
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
     ) -> Result<()> {
-        self.publish(host, configured.iter().map(|spec| (spec, None)))
+        self.publish(host, configured.iter().map(|spec| (spec, None, false)))
     }
 
     pub fn publish_held_initial_roots(
@@ -568,8 +742,19 @@ impl WorkloadBindingOwner {
     ) -> Result<()> {
         self.publish(
             host,
-            configured.iter().map(|(spec, pid)| (spec, Some(*pid))),
+            configured
+                .iter()
+                .map(|(spec, pid)| (spec, Some(*pid), false)),
         )
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn publish_running_recovery_candidate_for_test(
+        &mut self,
+        host: &KernelHost,
+        spec: &WorkloadBindingConfig,
+    ) -> Result<()> {
+        self.publish(host, [(spec, None, true)])
     }
 
     #[cfg(feature = "test-support")]
@@ -608,9 +793,10 @@ impl WorkloadBindingOwner {
             })?;
         ensure!(
             binding.state.lifecycle_state == BindingLifecycleStateV1::Active
-                && binding.held_initial_pid == Some(init_pid),
+                && (binding.held_initial_pid == Some(init_pid)
+                    || (!binding.spec.arm_initial_root && binding.held_initial_pid.is_none())),
             IdentityStateSnafu {
-                reason: "test runtime identity does not match the held initial process",
+                reason: "test runtime identity does not match the live initial process",
             }
         );
         let cgroup_path = binding
@@ -634,6 +820,89 @@ impl WorkloadBindingOwner {
             path_entries,
             state: RuntimeContainerState::Running,
         });
+        Ok(())
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn install_late_activation_target_for_test(
+        &mut self,
+        host: &KernelHost,
+        binding_id: &str,
+    ) -> Result<()> {
+        let (root, spec) = self
+            .bindings
+            .iter()
+            .find(|(_root, binding)| binding.spec.binding_id == binding_id)
+            .map(|(root, binding)| (*root, binding.spec.clone()))
+            .context(IdentityStateSnafu {
+                reason: "test activation target has no live binding",
+            })?;
+        self.install_late_activation_target(host, root, &spec)
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn install_running_recovery_for_test(
+        &mut self,
+        host: &KernelHost,
+        binding_id: &str,
+    ) -> Result<()> {
+        let binding = self
+            .bindings
+            .values_mut()
+            .find(|binding| binding.spec.binding_id == binding_id)
+            .context(IdentityStateSnafu {
+                reason: "test recovery has no live binding",
+            })?;
+        binding.install_recovery(host)
+    }
+
+    pub(crate) fn read_back_recovered_activations(&mut self, host: &KernelHost) -> Result<()> {
+        for (&root_cgroup_id, binding) in &mut self.bindings {
+            if binding.state.prepared_container_state != PreparedContainerStateV1::Recovering {
+                continue;
+            }
+            let key = root_cgroup_id.to_ne_bytes();
+            let live = host
+                .lookup_map("execution_set_bindings", &key)
+                .context(InterceptorSnafu)?
+                .context(IdentityStateSnafu {
+                    reason: "recovered binding disappeared before readback",
+                })?;
+            let live = execution_set_binding_state(&live)?;
+            ensure!(
+                same_runtime_binding(&binding.state, &live),
+                IdentityStateSnafu {
+                    reason: "BPF recovery changed immutable binding identity",
+                }
+            );
+            ensure!(
+                live.prepared_container_state == PreparedContainerStateV1::ActiveRecovered,
+                IdentityStateSnafu {
+                    reason: "BPF recovery did not publish an active recovered binding",
+                }
+            );
+            let recovery = host
+                .lookup_map("recovered_container_activations", &key)
+                .context(InterceptorSnafu)?
+                .context(IdentityStateSnafu {
+                    reason: "recovered binding has no BPF recovery result",
+                })?;
+            let recovery = RecoveredContainerActivationV1::try_read_from_bytes(&recovery).map_err(
+                |error| {
+                    IdentityStateSnafu {
+                        reason: format!("BPF recovery result has an invalid ABI: {error}"),
+                    }
+                    .build()
+                },
+            )?;
+            ensure!(
+                completed_recovery_matches_binding(&recovery, &live),
+                IdentityStateSnafu {
+                    reason: "BPF recovery result does not match its active binding",
+                }
+            );
+            binding.state = live;
+        }
         Ok(())
     }
 
@@ -735,7 +1004,10 @@ impl WorkloadBindingOwner {
             ) {
                 binding.lifecycle_state = BindingLifecycleStateV1::Terminating;
                 binding.initial_root_state = InitialRootStateV1::Consumed;
-                if binding.prepared_container_state != PreparedContainerStateV1::Active {
+                if !matches!(
+                    binding.prepared_container_state,
+                    PreparedContainerStateV1::Active | PreparedContainerStateV1::ActiveRecovered
+                ) {
                     binding.prepared_container_state = PreparedContainerStateV1::Expired;
                 }
                 binding.prepared_container_exec_task_cookie = 0;
@@ -1668,9 +1940,9 @@ impl WorkloadBindingOwner {
     fn publish<'a>(
         &mut self,
         host: &KernelHost,
-        configured: impl IntoIterator<Item = (&'a WorkloadBindingConfig, Option<u32>)>,
+        configured: impl IntoIterator<Item = (&'a WorkloadBindingConfig, Option<u32>, bool)>,
     ) -> Result<()> {
-        for (spec, held_initial_pid) in configured {
+        for (spec, held_initial_pid, recovery_candidate) in configured {
             let mut binding = self.prepare(spec)?;
             ensure!(
                 held_initial_pid.is_none() || spec.arm_initial_root,
@@ -1814,7 +2086,7 @@ impl WorkloadBindingOwner {
                         reason: format!("binding `{}` failed preparing readback", spec.binding_id),
                     }
                 );
-                if binding.held_initial_pid.is_none() {
+                if binding.held_initial_pid.is_none() && !recovery_candidate {
                     reserve_live_root_task_labels(host, &binding)?;
                 } else {
                     binding.require_initial_root_admission()?;
@@ -1930,6 +2202,47 @@ impl WorkloadBindingOwner {
                 })?;
             let activated = execution_set_binding_state(&activated)?;
             binding.verify_activated_profile(spec, &activated)?;
+            let live = host
+                .lookup_map("execution_set_bindings", &root_cgroup_id.to_ne_bytes())
+                .context(InterceptorSnafu)?
+                .context(IdentityStateSnafu {
+                    reason: "activated binding disappeared before adoption",
+                })?;
+            let live = execution_set_binding_state(&live)?;
+            ensure!(
+                Self::same_activation_identity(&live, &activated),
+                IdentityStateSnafu {
+                    reason: "live binding differs from its activated policy target",
+                }
+            );
+            let mut adopted_live = live;
+            adopted_live.active_profile_generation_ref_id =
+                activated.active_profile_generation_ref_id;
+            adopted_live.initial_role_id = activated.initial_role_id;
+            adopted_live.external_role_id = activated.external_role_id;
+            if adopted_live != live {
+                adopted_live.transition_version =
+                    live.transition_version
+                        .checked_add(1)
+                        .context(IdentityStateSnafu {
+                            reason: "activated binding transition overflowed",
+                        })?;
+                host.update_map(
+                    "execution_set_bindings",
+                    &root_cgroup_id.to_ne_bytes(),
+                    adopted_live.as_bytes(),
+                )
+                .context(InterceptorSnafu)?;
+                ensure!(
+                    host.lookup_map("execution_set_bindings", &root_cgroup_id.to_ne_bytes(),)
+                        .context(InterceptorSnafu)?
+                        .as_deref()
+                        == Some(adopted_live.as_bytes()),
+                    IdentityStateSnafu {
+                        reason: "activated binding policy facts failed exact readback",
+                    }
+                );
+            }
             ensure!(
                 profile_handles
                     .insert(active, activated.profile_id)
@@ -1940,7 +2253,7 @@ impl WorkloadBindingOwner {
                     ),
                 }
             );
-            adopted.push((root_cgroup_id, spec.clone(), activated));
+            adopted.push((root_cgroup_id, spec.clone(), adopted_live));
         }
         for (root_cgroup_id, spec, activated) in adopted {
             let binding = self
@@ -1950,6 +2263,7 @@ impl WorkloadBindingOwner {
                     reason: "verified activated binding disappeared before adoption",
                 })?;
             binding.adopt_activated_profile(spec, activated);
+            binding.install_recovery(host)?;
         }
         self.profile_handles = profile_handles;
         Ok(())
@@ -2076,7 +2390,7 @@ impl WorkloadBindingOwner {
                 );
             }
             let resolved = identity.resolve(configured);
-            self.publish_all(host, std::slice::from_ref(&resolved))?;
+            self.publish(host, [(&resolved, None, true)])?;
             let binding = self
                 .bindings
                 .values_mut()
@@ -2317,7 +2631,10 @@ impl WorkloadBindingOwner {
         }
         binding.state.lifecycle_state = BindingLifecycleStateV1::Terminating;
         binding.state.initial_root_state = InitialRootStateV1::Consumed;
-        if binding.state.prepared_container_state != PreparedContainerStateV1::Active {
+        if !matches!(
+            binding.state.prepared_container_state,
+            PreparedContainerStateV1::Active | PreparedContainerStateV1::ActiveRecovered
+        ) {
             binding.state.prepared_container_state = PreparedContainerStateV1::Expired;
         }
         binding.state.prepared_container_exec_task_cookie = 0;
@@ -2386,7 +2703,10 @@ impl WorkloadBindingOwner {
             );
             value.lifecycle_state = BindingLifecycleStateV1::Terminating;
             value.initial_root_state = InitialRootStateV1::Consumed;
-            if value.prepared_container_state != PreparedContainerStateV1::Active {
+            if !matches!(
+                value.prepared_container_state,
+                PreparedContainerStateV1::Active | PreparedContainerStateV1::ActiveRecovered
+            ) {
                 value.prepared_container_state = PreparedContainerStateV1::Expired;
             }
             value.prepared_container_exec_task_cookie = 0;
@@ -2547,6 +2867,35 @@ fn same_runtime_binding(
     desired == *recovered
 }
 
+fn completed_recovery_matches_binding(
+    recovery: &RecoveredContainerActivationV1,
+    binding: &ExecutionSetBindingStateV1,
+) -> bool {
+    recovery.phase == RecoveredContainerActivationPhaseV1::Complete
+        && recovery.transition_guard == 0
+        && recovery.node_boot_id == binding.node_boot_id
+        && recovery.label_epoch == binding.label_epoch
+        && recovery.binding_id == binding.binding_id
+        && recovery.binding_nonce == binding.binding_nonce
+        && recovery.root_cgroup_id == binding.root_cgroup_id
+        && recovery.root_cgroup_live_interval_id == binding.root_cgroup_live_interval_id
+        && recovery.profile_generation_ref_id == binding.active_profile_generation_ref_id
+        && recovery.expected_binding_transition_version == binding.transition_version
+        && recovery.init_host_tgid == binding.prepared_container_initial_host_tgid
+        && recovery.application_entry_instance_id == binding.prepared_container_entry_instance_id
+        && !recovery.recovery_attempt_id.is_zero()
+        && !recovery.application_entry_instance_id.is_zero()
+        && recovery.task_set_generation == recovery.scan_generation
+        && recovery.expected_task_count > 0
+        && recovery.validation_task_count == recovery.expected_task_count
+        && recovery.validation_application_task_count > 0
+        && recovery.validation_task_count
+            == recovery.validation_application_task_count + recovery.validation_external_task_count
+        && binding.prepared_container_state == PreparedContainerStateV1::ActiveRecovered
+        && binding.prepared_container_exec_task_cookie == 0
+        && binding.prepared_container_bootstrap_state == 0
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -2557,8 +2906,9 @@ mod tests {
     use snafu::{OptionExt as _, ResultExt as _};
 
     use super::{
-        declared_entry_request_is_present, same_runtime_binding, RuntimeContainerIdentity,
-        StagedRuntimeAdmissionV1, WorkloadBindingOwner,
+        completed_recovery_matches_binding, declared_entry_request_is_present,
+        same_runtime_binding, RuntimeContainerIdentity, StagedRuntimeAdmissionV1,
+        WorkloadBindingOwner,
     };
     use crate::error::{IdentityStateSnafu, IoSnafu};
     use crate::identity::runtime::RuntimeContainerState;
@@ -2569,7 +2919,10 @@ mod tests {
         POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION,
         SANDBOX_ID_ANNOTATION,
     };
-    use erebor_interceptor_abi::{Id128V1, InitialRootStateV1, PreparedContainerStateV1};
+    use erebor_interceptor_abi::{
+        Id128V1, InitialRootStateV1, PreparedContainerStateV1, RecoveredContainerActivationPhaseV1,
+        RecoveredContainerActivationV1,
+    };
 
     fn spec(root: &Path) -> WorkloadBindingConfig {
         WorkloadBindingConfig {
@@ -2905,6 +3258,59 @@ mod tests {
         recovered.root_cgroup_live_interval_id = desired.root_cgroup_live_interval_id;
         recovered.execution_set_id = Id128V1::new(11, 12);
         assert!(!same_runtime_binding(&desired, &recovered));
+        Ok(())
+    }
+
+    #[test]
+    fn completed_recovery_readback_requires_the_bpf_committed_anchor() -> crate::Result<()> {
+        let temporary = tempfile::tempdir().context(IoSnafu {
+            path: "temporary recovered binding root",
+        })?;
+        let root = temporary.path().join("workload");
+        fs::create_dir(&root).context(IoSnafu { path: &root })?;
+        fs::write(root.join("cgroup.procs"), "").context(IoSnafu { path: &root })?;
+        let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        let mut binding = owner.prepare(&spec(&root))?.state;
+        binding.initial_root_state = InitialRootStateV1::Consumed;
+        binding.prepared_container_state = PreparedContainerStateV1::ActiveRecovered;
+        binding.prepared_container_entry_instance_id = Id128V1::new(9, 10);
+        binding.prepared_container_initial_host_tgid = 42;
+        binding.transition_version = 8;
+        let mut recovery = RecoveredContainerActivationV1 {
+            node_boot_id: binding.node_boot_id,
+            binding_id: binding.binding_id,
+            binding_nonce: binding.binding_nonce,
+            recovery_attempt_id: Id128V1::new(11, 12),
+            root_cgroup_live_interval_id: binding.root_cgroup_live_interval_id,
+            application_entry_instance_id: binding.prepared_container_entry_instance_id,
+            label_epoch: binding.label_epoch,
+            profile_generation_ref_id: binding.active_profile_generation_ref_id,
+            root_cgroup_id: binding.root_cgroup_id,
+            expected_binding_transition_version: binding.transition_version,
+            task_set_generation: 4,
+            scan_generation: 4,
+            scan_task_count: 2,
+            scan_candidate_count: 2,
+            scan_application_task_count: 1,
+            scan_external_task_count: 1,
+            expected_task_count: 2,
+            validation_task_count: 2,
+            validation_application_task_count: 1,
+            validation_external_task_count: 1,
+            transition_version: 5,
+            transition_guard: 0,
+            init_host_tgid: binding.prepared_container_initial_host_tgid,
+            invalid_task_count: 0,
+            phase: RecoveredContainerActivationPhaseV1::Complete,
+            reserved: [0; 7],
+        };
+
+        assert!(completed_recovery_matches_binding(&recovery, &binding));
+        recovery.application_entry_instance_id = Id128V1::new(13, 14);
+        assert!(!completed_recovery_matches_binding(&recovery, &binding));
+        recovery.application_entry_instance_id = binding.prepared_container_entry_instance_id;
+        binding.prepared_container_state = PreparedContainerStateV1::Recovering;
+        assert!(!completed_recovery_matches_binding(&recovery, &binding));
         Ok(())
     }
 
