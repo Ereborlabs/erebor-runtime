@@ -88,16 +88,23 @@ impl PublishedBinding {
                 reason: "running container recovery has invalid initial state",
             }
         );
-        let policy_key = BindingActivationTargetKeyV1 {
-            binding_id: self.state.binding_id,
-            profile_generation_ref_id: self.state.active_profile_generation_ref_id,
-        };
+        let application_entry_count = host
+            .map_keys("entry_admission_rules")
+            .context(InterceptorSnafu)?
+            .into_iter()
+            .filter_map(|key| EntryAdmissionRuleKeyV1::try_read_from_bytes(&key).ok())
+            .filter(|key| {
+                key.profile_generation_ref_id == self.state.active_profile_generation_ref_id
+                    && key.binding_id == self.state.binding_id
+                    && key.source_role_id == self.state.initial_role_id
+                    && key.reserved == 0
+            })
+            .count();
         ensure!(
-            host.lookup_map("recovered_container_entry_rules", policy_key.as_bytes())
-                .context(InterceptorSnafu)?
-                .is_some(),
+            application_entry_count == 1,
             IdentityStateSnafu {
-                reason: "running container recovery has no signed application entry",
+                reason:
+                    "running container recovery does not have one normal signed application entry",
             }
         );
         let raw_pid = i32::try_from(runtime.init_pid).map_err(|error| {

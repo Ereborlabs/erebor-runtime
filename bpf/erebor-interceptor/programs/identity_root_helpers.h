@@ -287,6 +287,11 @@ static __always_inline int create_external_root(
             host_tid != binding->prepared_container_initial_host_tgid)
             return PREPARED_CONTAINER_IDENTITY_DEFER_V1;
     }
+    if (binding->prepared_container_state ==
+        prepared_container_state_v1_recovering) {
+        root_class = external_root_class_v1_restored_or_unknown_root;
+        role_class = installed_role_class_v1_fail_closed_unknown;
+    }
     initial_root = consume_initial_root(binding);
 
     if (binding->lifecycle_state != binding_lifecycle_state_v1_active)
@@ -365,6 +370,54 @@ static __always_inline int finalize_task_coordinate(struct task_struct *task,
     coordinate->finalized_boottime_ns = bpf_ktime_get_ns();
     coordinate->transition_version++;
     coordinate->state = task_coordinate_state_v1_runnable;
+    return 0;
+}
+
+static __always_inline int label_external_root(
+    struct task_struct *task, execution_set_binding_state_v1 *binding,
+    identity_runtime_config_v1 *config)
+{
+    identity_health_v1 *health = identity_health_record();
+    struct identity_scratch_v1 *scratch;
+    int claim;
+    int result;
+
+    scratch = identity_scratch_record();
+    if (!scratch) {
+        if (health)
+            health->allocation_failures++;
+        return -EACCES;
+    }
+    claim = claim_task_label(task);
+    if (claim > 0)
+        return 0;
+    if (claim < 0) {
+        if (health)
+            health->allocation_failures++;
+        return -EACCES;
+    }
+    result = create_external_root(task, config, binding, scratch);
+
+    if (result) {
+        bpf_task_storage_delete(&task_labels, task);
+        if (health && result != PREPARED_CONTAINER_IDENTITY_DEFER_V1)
+            health->allocation_failures++;
+        return result;
+    }
+    if (finalize_task_coordinate(task, &scratch->label)) {
+        task_coordinate_v1 *coordinate =
+            bpf_map_lookup_elem(&task_coordinates,
+                                &scratch->label.task_cookie);
+
+        if (coordinate) {
+            coordinate->state =
+                task_coordinate_state_v1_fail_closed_unknown;
+            coordinate->transition_version++;
+        }
+        if (health)
+            health->coordinate_failures++;
+        return -EACCES;
+    }
     return 0;
 }
 

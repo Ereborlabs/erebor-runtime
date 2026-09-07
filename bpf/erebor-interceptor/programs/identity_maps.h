@@ -505,13 +505,6 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 65536);
-    __type(key, binding_activation_target_key_v1);
-    __type(value, entry_admission_rule_v1);
-} recovered_container_entry_rules SEC(".maps");
-
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 65536);
     __type(key, __u64);
     __type(value, recovered_container_activation_v1);
 } recovered_container_activations SEC(".maps");

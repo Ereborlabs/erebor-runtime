@@ -2155,7 +2155,6 @@ struct LoweredGeneration {
     descriptor: ProfileGenerationDescriptorV1,
     semantics: GenerationSemantics,
     entry_admissions: BTreeMap<Vec<u8>, Vec<u8>>,
-    recovered_entry_admissions: BTreeMap<Vec<u8>, Vec<u8>>,
     decisions: BTreeMap<Vec<u8>, Vec<u8>>,
     defaults: BTreeMap<Vec<u8>, Vec<u8>>,
     device_decisions: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -2403,19 +2402,37 @@ impl LoweredGeneration {
             .values()
             .map(|(handle, _)| *handle)
             .collect::<BTreeSet<_>>();
+        let recovery_entry_exact_handles =
+            if binding.root_cgroup_path.is_some() && !binding.arm_initial_root {
+                application_entry_path_selector_ids(artifact, binding)?
+                    .into_iter()
+                    .filter_map(|selector_id| {
+                        artifact
+                            .policy_document
+                            .path_selectors
+                            .iter()
+                            .find(|selector| selector.path_selector_id == selector_id)
+                            .map(|selector| selector.kernel_handle())
+                    })
+                    .collect::<BTreeSet<_>>()
+            } else {
+                BTreeSet::new()
+            };
         let policy_exact_objects = generation_objects
             .iter()
             .copied()
-            .filter(|object| exact_handles.contains(&object.exact_object_key_id))
+            .filter(|object| {
+                exact_handles.contains(&object.exact_object_key_id)
+                    || recovery_entry_exact_handles.contains(&object.exact_object_key_id)
+            })
             .collect::<Vec<_>>();
         validate_binding_roles(artifact, binding, &role_handles, &process_state_handles)?;
-        let (entry_admissions, recovered_entry_admissions) = lower_entry_admissions(
+        let entry_admissions = lower_entry_admissions(
             artifact,
             binding,
             &role_handles,
             &process_state_handles,
             &composite_handles,
-            &generation_objects,
             defer_entry_admissions,
         )?;
         let entry_admission_authority = entry_admission_authority_rows(&entry_admissions)?;
@@ -2781,11 +2798,15 @@ impl LoweredGeneration {
             let value = ExactObjectBindingV1 {
                 profile_generation_ref_id: object.profile_generation_ref_id,
                 exact_object_key_id: object.exact_object_key_id,
-                composite_atom_id: exact_object_handles
-                    .values()
-                    .find_map(|(handle, atom)| {
-                        (*handle == object.exact_object_key_id).then_some(*atom)
+                composite_atom_id: artifact
+                    .policy_document
+                    .path_selectors
+                    .iter()
+                    .find(|selector| selector.kernel_handle() == object.exact_object_key_id)
+                    .and_then(|selector| {
+                        composite_handles.get(&format!("PATH:{}", selector.path_selector_id))
                     })
+                    .copied()
                     .ok_or_else(|| {
                         IdentityStateSnafu {
                             reason: "measured object lost its signed selector class".to_owned(),
@@ -2863,7 +2884,6 @@ impl LoweredGeneration {
             descriptor,
             semantics,
             entry_admissions,
-            recovered_entry_admissions,
             decisions,
             defaults,
             device_decisions,
@@ -2903,10 +2923,6 @@ impl LoweredGeneration {
             }
         );
         merge_rows(&mut self.entry_admissions, other.entry_admissions)?;
-        merge_rows(
-            &mut self.recovered_entry_admissions,
-            other.recovered_entry_admissions,
-        )?;
         merge_rows(&mut self.decisions, other.decisions)?;
         merge_rows(&mut self.defaults, other.defaults)?;
         merge_rows(&mut self.device_decisions, other.device_decisions)?;
@@ -2977,10 +2993,6 @@ impl LoweredGeneration {
     fn planned_rows(&self) -> Vec<PlannedGenerationRow<'_>> {
         vec![
             ("entry_admission_rules", &self.entry_admissions),
-            (
-                "recovered_container_entry_rules",
-                &self.recovered_entry_admissions,
-            ),
             ("effect_decisions", &self.decisions),
             ("effect_defaults", &self.defaults),
             ("device_effect_decisions", &self.device_decisions),
@@ -3252,27 +3264,11 @@ impl LoweredGeneration {
 
     fn install_entry_admissions(&self, host: &KernelHost) -> Result<()> {
         install_rows(host, "entry_admission_rules", &self.entry_admissions)?;
-        verify_rows(host, "entry_admission_rules", &self.entry_admissions)?;
-        install_rows(
-            host,
-            "recovered_container_entry_rules",
-            &self.recovered_entry_admissions,
-        )?;
-        verify_rows(
-            host,
-            "recovered_container_entry_rules",
-            &self.recovered_entry_admissions,
-        )
+        verify_rows(host, "entry_admission_rules", &self.entry_admissions)
     }
 
     fn revoke_entry_admissions(&self, host: &KernelHost) -> Result<()> {
-        for (map, rows) in [
-            ("entry_admission_rules", &self.entry_admissions),
-            (
-                "recovered_container_entry_rules",
-                &self.recovered_entry_admissions,
-            ),
-        ] {
+        for (map, rows) in [("entry_admission_rules", &self.entry_admissions)] {
             for key in rows.keys() {
                 if host
                     .lookup_map(map, key)
@@ -4820,6 +4816,21 @@ fn entry_admission_path_selector_ids(
     artifact: &ProfileCandidateArtifactV1,
     binding: &WorkloadBindingConfig,
 ) -> Result<BTreeSet<String>> {
+    entry_admission_path_selector_ids_for_kind(artifact, binding, None)
+}
+
+fn application_entry_path_selector_ids(
+    artifact: &ProfileCandidateArtifactV1,
+    binding: &WorkloadBindingConfig,
+) -> Result<BTreeSet<String>> {
+    entry_admission_path_selector_ids_for_kind(artifact, binding, Some(EntryKindV1::ContainerStart))
+}
+
+fn entry_admission_path_selector_ids_for_kind(
+    artifact: &ProfileCandidateArtifactV1,
+    binding: &WorkloadBindingConfig,
+    entry_kind: Option<EntryKindV1>,
+) -> Result<BTreeSet<String>> {
     let mut selector_ids = BTreeSet::new();
     for assignment in artifact
         .policy_document
@@ -4833,6 +4844,7 @@ fn entry_admission_path_selector_ids(
                     .container_kinds
                     .contains(&policy_container_kind(binding.container_kind))
                 && assignment.admission_execution_rule_id.is_some()
+                && entry_kind.is_none_or(|entry_kind| assignment.entry_kinds == [entry_kind])
         })
     {
         let rule_id =
@@ -4902,9 +4914,8 @@ fn lower_entry_admissions(
     role_handles: &BTreeMap<String, u32>,
     process_state_handles: &BTreeMap<String, u32>,
     composite_handles: &BTreeMap<String, u64>,
-    measured_objects: &[&ExactFileObjectConfig],
     defer_non_initial_entries: bool,
-) -> Result<(GenerationRows, GenerationRows)> {
+) -> Result<GenerationRows> {
     let assignment_handles = handles(
         artifact
             .policy_document
@@ -4929,7 +4940,6 @@ fn lower_entry_admissions(
             reason: "configured external role has no signed role ID",
         })?;
     let mut rows = GenerationRows::new();
-    let mut recovered_rows = GenerationRows::new();
     for assignment in artifact
         .policy_document
         .entry_role_assignments
@@ -5057,46 +5067,8 @@ fn lower_entry_admissions(
             executable_object: ExactFileObjectKeyV1::default(),
         };
         insert_exact(&mut rows, key.as_bytes(), value.as_bytes())?;
-        if *policy_entry_kind == EntryKindV1::ContainerStart
-            && binding.root_cgroup_path.is_some()
-            && !binding.arm_initial_root
-        {
-            let measured = measured_objects
-                .iter()
-                .filter(|object| object.exact_object_key_id == selector.kernel_handle())
-                .copied()
-                .collect::<Vec<_>>();
-            let [measured] = measured.as_slice() else {
-                return IdentityStateSnafu {
-                    reason: format!(
-                        "recovered binding `{}` needs one measured application executable",
-                        binding.binding_id
-                    ),
-                }
-                .fail();
-            };
-            let mut recovered = value;
-            recovered.exact_object_key_id = selector.kernel_handle();
-            recovered.executable_object = ExactFileObjectKeyV1 {
-                profile_generation_ref_id: measured.profile_generation_ref_id,
-                mount_namespace_inode: measured.mount_namespace_inode,
-                mount_id_unique: measured.selected_mount_id_unique,
-                filesystem_device: measured.filesystem_device,
-                inode: measured.inode,
-                inode_generation: measured.inode_generation,
-            };
-            let recovery_key = BindingActivationTargetKeyV1 {
-                binding_id: parse_id("binding_id", &binding.binding_id)?,
-                profile_generation_ref_id: binding.active_profile_generation_ref_id,
-            };
-            insert_exact(
-                &mut recovered_rows,
-                recovery_key.as_bytes(),
-                recovered.as_bytes(),
-            )?;
-        }
     }
-    Ok((rows, recovered_rows))
+    Ok(rows)
 }
 
 fn entry_admission_authority_rows(rows: &GenerationRows) -> Result<GenerationRows> {
@@ -6663,6 +6635,85 @@ mod tests {
     }
 
     #[test]
+    fn recovery_uses_the_normal_container_start_rule() -> crate::Result<()> {
+        let (artifact, recovery_binding) = entry_roles_artifact()?;
+        let objects = entry_role_objects(&artifact, &recovery_binding)?;
+        let recovered = LoweredGeneration::for_binding(
+            &artifact,
+            &recovery_binding,
+            &objects,
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        let mut held_binding = recovery_binding.clone();
+        held_binding.arm_initial_root = true;
+        let held = LoweredGeneration::for_binding(
+            &artifact,
+            &held_binding,
+            &objects,
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+
+        assert_eq!(recovered.entry_admissions, held.entry_admissions);
+        assert_eq!(recovered.file_objects.len(), 1);
+        assert!(held.file_objects.is_empty());
+        let application_key = recovered
+            .entry_admissions
+            .keys()
+            .find_map(|key| EntryAdmissionRuleKeyV1::try_read_from_bytes(key).ok())
+            .filter(|key| key.source_role_id == recovery_binding.initial_role_id)
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "recovery test has no normal application entry".to_owned(),
+                }
+                .build()
+            })?;
+        let application_selector_id =
+            super::application_entry_path_selector_ids(&artifact, &recovery_binding)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: "recovery test has no application selector".to_owned(),
+                    }
+                    .build()
+                })?;
+        let application_selector = artifact
+            .policy_document
+            .path_selectors
+            .iter()
+            .find(|selector| selector.path_selector_id == application_selector_id)
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "recovery test lost its application selector".to_owned(),
+                }
+                .build()
+            })?;
+        let object = recovered.file_objects.values().next().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "recovery test has no application object lookup".to_owned(),
+            }
+            .build()
+        })?;
+        let expected = ExactObjectBindingV1 {
+            profile_generation_ref_id: recovery_binding.active_profile_generation_ref_id,
+            exact_object_key_id: application_selector.kernel_handle(),
+            composite_atom_id: application_key.composite_atom_id,
+            state: ExactObjectBindingStateV1::ReadBack,
+            reserved: [0; 7],
+        };
+        assert_eq!(object, expected.as_bytes());
+        Ok(())
+    }
+
+    #[test]
     fn exact_linux_capability_uses_the_existing_effect_default_map() -> crate::Result<()> {
         let (mut artifact, binding) = entry_roles_artifact()?;
         let objects = entry_role_objects(&artifact, &binding)?;
@@ -6724,7 +6775,8 @@ mod tests {
 
     #[test]
     fn entry_admission_does_not_require_resolved_objects() -> crate::Result<()> {
-        let (artifact, binding) = entry_roles_artifact()?;
+        let (artifact, mut binding) = entry_roles_artifact()?;
+        binding.arm_initial_root = true;
         let objects = entry_role_objects(&artifact, &binding)?;
         assert!(objects.len() > 1);
         let generation = LoweredGeneration::for_binding(

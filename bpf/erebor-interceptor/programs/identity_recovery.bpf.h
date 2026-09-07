@@ -145,52 +145,55 @@ static __noinline int recovery_task_relation(
 }
 
 static __always_inline entry_admission_rule_v1 *recovery_application_rule(
+    struct task_struct *task,
     const execution_set_binding_state_v1 *binding,
-    const identity_runtime_config_v1 *config)
-{
-    binding_activation_target_key_v1 key;
-    execution_set_binding_state_v1 *activation;
-    entry_admission_rule_v1 *rule;
-
-    activation = binding_activation_for_new_root(binding, config);
-    if (!activation)
-        return NULL;
-    key.binding_id = binding->binding_id;
-    key.profile_generation_ref_id =
-        binding->active_profile_generation_ref_id;
-    rule = bpf_map_lookup_elem(&recovered_container_entry_rules, &key);
-    if (!rule || rule->target_role_id != activation->initial_role_id ||
-        rule->target_process_state_vector_id !=
-            CONSERVATIVE_PROCESS_STATE_VECTOR_V1 ||
-        !rule->admitted_entry_rule_id || !rule->exact_object_key_id ||
-        rule->reserved ||
-        rule->executable_object.profile_generation_ref_id !=
-            binding->active_profile_generation_ref_id ||
-        !rule->executable_object.mount_namespace_inode ||
-        !rule->executable_object.mount_id_unique ||
-        !rule->executable_object.filesystem_device ||
-        !rule->executable_object.inode ||
-        !rule->executable_object.inode_generation)
-        return NULL;
-    return rule;
-}
-
-static __always_inline bool recovery_task_executable_matches(
-    struct task_struct *task, const entry_admission_rule_v1 *rule,
+    const identity_runtime_config_v1 *config,
     struct identity_scratch_v1 *scratch)
 {
     struct mm_struct *mm = NULL;
     struct file *executable = NULL;
+    execution_set_binding_state_v1 *activation;
+    exact_object_binding_v1 *object;
+    entry_admission_rule_key_v1 *key;
+    entry_admission_rule_v1 *rule;
 
-    if (!task || !rule || !scratch ||
+    if (!task || !scratch ||
         BPF_CORE_READ_INTO(&mm, task, mm) || !mm ||
         BPF_CORE_READ_INTO(&executable, mm, exe_file) || !executable)
-        return false;
+        return NULL;
+    activation = binding_activation_for_new_root(binding, config);
+    if (!activation)
+        return NULL;
     exact_file_object_from_file(&scratch->file_object, executable);
     scratch->file_object.profile_generation_ref_id =
-        rule->executable_object.profile_generation_ref_id;
-    return exact_file_keys_equal(&scratch->file_object,
-                                 &rule->executable_object);
+        binding->active_profile_generation_ref_id;
+    object = bpf_map_lookup_elem(&exact_file_objects,
+                                 &scratch->file_object);
+    if (!object ||
+        object->profile_generation_ref_id !=
+            binding->active_profile_generation_ref_id ||
+        !object->exact_object_key_id || !object->composite_atom_id ||
+        (object->state != exact_object_binding_state_v1_read_back &&
+         object->state != exact_object_binding_state_v1_active_dynamic))
+        return NULL;
+    key = &scratch->entry_admission_key;
+    __builtin_memset(key, 0, sizeof(*key));
+    key->profile_generation_ref_id =
+        binding->active_profile_generation_ref_id;
+    key->binding_id = binding->binding_id;
+    key->composite_atom_id = object->composite_atom_id;
+    key->source_role_id = activation->initial_role_id;
+    rule = bpf_map_lookup_elem(&entry_admission_rules, key);
+    if (!rule || rule->target_role_id != activation->initial_role_id ||
+        rule->target_process_state_vector_id !=
+            CONSERVATIVE_PROCESS_STATE_VECTOR_V1 ||
+        !rule->admitted_entry_rule_id || rule->reserved ||
+        (rule->exact_object_key_id &&
+         (rule->exact_object_key_id != object->exact_object_key_id ||
+          !exact_file_keys_equal(&rule->executable_object,
+                                 &scratch->file_object))))
+        return NULL;
+    return rule;
 }
 
 static __always_inline int publish_recovery_provenance(
@@ -214,250 +217,159 @@ static __always_inline int publish_recovery_provenance(
                                BPF_NOEXIST);
 }
 
-static __always_inline void mark_recovery_identity_origin(
-    const task_label_v1 *label, __u8 root_class)
-{
-    process_execution_instance_v1 *execution;
-    external_root_classification_v1 *classification;
-
-    if (!label)
-        return;
-    execution = bpf_map_lookup_elem(&process_execution_instances,
-                                    &label->birth_execution_id);
-    if (execution) {
-        execution->started_by =
-            process_execution_started_by_v1_recovery_snapshot;
-        execution->transition_version++;
-    }
-    classification = bpf_map_lookup_elem(&external_root_classifications,
-                                         &label->task_cookie);
-    if (classification) {
-        classification->root_class = root_class;
-    }
-}
-
-static __always_inline int create_recovered_application_root(
-    struct task_struct *task, identity_runtime_config_v1 *config,
+static __always_inline bool recovery_preliminary_identity_is_restricted(
+    const task_label_v1 *label,
     execution_set_binding_state_v1 *binding,
-    recovered_container_activation_v1 *recovery,
-    struct identity_scratch_v1 *scratch)
+    const recovered_container_activation_v1 *recovery)
 {
-    entry_admission_rule_v1 *rule;
-    entry_security_state_v1 *entry;
-    int result;
-
-    rule = recovery_application_rule(binding, config);
-    if (!rule || !recovery_task_executable_matches(task, rule, scratch))
-        return -EACCES;
-    result = create_root(
-        task, config, binding, scratch,
-        external_root_class_v1_recovered_application_root,
-        installed_role_class_v1_initial_role, rule->target_role_id);
-    if (result)
-        return result;
-    entry = bpf_map_lookup_elem(&entry_states,
-                                &scratch->label.entry_instance_id);
-    if (!entry || entry->admitted_entry_rule_id ||
-        publish_recovery_provenance(
-            &scratch->label, recovery,
-            recovered_task_class_v1_application, scratch))
-        return -EACCES;
-    entry->admitted_entry_rule_id = rule->admitted_entry_rule_id;
-    entry->transition_version++;
-    mark_recovery_identity_origin(
-        &scratch->label,
-        external_root_class_v1_recovered_application_root);
-    recovery->application_entry_instance_id =
-        scratch->label.entry_instance_id;
-    recovery->transition_version++;
-    return finalize_task_coordinate(task, &scratch->label);
-}
-
-static __always_inline int create_recovered_external_root(
-    struct task_struct *task, identity_runtime_config_v1 *config,
-    execution_set_binding_state_v1 *binding,
-    recovered_container_activation_v1 *recovery,
-    struct identity_scratch_v1 *scratch)
-{
-    int result = create_root(
-        task, config, binding, scratch,
-        external_root_class_v1_restored_or_unknown_root,
-        installed_role_class_v1_fail_closed_unknown,
-        binding->external_role_id);
-
-    if (result)
-        return result;
-    if (publish_recovery_provenance(
-            &scratch->label, recovery,
-            recovered_task_class_v1_external, scratch))
-        return -EACCES;
-    mark_recovery_identity_origin(
-        &scratch->label,
-        external_root_class_v1_restored_or_unknown_root);
-    return finalize_task_coordinate(task, &scratch->label);
-}
-
-static __always_inline int create_recovered_application_process(
-    struct task_struct *task, identity_runtime_config_v1 *config,
-    execution_set_binding_state_v1 *binding,
-    recovered_container_activation_v1 *recovery,
-    struct identity_scratch_v1 *scratch)
-{
-    entry_admission_rule_v1 *rule;
-    entry_security_state_v1 *entry;
-    process_security_state_v1 *root_process;
-    authority_domain_state_v1 *domain;
-    __u64 *profile_task_refs;
-
-    rule = recovery_application_rule(binding, config);
-    entry = bpf_map_lookup_elem(&entry_states,
-                                &recovery->application_entry_instance_id);
-    root_process = entry ? bpf_map_lookup_elem(
-                               &process_states,
-                               &entry->root_process_state_id)
-                         : NULL;
-    domain = root_process ? bpf_map_lookup_elem(
-                                &authority_domains,
-                                &root_process->authority_domain_id)
-                          : NULL;
-    profile_task_refs = bpf_map_lookup_elem(
-        &profile_generation_task_refs,
-        &binding->active_profile_generation_ref_id);
-    if (!rule || !entry || !root_process || !domain || !profile_task_refs ||
-        entry->admitted_entry_rule_id != rule->admitted_entry_rule_id ||
-        root_process->active_role_id != rule->target_role_id ||
-        root_process->state != process_security_state_kind_v1_active ||
-        domain->state != authority_domain_state_kind_v1_active)
-        return -EACCES;
-
-    __builtin_memset(&scratch->label, 0, sizeof(scratch->label));
-    scratch->label.node_boot_id = config->node_boot_id;
-    scratch->label.label_epoch = config->label_epoch;
-    if (allocate_id(config, &scratch->label.process_lineage_id) ||
-        allocate_id(config, &scratch->label.process_instance_id) ||
-        allocate_id(config, &scratch->label.process_state_id) ||
-        allocate_id(config, &scratch->label.birth_execution_id) ||
-        allocate_id(config, &scratch->image.image_provenance_id))
-        return -EACCES;
-    scratch->label.task_cookie = scratch->label.birth_execution_id.low;
-    scratch->label.entry_instance_id = entry->entry_instance_id;
-    scratch->label.execution_set_id = binding->execution_set_id;
-    scratch->label.birth_profile_generation_ref_id =
-        binding->active_profile_generation_ref_id;
-    scratch->label.birth_authority_domain_id =
-        root_process->authority_domain_id;
-    scratch->label.lineage_depth = 1;
-    scratch->label.ancestor_process_lineage_ids[0] =
-        root_process->process_lineage_id;
-    scratch->label.placement.protected_root_binding_id =
-        binding->binding_id;
-    scratch->label.placement.protected_root_binding_nonce =
-        binding->binding_nonce;
-    prepare_coordinate(&scratch->coordinate, scratch->label.task_cookie,
-                       &scratch->label.process_instance_id,
-                       &scratch->label.process_state_id);
-    prepare_tombstone(&scratch->tombstone, &scratch->label);
-    if (read_real_parent_interval(
-            task, scratch->label.task_cookie, 0,
-            kernel_real_parent_change_reason_v1_recovery_snapshot,
-            &scratch->real_parent))
-        return -EACCES;
-    prepare_task_image(task, scratch, &scratch->image.image_provenance_id);
-    prepare_child_process(&scratch->process, root_process,
-                          &scratch->label);
-    prepare_process_vector(&scratch->process_vector, &scratch->label,
-                           binding->active_profile_generation_ref_id, 0);
-    prepare_execution(
-        &scratch->execution, &scratch->label.birth_execution_id,
-        &scratch->label.process_lineage_id,
-        &scratch->image.image_provenance_id,
-        process_execution_started_by_v1_recovery_snapshot,
-        process_execution_state_v1_active);
-    if (bpf_map_update_elem(&image_provenance,
-                            &scratch->image.image_provenance_id,
-                            &scratch->image, BPF_NOEXIST) ||
-        bpf_map_update_elem(&process_execution_instances,
-                            &scratch->label.birth_execution_id,
-                            &scratch->execution, BPF_NOEXIST) ||
-        bpf_map_update_elem(&process_state_vectors,
-                            &scratch->label.process_state_id,
-                            &scratch->process_vector, BPF_NOEXIST) ||
-        bpf_map_update_elem(&process_states,
-                            &scratch->label.process_state_id,
-                            &scratch->process, BPF_NOEXIST) ||
-        publish_recovery_provenance(
-            &scratch->label, recovery,
-            recovered_task_class_v1_application, scratch))
-        return -EACCES;
-    __sync_fetch_and_add(&entry->live_task_refs, 1);
-    __sync_fetch_and_add(&domain->live_process_refs, 1);
-    __sync_fetch_and_add(profile_task_refs, 1);
-    if (publish_task(task, scratch))
-        return -EACCES;
-    {
-        process_security_state_v1 *installed = bpf_map_lookup_elem(
-            &process_states, &scratch->label.process_state_id);
-        process_state_vector_v1 *vector = bpf_map_lookup_elem(
-            &process_state_vectors, &scratch->label.process_state_id);
-
-        if (!installed || !vector)
-            return -EACCES;
-        installed->state = process_security_state_kind_v1_active;
-        installed->transition_version++;
-        vector->state = process_state_vector_state_v1_active;
-        vector->transition_version++;
-    }
-    return finalize_task_coordinate(task, &scratch->label);
-}
-
-static __always_inline int create_recovered_thread(
-    struct task_struct *task, struct task_struct *leader,
-    identity_runtime_config_v1 *config,
-    recovered_container_activation_v1 *recovery,
-    struct identity_scratch_v1 *scratch)
-{
-    task_label_v1 *leader_label;
-    recovered_task_provenance_v1 *leader_provenance;
-    entry_security_state_v1 *entry;
+    task_coordinate_v1 *coordinate;
     process_security_state_v1 *process;
-    __u64 *profile_task_refs;
-    id128_v1 task_id;
+    process_state_vector_v1 *vector;
+    entry_security_state_v1 *entry;
+    authority_domain_state_v1 *domain;
 
-    leader_label = bpf_task_storage_get(&task_labels, leader, 0, 0);
-    leader_provenance = leader_label ? bpf_map_lookup_elem(
-        &recovered_task_provenance, &leader_label->task_cookie) : NULL;
-    entry = leader_label ? bpf_map_lookup_elem(
-        &entry_states, &leader_label->entry_instance_id) : NULL;
-    process = leader_label ? bpf_map_lookup_elem(
-        &process_states, &leader_label->process_state_id) : NULL;
-    profile_task_refs = leader_label ? bpf_map_lookup_elem(
-        &profile_generation_task_refs,
-        &leader_label->birth_profile_generation_ref_id) : NULL;
-    if (!leader_label || !leader_provenance || !entry || !process ||
-        !profile_task_refs ||
-        !id128_equal(&leader_provenance->recovery_attempt_id,
-                     &recovery->recovery_attempt_id) ||
-        allocate_id(config, &task_id))
-        return PREPARED_CONTAINER_IDENTITY_DEFER_V1;
-    scratch->label = *leader_label;
-    scratch->label.task_cookie = task_id.low;
-    prepare_coordinate(&scratch->coordinate, scratch->label.task_cookie,
-                       &scratch->label.process_instance_id,
-                       &scratch->label.process_state_id);
-    prepare_tombstone(&scratch->tombstone, &scratch->label);
-    if (read_real_parent_interval(
-            task, scratch->label.task_cookie, 0,
-            kernel_real_parent_change_reason_v1_recovery_snapshot,
-            &scratch->real_parent) ||
-        publish_recovery_provenance(
-            &scratch->label, recovery, leader_provenance->class_, scratch))
+    if (!label || !binding || !recovery ||
+        !binding_identity_matches_label(binding, label) ||
+        bpf_map_lookup_elem(&pending_execs, &label->task_cookie) ||
+        bpf_map_lookup_elem(&pending_execution_approvals,
+                            &label->task_cookie))
+        return false;
+    coordinate = bpf_map_lookup_elem(&task_coordinates,
+                                     &label->task_cookie);
+    process = bpf_map_lookup_elem(&process_states,
+                                  &label->process_state_id);
+    vector = bpf_map_lookup_elem(&process_state_vectors,
+                                 &label->process_state_id);
+    entry = bpf_map_lookup_elem(&entry_states,
+                                &label->entry_instance_id);
+    domain = process ? bpf_map_lookup_elem(
+                           &authority_domains,
+                           &process->authority_domain_id)
+                     : NULL;
+    return coordinate && process && vector && entry && domain &&
+           coordinate->state == task_coordinate_state_v1_runnable &&
+           process->state == process_security_state_kind_v1_active &&
+           process->exec_guard_state == exec_guard_state_v1_none &&
+           (process->active_role_id == binding->external_role_id ||
+            (process->active_role_id == binding->initial_role_id &&
+             id128_equal(&process->entry_instance_id,
+                         &recovery->application_entry_instance_id))) &&
+           vector->state == process_state_vector_state_v1_active &&
+           vector->profile_generation_ref_id ==
+               recovery->profile_generation_ref_id &&
+           entry->admission_state == entry_admission_state_v1_committed &&
+           entry->lifetime_state == entry_lifetime_state_v1_active &&
+           !entry->admitted_entry_rule_id &&
+           domain->state == authority_domain_state_kind_v1_active;
+}
+
+static __always_inline int adopt_recovered_application_identity(
+    task_label_v1 *label, execution_set_binding_state_v1 *binding,
+    recovered_container_activation_v1 *recovery,
+    entry_security_state_v1 *application_entry,
+    struct identity_scratch_v1 *scratch, bool exact_init)
+{
+    process_security_state_v1 *process;
+    process_state_vector_v1 *vector;
+    entry_security_state_v1 *old_entry;
+    external_root_classification_v1 *classification = NULL;
+
+    if (!recovery_preliminary_identity_is_restricted(
+            label, binding, recovery))
         return -EACCES;
-    __sync_fetch_and_add(&entry->live_task_refs, 1);
-    __sync_fetch_and_add(&process->live_thread_refs, 1);
-    __sync_fetch_and_add(profile_task_refs, 1);
-    if (publish_task(task, scratch))
+    process = bpf_map_lookup_elem(&process_states,
+                                  &label->process_state_id);
+    vector = bpf_map_lookup_elem(&process_state_vectors,
+                                 &label->process_state_id);
+    old_entry = bpf_map_lookup_elem(&entry_states,
+                                    &label->entry_instance_id);
+    if (!process || !vector || !old_entry ||
+        (exact_init &&
+         !(classification = bpf_map_lookup_elem(
+               &external_root_classifications,
+               &label->task_cookie))) ||
+        __sync_val_compare_and_swap(&process->transition_guard, 0, 1))
         return -EACCES;
-    return finalize_task_coordinate(task, &scratch->label);
+    if (publish_recovery_provenance(
+            label, recovery, recovered_task_class_v1_application,
+            scratch)) {
+        release_transition_guard(&process->transition_guard);
+        return -EACCES;
+    }
+    __sync_fetch_and_add(&application_entry->live_task_refs, 1);
+    if (!decrement_nonzero_counter(&old_entry->live_task_refs)) {
+        release_transition_guard(&process->transition_guard);
+        return -EACCES;
+    }
+    if (!old_entry->live_task_refs &&
+        old_entry->lifetime_state == entry_lifetime_state_v1_active) {
+        old_entry->lifetime_state = entry_lifetime_state_v1_draining;
+        old_entry->transition_version++;
+    }
+    label->entry_instance_id = application_entry->entry_instance_id;
+    process->entry_instance_id = application_entry->entry_instance_id;
+    process->entry_root_process_state_id =
+        application_entry->root_process_state_id;
+    process->active_role_id = binding->initial_role_id;
+    process->process_state_vector_id =
+        CONSERVATIVE_PROCESS_STATE_VECTOR_V1;
+    process->transition_version++;
+    vector->process_state_vector_id = process->process_state_vector_id;
+    vector->transition_version++;
+    if (exact_init) {
+        classification->entry_instance_id =
+            application_entry->entry_instance_id;
+        classification->installed_role_numeric_id =
+            binding->initial_role_id;
+        classification->installed_role_class =
+            installed_role_class_v1_initial_role;
+        classification->root_class =
+            external_root_class_v1_recovered_application_root;
+    }
+    release_transition_guard(&process->transition_guard);
+    return 0;
+}
+
+static __always_inline int adopt_recovered_application_root(
+    struct task_struct *task, identity_runtime_config_v1 *config,
+    execution_set_binding_state_v1 *binding,
+    recovered_container_activation_v1 *recovery,
+    task_label_v1 *label, struct identity_scratch_v1 *scratch)
+{
+    entry_admission_rule_v1 *rule;
+    entry_security_state_v1 *old_entry;
+    id128_v1 entry_instance_id;
+
+    if (!id128_is_zero(&recovery->application_entry_instance_id))
+        return -EACCES;
+    rule = recovery_application_rule(task, binding, config, scratch);
+    old_entry = label ? bpf_map_lookup_elem(
+                            &entry_states, &label->entry_instance_id)
+                      : NULL;
+    if (!rule || !old_entry ||
+        !recovery_preliminary_identity_is_restricted(
+            label, binding, recovery) ||
+        allocate_id(config, &entry_instance_id))
+        return -EACCES;
+    scratch->entry = *old_entry;
+    scratch->entry.entry_instance_id = entry_instance_id;
+    scratch->entry.live_task_refs = 0;
+    scratch->entry.transition_version++;
+    scratch->entry.admitted_entry_rule_id =
+        rule->admitted_entry_rule_id;
+    if (bpf_map_update_elem(&entry_states,
+                            &scratch->entry.entry_instance_id,
+                            &scratch->entry, BPF_NOEXIST))
+        return -EACCES;
+    entry_security_state_v1 *entry = bpf_map_lookup_elem(
+        &entry_states, &scratch->entry.entry_instance_id);
+
+    if (!entry || adopt_recovered_application_identity(
+                      label, binding, recovery, entry, scratch, true))
+        return -EACCES;
+    recovery->application_entry_instance_id = entry->entry_instance_id;
+    recovery->transition_version++;
+    return 0;
 }
 
 static __always_inline bool recovered_candidate_is_valid(
@@ -536,7 +448,6 @@ static __always_inline int reconcile_recovered_task(
     __u8 expected_class;
     bool exact_init;
     int relation;
-    int claim;
     int result = 0;
 
     recovery = recovery_for_binding(binding, config);
@@ -577,44 +488,47 @@ static __always_inline int reconcile_recovered_task(
         label = NULL;
     if (!label && recovery->phase ==
                       recovered_container_activation_phase_v1_scanning) {
+        if (label_external_root(task, binding, config)) {
+            __sync_fetch_and_add(&recovery->invalid_task_count, 1);
+            return -EACCES;
+        }
+        label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    }
+    if (label && recovery->phase ==
+                     recovered_container_activation_phase_v1_scanning &&
+        !recovered_candidate_is_valid(label, recovery, binding,
+                                      expected_class)) {
         scratch = identity_scratch_record();
         if (!scratch)
             return -EACCES;
-        claim = claim_task_label(task);
-        if (claim < 0)
-            return -EACCES;
-        if (!claim) {
-            if (host_tid != host_tgid) {
-                result = create_recovered_thread(
-                    task, leader, config, recovery, scratch);
-            } else if (exact_init) {
-                if (!id128_is_zero(
-                        &recovery->application_entry_instance_id))
-                    result = -EACCES;
-                else
-                    result = create_recovered_application_root(
-                        task, config, binding, recovery, scratch);
-            } else if (expected_class ==
-                       recovered_task_class_v1_application) {
-                if (id128_is_zero(
-                        &recovery->application_entry_instance_id))
-                    result = PREPARED_CONTAINER_IDENTITY_DEFER_V1;
-                else
-                    result = create_recovered_application_process(
-                        task, config, binding, recovery, scratch);
-            } else {
-                result = create_recovered_external_root(
-                    task, config, binding, recovery, scratch);
-            }
-            if (result) {
-                bpf_task_storage_delete(&task_labels, task);
-                if (result != PREPARED_CONTAINER_IDENTITY_DEFER_V1)
-                    __sync_fetch_and_add(
-                        &recovery->invalid_task_count, 1);
-                return result;
-            }
+        if (expected_class == recovered_task_class_v1_application) {
+            entry_security_state_v1 *application_entry =
+                bpf_map_lookup_elem(
+                    &entry_states,
+                    &recovery->application_entry_instance_id);
+
+            result = exact_init
+                         ? adopt_recovered_application_root(
+                               task, config, binding, recovery, label,
+                               scratch)
+                         : (application_entry
+                                ? adopt_recovered_application_identity(
+                                      label, binding, recovery,
+                                      application_entry, scratch, false)
+                                : PREPARED_CONTAINER_IDENTITY_DEFER_V1);
+        } else if (recovery_preliminary_identity_is_restricted(
+                       label, binding, recovery)) {
+            result = publish_recovery_provenance(
+                label, recovery, recovered_task_class_v1_external,
+                scratch);
+        } else {
+            result = -EACCES;
         }
-        label = bpf_task_storage_get(&task_labels, task, 0, 0);
+        if (result) {
+            if (result != PREPARED_CONTAINER_IDENTITY_DEFER_V1)
+                __sync_fetch_and_add(&recovery->invalid_task_count, 1);
+            return result;
+        }
     }
     if (!recovered_candidate_is_valid(label, recovery, binding,
                                       expected_class)) {

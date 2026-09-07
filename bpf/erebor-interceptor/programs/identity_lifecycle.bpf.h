@@ -3,54 +3,6 @@
 #ifndef EREBOR_IDENTITY_LIFECYCLE_BPF_H
 #define EREBOR_IDENTITY_LIFECYCLE_BPF_H
 
-static __always_inline int label_external_root(
-    struct task_struct *task, execution_set_binding_state_v1 *binding,
-    identity_runtime_config_v1 *config)
-{
-    identity_health_v1 *health = identity_health_record();
-    struct identity_scratch_v1 *scratch;
-    int claim;
-    int result;
-
-    scratch = identity_scratch_record();
-    if (!scratch) {
-        if (health)
-            health->allocation_failures++;
-        return -EACCES;
-    }
-    claim = claim_task_label(task);
-    if (claim > 0)
-        return 0;
-    if (claim < 0) {
-        if (health)
-            health->allocation_failures++;
-        return -EACCES;
-    }
-    result = create_external_root(task, config, binding, scratch);
-
-    if (result) {
-        bpf_task_storage_delete(&task_labels, task);
-        if (health && result != PREPARED_CONTAINER_IDENTITY_DEFER_V1)
-            health->allocation_failures++;
-        return result;
-    }
-    if (finalize_task_coordinate(task, &scratch->label)) {
-        task_coordinate_v1 *coordinate =
-            bpf_map_lookup_elem(&task_coordinates,
-                                &scratch->label.task_cookie);
-
-        if (coordinate) {
-            coordinate->state =
-                task_coordinate_state_v1_fail_closed_unknown;
-            coordinate->transition_version++;
-        }
-        if (health)
-            health->coordinate_failures++;
-        return -EACCES;
-    }
-    return 0;
-}
-
 SEC("lsm/task_alloc")
 int BPF_PROG(erebor_task_alloc, struct task_struct *task,
              unsigned long clone_flags, int ret)
