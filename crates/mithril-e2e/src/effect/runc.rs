@@ -2246,6 +2246,7 @@ impl EffectTestRunner {
                 &scheduled_binding,
                 container_id.clone(),
                 sandbox_id.clone(),
+                "sha256:local-content-id".to_owned(),
                 binding.container_generation,
                 cgroup_path.clone(),
                 initial_host_pid,

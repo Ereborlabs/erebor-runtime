@@ -786,12 +786,47 @@ impl WorkloadBindingOwner {
         scheduled: &WorkloadBindingConfig,
         container_id: String,
         sandbox_id: String,
+        listed_image_ref: String,
         container_generation: u64,
         cgroup_path: PathBuf,
         init_pid: u32,
         working_directory: PathBuf,
         path_entries: Vec<PathBuf>,
     ) -> Result<WorkloadBindingConfig> {
+        let listed = k8s_cri::v1::Container {
+            id: container_id.clone(),
+            pod_sandbox_id: sandbox_id.clone(),
+            metadata: Some(k8s_cri::v1::ContainerMetadata {
+                name: scheduled.container_name.clone(),
+                attempt: 0,
+            }),
+            image_ref: listed_image_ref,
+            state: k8s_cri::v1::ContainerState::ContainerRunning as i32,
+            labels: [
+                (
+                    "io.kubernetes.pod.namespace".to_owned(),
+                    scheduled.namespace.clone(),
+                ),
+                (
+                    "io.kubernetes.pod.uid".to_owned(),
+                    scheduled.pod_uid.clone(),
+                ),
+                (
+                    "io.kubernetes.container.name".to_owned(),
+                    scheduled.container_name.clone(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            ..k8s_cri::v1::Container::default()
+        };
+        ensure!(
+            super::runtime::scheduled_recovery_target(&listed, std::slice::from_ref(scheduled))?
+                .is_some_and(|matched| matched.binding_id == scheduled.binding_id),
+            IdentityStateSnafu {
+                reason: "test CRI listing did not select the signed scheduled recovery target",
+            }
+        );
         let identity = RuntimeContainerIdentity {
             full_container_id: container_id,
             namespace: scheduled.namespace.clone(),

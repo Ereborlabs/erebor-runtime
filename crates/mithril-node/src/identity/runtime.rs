@@ -510,7 +510,7 @@ impl ContainerRuntimeInventory {
     }
 }
 
-fn scheduled_recovery_target<'a>(
+pub(super) fn scheduled_recovery_target<'a>(
     container: &Container,
     configured: &'a [WorkloadBindingConfig],
 ) -> Result<Option<&'a WorkloadBindingConfig>> {
@@ -537,7 +537,6 @@ fn scheduled_recovery_target<'a>(
                     .metadata
                     .as_ref()
                     .is_some_and(|metadata| metadata.name == binding.container_name)
-                && container.image_ref.ends_with(&binding.image_digest)
         })
         .collect::<Vec<_>>();
     ensure!(
@@ -1053,7 +1052,7 @@ mod tests {
                 name: "worker".to_owned(),
                 attempt: 0,
             }),
-            image_ref: "registry.invalid/image@sha256:image-a".to_owned(),
+            image_ref: "sha256:local-content-id".to_owned(),
             state: ContainerState::ContainerRunning as i32,
             labels: [
                 (POD_NAMESPACE_LABEL.to_owned(), "default".to_owned()),
