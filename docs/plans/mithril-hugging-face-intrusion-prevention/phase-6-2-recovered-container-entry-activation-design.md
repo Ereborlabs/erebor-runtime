@@ -1,0 +1,440 @@
+# Phase 6.2 Recovered Container Entry Activation Design Proposal
+
+Status: Approved design on 2026-09-07. Implementation and qualification are
+not complete.
+
+Parent: [Phase 6.2 Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
+
+Closure: [Phase 6.2 closure matrix](./phase-6-2-closure-matrix.md)
+
+Related design: [Held OCI route publication](./phase-6-2-held-oci-route-publication-design.md)
+
+This proposal lets Mithril establish forward entry authority for a protected
+container that was already running when Mithril recovered it. Recovery creates
+one measured cutover. BPF assigns the application entry to the current
+container-init tree, keeps every other existing process tree on the restricted
+external role, and admits only new later entries through the normal executable
+and argument checks. Mithril Node cannot assign a role or rule ID to a task.
+
+The recovery result does not claim that Mithril governed the original
+container start or any action before the cutover.
+
+## Intended End State
+
+An exact running container can move through this state sequence:
+
+```text
+UNARMED -- Mithril Node install --> RECOVERING -- BPF commit --> ACTIVE_RECOVERED
+```
+
+While the binding is `RECOVERING`, BPF denies covered effects and does not
+create runtime-bootstrap authority. Mithril Node installs the signed policy,
+binding facts, initial `RECOVERING` state, and bounded recovery request. It
+invokes the BPF recovery iterator but does not change identity state after that
+publication. BPF measures one stable task set, creates one recovered
+application entry for the exact container-init process, assigns its current
+in-container process tree to that entry, and assigns all other existing process
+trees to `externalRole` with `admitted_entry_rule_id = 0`.
+
+After complete BPF validation, BPF publishes `ACTIVE_RECOVERED` and releases
+the recovery barrier. Mithril Node reads back that result. A later runtime
+controller can then prepare an exact runtime-bootstrap lineage against the
+recovered application anchor. A new probe, lifecycle hook, tool entry, or
+approved administrative entry starts with `externalRole` and rule ID `0`. Its
+own executable and arguments select and commit its declared entry.
+
+Evidence identifies the recovery cutover and the earlier coverage gap. It does
+not report the recovered application tree as an originally held and admitted
+tree.
+
+## Current Defect
+
+A later entry in a container that Mithril governed from creation uses the
+admitted initial application entry as its runtime-bootstrap anchor. The
+runtime controller receives a task-local marker when it performs an exact
+permitted control operation against that anchor. Its child carries the marker
+through runc infrastructure until the final entry executable reaches BPF.
+
+A recovered container has no such anchor. Its binding has an unarmed prepared
+state, its existing root has no admitted entry rule, and the runtime controller
+cannot receive the marker. K3s runc can then reach an anonymous internal exec
+before it executes the requested command. BPF denies that internal exec, so it
+never evaluates the declared probe or administrative rule.
+
+The final entry lookup is not defective. The runtime cannot reach that lookup.
+
+## Existing Normal-Start Ownership
+
+The current held-container flow uses this owner split:
+
+Mithril Node prepares the held container
+  -> `PublishedBinding::prepare_container` writes the initial `PREPARED` state
+  and exact held init TGID
+  -> Node publishes the binding and invokes BPF reconciliation
+
+BPF creates the initial identity
+  -> the BPF task iterator claims the exact held task
+  -> `label_external_root` allocates the task, process, execution, and entry
+  identities
+  -> BPF assigns the initial role and stores its allocated entry in
+  `prepared_container_entry_instance_id`
+  -> Node reads back the BPF-created identity
+
+BPF observes the application exec
+  -> `prepared_container_reserve_activation` changes `PREPARED` to
+  `EXEC_PENDING`
+  -> BPF verifies and commits the application entry rule
+  -> `activate_prepared_container_for_application` changes `EXEC_PENDING` to
+  `ACTIVE` after the first syscall proves that the new image reached user mode
+
+Mithril Node does not allocate the identity, assign the role or rule, store the
+application anchor, or publish `ACTIVE`. The recovered-container flow keeps
+this same ownership rule. Node supplies the initial prepared state. BPF owns
+the identity and the active-state commit.
+
+## Authority Decision
+
+Recovery creates a new authority boundary. It does not reconstruct the
+original birth boundary.
+
+| Fact | Authority after recovery | Non-authority |
+| --- | --- | --- |
+| Container identity | Authenticated CRI container ID and generation, exact cgroup, init PID identity, node boot, and active signed binding | Container name, Pod name, cached PID, or cgroup path text alone |
+| Recovered application | BPF selects the stable current init task after the bounded request, kernel task identity, current executable and arguments, signed application entry, and binding all match | A Node-written role or rule ID, PID 1 alone, image name alone, current executable alone, or an incomplete task snapshot |
+| Application descendants | BPF selects a current in-container process only when its complete in-cgroup parent chain reaches the verified init task in the stable recovery snapshot | A Node-provided task class, a process outside the exact cgroup, an unresolved parent edge, or a task that appears after the snapshot |
+| Other existing tasks | BPF assigns a restricted external identity with rule ID `0` | A Node-assigned rule or a guessed probe, lifecycle, administrative, or application entry |
+| Future later entry | Fresh external root followed by exact executable and argument admission | Runtime name, command timing, cgroup membership, or recovery state alone |
+| Coverage claim | Effects after the successful recovery cutover | Original exec, earlier ancestry, and effects before the cutover |
+
+The existing `prepared_container_entry_instance_id` remains the binding's
+application anchor. In `ACTIVE_RECOVERED`, it names the recovered application
+entry instead of an entry created by the held OCI start path. The binding state
+and evidence provenance distinguish the two origins.
+
+## Assignment Ownership Invariant
+
+BPF is the only owner that assigns process identity and policy authority. Only
+BPF can:
+
+- allocate an `entry_instance_id`, process identity, task cookie, or execution
+  identity;
+- write a task's nonzero task label;
+- write its process state, entry state, and root classification;
+- assign its installed role and `admitted_entry_rule_id`; and
+- store the recovered application entry in
+  `prepared_container_entry_instance_id`.
+
+Mithril Node can install only the signed policy, immutable binding facts, the
+initial `RECOVERING` state, and the bounded recovery request. It can invoke the
+BPF recovery iterator and read the BPF result. After it publishes
+`RECOVERING`, it cannot write task storage, task coordinates, process states,
+entry states, classifications, the application anchor, or another
+prepared-container lifecycle state.
+
+The recovery request contains the binding identity, transition version,
+recovery attempt identity, exact cgroup identity, and exact init task identity.
+It does not contain an `entry_instance_id`, installed role ID, or admitted rule
+ID. BPF reads the application role and entry rule from the active signed policy
+generation that the binding names. BPF rejects a request if the binding,
+generation, cgroup, init task, or transition version changes.
+
+## State Contract
+
+| State | BPF behavior | Node behavior |
+| --- | --- | --- |
+| `UNARMED` | Existing tasks use the recovered or restricted floor. No runtime controller can use the application-anchor bootstrap. | Node can replace the unarmed binding with one exact `RECOVERING` installation. |
+| `RECOVERING` | Covered effects deny. BPF claims tasks, assigns identities, tracks task-set changes, and validates the complete task set. New task placement cannot create an admitted entry or runtime-bootstrap marker. | Node can invoke the BPF recovery iterator and read its progress. It cannot change the state. |
+| `ACTIVE_RECOVERED` | The BPF-assigned recovered application entry and its descendants use the application role. Other old roots remain external. New later roots use normal entry admission. | Node retains the recovery record and reconciles the exact container lifetime. |
+| `ACTIVE` | Existing held-OCI behavior remains unchanged. | Node reads back the original prepared-container activation. |
+| `CORRUPT` | All affected covered effects deny. | Node reports the failure and does not retry in place. |
+
+`ACTIVE` and `ACTIVE_RECOVERED` have the same forward later-entry behavior.
+They have different evidence meaning and different activation proofs. Mithril
+Node owns only the initial `UNARMED -> RECOVERING` installation. BPF owns every
+transition out of `RECOVERING`. Mithril Node cannot publish
+`ACTIVE_RECOVERED`, roll the binding back, or mark it `CORRUPT`.
+
+## Recovery Flow
+
+Mithril Node discovers one running protected container with no retained active
+entry identity
+  -> `WorkloadBindingOwner` resolves one authenticated CRI container ID and
+  generation
+  -> `WorkloadBindingOwner` resolves the exact live cgroup and init task
+  -> `WorkloadBindingOwner` validates the node boot, label epoch, execution
+  set, profile, and active signed policy generation
+  -> `WorkloadBindingOwner` verifies that the live prepared-container state is
+  `UNARMED` and that all BPF-owned recovery output fields are zero
+  -> `WorkloadBindingOwner` installs one `RECOVERING` binding value with the
+  exact recovery attempt, cgroup, container lifetime, and init task inputs
+  -> the installation contains no task label, entry ID, installed role, or
+  admitted rule ID
+  -> Node reads back the exact `RECOVERING` installation
+
+Mithril Node invokes the BPF recovery iterator
+  -> BPF reads the installed `RECOVERING` binding and active signed policy
+  -> BPF verifies the node boot, label epoch, binding identity, transition
+  version, cgroup identity, container lifetime, and init task identity
+  -> BPF resolves the application entry, role, and execution rule from the
+  active signed policy generation
+  -> BPF rejects any mismatch before it assigns identity or authority
+  -> Mithril Node makes no further lifecycle transition
+
+BPF accepts the exact `RECOVERING` installation
+  -> BPF claims the recovery transaction under the binding transition guard
+  -> BPF initializes its task-set generation and completion counters
+  -> BPF denies covered effects for the exact binding
+  -> BPF refuses entry admission and runtime-bootstrap creation for the exact
+  binding
+  -> BPF task create, cgroup attach, reparent, exec, and exit hooks advance the
+  task-set generation while recovery is in progress
+
+BPF scans the live task set
+  -> the BPF iterator selects only tasks in the exact bound cgroup lifetime
+  -> BPF claims each task's local storage and allocates its kernel identity
+  -> BPF selects the exact verified init task as the recovered application
+  root
+  -> BPF allocates one fresh application `entry_instance_id`
+  -> BPF reads the application role and `admitted_entry_rule_id` from the
+  signed application entry
+  -> BPF assigns that entry, role, rule, and process-state vector to the init
+  task
+  -> BPF assigns the same application entry and role to each current process
+  whose complete in-cgroup parent chain reaches the init task
+  -> BPF creates a restricted external entry for every other existing process
+  tree
+  -> every external entry has `externalRole`, purpose `unknown`, and
+  `admitted_entry_rule_id = 0`
+  -> BPF records recovered provenance and the recovery attempt identity on all
+  candidate rows
+
+A task appears, exits, attaches, reparents, or starts exec during the scan
+  -> its BPF lifecycle hook advances the task-set generation
+  -> the current scan cannot commit
+  -> BPF keeps the binding `RECOVERING` and keeps covered effects denied
+  -> a later iterator pass restarts from the new task-set generation
+
+BPF validates the recovery candidate
+  -> candidate rows remain unreachable while the binding is `RECOVERING`
+  -> BPF checks every task label, process state, entry state, classification,
+  role, rule ID, binding ID, policy generation, and recovery attempt identity
+  -> BPF requires the same task-set generation and the same complete live task
+  count at the start and end of validation
+  -> BPF requires one exact recovered application root and no unlabeled task,
+  unresolved parent, duplicate root, or task from another cgroup lifetime
+
+The BPF validation is complete
+  -> BPF acquires the binding transition guard
+  -> BPF checks the request, policy generation, task-set generation, task
+  count, application entry, and candidate-row counts again
+  -> BPF stores its allocated application entry as the binding's application
+  anchor
+  -> BPF advances the binding transition version
+  -> BPF changes `RECOVERING` to `ACTIVE_RECOVERED`
+  -> BPF releases the transition guard
+  -> effects after this BPF cutover use the recovered identities
+
+Mithril Node reads the BPF result
+  -> it reports `ACTIVE_RECOVERED`, the BPF-assigned counts, and the coverage
+  cutover
+  -> it does not rewrite the application anchor, task identities, roles, rule
+  IDs, or lifecycle state
+
+BPF detects a non-retryable contradiction
+  -> BPF changes `RECOVERING` to `CORRUPT` under the transition guard
+  -> BPF does not publish the candidate as active
+  -> covered effects remain fail-closed
+
+Mithril Node stops or restarts during recovery
+  -> installed policy and BPF internal state remain unchanged
+  -> BPF does not infer success from the Node process lifetime
+  -> a later Node instance can invoke the same BPF recovery and readback path
+
+## Existing Task Behavior
+
+The verified init process performs its next covered effect after the cutover
+  -> BPF verifies `ACTIVE_RECOVERED`, the recovered application entry, current
+  binding, current policy generation, and task identity
+  -> BPF applies the application role to the effect
+  -> evidence marks the actor and binding as recovered at the cutover
+
+A selected current application descendant performs its next covered effect
+  -> BPF verifies the descendant's recovered process identity and shared
+  application entry
+  -> BPF applies the application role
+  -> BPF does not claim an observed kernel birth edge for the pre-cutover task
+
+An existing probe, hook, runtime helper, or ambiguous process performs a
+covered effect
+  -> BPF applies `externalRole`
+  -> `admitted_entry_rule_id` remains `0`
+  -> BPF does not infer the old entry kind from its executable, arguments,
+  name, parent, or timing
+  -> the task can exit, but it cannot obtain an admitted role through recovery
+
+An existing external task exits
+  -> the normal task-exit owner retires its recovered external identity
+  -> the exit does not change the application anchor or authorize a later task
+
+## Future Later-Entry Flow
+
+Kubelet requests a new exec probe after `ACTIVE_RECOVERED`
+  -> containerd sends the request to the exact live container shim
+  -> a runtime controller performs the qualified control operation against the
+  recovered application anchor
+  -> BPF verifies the active recovered binding, exact anchor entry, current
+  node boot, and current policy generation
+  -> BPF creates one task-local runtime-bootstrap marker on the observed
+  controller thread group
+
+The marked runtime controller creates a child
+  -> `task_alloc` copies the marker to the exact child lineage
+  -> cgroup attachment creates one fresh `external_runtime_root`
+  -> the new root starts with `externalRole`, purpose `unknown`, and rule ID
+  `0`
+  -> no runtime name, binary path, process name, or lifecycle kind becomes
+  authority
+
+runc performs an internal executable transition
+  -> BPF verifies the exact runtime-bootstrap marker and current binding
+  -> BPF accepts a mounted same-image transition as runtime infrastructure
+  -> BPF accepts an anonymous transition only when the same exact marker is
+  valid
+  -> BPF keeps the external role and rule ID `0`
+  -> BPF retains the marker only for the same task lineage and binding
+
+runc executes the requested probe command
+  -> the exec syscall hook captures the logical invocation path and complete
+  arguments
+  -> `bprm_check_security` checks the opened executable through the normal
+  policy gate
+  -> BPF looks up the declared entry by policy generation, binding, logical
+  path atom, and `externalRole`
+  -> BPF verifies the declared executable, required arguments, target role,
+  and process-state vector
+  -> BPF reserves the declared rule ID under the process transition guard
+  -> the credential and successful-exec hooks verify the same request
+  -> successful exec commits only the declared probe role and rule ID
+  -> BPF clears the runtime-bootstrap marker
+
+The requested command does not match one declared entry
+  -> BPF does not commit a rule ID or target role
+  -> the task remains an external root
+  -> BPF denies the exec before the requested program reaches user mode
+
+## Approved Administrative Entry
+
+Control approves one administrative command for an `ACTIVE_RECOVERED` binding
+  -> Mithril Node verifies and publishes the existing signed one-use slot
+  -> the slot remains bound to the node boot, binding ID and nonce, container
+  generation, policy generation, exact executable, complete arguments, role,
+  and deadline
+
+The runtime prepares the approved command
+  -> the recovered application anchor supplies only the runtime-bootstrap
+  relationship
+  -> the runtime-bootstrap marker does not reserve or consume the approval
+  slot
+  -> runc remains an external runtime root through its internal execs
+
+runc executes the approved command
+  -> the normal BPRM transaction matches the exact executable and complete
+  kernel-captured arguments
+  -> one task reserves and consumes the approval slot
+  -> successful exec installs only the administrative role and rule ID
+  -> another command, task, binding, generation, or replay remains denied
+
+## Recovery Evidence
+
+The recovery transaction emits one bounded record that contains:
+
+- node ID, node boot ID, and label epoch;
+- Pod UID, container ID, container generation, and binding ID;
+- policy generation and application rule ID;
+- recovery attempt ID and cutover boot-time timestamp;
+- init task cookie and recovered application entry ID;
+- application-tree and external-tree task counts;
+- executable and argument verification results;
+- BPF task-set generation and validation result;
+- previous and final binding states; and
+- success, retryable failure, or corrupt result.
+
+The record states that coverage before the cutover is unknown. Control and Node
+status must not convert that interval into a protected result.
+
+## Implementation Owners
+
+| Owner | Required change |
+| --- | --- |
+| Interceptor ABI | Add `RECOVERING` and `ACTIVE_RECOVERED` prepared-container states. Add only the recovery identity needed for guarded publication and evidence. |
+| `WorkloadBindingOwner` | Resolve the exact CRI lifetime and init task. Install the signed policy, binding facts, `RECOVERING` state, and authority-free recovery inputs. Do not assign task authority or publish a later state. |
+| `NativeSecurityStateOwner` | Invoke the BPF recovery and validation iterators. Read health and completion output. Do not write identity rows or lifecycle transitions. |
+| BPF recovery owner | Claim tasks, allocate identities, select the init tree, assign roles and rule IDs, validate the complete task set, store the application anchor, and publish `ACTIVE_RECOVERED` or `CORRUPT`. |
+| BPF task lifecycle | Deny during `RECOVERING`, advance the recovery task-set generation for every task change, accept only complete recovered rows at `ACTIVE_RECOVERED`, and classify every new root after the cutover. |
+| BPF runtime-bootstrap owner | Accept the recovered application anchor, keep marker inheritance task-local, and accept exact anonymous runtime-internal execs without assigning an entry role. |
+| BPF exec owner | Keep the new root external until its own executable and arguments reserve and commit one declared or approved entry. |
+| Node evidence owner | Record the recovery gap, task partition, cutover, and failure state without claiming original-start coverage. |
+| Lightweight qualification | Start a fresh container and shim before Mithril binds them. Prove recovery and later-entry behavior with the K3s runtime versions. |
+| Kubernetes qualification | Run the same state transitions, role results, rule results, denials, and evidence fields on the physical K3s path. |
+
+## Acceptance
+
+1. A state-machine test proves that Node can install only `UNARMED ->
+   RECOVERING`. It proves that only BPF can publish a later recovery state,
+   including `ACTIVE_RECOVERED`, retry rollback, and fail-closed corruption
+   transitions. Retirement after activation keeps its existing owner.
+2. A recovery test verifies the exact CRI container lifetime, init task,
+   executable, arguments, root view, and policy generation.
+3. A BPF recovery test proves that BPF assigns the recovered application rule
+   and role to the init tree and assigns every other existing tree to
+   `externalRole` with rule ID `0`. Node writes none of these values.
+4. A race test creates, exits, and reparents tasks around recovery. No task can
+   act without one read-back identity, and an unstable snapshot cannot become
+   active.
+5. A failure test covers an unstable task-set generation, PID reuse, container
+   replacement, executable mismatch, argument mismatch, policy replacement,
+   partial BPF publication, failed readback, and node restart during
+   `RECOVERING`.
+6. Existing external tasks cannot acquire a declared role after recovery. They
+   remain restricted until exit.
+7. A future PostStart, PreStop, startup probe, readiness probe, and liveness
+   probe starts as an external root and commits only its declared rule and
+   role.
+8. A future runtime controller receives the bootstrap marker from the exact
+   recovered application anchor. Its child inherits the marker, and an exact
+   anonymous runc internal exec grants no entry role.
+9. An unmatched `kubectl exec`, direct `crictl exec`, cgroup-entering task,
+   wrong executable, wrong arguments, wrong binding, and replay remain denied.
+10. One approved administrative exec consumes its exact one-use slot and
+    installs only the administrative role. An ordinary administrative exec
+    remains external and denied.
+11. The lightweight test starts the container and shim before Mithril, records
+    the BPF-produced recovered task partition, and then proves the later-entry
+    results.
+12. The paired Kubernetes test uses the same K3s containerd, shim, and runc
+    versions and requires the same state transitions, result fields, roles,
+    rule IDs, and decisions.
+13. The lightweight test passes before the Kubernetes test runs.
+14. Evidence reports the pre-cutover gap and never reports the original exec
+    as Mithril-governed.
+15. The complete repository Rust gate passes after the final source edit.
+
+## Exclusions
+
+This proposal does not reconstruct pre-cutover birth lineage, entry purpose,
+open-file ownership, socket ownership, memory provenance, or completed effects.
+It does not authorize checkpoint restore, an unmatched workload, a container
+without authenticated CRI identity, or a task outside the exact cgroup.
+
+This proposal does not identify runc, containerd, a shim, or another runtime by
+name, executable path, arguments, or a fixed syscall sequence. It does not
+give application authority to an existing independent or ambiguous process
+tree.
+
+Version-changed Kubernetes recovery, direct non-CRI fallback, authorized final
+decommission, and complete Phase 6.2 closure remain separate work.
+
+## Result
+
+Not done. The design is approved. No implementation or qualification result is
+claimed by this proposal.

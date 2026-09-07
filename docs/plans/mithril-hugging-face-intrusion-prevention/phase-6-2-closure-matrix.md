@@ -5,6 +5,7 @@
 - Manual acceptance: [Phase 6.2 runbook](./manual-testing/phase-6-2-manual-acceptance.md)
 - Implementation review: [Phase 6.2 review guide](./phase-6-2-implementation-review.md)
 - Held-OCI design: [held OCI route publication](./phase-6-2-held-oci-route-publication-design.md)
+- Recovered-entry design: [recovered container entry activation](./phase-6-2-recovered-container-entry-activation-design.md)
 - Policy example: [independent entry roles](./phase-6-2-entry-policy-example.yaml)
 
 ## Closure Decision
@@ -23,6 +24,13 @@ entry, adds declared additional entries and one approved administrative entry,
 and retains `externalRole`. The Kubernetes fixture uses this schema and proved
 its declared entries under the earlier contract. It does not prove the approved
 administrative entry or the new probe argv-verification requirement. The
+approved recovered-container design defines a measured
+`UNARMED -> RECOVERING -> ACTIVE_RECOVERED` cutover. Mithril Node installs the
+initial `RECOVERING` state and authority-free recovery inputs. BPF assigns the
+verified current init tree to the application entry, assigns other existing
+trees to the restricted external role, and publishes `ACTIVE_RECOVERED` after
+complete validation. Future entries use the normal per-exec admission path.
+This recovery design is not implemented or qualified. The
 historical complete fixture also proves guarded migration of one running
 process to a replacement base-policy generation. The current physical outage
 fixture passed evidence-stream interruption and recovery, storage failure,
@@ -74,7 +82,7 @@ hook publishes the authoritative OCI path rows before application release.
 | `D6.2.5` | **Implemented, automated, and physically exercised.** | Automated intake failure, duplicate, gap, reorder, replay, storage, restart, binary WAL migration, capacity policy, and connection-reuse tests pass. The physical outage fixture retained unacknowledged records across Control and Node restart, withheld acknowledgement while Control storage was read-only, replayed the records after recovery, preserved existing Control and Node WAL prefixes, and truncated Node WAL data only after durable acknowledgement. |
 | `D6.2.6` | **Implemented, automated, and physically exercised.** | The current fixture passed target withdrawal, complete desired inventory, live-runtime retention, exception use, expiry, revocation, target retirement, restart, reconnect, and physical-session settlement. |
 | `D6.2.7` | **Implemented, automated, and physically exercised.** | Both statuses are bounded and contain no authority material. Separate writer roles and Control status-only permissions passed typed authorization reviews against the installed CRDs. |
-| `D6.2.8` | **Partial.** | The non-Kubernetes VM and complete Kubernetes fixtures proved independent and reusable declared entry roles, application start, PostStart, PreStop, exec probes, external-entry denial, and scenario cleanup under the earlier contract. The administrative reservation and late kernel-owned argv checks are not qualified. Declared probe entries must use the same per-exec checks before this result closes. |
+| `D6.2.8` | **Partial.** | The non-Kubernetes VM and complete Kubernetes fixtures proved independent and reusable declared entry roles, application start, PostStart, PreStop, exec probes, external-entry denial, and scenario cleanup under the earlier contract. The administrative reservation and late kernel-owned argv checks are not qualified. Recovered-container activation and its later-entry path are not implemented or qualified. Declared probe entries must use the same per-exec checks before this result closes. |
 | `D6.2.9` | **Implemented, automated, and physically exercised.** | The fixture passed quarantine, same-name Node UID replacement, selector re-entry, node process restart, and host reboot with a new boot and label epoch. |
 | `D6.2.10` | **Implemented, automated, and physically exercised.** | Policy and container matching, immutable image pins, Pod mutation, update validation, binding validation, and scheduler choice passed through the current physical admission flow. |
 | `D6.2.11` | **Partial.** | Exact selected-node delivery, activation, guarded live-process migration, staged runtime fact equality, cgroup binding, runtime lifetime replacement, desired-inventory cleanup, and stock-runtime process release pass physically. The current lightweight and Kubernetes cases prove held-OCI path deferral, authoritative `createContainer` path publication, stale-cache repair, and retirement of older cache generations. The retained containerd default-runtime gate and exact socket-free Control and Node recovery pass for the current image shapes. Version-changed Kubernetes recovery and direct non-CRI BPF fallback remain unproved. |
