@@ -314,6 +314,10 @@ impl RuncPolicyFixture {
                 mithril_control::workload_target_fact_digest(&workload).context(PolicySnafu)?;
             workloads.push(workload);
         }
+        workloads.sort_by(|left, right| {
+            left.workload_binding_generation_digest
+                .cmp(&right.workload_binding_generation_digest)
+        });
         let target = PolicyTargetV1 {
             tenant_id: config
                 .evidence
@@ -2321,6 +2325,75 @@ impl EffectTestRunner {
             cgroup_path: cgroup_path.clone(),
             containerd: Some(runtime.clone()),
         };
+        let external_pid_path = fixture_root.join("existing-external.pid");
+        let external_stdout = output_directory.join("existing-external.stdout");
+        let external_stderr = output_directory.join("existing-external.stderr");
+        run_checked(
+            Command::new("/usr/bin/mkfifo").arg(role_directory.join("external.stop")),
+            Path::new("/usr/bin/mkfifo"),
+        )?;
+        let mut external_child = container.spawn_exec(
+            "/bin/sh",
+            &[
+                "-c",
+                "read -r stop < /var/lib/mithril-convergence/external.stop & echo $$ > /var/lib/mithril-convergence/external.ready; wait",
+                "recovered-external-tree",
+            ],
+            &external_pid_path,
+            &external_stdout,
+            &external_stderr,
+        )?;
+        let external_host_pid = wait_for_pid_file(&external_pid_path, &mut external_child)?
+            .context(InvalidInputSnafu {
+                path: &external_stderr,
+                reason: "the existing external tree exited before recovery",
+            })?;
+        wait_for_path(
+            &role_directory.join("external.ready"),
+            true,
+            "the existing external process tree",
+        )?;
+        let cgroup_tasks = fs::read_to_string(cgroup_path.join("cgroup.procs"))
+            .context(IoSnafu { path: &cgroup_path })?;
+        let marked_pids = cgroup_tasks
+            .lines()
+            .filter(|pid| {
+                fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|bytes| {
+                    bytes
+                        .split(|byte| *byte == 0)
+                        .any(|argument| argument == b"recovered-external-tree")
+                })
+            })
+            .count();
+        ensure!(
+            marked_pids == 2,
+            InvalidInputSnafu {
+                path: &external_stdout,
+                reason: "the external parent and child do not share the Kubernetes command line",
+            }
+        );
+        let namespace_pid =
+            fs::read_to_string(role_directory.join("external.ready")).context(IoSnafu {
+                path: &role_directory,
+            })?;
+        let external_pids = cgroup_tasks
+            .lines()
+            .filter(|pid| {
+                fs::read_to_string(format!("/proc/{pid}/status")).is_ok_and(|status| {
+                    status.lines().any(|line| {
+                        line.starts_with("NSpid:")
+                            && line.split_whitespace().last() == Some(namespace_pid.trim())
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            external_pids == [external_host_pid.to_string()],
+            InvalidInputSnafu {
+                path: &external_stdout,
+                reason: "the external namespace PID does not identify the exact runtime task",
+            }
+        );
 
         let original_controller_cgroup = current_unified_cgroup()?;
         let controller_cgroup = PathBuf::from("/sys/fs/cgroup").join(format!(
@@ -2591,10 +2664,30 @@ impl EffectTestRunner {
         ensure!(
             recovery.phase == RecoveredContainerActivationPhaseV1::Complete
                 && !recovery.application_entry_instance_id.is_zero()
-                && recovery.validation_application_task_count > 0,
+                && recovery.validation_application_task_count == 2
+                && recovery.validation_external_task_count == 2,
             InvalidInputSnafu {
                 path: pin_root,
                 reason: format!("the BPF recovery result is incomplete: {recovery:?}"),
+            }
+        );
+        let recovered_external = inspector
+            .snapshot(external_host_pid)
+            .context(NodeSnafu)?
+            .context(InvalidInputSnafu {
+                path: pin_root,
+                reason: "BPF did not assign the existing external tree",
+            })?;
+        ensure!(
+            recovered_external.active_role_id == binding.external_role_id
+                && recovered_external.admitted_entry_rule_id == 0
+                && recovered_external.entry_instance_id != recovered_initial.entry_instance_id
+                && recovered_external.root_class.as_deref() == Some("restored_or_unknown_root"),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: format!(
+                    "recovery admitted the existing external tree: {recovered_external:?}"
+                ),
             }
         );
 
@@ -2896,6 +2989,9 @@ impl EffectTestRunner {
         );
 
         container.cleanup()?;
+        external_child.wait().context(IoSnafu {
+            path: &external_stderr,
+        })?;
         bindings
             .retire_binding_id_for_test(&host, &recovered_binding_id)
             .context(NodeSnafu)?;

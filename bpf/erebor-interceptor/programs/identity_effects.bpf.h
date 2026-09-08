@@ -505,6 +505,12 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
     coordinate = bpf_map_lookup_elem(&task_coordinates, &label->task_cookie);
     process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
     entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
+    if (policy_binding_lifecycle(binding->lifecycle_state) !=
+            binding_lifecycle_state_v1_active &&
+        !prepared_container_pre_active_actor_is_exact(binding, label, entry))
+        return identity_or_prior_effect_result(
+            config, scratch, ret,
+            effect_observation_reason_v1_corrupt_identity_or_generation);
     if (!coordinate || coordinate->state != task_coordinate_state_v1_runnable ||
         !scratch || refresh_real_parent(task, label, coordinate, scratch) ||
         (config->effect_policy_enabled &&

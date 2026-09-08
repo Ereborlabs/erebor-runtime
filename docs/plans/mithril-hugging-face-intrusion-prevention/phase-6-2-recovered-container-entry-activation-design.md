@@ -376,6 +376,12 @@ later-entry bootstrap requires an active admitted initial anchor.
 
 ### Active-anchor predicate scope
 
+For forward admission, use the existing lifecycle normalization:
+`ACTIVE_RECOVERED` has the same decision value as `ACTIVE`. This normalization
+does not write the binding. The stored lifecycle and recovery evidence remain
+`ACTIVE_RECOVERED`. All other lifecycle values remain unchanged. The lifecycle
+owner checks the normalized value before it accepts an active anchor.
+
 The normal and recovered flows use the same committed application entry as
 the runtime anchor. Keep lifecycle transitions at their owner. Do not add
 lists of lifecycle states to identity checks, or hide such lists in helpers,

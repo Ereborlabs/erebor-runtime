@@ -1812,6 +1812,10 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
     process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
     entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
     snapshot = scratch ? &scratch->process : NULL;
+    if (policy_binding_lifecycle(binding->lifecycle_state) !=
+            binding_lifecycle_state_v1_active &&
+        !prepared_container_pre_active_actor_is_exact(binding, label, entry))
+        return identity_deny(config);
     if ((config->effect_policy_enabled &&
          migrate_process_generation(config, binding, label, process, scratch)) ||
         snapshot_process_state(process, snapshot) ||
@@ -2474,6 +2478,9 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
         !target_image ||
         target_image->state != image_provenance_state_v1_preparing ||
         binding_lookup || !binding_matches_label(binding, label) ||
+        (policy_binding_lifecycle(binding->lifecycle_state) !=
+             binding_lifecycle_state_v1_active &&
+         !prepared_container_pre_active_actor_is_exact(binding, label, entry)) ||
         !scratch ||
         (((!scratch->image.ordered_candidates[0].mount_id &&
            !pending->prepared_runtime_exec) ||

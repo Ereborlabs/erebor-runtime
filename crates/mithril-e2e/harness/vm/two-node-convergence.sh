@@ -2227,6 +2227,8 @@ if [[ $recovered_entry_only == true ]]; then
       .status
     ) |
     .spec.nodeName = $node_name |
+    .spec.containers[0].command[2] =
+      ("sleep 600 & " + .spec.containers[0].command[2]) |
     del(.spec.nodeSelector, .spec.affinity)
   ' <<<"$recovered_dry_run" >"$recovered_pod"
   "$provider" put "$vm_a" "$recovered_pod" \
@@ -2264,6 +2266,38 @@ if [[ $recovered_entry_only == true ]]; then
     /sys/fs/bpf/mithril-convergence
   "$provider" run "$vm_a" sudo test ! -S "$runtime_hook_socket"
 
+  "$provider" run "$vm_a" sudo mkfifo \
+    /var/lib/mithril-convergence/markers/recovered-entry.external-stop
+  printf -v recovered_external_command '%q ' sudo /usr/local/bin/k3s crictl exec \
+    "$recovered_container_id" /bin/sh -c \
+    'read -r stop < /var/lib/mithril-convergence/recovered-entry.external-stop & echo $$ > /var/lib/mithril-convergence/recovered-entry.external-ready; wait' \
+    recovered-external-tree
+  "$provider" run "$vm_a" "$recovered_external_command" \
+    >"$output_directory/recovered-existing-external.stdout" \
+    2>"$output_directory/recovered-existing-external.stderr" &
+  for _attempt in {1..60}; do
+    if "$provider" run "$vm_a" sudo test -f \
+      /var/lib/mithril-convergence/markers/recovered-entry.external-ready; then
+      break
+    fi
+    [[ $_attempt -lt 60 ]] || {
+      echo "the existing external tree did not start before Mithril Node" >&2
+      exit 1
+    }
+    sleep 1
+  done
+  recovered_external_pid=$("$provider" run "$vm_a" "sudo sh -c '
+    cgroup=\$(sed -n \"s/^0:://p\" /proc/$recovered_host_pid/cgroup)
+    expected=\$(cat /var/lib/mithril-convergence/markers/recovered-entry.external-ready)
+    for task in \$(cat /sys/fs/cgroup\"\$cgroup\"/cgroup.procs); do
+      observed=\$(sed -n \"s/^NSpid:.*[[:space:]]//p\" /proc/\"\$task\"/status 2>/dev/null)
+      if [ \"\$observed\" = \"\$expected\" ]; then echo \"\$task\"; fi
+    done'")
+  [[ $recovered_external_pid =~ ^[1-9][0-9]*$ ]] || {
+    echo "the existing external tree has no exact host PID" >&2
+    exit 1
+  }
+
   helm --kubeconfig "$kubeconfig" upgrade --install mithril \
     "$repo_root/packaging/mithril/helm" --namespace "$system_namespace" \
     --values "$values" >/dev/null
@@ -2291,7 +2325,8 @@ if [[ $recovered_entry_only == true ]]; then
       .recovered_container_activation.application_entry_instance_id ==
         .entry_instance_id and
       .recovered_container_activation.expected_task_count > 0 and
-      .recovered_container_activation.application_task_count > 0 and
+      .recovered_container_activation.application_task_count == 2 and
+      .recovered_container_activation.external_task_count == 2 and
       .recovered_container_activation.expected_task_count ==
         (.recovered_container_activation.application_task_count +
          .recovered_container_activation.external_task_count) and
@@ -2318,6 +2353,17 @@ if [[ $recovered_entry_only == true ]]; then
   recovered_external_task_count=$(jq -er \
     '.recovered_container_activation.external_task_count' \
     <<<"$recovered_initial_snapshot")
+  recovered_external_snapshot=$(runtime_task_snapshot \
+    "$node_a_name" "$recovered_external_pid")
+  jq -e --argjson application "$recovered_initial_snapshot" '
+    .runtime_binding.lifecycle_state == "active_recovered" and
+    .admitted_entry_rule_id == 0 and
+    .active_role_id != $application.active_role_id and
+    .entry_instance_id != $application.entry_instance_id and
+    .root_class == "restored_or_unknown_root"
+  ' <<<"$recovered_external_snapshot" >/dev/null
+  printf '%s\n' "$recovered_external_snapshot" \
+    >"$output_directory/recovered-existing-external.json"
 
   recovered_effect_capture=$output_directory/recovered-entry-effects.txt
   start_entry_effect_capture "$node_a_name" "$recovered_effect_capture"

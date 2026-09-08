@@ -97,6 +97,32 @@ for the scheduled-policy fixture correction and saved failing evidence.
 The full repository gate still fails the draft lifecycle ABI numbering check.
 Recovery remains **Not done**.
 
+The later forward-lifecycle change uses the existing `ACTIVE_RECOVERED` to
+`ACTIVE` normalization without changing stored state or evidence. Lightweight
+recovery run 39 and normal-start run 20 pass. Their results are under
+`target/mithril-recovery-qualification/20260908-forward-lifecycle/`. The BPF
+source compiles against all four checked-in architecture headers. No current
+Kubernetes pass covers this change. The latest Kubernetes VM is paused on an
+I/O error and its configured backing-disk path is absent. The broader lifecycle
+predicate cleanup, stable ABI values, and recovery race checks remain open.
+Result: **Not done**.
+
+The later binding-identity cleanup removes BPF lifecycle ranges from the
+identity predicate and retains denials in effect and transition owners.
+Recovery publication takes the binding guard, but complete task-change race
+safety remains open. Lightweight run 43 and the paired Kubernetes result in
+`20260908-forward-lifecycle/kubernetes-external-pid/` prove two application
+tasks, two restricted external tasks, runtime bootstrap, signed probe
+admission, and the expected denials. Lightweight run 42 first reproduced the
+Kubernetes parent-and-child command-line ambiguity. Normal lightweight run 22
+also passes after the fixture sorts its signed target inputs. The paired
+Kubernetes normal-start check also passes; its result is
+`20260908-forward-lifecycle/kubernetes-normal-start/protected-start-result.json`.
+The repository gate still fails the stable lifecycle ABI assertion.
+See the implementation review for
+the object digest, exact evidence paths, and remaining recovery matrix.
+Result: **Not done**.
+
 The direct stock-`runc` application-start lane proves the `PREPARED` to
 `ACTIVE` transition and dependency access with libc and the ELF loader absent
 from policy. The current complete Kubernetes fixture proves the same start

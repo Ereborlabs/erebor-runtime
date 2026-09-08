@@ -137,8 +137,8 @@ _Static_assert(sizeof(mount_security_view_state_v1) == 40,
 _Static_assert(sizeof(mount_mutation_attempt_v1) == 32,
                "mount mutation attempt ABI size");
 
-#include "identity_task_helpers.h"
 #include "identity_prepared_container.h"
+#include "identity_task_helpers.h"
 #include "identity_root_helpers.h"
 #include "identity_path.bpf.h"
 

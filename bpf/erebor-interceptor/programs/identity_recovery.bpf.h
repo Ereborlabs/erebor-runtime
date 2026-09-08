@@ -259,7 +259,7 @@ static __always_inline bool recovery_preliminary_identity_is_restricted(
     authority_domain_state_v1 *domain;
 
     if (!label || !binding || !recovery ||
-        !binding_identity_matches_label(binding, label) ||
+        !binding_matches_label(binding, label) ||
         bpf_map_lookup_elem(&pending_execs, &label->task_cookie) ||
         bpf_map_lookup_elem(&pending_execution_approvals,
                             &label->task_cookie))
@@ -417,7 +417,7 @@ static __always_inline bool recovered_candidate_is_valid(
     external_root_classification_v1 *classification;
 
     if (!label || !recovery || !binding ||
-        !binding_identity_matches_label(binding, label))
+        !binding_matches_label(binding, label))
         return false;
     provenance = bpf_map_lookup_elem(&recovered_task_provenance,
                                      &label->task_cookie);
@@ -684,6 +684,8 @@ static __noinline int advance_recovered_container_activation(
     if (recovery->phase !=
         recovered_container_activation_phase_v1_validating)
         return 12;
+    if (__sync_val_compare_and_swap(&binding->transition_guard, 0, 1))
+        return 13;
     if (recovery->scan_generation != recovery->task_set_generation ||
         recovery->validation_task_count != recovery->expected_task_count ||
         recovery->validation_task_count !=
@@ -693,18 +695,13 @@ static __noinline int advance_recovered_container_activation(
             recovery->scan_application_task_count ||
         recovery->validation_external_task_count !=
             recovery->scan_external_task_count) {
-        reset_recovery_scan(recovery);
-        return 13;
+        goto retry;
     }
-    if (__sync_val_compare_and_swap(&recovery->transition_guard, 0, 1))
-        return 13;
     if (!recovery_record_matches_binding(recovery, binding, config) ||
         recovery->scan_generation != recovery->task_set_generation ||
         binding->lifecycle_state != binding_lifecycle_state_v1_recovering ||
         !id128_is_zero(&binding->prepared_container_entry_instance_id)) {
-        release_transition_guard(&recovery->transition_guard);
-        reset_recovery_scan(recovery);
-        return 13;
+        goto retry;
     }
     binding->prepared_container_entry_instance_id =
         recovery->application_entry_instance_id;
@@ -714,8 +711,13 @@ static __noinline int advance_recovered_container_activation(
         binding->transition_version;
     recovery->phase = recovered_container_activation_phase_v1_complete;
     recovery->transition_version++;
-    release_transition_guard(&recovery->transition_guard);
+    release_transition_guard(&binding->transition_guard);
     return 1;
+
+retry:
+    reset_recovery_scan(recovery);
+    release_transition_guard(&binding->transition_guard);
+    return 13;
 }
 
 static __always_inline void recovered_container_task_set_changed(

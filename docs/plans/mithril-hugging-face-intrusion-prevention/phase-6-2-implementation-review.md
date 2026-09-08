@@ -87,6 +87,91 @@ from 5 to 10. All 243 Node unit tests pass. Numeric lifecycle predicates,
 the recovery publication guard, and complete recovery race qualification
 remain open. Result for the complete recovery design: **Not done**.
 
+### Forward lifecycle normalization on 2026-09-08
+
+This working-tree change reuses
+[`policy_binding_lifecycle`](../../../bpf/erebor-interceptor/programs/identity_maps.h).
+It removes `prepared_container_has_active_anchor`. The six callers compare
+the normalized lifecycle with `ACTIVE`. The normalization maps only
+`ACTIVE_RECOVERED` to `ACTIVE`; it does not write a binding or change evidence.
+Pending, recovery, and terminal values remain unchanged. The exact binding,
+entry, role, task, boot, and policy-generation checks remain in place.
+
+[`runtime_entry_may_control_initial_target`](../../../bpf/erebor-interceptor/programs/identity_device_process.bpf.h) BPF receives a later runtime control request
+  -> [`policy_binding_lifecycle`](../../../bpf/erebor-interceptor/programs/identity_maps.h) BPF checks the shared forward lifecycle value
+  -> [`runtime_entry_may_control_initial_target`](../../../bpf/erebor-interceptor/programs/identity_device_process.bpf.h) BPF verifies the exact application target before it creates runtime-bootstrap authority
+  -> [`runtime_entry_bootstrap_actor_is_exact`](../../../bpf/erebor-interceptor/programs/identity_task_helpers.h) BPF applies the same lifecycle check to the marked runtime actor
+
+The object compiles against all four checked-in architecture headers.
+Recovered-entry lightweight run 39 passes with that object. BPF validates two
+application tasks and two external tasks. The external root keeps rule zero.
+The later probe receives its signed rule; its signed file denial and unmatched
+exec denial pass. The result is
+`target/mithril-recovery-qualification/20260908-forward-lifecycle/recovered-run39.json`.
+Normal-start lightweight run 20 also passes. Its result is `entry-role-run20.json`
+in the same directory. Both cases load the new object at initial startup;
+the normal-start case later tests replacement with its embedded checkpoint
+object. The new object's SHA-256 is
+`95d6acea065d931d0f4e3be370b9c677722204ff4dff5f8e8ec86e93251fc55f`.
+No current Kubernetes pass covers this change. The latest Kubernetes VM is paused on an
+I/O error, and its configured backing-disk path is absent. Result: **Not done**.
+The numeric lifecycle predicates, stable ABI values, and complete recovery
+race qualification remain open.
+
+### Binding identity and external-tree qualification on 2026-09-08
+
+[`binding_matches_label`](../../../bpf/erebor-interceptor/programs/identity_maps.h) BPF checks the binding ID and nonce
+  -> [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h) the effect owner requires normalized `ACTIVE` or the existing exact prepared-task proof
+  -> [`identity_bprm_transition`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h) the exec owner applies the same barrier before generation migration
+  -> [`erebor_sched_process_exec`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h) successful exec checks the barrier again before commit
+
+The identity predicate contains no lifecycle range or state list. Task birth,
+io_uring actor capture, and process-control owners retain their lifecycle
+checks. Normal and recovered runtime controllers use the same application
+anchor proof. The admitted-actor check requires normalized `ACTIVE`; the
+separate exact prepared-task path supplies the pre-activation bypass.
+Graph reconciliation retains exact binding identity without granting effects.
+
+Partial [`advance_recovered_container_activation`](../../../bpf/erebor-interceptor/programs/identity_recovery.bpf.h) BPF acquires the binding guard before final count and identity checks
+  -> BPF publishes the application anchor and `ACTIVE_RECOVERED` under that guard
+  -> Not implemented: complete concurrent task-change qualification and guard coordination with every task-set writer
+
+Evidence is under
+`target/mithril-recovery-qualification/20260908-forward-lifecycle/`.
+Lightweight run 40 failed the verifier at a combined stack size of 544 bytes.
+Removal of the repeated prepared-task proof from the admitted-actor check
+restored the effect function's stack size from 360 to 352 bytes. Recovery
+run 41 passed the real verifier. The object SHA-256 is
+`a008bae332711afc04ff1183cd13a931b33158e60a57ee4e352dd366cd203e8f`.
+The object compiles against all four checked-in architecture headers.
+
+Normal lightweight run 21 found unsorted target digests in the two-container
+fixture. `RuncPolicyFixture::scheduled_delivery` now sorts the workload facts
+before it constructs the signed target. Control validation is unchanged.
+Run 22 passes normal start, later entry roles, recovered administrative
+approval, mismatch and replay denial, and cleanup. The result is
+`entry-role-run22.json`.
+
+The next Kubernetes case found that the external shell parent and child have
+the same command-line marker. Lightweight run 42 reproduced the ambiguous
+PID selection before the fixture fix. Both fixtures now keep that condition
+and select the parent through its recorded namespace PID. Lightweight run 43
+and `kubernetes-external-pid/recovered-container-kubernetes-entry.json` pass.
+Both cases validate two application tasks and two external tasks. The external
+root retains rule zero and a separate entry. Later runtime bootstrap, signed
+probe admission, signed file denial, and unmatched-exec denial pass.
+
+The final repository gate passes format, workspace check, and strict Clippy.
+It stops at the existing `Tombstoned = 5` ABI assertion; the draft uses 10.
+The paired Kubernetes normal-start check passes. Its result is
+`kubernetes-normal-start/protected-start-result.json`. It proves deferred
+`createRuntime` path publication, application start, six independent entry
+roles, incomplete-argument denial, external-cgroup denial, and unreachable
+mount-cache row collection. The test VMs and evidence remain available.
+Stable ABI values, concurrent task and identity changes, Node restart during
+`RECOVERING`, and Kubernetes administrative approval remain open.
+Overall result: **Not done**.
+
 ### Intended end state
 
 Node keeps every matching non-`UNKNOWN` BPF lifecycle state. The display field

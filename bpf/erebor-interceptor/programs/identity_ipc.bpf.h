@@ -189,7 +189,8 @@ static __always_inline int ipc_validate_stored_endpoint(
         !id128_equal(&binding->binding_nonce, binding_nonce) ||
         !id128_equal(&binding->execution_set_id, execution_set_id) ||
         binding->root_cgroup_id != root_cgroup_id ||
-        !prepared_container_has_active_anchor(binding) ||
+        policy_binding_lifecycle(binding->lifecycle_state) !=
+            binding_lifecycle_state_v1_active ||
         !entry || entry->admission_state != entry_admission_state_v1_committed ||
         entry->lifetime_state != entry_lifetime_state_v1_active ||
         !entry->live_task_refs ||

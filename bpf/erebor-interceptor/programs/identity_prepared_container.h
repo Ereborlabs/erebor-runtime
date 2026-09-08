@@ -175,9 +175,8 @@ static __always_inline bool prepared_container_admitted_actor_is_exact(
     const entry_security_state_v1 *entry)
 {
     return binding && label && entry &&
-           (binding->lifecycle_state == binding_lifecycle_state_v1_prepared ||
-            binding->lifecycle_state == binding_lifecycle_state_v1_exec_pending ||
-            prepared_container_has_active_anchor(binding)) &&
+           policy_binding_lifecycle(binding->lifecycle_state) ==
+               binding_lifecycle_state_v1_active &&
            binding_matches_label(binding, label) &&
            id128_equal(&binding->execution_set_id,
                        &label->execution_set_id) &&

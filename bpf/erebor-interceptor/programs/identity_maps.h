@@ -1428,39 +1428,14 @@ static __always_inline bool task_label_is_uninitialized(
     return true;
 }
 
-static __always_inline bool binding_lifecycle_is_addressable(
-    binding_lifecycle_state_v1 state)
-{
-    return state >= binding_lifecycle_state_v1_active &&
-           state <= binding_lifecycle_state_v1_active_recovered;
-}
-
-static __always_inline bool binding_identity_matches_label(
+static __always_inline bool binding_matches_label(
     const execution_set_binding_state_v1 *binding, const task_label_v1 *label)
 {
     return binding && label &&
            id128_equal(&binding->binding_id,
                        &label->placement.protected_root_binding_id) &&
            id128_equal(&binding->binding_nonce,
-                       &label->placement.protected_root_binding_nonce) &&
-           binding_lifecycle_is_addressable(binding->lifecycle_state);
-}
-
-static __always_inline bool binding_matches_label(
-    const execution_set_binding_state_v1 *binding, const task_label_v1 *label)
-{
-    return binding_identity_matches_label(binding, label) &&
-           binding->lifecycle_state != binding_lifecycle_state_v1_recovering &&
-           binding->lifecycle_state != binding_lifecycle_state_v1_corrupt;
-}
-
-static __always_inline bool prepared_container_has_active_anchor(
-    const execution_set_binding_state_v1 *binding)
-{
-    return binding &&
-           (binding->lifecycle_state == binding_lifecycle_state_v1_active ||
-            binding->lifecycle_state ==
-                binding_lifecycle_state_v1_active_recovered);
+                       &label->placement.protected_root_binding_nonce);
 }
 
 static __always_inline binding_lifecycle_state_v1 policy_binding_lifecycle(
@@ -1469,21 +1444,6 @@ static __always_inline binding_lifecycle_state_v1 policy_binding_lifecycle(
     return state == binding_lifecycle_state_v1_active_recovered
                ? binding_lifecycle_state_v1_active
                : state;
-}
-
-static __always_inline bool binding_retains_label(
-    const execution_set_binding_state_v1 *binding, const task_label_v1 *label)
-{
-    if (!binding || !label ||
-        !id128_equal(&binding->binding_id,
-                     &label->placement.protected_root_binding_id) ||
-        !id128_equal(&binding->binding_nonce,
-                     &label->placement.protected_root_binding_nonce))
-        return false;
-    /* Terminal bindings deny effects, but their live tasks remain valid graph
-     * holders until exit cleanup retires the task-local identity. */
-    return binding->lifecycle_state >= binding_lifecycle_state_v1_active &&
-           binding->lifecycle_state <= binding_lifecycle_state_v1_tombstoned;
 }
 
 static __always_inline bool generation_allows_existing_holder(
@@ -1532,8 +1492,7 @@ binding_activation_for_new_root(
         target->container_generation != binding->container_generation ||
         target->lifecycle_generation != binding->lifecycle_generation ||
         target->lifecycle_state != binding_lifecycle_state_v1_active ||
-        !target->initial_role_id || !target->external_role_id ||
-        !binding_lifecycle_is_addressable(binding->lifecycle_state))
+        !target->initial_role_id || !target->external_role_id)
         return NULL;
     if (generation_id != target->active_profile_generation_ref_id)
         return NULL;

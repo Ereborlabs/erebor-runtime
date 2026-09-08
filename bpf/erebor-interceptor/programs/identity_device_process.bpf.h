@@ -161,6 +161,9 @@ static __always_inline int snapshot_process_control_target(
     binding = binding_for_cgroup(cgroup, &binding_lookup);
     if (binding_lookup || !binding_matches_label(binding, label))
         return -EACCES;
+    if (policy_binding_lifecycle(binding->lifecycle_state) !=
+        binding_lifecycle_state_v1_active)
+        return -EACCES;
     coordinate = bpf_map_lookup_elem(&task_coordinates,
                                      &label->task_cookie);
     process = bpf_map_lookup_elem(&process_states,
@@ -276,7 +279,8 @@ static __always_inline bool effect_controller_may_read_target(
         return false;
     binding = binding_for_cgroup(target_cgroup, &binding_lookup);
     return !binding_lookup && binding &&
-           prepared_container_has_active_anchor(binding) &&
+           policy_binding_lifecycle(binding->lifecycle_state) ==
+               binding_lifecycle_state_v1_active &&
            binding->label_epoch == config->label_epoch &&
            id128_equal(&binding->node_boot_id, &config->node_boot_id);
 }
@@ -373,7 +377,8 @@ static __noinline bool runtime_entry_may_control_initial_target(
                                              &target_label->entry_instance_id)
                        : NULL;
     if (binding_lookup || !binding || !target_label || !target_entry ||
-        !prepared_container_has_active_anchor(binding) ||
+        policy_binding_lifecycle(binding->lifecycle_state) !=
+            binding_lifecycle_state_v1_active ||
         !binding_matches_label(binding, target_label))
         return false;
     admitted_initial_target =
@@ -565,7 +570,11 @@ static __noinline int identity_process_control_effect(
         !id128_equal(&target_coordinate->process_instance_id,
                      &scratch->target_label.process_instance_id) ||
         !binding_matches_label(binding, controller_label) ||
-        !binding_matches_label(target_binding, target_live_label))
+        !binding_matches_label(target_binding, target_live_label) ||
+        policy_binding_lifecycle(binding->lifecycle_state) !=
+            binding_lifecycle_state_v1_active ||
+        policy_binding_lifecycle(target_binding->lifecycle_state) !=
+            binding_lifecycle_state_v1_active)
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);

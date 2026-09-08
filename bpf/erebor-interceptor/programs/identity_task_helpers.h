@@ -170,7 +170,8 @@ static __noinline bool runtime_entry_bootstrap_actor_is_exact(
     classification = entry_root_classification(label, entry);
     if (!config || !binding || !label || !process || !entry ||
         !classification ||
-        !prepared_container_has_active_anchor(binding) ||
+        policy_binding_lifecycle(binding->lifecycle_state) !=
+            binding_lifecycle_state_v1_active ||
         !binding_matches_label(binding, label) ||
         process->runtime_entry_bootstrap_prepared != 1 ||
         entry->admitted_entry_rule_id ||
@@ -859,6 +860,10 @@ static __always_inline int create_native_child(
     entry = bpf_map_lookup_elem(&entry_states,
                                 &parent_label->entry_instance_id);
     if (!parent_process || !parent_vector || !entry)
+        return identity_deny(config);
+    if (policy_binding_lifecycle(binding->lifecycle_state) !=
+            binding_lifecycle_state_v1_active &&
+        !prepared_container_pre_active_actor_is_exact(binding, parent_label, entry))
         return identity_deny(config);
     if (config->effect_policy_enabled &&
         migrate_process_generation(config, binding, parent_label,

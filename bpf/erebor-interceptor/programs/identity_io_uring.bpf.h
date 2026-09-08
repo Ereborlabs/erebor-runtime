@@ -38,6 +38,10 @@ static __noinline int snapshot_io_uring_actor(
     vector = bpf_map_lookup_elem(&process_state_vectors,
                                  &label->process_state_id);
     entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
+    if (policy_binding_lifecycle(binding->lifecycle_state) !=
+            binding_lifecycle_state_v1_active &&
+        !prepared_container_pre_active_actor_is_exact(binding, label, entry))
+        return -EACCES;
     if (!coordinate ||
         coordinate->state != task_coordinate_state_v1_runnable ||
         coordinate->task_cookie != label->task_cookie ||
@@ -187,7 +191,8 @@ static __always_inline bool io_uring_admitted_actor_is_exact(
     const execution_set_binding_state_v1 *binding)
 {
     return actor && binding &&
-           prepared_container_has_active_anchor(binding) &&
+           policy_binding_lifecycle(binding->lifecycle_state) ==
+               binding_lifecycle_state_v1_active &&
            actor->admitted_entry_rule_id &&
            id128_equal(&binding->binding_id, &actor->binding_id) &&
            id128_equal(&binding->binding_nonce, &actor->binding_nonce) &&
