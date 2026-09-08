@@ -22,6 +22,85 @@ Mount-cache design: [Independent runtime mount-cache generation](./phase-6-2-sec
 
 Held-OCI design: [Held OCI route publication](./phase-6-2-held-oci-route-publication-design.md)
 
+## Recovery Reconciliation Update On 2026-09-08
+
+This section covers the uncommitted recovery changes. Earlier passes below
+apply to their recorded source checkpoints, not to this working tree.
+Result: **Not done**. The focused shared-cycle lightweight and Kubernetes
+recovery cases passed. Results are under
+`target/mithril-recovery-qualification/20260908-resumed/`, in
+`recovered-run35.json` and
+`kubernetes-exact-probe/recovered-container-kubernetes-entry.json`.
+The cases reproduce missing-file, capture-filter, and readiness-first
+conditions found in Kubernetes. Both inspect the exact startup task instead
+of selecting the first observed non-application role. The Kubernetes directory
+also contains the task snapshot, denial evidence, and bpftrace output.
+The broader lightweight case passed in `entry-role-run15.json` in the same
+directory. It includes the recovered administrative approval and its denial,
+consumption, and cleanup checks. The Kubernetes administrative transaction
+remains unqualified. The repository gate passed
+format, workspace check, and strict Clippy. It failed the existing ABI value
+assertion for `Tombstoned`. Complete recovery qualification remains open.
+
+The paired normal protected-start Kubernetes check failed in
+`kubernetes-protected-fresh`. `PublishedBinding::validate_initial_root_preparation`
+uses the presence of CRI identity to select recovery validation. A held
+`Created` binding also has CRI identity and is incorrectly rejected. The
+lightweight held-start setup omits this input at publication. Its shared-owner
+reproduction is not implemented. Do not count the recovery pass as proof of
+the normal held-start path.
+
+### Intended end state
+
+Node keeps every matching non-`UNKNOWN` BPF lifecycle state. The display field
+`arm_initial_root` cannot select authority. A new running-container binding
+receives `RECOVERING` after signed policy installation. BPF owns its later
+identity assignments and activation. Node and lightweight use the same
+production operation, including durable policy delivery.
+
+### Implementation review flow
+
+[`NodeBindingReconciliation::deliver_policy`](../../../crates/mithril-node/src/node.rs) Control supplies one signed bundle
+  -> [`NodePolicyDeliveryOwner::prepare_activation_for_session`](../../../crates/mithril-node/src/policy_delivery.rs) Node verifies the signer, tenant, target, session, and replay bounds
+  -> [`NodeBindingReconciliation::activate_policy`](../../../crates/mithril-node/src/node.rs) Node records pending delivery before policy installation
+  -> [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs) Node installs the normal signed policy rows
+  -> [`NodePolicyDeliveryOwner::commit_activation`](../../../crates/mithril-node/src/policy_delivery.rs) Node stores the actual kernel activation receipt
+
+[`NodeBindingReconciliation::reconcile`](../../../crates/mithril-node/src/node.rs) Mithril Node discovers one running protected container
+  -> [`WorkloadBindingOwner::reconcile_runtime_observations`](../../../crates/mithril-node/src/identity/binding.rs) the runtime owner validates the external CRI observations
+  -> [`PublishedBinding::adopt_retained_state`](../../../crates/mithril-node/src/identity/binding.rs) Node retains a matching non-`UNKNOWN` BPF value without a lifecycle rewrite
+  -> [`NodePolicyDeliveryOwner::record_runtime_binding`](../../../crates/mithril-node/src/policy_delivery.rs) Node saves the concrete association with its signed target
+  -> [`NodePolicyDeliveryOwner::restore_config_for_session`](../../../crates/mithril-node/src/policy_delivery.rs) Node restores the verified configuration through the durable delivery owner
+  -> [`PublishedBinding::install_recovery`](../../../crates/mithril-node/src/identity/binding.rs) an absent binding receives its recovery inputs before the final `RECOVERING` insertion
+  -> [`NativeSecurityStateOwner::recover_tasks`](../../../crates/mithril-node/src/identity/native.rs) Node invokes BPF reconciliation
+  -> [`normal_entry_authority`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h) BPF uses the normal signed entry authority
+  -> Partial [`identity_recovery.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_recovery.bpf.h) BPF assigns and validates the recovered task set; complete tree and race qualification remains open
+  -> [`WorkloadBindingOwner::read_back_recovered_activations`](../../../crates/mithril-node/src/identity/binding.rs) Node reads the BPF state and verifies completion evidence when BPF reports `ACTIVE_RECOVERED`
+
+[`PublishedBinding::adopt_retained_state`](../../../crates/mithril-node/src/identity/binding.rs) A retained value has a different boot or container lifetime
+  -> [`same_runtime_binding`](../../../crates/mithril-node/src/identity/binding.rs) identity validation rejects the value
+  -> [`WorkloadBindingOwner::publish`](../../../crates/mithril-node/src/identity/binding.rs) Node does not replace the retained binding
+
+`NodeBindingReconciliation` borrows the existing Node owners. It owns no
+second policy store or BPF state. The Node loop reads CRI through the existing
+runtime client. Lightweight supplies CRI list/status observations to the same
+operation. No test CRI server is required. The fixture supplies a signed bundle
+through the same activation implementation; it does not write an activation
+receipt or assign its resolved bindings directly to Node configuration.
+
+The state-preservation test is
+`retained_bpf_state_is_preserved_except_unknown`. It checks every valid enum
+value and rejects a changed boot or container generation. The policy test
+`recovery_uses_the_normal_container_start_rule` checks identical entry and
+object rows with both display-flag values. Neither unit test replaces the
+paired physical checks.
+
+Node removes no retained BPF object merely because its process exits. The
+existing pinned-map lifetime and retirement owners remain in effect. The
+new recovery insertion uses `MapInsertResult::Inserted`; it cannot overwrite
+a binding that appears during publication. ABI reads use
+`TryFromBytes::try_read_from_bytes` and reject invalid enum values and sizes.
+
 ## Review Goal
 
 Verify that Kubernetes desired state has one Control owner. Verify that the

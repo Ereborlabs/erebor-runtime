@@ -51,6 +51,44 @@ the current recovery path matcher is not equivalent to the normal exec-path
 matcher. See the recovered-entry design for the exact test and bpftrace
 evidence. Earlier physical passes do not qualify these source changes.
 
+The recovery check on 2026-09-08 is also **Not done**. The recovered-entry
+lightweight case passed, including a repeated identity-reconciliation cycle
+and the probe's own file-policy denial. Kubernetes failed before Node
+published `RECOVERING`: policy-delivery restoration changed the recovered
+binding's `arm_initial_root` from false to true. The lightweight case bypassed
+that restoration step. Its shared production operation must include that
+step before the implementation fix and the next Kubernetes run. The broader
+lightweight administrative-recovery case also fails policy activation. See
+the recovered-entry design for the exact evidence and remaining checks.
+
+The later shared-cycle correction reproduced that Node failure in lightweight
+before removing the display flag from authority decisions. Lightweight run 28
+passed through durable save and restore. Kubernetes then completed recovery
+and admitted a later probe, but its denial target file was absent. Lightweight
+run 29 reproduced that fixture failure before the paired fixture correction.
+Lightweight run 30 passed. The next Kubernetes capture excluded the actual
+`EXACT_POLICY_DENY` event. Lightweight run 31 reproduced this filter error
+through the production observation server and CLI. Both captures now have no
+reason filter; lightweight run 32 passed. The next Kubernetes check selected
+the readiness task instead of the startup task. Lightweight run 34 reproduced
+this event-order error. Both cases now inspect the exact held startup task.
+Lightweight run 35 and the paired focused Kubernetes case passed. Their
+results are in `target/mithril-recovery-qualification/20260908-resumed/`, in
+`recovered-run35.json` and
+`kubernetes-exact-probe/recovered-container-kubernetes-entry.json`.
+The broader lightweight case passed in `entry-role-run15.json` in the same
+directory. It includes recovered administrative entry, argument-mismatch and
+replay denial, one-use approval, slot cleanup, ordinary entry roles, and cache
+retirement. The Kubernetes administrative-approval transaction remains
+unqualified. The paired fresh Kubernetes protected-start check failed:
+Node treated the held binding's verified CRI `Created` identity as recovered
+`Running` identity and stopped during publication. The lightweight held-start
+setup omitted that CRI identity. A shared-operation reproduction is required
+before the fix or another Kubernetes run. See the recovered-entry design for
+the saved Node error and exact branch.
+The full repository gate still fails the draft lifecycle ABI numbering check.
+Recovery remains **Not done**.
+
 The direct stock-`runc` application-start lane proves the `PREPARED` to
 `ACTIVE` transition and dependency access with libc and the ELF loader absent
 from policy. The current complete Kubernetes fixture proves the same start

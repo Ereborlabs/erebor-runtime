@@ -51,7 +51,167 @@ It then failed `decision_abi_layout_and_values_are_closed`: the draft changed
 the `Tombstoned` value from 5 to 10. The full workspace test suite did not
 complete. No implementation deliverable is qualified by this run.
 
+## Qualification Check On 2026-09-08
+
+Result: **Not done**. The recovered-entry lightweight case passed on the
+retained kernel VM. The paired Kubernetes case failed before Node published
+`RECOVERING`. No implementation deliverable is qualified by these results.
+
+The lightweight result is
+`/tmp/mithril-recovery-argv-20260908-run24.json`. BPF assigned application
+role 2 and normal entry rule 8 to two application tasks. A later runtime
+inspection created the bootstrap marker. The internal runtime exec kept rule
+ID 0. The probe received role 8 and rule 5. Its permitted output passed, its
+own file-policy denial passed, and an unmatched exec was denied. A second
+production identity-reconciliation call preserved the recovered task
+snapshot. This case had no existing external task tree.
+
+The Kubernetes evidence is in
+`/tmp/mithril-recovered-k8s-20260908-current`. Node reported
+`running container recovery has invalid initial state`. Runtime reconciliation
+sets `arm_initial_root = false` for the running container. Policy delivery
+saves that binding. `materialize_scheduled_bindings` then restores its runtime
+coordinates but does not preserve `arm_initial_root`. The reconstructed
+configuration has `arm_initial_root = true`. Recovery installation rejects
+that configuration before the BPF handoff. An added policy-delivery regression
+check reproduces this field loss and fails. The defect is not fixed.
+
+The lightweight case did not include this complete production path. It
+assigned the resolved runtime binding directly to its configuration. The
+shared operation must also cover production policy-delivery restoration
+before this case can qualify Kubernetes recovery. Do not add another manual
+test sequence or rerun Kubernetes before that lightweight reproduction fails.
+
+The broader lightweight case also remains incomplete. Its static
+administrative-recovery fixture fails policy activation because that path
+requires a live binding before policy publication. Do not publish an
+intermediate `UNARMED` recovery binding to bypass this failure. The ABI value
+failure recorded above and the remaining lifecycle-predicate review are also
+open. These results do not close the full process-tree, argument-mismatch,
+race, administrative-entry, or complete repository checks.
+
+### Shared-Cycle Correction On 2026-09-08
+
+The Node and lightweight paths now call `NodeBindingReconciliation::reconcile`.
+This operation includes CRI selection, durable binding save and restore,
+policy installation, and BPF readback. Lightweight supplies a signed Control
+bundle through `deliver_policy`. It no longer assigns the resolved binding
+directly to Node configuration. Run 27 reproduced the exact Kubernetes
+`running container recovery has invalid initial state` failure before the fix.
+
+The fix removes `arm_initial_root` from authorization decisions. Node retains
+every matching non-`UNKNOWN` BPF state without clearing exec cookies or
+replacing a pending state. The shared-cycle lightweight run 28 passed. Its
+result is `/tmp/mithril-recovery-argv-20260908-run28.json`.
+
+The next Kubernetes run is in
+`/tmp/mithril-recovered-k8s-20260908-shared-cycle`. BPF completed recovery and
+admitted a later probe. The denial check failed because the target file did
+not exist. `cat` returned `ENOENT`, not a policy denial. Lightweight run 29
+reproduced that condition and failed its denial-evidence check before the
+fixture correction. The revised cases check missing-file failure separately
+from signed denial of an existing file. Lightweight run 30 passed.
+
+The next Kubernetes run, `shared-cycle-fixed`, reached the actual signed file
+denial. Its unfiltered diagnostic contains `EXACT_POLICY_DENY`, probe rule 5,
+role 7, and `kernel_result=-13`. The test capture omitted that event because
+`start_entry_effect_capture` selected other reasons but not
+`EXACT_POLICY_DENY`. Lightweight run 31 used the production observation server
+and `mithril-inspect` with those same filters. It failed with
+`the public observation capture omitted the signed file denial`.
+
+The correction removes the reason filters from both captures. Lightweight
+run 32 passed through the production observation server and CLI. Its result
+is `/tmp/mithril-recovery-argv-20260908-run32.json`. The paired Kubernetes run
+was interrupted. The host restart removed its temporary evidence.
+Neither fixture correction changes BPF authorization.
+
+The resumed Kubernetes run captured the denial but selected the wrong probe.
+Readiness `/bin/grep` ran before startup `/bin/cat`. The harness selected the
+first non-application event, then searched for the denial under the readiness
+rule. Lightweight run 34 reproduced this error with a real readiness exec
+before the startup exec. Both cases now hold the startup task on a FIFO and
+read its exact identity through the production inspection API. The first
+event no longer selects the expected role or rule. Lightweight run 35 passed.
+
+The paired focused Kubernetes case then passed. It records the recovered
+anchor, runtime bootstrap marker, internal runtime exec with rule zero,
+signed probe admission, signed file denial, unmatched-exec denial, and a
+ready startup probe. Evidence is under
+`target/mithril-recovery-qualification/20260908-resumed/`:
+
+- `recovered-run35.json`: lightweight recovery result before Kubernetes.
+- `recovered-run36.json`: lightweight pass after the final shared fixture edits.
+- `kubernetes-exact-probe/recovered-container-kubernetes-entry.json`: physical result.
+- `kubernetes-exact-probe/recovered-entry-probe.json`: exact startup task.
+- `kubernetes-exact-probe/recovered-entry-effects.txt`: signed denial evidence.
+- `kubernetes-exact-probe/recovered-entry-bpftrace.txt`: runtime hook trace.
+
+The host disk filled during Kubernetes setup and paused the test VMs. Removal
+of the disposable Rust incremental cache restored space. The current test VMs
+resumed before the recovery checks. No VM disk or test evidence was removed.
+
+The broader lightweight administrative-entry case also passed. Its first
+shared-cycle delivery omitted the first active container from the signed
+target list. Production rejected that activation. The fixture now includes
+both targets and uses the production binding-ID derivation. The two targets
+have distinct container and execution-set IDs. The base configuration no
+longer includes the old static candidate in addition to the Control-delivered
+candidate. Run 13 reached recovery and unapproved-exec denial, then failed
+because the requested administrative file existed only in the first
+container. The fixture now requests `/bin/busybox` in the recovered container.
+Run 14 admitted the approved command with administrator role 1 and rule 7,
+but its assertion expected the old generation 2 instead of the delivered
+generation 3. The assertion now uses the delivered generation. Run 15 passed,
+including argument-mismatch denial, one-use approval, administrator role
+assignment, replay denial, slot cleanup, ordinary entry roles, and cache
+retirement. Its result is `entry-role-run15.json` under the evidence directory
+above. Logs for runs 10 through 14 are saved there as `entry-role-runN.log`.
+The paired Kubernetes protected-start check failed in
+`kubernetes-protected-fresh`. An attempted reuse of the recovery-only fixture
+was rejected before admission: only its first node has a Mithril runtime
+manifest. The protected-start reuse check requires both nodes. No production
+check was changed to bypass that rejection.
+
+The fresh normal-start case found a Node validation defect. The first OCI
+hook stages runtime facts. The second hook verifies CRI `Created`, then
+publishes the held binding and attaches that verified runtime identity.
+`validate_initial_root_preparation` treats every nonempty `runtime_identity`
+as recovery. It requires no held PID and CRI `Running`. The valid held
+`Created` binding fails that check. Node exits with
+`recovered initial-root preparation changed before publication`; later hook
+attempts cannot connect to its admission socket. The Node log is
+`kubernetes-protected-fresh/node-admission-previous.log`.
+
+The lightweight held-start setup has no CRI identity at that validation point.
+It therefore takes the other branch and passes. This normal-start condition
+must be added through a shared production operation before the implementation
+fix or another Kubernetes run. Do not assign private runtime state in the
+fixture. The recovery passes above do not qualify normal protected start or
+the Kubernetes administrative-approval transaction.
+
+All 243 Node unit tests passed with Unix-socket access. The repository gate
+passed formatting, workspace check, and strict Clippy. It failed the existing
+ABI assertion that requires `Tombstoned = 5`; the current draft uses 10.
+The draft also keeps numeric lifecycle predicates and uses the recovery-row
+transition guard for final publication. The approved design requires simple
+identity predicates and the binding transition guard. These source gaps and
+complete tree, executable-mismatch, and race qualification remain open.
+Result: **Not done**. No new implementation commit is qualified yet.
+
 ## Intended End State
+
+Node reads the exact retained BPF binding before it starts recovery. A binding
+that matches the current boot, label epoch, and container lifetime keeps every
+non-`UNKNOWN` lifecycle state. This includes pending and terminal states. Node
+does not convert a retained state to `RECOVERING`. A retained state does not
+authorize an effect; BPF applies that state's existing effect checks.
+
+`arm_initial_root` can remain as a display field. It does not select recovery,
+assign authority, or override BPF state. Durable policy delivery keeps the
+signed policy and container association. The Node loop and lightweight case
+call the same production reconciliation operation, including durable save,
+restore, policy installation, and BPF readback.
 
 An exact running container uses this recovery handoff:
 
