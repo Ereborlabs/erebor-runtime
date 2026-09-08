@@ -33,10 +33,11 @@ pub use exact_object::ExactFileObjectResolver;
 pub use identity::{
     AdministrativeBindingTargetV1, AdministrativeExecIdentityV1,
     AdministrativeFileObjectIdentityV1, AuthorizationProofOwner, AuthorizationTargetV1,
-    IssuerTrustV1, NativeIdentityInspector, NativeRuntimeBindingSnapshotV1,
-    NativeSecurityStateOwner, NativeTaskSnapshotV1, PortableProfileGenerationIdentityV1,
-    PreparedAuthorizationProofV1, ReconciliationReportV1,
-    ResolvedAdministrativeExecutableIdentityV1, TrustBundleV1, WorkloadBindingOwner,
+    CriRuntimeContainerObservationV1, IssuerTrustV1, NativeIdentityInspector,
+    NativeRuntimeBindingSnapshotV1, NativeSecurityStateOwner, NativeTaskSnapshotV1,
+    PortableProfileGenerationIdentityV1, PreparedAuthorizationProofV1, ReconciliationReportV1,
+    ResolvedAdministrativeExecutableIdentityV1, RuntimeReconciliationResultV1, TrustBundleV1,
+    WorkloadBindingOwner,
 };
 pub use local::RuntimeObservationServer;
 #[cfg(feature = "test-support")]
@@ -58,9 +59,9 @@ pub use policy_delivery::{
 };
 pub use runtime_admission::{
     RuntimeAdmissionClient, RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1,
-    RuntimeAdmissionResponseV1, CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION,
-    POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION,
-    PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
+    RuntimeAdmissionResponseV1, ScheduledRuntimeBindingV1, CONTAINER_NAME_ANNOTATION,
+    IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
+    POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
 };
 pub use runtime_gate::{RetainedRuntimeDecisionV1, RetainedRuntimeGate};
 pub use runtime_integration::{

@@ -119,7 +119,8 @@ impl NativeSecurityStateOwner {
         }
     }
 
-    pub(crate) fn for_effect_controller(
+    /// Creates an identity owner for the process in the configured controller cgroup.
+    pub fn for_effect_controller(
         node_boot_id: Id128V1,
         label_epoch: u64,
         cgroup_path: &Path,

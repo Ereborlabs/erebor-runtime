@@ -714,6 +714,29 @@ impl NodeChassis {
         self.readiness.subscribe()
     }
 
+    /// Reconciles installed binding identity through the production owner sequence.
+    pub fn reconcile_binding_identity(
+        config: &NodeConfig,
+        host: &mut KernelHost,
+        bindings: &mut WorkloadBindingOwner,
+        policy: Option<&mut crate::NodePolicyGenerationOwner>,
+        identity: &NativeSecurityStateOwner,
+        policy_authority_present: bool,
+    ) -> Result<bool> {
+        if let Some(policy) = policy {
+            identity.set_effect_policy(host, policy_authority_present)?;
+            policy.reconcile_cri_exact_bindings(config, host, bindings)?;
+            // Give running tasks restricted identity before BPF starts recovery.
+            identity.activate_prepared_runtime_roots(host, policy_authority_present)?;
+            bindings.adopt_activated_profiles(host, &config.workload_bindings)?;
+            policy.reconcile_policy_lifecycle(host)?;
+        }
+        let recovery_barrier_observed = bindings.has_recovering_binding();
+        identity.recover_tasks(host, policy_authority_present)?;
+        bindings.read_back_recovered_activations(host)?;
+        Ok(recovery_barrier_observed)
+    }
+
     pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
         let mut prevention_enabled = self
             .policy
@@ -2475,31 +2498,6 @@ impl NodeChassis {
             }
             self.config = config;
         }
-        if let Some(policy) = self.policy.as_mut() {
-            if let Err(error) =
-                policy.reconcile_cri_exact_bindings(&self.config, host, &self.bindings)
-            {
-                return ReconciliationOutcome::IdentityUnhealthy {
-                    owner: "policy runtime binding",
-                    reason: error.to_string(),
-                };
-            }
-            if let Err(error) = self
-                .bindings
-                .adopt_activated_profiles(host, &self.config.workload_bindings)
-            {
-                return ReconciliationOutcome::IdentityUnhealthy {
-                    owner: "activated profile",
-                    reason: error.to_string(),
-                };
-            }
-            if let Err(error) = policy.reconcile_policy_lifecycle(host) {
-                return ReconciliationOutcome::IdentityUnhealthy {
-                    owner: "policy lifecycle",
-                    reason: error.to_string(),
-                };
-            }
-        }
         if let Some(administrative) = self.administrative.as_mut() {
             if let Err(error) = administrative.reconcile(host) {
                 return ReconciliationOutcome::IdentityUnhealthy {
@@ -2508,11 +2506,14 @@ impl NodeChassis {
                 };
             }
         }
-        if let Err(error) = self
-            .identity
-            .recover_tasks(host, policy_authority_present)
-            .and_then(|_report| self.bindings.read_back_recovered_activations(host))
-        {
+        if let Err(error) = Self::reconcile_binding_identity(
+            &self.config,
+            host,
+            &mut self.bindings,
+            self.policy.as_mut(),
+            &self.identity,
+            policy_authority_present,
+        ) {
             return ReconciliationOutcome::IdentityUnhealthy {
                 owner: "recovered container identity",
                 reason: error.to_string(),

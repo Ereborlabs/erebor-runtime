@@ -7,7 +7,8 @@ use containerd_client::services::v1::{events_client::EventsClient, SubscribeRequ
 use hyper_util::rt::TokioIo;
 use k8s_cri::v1::runtime_service_client::RuntimeServiceClient;
 use k8s_cri::v1::{
-    Container, ContainerState, ContainerStatusRequest, ListContainersRequest, VersionRequest,
+    Container, ContainerState, ContainerStatusRequest, ContainerStatusResponse,
+    ListContainersRequest, VersionRequest,
 };
 use procfs::process::Process;
 use snafu::{ensure, ResultExt as _};
@@ -32,6 +33,12 @@ const EVENT_RECONNECT_MAXIMUM: Duration = Duration::from_secs(60);
 pub(super) enum RuntimeContainerState {
     Created,
     Running,
+}
+
+#[derive(Clone, Debug)]
+pub struct CriRuntimeContainerObservationV1 {
+    pub listed: Container,
+    pub status: ContainerStatusResponse,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -249,33 +256,18 @@ impl ContainerRuntimeInventory {
             .context(ContainerRuntimeRpcSnafu)?
             .into_inner()
             .containers;
-        let mut seen = BTreeSet::new();
-        let mut identities = Vec::with_capacity(expected.len());
+        let mut observations = Vec::with_capacity(expected.len());
         for container in listed {
-            let expected = match expected.get(container.id.as_str()) {
-                Some(expected) => Some(*expected),
-                None => scheduled_recovery_target(&container, configured)?,
-            };
-            let Some(expected) = expected else {
-                continue;
-            };
-            ensure!(
-                seen.insert(container.id.clone()),
-                IdentityStateSnafu {
-                    reason: format!("CRI returned duplicate container `{}`", container.id),
-                }
-            );
-            if runtime_state_for_reconciliation(container.state, expected.container_generation)
-                .is_none()
-            {
+            let selected = expected.contains_key(container.id.as_str())
+                || scheduled_recovery_target(&container, configured)?.is_some();
+            if !selected {
                 continue;
             }
-            if let Some(identity) = self.inspect(container, expected).await? {
-                identities.push(identity);
+            if let Some(observation) = self.observe(container).await? {
+                observations.push(observation);
             }
         }
-        identities.sort_by(|left, right| left.full_container_id.cmp(&right.full_container_id));
-        Ok(identities)
+        runtime_identities_from_observations(observations, configured, &self.cgroup_root)
     }
 
     pub(super) async fn inspect_created_for_admission(
@@ -407,11 +399,10 @@ impl ContainerRuntimeInventory {
         })
     }
 
-    async fn inspect(
+    async fn observe(
         &mut self,
         container: k8s_cri::v1::Container,
-        expected: &WorkloadBindingConfig,
-    ) -> Result<Option<RuntimeContainerIdentity>> {
+    ) -> Result<Option<CriRuntimeContainerObservationV1>> {
         let requested_container_id = container.id.clone();
         let response = match self
             .client
@@ -425,6 +416,47 @@ impl ContainerRuntimeInventory {
             Err(source) if source.code() == tonic::Code::NotFound => return Ok(None),
             Err(source) => Err(source).context(ContainerRuntimeRpcSnafu)?,
         };
+        Ok(Some(CriRuntimeContainerObservationV1 {
+            listed: container,
+            status: response,
+        }))
+    }
+}
+
+pub(super) fn runtime_identities_from_observations(
+    observations: Vec<CriRuntimeContainerObservationV1>,
+    configured: &[WorkloadBindingConfig],
+    cgroup_root: &Path,
+) -> Result<Vec<RuntimeContainerIdentity>> {
+    let expected: BTreeMap<&str, &WorkloadBindingConfig> = configured
+        .iter()
+        .filter(|binding| !binding.container_id.starts_with("scheduled:"))
+        .map(|binding| (binding.container_id.as_str(), binding))
+        .collect();
+    let mut seen = BTreeSet::new();
+    let mut identities = Vec::with_capacity(observations.len());
+    for observation in observations {
+        let container = observation.listed;
+        let expected = match expected.get(container.id.as_str()) {
+            Some(expected) => Some(*expected),
+            None => scheduled_recovery_target(&container, configured)?,
+        };
+        let Some(expected) = expected else {
+            continue;
+        };
+        ensure!(
+            seen.insert(container.id.clone()),
+            IdentityStateSnafu {
+                reason: format!("CRI returned duplicate container `{}`", container.id),
+            }
+        );
+        if runtime_state_for_reconciliation(container.state, expected.container_generation)
+            .is_none()
+        {
+            continue;
+        }
+        let requested_container_id = container.id.clone();
+        let response = observation.status;
         let status = response.status.ok_or_else(|| {
             IdentityStateSnafu {
                 reason: format!(
@@ -468,7 +500,7 @@ impl ContainerRuntimeInventory {
             .build()
         })?;
         let Some(status_state) = runtime_state(status.state) else {
-            return Ok(None);
+            continue;
         };
         let scheduled = expected.container_id.starts_with("scheduled:");
         ensure!(
@@ -492,8 +524,8 @@ impl ContainerRuntimeInventory {
                 ),
             }
         );
-        let runtime = runtime_process_from_info(&response.info, &self.cgroup_root, status_state)?;
-        Ok(Some(RuntimeContainerIdentity {
+        let runtime = runtime_process_from_info(&response.info, cgroup_root, status_state)?;
+        identities.push(RuntimeContainerIdentity {
             full_container_id: status.id,
             namespace: namespace.clone(),
             pod_uid: pod_uid.clone(),
@@ -506,8 +538,10 @@ impl ContainerRuntimeInventory {
             working_directory: runtime.working_directory,
             path_entries: runtime.path_entries,
             state: status_state,
-        }))
+        });
     }
+    identities.sort_by(|left, right| left.full_container_id.cmp(&right.full_container_id));
+    Ok(identities)
 }
 
 pub(super) fn scheduled_recovery_target<'a>(

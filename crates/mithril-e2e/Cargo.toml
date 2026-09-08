@@ -15,6 +15,7 @@ erebor-interceptor = { path = "../erebor-interceptor" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 hex.workspace = true
+k8s-cri.workspace = true
 libbpf-rs.workspace = true
 libc = "0.2.186"
 linux-raw-sys = { version = "0.12.1", features = ["general"] }

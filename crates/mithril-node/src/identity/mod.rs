@@ -11,8 +11,11 @@ pub use authorization::{
     PreparedAuthorizationProofV1, ResolvedAdministrativeExecutableIdentityV1, TrustBundleV1,
 };
 pub(crate) use binding::ExactObjectBindingTargetV1;
-pub use binding::{AdministrativeBindingTargetV1, WorkloadBindingOwner};
+pub use binding::{
+    AdministrativeBindingTargetV1, RuntimeReconciliationResultV1, WorkloadBindingOwner,
+};
 pub use inspection::{
     NativeIdentityInspector, NativeRuntimeBindingSnapshotV1, NativeTaskSnapshotV1,
 };
 pub use native::{NativeSecurityStateOwner, ReconciliationReportV1};
+pub use runtime::CriRuntimeContainerObservationV1;

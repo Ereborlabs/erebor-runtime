@@ -32,7 +32,10 @@ use crate::{ContainerRuntimeConfig, Result, WorkloadBindingConfig};
 
 #[cfg(feature = "test-support")]
 use super::runtime::RuntimeContainerState;
-use super::runtime::{ContainerRuntimeInventory, RuntimeContainerIdentity};
+use super::runtime::{
+    runtime_identities_from_observations, ContainerRuntimeInventory,
+    CriRuntimeContainerObservationV1, RuntimeContainerIdentity,
+};
 
 const RUNTIME_STAGE_LIFETIME: Duration = Duration::from_secs(30);
 const MAXIMUM_RUNTIME_STAGES: usize = 128;
@@ -576,7 +579,7 @@ impl RuntimeReconciliationPlan {
 }
 
 #[derive(Default)]
-pub(crate) struct RuntimeReconciliationResultV1 {
+pub struct RuntimeReconciliationResultV1 {
     pub retired_binding_ids: Vec<String>,
     pub recovered_bindings: Vec<WorkloadBindingConfig>,
 }
@@ -763,102 +766,6 @@ impl WorkloadBindingOwner {
         spec: &WorkloadBindingConfig,
     ) -> Result<()> {
         self.publish(host, [(spec, None, true)])
-    }
-
-    #[cfg(feature = "test-support")]
-    pub fn scheduled_recovery_candidate_for_test(
-        spec: &WorkloadBindingConfig,
-    ) -> WorkloadBindingConfig {
-        let mut scheduled = spec.clone();
-        let authority = ScheduledRuntimeBindingV1::authority_binding_id(
-            &scheduled.pod_uid,
-            &scheduled.container_name,
-        );
-        scheduled.binding_id.clone_from(&authority);
-        scheduled.scheduled_binding_authority_id = Some(authority);
-        scheduled.scheduled_target_digest = Some("f".repeat(64));
-        scheduled.container_id = format!("scheduled:{}", "e".repeat(64));
-        scheduled.sandbox_id = format!("scheduled:{}", "d".repeat(64));
-        scheduled.container_generation = 1;
-        scheduled.root_cgroup_path = None;
-        scheduled.arm_initial_root = true;
-        scheduled
-    }
-
-    #[cfg(feature = "test-support")]
-    #[allow(clippy::too_many_arguments)]
-    pub fn publish_scheduled_running_recovery_for_test(
-        &mut self,
-        host: &KernelHost,
-        scheduled: &WorkloadBindingConfig,
-        container_id: String,
-        sandbox_id: String,
-        listed_image_ref: String,
-        container_generation: u64,
-        cgroup_path: PathBuf,
-        init_pid: u32,
-        working_directory: PathBuf,
-        path_entries: Vec<PathBuf>,
-    ) -> Result<WorkloadBindingConfig> {
-        let listed = k8s_cri::v1::Container {
-            id: container_id.clone(),
-            pod_sandbox_id: sandbox_id.clone(),
-            metadata: Some(k8s_cri::v1::ContainerMetadata {
-                name: scheduled.container_name.clone(),
-                attempt: 0,
-            }),
-            image_ref: listed_image_ref,
-            state: k8s_cri::v1::ContainerState::ContainerRunning as i32,
-            labels: [
-                (
-                    "io.kubernetes.pod.namespace".to_owned(),
-                    scheduled.namespace.clone(),
-                ),
-                (
-                    "io.kubernetes.pod.uid".to_owned(),
-                    scheduled.pod_uid.clone(),
-                ),
-                (
-                    "io.kubernetes.container.name".to_owned(),
-                    scheduled.container_name.clone(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-            ..k8s_cri::v1::Container::default()
-        };
-        ensure!(
-            super::runtime::scheduled_recovery_target(&listed, std::slice::from_ref(scheduled))?
-                .is_some_and(|matched| matched.binding_id == scheduled.binding_id),
-            IdentityStateSnafu {
-                reason: "test CRI listing did not select the signed scheduled recovery target",
-            }
-        );
-        let identity = RuntimeContainerIdentity {
-            full_container_id: container_id,
-            namespace: scheduled.namespace.clone(),
-            pod_uid: scheduled.pod_uid.clone(),
-            sandbox_id,
-            container_name: scheduled.container_name.clone(),
-            image_digest: scheduled.image_digest.clone(),
-            generation: container_generation,
-            cgroup_path,
-            init_pid,
-            working_directory,
-            path_entries,
-            state: super::runtime::RuntimeContainerState::Running,
-        };
-        let resolved = identity.resolve(scheduled)?;
-        self.publish(host, [(&resolved, None, true)])?;
-        let binding = self
-            .bindings
-            .values_mut()
-            .find(|binding| binding.spec.binding_id == resolved.binding_id)
-            .context(IdentityStateSnafu {
-                reason: "test recovery lost its resolved running binding",
-            })?;
-        binding.runtime_identity = Some(identity);
-        Ok(resolved)
     }
 
     #[cfg(feature = "test-support")]
@@ -2405,6 +2312,13 @@ impl WorkloadBindingOwner {
             .map(|binding| binding.spec.binding_id.as_str())
     }
 
+    pub(crate) fn has_recovering_binding(&self) -> bool {
+        self.bindings.values().any(|binding| {
+            binding.state.prepared_container_state == PreparedContainerStateV1::Recovering
+                && binding.state.prepared_container_entry_instance_id.is_zero()
+        })
+    }
+
     pub(crate) async fn reconcile(
         &mut self,
         host: &KernelHost,
@@ -2452,6 +2366,26 @@ impl WorkloadBindingOwner {
             })?
             .snapshot(configured)
             .await?;
+        self.reconcile_runtime_identities(host, configured, observed)
+    }
+
+    pub fn reconcile_runtime_observations(
+        &mut self,
+        host: &KernelHost,
+        configured: &[WorkloadBindingConfig],
+        observations: Vec<CriRuntimeContainerObservationV1>,
+    ) -> Result<RuntimeReconciliationResultV1> {
+        let observed =
+            runtime_identities_from_observations(observations, configured, &self.cgroup_root)?;
+        self.reconcile_runtime_identities(host, configured, observed)
+    }
+
+    fn reconcile_runtime_identities(
+        &mut self,
+        host: &KernelHost,
+        configured: &[WorkloadBindingConfig],
+        observed: Vec<RuntimeContainerIdentity>,
+    ) -> Result<RuntimeReconciliationResultV1> {
         let observed: BTreeMap<String, RuntimeContainerIdentity> = observed
             .into_iter()
             .map(|identity| (identity.full_container_id.clone(), identity))

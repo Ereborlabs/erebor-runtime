@@ -3232,6 +3232,7 @@ dependencies = [
  "erebor-runtime-error",
  "erebor-runtime-ipc",
  "hex",
+ "k8s-cri",
  "k8s-openapi",
  "kube",
  "libbpf-rs",

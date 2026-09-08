@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fs;
 use std::io::Write as _;
@@ -15,23 +15,26 @@ use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::{
     CanonicalMountRootKeyV1, CanonicalMountRootV1, EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1,
     ExactFileObjectKeyV1, ExecGuardStateV1, ExecutionApprovalSlotStateV1, ExecutionApprovalSlotV1,
-    ExecutionSetBindingStateV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
-    PendingExecStateV1, PendingExecV1, PreparedContainerStateV1, ProcessSecurityStateV1,
-    RecoveredContainerActivationPhaseV1, RecoveredContainerActivationV1, TaskCoordinateStateV1,
-    EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ARGV_V1,
+    Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1, PendingExecStateV1, PendingExecV1,
+    ProcessSecurityStateV1, RecoveredContainerActivationPhaseV1, RecoveredContainerActivationV1,
+    TaskCoordinateStateV1, EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ARGV_V1,
     EXECUTION_APPROVAL_TRACE_STAGE_EXECVEAT_ENTRY_V1,
     EXECUTION_APPROVAL_TRACE_STAGE_EXECVE_ENTRY_V1,
 };
 use erebor_runtime_ipc::v1::MithrilEffectObservation;
+use k8s_cri::v1::{
+    Container, ContainerMetadata, ContainerState, ContainerStatus, ContainerStatusResponse,
+};
 use mithril_control::{
     encode_administrative_authorization_fixture, lower_kubernetes_policy, policy_custom_resource,
     ResolveAdministrativeExec, WorkloadProtectionPolicySpec,
 };
 use mithril_node::{
-    AdministrativeAuthorizationConfig, AdministrativeExecTestOwner, EffectObservationStore,
-    EvidenceWalCapacityPolicyV1, EvidenceWalLimits, NativeIdentityInspector,
-    NativeSecurityStateOwner, NativeTaskSnapshotV1, NodePolicyGenerationOwner,
-    ObservationCanonicalizer, RuntimeSeccompTestNotification, RuntimeSeccompTestServer,
+    AdministrativeAuthorizationConfig, AdministrativeExecTestOwner,
+    CriRuntimeContainerObservationV1, EffectObservationStore, EvidenceWalCapacityPolicyV1,
+    EvidenceWalLimits, NativeIdentityInspector, NativeSecurityStateOwner, NativeTaskSnapshotV1,
+    NodeChassis, NodePolicyGenerationOwner, ObservationCanonicalizer,
+    RuntimeSeccompTestNotification, RuntimeSeccompTestServer, ScheduledRuntimeBindingV1,
     WorkloadBindingOwner, CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION,
     POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION,
     PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
@@ -2162,6 +2165,28 @@ impl EffectTestRunner {
             containerd: Some(runtime.clone()),
         };
 
+        let original_controller_cgroup = current_unified_cgroup()?;
+        let controller_cgroup = PathBuf::from("/sys/fs/cgroup").join(format!(
+            "mithril-recovered-entry-controller-{}",
+            std::process::id()
+        ));
+        ensure!(
+            !controller_cgroup.exists(),
+            InvalidInputSnafu {
+                path: &controller_cgroup,
+                reason: "the recovered-entry controller cgroup already exists",
+            }
+        );
+        fs::create_dir(&controller_cgroup).context(IoSnafu {
+            path: &controller_cgroup,
+        })?;
+        fs::write(
+            controller_cgroup.join("cgroup.procs"),
+            std::process::id().to_string(),
+        )
+        .context(IoSnafu {
+            path: &controller_cgroup,
+        })?;
         let (boot_id, node_boot_id) = boot_identity()?;
         let retained_bpf_sha256 = DigestV1::of(fs::read(retained_bpf_object).context(IoSnafu {
             path: retained_bpf_object,
@@ -2178,6 +2203,19 @@ impl EffectTestRunner {
         ))
         .start()
         .context(InterceptorSnafu)?;
+        let identity =
+            NativeSecurityStateOwner::for_effect_controller(node_boot_id, 1, &controller_cgroup)
+                .context(NodeSnafu)?;
+        let initial_reconciliation = identity
+            .activate_initial_with_effect_policy(&mut host, false)
+            .context(NodeSnafu)?;
+        ensure!(
+            initial_reconciliation == Default::default(),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: format!("BPF startup changed identity health: {initial_reconciliation:?}"),
+            }
+        );
         let observations = EffectObservationStore::default();
         let sink = observations.clone();
         let reader = host
@@ -2218,8 +2256,21 @@ impl EffectTestRunner {
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned();
         binding.initial_role_id = policy.initial_role_id;
         binding.external_role_id = policy.external_role_id;
-        let scheduled_binding =
-            WorkloadBindingOwner::scheduled_recovery_candidate_for_test(&binding);
+        let mut scheduled_binding = binding.clone();
+        let scheduled_authority = ScheduledRuntimeBindingV1::authority_binding_id(
+            &binding.pod_uid,
+            &binding.container_name,
+        );
+        scheduled_binding
+            .binding_id
+            .clone_from(&scheduled_authority);
+        scheduled_binding.scheduled_binding_authority_id = Some(scheduled_authority);
+        scheduled_binding.scheduled_target_digest = Some("f".repeat(64));
+        scheduled_binding.container_id = format!("scheduled:{}", "e".repeat(64));
+        scheduled_binding.sandbox_id = format!("scheduled:{}", "d".repeat(64));
+        scheduled_binding.container_generation = 1;
+        scheduled_binding.root_cgroup_path = None;
+        scheduled_binding.arm_initial_root = true;
         let policy_fixture = self
             .repo_root
             .join("crates/mithril-e2e/fixtures/mithril-policy");
@@ -2240,49 +2291,113 @@ impl EffectTestRunner {
             1,
         )
         .context(NodeSnafu)?;
-        let recovered_binding = bindings
-            .publish_scheduled_running_recovery_for_test(
+        let labels = [
+            (
+                "io.kubernetes.pod.namespace".to_owned(),
+                scheduled_binding.namespace.clone(),
+            ),
+            (
+                "io.kubernetes.pod.uid".to_owned(),
+                scheduled_binding.pod_uid.clone(),
+            ),
+            (
+                "io.kubernetes.container.name".to_owned(),
+                scheduled_binding.container_name.clone(),
+            ),
+        ]
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+        let cgroup_runtime_path = cgroup_path
+            .strip_prefix("/sys/fs/cgroup")
+            .map_err(|error| {
+                InvalidInputSnafu {
+                    path: &cgroup_path,
+                    reason: format!("the runtime cgroup is outside the unified root: {error}"),
+                }
+                .build()
+            })?;
+        let cgroup_runtime_path = Path::new("/").join(cgroup_runtime_path);
+        let runtime_observation = CriRuntimeContainerObservationV1 {
+            listed: Container {
+                id: container_id.clone(),
+                pod_sandbox_id: sandbox_id.clone(),
+                metadata: Some(ContainerMetadata {
+                    name: scheduled_binding.container_name.clone(),
+                    attempt: 0,
+                }),
+                image_ref: "sha256:local-content-id".to_owned(),
+                state: ContainerState::ContainerRunning as i32,
+                labels: labels.clone(),
+                ..Container::default()
+            },
+            status: ContainerStatusResponse {
+                status: Some(ContainerStatus {
+                    id: container_id.clone(),
+                    metadata: Some(ContainerMetadata {
+                        name: scheduled_binding.container_name.clone(),
+                        attempt: 0,
+                    }),
+                    state: ContainerState::ContainerRunning as i32,
+                    created_at: i64::try_from(binding.container_generation).map_err(|error| {
+                        InvalidInputSnafu {
+                            path: pin_root,
+                            reason: format!("the runtime generation is invalid: {error}"),
+                        }
+                        .build()
+                    })?,
+                    image_ref: format!("direct-runc@{}", binding.image_digest),
+                    labels,
+                    ..ContainerStatus::default()
+                }),
+                info: [(
+                    "info".to_owned(),
+                    json!({
+                        "pid": initial_host_pid,
+                        "runtimeSpec": {
+                            "process": {
+                                "cwd": "/",
+                                "env": ["PATH=/bin:/usr/bin"]
+                            },
+                            "linux": {
+                                "cgroupsPath": cgroup_runtime_path
+                            }
+                        }
+                    })
+                    .to_string(),
+                )]
+                .into_iter()
+                .collect(),
+            },
+        };
+        let runtime = bindings
+            .reconcile_runtime_observations(
                 &host,
-                &scheduled_binding,
-                container_id.clone(),
-                sandbox_id.clone(),
-                "sha256:local-content-id".to_owned(),
-                binding.container_generation,
-                cgroup_path.clone(),
-                initial_host_pid,
-                PathBuf::from("/"),
-                vec![PathBuf::from("/bin"), PathBuf::from("/usr/bin")],
+                &node_config.workload_bindings,
+                vec![runtime_observation],
             )
             .context(NodeSnafu)?;
-        node_config.workload_bindings = vec![recovered_binding];
-        policy_owner
-            .reconcile_cri_exact_bindings(&node_config, &mut host, &bindings)
-            .context(NodeSnafu)?;
-        bindings
-            .adopt_activated_profiles(&host, &node_config.workload_bindings)
-            .context(NodeSnafu)?;
+        ensure!(
+            runtime.retired_binding_ids.is_empty() && runtime.recovered_bindings.len() == 1,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "production runtime reconciliation did not select one recovery target",
+            }
+        );
+        let recovered_binding_id = runtime.recovered_bindings[0].binding_id.clone();
+        node_config.workload_bindings = runtime.recovered_bindings;
+        let recovering_before_iterator = NodeChassis::reconcile_binding_identity(
+            &node_config,
+            &mut host,
+            &mut bindings,
+            Some(&mut policy_owner),
+            &identity,
+            true,
+        )
+        .context(NodeSnafu)?;
         let binding_key = fs::metadata(&cgroup_path)
             .context(IoSnafu { path: &cgroup_path })?
             .ino()
             .to_ne_bytes();
-        let recovering = host
-            .lookup_map("execution_set_bindings", &binding_key)
-            .context(InterceptorSnafu)?
-            .context(InvalidInputSnafu {
-                path: pin_root,
-                reason: "the recovering binding disappeared before the iterator",
-            })?;
-        let recovering =
-            ExecutionSetBindingStateV1::try_read_from_bytes(&recovering).map_err(|error| {
-                InvalidInputSnafu {
-                    path: pin_root,
-                    reason: format!("the recovering binding has an invalid ABI: {error}"),
-                }
-                .build()
-            })?;
-        let recovering_before_iterator = recovering.prepared_container_state
-            == PreparedContainerStateV1::Recovering
-            && recovering.prepared_container_entry_instance_id.is_zero();
         ensure!(
             recovering_before_iterator,
             InvalidInputSnafu {
@@ -2291,17 +2406,6 @@ impl EffectTestRunner {
             }
         );
 
-        let identity = NativeSecurityStateOwner::new(node_boot_id, 1);
-        let reconciliation = identity
-            .activate_initial_with_effect_policy(&mut host, true)
-            .context(NodeSnafu)?;
-        ensure!(
-            reconciliation == Default::default(),
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: format!("BPF recovery changed identity health: {reconciliation:?}"),
-            }
-        );
         let inspector = NativeIdentityInspector::new(pin_root);
         let recovered_initial = inspector
             .snapshot(initial_host_pid)
@@ -2463,10 +2567,18 @@ impl EffectTestRunner {
 
         container.cleanup()?;
         bindings
-            .retire_binding_id_for_test(&host, &binding.binding_id)
+            .retire_binding_id_for_test(&host, &recovered_binding_id)
             .context(NodeSnafu)?;
         drop(reader);
         host.shutdown().context(InterceptorSnafu)?;
+        fs::write(
+            original_controller_cgroup.join("cgroup.procs"),
+            std::process::id().to_string(),
+        )
+        .context(IoSnafu {
+            path: &original_controller_cgroup,
+        })?;
+        remove_cgroup(&controller_cgroup)?;
         pin_cleanup.cleanup()?;
         lease_cleanup.cleanup()?;
         containerd_server.cleanup()?;
@@ -6995,6 +7107,24 @@ fn remove_cgroup(path: &Path) -> Result<()> {
             Err(source) => return Err(source).context(IoSnafu { path }),
         }
     }
+}
+
+fn current_unified_cgroup() -> Result<PathBuf> {
+    let source = Path::new("/proc/self/cgroup");
+    let value = fs::read_to_string(source).context(IoSnafu { path: source })?;
+    let mut paths = value.lines().filter_map(|line| line.strip_prefix("0::"));
+    let relative = paths.next().context(InvalidInputSnafu {
+        path: source,
+        reason: "the process has no unified cgroup",
+    })?;
+    ensure!(
+        paths.next().is_none() && relative.starts_with('/'),
+        InvalidInputSnafu {
+            path: source,
+            reason: "the process has an ambiguous unified cgroup",
+        }
+    );
+    Ok(PathBuf::from("/sys/fs/cgroup").join(relative.trim_start_matches('/')))
 }
 
 #[cfg(test)]

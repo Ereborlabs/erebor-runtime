@@ -70,7 +70,7 @@ pub(crate) struct KubernetesRuntimeIdentityV1 {
 }
 
 /// This owner converts signed scheduling authority into one container lifetime.
-pub(crate) struct ScheduledRuntimeBindingV1 {
+pub struct ScheduledRuntimeBindingV1 {
     pub binding_index: usize,
     pub previous_binding_id: Option<String>,
     pub resolved: WorkloadBindingConfig,
@@ -461,7 +461,7 @@ impl RuntimeAdmissionClient {
 }
 
 impl ScheduledRuntimeBindingV1 {
-    pub(crate) fn runtime_binding_id(authority_binding_id: &str, container_id: &str) -> String {
+    pub fn runtime_binding_id(authority_binding_id: &str, container_id: &str) -> String {
         Self::derived_uuid(&[
             b"MITHRIL-KUBERNETES-RUNTIME-BINDING-V1\0",
             authority_binding_id.as_bytes(),
@@ -469,7 +469,7 @@ impl ScheduledRuntimeBindingV1 {
         ])
     }
 
-    pub(crate) fn authority_binding_id(pod_uid: &str, container_name: &str) -> String {
+    pub fn authority_binding_id(pod_uid: &str, container_name: &str) -> String {
         Self::derived_uuid(&[
             b"MITHRIL-KUBERNETES-BINDING-V1\0",
             pod_uid.as_bytes(),
