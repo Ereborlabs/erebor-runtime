@@ -44,6 +44,13 @@ network partition, API outage, an expired Kubernetes watch cursor, and Control
 relist. Version-changed Kubernetes recovery and authorized final decommission
 remain `Not run`.
 
+The recovery changes under test on 2026-09-07 do not have a Kubernetes pass.
+The lightweight test reaches `RECOVERING`, but BPF rejects the initial
+application candidate. Its signed `/bin/sh` path resolves to `/bin/busybox`;
+the current recovery path matcher is not equivalent to the normal exec-path
+matcher. See the recovered-entry design for the exact test and bpftrace
+evidence. Earlier physical passes do not qualify these source changes.
+
 The direct stock-`runc` application-start lane proves the `PREPARED` to
 `ACTIVE` transition and dependency access with libc and the ELF loader absent
 from policy. The current complete Kubernetes fixture proves the same start

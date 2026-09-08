@@ -19,6 +19,38 @@ and argument checks. Mithril Node cannot assign a role or rule ID to a task.
 The recovery result does not claim that Mithril governed the original
 container start or any action before the cutover.
 
+## Qualification Check On 2026-09-07
+
+Result: **Not done**. The current lightweight production-cycle test fails
+before BPF publishes an application entry. Kubernetes has not run against
+this source change.
+
+The first lightweight failure found a Node policy publication defect. The
+path-reconciliation early return omitted normal entry rows for a new binding
+when the measured path sets did not change. The current source removes that
+early return. The next run reached BPF recovery.
+
+The fixture also used `/bin/busybox sleep 300` with a signed `/bin/sh`
+application entry. The fixture now starts `/bin/sh -c 'sleep 300 & wait'`.
+This uses the signed entry path and keeps a child in the application tree.
+The corrected test still fails. bpftrace readback shows one scanned task,
+zero accepted candidates, one invalid task, and a zero application entry ID.
+The signed `/bin/sh` path is a symlink to `/bin/busybox`. Normal admission
+matches the captured exec pathname. The current recovery code matches the
+resolved path of `mm->exe_file`. These are different inputs. The current
+recovery matcher does not prove equivalent admission for this case.
+
+Trace evidence is in
+`/tmp/mithril-recovery-lifecycle-lightweight-20260907-astra2/signed-entry-bpftrace.log`.
+The retained VM is `mithril-runtime-qualification-836598`. The trace did not
+change an admission decision. Do not count the trace process exit code as a
+test pass.
+
+The repository gate passed formatting, workspace check, and strict Clippy.
+It then failed `decision_abi_layout_and_values_are_closed`: the draft changed
+the `Tombstoned` value from 5 to 10. The full workspace test suite did not
+complete. No implementation deliverable is qualified by this run.
+
 ## Intended End State
 
 An exact running container uses this recovery handoff:
