@@ -21,11 +21,25 @@ container start or any action before the cutover.
 
 ## Intended End State
 
-An exact running container can move through this state sequence:
+An exact running container uses this recovery handoff:
 
 ```text
-UNARMED -- Mithril Node install --> RECOVERING -- BPF commit --> ACTIVE_RECOVERED
+Node local preparation -- Node publish --> RECOVERING -- BPF commit --> ACTIVE_RECOVERED
 ```
+
+`UNARMED` is not a Node recovery-delivery phase. It can already exist as the
+restricted result of an earlier generic task or binding observation. In that
+case, Node can replace it with one guarded `RECOVERING` publication. Node must
+not publish a new recovery binding as `UNARMED` and depend on a later
+reconciliation cycle to install `RECOVERING`.
+
+Before the publication, Node resolves and validates the CRI lifetime, init
+task, cgroup, signed policy generation, normal `ContainerStart` rule,
+executable, applicable arguments, and canonical root routes. Node installs
+supporting rows that remain unreachable without the binding. The
+`RECOVERING` binding publication is the handoff commit. A successful Node
+recovery operation therefore returns only after readback proves that BPF
+received `RECOVERING` or already advanced it.
 
 While the binding is `RECOVERING`, BPF denies covered effects and does not
 create runtime-bootstrap authority. Mithril Node installs the signed policy,
@@ -196,6 +210,38 @@ application anchor, or publish `ACTIVE`. The recovered-container flow keeps
 this same ownership rule. Node supplies the initial prepared state. BPF owns
 the identity and the active-state commit.
 
+## Shared Initial-Entry Machinery
+
+Normal start and recovery must use the same policy selection and identity
+assignment functions. Recovery is another way to establish the normal signed
+initial application entry. It is not another authorization path.
+
+On the Node side, one initial-root preparation function must:
+
+- resolve the active generation's normal signed `ContainerStart` rule;
+- validate the concrete binding, cgroup, init task, executable, applicable
+  arguments, and canonical routes;
+- install the supporting policy and route rows; and
+- publish the prepared-container value last.
+
+The caller selects only the initial state and evidence inputs. A held new
+container publishes `PREPARED`. A recovered running container publishes
+`RECOVERING`. Recovery-specific Node code must not repeat rule lookup, route
+installation, or binding publication.
+
+On the BPF side, one normal initial-entry authority function must return the
+signed rule ID, application role, executable requirements, and applicable
+argument requirements. The held-init exec path and the recovered-init
+validation path must both use that result. The recovery path adds only the
+stable-tree cutover, new entry allocation, provisional-identity replacement,
+and recovery provenance. It must not contain a second rule table or a copied
+normal-entry matcher.
+
+This consolidation is an implementation constraint. The final change must
+remove the duplicate recovery policy path and reduce the recovery-specific BPF
+code. A larger recovery-specific authorization implementation does not satisfy
+this design.
+
 ## Authority Decision
 
 Recovery creates a new authority boundary. It does not reconstruct the
@@ -246,7 +292,7 @@ generation, cgroup, init task, or transition version changes.
 
 | State | BPF behavior | Node behavior |
 | --- | --- | --- |
-| `UNARMED` | Existing tasks use the recovered or restricted floor. No runtime controller can use the application-anchor bootstrap. | Node can replace the unarmed binding with one exact `RECOVERING` installation. |
+| `UNARMED` | Existing tasks use the restricted floor. No runtime controller can use the application-anchor bootstrap. This state is not a completed recovery handoff. | Node can replace an existing unarmed observation with one exact `RECOVERING` publication. Node must not publish a new recovery binding in this state. |
 | `RECOVERING` | Covered effects deny. BPF claims tasks, assigns identities, tracks task-set changes, and validates the complete task set. New task placement cannot create an admitted entry or runtime-bootstrap marker. | Node can invoke the BPF recovery iterator and read its progress. It cannot change the state. |
 | `ACTIVE_RECOVERED` | The BPF-assigned recovered application entry and its descendants use the application role. Other old roots remain external. New later roots use normal entry admission. | Node retains the recovery record and reconciles the exact container lifetime. |
 | `ACTIVE` | Existing held-OCI behavior remains unchanged. | Node reads back the original prepared-container activation. |
@@ -254,8 +300,9 @@ generation, cgroup, init task, or transition version changes.
 
 `ACTIVE` and `ACTIVE_RECOVERED` have the same forward later-entry behavior.
 They have different evidence meaning and different activation proofs. Mithril
-Node owns only the initial `UNARMED -> RECOVERING` installation. BPF owns every
-transition out of `RECOVERING`. Mithril Node cannot publish
+Node owns only the initial `RECOVERING` publication, including a guarded
+replacement of an older `UNARMED` observation. BPF owns every transition out
+of `RECOVERING`. Mithril Node cannot publish
 `ACTIVE_RECOVERED`, roll the binding back, or mark it `CORRUPT`.
 
 ## Recovery Flow
@@ -267,9 +314,14 @@ entry identity
   -> `WorkloadBindingOwner` resolves the exact live cgroup and init task
   -> `WorkloadBindingOwner` validates the node boot, label epoch, execution
   set, profile, and active signed policy generation
-  -> `WorkloadBindingOwner` verifies that the live prepared-container state is
-  `UNARMED` and that all BPF-owned recovery output fields are zero
-  -> `WorkloadBindingOwner` installs one `RECOVERING` binding value with the
+  -> the shared initial-root preparation resolves the normal signed
+  `ContainerStart` rule and validates the executable and applicable arguments
+  -> the shared initial-root preparation installs the supporting policy and
+  canonical route rows while they remain unreachable
+  -> `WorkloadBindingOwner` verifies that no active binding conflicts with the
+  request; an existing `UNARMED` observation must have zero BPF-owned recovery
+  output fields
+  -> `WorkloadBindingOwner` publishes one `RECOVERING` binding value with the
   exact recovery attempt, cgroup, container lifetime, and init task inputs
   -> the installation contains no task label, entry ID, installed role, or
   admitted rule ID
@@ -478,7 +530,7 @@ status must not convert that interval into a protected result.
 | Owner | Required change |
 | --- | --- |
 | Interceptor ABI | Add `RECOVERING` and `ACTIVE_RECOVERED` prepared-container states. Add only the recovery identity needed for guarded publication and evidence. |
-| `WorkloadBindingOwner` | Resolve the exact CRI lifetime and init task. Install the signed policy, binding facts, `RECOVERING` state, and authority-free recovery inputs. Do not assign task authority or publish a later state. |
+| `WorkloadBindingOwner` | Use the same initial-root preparation and publication function as held-init arming. Resolve the exact CRI lifetime and init task. Publish the binding directly as `RECOVERING` after its supporting rows are ready. Do not assign task authority or publish a later state. |
 | `NativeSecurityStateOwner` | Invoke the BPF recovery and validation iterators. Read health and completion output. Do not write identity rows or lifecycle transitions. |
 | BPF recovery owner | Claim tasks, allocate identities, select the init tree, assign roles and rule IDs, validate the complete task set, store the application anchor, and publish `ACTIVE_RECOVERED` or `CORRUPT`. |
 | BPF task lifecycle | Deny during `RECOVERING`, advance the recovery task-set generation for every task change, accept only complete recovered rows at `ACTIVE_RECOVERED`, and classify every new root after the cutover. |
@@ -490,8 +542,10 @@ status must not convert that interval into a protected result.
 
 ## Acceptance
 
-1. A state-machine test proves that Node can install only `UNARMED ->
-   RECOVERING`. It proves that only BPF can publish a later recovery state,
+1. A state-machine test proves that Node's recovery handoff publishes
+   `RECOVERING` directly. An older `UNARMED` observation can be replaced in the
+   same guarded publication, but a new recovery binding is never delivered as
+   `UNARMED`. The test proves that only BPF can publish a later recovery state,
    including `ACTIVE_RECOVERED`, retry rollback, and fail-closed corruption
    transitions. Retirement after activation keeps its existing owner.
 2. A recovery test verifies the exact CRI container lifetime, init task,
@@ -531,6 +585,11 @@ status must not convert that interval into a protected result.
 14. Evidence reports the pre-cutover gap and never reports the original exec
     as Mithril-governed.
 15. The complete repository Rust gate passes after the final source edit.
+16. Held-init arming and recovered-init preparation call the same Node
+    initial-root preparation functions and the same BPF normal-entry authority
+    functions. Recovery-specific code contains only cutover and provenance
+    behavior, and the recovery implementation is net-negative after duplicate
+    authority logic is removed.
 
 ## Exclusions
 
