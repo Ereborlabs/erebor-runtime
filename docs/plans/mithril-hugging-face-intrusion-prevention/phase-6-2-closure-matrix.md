@@ -25,12 +25,18 @@ and retains `externalRole`. The Kubernetes fixture uses this schema and proved
 its declared entries under the earlier contract. It does not prove the approved
 administrative entry or the new probe argv-verification requirement. The
 approved recovered-container design defines a measured
-`UNARMED -> RECOVERING -> ACTIVE_RECOVERED` cutover. Mithril Node installs the
-initial `RECOVERING` state and authority-free recovery inputs. BPF assigns the
+`RECOVERING -> ACTIVE_RECOVERED` cutover in `lifecycle_state`. Mithril Node
+installs all signed policy rows before it publishes the binding directly as
+`RECOVERING`. Node supplies authenticated CRI coordinates. BPF measures PID 1,
+its executable, applicable arguments, root view, and complete process tree
+after this publication. BPF assigns the
 verified current init tree to the application entry, assigns other existing
 trees to the restricted external role, and publishes `ACTIVE_RECOVERED` after
 complete validation. Future entries use the normal per-exec admission path.
-This recovery design is not implemented or qualified. The
+This recovery design is not complete or qualified. The lightweight test must
+call the same production Node reconciliation operation as Kubernetes. It must
+reproduce each Kubernetes-only failure before an implementation fix or another
+Kubernetes run. The
 historical complete fixture also proves guarded migration of one running
 process to a replacement base-policy generation. The current physical outage
 fixture passed evidence-stream interruption and recovery, storage failure,

@@ -27,16 +27,13 @@ An exact running container uses this recovery handoff:
 Node local preparation -- Node publish --> RECOVERING -- BPF commit --> ACTIVE_RECOVERED
 ```
 
-`UNARMED` is not a Node recovery-delivery phase. It can already exist as the
-restricted result of an earlier generic task or binding observation. In that
-case, Node can replace it with one guarded `RECOVERING` publication. Node must
-not publish a new recovery binding as `UNARMED` and depend on a later
-reconciliation cycle to install `RECOVERING`.
+Recovery uses only `lifecycle_state`. Remove the separate
+`prepared_container_state` field. Node publishes no intermediate `UNARMED`
+recovery binding.
 
-Before the publication, Node resolves and validates the CRI lifetime, init
-task, cgroup, signed policy generation, normal `ContainerStart` rule,
-executable, applicable arguments, and canonical root routes. Node installs
-supporting rows that remain unreachable without the binding. The
+Before the publication, Node authenticates the CRI container lifetime, cgroup,
+and init task coordinates. Node installs all signed policy rows. Node does not
+measure the process executable, arguments, root view, or process tree. The
 `RECOVERING` binding publication is the handoff commit. A successful Node
 recovery operation therefore returns only after readback proves that BPF
 received `RECOVERING` or already advanced it.
@@ -45,7 +42,9 @@ While the binding is `RECOVERING`, BPF denies covered effects and does not
 create runtime-bootstrap authority. Mithril Node installs the signed policy,
 binding facts, initial `RECOVERING` state, and bounded recovery request. It
 invokes the BPF recovery iterator but does not change identity state after that
-publication. BPF measures one stable task set, creates one recovered
+publication. After `RECOVERING` is visible, BPF measures the exact PID 1,
+executable, applicable arguments, root view, and complete process tree. BPF
+measures one stable task set, creates one recovered
 application entry for the exact container-init process, assigns its current
 in-container process tree to that entry, and assigns all other existing process
 trees to `externalRole` with `admitted_entry_rule_id = 0`.
@@ -88,7 +87,7 @@ not differ at the final probe-rule lookup.
 The runtime controller inspects the admitted initial container task
   -> `identity_process_control_gate` calls
   `runtime_entry_may_control_initial_target`
-  -> BPF requires prepared-container state `ACTIVE`
+  -> BPF requires `lifecycle_state = ACTIVE`
   -> BPF requires `prepared_container_entry_instance_id` to equal the target
   task's entry ID
   -> BPF requires the target entry to have a nonzero
@@ -158,17 +157,16 @@ later-entry bootstrap requires an active admitted initial anchor.
 
 ### Active-anchor predicate scope
 
-The implementation must use one BPF helper for the state part of an active
-admitted-anchor check:
+The normal and recovered flows use the same committed application entry as
+the runtime anchor. Keep lifecycle transitions at their owner. Do not add
+lists of lifecycle states to identity checks, or hide such lists in helpers,
+variables, or numeric ranges. Preserve the recovery barrier and terminal
+denial checks.
 
-```text
-prepared-container state is ACTIVE or ACTIVE_RECOVERED
-```
-
-`runtime_entry_may_control_initial_target` uses this helper for the inspected
-application target. `runtime_entry_bootstrap_actor_is_exact` uses it for the
-external runtime actor. Both predicates retain all existing binding, entry,
-role, classification, task, boot, and policy-generation checks.
+`runtime_entry_may_control_initial_target` verifies the inspected application
+target. `runtime_entry_bootstrap_actor_is_exact` verifies the external runtime
+actor. Both retain the binding, entry, role, classification, task, boot, and
+policy-generation checks.
 
 This equivalence applies only to forward later-entry bootstrap. It does not
 make `ACTIVE_RECOVERED` proof of the original application exec. It does not
@@ -218,16 +216,15 @@ initial application entry. It is not another authorization path.
 
 On the Node side, one initial-root preparation function must:
 
-- resolve the active generation's normal signed `ContainerStart` rule;
-- validate the concrete binding, cgroup, init task, executable, applicable
-  arguments, and canonical routes;
-- install the supporting policy and route rows; and
-- publish the prepared-container value last.
+- authenticate the concrete CRI binding, cgroup, and init task coordinates;
+- install the normal signed policy rows; and
+- publish the binding with its initial `lifecycle_state` last.
 
 The caller selects only the initial state and evidence inputs. A held new
 container publishes `PREPARED`. A recovered running container publishes
-`RECOVERING`. Recovery-specific Node code must not repeat rule lookup, route
-installation, or binding publication.
+`RECOVERING`. Recovery-specific Node code must not repeat rule lookup or
+binding publication. BPF measures the recovered process and root view after
+this publication.
 
 On the BPF side, one normal initial-entry authority function must return the
 signed rule ID, application role, executable requirements, and applicable
@@ -278,8 +275,8 @@ Mithril Node can install only the signed policy, immutable binding facts, the
 initial `RECOVERING` state, and the bounded recovery request. It can invoke the
 BPF recovery iterator and read the BPF result. After it publishes
 `RECOVERING`, it cannot write task storage, task coordinates, process states,
-entry states, classifications, the application anchor, or another
-prepared-container lifecycle state.
+entry states, classifications, the application anchor, or another recovery
+lifecycle state.
 
 The recovery request contains the binding identity, transition version,
 recovery attempt identity, exact cgroup identity, and exact init task identity.
@@ -292,7 +289,6 @@ generation, cgroup, init task, or transition version changes.
 
 | State | BPF behavior | Node behavior |
 | --- | --- | --- |
-| `UNARMED` | Existing tasks use the restricted floor. No runtime controller can use the application-anchor bootstrap. This state is not a completed recovery handoff. | Node can replace an existing unarmed observation with one exact `RECOVERING` publication. Node must not publish a new recovery binding in this state. |
 | `RECOVERING` | Covered effects deny. BPF claims tasks, assigns identities, tracks task-set changes, and validates the complete task set. New task placement cannot create an admitted entry or runtime-bootstrap marker. | Node can invoke the BPF recovery iterator and read its progress. It cannot change the state. |
 | `ACTIVE_RECOVERED` | The BPF-assigned recovered application entry and its descendants use the application role. Other old roots remain external. New later roots use normal entry admission. | Node retains the recovery record and reconciles the exact container lifetime. |
 | `ACTIVE` | Existing held-OCI behavior remains unchanged. | Node reads back the original prepared-container activation. |
@@ -300,8 +296,7 @@ generation, cgroup, init task, or transition version changes.
 
 `ACTIVE` and `ACTIVE_RECOVERED` have the same forward later-entry behavior.
 They have different evidence meaning and different activation proofs. Mithril
-Node owns only the initial `RECOVERING` publication, including a guarded
-replacement of an older `UNARMED` observation. BPF owns every transition out
+Node owns only the initial `RECOVERING` publication. BPF owns every transition out
 of `RECOVERING`. Mithril Node cannot publish
 `ACTIVE_RECOVERED`, roll the binding back, or mark it `CORRUPT`.
 
@@ -314,13 +309,10 @@ entry identity
   -> `WorkloadBindingOwner` resolves the exact live cgroup and init task
   -> `WorkloadBindingOwner` validates the node boot, label epoch, execution
   set, profile, and active signed policy generation
-  -> the shared initial-root preparation resolves the normal signed
-  `ContainerStart` rule and validates the executable and applicable arguments
-  -> the shared initial-root preparation installs the supporting policy and
-  canonical route rows while they remain unreachable
+  -> the shared initial-root preparation installs all normal signed policy
+  rows while they remain unreachable
   -> `WorkloadBindingOwner` verifies that no active binding conflicts with the
-  request; an existing `UNARMED` observation must have zero BPF-owned recovery
-  output fields
+  request
   -> `WorkloadBindingOwner` publishes one `RECOVERING` binding value with the
   exact recovery attempt, cgroup, container lifetime, and init task inputs
   -> the installation contains no task label, entry ID, installed role, or
@@ -333,6 +325,8 @@ Mithril Node invokes the BPF recovery iterator
   version, cgroup identity, container lifetime, and init task identity
   -> BPF resolves the application entry, role, and execution rule from the
   active signed policy generation
+  -> BPF measures PID 1, its executable, applicable arguments, root view, and
+  complete process tree against that normal signed rule
   -> BPF rejects any mismatch before it assigns identity or authority
   -> Mithril Node makes no further lifecycle transition
 
@@ -529,7 +523,7 @@ status must not convert that interval into a protected result.
 
 | Owner | Required change |
 | --- | --- |
-| Interceptor ABI | Add `RECOVERING` and `ACTIVE_RECOVERED` prepared-container states. Add only the recovery identity needed for guarded publication and evidence. |
+| Interceptor ABI | Keep recovery state only in `lifecycle_state`. Remove `prepared_container_state`. Add only the recovery identity needed for guarded publication and evidence. |
 | `WorkloadBindingOwner` | Use the same initial-root preparation and publication function as held-init arming. Resolve the exact CRI lifetime and init task. Publish the binding directly as `RECOVERING` after its supporting rows are ready. Do not assign task authority or publish a later state. |
 | `NativeSecurityStateOwner` | Invoke the BPF recovery and validation iterators. Read health and completion output. Do not write identity rows or lifecycle transitions. |
 | BPF recovery owner | Claim tasks, allocate identities, select the init tree, assign roles and rule IDs, validate the complete task set, store the application anchor, and publish `ACTIVE_RECOVERED` or `CORRUPT`. |
@@ -543,9 +537,9 @@ status must not convert that interval into a protected result.
 ## Acceptance
 
 1. A state-machine test proves that Node's recovery handoff publishes
-   `RECOVERING` directly. An older `UNARMED` observation can be replaced in the
-   same guarded publication, but a new recovery binding is never delivered as
-   `UNARMED`. The test proves that only BPF can publish a later recovery state,
+   `lifecycle_state = RECOVERING` directly after all signed policy rows exist.
+   No recovery binding is delivered as `UNARMED`. The test proves that only
+   BPF can publish a later recovery state,
    including `ACTIVE_RECOVERED`, retry rollback, and fail-closed corruption
    transitions. Retirement after activation keeps its existing owner.
 2. A recovery test verifies the exact CRI container lifetime, init task,
@@ -575,9 +569,12 @@ status must not convert that interval into a protected result.
 10. One approved administrative exec consumes its exact one-use slot and
     installs only the administrative role. An ordinary administrative exec
     remains external and denied.
-11. The lightweight test starts the container and shim before Mithril, records
-    the BPF-produced recovered task partition, and then proves the later-entry
-    results.
+11. The lightweight test starts the container and shim before Mithril and
+    supplies external CRI and signed policy inputs to the supported Node
+    reconciliation API. The real Node loop calls that same production
+    operation. The test inspects the BPF task partition and later-entry
+    results. It does not repeat Node's internal publication sequence. Each
+    Kubernetes-only failure must first fail in this lightweight operation.
 12. The paired Kubernetes test uses the same K3s containerd, shim, and runc
     versions and requires the same state transitions, result fields, roles,
     rule IDs, and decisions.
