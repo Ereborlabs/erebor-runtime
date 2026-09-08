@@ -1,0 +1,16 @@
+kprobe:security_ptrace_access_check
+{
+  printf("hook=ptrace_access_check actor_tgid=%d actor_tid=%d actor_comm=%s target_pid=%d mode=%d\n",
+    pid, tid, comm, ((struct task_struct *)arg0)->pid, arg1);
+}
+
+kprobe:security_bprm_check
+{
+  printf("hook=bprm_check_security actor_tgid=%d actor_tid=%d actor_comm=%s filename=%s\n",
+    pid, tid, comm, str(((struct linux_binprm *)arg0)->filename));
+}
+
+interval:s:120
+{
+  exit();
+}

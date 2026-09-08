@@ -172,7 +172,7 @@ pub const REQUIRED_QUALIFICATION_PROGRAMS: [&str; 55] = [
     "qualification_final_flow",
 ];
 
-pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 78] = [
+pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 79] = [
     "erebor_task_alloc",
     "erebor_policy_activation_probe",
     "erebor_cgroup_attach_task",
@@ -251,6 +251,7 @@ pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 78] = [
     "erebor_identity_uring_cmd",
     "erebor_sched_process_exit",
     "erebor_reconcile_tasks",
+    "erebor_reconcile_recovering_tasks",
 ];
 
 pub const EXCEPTION_USE_RECEIPT_CAPACITY: u64 = 65_536;
@@ -337,7 +338,9 @@ impl KernelObjectKind {
         self != Self::Identity
             || !matches!(
                 name,
-                "erebor_reconcile_tasks" | "erebor_policy_activation_probe"
+                "erebor_reconcile_tasks"
+                    | "erebor_reconcile_recovering_tasks"
+                    | "erebor_policy_activation_probe"
             )
     }
 }
@@ -1505,28 +1508,38 @@ impl KernelHost {
     }
 
     pub fn reconcile_tasks(&mut self) -> Result<()> {
+        for name in [
+            "erebor_reconcile_tasks",
+            "erebor_reconcile_recovering_tasks",
+        ] {
+            self.run_task_iterator(name)?;
+        }
+        Ok(())
+    }
+
+    fn run_task_iterator(&mut self, name: &str) -> Result<()> {
         let program = self
             .object
             .progs_mut()
-            .find(|program| program.name().to_string_lossy() == "erebor_reconcile_tasks")
+            .find(|program| program.name().to_string_lossy() == name)
             .ok_or_else(|| {
                 ManifestMismatchSnafu {
-                    path: PathBuf::from("erebor_reconcile_tasks"),
+                    path: PathBuf::from(name),
                     reason: "loaded object has no task reconciliation iterator".to_owned(),
                 }
                 .build()
             })?;
         let link = program.attach().context(LibbpfSnafu {
             action: "attach task reconciliation iterator",
-            path: Path::new("erebor_reconcile_tasks"),
+            path: Path::new(name),
         })?;
         let mut iterator = Iter::new(&link).context(LibbpfSnafu {
             action: "open task reconciliation iterator",
-            path: Path::new("erebor_reconcile_tasks"),
+            path: Path::new(name),
         })?;
         io::copy(&mut iterator, &mut io::sink()).context(IoSnafu {
             action: "run task reconciliation iterator",
-            path: Path::new("erebor_reconcile_tasks"),
+            path: Path::new(name),
         })?;
         Ok(())
     }
@@ -2085,6 +2098,8 @@ mod tests {
         ));
         assert!(kind.includes("erebor_reconcile_tasks", "iter/task"));
         assert!(!kind.attaches("erebor_reconcile_tasks", "iter/task"));
+        assert!(kind.includes("erebor_reconcile_recovering_tasks", "iter.s/task"));
+        assert!(!kind.attaches("erebor_reconcile_recovering_tasks", "iter.s/task"));
         assert!(kind.includes("erebor_policy_activation_probe", "classifier"));
         assert!(!kind.attaches("erebor_policy_activation_probe", "classifier"));
         assert!(!kind.includes("unrelated", "tracepoint/sched/sched_process_exit"));

@@ -127,9 +127,16 @@ enum binding_lifecycle_state_v1
   binding_lifecycle_state_v1_unknown = 0,
   binding_lifecycle_state_v1_preparing = 1,
   binding_lifecycle_state_v1_active = 2,
-  binding_lifecycle_state_v1_draining = 3,
-  binding_lifecycle_state_v1_terminating = 4,
-  binding_lifecycle_state_v1_tombstoned = 5,
+  binding_lifecycle_state_v1_unarmed = 3,
+  binding_lifecycle_state_v1_prepared = 4,
+  binding_lifecycle_state_v1_exec_pending = 5,
+  binding_lifecycle_state_v1_recovering = 6,
+  binding_lifecycle_state_v1_active_recovered = 7,
+  binding_lifecycle_state_v1_draining = 8,
+  binding_lifecycle_state_v1_terminating = 9,
+  binding_lifecycle_state_v1_tombstoned = 10,
+  binding_lifecycle_state_v1_expired = 11,
+  binding_lifecycle_state_v1_corrupt = 12,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum binding_lifecycle_state_v1 binding_lifecycle_state_v1;
@@ -319,26 +326,6 @@ enum initial_root_state_v1
 typedef enum initial_root_state_v1 initial_root_state_v1;
 #else
 typedef uint64_t initial_root_state_v1;
-#endif // __STDC_VERSION__ >= 202311L
-
-enum prepared_container_state_v1
-#if __STDC_VERSION__ >= 202311L
-  : uint64_t
-#endif // __STDC_VERSION__ >= 202311L
- {
-  prepared_container_state_v1_unarmed = 0,
-  prepared_container_state_v1_prepared = 1,
-  prepared_container_state_v1_exec_pending = 2,
-  prepared_container_state_v1_active = 3,
-  prepared_container_state_v1_expired = 4,
-  prepared_container_state_v1_corrupt = 5,
-  prepared_container_state_v1_recovering = 6,
-  prepared_container_state_v1_active_recovered = 7,
-};
-#if __STDC_VERSION__ >= 202311L
-typedef enum prepared_container_state_v1 prepared_container_state_v1;
-#else
-typedef uint64_t prepared_container_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum installed_role_class_v1
@@ -1336,7 +1323,7 @@ typedef struct execution_set_binding_state_v1 {
   binding_lifecycle_state_v1 lifecycle_state;
   uint8_t reserved[7];
   initial_root_state_v1 initial_root_state;
-  prepared_container_state_v1 prepared_container_state;
+  uint64_t transition_guard;
   struct id128_v1 prepared_container_entry_instance_id;
   uint64_t prepared_container_exec_task_cookie;
   uint32_t prepared_container_initial_host_tgid;

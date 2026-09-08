@@ -399,6 +399,7 @@ if [[ $recovered_entry_only == true ]]; then
     .runtime_internal_exec_observed_with_rule_zero and
     .declared_probe_role_id > 0 and
     .declared_probe_rule_id > 0 and
+    .declared_probe_policy_denied and
     .declared_probe_role_id != .recovered_application_role_id and
     .declared_probe_rule_id != .recovered_application_rule_id and
     .unmatched_exec_denied and
@@ -426,7 +427,7 @@ entry_role_output=$remote_root/runc-entry-roles
 
 if [[ $entry_role_runtime_only == true ]]; then
   jq -e '
-    .schema_version == 36 and
+    .schema_version == 38 and
     .prepared_state_before_exec == "prepared" and
     .prepared_state_after_exec == "active" and
     .prepared_runtime_effect_observed and
@@ -468,11 +469,13 @@ if [[ $entry_role_runtime_only == true ]]; then
     )) and
     .independent_entry_roles_are_distinct and
     .reusable_entry_reinvocation_isolated and
+    .declared_probe_incomplete_argv_denied and
     .runtime_entry_infrastructure_observed and
     .live_replacement_migrated_running_application and
     .replacement_generation_descendant_default_exec_allowed and
     .live_replacement_entries_use_new_generation and
     .administrative_unapproved_exec_denied and
+    .administrative_recovered_runtime_binding and
     .execution_approval_trace_observed and
     (.execution_approval_prepare_trace_stage == 2 or
       .execution_approval_prepare_trace_stage == 3) and

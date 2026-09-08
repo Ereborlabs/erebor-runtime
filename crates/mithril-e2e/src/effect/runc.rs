@@ -27,17 +27,20 @@ use k8s_cri::v1::{
 };
 use mithril_control::{
     encode_administrative_authorization_fixture, lower_kubernetes_policy, policy_custom_resource,
-    ResolveAdministrativeExec, WorkloadProtectionPolicySpec,
+    CapabilityRecord, KubernetesWorkloadIdentityV1, PolicyBundleV1, PolicyDeliveryCandidateV1,
+    PolicyDeliveryOperationV1, PolicySignerTrust, PolicySignerTrustV1, PolicyTargetSnapshotV1,
+    PolicyTargetV1, ProfileCandidateArtifactV1, ResolveAdministrativeExec, TrustGenerationV1,
+    WorkloadProtectionPolicySpec, WorkloadTargetFactV1,
 };
 use mithril_node::{
     AdministrativeAuthorizationConfig, AdministrativeExecTestOwner,
     CriRuntimeContainerObservationV1, EffectObservationStore, EvidenceWalCapacityPolicyV1,
     EvidenceWalLimits, NativeIdentityInspector, NativeSecurityStateOwner, NativeTaskSnapshotV1,
-    NodeChassis, NodePolicyGenerationOwner, ObservationCanonicalizer,
-    RuntimeSeccompTestNotification, RuntimeSeccompTestServer, ScheduledRuntimeBindingV1,
-    WorkloadBindingOwner, CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION,
-    POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION,
-    PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
+    NodeBindingReconciliation, NodePolicyDeliveryOwner, NodePolicyGenerationOwner,
+    ObservationCanonicalizer, RuntimeSeccompTestNotification, RuntimeSeccompTestServer,
+    ScheduledRuntimeBindingV1, TrustCache, WorkloadBindingConfig, WorkloadBindingOwner,
+    CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
+    POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -79,6 +82,7 @@ pub struct RecoveredContainerEntryProbeV1 {
     pub runtime_internal_exec_observed_with_rule_zero: bool,
     pub declared_probe_role_id: u32,
     pub declared_probe_rule_id: u32,
+    pub declared_probe_policy_denied: bool,
     pub unmatched_exec_denied: bool,
     pub pin_root_removed: bool,
     pub lease_removed: bool,
@@ -125,11 +129,13 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub independent_entries: Vec<RuncEntryRoleProbeV1>,
     pub independent_entry_roles_are_distinct: bool,
     pub reusable_entry_reinvocation_isolated: bool,
+    pub declared_probe_incomplete_argv_denied: bool,
     pub runtime_entry_infrastructure_observed: bool,
     pub live_replacement_migrated_running_application: bool,
     pub replacement_generation_descendant_default_exec_allowed: bool,
     pub live_replacement_entries_use_new_generation: bool,
     pub administrative_unapproved_exec_denied: bool,
+    pub administrative_recovered_runtime_binding: bool,
     pub execution_approval_trace_observed: bool,
     pub execution_approval_prepare_trace_stage: u32,
     pub execution_approval_prepare_trace_failed_checks: u64,
@@ -226,6 +232,157 @@ struct RuncPolicyFixture {
     initial_role_id: u32,
     external_role_id: u32,
     role_ids: BTreeMap<String, u32>,
+}
+
+impl RuncPolicyFixture {
+    fn scheduled_delivery(
+        config: &mithril_node::NodeConfig,
+        bindings: &[&WorkloadBindingConfig],
+        node_boot_id: Id128V1,
+        artifact_path: &Path,
+        signing_key_path: &Path,
+    ) -> Result<(PolicyBundleV1, TrustGenerationV1)> {
+        let key_hex = fs::read_to_string(signing_key_path).context(IoSnafu {
+            path: signing_key_path,
+        })?;
+        let mut key_bytes = [0; 32];
+        hex::decode_to_slice(key_hex.trim(), &mut key_bytes).map_err(|error| {
+            InvalidInputSnafu {
+                path: signing_key_path,
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        let key = SigningKey::from_bytes(&key_bytes);
+        let artifact: ProfileCandidateArtifactV1 =
+            serde_json::from_slice(&fs::read(artifact_path).context(IoSnafu {
+                path: artifact_path,
+            })?)
+            .context(JsonSnafu {
+                path: artifact_path,
+            })?;
+        let trust = TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: String::new(),
+            policy_issuer_sequence_epoch: artifact.header.sequence_epoch,
+            policy_signers: vec![PolicySignerTrustV1 {
+                signing_key_id: artifact.signed_profile.signing_key_id.clone(),
+                ed25519_public_key_hex: hex::encode(key.verifying_key().to_bytes()),
+                revoked: false,
+            }],
+        }
+        .with_computed_bundle_digest();
+        let mut workloads = Vec::new();
+        for binding in bindings {
+            let mut workload = WorkloadTargetFactV1 {
+                node_id: config.node_id.clone(),
+                workload_binding_generation_digest: String::new(),
+                execution_set_id: binding.execution_set_id.clone(),
+                cluster_uid: binding.cluster_uid.clone(),
+                namespace_uid: binding.namespace_uid.clone(),
+                controller_uid: binding.controller_uid.clone(),
+                service_account_uid: binding.service_account_uid.clone(),
+                pod_uid: binding.pod_uid.clone(),
+                container_id: format!("scheduled:{}", binding.container_id),
+                container_name: binding.container_name.clone(),
+                container_kind: mithril_control::ContainerKindV1::Application,
+                image_digest: binding.image_digest.clone(),
+                pod_labels: binding.pod_labels.clone(),
+                kubernetes: Some(KubernetesWorkloadIdentityV1 {
+                    namespace_name: binding.namespace.clone(),
+                    pod_name: "recovered-entry".to_owned(),
+                    profile_id: binding.profile_id.clone(),
+                    policy_source_revision_id: "d".repeat(64),
+                    binding_id: ScheduledRuntimeBindingV1::authority_binding_id(
+                        &binding.pod_uid,
+                        &binding.container_name,
+                    ),
+                    protected_scope_id: binding.protected_scope_id.clone(),
+                    workload_selector_id: binding.workload_selector_id.clone(),
+                    kubernetes_node_name: config.kubernetes_node_name.clone().context(
+                        InvalidInputSnafu {
+                            path: &config.state_directory,
+                            reason: "the fixture has no Kubernetes node name",
+                        },
+                    )?,
+                    kubernetes_node_uid: "recovered-entry-node".to_owned(),
+                    node_boot_id: hex::encode(node_boot_id.to_be_bytes()),
+                    label_epoch: 1,
+                }),
+            };
+            workload.workload_binding_generation_digest =
+                mithril_control::workload_target_fact_digest(&workload).context(PolicySnafu)?;
+            workloads.push(workload);
+        }
+        let target = PolicyTargetV1 {
+            tenant_id: config
+                .evidence
+                .as_ref()
+                .context(InvalidInputSnafu {
+                    path: &config.state_directory,
+                    reason: "the delivery fixture has no tenant",
+                })?
+                .tenant_id
+                .clone(),
+            cluster_uid: workloads
+                .first()
+                .context(InvalidInputSnafu {
+                    path: artifact_path,
+                    reason: "the delivery fixture has no workload target",
+                })?
+                .cluster_uid
+                .clone(),
+            node_id: config.node_id.clone(),
+            workload_binding_generation_digests: workloads
+                .iter()
+                .map(|workload| workload.workload_binding_generation_digest.clone())
+                .collect(),
+            workload_targets: workloads,
+        };
+        let signed_digest = DigestV1::of(serde_json::to_vec(&artifact).context(JsonSnafu {
+            path: artifact_path,
+        })?)
+        .to_hex();
+        let source_revision = "d".repeat(64);
+        let snapshot = PolicyTargetSnapshotV1::new(
+            source_revision.clone(),
+            signed_digest.clone(),
+            1,
+            vec![target.clone()],
+        )
+        .context(PolicySnafu)?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| {
+                InvalidInputSnafu {
+                    path: artifact_path,
+                    reason: error.to_string(),
+                }
+                .build()
+            })?
+            .as_nanos() as i64;
+        let candidate = PolicyDeliveryCandidateV1::sign(
+            target.tenant_id.clone(),
+            source_revision,
+            signed_digest,
+            &snapshot,
+            target,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            1,
+            1,
+            now,
+            now + 900_000_000_000,
+            artifact.signed_profile.signing_key_id.clone(),
+            &key,
+        )
+        .context(PolicySnafu)?;
+        Ok((
+            PolicyBundleV1::new(candidate, artifact, key.verifying_key().to_bytes().to_vec())
+                .context(PolicySnafu)?,
+            trust,
+        ))
+    }
 }
 
 struct RuncContainer {
@@ -2041,7 +2198,7 @@ impl EffectTestRunner {
         );
         config["process"]["terminal"] = json!(false);
         config["process"]["cwd"] = json!("/");
-        config["process"]["args"] = json!(["/bin/busybox", "sleep", "300"]);
+        config["process"]["args"] = json!(["/bin/sh", "-c", "sleep 300 & wait"]);
         config["process"]["env"] =
             json!(["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"]);
         config["process"]["capabilities"] = json!({
@@ -2060,7 +2217,7 @@ impl EffectTestRunner {
             "io.kubernetes.cri.container-type": "container",
             "io.kubernetes.cri.container-id": container_id,
             (POD_NAMESPACE_ANNOTATION): "default",
-            (POD_UID_ANNOTATION): "recovered-entry-pod",
+            (POD_UID_ANNOTATION): "10000000-0000-4000-8000-000000000006",
             (CONTAINER_NAME_ANNOTATION): "direct-runc",
             (IMAGE_NAME_ANNOTATION): format!("direct-runc@sha256:{}", "a".repeat(64)),
             (SANDBOX_ID_ANNOTATION): sandbox_id,
@@ -2233,7 +2390,7 @@ impl EffectTestRunner {
         );
         binding.container_id.clone_from(&container_id);
         binding.sandbox_id.clone_from(&sandbox_id);
-        binding.pod_uid = "recovered-entry-pod".to_owned();
+        binding.pod_uid = "10000000-0000-4000-8000-000000000006".to_owned();
         binding.profile_id.clone_from(&policy.profile_id);
         binding
             .protected_scope_id
@@ -2246,6 +2403,8 @@ impl EffectTestRunner {
             .clone_from(&policy.workload_selector_id);
         binding.cluster_uid = "10000000-0000-4000-8000-000000000002".to_owned();
         binding.namespace_uid = "10000000-0000-4000-8000-000000000003".to_owned();
+        binding.controller_uid = "10000000-0000-4000-8000-000000000004".to_owned();
+        binding.service_account_uid = "10000000-0000-4000-8000-000000000005".to_owned();
         binding.pod_labels = [(
             "app.kubernetes.io/name".to_owned(),
             "direct-runc".to_owned(),
@@ -2256,21 +2415,6 @@ impl EffectTestRunner {
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned();
         binding.initial_role_id = policy.initial_role_id;
         binding.external_role_id = policy.external_role_id;
-        let mut scheduled_binding = binding.clone();
-        let scheduled_authority = ScheduledRuntimeBindingV1::authority_binding_id(
-            &binding.pod_uid,
-            &binding.container_name,
-        );
-        scheduled_binding
-            .binding_id
-            .clone_from(&scheduled_authority);
-        scheduled_binding.scheduled_binding_authority_id = Some(scheduled_authority);
-        scheduled_binding.scheduled_target_digest = Some("f".repeat(64));
-        scheduled_binding.container_id = format!("scheduled:{}", "e".repeat(64));
-        scheduled_binding.sandbox_id = format!("scheduled:{}", "d".repeat(64));
-        scheduled_binding.container_generation = 1;
-        scheduled_binding.root_cgroup_path = None;
-        scheduled_binding.arm_initial_root = true;
         let policy_fixture = self
             .repo_root
             .join("crates/mithril-e2e/fixtures/mithril-policy");
@@ -2280,124 +2424,108 @@ impl EffectTestRunner {
             lease_path,
             &policy_fixture,
             policy.artifact_path.clone(),
-            vec![scheduled_binding.clone()],
+            Vec::new(),
         );
-        let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
-        let mut policy_owner = NodePolicyGenerationOwner::load_and_install_for_bindings(
+        node_config.policy_candidates.clear();
+        node_config
+            .evidence
+            .as_mut()
+            .context(InvalidInputSnafu {
+                path: &fixture_root,
+                reason: "the recovery fixture has no evidence configuration",
+            })?
+            .tenant_id = "10000000-0000-4000-8000-000000000001".to_owned();
+        node_config.kubernetes_node_name = Some("recovered-entry-node".to_owned());
+        node_config.runtime_admission = Some(mithril_node::RuntimeAdmissionConfig {
+            socket_path: fixture_root.join("runtime-admission.sock"),
+            trusted_start_hook_path: fixture_root.join("mithril-oci-hook"),
+            maximum_request_bytes: 64 * 1_024,
+            timeout_ms: 10_000,
+        });
+        node_config.container_runtime = Some(mithril_node::ContainerRuntimeConfig {
+            socket_path: runtime.socket_path.clone(),
+            effect_controller_cgroup_path: controller_cgroup.clone(),
+            reconciliation_interval_ms: 2_000,
+        });
+        let (bundle, trust_generation) = RuncPolicyFixture::scheduled_delivery(
             &node_config,
-            &mut host,
-            &bindings,
+            &[&binding],
             node_boot_id,
-            1,
-        )
-        .context(NodeSnafu)?;
-        let labels = [
-            (
-                "io.kubernetes.pod.namespace".to_owned(),
-                scheduled_binding.namespace.clone(),
-            ),
-            (
-                "io.kubernetes.pod.uid".to_owned(),
-                scheduled_binding.pod_uid.clone(),
-            ),
-            (
-                "io.kubernetes.container.name".to_owned(),
-                scheduled_binding.container_name.clone(),
-            ),
-        ]
-        .into_iter()
-        .collect::<HashMap<_, _>>();
-        let cgroup_runtime_path = cgroup_path
-            .strip_prefix("/sys/fs/cgroup")
-            .map_err(|error| {
-                InvalidInputSnafu {
-                    path: &cgroup_path,
-                    reason: format!("the runtime cgroup is outside the unified root: {error}"),
-                }
-                .build()
-            })?;
-        let cgroup_runtime_path = Path::new("/").join(cgroup_runtime_path);
-        let runtime_observation = CriRuntimeContainerObservationV1 {
-            listed: Container {
-                id: container_id.clone(),
-                pod_sandbox_id: sandbox_id.clone(),
-                metadata: Some(ContainerMetadata {
-                    name: scheduled_binding.container_name.clone(),
-                    attempt: 0,
-                }),
-                image_ref: "sha256:local-content-id".to_owned(),
-                state: ContainerState::ContainerRunning as i32,
-                labels: labels.clone(),
-                ..Container::default()
-            },
-            status: ContainerStatusResponse {
-                status: Some(ContainerStatus {
-                    id: container_id.clone(),
-                    metadata: Some(ContainerMetadata {
-                        name: scheduled_binding.container_name.clone(),
-                        attempt: 0,
-                    }),
-                    state: ContainerState::ContainerRunning as i32,
-                    created_at: i64::try_from(binding.container_generation).map_err(|error| {
-                        InvalidInputSnafu {
-                            path: pin_root,
-                            reason: format!("the runtime generation is invalid: {error}"),
-                        }
-                        .build()
-                    })?,
-                    image_ref: format!("direct-runc@{}", binding.image_digest),
-                    labels,
-                    ..ContainerStatus::default()
-                }),
-                info: [(
-                    "info".to_owned(),
-                    json!({
-                        "pid": initial_host_pid,
-                        "runtimeSpec": {
-                            "process": {
-                                "cwd": "/",
-                                "env": ["PATH=/bin:/usr/bin"]
-                            },
-                            "linux": {
-                                "cgroupsPath": cgroup_runtime_path
-                            }
-                        }
-                    })
-                    .to_string(),
-                )]
-                .into_iter()
-                .collect(),
-            },
-        };
-        let runtime = bindings
-            .reconcile_runtime_observations(
-                &host,
-                &node_config.workload_bindings,
-                vec![runtime_observation],
+            &policy.artifact_path,
+            &policy_fixture.join("test-signing-key.hex"),
+        )?;
+        node_config.administrative_authorization = Some(AdministrativeAuthorizationConfig {
+            tenant_id: bundle.candidate.tenant_id.clone(),
+            cluster_uid: binding.cluster_uid.clone(),
+            trust_domain_id: bundle.profile_artifact.header.trust_domain_id.clone(),
+            issuer_id: bundle.profile_artifact.header.issuer_id.clone(),
+            key_id: bundle.candidate.signing_key_id.clone(),
+            public_key_path: policy_fixture.join("test-public-key.hex"),
+            sequence_epoch: 1,
+            valid_from_utc_ns: bundle.candidate.issued_utc_ns,
+            valid_until_utc_ns: bundle.candidate.expires_utc_ns,
+            maximum_clock_skew_ns: 1_000_000_000,
+        });
+        let base_config = node_config.clone();
+        let mut trust = TrustCache::load(&fixture_root).context(NodeSnafu)?;
+        trust
+            .install_with_policy(
+                trust_generation.generation,
+                trust_generation.bundle_digest,
+                trust_generation.policy_issuer_sequence_epoch,
+                &[PolicySignerTrust {
+                    signing_key_id: bundle.candidate.signing_key_id.clone(),
+                    ed25519_public_key: bundle.profile_signing_public_key.clone(),
+                    revoked: false,
+                }],
+                &[1; 16],
             )
             .context(NodeSnafu)?;
+        let mut delivery = NodePolicyDeliveryOwner::load(&fixture_root).context(NodeSnafu)?;
+        let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
+        let mut policy_owner = None;
+        let mut reconciliation = NodeBindingReconciliation {
+            base_config: &base_config,
+            config: &mut node_config,
+            trust: &trust,
+            delivery: &mut delivery,
+            bindings: &mut bindings,
+            policy: &mut policy_owner,
+            identity: &identity,
+            node_boot_id,
+            label_epoch: 1,
+        };
+        let capabilities = ["EXACT_NATIVE_IDENTITY", "LOCAL_EFFECT_OBSERVATION"]
+            .into_iter()
+            .map(|capability_id| CapabilityRecord {
+                capability_id: capability_id.to_owned(),
+                state: "SUPPORTED".to_owned(),
+                reason_code: "REAL_KERNEL_FIXTURE".to_owned(),
+            })
+            .collect::<Vec<_>>();
+        reconciliation
+            .deliver_policy(&mut host, &bundle, &capabilities)
+            .context(NodeSnafu)?;
+        let executor = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context(IoSnafu {
+                path: &fixture_root,
+            })?;
+        let preliminary_recovery = executor
+            .block_on(reconciliation.reconcile(&mut host, Some(Vec::new())))
+            .context(NodeSnafu)?;
         ensure!(
-            runtime.retired_binding_ids.is_empty() && runtime.recovered_bindings.len() == 1,
+            !preliminary_recovery,
             InvalidInputSnafu {
                 path: pin_root,
-                reason: "production runtime reconciliation did not select one recovery target",
+                reason: "BPF started recovery before CRI published the concrete binding",
             }
         );
-        let recovered_binding_id = runtime.recovered_bindings[0].binding_id.clone();
-        node_config.workload_bindings = runtime.recovered_bindings;
-        let recovering_before_iterator = NodeChassis::reconcile_binding_identity(
-            &node_config,
-            &mut host,
-            &mut bindings,
-            Some(&mut policy_owner),
-            &identity,
-            true,
-        )
-        .context(NodeSnafu)?;
-        let binding_key = fs::metadata(&cgroup_path)
-            .context(IoSnafu { path: &cgroup_path })?
-            .ino()
-            .to_ne_bytes();
+        let runtime_observation = running_container_observation(&binding, initial_host_pid)?;
+        let recovering_before_iterator = executor
+            .block_on(reconciliation.reconcile(&mut host, Some(vec![runtime_observation.clone()])))
+            .context(NodeSnafu)?;
         ensure!(
             recovering_before_iterator,
             InvalidInputSnafu {
@@ -2405,6 +2533,13 @@ impl EffectTestRunner {
                 reason: "Node did not install the authority-free RECOVERING state",
             }
         );
+        let recovered_binding_id = reconciliation.config.workload_bindings[0]
+            .binding_id
+            .clone();
+        let binding_key = fs::metadata(&cgroup_path)
+            .context(IoSnafu { path: &cgroup_path })?
+            .ino()
+            .to_ne_bytes();
 
         let inspector = NativeIdentityInspector::new(pin_root);
         let recovered_initial = inspector
@@ -2422,7 +2557,7 @@ impl EffectTestRunner {
                     path: pin_root,
                     reason: "the recovered init task has no runtime binding",
                 })?;
-        let active_recovered_before_ptrace = recovered_binding.prepared_container_state
+        let active_recovered_before_ptrace = recovered_binding.lifecycle_state
             == "active_recovered"
             && recovered_initial.active_role_id == binding.initial_role_id
             && recovered_initial.admitted_entry_rule_id != 0
@@ -2463,6 +2598,41 @@ impl EffectTestRunner {
             }
         );
 
+        let repeated_recovery = executor
+            .block_on(reconciliation.reconcile(&mut host, Some(vec![runtime_observation])))
+            .context(NodeSnafu)?;
+        ensure!(
+            !repeated_recovery
+                && inspector.snapshot(initial_host_pid).context(NodeSnafu)?
+                    == Some(recovered_initial.clone()),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "routine reconciliation changed the recovered application identity",
+            }
+        );
+
+        let competing_probe_marker = observations.cursor();
+        let mut readiness_probe = container.spawn_exec(
+            "/bin/grep",
+            &[
+                "-q",
+                "READY",
+                "/var/lib/mithril-convergence/protected.lifecycle-ready",
+            ],
+            &fixture_root.join("readiness-probe.pid"),
+            &output_directory.join("recovered-readiness.stdout"),
+            &output_directory.join("recovered-readiness.stderr"),
+        )?;
+        ensure!(
+            wait_for_child(&mut readiness_probe)?.success(),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the competing readiness probe did not pass",
+            }
+        );
+        reader
+            .poll(Duration::from_millis(100))
+            .context(InterceptorSnafu)?;
         let probe_marker = observations.cursor();
         let probe_pid_path = fixture_root.join("startup-probe.pid");
         let probe_stdout = output_directory.join("recovered-startup-probe.stdout");
@@ -2477,11 +2647,20 @@ impl EffectTestRunner {
             &probe_stdout,
             &probe_stderr,
         )?;
-        let probe_pid =
-            wait_for_pid_file(&probe_pid_path, &mut probe)?.context(InvalidInputSnafu {
+        let probe_pid = wait_for_pid_file(&probe_pid_path, &mut probe)?;
+        reader
+            .poll(Duration::from_millis(100))
+            .context(InterceptorSnafu)?;
+        let probe_pid = probe_pid.ok_or_else(|| {
+            InvalidInputSnafu {
                 path: &probe_stderr,
-                reason: "the recovered startup probe did not reach its declared executable",
-            })?;
+                reason: format!(
+                    "the recovered startup probe did not reach its declared executable; effects={:?}",
+                    recent_effect_summary(&observations, probe_marker)
+                ),
+            }
+            .build()
+        })?;
         let probe_snapshot = wait_for_task_snapshot(
             &inspector,
             probe_pid,
@@ -2491,6 +2670,26 @@ impl EffectTestRunner {
             probe_marker,
             &probe_stderr,
         )?;
+        let competing_effects = observations.recent_since(competing_probe_marker);
+        let first_probe = competing_effects
+            .iter()
+            .find(|event| {
+                event.active_role_id > 0
+                    && event.admitted_entry_rule_id > 0
+                    && event.active_role_id != recovered_initial.active_role_id
+            })
+            .context(InvalidInputSnafu {
+                path: pin_root,
+                reason: "the competing probe has no admitted identity evidence",
+            })?;
+        ensure!(
+            first_probe.active_role_id == policy.role_ids["readiness"]
+                && first_probe.active_role_id != probe_snapshot.active_role_id,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the readiness-before-startup regression condition is missing",
+            }
+        );
         fs::write(role_directory.join("application.denied"), b"release\n").context(IoSnafu {
             path: &role_directory,
         })?;
@@ -2513,6 +2712,9 @@ impl EffectTestRunner {
         });
         ensure!(
             probe_status.success()
+                && fs::read(&probe_stdout).context(IoSnafu {
+                    path: &probe_stdout,
+                })? == b"READY\nrelease\n"
                 && probe_snapshot.active_role_id == policy.role_ids["startup"]
                 && probe_snapshot.admitted_entry_rule_id != 0
                 && ptrace_bootstrap_marker_observed
@@ -2520,9 +2722,137 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: &probe_stderr,
                 reason: format!(
-                    "the recovered later-entry sequence failed: status={probe_status}, snapshot={probe_snapshot:?}, effects={:?}",
-                    recent_effect_summary(&observations, probe_marker)
+                    "the recovered later-entry sequence failed: status={probe_status}, snapshot={probe_snapshot:?}, effects={:?}, cache={:?}, routes={}",
+                    recent_effect_summary(&observations, probe_marker),
+                    canonical_mount_cache_state_summary(&host)?,
+                    canonical_mount_route_summary(&host)?
                 ),
+            }
+        );
+
+        fs::rename(
+            role_directory.join("startup.denied"),
+            role_directory.join("startup.saved"),
+        )
+        .context(IoSnafu {
+            path: &role_directory,
+        })?;
+        let missing_marker = observations.cursor();
+        let missing_stdout = output_directory.join("recovered-missing-file.stdout");
+        let missing_stderr = output_directory.join("recovered-missing-file.stderr");
+        let mut missing = container.spawn_exec(
+            "/bin/cat",
+            &["/var/lib/mithril-convergence/startup.denied"],
+            &fixture_root.join("missing-file.pid"),
+            &missing_stdout,
+            &missing_stderr,
+        )?;
+        let missing_status = wait_for_child(&mut missing)?;
+        reader
+            .poll(Duration::from_millis(100))
+            .context(InterceptorSnafu)?;
+        ensure!(
+            !missing_status.success()
+                && fs::read_to_string(&missing_stderr)
+                    .context(IoSnafu {
+                        path: &missing_stderr
+                    })?
+                    .contains("No such file or directory")
+                && observations
+                    .recent_since(missing_marker)
+                    .iter()
+                    .all(|event| event.reason != "EXACT_POLICY_DENY"),
+            InvalidInputSnafu {
+                path: &missing_stderr,
+                reason: "a missing file must not qualify as a signed policy denial",
+            }
+        );
+        fs::rename(
+            role_directory.join("startup.saved"),
+            role_directory.join("startup.denied"),
+        )
+        .context(IoSnafu {
+            path: &role_directory,
+        })?;
+        let policy_deny_marker = observations.cursor();
+        let policy_deny_stdout = output_directory.join("recovered-policy-deny.stdout");
+        let policy_deny_stderr = output_directory.join("recovered-policy-deny.stderr");
+        let mut policy_denied = container.spawn_exec(
+            "/bin/cat",
+            &["/var/lib/mithril-convergence/startup.denied"],
+            &fixture_root.join("policy-deny.pid"),
+            &policy_deny_stdout,
+            &policy_deny_stderr,
+        )?;
+        let policy_deny_status = wait_for_child(&mut policy_denied)?;
+        let declared_probe_policy_denied = !policy_deny_status.success()
+            && wait_for_entry_policy_deny(
+                &reader,
+                &observations,
+                policy_deny_marker,
+                probe_snapshot.active_role_id,
+                probe_snapshot.admitted_entry_rule_id,
+            )?;
+        ensure!(
+            declared_probe_policy_denied,
+            InvalidInputSnafu {
+                path: &policy_deny_stderr,
+                reason: "the recovered probe did not enforce its normal signed file denial",
+            }
+        );
+
+        let inspection_path = runtime.runner_path.with_file_name("mithril-inspect");
+        let observation_socket = fixture_root.join("observation.sock");
+        let capture = executor.block_on(async {
+            let (_readiness, readiness) =
+                tokio::sync::watch::channel(mithril_node::NodeReadinessV1 {
+                    kernel_ready: true,
+                    identity_ready: true,
+                    control_ready: true,
+                    admission_ready: true,
+                    effect_prevention_claims_enabled: true,
+                });
+            let (shutdown, stopped) = tokio::sync::watch::channel(false);
+            let server = mithril_node::RuntimeObservationServer::bind_with_effects(
+                mithril_node::RuntimeObservationConfig {
+                    socket_path: observation_socket.clone(),
+                    allowed_uid: 0,
+                    cgroup_scope: "/".to_owned(),
+                },
+                host.manifest(),
+                &capabilities,
+                observations.clone(),
+                pin_root.to_path_buf(),
+                readiness,
+            )
+            .context(NodeSnafu)?;
+            let mut command = Command::new(&inspection_path);
+            command
+                .arg("effects")
+                .arg("--socket-path")
+                .arg(&observation_socket)
+                .args(["--cgroup-scope", "/", "--samples", "1"]);
+            let (served, output) = tokio::join!(server.serve(stopped), async {
+                let output = tokio::task::spawn_blocking(move || command.output()).await;
+                let _ = shutdown.send(true);
+                output
+                    .map_err(std::io::Error::other)
+                    .context(IoSnafu {
+                        path: &inspection_path,
+                    })?
+                    .context(IoSnafu {
+                        path: &inspection_path,
+                    })
+            });
+            served.context(NodeSnafu)?;
+            output
+        })?;
+        ensure!(
+            capture.status.success()
+                && String::from_utf8_lossy(&capture.stdout).contains("reason=EXACT_POLICY_DENY"),
+            InvalidInputSnafu {
+                path: &inspection_path,
+                reason: "the public observation capture omitted the signed file denial",
             }
         );
 
@@ -2607,6 +2937,7 @@ impl EffectTestRunner {
             runtime_internal_exec_observed_with_rule_zero,
             declared_probe_role_id: probe_snapshot.active_role_id,
             declared_probe_rule_id: probe_snapshot.admitted_entry_rule_id,
+            declared_probe_policy_denied,
             unmatched_exec_denied,
             pin_root_removed: !pin_root.exists(),
             lease_removed: !lease_path.exists(),
@@ -2792,7 +3123,8 @@ impl EffectTestRunner {
                 "echo \"$concurrent_recursive_result\" >/var/lib/mithril-convergence/concurrent-recursive.result; echo \"$concurrent_recursive_count\" >/var/lib/mithril-convergence/concurrent-recursive-count; ",
                 "read -r stable_recursive_start </var/lib/mithril-convergence/stable-recursive-start.fifo; if /bin/cat /srv/team/blue/secrets/models/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/var/lib/mithril-convergence/stable-recursive.result; else echo PATH_TREE_DENIED >/var/lib/mithril-convergence/stable-recursive.result; fi; ",
                 "read -r reader_queue_burst_start </var/lib/mithril-convergence/reader-queue-burst-start.fifo; reader_queue_burst_count=0; while [ \"$reader_queue_burst_count\" -lt 70000 ]; do command : </srv/team/blue/secrets/models/secret || true; reader_queue_burst_count=$((reader_queue_burst_count + 1)); done 2>/dev/null; ",
-                "if ( /bin/sleep 0 ); then echo READER_QUEUE_BURST_ALLOWED >/var/lib/mithril-convergence/reader-queue-burst.result; else echo READER_QUEUE_BURST_DENIED >/var/lib/mithril-convergence/reader-queue-burst.result; fi; ",
+                "echo READER_QUEUE_BURST_COMPLETE >/var/lib/mithril-convergence/reader-queue-burst.result; read -r reader_queue_post_drain_start </var/lib/mithril-convergence/reader-queue-post-drain-start.fifo; ",
+                "if ( /bin/sleep 0 ); then echo READER_QUEUE_POST_DRAIN_ALLOWED >/var/lib/mithril-convergence/reader-queue-post-drain.result; else echo READER_QUEUE_POST_DRAIN_DENIED >/var/lib/mithril-convergence/reader-queue-post-drain.result; fi; ",
                 "read -r replacement_exec_request </var/lib/mithril-convergence/replacement-exec-request; ",
                 "if [ \"$replacement_exec_request\" = EXEC ]; then if ( /bin/sleep 0 ); then echo REPLACEMENT_EXEC_ALLOWED >/var/lib/mithril-convergence/replacement-exec-result; else echo REPLACEMENT_EXEC_DENIED >/var/lib/mithril-convergence/replacement-exec-result; fi; fi; ",
                 "exec 3<>/var/lib/mithril-convergence/mount-reconciliation.fifo; ",
@@ -2820,7 +3152,7 @@ impl EffectTestRunner {
             "io.kubernetes.cri.container-type": "container",
             "io.kubernetes.cri.container-id": container_id,
             (POD_NAMESPACE_ANNOTATION): "default",
-            (POD_UID_ANNOTATION): "direct-runc-pod",
+            (POD_UID_ANNOTATION): "10000000-0000-4000-8000-000000000006",
             (CONTAINER_NAME_ANNOTATION): "direct-runc",
             (IMAGE_NAME_ANNOTATION): format!(
                 "direct-runc@sha256:{}",
@@ -3197,8 +3529,18 @@ impl EffectTestRunner {
             "direct-runc",
             true,
         );
-        binding.scheduled_binding_authority_id =
-            Some("99999999-9999-4999-8999-999999999995".to_owned());
+        binding.pod_uid = "10000000-0000-4000-8000-000000000006".to_owned();
+        binding.controller_uid = "10000000-0000-4000-8000-000000000004".to_owned();
+        binding.service_account_uid = "10000000-0000-4000-8000-000000000005".to_owned();
+        let authority_binding_id = ScheduledRuntimeBindingV1::authority_binding_id(
+            &binding.pod_uid,
+            &binding.container_name,
+        );
+        binding.binding_id = ScheduledRuntimeBindingV1::runtime_binding_id(
+            &authority_binding_id,
+            &binding.container_id,
+        );
+        binding.scheduled_binding_authority_id = Some(authority_binding_id);
         binding.profile_id = policy.profile_id.clone();
         binding.protected_scope_id = policy.protected_scope_id.clone();
         binding.execution_set_id = policy.execution_set_id.clone();
@@ -3216,19 +3558,24 @@ impl EffectTestRunner {
         binding.initial_role_id = policy.initial_role_id;
         binding.external_role_id = policy.external_role_id;
         let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
-        bindings
-            .publish_held_initial_roots(&host, &[(binding.clone(), initial_pid)])
-            .context(NodeSnafu)?;
         let policy_fixture = self
             .repo_root
             .join("crates/mithril-e2e/fixtures/mithril-policy");
-        let node_config = effect_node_config(
+        let mut scheduled_binding = binding.clone();
+        scheduled_binding.binding_id = ScheduledRuntimeBindingV1::authority_binding_id(
+            &binding.pod_uid,
+            &binding.container_name,
+        );
+        scheduled_binding.container_id = format!("scheduled:{}", binding.container_id);
+        scheduled_binding.container_generation = 0;
+        scheduled_binding.root_cgroup_path = None;
+        let mut node_config = effect_node_config(
             &fixture_root,
             pin_root,
             lease_path,
             &policy_fixture,
             policy.artifact_path.clone(),
-            vec![binding.clone()],
+            vec![scheduled_binding],
         );
         let policy_start = Instant::now();
         let mut policy_owner = NodePolicyGenerationOwner::load_and_install_for_bindings(
@@ -3243,9 +3590,26 @@ impl EffectTestRunner {
             "initial policy generation install: {:?}",
             policy_start.elapsed()
         );
+        let mut observation = running_container_observation(&binding, 0)?;
+        observation.listed.state = ContainerState::ContainerCreated as i32;
+        observation
+            .status
+            .status
+            .as_mut()
+            .context(InvalidInputSnafu {
+                path: &fixture_root,
+                reason: "the held fixture has no CRI status",
+            })?
+            .state = ContainerState::ContainerCreated as i32;
+        bindings
+            .publish_held_activated_root(&host, &binding, initial_pid, &observation)
+            .context(NodeSnafu)?;
+        node_config.workload_bindings = vec![binding.clone()];
         let read_entry_rules = |host: &KernelHost| {
             host.map_keys("entry_admission_rules")
                 .context(InterceptorSnafu)?
+                .into_iter()
+                .collect::<BTreeSet<_>>()
                 .into_iter()
                 .map(|key| {
                     host.lookup_map("entry_admission_rules", &key)
@@ -3344,13 +3708,13 @@ impl EffectTestRunner {
                 }
                 .build()
             })?;
-        let prepared_state_before_exec = prepared
+        let lifecycle_state_before_exec = prepared
             .runtime_binding
             .as_ref()
-            .map(|binding| binding.prepared_container_state.clone())
+            .map(|binding| binding.lifecycle_state.clone())
             .unwrap_or_default();
         ensure!(
-            prepared_state_before_exec == "prepared",
+            lifecycle_state_before_exec == "prepared",
             InvalidInputSnafu {
                 path: pin_root,
                 reason: "the held direct runc task is not in PREPARED state",
@@ -3520,8 +3884,9 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: Path::new("canonical_mount_roots"),
                 reason: format!(
-                    "routine reconciliation changed the signed entry rows or published a canonical mount route before the OCI view: entry_rule_count={}, routes={create_runtime_canonical_policy:?}",
+                    "routine reconciliation changed the signed entry rows or published a canonical mount route before the OCI view: entry_rule_count={}, routes={create_runtime_canonical_policy:?}, before={provisional_entry_rules:?}, after={create_runtime_entry_rules:?}, keys_equal={}",
                     create_runtime_entry_rule_keys.len(),
+                    create_runtime_entry_rule_keys == provisional_entry_rule_keys,
                 ),
             }
         );
@@ -4158,13 +4523,13 @@ impl EffectTestRunner {
                 }
                 .build()
             })?;
-        let prepared_state_after_exec = active
+        let lifecycle_state_after_exec = active
             .runtime_binding
             .as_ref()
-            .map(|binding| binding.prepared_container_state.clone())
+            .map(|binding| binding.lifecycle_state.clone())
             .unwrap_or_default();
         ensure!(
-            prepared_state_after_exec == "active"
+            lifecycle_state_after_exec == "active"
                 && active.profile_generation_ref_id == PROFILE_GENERATION_REF_ID,
             InvalidInputSnafu {
                 path: pin_root,
@@ -4429,7 +4794,6 @@ impl EffectTestRunner {
                 ),
             }
         );
-        let reader_queue_burst_marker = observations.cursor();
         fs::write(
             role_directory.join("reader-queue-burst-start.fifo"),
             b"start\n",
@@ -4458,6 +4822,54 @@ impl EffectTestRunner {
         {
             thread::sleep(Duration::from_millis(25));
         }
+        let reader_queue_post_drain_marker = observations.cursor();
+        fs::write(
+            role_directory.join("reader-queue-post-drain-start.fifo"),
+            b"start\n",
+        )
+        .context(IoSnafu {
+            path: &role_directory,
+        })?;
+        let reader_queue_post_drain_result = role_directory.join("reader-queue-post-drain.result");
+        let reader_queue_post_drain_deadline = Instant::now() + WAIT_LIMIT;
+        while (!reader_queue_post_drain_result.exists()
+            || !observations
+                .recent_since(reader_queue_post_drain_marker)
+                .iter()
+                .any(|event| {
+                    event.reason == "APPLICATION_DEFAULT_ALLOW"
+                        && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
+                        && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
+                        && event.active_role_id == active.active_role_id
+                        && event.admitted_entry_rule_id == active.admitted_entry_rule_id
+                }))
+            && Instant::now() < reader_queue_post_drain_deadline
+        {
+            reader
+                .poll(Duration::from_millis(25))
+                .context(InterceptorSnafu)?;
+        }
+        wait_for_path(
+            &reader_queue_post_drain_result,
+            true,
+            "the post-drain application exec",
+        )?;
+        let reader_queue_post_drain_exec_observed = observations
+            .recent_since(reader_queue_post_drain_marker)
+            .iter()
+            .any(|event| {
+                event.reason == "APPLICATION_DEFAULT_ALLOW"
+                    && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
+                    && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
+                    && event.active_role_id == active.active_role_id
+                    && event.admitted_entry_rule_id == active.admitted_entry_rule_id
+            });
+        let reader_queue_post_drain_deadline = Instant::now() + WAIT_LIMIT;
+        while reader_queue_observations.reader_queue_pending_records() > 0
+            && Instant::now() < reader_queue_post_drain_deadline
+        {
+            thread::sleep(Duration::from_millis(25));
+        }
         let reader_queue_health = reader_queue_observations.health(None);
         let bounded_reader_queue_preserved_concurrent_burst =
             reader_queue_observations.reader_queue_pending_records() == 0
@@ -4469,17 +4881,14 @@ impl EffectTestRunner {
                         path: &reader_queue_burst_result,
                     })?
                     .trim()
-                    == "READER_QUEUE_BURST_ALLOWED"
-                && observations
-                    .recent_since(reader_queue_burst_marker)
-                    .iter()
-                    .any(|event| {
-                        event.reason == "APPLICATION_DEFAULT_ALLOW"
-                            && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
-                            && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
-                            && event.active_role_id == active.active_role_id
-                            && event.admitted_entry_rule_id == active.admitted_entry_rule_id
-                    });
+                    == "READER_QUEUE_BURST_COMPLETE"
+                && fs::read_to_string(&reader_queue_post_drain_result)
+                    .context(IoSnafu {
+                        path: &reader_queue_post_drain_result,
+                    })?
+                    .trim()
+                    == "READER_QUEUE_POST_DRAIN_ALLOWED"
+                && reader_queue_post_drain_exec_observed;
         ensure!(
             bounded_reader_queue_preserved_concurrent_burst,
             InvalidInputSnafu {
@@ -5306,6 +5715,67 @@ impl EffectTestRunner {
                 reason: "the application path-tree denial affected the startup role",
             }
         );
+        let incomplete_probe_marker = observations.cursor();
+        let incomplete_probe_pid_path = fixture_root.join("probe-incomplete-argv.pid");
+        let incomplete_probe_stdout = output_directory.join("probe-incomplete-argv.stdout");
+        let incomplete_probe_stderr = output_directory.join("probe-incomplete-argv.stderr");
+        let incomplete_probe_arguments =
+            vec!["/var/lib/mithril-convergence/protected.lifecycle-ready"; 3_000];
+        let mut incomplete_probe = container.spawn_exec(
+            "/bin/cat",
+            &incomplete_probe_arguments,
+            &incomplete_probe_pid_path,
+            &incomplete_probe_stdout,
+            &incomplete_probe_stderr,
+        )?;
+        let incomplete_probe_snapshot =
+            wait_for_pid_file(&incomplete_probe_pid_path, &mut incomplete_probe)?
+                .and_then(|pid| inspector.snapshot(pid).ok().flatten());
+        let incomplete_probe_status = wait_for_child(&mut incomplete_probe)?;
+        reader
+            .poll(Duration::from_millis(100))
+            .context(InterceptorSnafu)?;
+        wait_for_reason(
+            &reader,
+            &observations,
+            incomplete_probe_marker,
+            "UNSUPPORTED_OBJECT",
+        )?;
+        let declared_probe_incomplete_argv_denied =
+            incomplete_probe_snapshot.as_ref().is_none_or(|snapshot| {
+                snapshot.admitted_entry_rule_id == 0
+                    && snapshot.active_role_id == replacement_binding.external_role_id
+                    && snapshot.installed_role_class.as_deref()
+                        == Some("runtime_external_restricted")
+            }) && !incomplete_probe_status.success()
+                && fs::read(&incomplete_probe_stdout)
+                    .context(IoSnafu {
+                        path: &incomplete_probe_stdout,
+                    })?
+                    .is_empty()
+                && observations
+                    .recent_since(incomplete_probe_marker)
+                    .iter()
+                    .any(|event| {
+                        event.reason == "UNSUPPORTED_OBJECT"
+                            && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
+                            && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
+                            && event.active_role_id == replacement_binding.external_role_id
+                            && event.admitted_entry_rule_id == 0
+                            && event.kernel_result == -13
+                    });
+        ensure!(
+            declared_probe_incomplete_argv_denied,
+            InvalidInputSnafu {
+                path: &incomplete_probe_stderr,
+                reason: format!(
+                    "a declared probe entered without a complete argv capture: status={incomplete_probe_status}, snapshot={incomplete_probe_snapshot:?}, stderr={}",
+                    fs::read_to_string(&incomplete_probe_stderr)
+                        .unwrap_or_default()
+                        .trim()
+                ),
+            }
+        );
         let role_ids = independent_entries
             .iter()
             .map(|entry| entry.active_role_id)
@@ -5360,60 +5830,162 @@ impl EffectTestRunner {
             }
         );
 
-        restarted_bindings
-            .attach_running_runtime_identity_for_test(
-                &replacement_binding.binding_id,
-                initial_pid,
-                PathBuf::from("/"),
-                vec![PathBuf::from("/bin"), PathBuf::from("/usr/bin")],
-            )
-            .context(NodeSnafu)?;
-        let administrative_executable = "/var/lib/mithril/busybox";
-        let administrative_arguments = ["sleep", "20"];
-        let verify_unapproved_administrative_exec = |name: &str| -> Result<bool> {
-            let marker = observations.cursor();
-            let pid_path = fixture_root.join(format!("{name}.pid"));
-            let stdout = output_directory.join(format!("{name}.stdout"));
-            let stderr = output_directory.join(format!("{name}.stderr"));
-            let mut child = container.spawn_exec_with_process_spec(
-                administrative_executable,
-                &administrative_arguments,
-                &pid_path,
-                &stdout,
-                &stderr,
-            )?;
-            let snapshot = wait_for_pid_file(&pid_path, &mut child)?
-                .and_then(|pid| inspector.snapshot(pid).ok().flatten());
-            let status = wait_for_child(&mut child)?;
-            reader
-                .poll(Duration::from_millis(100))
-                .context(InterceptorSnafu)?;
-            wait_for_reason(&reader, &observations, marker, "UNSUPPORTED_OBJECT")?;
-            let denied = snapshot.is_none()
-                && observations.recent_since(marker).iter().any(|event| {
-                    event.reason == "UNSUPPORTED_OBJECT"
-                        && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
-                        && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
-                        && event.active_role_id == replacement_binding.external_role_id
-                        && event.admitted_entry_rule_id == 0
-                        && event.kernel_result == -13
-                });
-            ensure!(
-                denied,
-                InvalidInputSnafu {
-                    path: &stderr,
-                    reason: format!(
-                        "an unapproved administrative exec entered the protected container: status={status}, snapshot={snapshot:?}, stderr={}, effects={:?}",
-                        fs::read_to_string(&stderr).unwrap_or_default().trim(),
-                        recent_effect_summary(&observations, marker)
-                    ),
-                }
-            );
-            Ok(true)
+        let mut administrative_runtime =
+            container
+                .containerd
+                .as_ref()
+                .cloned()
+                .context(InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "the recovered administrative case requires containerd",
+                })?;
+        let administrative_runtime_root = fixture_root.join("administrative-recovered-runtime");
+        let administrative_overlay_upper = administrative_runtime_root.join("overlay-upper");
+        let administrative_overlay_work = administrative_runtime_root.join("overlay-work");
+        fs::create_dir_all(&administrative_overlay_upper).context(IoSnafu {
+            path: &administrative_overlay_upper,
+        })?;
+        fs::create_dir(&administrative_overlay_work).context(IoSnafu {
+            path: &administrative_overlay_work,
+        })?;
+        let administrative_container_id = format!(
+            "{:x}",
+            Sha256::digest(format!("administrative-{container_id}").as_bytes())
+        );
+        administrative_runtime.sandbox_id = format!(
+            "{:x}",
+            Sha256::digest(format!("administrative-sandbox-{container_id}").as_bytes())
+        );
+        let administrative_cgroup_name =
+            format!("mithril-administrative-recovered-{}", std::process::id());
+        let administrative_cgroup_path = PathBuf::from("/sys/fs/cgroup/system.slice")
+            .join(format!("{administrative_cgroup_name}.scope"));
+        ensure!(
+            !administrative_cgroup_path.exists(),
+            InvalidInputSnafu {
+                path: &administrative_cgroup_path,
+                reason: "the recovered administrative cgroup already exists",
+            }
+        );
+        let mut administrative_config = config.clone();
+        administrative_config["process"]["args"] = json!(["/bin/sh", "-c", "sleep 300; wait"]);
+        administrative_config["hooks"] = json!({});
+        administrative_config["linux"]["cgroupsPath"] = json!(format!(
+            "system.slice:mithril-administrative-recovered:{}",
+            std::process::id()
+        ));
+        administrative_config["annotations"]["io.kubernetes.cri.container-id"] =
+            json!(administrative_container_id);
+        administrative_config["annotations"][SANDBOX_ID_ANNOTATION] =
+            json!(administrative_runtime.sandbox_id);
+        administrative_config["annotations"][POD_UID_ANNOTATION] =
+            json!("10000000-0000-4000-8000-000000000007");
+        let administrative_config_path = administrative_runtime_root.join("config.json");
+        fs::write(
+            &administrative_config_path,
+            serde_json::to_vec_pretty(&administrative_config).context(JsonSnafu {
+                path: &administrative_config_path,
+            })?,
+        )
+        .context(IoSnafu {
+            path: &administrative_config_path,
+        })?;
+        let administrative_initial_pid_path = administrative_runtime_root.join("initial.pid");
+        let administrative_initial_stdout =
+            output_directory.join("administrative-recovered-initial.stdout");
+        let administrative_initial_stderr =
+            output_directory.join("administrative-recovered-initial.stderr");
+        fs::File::create(&administrative_initial_stdout).context(IoSnafu {
+            path: &administrative_initial_stdout,
+        })?;
+        fs::File::create(&administrative_initial_stderr).context(IoSnafu {
+            path: &administrative_initial_stderr,
+        })?;
+        let administrative_runner_stdout =
+            output_directory.join("administrative-recovered-runner.stdout");
+        let administrative_runner_stderr =
+            output_directory.join("administrative-recovered-runner.stderr");
+        let mut administrative_child = Command::new(&administrative_runtime.runner_path)
+            .arg("containerd-start-fixture")
+            .args([
+                "--socket-path",
+                administrative_runtime
+                    .socket_path
+                    .to_string_lossy()
+                    .as_ref(),
+            ])
+            .args(["--namespace", &administrative_runtime.namespace])
+            .args(["--container-id", &administrative_container_id])
+            .args(["--sandbox-id", &administrative_runtime.sandbox_id])
+            .args([
+                "--spec-path",
+                administrative_config_path.to_string_lossy().as_ref(),
+            ])
+            .args(["--rootfs-lower-path", rootfs.to_string_lossy().as_ref()])
+            .args([
+                "--rootfs-upper-path",
+                administrative_overlay_upper.to_string_lossy().as_ref(),
+            ])
+            .args([
+                "--rootfs-work-path",
+                administrative_overlay_work.to_string_lossy().as_ref(),
+            ])
+            .args([
+                "--pid-path",
+                administrative_initial_pid_path.to_string_lossy().as_ref(),
+            ])
+            .args([
+                "--stdout-path",
+                administrative_initial_stdout.to_string_lossy().as_ref(),
+            ])
+            .args([
+                "--stderr-path",
+                administrative_initial_stderr.to_string_lossy().as_ref(),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(
+                fs::File::create(&administrative_runner_stdout).context(IoSnafu {
+                    path: &administrative_runner_stdout,
+                })?,
+            ))
+            .stderr(Stdio::from(
+                fs::File::create(&administrative_runner_stderr).context(IoSnafu {
+                    path: &administrative_runner_stderr,
+                })?,
+            ))
+            .spawn()
+            .context(IoSnafu {
+                path: &administrative_runtime.runner_path,
+            })?;
+        let administrative_initial_pid =
+            wait_for_pid_file(&administrative_initial_pid_path, &mut administrative_child)?
+                .context(InvalidInputSnafu {
+                    path: &administrative_initial_stderr,
+                    reason:
+                        "the recovered administrative container exited before publishing its PID",
+                })?;
+        let mut administrative_container = RuncContainer {
+            child: Some(administrative_child),
+            runc_path: runc_path.to_path_buf(),
+            state_root: state_root.clone(),
+            bundle: bundle.clone(),
+            container_id: administrative_container_id.clone(),
+            cgroup_path: administrative_cgroup_path.clone(),
+            containerd: Some(administrative_runtime.clone()),
         };
-        let administrative_unapproved_exec_denied =
-            verify_unapproved_administrative_exec("administrative-unapproved")?;
-
+        let mut administrative_binding = replacement_binding.clone();
+        administrative_binding.binding_id = "99999999-9999-4999-8999-999999999994".to_owned();
+        administrative_binding.execution_set_id = "99999999-9999-4999-8999-999999999993".to_owned();
+        administrative_binding.scheduled_binding_authority_id = None;
+        administrative_binding.container_id = administrative_container_id;
+        administrative_binding.pod_uid = "10000000-0000-4000-8000-000000000007".to_owned();
+        administrative_binding.controller_uid = "10000000-0000-4000-8000-000000000004".to_owned();
+        administrative_binding.service_account_uid =
+            "10000000-0000-4000-8000-000000000005".to_owned();
+        administrative_binding.sandbox_id = administrative_runtime.sandbox_id;
+        administrative_binding.container_generation = 2;
+        administrative_binding.root_cgroup_path = Some(administrative_cgroup_path.clone());
+        administrative_binding.arm_initial_root = false;
         let tenant_id = Id128V1::new(0xaaaa_aaaa_aaaa_4aaa, 0x8aaa_aaaa_aaaa_aaaa);
         let cluster_uid = Id128V1::new(0x1000_0000_0000_4000, 0x8000_0000_0000_0002);
         let trust_domain_id = Id128V1::new(0x2222_2222_2222_4222, 0x8222_2222_2222_2222);
@@ -5425,7 +5997,7 @@ impl EffectTestRunner {
                 .to_string()
         };
         ensure!(
-            replacement_binding.cluster_uid == id_string(cluster_uid),
+            administrative_binding.cluster_uid == id_string(cluster_uid),
             InvalidInputSnafu {
                 path: pin_root,
                 reason: "the administrative fixture cluster differs from the live binding",
@@ -5472,6 +6044,184 @@ impl EffectTestRunner {
             valid_until_utc_ns: now_utc_ns.saturating_add(300_000_000_000),
             maximum_clock_skew_ns: 1_000_000_000,
         };
+        let mut administrative_node_config = replacement_config.clone();
+        administrative_node_config.policy_candidates.clear();
+        administrative_node_config.kubernetes_node_name = Some("recovered-entry-node".to_owned());
+        administrative_node_config.administrative_authorization =
+            Some(administrative_config.clone());
+        administrative_node_config.runtime_admission = Some(mithril_node::RuntimeAdmissionConfig {
+            socket_path: fixture_root.join("runtime-admission.sock"),
+            trusted_start_hook_path: oci_stage_hook.clone(),
+            maximum_request_bytes: 64 * 1_024,
+            timeout_ms: 10_000,
+        });
+        administrative_node_config.container_runtime = Some(mithril_node::ContainerRuntimeConfig {
+            socket_path: administrative_runtime.socket_path.clone(),
+            effect_controller_cgroup_path: current_unified_cgroup()?,
+            reconciliation_interval_ms: 2_000,
+        });
+        let base_config = administrative_node_config.clone();
+        let (delivered_bundle, trust_generation) = RuncPolicyFixture::scheduled_delivery(
+            &administrative_node_config,
+            &[&replacement_binding, &administrative_binding],
+            node_boot_id,
+            &policy.replacement_artifact_path,
+            &policy_fixture.join("test-signing-key.hex"),
+        )?;
+        let mut trust = TrustCache::load(&fixture_root).context(NodeSnafu)?;
+        trust
+            .install_with_policy(
+                trust_generation.generation,
+                trust_generation.bundle_digest,
+                trust_generation.policy_issuer_sequence_epoch,
+                &[PolicySignerTrust {
+                    signing_key_id: delivered_bundle.candidate.signing_key_id.clone(),
+                    ed25519_public_key: delivered_bundle.profile_signing_public_key.clone(),
+                    revoked: false,
+                }],
+                &[1; 16],
+            )
+            .context(NodeSnafu)?;
+        let mut delivery = NodePolicyDeliveryOwner::load(&fixture_root).context(NodeSnafu)?;
+        let mut current_policy = Some(restarted_policy_owner);
+        let capabilities = ["EXACT_NATIVE_IDENTITY", "LOCAL_EFFECT_OBSERVATION"]
+            .into_iter()
+            .map(|capability_id| CapabilityRecord {
+                capability_id: capability_id.to_owned(),
+                state: "SUPPORTED".to_owned(),
+                reason_code: "REAL_KERNEL_FIXTURE".to_owned(),
+            })
+            .collect::<Vec<_>>();
+        let executor = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context(IoSnafu {
+                path: &fixture_root,
+            })?;
+        let recovery_reconciliation = {
+            let mut reconciliation = NodeBindingReconciliation {
+                base_config: &base_config,
+                config: &mut administrative_node_config,
+                trust: &trust,
+                delivery: &mut delivery,
+                bindings: &mut restarted_bindings,
+                policy: &mut current_policy,
+                identity: &restarted_identity,
+                node_boot_id,
+                label_epoch: 1,
+            };
+            reconciliation
+                .deliver_policy(&mut host, &delivered_bundle, &capabilities)
+                .context(NodeSnafu)?;
+            executor
+                .block_on(reconciliation.reconcile(
+                    &mut host,
+                    Some(vec![
+                        running_container_observation(&replacement_binding, initial_pid)?,
+                        running_container_observation(
+                            &administrative_binding,
+                            administrative_initial_pid,
+                        )?,
+                    ]),
+                ))
+                .context(NodeSnafu)?
+        };
+        restarted_policy_owner = current_policy.context(InvalidInputSnafu {
+            path: pin_root,
+            reason: "the recovery cycle did not retain the signed policy",
+        })?;
+        administrative_binding = administrative_node_config
+            .workload_bindings
+            .iter()
+            .find(|binding| binding.container_id == administrative_binding.container_id)
+            .cloned()
+            .context(InvalidInputSnafu {
+                path: pin_root,
+                reason: "the recovery cycle did not retain the administrative target",
+            })?;
+        let administrative_generation = administrative_binding.active_profile_generation_ref_id;
+        let recovered_initial = inspector
+            .snapshot(administrative_initial_pid)
+            .context(NodeSnafu)?
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "the recovered administrative container has no initial identity",
+                }
+                .build()
+            })?;
+        let administrative_recovered_runtime_binding = recovery_reconciliation
+            && recovered_initial.active_role_id == administrative_binding.initial_role_id
+            && recovered_initial.admitted_entry_rule_id != 0
+            && recovered_initial.root_class.as_deref() == Some("recovered_application_root")
+            && recovered_initial.installed_role_class.as_deref() == Some("initial_role")
+            && recovered_initial
+                .runtime_binding
+                .as_ref()
+                .is_some_and(|binding| {
+                    binding.lifecycle_state == "active_recovered"
+                        && binding.prepared_container_entry_instance_id
+                            != "00000000000000000000000000000000"
+                        && binding.prepared_container_exec_task_cookie == 0
+                        && binding.prepared_container_initial_host_tgid
+                            == administrative_initial_pid
+                        && binding.prepared_container_bootstrap_state == 0
+                });
+        ensure!(
+            administrative_recovered_runtime_binding,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: format!(
+                    "the lightweight case did not activate the BPF-owned recovered application anchor: reconciliation={recovery_reconciliation:?}, initial={recovered_initial:?}"
+                ),
+            }
+        );
+        let administrative_executable = "/bin/busybox";
+        let administrative_arguments = ["sleep", "20"];
+        let verify_unapproved_administrative_exec = |name: &str| -> Result<bool> {
+            let marker = observations.cursor();
+            let pid_path = fixture_root.join(format!("{name}.pid"));
+            let stdout = output_directory.join(format!("{name}.stdout"));
+            let stderr = output_directory.join(format!("{name}.stderr"));
+            let mut child = administrative_container.spawn_exec_with_process_spec(
+                administrative_executable,
+                &administrative_arguments,
+                &pid_path,
+                &stdout,
+                &stderr,
+            )?;
+            let snapshot = wait_for_pid_file(&pid_path, &mut child)?
+                .and_then(|pid| inspector.snapshot(pid).ok().flatten());
+            let status = wait_for_child(&mut child)?;
+            reader
+                .poll(Duration::from_millis(100))
+                .context(InterceptorSnafu)?;
+            wait_for_reason(&reader, &observations, marker, "UNSUPPORTED_OBJECT")?;
+            let denied = snapshot.is_none()
+                && observations.recent_since(marker).iter().any(|event| {
+                    event.reason == "UNSUPPORTED_OBJECT"
+                        && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
+                        && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
+                        && event.active_role_id == administrative_binding.external_role_id
+                        && event.admitted_entry_rule_id == 0
+                        && event.kernel_result == -13
+                });
+            ensure!(
+                denied,
+                InvalidInputSnafu {
+                    path: &stderr,
+                    reason: format!(
+                        "an unapproved administrative exec entered the protected container: status={status}, snapshot={snapshot:?}, stderr={}, effects={:?}",
+                        fs::read_to_string(&stderr).unwrap_or_default().trim(),
+                        recent_effect_summary(&observations, marker)
+                    ),
+                }
+            );
+            Ok(true)
+        };
+        let administrative_unapproved_exec_denied =
+            verify_unapproved_administrative_exec("administrative-unapproved")?;
+
         let mut administrative_owner = AdministrativeExecTestOwner::load(
             &administrative_config,
             &fixture_root.join("administrative-authorization"),
@@ -5487,11 +6237,11 @@ impl EffectTestRunner {
                 &restarted_policy_owner,
                 ResolveAdministrativeExec {
                     request_id: administrative_request_id.to_be_bytes().to_vec(),
-                    namespace: replacement_binding.namespace.as_bytes().to_vec(),
-                    pod_uid: replacement_binding.pod_uid.as_bytes().to_vec(),
-                    container_name: replacement_binding.container_name.as_bytes().to_vec(),
-                    full_container_id: replacement_binding.container_id.as_bytes().to_vec(),
-                    container_generation: replacement_binding.container_generation,
+                    namespace: administrative_binding.namespace.as_bytes().to_vec(),
+                    pod_uid: administrative_binding.pod_uid.as_bytes().to_vec(),
+                    container_name: administrative_binding.container_name.as_bytes().to_vec(),
+                    full_container_id: administrative_binding.container_id.as_bytes().to_vec(),
+                    container_generation: administrative_binding.container_generation,
                     argv: vec![
                         administrative_executable.as_bytes().to_vec(),
                         b"sleep".to_vec(),
@@ -5562,7 +6312,7 @@ impl EffectTestRunner {
         let mismatch_pid_path = fixture_root.join("administrative-argv-mismatch.pid");
         let mismatch_stdout = output_directory.join("administrative-argv-mismatch.stdout");
         let mismatch_stderr = output_directory.join("administrative-argv-mismatch.stderr");
-        let mut mismatch_child = container.spawn_exec_with_process_spec(
+        let mut mismatch_child = administrative_container.spawn_exec_with_process_spec(
             administrative_executable,
             &["sleep", "19"],
             &mismatch_pid_path,
@@ -5588,7 +6338,7 @@ impl EffectTestRunner {
                 event.reason == "UNSUPPORTED_OBJECT"
                     && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
                     && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
-                    && event.active_role_id == replacement_binding.external_role_id
+                    && event.active_role_id == administrative_binding.external_role_id
                     && event.admitted_entry_rule_id == 0
                     && event.kernel_result == -13
             });
@@ -5632,9 +6382,9 @@ impl EffectTestRunner {
             .context(InterceptorSnafu)?
             .is_empty();
         let mismatch_never_entered_approved_role = mismatch_snapshot.as_ref().is_none_or(|task| {
-            task.active_role_id == replacement_binding.external_role_id
+            task.active_role_id == administrative_binding.external_role_id
                 && task.admitted_entry_rule_id == 0
-                && task.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
+                && task.profile_generation_ref_id == administrative_generation
         });
         ensure!(
             mismatch_never_entered_approved_role
@@ -5659,14 +6409,37 @@ impl EffectTestRunner {
         let administrative_pid_path = fixture_root.join("administrative-approved.pid");
         let administrative_stdout = output_directory.join("administrative-approved.stdout");
         let administrative_stderr = output_directory.join("administrative-approved.stderr");
-        let mut administrative_child = container.spawn_exec_with_process_spec(
+        let mut administrative_child = administrative_container.spawn_exec_with_process_spec(
             administrative_executable,
             &administrative_arguments,
             &administrative_pid_path,
             &administrative_stdout,
             &administrative_stderr,
         )?;
-        let administrative_pid = wait_for_detached_pid_file(&administrative_pid_path)?;
+        let administrative_pid = match wait_for_detached_pid_file(&administrative_pid_path) {
+            Ok(pid) => pid,
+            Err(error) => {
+                reader
+                    .poll(Duration::from_millis(100))
+                    .context(InterceptorSnafu)?;
+                let slot = host
+                    .lookup_map("execution_approval_slots", &armed_slots[0])
+                    .ok()
+                    .flatten()
+                    .and_then(|value| ExecutionApprovalSlotV1::try_read_from_bytes(&value).ok());
+                return InvalidInputSnafu {
+                    path: &administrative_stderr,
+                    reason: format!(
+                        "{error}; execution approval slot after exec: {slot:?}; stderr={}; effects={:?}",
+                        fs::read_to_string(&administrative_stderr)
+                            .unwrap_or_default()
+                            .trim(),
+                        recent_effect_summary(&observations, administrative_marker),
+                    ),
+                }
+                .fail();
+            }
+        };
         let administrative_snapshot = wait_for_detached_task_snapshot(
             &inspector,
             administrative_pid,
@@ -5688,9 +6461,27 @@ impl EffectTestRunner {
             .build()
         })?;
         let administrative_status = wait_for_child(&mut administrative_child)?;
+        eprintln!(
+            "administrative effect trace: {:?}",
+            observations
+                .recent_since(administrative_marker)
+                .iter()
+                .filter(|event| event.task_cookie == administrative_snapshot.task_cookie)
+                .map(|event| (
+                    event.reason.as_str(),
+                    event.effect_family,
+                    event.operation,
+                    event.active_role_id,
+                    event.admitted_entry_rule_id,
+                    event.kernel_result,
+                    event.execution_approval_trace_stage,
+                    event.execution_approval_failed_checks,
+                ))
+                .collect::<Vec<_>>()
+        );
         let administrative_role_installed = administrative_status.success()
             && administrative_snapshot.active_role_id == policy.role_ids["administrator"]
-            && administrative_snapshot.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
+            && administrative_snapshot.profile_generation_ref_id == administrative_generation
             && administrative_snapshot.admitted_entry_rule_id > 0;
         ensure!(
             administrative_role_installed,
@@ -5738,6 +6529,10 @@ impl EffectTestRunner {
         );
         let administrative_replay_exec_denied =
             verify_unapproved_administrative_exec("administrative-replay")?;
+        administrative_container.cleanup()?;
+        restarted_bindings
+            .retire_binding_id_for_test(&host, &administrative_binding.binding_id)
+            .context(NodeSnafu)?;
 
         let post_ponr_pid_path = fixture_root.join("post-ponr-terminal.pid");
         let post_ponr_stdout = output_directory.join("runc-entry-post-ponr.stdout");
@@ -5750,11 +6545,8 @@ impl EffectTestRunner {
             &post_ponr_stderr,
         )?;
         let post_ponr_status = wait_for_child(&mut post_ponr_child)?;
-        let post_ponr_pending = wait_for_post_ponr_terminal_exec(
-            &host,
-            NEXT_PROFILE_GENERATION_REF_ID,
-            &post_ponr_stderr,
-        )?;
+        let post_ponr_pending =
+            wait_for_post_ponr_terminal_exec(&host, administrative_generation, &post_ponr_stderr)?;
         let post_ponr_terminal_evidence_observed = !post_ponr_status.success()
             && replacement_terminal_entry_rule_ids
                 .contains(&post_ponr_pending.admitted_entry_rule_id);
@@ -5990,18 +6782,14 @@ impl EffectTestRunner {
         kubernetes_subpath_mounts.cleanup()?;
         drop(restarted_policy_owner);
         restarted_bindings
-            .retire_profile_bindings_for_test(
-                &host,
-                &policy.profile_id,
-                NEXT_PROFILE_GENERATION_REF_ID,
-            )
+            .retire_profile_bindings_for_test(&host, &policy.profile_id, administrative_generation)
             .context(NodeSnafu)?;
         let retirement_deadline = Instant::now() + WAIT_LIMIT;
         let inactive_generation_retired = loop {
             if NodePolicyGenerationOwner::retire_profile_generation_for_test(
                 &host,
                 &policy.profile_id,
-                NEXT_PROFILE_GENERATION_REF_ID,
+                administrative_generation,
                 node_boot_id,
                 1,
             )
@@ -6039,14 +6827,14 @@ impl EffectTestRunner {
             .finalize_retired_profile_bindings_for_test(
                 &host,
                 &policy.profile_id,
-                NEXT_PROFILE_GENERATION_REF_ID,
+                administrative_generation,
             )
             .context(NodeSnafu)?;
         ensure!(
             NodePolicyGenerationOwner::profile_generation_is_absent_for_test(
                 &host,
                 &policy.profile_id,
-                NEXT_PROFILE_GENERATION_REF_ID,
+                administrative_generation,
             )
             .context(NodeSnafu)?,
             InvalidInputSnafu {
@@ -6071,11 +6859,11 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 36,
+            schema_version: 38,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
-            prepared_state_before_exec,
-            prepared_state_after_exec,
+            prepared_state_before_exec: lifecycle_state_before_exec,
+            prepared_state_after_exec: lifecycle_state_after_exec,
             prepared_runtime_effect_observed: true,
             seccomp_start_gate_unlinked,
             create_runtime_path_authority_deferred,
@@ -6108,11 +6896,13 @@ impl EffectTestRunner {
             independent_entries,
             independent_entry_roles_are_distinct,
             reusable_entry_reinvocation_isolated,
+            declared_probe_incomplete_argv_denied,
             runtime_entry_infrastructure_observed,
             live_replacement_migrated_running_application,
             replacement_generation_descendant_default_exec_allowed,
             live_replacement_entries_use_new_generation,
             administrative_unapproved_exec_denied,
+            administrative_recovered_runtime_binding,
             execution_approval_trace_observed,
             execution_approval_prepare_trace_stage: execution_approval_prepare_trace
                 .as_ref()
@@ -6240,6 +7030,86 @@ impl EffectTestRunner {
     }
 }
 
+fn running_container_observation(
+    binding: &WorkloadBindingConfig,
+    init_pid: u32,
+) -> Result<CriRuntimeContainerObservationV1> {
+    let cgroup_path = binding
+        .root_cgroup_path
+        .as_ref()
+        .context(InvalidInputSnafu {
+            path: Path::new("runtime observation"),
+            reason: "the running fixture has no cgroup path",
+        })?;
+    let relative = cgroup_path
+        .strip_prefix("/sys/fs/cgroup")
+        .map_err(|error| {
+            InvalidInputSnafu {
+                path: cgroup_path,
+                reason: format!("the runtime cgroup is outside the unified root: {error}"),
+            }
+            .build()
+        })?;
+    let labels = [
+        (
+            "io.kubernetes.pod.namespace".to_owned(),
+            binding.namespace.clone(),
+        ),
+        ("io.kubernetes.pod.uid".to_owned(), binding.pod_uid.clone()),
+        (
+            "io.kubernetes.container.name".to_owned(),
+            binding.container_name.clone(),
+        ),
+    ]
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+    let metadata = Some(ContainerMetadata {
+        name: binding.container_name.clone(),
+        attempt: 0,
+    });
+    Ok(CriRuntimeContainerObservationV1 {
+        listed: Container {
+            id: binding.container_id.clone(),
+            pod_sandbox_id: binding.sandbox_id.clone(),
+            metadata: metadata.clone(),
+            image_ref: "sha256:local-content-id".to_owned(),
+            state: ContainerState::ContainerRunning as i32,
+            labels: labels.clone(),
+            ..Container::default()
+        },
+        status: ContainerStatusResponse {
+            status: Some(ContainerStatus {
+                id: binding.container_id.clone(),
+                metadata,
+                state: ContainerState::ContainerRunning as i32,
+                created_at: i64::try_from(binding.container_generation).map_err(|error| {
+                    InvalidInputSnafu {
+                        path: cgroup_path,
+                        reason: format!("the runtime generation is invalid: {error}"),
+                    }
+                    .build()
+                })?,
+                image_ref: format!("direct-runc@{}", binding.image_digest),
+                labels,
+                ..ContainerStatus::default()
+            }),
+            info: [(
+                "info".to_owned(),
+                json!({
+                    "pid": init_pid,
+                    "runtimeSpec": {
+                        "process": { "cwd": "/", "env": ["PATH=/bin:/usr/bin"] },
+                        "linux": { "cgroupsPath": Path::new("/").join(relative) }
+                    }
+                })
+                .to_string(),
+            )]
+            .into_iter()
+            .collect(),
+        },
+    })
+}
+
 fn prepare_entry_role_root(
     rootfs: &Path,
     workload_path: &Path,
@@ -6301,6 +7171,7 @@ fn prepare_entry_role_root(
         "concurrent-recursive-start.fifo",
         "stable-recursive-start.fifo",
         "reader-queue-burst-start.fifo",
+        "reader-queue-post-drain-start.fifo",
         "replacement-exec-request",
     ] {
         let path = role_directory.join(name);
@@ -6485,7 +7356,8 @@ fn recent_effect_summary(observations: &EffectObservationStore, marker: u64) -> 
         .take(16)
         .map(|event| {
             format!(
-                "reason={} family={} operation={} argument={} generation={} binding={} role={} vector={} admission={} atom={} object={} file=({},{},{},{},{}) result={} approval=(stage={},pending={},slot={},sequence={},failed={:#x},syscall_flags={:#x},expected=({},{},{},{},{}),observed=({},{},{},{},{}))",
+                "task={} reason={} family={} operation={} argument={} generation={} binding={} role={} vector={} admission={} atom={} object={} file=({},{},{},{},{}) result={} approval=(stage={},pending={},slot={},sequence={},failed={:#x},syscall_flags={:#x},expected=({},{},{},{},{}),observed=({},{},{},{},{}))",
+                event.task_cookie,
                 event.reason,
                 event.effect_family,
                 event.operation,
@@ -7025,7 +7897,7 @@ fn wait_for_runtime_active(
             .snapshot(initial_pid)
             .context(NodeSnafu)?
             .and_then(|snapshot| snapshot.runtime_binding)
-            .is_some_and(|binding| binding.prepared_container_state == "active")
+            .is_some_and(|binding| binding.lifecycle_state == "active")
         {
             return Ok(());
         }
@@ -7051,7 +7923,7 @@ fn wait_for_runtime_active(
         ensure!(
             Instant::now() < deadline,
             InvalidInputSnafu {
-                path: Path::new("prepared_container_state"),
+                path: Path::new("lifecycle_state"),
                 reason: format!(
                     "direct runc did not activate normal policy; observations={:?}",
                     observations

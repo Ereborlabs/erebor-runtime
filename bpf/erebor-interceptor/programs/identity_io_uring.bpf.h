@@ -187,7 +187,6 @@ static __always_inline bool io_uring_admitted_actor_is_exact(
     const execution_set_binding_state_v1 *binding)
 {
     return actor && binding &&
-           binding->lifecycle_state == binding_lifecycle_state_v1_active &&
            prepared_container_has_active_anchor(binding) &&
            actor->admitted_entry_rule_id &&
            id128_equal(&binding->binding_id, &actor->binding_id) &&
@@ -431,7 +430,7 @@ static __noinline int resolved_io_uring_effect_gate(
         scratch->effect_default.process_state_vector_id =
             request->actor.process_state_vector_id;
         scratch->effect_default.binding_lifecycle_state =
-            request->actor.binding_lifecycle_state;
+            policy_binding_lifecycle(request->actor.binding_lifecycle_state);
         decision =
             bpf_map_lookup_elem(&effect_defaults, &scratch->effect_default);
         return apply_effect_decision(config, scratch, generation, decision,
@@ -463,7 +462,7 @@ static __noinline int resolved_io_uring_effect_gate(
     scratch->effect_key.process_state_vector_id =
         request->actor.process_state_vector_id;
     scratch->effect_key.binding_lifecycle_state =
-        request->actor.binding_lifecycle_state;
+        policy_binding_lifecycle(request->actor.binding_lifecycle_state);
     decision = bpf_map_lookup_elem(&effect_decisions, &scratch->effect_key);
     if (!decision) {
         __builtin_memset(&scratch->effect_default, 0,

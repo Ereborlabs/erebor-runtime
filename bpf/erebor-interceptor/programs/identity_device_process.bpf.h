@@ -97,7 +97,7 @@ static __noinline int identity_device_ioctl_effect(struct file *file,
     scratch->device_effect_key.operation =
         kernel_effect_operation_v1_ioctl;
     scratch->device_effect_key.binding_lifecycle_state =
-        binding->lifecycle_state;
+        policy_binding_lifecycle(binding->lifecycle_state);
     scratch->device_effect_key.device_type = device_type;
     decision = bpf_map_lookup_elem(&device_effect_decisions,
                                    &scratch->device_effect_key);
@@ -276,7 +276,7 @@ static __always_inline bool effect_controller_may_read_target(
         return false;
     binding = binding_for_cgroup(target_cgroup, &binding_lookup);
     return !binding_lookup && binding &&
-           binding->lifecycle_state == binding_lifecycle_state_v1_active &&
+           prepared_container_has_active_anchor(binding) &&
            binding->label_epoch == config->label_epoch &&
            id128_equal(&binding->node_boot_id, &config->node_boot_id);
 }
@@ -529,7 +529,7 @@ static __noinline int identity_process_control_effect(
     scratch->process_control_rule_key.operation_argument = operation_argument;
     scratch->process_control_rule_key.operation = operation;
     scratch->process_control_rule_key.binding_lifecycle_state =
-        binding->lifecycle_state;
+        policy_binding_lifecycle(binding->lifecycle_state);
     rule = bpf_map_lookup_elem(&process_control_rules,
                                &scratch->process_control_rule_key);
     if (!rule) {

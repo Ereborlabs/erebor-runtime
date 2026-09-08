@@ -40,8 +40,7 @@ int erebor_sched_process_exit(struct trace_event_raw_sched_process_template *con
     if (config && !task_cgroup(task, &cgroup)) {
         binding = binding_for_cgroup(cgroup, &binding_lookup);
         if (!binding_lookup && binding &&
-            binding->prepared_container_state ==
-                prepared_container_state_v1_recovering)
+            binding->lifecycle_state == binding_lifecycle_state_v1_recovering)
             recovered_container_task_set_changed(binding, config);
     }
     exit_task_effect_attempts(task);

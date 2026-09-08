@@ -29,9 +29,16 @@ pub enum BindingLifecycleStateV1 {
     Unknown = 0,
     Preparing = 1,
     Active = 2,
-    Draining = 3,
-    Terminating = 4,
-    Tombstoned = 5,
+    Unarmed = 3,
+    Prepared = 4,
+    ExecPending = 5,
+    Recovering = 6,
+    ActiveRecovered = 7,
+    Draining = 8,
+    Terminating = 9,
+    Tombstoned = 10,
+    Expired = 11,
+    Corrupt = 12,
 }
 
 #[repr(u8)]

@@ -53,9 +53,8 @@ int BPF_PROG(erebor_task_alloc, struct task_struct *task,
             health->placement_mismatches++;
         return identity_deny(config);
     }
-    if (creator_binding &&
-        creator_binding->prepared_container_state ==
-            prepared_container_state_v1_recovering) {
+    if (creator_binding && creator_binding->lifecycle_state ==
+                               binding_lifecycle_state_v1_recovering) {
         recovered_container_task_set_changed(creator_binding, config);
         return identity_deny(config);
     }
@@ -123,9 +122,8 @@ int BPF_PROG(erebor_cgroup_attach_task, struct cgroup *cgroup,
         }
         return 0;
     }
-    if (binding &&
-        binding->prepared_container_state ==
-            prepared_container_state_v1_recovering) {
+    if (binding && binding->lifecycle_state ==
+                       binding_lifecycle_state_v1_recovering) {
         recovered_container_task_set_changed(binding, config);
         return 0;
     }
@@ -162,9 +160,6 @@ int erebor_cgroup_release(struct bpf_raw_tracepoint_args *context)
     if (binding) {
         binding->lifecycle_state = binding_lifecycle_state_v1_tombstoned;
         binding->initial_root_state = initial_root_state_v1_consumed;
-        if (!prepared_container_has_active_anchor(binding))
-            binding->prepared_container_state =
-                prepared_container_state_v1_expired;
         binding->prepared_container_exec_task_cookie = 0;
         binding->prepared_container_bootstrap_state =
             PREPARED_CONTAINER_BOOTSTRAP_AVAILABLE_V1;
@@ -192,9 +187,8 @@ int BPF_PROG(erebor_wake_up_new_task, struct task_struct *task)
         if (task_cgroup(task, &cgroup))
             return 0;
         binding = binding_for_cgroup(cgroup, &binding_lookup);
-        if (!binding_lookup && binding &&
-            binding->prepared_container_state ==
-                prepared_container_state_v1_recovering) {
+        if (!binding_lookup && binding && binding->lifecycle_state ==
+                                           binding_lifecycle_state_v1_recovering) {
             recovered_container_task_set_changed(binding, config);
             return 0;
         }
@@ -220,7 +214,6 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
 {
     identity_runtime_config_v1 *config;
     identity_health_v1 *health;
-    struct identity_scratch_v1 *scratch;
     task_label_v1 *label;
     task_coordinate_v1 *coordinate;
     process_security_state_v1 *process;
@@ -229,7 +222,6 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
     authority_domain_state_v1 *domain;
     execution_set_binding_state_v1 *binding;
     __u64 *profile_task_refs;
-    int claim;
     kernel_real_parent_interval_key_v1 parent_key;
     kernel_real_parent_interval_v1 *parent_interval;
     struct task_struct *task = context->task;
@@ -247,17 +239,9 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
         binding = binding_for_cgroup(cgroup, &binding_lookup);
     if (task_label_is_uninitialized(label))
         label = NULL;
-    if (!binding_lookup && binding &&
-        binding->prepared_container_state ==
-            prepared_container_state_v1_recovering) {
-        result = reconcile_recovered_task(task, config, binding);
-        if (result && result != PREPARED_CONTAINER_IDENTITY_DEFER_V1) {
-            health = identity_health_record();
-            if (health)
-                health->reconciliation_required++;
-        }
+    if (!binding_lookup && binding && binding->lifecycle_state ==
+                                       binding_lifecycle_state_v1_recovering)
         return 0;
-    }
     if (label) {
         coordinate = bpf_map_lookup_elem(&task_coordinates,
                                          &label->task_cookie);
@@ -327,8 +311,7 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
     }
     if (!binding)
         return 0;
-    if (binding->prepared_container_state ==
-        prepared_container_state_v1_prepared) {
+    if (binding->lifecycle_state == binding_lifecycle_state_v1_prepared) {
         /* The iterator can see the held task before the OCI response. Keep
          * the exact prepared-root proof when reconciliation labels it. */
         result = label_external_root(task, binding, config);
@@ -340,23 +323,8 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
         }
         return 0;
     }
-    scratch = identity_scratch_record();
-    health = identity_health_record();
-    claim = scratch ? claim_task_label(task) : -EACCES;
-    if (claim > 0)
-        return 0;
-    if (claim < 0) {
-        if (health)
-            health->reconciliation_required++;
-        return 0;
-    }
-    consume_initial_root(binding);
-    if (create_root(task, config, binding, scratch,
-                    external_root_class_v1_restored_or_unknown_root,
-                    installed_role_class_v1_fail_closed_unknown,
-                    binding->external_role_id) ||
-        finalize_task_coordinate(task, &scratch->label)) {
-        bpf_task_storage_delete(&task_labels, task);
+    if (label_restored_root(task, binding, config)) {
+        health = identity_health_record();
         if (health)
             health->reconciliation_required++;
     }

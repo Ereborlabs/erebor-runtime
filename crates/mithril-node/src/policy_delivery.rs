@@ -265,7 +265,7 @@ pub(crate) enum PolicyTransferActionV1 {
     Ready(Box<PolicyBundleV1>),
 }
 
-pub(crate) struct NodePolicyDeliveryOwner {
+pub struct NodePolicyDeliveryOwner {
     root: PathBuf,
     state_path: PathBuf,
     transfer_path: PathBuf,
@@ -274,7 +274,7 @@ pub(crate) struct NodePolicyDeliveryOwner {
 }
 
 impl NodePolicyDeliveryOwner {
-    pub(crate) fn load(state_directory: &Path) -> Result<Self> {
+    pub fn load(state_directory: &Path) -> Result<Self> {
         let root = state_directory.join("policy-delivery-v1");
         let state_path = root.join("state.json");
         let transfer_path = root.join("transfer.json");
@@ -5368,6 +5368,7 @@ mod tests {
         runtime_binding.sandbox_id = "e".repeat(64);
         runtime_binding.root_cgroup_path = Some(directory.path().join("pod-cgroup"));
         runtime_binding.container_generation = 42;
+        runtime_binding.arm_initial_root = false;
         let rollback = owner.record_runtime_binding(&runtime_binding)?;
         let admitted = super::policy_delivery_status(directory.path())?;
         assert_eq!(
@@ -5422,6 +5423,7 @@ mod tests {
             restored.workload_bindings[0].binding_id,
             runtime_binding.binding_id
         );
+        assert!(restored.workload_bindings[0].arm_initial_root);
 
         let mut new_boot = config.clone();
         new_boot.workload_bindings.clear();

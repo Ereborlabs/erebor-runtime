@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 
 use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{
-    CreatedByEdgeV1, EntrySecurityStateV1, ExecutionSetBindingStateV1, ExternalRootClassV1,
-    ExternalRootClassificationV1, Id128V1, ImageProvenanceV1, InstalledRoleClassV1,
-    KernelRealParentIntervalKeyV1, KernelRealParentIntervalV1, PreparedContainerStateV1,
-    ProcessExecutionInstanceV1, ProcessSecurityStateV1, ProcessStateVectorV1, TaskCoordinateV1,
+    BindingLifecycleStateV1, CreatedByEdgeV1, EntrySecurityStateV1, ExecutionSetBindingStateV1,
+    ExternalRootClassV1, ExternalRootClassificationV1, Id128V1, ImageProvenanceV1,
+    InstalledRoleClassV1, KernelRealParentIntervalKeyV1, KernelRealParentIntervalV1,
+    ProcessExecutionInstanceV1, ProcessSecurityStateV1, ProcessStateVectorV1,
+    RecoveredContainerActivationPhaseV1, RecoveredContainerActivationV1, TaskCoordinateV1,
     TaskLabelV1,
 };
 use rustix::process::{pidfd_open, Pid, PidfdFlags};
@@ -29,6 +30,8 @@ pub struct NativeTaskSnapshotV1 {
     pub admitted_entry_rule_id: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_binding: Option<NativeRuntimeBindingSnapshotV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovered_container_activation: Option<NativeRecoveredContainerActivationSnapshotV1>,
     pub creator_task_cookie: Option<u64>,
     pub root_class: Option<String>,
     pub installed_role_class: Option<String>,
@@ -57,12 +60,24 @@ pub struct NativeTaskSnapshotV1 {
 pub struct NativeRuntimeBindingSnapshotV1 {
     pub binding_id: String,
     pub root_cgroup_id: u64,
-    pub prepared_container_state: String,
+    pub lifecycle_state: String,
     pub prepared_container_entry_instance_id: String,
     pub prepared_container_exec_task_cookie: u64,
     pub prepared_container_initial_host_tgid: u32,
     #[serde(default)]
     pub prepared_container_bootstrap_state: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NativeRecoveredContainerActivationSnapshotV1 {
+    pub phase: String,
+    pub recovery_attempt_id: String,
+    pub application_entry_instance_id: String,
+    pub task_set_generation: u64,
+    pub expected_task_count: u64,
+    pub application_task_count: u64,
+    pub external_task_count: u64,
+    pub invalid_task_count: u32,
 }
 
 pub struct NativeIdentityInspector {
@@ -113,10 +128,7 @@ impl NativeIdentityInspector {
             |(root_cgroup_id, binding)| NativeRuntimeBindingSnapshotV1 {
                 binding_id: id_string(binding.binding_id),
                 root_cgroup_id,
-                prepared_container_state: prepared_container_state_name(
-                    binding.prepared_container_state,
-                )
-                .to_owned(),
+                lifecycle_state: binding_lifecycle_state_name(binding.lifecycle_state).to_owned(),
                 prepared_container_entry_instance_id: id_string(
                     binding.prepared_container_entry_instance_id,
                 ),
@@ -125,6 +137,11 @@ impl NativeIdentityInspector {
                 prepared_container_bootstrap_state: binding.prepared_container_bootstrap_state,
             },
         );
+        let recovered_container_activation = runtime_binding
+            .as_ref()
+            .map(|binding| self.recovered_container_activation(binding.root_cgroup_id))
+            .transpose()?
+            .flatten();
         let process = self.required(
             "process_states",
             process_state_id.as_bytes(),
@@ -205,6 +222,7 @@ impl NativeIdentityInspector {
             entry_instance_id: id_string(label.entry_instance_id),
             admitted_entry_rule_id: entry.admitted_entry_rule_id,
             runtime_binding,
+            recovered_container_activation,
             creator_task_cookie,
             root_class,
             installed_role_class,
@@ -227,6 +245,36 @@ impl NativeIdentityInspector {
             coordinate_state: coordinate.state as u8,
             exec_guard_state: process.exec_guard_state as u8,
             profile_generation_ref_id,
+        }))
+    }
+
+    fn recovered_container_activation(
+        &self,
+        root_cgroup_id: u64,
+    ) -> Result<Option<NativeRecoveredContainerActivationSnapshotV1>> {
+        let Some(value) = self
+            .state
+            .lookup(
+                "recovered_container_activations",
+                &root_cgroup_id.to_ne_bytes(),
+            )
+            .context(InterceptorSnafu)?
+        else {
+            return Ok(None);
+        };
+        let value = read_abi_value::<RecoveredContainerActivationV1>(
+            &value,
+            "recovered container activation",
+        )?;
+        Ok(Some(NativeRecoveredContainerActivationSnapshotV1 {
+            phase: recovered_container_activation_phase_name(value.phase).to_owned(),
+            recovery_attempt_id: id_string(value.recovery_attempt_id),
+            application_entry_instance_id: id_string(value.application_entry_instance_id),
+            task_set_generation: value.task_set_generation,
+            expected_task_count: value.expected_task_count,
+            application_task_count: value.validation_application_task_count,
+            external_task_count: value.validation_external_task_count,
+            invalid_task_count: value.invalid_task_count,
         }))
     }
 
@@ -332,15 +380,32 @@ fn installed_role_class_name(value: InstalledRoleClassV1) -> &'static str {
     }
 }
 
-fn prepared_container_state_name(value: PreparedContainerStateV1) -> &'static str {
+fn binding_lifecycle_state_name(value: BindingLifecycleStateV1) -> &'static str {
     match value {
-        PreparedContainerStateV1::Unarmed => "unarmed",
-        PreparedContainerStateV1::Prepared => "prepared",
-        PreparedContainerStateV1::ExecPending => "exec_pending",
-        PreparedContainerStateV1::Active => "active",
-        PreparedContainerStateV1::Expired => "expired",
-        PreparedContainerStateV1::Corrupt => "corrupt",
-        PreparedContainerStateV1::Recovering => "recovering",
-        PreparedContainerStateV1::ActiveRecovered => "active_recovered",
+        BindingLifecycleStateV1::Unknown => "unknown",
+        BindingLifecycleStateV1::Preparing => "preparing",
+        BindingLifecycleStateV1::Unarmed => "unarmed",
+        BindingLifecycleStateV1::Prepared => "prepared",
+        BindingLifecycleStateV1::ExecPending => "exec_pending",
+        BindingLifecycleStateV1::Active => "active",
+        BindingLifecycleStateV1::Recovering => "recovering",
+        BindingLifecycleStateV1::ActiveRecovered => "active_recovered",
+        BindingLifecycleStateV1::Draining => "draining",
+        BindingLifecycleStateV1::Terminating => "terminating",
+        BindingLifecycleStateV1::Tombstoned => "tombstoned",
+        BindingLifecycleStateV1::Expired => "expired",
+        BindingLifecycleStateV1::Corrupt => "corrupt",
+    }
+}
+
+fn recovered_container_activation_phase_name(
+    value: RecoveredContainerActivationPhaseV1,
+) -> &'static str {
+    match value {
+        RecoveredContainerActivationPhaseV1::Unknown => "unknown",
+        RecoveredContainerActivationPhaseV1::Scanning => "scanning",
+        RecoveredContainerActivationPhaseV1::Validating => "validating",
+        RecoveredContainerActivationPhaseV1::Complete => "complete",
+        RecoveredContainerActivationPhaseV1::Corrupt => "corrupt",
     }
 }

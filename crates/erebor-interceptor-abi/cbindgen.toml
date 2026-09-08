@@ -96,7 +96,6 @@ include = [
   "IdentityRuntimeConfigV1",
   "InstalledRoleClassV1",
   "InitialRootStateV1",
-  "PreparedContainerStateV1",
   "IoUringActorSnapshotV1",
   "IoUringExecutionStateKindV1",
   "IoUringExecutionStateV1",
@@ -240,7 +239,6 @@ include = [
 "IdentityRuntimeConfigV1" = "identity_runtime_config_v1"
 "InstalledRoleClassV1" = "installed_role_class_v1"
 "InitialRootStateV1" = "initial_root_state_v1"
-"PreparedContainerStateV1" = "prepared_container_state_v1"
 "IoUringActorSnapshotV1" = "io_uring_actor_snapshot_v1"
 "IoUringExecutionStateKindV1" = "io_uring_execution_state_kind_v1"
 "IoUringExecutionStateV1" = "io_uring_execution_state_v1"

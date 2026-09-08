@@ -16,7 +16,7 @@ static __always_inline void prepared_container_mark_corrupt(
 {
     if (!binding)
         return;
-    binding->prepared_container_state = prepared_container_state_v1_corrupt;
+    binding->lifecycle_state = binding_lifecycle_state_v1_corrupt;
     __sync_fetch_and_add(&binding->transition_version, 1);
 }
 
@@ -24,9 +24,7 @@ static __always_inline bool prepared_container_binding_is_prepared(
     execution_set_binding_state_v1 *binding)
 {
     return binding &&
-           binding->lifecycle_state == binding_lifecycle_state_v1_active &&
-           binding->prepared_container_state ==
-               prepared_container_state_v1_prepared;
+           binding->lifecycle_state == binding_lifecycle_state_v1_prepared;
 }
 
 static __always_inline bool prepared_container_actor_identity_is_exact(
@@ -166,9 +164,7 @@ static __always_inline bool prepared_container_pre_active_actor_is_exact(
     /* EXEC_PENDING is not active authority. Only the reserved exec task keeps
      * the bootstrap bypass until the successful exec commit. */
     if (!binding || !label || !entry ||
-        binding->lifecycle_state != binding_lifecycle_state_v1_active ||
-        binding->prepared_container_state !=
-            prepared_container_state_v1_exec_pending ||
+        binding->lifecycle_state != binding_lifecycle_state_v1_exec_pending ||
         binding->prepared_container_exec_task_cookie != label->task_cookie)
         return false;
     return prepared_container_actor_identity_is_exact(binding, label, entry);
@@ -179,11 +175,8 @@ static __always_inline bool prepared_container_admitted_actor_is_exact(
     const entry_security_state_v1 *entry)
 {
     return binding && label && entry &&
-           binding->lifecycle_state == binding_lifecycle_state_v1_active &&
-           (binding->prepared_container_state ==
-                prepared_container_state_v1_prepared ||
-            binding->prepared_container_state ==
-                prepared_container_state_v1_exec_pending ||
+           (binding->lifecycle_state == binding_lifecycle_state_v1_prepared ||
+            binding->lifecycle_state == binding_lifecycle_state_v1_exec_pending ||
             prepared_container_has_active_anchor(binding)) &&
            binding_matches_label(binding, label) &&
            id128_equal(&binding->execution_set_id,
@@ -212,20 +205,8 @@ static __always_inline int prepared_container_set_initial_entry(
 static __always_inline int prepared_container_reserve_activation(
     execution_set_binding_state_v1 *binding, const task_label_v1 *label)
 {
-    __u64 previous;
-
     if (!binding || !label)
         return -EACCES;
-    if (binding->prepared_container_state ==
-        prepared_container_state_v1_exec_pending)
-        return binding->prepared_container_exec_task_cookie ==
-                       label->task_cookie
-                   ? 0
-                   : -EACCES;
-    if (binding->prepared_container_state ==
-            prepared_container_state_v1_unarmed ||
-        prepared_container_has_active_anchor(binding))
-        return 0;
     if (binding->prepared_container_bootstrap_state ==
             PREPARED_CONTAINER_BOOTSTRAP_PENDING_V1 ||
         binding->prepared_container_exec_task_cookie)
@@ -238,17 +219,22 @@ static __always_inline int prepared_container_reserve_activation(
             &binding->prepared_container_exec_task_cookie, 0,
             label->task_cookie))
         return -EACCES;
-    previous = __sync_val_compare_and_swap(
-        &binding->prepared_container_state,
-        prepared_container_state_v1_prepared,
-        prepared_container_state_v1_exec_pending);
-    if (previous != prepared_container_state_v1_prepared) {
+    if (__sync_val_compare_and_swap(&binding->transition_guard, 0, 1)) {
         __sync_val_compare_and_swap(
             &binding->prepared_container_exec_task_cookie,
             label->task_cookie, 0);
         return -EACCES;
     }
+    if (binding->lifecycle_state != binding_lifecycle_state_v1_prepared) {
+        release_transition_guard(&binding->transition_guard);
+        __sync_val_compare_and_swap(
+            &binding->prepared_container_exec_task_cookie,
+            label->task_cookie, 0);
+        return -EACCES;
+    }
+    binding->lifecycle_state = binding_lifecycle_state_v1_exec_pending;
     __sync_fetch_and_add(&binding->transition_version, 1);
+    release_transition_guard(&binding->transition_guard);
     return 0;
 }
 
@@ -256,22 +242,24 @@ static __always_inline void prepared_container_rollback_activation(
     execution_set_binding_state_v1 *binding, __u64 task_cookie)
 {
     if (!binding ||
-        binding->prepared_container_state !=
-            prepared_container_state_v1_exec_pending ||
+        binding->lifecycle_state != binding_lifecycle_state_v1_exec_pending ||
         binding->prepared_container_exec_task_cookie != task_cookie)
         return;
     if (__sync_val_compare_and_swap(
             &binding->prepared_container_exec_task_cookie, task_cookie, 0) !=
             task_cookie ||
-        __sync_val_compare_and_swap(
-            &binding->prepared_container_state,
-            prepared_container_state_v1_exec_pending,
-            prepared_container_state_v1_prepared) !=
-            prepared_container_state_v1_exec_pending) {
+        __sync_val_compare_and_swap(&binding->transition_guard, 0, 1)) {
         prepared_container_mark_corrupt(binding);
         return;
     }
+    if (binding->lifecycle_state != binding_lifecycle_state_v1_exec_pending) {
+        release_transition_guard(&binding->transition_guard);
+        prepared_container_mark_corrupt(binding);
+        return;
+    }
+    binding->lifecycle_state = binding_lifecycle_state_v1_prepared;
     __sync_fetch_and_add(&binding->transition_version, 1);
+    release_transition_guard(&binding->transition_guard);
 }
 
 static __always_inline bool prepared_container_commit_activation(
@@ -279,16 +267,18 @@ static __always_inline bool prepared_container_commit_activation(
 {
     if (!binding ||
         binding->prepared_container_exec_task_cookie != task_cookie ||
-        __sync_val_compare_and_swap(
-            &binding->prepared_container_state,
-            prepared_container_state_v1_exec_pending,
-            prepared_container_state_v1_active) !=
-            prepared_container_state_v1_exec_pending)
+        __sync_val_compare_and_swap(&binding->transition_guard, 0, 1))
         return false;
+    if (binding->lifecycle_state != binding_lifecycle_state_v1_exec_pending) {
+        release_transition_guard(&binding->transition_guard);
+        return false;
+    }
+    binding->lifecycle_state = binding_lifecycle_state_v1_active;
     binding->prepared_container_exec_task_cookie = 0;
     binding->prepared_container_bootstrap_state =
         PREPARED_CONTAINER_BOOTSTRAP_AVAILABLE_V1;
     __sync_fetch_and_add(&binding->transition_version, 1);
+    release_transition_guard(&binding->transition_guard);
     return true;
 }
 

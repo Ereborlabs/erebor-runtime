@@ -42,7 +42,7 @@ pub use identity::{
 pub use local::RuntimeObservationServer;
 #[cfg(feature = "test-support")]
 pub use node::{AdministrativeExecTestOwner, PolicyControlPacingOwner};
-pub use node::{NodeChassis, NodeReadinessV1};
+pub use node::{NodeBindingReconciliation, NodeChassis, NodeReadinessV1};
 pub use observation::{
     CoverageCountersV1, CoverageGapReasonV1, CoverageHealthOwner, CoverageIntervalV1,
     CoverageSnapshotV1, CoverageStateV1, DeterministicLocalWindowOwner, EffectObservationCpuHealth,
@@ -55,7 +55,8 @@ pub use observation::{
 };
 pub use policy::NodePolicyGenerationOwner;
 pub use policy_delivery::{
-    policy_delivery_status, PolicyDeliveryStatusV1, PolicyDeliveryTargetStatusV1,
+    policy_delivery_status, NodePolicyDeliveryOwner, PolicyDeliveryStatusV1,
+    PolicyDeliveryTargetStatusV1,
 };
 pub use runtime_admission::{
     RuntimeAdmissionClient, RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1,

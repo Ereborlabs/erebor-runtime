@@ -78,7 +78,6 @@ pub struct NodePolicyGenerationOwner {
     measured_exact_objects: Vec<MeasuredExactObjectV1>,
     measured_mount_routes: Vec<MeasuredMountRouteV1>,
     resolved_path_binding_ids: BTreeSet<String>,
-    deferred_entry_binding_ids: BTreeSet<String>,
     generation_semantics: BTreeMap<u64, GenerationSemantics>,
     dynamic_rows: BTreeMap<&'static str, BTreeSet<Vec<u8>>>,
     exception_authority: Mutex<ExceptionAuthorityOwner>,
@@ -740,7 +739,7 @@ impl NodePolicyGenerationOwner {
             measured_mount_views,
             resolved_path_binding_ids,
             BTreeMap::new(),
-            BTreeSet::new(),
+            bindings.held_binding_ids().map(str::to_owned).collect(),
         )
     }
 
@@ -773,7 +772,7 @@ impl NodePolicyGenerationOwner {
             measured_mount_views,
             resolved_path_binding_ids,
             self.generation_semantics.clone(),
-            BTreeSet::new(),
+            bindings.held_binding_ids().map(str::to_owned).collect(),
         )
     }
 
@@ -1000,8 +999,7 @@ impl NodePolicyGenerationOwner {
                 now_utc_ns,
                 now_boottime_ns,
                 deferred_entry_binding_ids.contains(&binding.binding_id)
-                    || binding.arm_initial_root
-                        && !resolved_path_binding_ids.contains(&binding.binding_id),
+                    && !resolved_path_binding_ids.contains(&binding.binding_id),
             )?;
             match generations.get_mut(&binding.active_profile_generation_ref_id) {
                 Some(existing) => existing.merge(lowered)?,
@@ -1173,7 +1171,6 @@ impl NodePolicyGenerationOwner {
             measured_exact_objects,
             measured_mount_routes,
             resolved_path_binding_ids,
-            deferred_entry_binding_ids,
             generation_semantics,
             dynamic_rows,
             exception_authority: Mutex::new(exception_authority),
@@ -1317,20 +1314,7 @@ impl NodePolicyGenerationOwner {
         );
         resolved_path_binding_ids.retain(|binding_id| active_binding_ids.contains(binding_id));
         resolved_path_binding_ids.extend(retained_binding_ids);
-        let deferred_entry_binding_ids = BTreeSet::new();
-        if measured_exact_objects == self.measured_exact_objects
-            && measured_mount_routes == self.measured_mount_routes
-            && resolved_path_binding_ids == self.resolved_path_binding_ids
-            && deferred_entry_binding_ids == self.deferred_entry_binding_ids
-        {
-            self.mount_view_handles.extend(measured_mount_views);
-            if let Some((_, _, view)) = oci_entry_view {
-                self.mount_view_handles
-                    .insert(view.mount_namespace_inode()?, view);
-            }
-            return Ok(());
-        }
-
+        let deferred_entry_binding_ids = bindings.held_binding_ids().map(str::to_owned).collect();
         let mut candidate_mount_views = measured_mount_views;
         if let Some((_, _, view)) = oci_entry_view {
             candidate_mount_views.insert(view.mount_namespace_inode()?, view);
@@ -1505,26 +1489,18 @@ impl NodePolicyGenerationOwner {
                         binding.binding_id
                     ),
                 })?;
-            let entry_selector_ids = if binding.arm_initial_root {
-                BTreeSet::new()
-            } else {
-                entry_admission_path_selector_ids(artifact, binding)?
-            };
             let selectors = artifact
                 .policy_document
                 .path_selectors
                 .iter()
-                .filter(|selector| {
-                    selector.requires_exact_object()
-                        || entry_selector_ids.contains(&selector.path_selector_id)
-                });
+                .filter(|selector| selector.requires_exact_object());
             let target_oci_entry_view =
                 oci_entry_view.filter(|(binding_id, _, _)| *binding_id == target.binding_id);
             if !target.process_path_view_allowed && target_oci_entry_view.is_none() {
                 continue;
             }
             let view = crate::exact_object::ExactFileObjectView::acquire(target.init_pid)?;
-            let process_root_is_container = !binding.arm_initial_root || !view.has_host_root()?;
+            let process_root_is_container = !view.has_host_root()?;
             if let Some((_, held_initial_pid, _)) = target_oci_entry_view {
                 ensure!(
                     held_initial_pid == target.init_pid,
@@ -2402,29 +2378,10 @@ impl LoweredGeneration {
             .values()
             .map(|(handle, _)| *handle)
             .collect::<BTreeSet<_>>();
-        let recovery_entry_exact_handles =
-            if binding.root_cgroup_path.is_some() && !binding.arm_initial_root {
-                application_entry_path_selector_ids(artifact, binding)?
-                    .into_iter()
-                    .filter_map(|selector_id| {
-                        artifact
-                            .policy_document
-                            .path_selectors
-                            .iter()
-                            .find(|selector| selector.path_selector_id == selector_id)
-                            .map(|selector| selector.kernel_handle())
-                    })
-                    .collect::<BTreeSet<_>>()
-            } else {
-                BTreeSet::new()
-            };
         let policy_exact_objects = generation_objects
             .iter()
             .copied()
-            .filter(|object| {
-                exact_handles.contains(&object.exact_object_key_id)
-                    || recovery_entry_exact_handles.contains(&object.exact_object_key_id)
-            })
+            .filter(|object| exact_handles.contains(&object.exact_object_key_id))
             .collect::<Vec<_>>();
         validate_binding_roles(artifact, binding, &role_handles, &process_state_handles)?;
         let entry_admissions = lower_entry_admissions(
@@ -3618,7 +3575,8 @@ fn add_binding_activation(
                     generation: binding.active_profile_generation_ref_id,
                     initial_role_id: binding.initial_role_id,
                     external_role_id: binding.external_role_id,
-                    requires_live_cgroup: binding.root_cgroup_path.is_some(),
+                    requires_live_cgroup: binding.root_cgroup_path.is_some()
+                        && binding.scheduled_binding_authority_id.is_none(),
                 },
             )
             .is_none(),
@@ -3720,7 +3678,7 @@ fn activate_profile(
             .build()
         })?;
         if binding.profile_id != *profile_id
-            || binding.lifecycle_state != BindingLifecycleStateV1::Active
+            || !crate::identity::binding_lifecycle_is_addressable(binding.lifecycle_state)
         {
             continue;
         }
@@ -3758,6 +3716,7 @@ fn activate_profile(
             }
         );
         let mut desired = *current;
+        desired.lifecycle_state = BindingLifecycleStateV1::Active;
         desired.active_profile_generation_ref_id = target.generation;
         desired.initial_role_id = target.initial_role_id;
         desired.external_role_id = target.external_role_id;
@@ -4816,21 +4775,6 @@ fn entry_admission_path_selector_ids(
     artifact: &ProfileCandidateArtifactV1,
     binding: &WorkloadBindingConfig,
 ) -> Result<BTreeSet<String>> {
-    entry_admission_path_selector_ids_for_kind(artifact, binding, None)
-}
-
-fn application_entry_path_selector_ids(
-    artifact: &ProfileCandidateArtifactV1,
-    binding: &WorkloadBindingConfig,
-) -> Result<BTreeSet<String>> {
-    entry_admission_path_selector_ids_for_kind(artifact, binding, Some(EntryKindV1::ContainerStart))
-}
-
-fn entry_admission_path_selector_ids_for_kind(
-    artifact: &ProfileCandidateArtifactV1,
-    binding: &WorkloadBindingConfig,
-    entry_kind: Option<EntryKindV1>,
-) -> Result<BTreeSet<String>> {
     let mut selector_ids = BTreeSet::new();
     for assignment in artifact
         .policy_document
@@ -4844,7 +4788,6 @@ fn entry_admission_path_selector_ids_for_kind(
                     .container_kinds
                     .contains(&policy_container_kind(binding.container_kind))
                 && assignment.admission_execution_rule_id.is_some()
-                && entry_kind.is_none_or(|entry_kind| assignment.entry_kinds == [entry_kind])
         })
     {
         let rule_id =
@@ -6662,54 +6605,8 @@ mod tests {
         )?;
 
         assert_eq!(recovered.entry_admissions, held.entry_admissions);
-        assert_eq!(recovered.file_objects.len(), 1);
-        assert!(held.file_objects.is_empty());
-        let application_key = recovered
-            .entry_admissions
-            .keys()
-            .find_map(|key| EntryAdmissionRuleKeyV1::try_read_from_bytes(key).ok())
-            .filter(|key| key.source_role_id == recovery_binding.initial_role_id)
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "recovery test has no normal application entry".to_owned(),
-                }
-                .build()
-            })?;
-        let application_selector_id =
-            super::application_entry_path_selector_ids(&artifact, &recovery_binding)?
-                .into_iter()
-                .next()
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: "recovery test has no application selector".to_owned(),
-                    }
-                    .build()
-                })?;
-        let application_selector = artifact
-            .policy_document
-            .path_selectors
-            .iter()
-            .find(|selector| selector.path_selector_id == application_selector_id)
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "recovery test lost its application selector".to_owned(),
-                }
-                .build()
-            })?;
-        let object = recovered.file_objects.values().next().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "recovery test has no application object lookup".to_owned(),
-            }
-            .build()
-        })?;
-        let expected = ExactObjectBindingV1 {
-            profile_generation_ref_id: recovery_binding.active_profile_generation_ref_id,
-            exact_object_key_id: application_selector.kernel_handle(),
-            composite_atom_id: application_key.composite_atom_id,
-            state: ExactObjectBindingStateV1::ReadBack,
-            reserved: [0; 7],
-        };
-        assert_eq!(object, expected.as_bytes());
+        assert_eq!(recovered.file_objects, held.file_objects);
+        assert!(recovered.file_objects.is_empty());
         Ok(())
     }
 

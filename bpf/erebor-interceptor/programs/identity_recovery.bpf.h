@@ -30,9 +30,7 @@ static __always_inline bool recovery_record_matches_binding(
                binding->prepared_container_initial_host_tgid &&
            recovery->task_set_generation &&
            !id128_is_zero(&recovery->recovery_attempt_id) &&
-           binding->lifecycle_state == binding_lifecycle_state_v1_active &&
-           binding->prepared_container_state ==
-               prepared_container_state_v1_recovering;
+           binding->lifecycle_state == binding_lifecycle_state_v1_recovering;
 }
 
 static __always_inline recovered_container_activation_v1 *
@@ -144,7 +142,7 @@ static __noinline int recovery_task_relation(
     return RECOVERY_RELATION_UNRESOLVED_V1;
 }
 
-static __always_inline entry_admission_rule_v1 *recovery_application_rule(
+static __always_inline __u32 recovery_application_rule_id(
     struct task_struct *task,
     const execution_set_binding_state_v1 *binding,
     const identity_runtime_config_v1 *config,
@@ -152,48 +150,80 @@ static __always_inline entry_admission_rule_v1 *recovery_application_rule(
 {
     struct mm_struct *mm = NULL;
     struct file *executable = NULL;
-    execution_set_binding_state_v1 *activation;
-    exact_object_binding_v1 *object;
-    entry_admission_rule_key_v1 *key;
+    struct provisional_exec_request_v1 *request;
+    execution_argv_chunk_v1 *first;
     entry_admission_rule_v1 *rule;
+    unsigned long start = 0;
+    unsigned long end = 0;
+    __u64 atom;
+    long length;
+    int authority;
 
     if (!task || !scratch ||
         BPF_CORE_READ_INTO(&mm, task, mm) || !mm ||
-        BPF_CORE_READ_INTO(&executable, mm, exe_file) || !executable)
-        return NULL;
-    activation = binding_activation_for_new_root(binding, config);
-    if (!activation)
-        return NULL;
+        BPF_CORE_READ_INTO(&executable, mm, exe_file) || !executable ||
+        BPF_CORE_READ_INTO(&start, mm, arg_start) ||
+        BPF_CORE_READ_INTO(&end, mm, arg_end))
+        return 0;
+    request = bpf_task_storage_get(
+        &provisional_exec_requests, bpf_get_current_task_btf(), 0,
+        BPF_LOCAL_STORAGE_GET_F_CREATE);
+    if (!request || capture_execution_argv_packed_user(
+                        start, end, 0, task, &request->argv_snapshot)) {
+        clear_provisional_exec_request(bpf_get_current_task_btf());
+        return 0;
+    }
+    scratch = identity_scratch_record();
+    if (!scratch) {
+        clear_provisional_exec_request(bpf_get_current_task_btf());
+        return 0;
+    }
+    scratch->exec_argv_chunk_key.snapshot_id = request->argv_snapshot.snapshot_id;
+    scratch->exec_argv_chunk_key.chunk_index = 0;
+    scratch->exec_argv_chunk_key.reserved = 0;
+    first = bpf_map_lookup_elem(&execution_argv_provisional_chunks,
+                                &scratch->exec_argv_chunk_key);
+    if (!first) {
+        clear_provisional_exec_request(bpf_get_current_task_btf());
+        return 0;
+    }
+    length = bpf_probe_read_kernel_str(
+        scratch->exec_argument, sizeof(scratch->exec_argument), first->bytes);
+    if (length <= 1 || length > EXECUTION_ARGV_CHUNK_BYTES_V1 ||
+        first->bytes[((__u32)length - 1) &
+                     (EXECUTION_ARGV_CHUNK_BYTES_V1 - 1)]) {
+        clear_provisional_exec_request(bpf_get_current_task_btf());
+        return 0;
+    }
+    request->declared_entry.path_length = 0;
+    record_declared_exec_request(request, scratch, length);
+    atom = logical_exec_request_atom(&request->declared_entry,
+                                     binding->active_profile_generation_ref_id,
+                                     scratch);
+    clear_provisional_exec_request(bpf_get_current_task_btf());
+    if (!atom || !recovery_for_binding(binding, config))
+        return 0;
     exact_file_object_from_file(&scratch->file_object, executable);
     scratch->file_object.profile_generation_ref_id =
         binding->active_profile_generation_ref_id;
-    object = bpf_map_lookup_elem(&exact_file_objects,
-                                 &scratch->file_object);
-    if (!object ||
-        object->profile_generation_ref_id !=
-            binding->active_profile_generation_ref_id ||
-        !object->exact_object_key_id || !object->composite_atom_id ||
-        (object->state != exact_object_binding_state_v1_read_back &&
-         object->state != exact_object_binding_state_v1_active_dynamic))
-        return NULL;
-    key = &scratch->entry_admission_key;
-    __builtin_memset(key, 0, sizeof(*key));
-    key->profile_generation_ref_id =
+    scratch->entry_admission_key.profile_generation_ref_id =
         binding->active_profile_generation_ref_id;
-    key->binding_id = binding->binding_id;
-    key->composite_atom_id = object->composite_atom_id;
-    key->source_role_id = activation->initial_role_id;
-    rule = bpf_map_lookup_elem(&entry_admission_rules, key);
-    if (!rule || rule->target_role_id != activation->initial_role_id ||
+    scratch->entry_admission_key.binding_id = binding->binding_id;
+    scratch->entry_admission_key.composite_atom_id =
+        atom;
+    scratch->entry_admission_key.reserved = 0;
+    scratch->entry_admission_key.source_role_id =
+        binding->initial_role_id;
+    authority = normal_entry_authority(binding, config, scratch);
+    if (authority != 1)
+        return 0;
+    rule = bpf_map_lookup_elem(
+        &entry_admission_rules, &scratch->entry_admission_key);
+    if (!rule || rule->target_role_id != binding->initial_role_id ||
         rule->target_process_state_vector_id !=
-            CONSERVATIVE_PROCESS_STATE_VECTOR_V1 ||
-        !rule->admitted_entry_rule_id || rule->reserved ||
-        (rule->exact_object_key_id &&
-         (rule->exact_object_key_id != object->exact_object_key_id ||
-          !exact_file_keys_equal(&rule->executable_object,
-                                 &scratch->file_object))))
-        return NULL;
-    return rule;
+            CONSERVATIVE_PROCESS_STATE_VECTOR_V1)
+        return 0;
+    return rule->admitted_entry_rule_id;
 }
 
 static __always_inline int publish_recovery_provenance(
@@ -336,17 +366,19 @@ static __always_inline int adopt_recovered_application_root(
     recovered_container_activation_v1 *recovery,
     task_label_v1 *label, struct identity_scratch_v1 *scratch)
 {
-    entry_admission_rule_v1 *rule;
     entry_security_state_v1 *old_entry;
     id128_v1 entry_instance_id;
+    __u32 admitted_entry_rule_id;
 
     if (!id128_is_zero(&recovery->application_entry_instance_id))
         return -EACCES;
-    rule = recovery_application_rule(task, binding, config, scratch);
+    admitted_entry_rule_id = recovery_application_rule_id(
+        task, binding, config, scratch);
+    scratch = identity_scratch_record();
     old_entry = label ? bpf_map_lookup_elem(
                             &entry_states, &label->entry_instance_id)
                       : NULL;
-    if (!rule || !old_entry ||
+    if (!admitted_entry_rule_id || !scratch || !old_entry ||
         !recovery_preliminary_identity_is_restricted(
             label, binding, recovery) ||
         allocate_id(config, &entry_instance_id))
@@ -355,8 +387,7 @@ static __always_inline int adopt_recovered_application_root(
     scratch->entry.entry_instance_id = entry_instance_id;
     scratch->entry.live_task_refs = 0;
     scratch->entry.transition_version++;
-    scratch->entry.admitted_entry_rule_id =
-        rule->admitted_entry_rule_id;
+    scratch->entry.admitted_entry_rule_id = admitted_entry_rule_id;
     if (bpf_map_update_elem(&entry_states,
                             &scratch->entry.entry_instance_id,
                             &scratch->entry, BPF_NOEXIST))
@@ -488,7 +519,7 @@ static __always_inline int reconcile_recovered_task(
         label = NULL;
     if (!label && recovery->phase ==
                       recovered_container_activation_phase_v1_scanning) {
-        if (label_external_root(task, binding, config)) {
+        if (label_restored_root(task, binding, config)) {
             __sync_fetch_and_add(&recovery->invalid_task_count, 1);
             return -EACCES;
         }
@@ -551,6 +582,32 @@ static __always_inline int reconcile_recovered_task(
         else
             __sync_fetch_and_add(
                 &recovery->validation_external_task_count, 1);
+    }
+    return 0;
+}
+
+SEC("iter.s/task")
+int erebor_reconcile_recovering_tasks(struct bpf_iter__task *context)
+{
+    struct task_struct *task = context->task;
+    identity_runtime_config_v1 *config = identity_runtime_config();
+    struct cgroup *cgroup = NULL;
+    execution_set_binding_state_v1 *binding;
+    identity_health_v1 *health;
+    int lookup;
+    int result;
+
+    if (!task || !config || !config->enabled || task_cgroup(task, &cgroup))
+        return 0;
+    binding = binding_for_cgroup(cgroup, &lookup);
+    if (lookup || !binding || binding->lifecycle_state !=
+                                binding_lifecycle_state_v1_recovering)
+        return 0;
+    result = reconcile_recovered_task(task, config, binding);
+    if (result && result != PREPARED_CONTAINER_IDENTITY_DEFER_V1) {
+        health = identity_health_record();
+        if (health)
+            health->reconciliation_required++;
     }
     return 0;
 }
@@ -643,8 +700,7 @@ static __noinline int advance_recovered_container_activation(
         return 13;
     if (!recovery_record_matches_binding(recovery, binding, config) ||
         recovery->scan_generation != recovery->task_set_generation ||
-        binding->prepared_container_state !=
-            prepared_container_state_v1_recovering ||
+        binding->lifecycle_state != binding_lifecycle_state_v1_recovering ||
         !id128_is_zero(&binding->prepared_container_entry_instance_id)) {
         release_transition_guard(&recovery->transition_guard);
         reset_recovery_scan(recovery);
@@ -652,8 +708,7 @@ static __noinline int advance_recovered_container_activation(
     }
     binding->prepared_container_entry_instance_id =
         recovery->application_entry_instance_id;
-    binding->prepared_container_state =
-        prepared_container_state_v1_active_recovered;
+    binding->lifecycle_state = binding_lifecycle_state_v1_active_recovered;
     binding->transition_version++;
     recovery->expected_binding_transition_version =
         binding->transition_version;

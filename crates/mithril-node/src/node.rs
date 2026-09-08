@@ -32,6 +32,148 @@ use crate::{
     TrustCache, WorkloadBindingOwner,
 };
 
+/// Borrows the production owners for one policy or runtime reconciliation operation.
+pub struct NodeBindingReconciliation<'a> {
+    pub base_config: &'a NodeConfig,
+    pub config: &'a mut NodeConfig,
+    pub trust: &'a TrustCache,
+    pub delivery: &'a mut crate::NodePolicyDeliveryOwner,
+    pub bindings: &'a mut WorkloadBindingOwner,
+    pub policy: &'a mut Option<crate::NodePolicyGenerationOwner>,
+    pub identity: &'a NativeSecurityStateOwner,
+    pub node_boot_id: Id128V1,
+    pub label_epoch: u64,
+}
+
+impl NodeBindingReconciliation<'_> {
+    /// Uses supplied CRI observations or reads them from the configured runtime.
+    pub async fn reconcile(
+        &mut self,
+        host: &mut KernelHost,
+        observations: Option<Vec<crate::CriRuntimeContainerObservationV1>>,
+    ) -> Result<bool> {
+        let runtime = match observations {
+            Some(observations) => self.bindings.reconcile_runtime_observations(
+                host,
+                &self.config.workload_bindings,
+                observations,
+            )?,
+            None => {
+                self.bindings
+                    .reconcile(host, &self.config.workload_bindings)
+                    .await?
+            }
+        };
+        for binding in &runtime.recovered_bindings {
+            self.delivery.record_runtime_binding(binding)?;
+        }
+        if !runtime.retired_binding_ids.is_empty() {
+            self.delivery
+                .retire_runtime_bindings(&runtime.retired_binding_ids)?;
+        }
+        if !runtime.recovered_bindings.is_empty() || !runtime.retired_binding_ids.is_empty() {
+            let mut config = self.base_config.clone();
+            self.delivery.restore_config_for_session(
+                &mut config,
+                self.trust,
+                &self.node_boot_id.to_be_bytes(),
+                self.label_epoch,
+            )?;
+            *self.config = config;
+        }
+        let policy_authority_present =
+            self.policy.is_some() || self.delivery.inventory_retirement().is_some();
+        NodeChassis::reconcile_binding_identity(
+            self.config,
+            host,
+            self.bindings,
+            self.policy.as_mut(),
+            self.identity,
+            policy_authority_present,
+        )
+    }
+
+    /// Verifies and installs a signed Control bundle, then records kernel readback.
+    pub fn deliver_policy(
+        &mut self,
+        host: &mut KernelHost,
+        bundle: &PolicyBundleV1,
+        capabilities: &[CapabilityRecord],
+    ) -> Result<()> {
+        let generation = crate::NodePolicyGenerationOwner::next_generation_ref_id(
+            self.config,
+            host,
+            self.node_boot_id,
+            self.label_epoch,
+        )?;
+        let prepared = self.delivery.prepare_activation_for_session(
+            bundle,
+            self.trust,
+            self.config,
+            capabilities,
+            generation,
+            crate::policy::current_utc_ns()?,
+            &self.node_boot_id.to_be_bytes(),
+            self.label_epoch,
+        )?;
+        self.activate_policy(host, bundle, prepared)
+    }
+
+    fn activate_policy(
+        &mut self,
+        host: &mut KernelHost,
+        bundle: &PolicyBundleV1,
+        prepared: crate::policy_delivery::PreparedPolicyActivationV1,
+    ) -> Result<()> {
+        self.delivery.begin_activation(bundle, &prepared)?;
+        let owner = match self.policy.as_ref() {
+            Some(policy) => policy.reload_and_install_for_bindings(
+                &prepared.config,
+                host,
+                self.bindings,
+                self.node_boot_id,
+                self.label_epoch,
+            )?,
+            None => crate::NodePolicyGenerationOwner::load_and_install_for_bindings(
+                &prepared.config,
+                host,
+                self.bindings,
+                self.node_boot_id,
+                self.label_epoch,
+            )?,
+        };
+        self.identity.set_effect_policy(host, true)?;
+        self.bindings
+            .adopt_activated_profiles(host, &prepared.config.workload_bindings)?;
+        self.identity.recover_tasks(host, true)?;
+        self.bindings.read_back_recovered_activations(host)?;
+        let receipt = crate::NodePolicyGenerationOwner::activation_receipt(
+            host,
+            &prepared.profile_id,
+            prepared.profile_generation_ref_id,
+        )?;
+        snafu::ensure!(
+            receipt.profile_generation_ref_id == prepared.profile_generation_ref_id,
+            IdentityStateSnafu {
+                reason: "the policy activation receipt names a different generation",
+            }
+        );
+        self.delivery.commit_activation(
+            bundle,
+            &prepared,
+            crate::policy_delivery::PolicyActivationProofV1 {
+                node_bound_generation_digest: receipt.node_bound_generation_digest,
+                readback_digest: receipt.readback_digest,
+                probe_result_digest: receipt.probe_result_digest,
+                observed_utc_ns: crate::policy::current_utc_ns()?,
+            },
+        )?;
+        *self.config = prepared.config;
+        *self.policy = Some(owner);
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct NodeReadinessV1 {
     pub kernel_ready: bool,
@@ -299,10 +441,6 @@ impl NodeChassis {
             snafu::ensure!(
                 config.container_runtime.is_none()
                     && held_initial_pids.len() == config.workload_bindings.len()
-                    && config
-                        .workload_bindings
-                        .iter()
-                        .all(|binding| binding.arm_initial_root)
                     && held_initial_pids.iter().all(|pid| *pid > 0),
                 IdentityStateSnafu {
                     reason:
@@ -726,8 +864,6 @@ impl NodeChassis {
         if let Some(policy) = policy {
             identity.set_effect_policy(host, policy_authority_present)?;
             policy.reconcile_cri_exact_bindings(config, host, bindings)?;
-            // Give running tasks restricted identity before BPF starts recovery.
-            identity.activate_prepared_runtime_roots(host, policy_authority_present)?;
             bindings.adopt_activated_profiles(host, &config.workload_bindings)?;
             policy.reconcile_policy_lifecycle(host)?;
         }
@@ -2099,22 +2235,17 @@ impl NodeChassis {
                 reason: "runtime admission has no healthy active prevention generation",
             }
         );
-        let scheduled = self
+        let (scheduled, observation) = self
             .bindings
             .verify_runtime_preparation(&self.config.workload_bindings, request)
             .await?;
         let mut dynamic = self.config.clone();
         dynamic.workload_bindings[scheduled.binding_index] = scheduled.resolved.clone();
         dynamic.validate()?;
-        if let Err(error) = envelope.ensure_active() {
-            self.bindings.cancel_runtime_admission();
-            return Err(error.into());
-        }
-        dynamic.workload_bindings[scheduled.binding_index] = scheduled.resolved.clone();
+        envelope.ensure_active()?;
         let policy_authority_present =
             self.policy.is_some() || self.policy_delivery.inventory_retirement().is_some();
         let Some(host) = self.host.as_mut() else {
-            self.bindings.cancel_runtime_admission();
             return Err(IdentityStateSnafu {
                 reason: "runtime admission has no live kernel host".to_owned(),
             }
@@ -2122,27 +2253,20 @@ impl NodeChassis {
             .into());
         };
         // Cancellation must be visible before any existing or new kernel authority changes.
-        if let Err(error) = envelope.ensure_active() {
-            self.bindings.cancel_runtime_admission();
-            return Err(error.into());
-        }
+        envelope.ensure_active()?;
         if let Some(previous) = scheduled.previous_binding_id.as_deref() {
             // Retire a prior container lifetime before this replacement gains authority.
             if let Err(error) = self.bindings.retire_binding_id(host, previous) {
-                self.bindings.cancel_runtime_admission();
                 return Err(RuntimeAdmissionFailureV1::fatal(error));
             }
         }
-        if let Err(error) = envelope.ensure_active() {
-            self.bindings.cancel_runtime_admission();
-            return Err(error.into());
-        }
+        envelope.ensure_active()?;
         if let Err(error) = self.bindings.publish_held_activated_root(
             host,
             &scheduled.resolved,
             request.held_initial_pid()?,
+            &observation,
         ) {
-            self.bindings.cancel_runtime_admission();
             return Err(RuntimeAdmissionFailureV1::fatal(error));
         }
         // The held task must own the prepared entry before the runtime can
@@ -2158,7 +2282,6 @@ impl NodeChassis {
                 )
             });
         if let Err(error) = identity_readback {
-            self.bindings.cancel_runtime_admission();
             let rollback = self
                 .bindings
                 .retire_binding_id(host, &scheduled.resolved.binding_id);
@@ -2447,57 +2570,6 @@ impl NodeChassis {
                 reason: error.to_string(),
             };
         }
-        let runtime_reconciliation = match self
-            .bindings
-            .reconcile(host, &self.config.workload_bindings)
-            .await
-        {
-            Ok(reconciliation) => reconciliation,
-            Err(error) => {
-                return ReconciliationOutcome::IdentityUnhealthy {
-                    owner: "runtime binding",
-                    reason: error.to_string(),
-                };
-            }
-        };
-        if !runtime_reconciliation.recovered_bindings.is_empty() {
-            for binding in &runtime_reconciliation.recovered_bindings {
-                if let Err(error) = self.policy_delivery.record_runtime_binding(binding) {
-                    return ReconciliationOutcome::IdentityUnhealthy {
-                        owner: "runtime binding delivery",
-                        reason: error.to_string(),
-                    };
-                }
-            }
-        }
-        if !runtime_reconciliation.retired_binding_ids.is_empty() {
-            if let Err(error) = self
-                .policy_delivery
-                .retire_runtime_bindings(&runtime_reconciliation.retired_binding_ids)
-            {
-                return ReconciliationOutcome::IdentityUnhealthy {
-                    owner: "runtime binding delivery",
-                    reason: error.to_string(),
-                };
-            }
-        }
-        if !runtime_reconciliation.recovered_bindings.is_empty()
-            || !runtime_reconciliation.retired_binding_ids.is_empty()
-        {
-            let mut config = self.base_config.clone();
-            if let Err(error) = self.policy_delivery.restore_config_for_session(
-                &mut config,
-                &self.trust,
-                &self.node_boot_id.to_be_bytes(),
-                self.label_epoch,
-            ) {
-                return ReconciliationOutcome::IdentityUnhealthy {
-                    owner: "runtime binding delivery",
-                    reason: error.to_string(),
-                };
-            }
-            self.config = config;
-        }
         if let Some(administrative) = self.administrative.as_mut() {
             if let Err(error) = administrative.reconcile(host) {
                 return ReconciliationOutcome::IdentityUnhealthy {
@@ -2506,14 +2578,20 @@ impl NodeChassis {
                 };
             }
         }
-        if let Err(error) = Self::reconcile_binding_identity(
-            &self.config,
-            host,
-            &mut self.bindings,
-            self.policy.as_mut(),
-            &self.identity,
-            policy_authority_present,
-        ) {
+        if let Err(error) = (NodeBindingReconciliation {
+            base_config: &self.base_config,
+            config: &mut self.config,
+            trust: &self.trust,
+            delivery: &mut self.policy_delivery,
+            bindings: &mut self.bindings,
+            policy: &mut self.policy,
+            identity: &self.identity,
+            node_boot_id: self.node_boot_id,
+            label_epoch: self.label_epoch,
+        })
+        .reconcile(host, None)
+        .await
+        {
             return ReconciliationOutcome::IdentityUnhealthy {
                 owner: "recovered container identity",
                 reason: error.to_string(),
@@ -2795,60 +2873,25 @@ impl NodeChassis {
         prepared: crate::policy_delivery::PreparedPolicyActivationV1,
         evidence_healthy: bool,
     ) -> Result<()> {
-        // Durable pending intent precedes all kernel writes for restart recovery.
-        self.policy_delivery.begin_activation(bundle, &prepared)?;
-        let host = self.host.as_mut().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "the policy activation owner has no live kernel host".to_owned(),
-            }
-            .build()
+        let host = self.host.as_mut().context(IdentityStateSnafu {
+            reason: "the policy activation owner has no live kernel host",
         })?;
-        let owner = match self.policy.as_ref() {
-            Some(policy) => policy.reload_and_install_for_bindings(
-                &prepared.config,
-                host,
-                &self.bindings,
-                self.node_boot_id,
-                self.label_epoch,
-            )?,
-            None => crate::NodePolicyGenerationOwner::load_and_install_for_bindings(
-                &prepared.config,
-                host,
-                &self.bindings,
-                self.node_boot_id,
-                self.label_epoch,
-            )?,
-        };
-        self.identity.set_effect_policy(host, true)?;
-        self.bindings
-            .adopt_activated_profiles(host, &prepared.config.workload_bindings)?;
-        self.identity.recover_tasks(host, true)?;
-        self.bindings.read_back_recovered_activations(host)?;
-        // Exact active-pointer readback separates activation from staging success.
-        let receipt = crate::NodePolicyGenerationOwner::activation_receipt(
-            host,
-            &prepared.profile_id,
-            prepared.profile_generation_ref_id,
-        )?;
-        snafu::ensure!(
-            receipt.profile_generation_ref_id == prepared.profile_generation_ref_id,
-            IdentityStateSnafu {
-                reason: "the policy activation receipt names a different generation",
-            }
-        );
-        self.policy_delivery.commit_activation(
-            bundle,
-            &prepared,
-            crate::policy_delivery::PolicyActivationProofV1 {
-                node_bound_generation_digest: receipt.node_bound_generation_digest,
-                readback_digest: receipt.readback_digest,
-                probe_result_digest: receipt.probe_result_digest,
-                observed_utc_ns: crate::policy::current_utc_ns()?,
-            },
-        )?;
-        let prevention_enabled = owner.prevention_enabled();
-        self.config = prepared.config;
-        self.policy = Some(owner);
+        NodeBindingReconciliation {
+            base_config: &self.base_config,
+            config: &mut self.config,
+            trust: &self.trust,
+            delivery: &mut self.policy_delivery,
+            bindings: &mut self.bindings,
+            policy: &mut self.policy,
+            identity: &self.identity,
+            node_boot_id: self.node_boot_id,
+            label_epoch: self.label_epoch,
+        }
+        .activate_policy(host, bundle, prepared)?;
+        let prevention_enabled = self
+            .policy
+            .as_ref()
+            .is_some_and(crate::NodePolicyGenerationOwner::prevention_enabled);
         if let Some(capability) = self
             .registration
             .capabilities

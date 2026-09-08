@@ -271,7 +271,8 @@ static __always_inline physical_decision_v1 *effect_base_decision(
         scratch->observation.exact_object_key_id;
     scratch->effect_key.process_state_vector_id =
         process_vector->process_state_vector_id;
-    scratch->effect_key.binding_lifecycle_state = binding->lifecycle_state;
+    scratch->effect_key.binding_lifecycle_state =
+        policy_binding_lifecycle(binding->lifecycle_state);
     if (scratch->effect_key.exact_object_key_id) {
         decision = bpf_map_lookup_elem(&effect_decisions,
                                        &scratch->effect_key);
@@ -672,7 +673,8 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
     /* A create target is an unhashed dentry before the VFS creates it. Its
      * complete path can still match an explicit recursive path rule. */
     if (scratch->observation.operation != kernel_effect_operation_v1_create &&
-        path_unlinked(&scratch->effect_path))
+        (path_unlinked(&scratch->effect_path) ||
+         path_is_anonymous_pipe(&scratch->effect_path)))
         return admitted_default_or_hard_effect_result(
             config, scratch, binding, label, entry,
             effect_observation_reason_v1_unsupported_object);
@@ -882,8 +884,7 @@ static __noinline bool initial_root_is_before_first_exec(void)
     if (!task || task_cgroup(task, &cgroup))
         return false;
     binding = binding_for_cgroup(cgroup, &binding_lookup);
-    if (binding_lookup || !binding ||
-        binding->lifecycle_state != binding_lifecycle_state_v1_active)
+    if (binding_lookup || !binding)
         return false;
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!label)

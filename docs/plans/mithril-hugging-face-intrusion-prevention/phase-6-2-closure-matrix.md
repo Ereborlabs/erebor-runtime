@@ -86,6 +86,14 @@ Node treated the held binding's verified CRI `Created` identity as recovered
 setup omitted that CRI identity. A shared-operation reproduction is required
 before the fix or another Kubernetes run. See the recovered-entry design for
 the saved Node error and exact branch.
+The later lightweight run 16 reproduces the held-start publication error
+through the shared `publish_held_activated_root` operation. The current source
+selects recovery validation from `lifecycle_state`, not CRI identity presence.
+The held-start unit regression and lightweight runtime run 19 pass. The focused
+lightweight recovery run 37 also passes. The paired Kubernetes check passes in
+`kubernetes-held-created-green/protected-start-result.json` in the same evidence
+directory. The held-start correction is **Done**. See the implementation review
+for the scheduled-policy fixture correction and saved failing evidence.
 The full repository gate still fails the draft lifecycle ABI numbering check.
 Recovery remains **Not done**.
 

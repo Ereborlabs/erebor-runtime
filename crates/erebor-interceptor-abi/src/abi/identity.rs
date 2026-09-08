@@ -332,24 +332,6 @@ pub enum InitialRootStateV1 {
     Consumed = 2,
 }
 
-// The kernel owns the only transition from trusted runtime setup to workload
-// enforcement. A failed exec can return only its own reservation to PREPARED.
-#[repr(u64)]
-#[derive(
-    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
-)]
-pub enum PreparedContainerStateV1 {
-    #[default]
-    Unarmed = 0,
-    Prepared = 1,
-    ExecPending = 2,
-    Active = 3,
-    Expired = 4,
-    Corrupt = 5,
-    Recovering = 6,
-    ActiveRecovered = 7,
-}
-
 #[repr(u8)]
 #[derive(
     Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
@@ -679,7 +661,7 @@ pub struct ExecutionSetBindingStateV1 {
     pub lifecycle_state: super::BindingLifecycleStateV1,
     pub reserved: [u8; 7],
     pub initial_root_state: InitialRootStateV1,
-    pub prepared_container_state: PreparedContainerStateV1,
+    pub transition_guard: u64,
     pub prepared_container_entry_instance_id: Id128V1,
     pub prepared_container_exec_task_cookie: u64,
     pub prepared_container_initial_host_tgid: u32,
@@ -1148,11 +1130,6 @@ mod tests {
         assert_eq!(InstalledRoleClassV1::ApprovedAdministrativeRole as u8, 5);
         assert_eq!(InitialRootStateV1::Unarmed as u64, 0);
         assert_eq!(InitialRootStateV1::Consumed as u64, 2);
-        assert_eq!(PreparedContainerStateV1::Unarmed as u64, 0);
-        assert_eq!(PreparedContainerStateV1::Prepared as u64, 1);
-        assert_eq!(PreparedContainerStateV1::ExecPending as u64, 2);
-        assert_eq!(PreparedContainerStateV1::Active as u64, 3);
-        assert_eq!(PreparedContainerStateV1::Corrupt as u64, 5);
         assert_eq!(ExecutionApprovalSlotStateV1::Reserved as u64, 6);
         assert_eq!(ExecutionApprovalSlotStateV1::Tampered as u64, 7);
         assert_eq!(PendingExecutionApprovalStateV1::SlotReserved as u8, 2);
@@ -1165,17 +1142,12 @@ mod tests {
     #[test]
     fn checked_decoders_reject_invalid_enum_values() {
         let binding = ExecutionSetBindingStateV1 {
-            lifecycle_state: BindingLifecycleStateV1::Active,
+            lifecycle_state: BindingLifecycleStateV1::Prepared,
             initial_root_state: InitialRootStateV1::Available,
-            prepared_container_state: PreparedContainerStateV1::Prepared,
             ..ExecutionSetBindingStateV1::default()
         };
         let mut binding_bytes = binding.as_bytes().to_vec();
         binding_bytes[offset_of!(ExecutionSetBindingStateV1, lifecycle_state)] = u8::MAX;
-        assert!(ExecutionSetBindingStateV1::try_read_from_bytes(&binding_bytes).is_err());
-        let mut binding_bytes = binding.as_bytes().to_vec();
-        let state_offset = offset_of!(ExecutionSetBindingStateV1, prepared_container_state);
-        binding_bytes[state_offset..state_offset + size_of::<u64>()].fill(u8::MAX);
         assert!(ExecutionSetBindingStateV1::try_read_from_bytes(&binding_bytes).is_err());
         let slot = ExecutionApprovalSlotV1 {
             state: ExecutionApprovalSlotStateV1::Armed,

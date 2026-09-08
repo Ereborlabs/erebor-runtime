@@ -50,6 +50,43 @@ lightweight held-start setup omits this input at publication. Its shared-owner
 reproduction is not implemented. Do not count the recovery pass as proof of
 the normal held-start path.
 
+### Held-start correction under test
+
+The later lightweight run 16 reproduces this error through
+[`WorkloadBindingOwner::publish_held_activated_root`](../../../crates/mithril-node/src/identity/binding.rs).
+The saved failure is
+`target/mithril-recovery-qualification/20260908-resumed/held-created-red-run16.log`.
+The current working tree makes this existing operation public. Both Node and
+lightweight pass a CRI observation to the operation. The operation uses
+[`CriRuntimeContainerObservationV1::created_identity`](../../../crates/mithril-node/src/identity/runtime.rs)
+to verify the exact Created container, image, generation, and cgroup. Node no
+longer stores a pending CRI identity between verification and publication.
+Cancellation checks and publication rollback remain in the Node owner.
+
+The validator now selects recovery checks only when `lifecycle_state` is
+`RECOVERING`. CRI identity presence does not select recovery. The held-start
+unit regression passes. Lightweight run 17 passed binding publication, then
+failed the signed-row stability check. Run 18 showed equal rule values but
+different binding keys. The fixture installed concrete policy before the
+binding, instead of scheduled policy. The fixture now supplies scheduled
+policy first and retains the exact key-and-value stability check. Lightweight
+run 19 passes the complete runtime case. The saved result is `entry-role-run19.json`
+in the same evidence directory. The focused recovery case also passes in
+`recovered-run37.json`. The paired Kubernetes rerun passes in
+`kubernetes-held-created-green/protected-start-result.json`. It proves normal
+application start, six independent later entries, incomplete-argument denial,
+initial path deferral, cache retirement, and external-entry denial. The
+retained test cluster uses K3s `v1.35.5+k3s1` and containerd `2.2.3-k3s1`.
+Result for this held-start correction: **Done**.
+
+This checkpoint includes the preceding recovery changes. It does not close
+the recovery design. The final repository gate is recorded in
+`rust-gate-held-created-final.log`. Format, workspace check, and strict Clippy
+pass. The ABI assertion still fails because the draft changes `Tombstoned`
+from 5 to 10. All 243 Node unit tests pass. Numeric lifecycle predicates,
+the recovery publication guard, and complete recovery race qualification
+remain open. Result for the complete recovery design: **Not done**.
+
 ### Intended end state
 
 Node keeps every matching non-`UNKNOWN` BPF lifecycle state. The display field

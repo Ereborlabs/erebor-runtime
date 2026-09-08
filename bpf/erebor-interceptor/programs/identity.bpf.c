@@ -141,7 +141,13 @@ _Static_assert(sizeof(mount_mutation_attempt_v1) == 32,
 #include "identity_prepared_container.h"
 #include "identity_root_helpers.h"
 #include "identity_path.bpf.h"
-#include "identity_recovery.bpf.h"
+
+static __noinline int advance_recovered_container_activation(
+    const policy_activation_probe_v1 *request,
+    const identity_runtime_config_v1 *config);
+static __always_inline void recovered_container_task_set_changed(
+    execution_set_binding_state_v1 *binding,
+    const identity_runtime_config_v1 *config);
 
 SEC("classifier")
 int erebor_policy_activation_probe(struct __sk_buff *context)
@@ -325,6 +331,7 @@ static __noinline int io_uring_file_mapping_gate(
     struct file *file, unsigned long reqprot, unsigned long prot,
     unsigned long flags, int ret);
 #include "identity_exec.bpf.h"
+#include "identity_recovery.bpf.h"
 #include "identity_effects.bpf.h"
 #include "identity_io_uring.bpf.h"
 #include "identity_exit.bpf.h"

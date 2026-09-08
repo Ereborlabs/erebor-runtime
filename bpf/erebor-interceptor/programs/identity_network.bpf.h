@@ -167,7 +167,8 @@ static __always_inline physical_decision_v1 *network_control_decision(
     scratch->effect_default.effect_family = kernel_effect_family_v1_network;
     scratch->effect_default.operation = operation;
     scratch->effect_default.process_state_vector_id = process_state_vector_id;
-    scratch->effect_default.binding_lifecycle_state = lifecycle;
+    scratch->effect_default.binding_lifecycle_state =
+        policy_binding_lifecycle(lifecycle);
     return bpf_map_lookup_elem(&effect_defaults, &scratch->effect_default);
 }
 
@@ -189,7 +190,8 @@ static __always_inline physical_decision_v1 *network_destination_decision(
         process_state_vector_id;
     scratch->network_destination_key.operation = operation;
     scratch->network_destination_key.protocol = protocol;
-    scratch->network_destination_key.binding_lifecycle_state = lifecycle;
+    scratch->network_destination_key.binding_lifecycle_state =
+        policy_binding_lifecycle(lifecycle);
     return bpf_map_lookup_elem(&network_destination_decisions,
                                &scratch->network_destination_key);
 }

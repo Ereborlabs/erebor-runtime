@@ -199,6 +199,33 @@ identity predicates and the binding transition guard. These source gaps and
 complete tree, executable-mismatch, and race qualification remain open.
 Result: **Not done**. No new implementation commit is qualified yet.
 
+### Held-Start Validation Correction On 2026-09-08
+
+The lightweight runtime case now calls the same
+`WorkloadBindingOwner::publish_held_activated_root` operation as Node. It
+supplies the scheduled policy before the held binding and supplies a CRI
+`Created` observation with runtime PID zero. The held process PID remains a
+separate OCI input. This is a normal initial start, not recovery.
+
+Run 16 failed with the exact Kubernetes error before the validator fix:
+`recovered initial-root preparation changed before publication`. The saved
+log is
+`target/mithril-recovery-qualification/20260908-resumed/held-created-red-run16.log`.
+The validator now selects recovery checks from `lifecycle_state = RECOVERING`,
+not from CRI identity presence. The shared operation verifies CRI identity
+through the existing production validator. Node no longer stores a pending
+runtime identity between verification and publication. The runtime request
+keeps its cancellation checks and rollback behavior.
+
+Lightweight runtime run 19 and focused recovery run 37 pass. Their results
+are `entry-role-run19.json` and `recovered-run37.json` in the same evidence
+directory. The paired Kubernetes protected-start run passes in
+`kubernetes-held-created-green/protected-start-result.json`. It proves normal
+start, independent declared entries, incomplete-argument denial, path
+deferral, cache retirement, and external-entry denial. Result for the
+held-start correction: **Done**. The broader source gaps listed above remain
+open. Result for this recovery design: **Not done**.
+
 ## Intended End State
 
 Node reads the exact retained BPF binding before it starts recovery. A binding

@@ -5867,7 +5867,7 @@ impl IdentityTestRunner {
                         && root.root_class.as_deref() == Some("initial_container_root")
                         && root.installed_role_class.as_deref() == Some("initial_role")
                         && root.active_role_id == binding.initial_role_id
-                        && runtime.prepared_container_state == "prepared"
+                        && runtime.lifecycle_state == "prepared"
                         && runtime.prepared_container_entry_instance_id == root.entry_instance_id
                         && runtime.prepared_container_initial_host_tgid == pid,
                     InvalidInputSnafu {

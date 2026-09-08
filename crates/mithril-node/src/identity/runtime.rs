@@ -82,7 +82,6 @@ impl RuntimeContainerIdentity {
                             &configured.container_name,
                         )
                     && configured.root_cgroup_path.is_none()
-                    && configured.arm_initial_root
                     && self.matches_scheduled(configured),
                 IdentityStateSnafu {
                     reason: "running CRI identity differs from its signed scheduled target",
@@ -98,8 +97,7 @@ impl RuntimeContainerIdentity {
             resolved.container_generation = self.generation;
         }
         resolved.root_cgroup_path = Some(self.cgroup_path.clone());
-        resolved.arm_initial_root =
-            configured.arm_initial_root && self.state == RuntimeContainerState::Created;
+        resolved.arm_initial_root = self.state == RuntimeContainerState::Created;
         Ok(resolved)
     }
 
@@ -273,7 +271,7 @@ impl ContainerRuntimeInventory {
     pub(super) async fn inspect_created_for_admission(
         &mut self,
         expected: &WorkloadBindingConfig,
-    ) -> Result<RuntimeContainerIdentity> {
+    ) -> Result<(RuntimeContainerIdentity, CriRuntimeContainerObservationV1)> {
         // Query CRI directly; hook annotations alone are not runtime identity proof.
         let listed = self
             .client
@@ -308,7 +306,54 @@ impl ContainerRuntimeInventory {
             .await
             .context(ContainerRuntimeRpcSnafu)?
             .into_inner();
-        let status = response.status.ok_or_else(|| {
+        let observation = CriRuntimeContainerObservationV1 {
+            listed: container,
+            status: response,
+        };
+        let identity = observation.created_identity(expected, &self.cgroup_root)?;
+        Ok((identity, observation))
+    }
+
+    async fn observe(
+        &mut self,
+        container: k8s_cri::v1::Container,
+    ) -> Result<Option<CriRuntimeContainerObservationV1>> {
+        let requested_container_id = container.id.clone();
+        let response = match self
+            .client
+            .container_status(ContainerStatusRequest {
+                container_id: requested_container_id.clone(),
+                verbose: true,
+            })
+            .await
+        {
+            Ok(response) => response.into_inner(),
+            Err(source) if source.code() == tonic::Code::NotFound => return Ok(None),
+            Err(source) => Err(source).context(ContainerRuntimeRpcSnafu)?,
+        };
+        Ok(Some(CriRuntimeContainerObservationV1 {
+            listed: container,
+            status: response,
+        }))
+    }
+}
+
+impl CriRuntimeContainerObservationV1 {
+    pub(super) fn created_identity(
+        &self,
+        expected: &WorkloadBindingConfig,
+        cgroup_root: &Path,
+    ) -> Result<RuntimeContainerIdentity> {
+        ensure!(
+            self.listed.id == expected.container_id
+                && self.listed.state == ContainerState::ContainerCreated as i32
+                && self.listed.pod_sandbox_id == expected.sandbox_id,
+            IdentityStateSnafu {
+                reason: "runtime admission container is not one exact Created CRI record",
+            }
+        );
+        let response = &self.status;
+        let status = response.status.as_ref().ok_or_else(|| {
             IdentityStateSnafu {
                 reason: "runtime admission CRI response has no status".to_owned(),
             }
@@ -360,11 +405,8 @@ impl ContainerRuntimeInventory {
             }
         );
         // Runtime admission verifies this CRI cgroup while the initial task is held.
-        let process = runtime_process_from_info(
-            &response.info,
-            &self.cgroup_root,
-            RuntimeContainerState::Created,
-        )?;
+        let process =
+            runtime_process_from_info(&response.info, cgroup_root, RuntimeContainerState::Created)?;
         ensure!(
             process.init_pid == 0,
             IdentityStateSnafu {
@@ -384,10 +426,10 @@ impl ContainerRuntimeInventory {
             );
         }
         Ok(RuntimeContainerIdentity {
-            full_container_id: status.id,
+            full_container_id: status.id.clone(),
             namespace: namespace.clone(),
             pod_uid: pod_uid.clone(),
-            sandbox_id: container.pod_sandbox_id,
+            sandbox_id: self.listed.pod_sandbox_id.clone(),
             container_name: container_name.clone(),
             image_digest: expected.image_digest.clone(),
             generation,
@@ -397,29 +439,6 @@ impl ContainerRuntimeInventory {
             path_entries: process.path_entries,
             state: RuntimeContainerState::Created,
         })
-    }
-
-    async fn observe(
-        &mut self,
-        container: k8s_cri::v1::Container,
-    ) -> Result<Option<CriRuntimeContainerObservationV1>> {
-        let requested_container_id = container.id.clone();
-        let response = match self
-            .client
-            .container_status(ContainerStatusRequest {
-                container_id: requested_container_id.clone(),
-                verbose: true,
-            })
-            .await
-        {
-            Ok(response) => response.into_inner(),
-            Err(source) if source.code() == tonic::Code::NotFound => return Ok(None),
-            Err(source) => Err(source).context(ContainerRuntimeRpcSnafu)?,
-        };
-        Ok(Some(CriRuntimeContainerObservationV1 {
-            listed: container,
-            status: response,
-        }))
     }
 }
 
@@ -973,7 +992,7 @@ mod tests {
     }
 
     #[test]
-    fn cri_running_container_resolves_local_cgroup_conservatively() {
+    fn cri_running_container_resolves_local_cgroup_conservatively() -> crate::Result<()> {
         let configured = WorkloadBindingConfig {
             binding_id: "11111111-1111-4111-8111-111111111111".to_owned(),
             scheduled_binding_authority_id: None,
@@ -1017,9 +1036,7 @@ mod tests {
             state: RuntimeContainerState::Running,
         };
 
-        let resolved = identity
-            .resolve(&configured)
-            .expect("resolve running container");
+        let resolved = identity.resolve(&configured)?;
         assert_eq!(
             resolved.root_cgroup_path.as_ref(),
             Some(&identity.cgroup_path)
@@ -1029,12 +1046,7 @@ mod tests {
         let mut created = identity;
         created.state = RuntimeContainerState::Created;
         created.init_pid = 0;
-        assert!(
-            created
-                .resolve(&configured)
-                .expect("resolve created container")
-                .arm_initial_root
-        );
+        assert!(created.resolve(&configured)?.arm_initial_root);
         assert!(
             created.accepts_observed_lifetime(&RuntimeContainerIdentity {
                 init_pid: 42,
@@ -1042,6 +1054,7 @@ mod tests {
                 ..created.clone()
             })
         );
+        Ok(())
     }
 
     #[test]

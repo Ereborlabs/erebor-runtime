@@ -252,6 +252,15 @@ static __always_inline bool path_unlinked(const struct path *path)
     return dentry_unlinked(dentry);
 }
 
+static __always_inline bool path_is_anonymous_pipe(const struct path *path)
+{
+    unsigned long magic = 0;
+
+    return path &&
+           !BPF_CORE_READ_INTO(&magic, path, dentry, d_sb, s_magic) &&
+           magic == PIPEFS_MAGIC;
+}
+
 static __always_inline int exact_inode_generation(
     struct inode *inode, __u32 filesystem_device, bool create,
     __u64 *generation)

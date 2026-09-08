@@ -15,6 +15,7 @@ keep_vms=false
 manual_environment=false
 protected_start_only=false
 lightweight_only=false
+recovered_entry_only=false
 reuse_environment=
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
 reuse_images=${MITHRIL_VM_REUSE_IMAGES:-false}
@@ -34,7 +35,7 @@ runtime_sockets_held=false
 held_runtime_socket=$runtime_hook_socket.gate-$run_id
 
 usage() {
-  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--keep-vms] [--manual-environment] [--protected-start-only] [--lightweight-only] [--reuse-environment PATH]" >&2
+  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--keep-vms] [--manual-environment] [--protected-start-only] [--lightweight-only] [--recovered-entry-only] [--reuse-environment PATH]" >&2
 }
 
 while (($#)); do
@@ -67,6 +68,10 @@ while (($#)); do
       keep_vms=true
       shift
       ;;
+    --recovered-entry-only)
+      recovered_entry_only=true
+      shift
+      ;;
     --reuse-environment)
       (($# >= 2)) || { usage; exit 2; }
       reuse_environment=$2
@@ -85,6 +90,12 @@ done
 
 [[ $protected_start_only == false || $manual_environment == false ]] || {
   echo "--protected-start-only cannot run with --manual-environment" >&2
+  exit 2
+}
+[[ $recovered_entry_only == false ||
+    ( $manual_environment == false && $protected_start_only == false &&
+      $lightweight_only == false && -z $reuse_environment ) ]] || {
+  echo "--recovered-entry-only requires a fresh automated environment" >&2
   exit 2
 }
 
@@ -134,6 +145,10 @@ if [[ -d $output_directory ]] &&
 fi
 mkdir -p -- "$output_directory"
 output_directory=$(cd -- "$output_directory" && pwd)
+work_root=${MITHRIL_VM_WORK_ROOT:-$repo_root/target/mithril-vm-work}
+mkdir -p -- "$work_root"
+work_root=$(cd -- "$work_root" && pwd)
+export MITHRIL_VM_WORK_ROOT=$work_root
 
 reusing_environment=false
 if [[ -n $reuse_environment ]]; then
@@ -164,8 +179,11 @@ if [[ -n $reuse_environment ]]; then
   }
   [[ $vm_a == mithril-runtime-qualification-[0-9]* &&
       $vm_b == mithril-runtime-qualification-[0-9]* && $vm_a != "$vm_b" &&
-      $work_a == /tmp/mithril-vm-test.* &&
-      $work_b == /tmp/mithril-vm-test.* && -d $work_a && -d $work_b &&
+      ( $work_a == /tmp/mithril-vm-test.* ||
+        $work_a == "$work_root"/mithril-vm-test.* ) &&
+      ( $work_b == /tmp/mithril-vm-test.* ||
+        $work_b == "$work_root"/mithril-vm-test.* ) &&
+      -d $work_a && -d $work_b &&
       $retained_known_hosts == "$work_a/known_hosts" ]] || {
     echo "retained environment does not identify two owned harness VMs" >&2
     exit 2
@@ -184,8 +202,8 @@ if [[ -n $reuse_environment ]]; then
   keep_vms=true
   reusing_environment=true
 else
-  work_a=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
-  work_b=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
+  work_a=$(mktemp -d "$work_root/mithril-vm-test.XXXXXX")
+  work_b=$(mktemp -d "$work_root/mithril-vm-test.XXXXXX")
   vm_a=mithril-runtime-qualification-$$1
   vm_b=mithril-runtime-qualification-$$2
   export MITHRIL_VM_KNOWN_HOSTS=$work_a/known_hosts
@@ -417,12 +435,14 @@ cleanup() {
       "$MITHRIL_VM_KNOWN_HOSTS" "$control_state_claim" \
       "$control_config_secret" "$admission_tls_secret" || cleanup_failed=true
   else
-    if [[ $work_a == /tmp/mithril-vm-test.* ]]; then
+    if [[ $work_a == /tmp/mithril-vm-test.* ||
+          $work_a == "$work_root"/mithril-vm-test.* ]]; then
       rm -rf -- "$work_a" || cleanup_failed=true
     else
       cleanup_failed=true
     fi
-    if [[ $work_b == /tmp/mithril-vm-test.* ]]; then
+    if [[ $work_b == /tmp/mithril-vm-test.* ||
+          $work_b == "$work_root"/mithril-vm-test.* ]]; then
       rm -rf -- "$work_b" || cleanup_failed=true
     else
       cleanup_failed=true
@@ -1093,6 +1113,12 @@ if [[ $reuse_mithril_state == true ]]; then
     qualify_state_preserving_upgrade=false
   fi
 fi
+node_selector_key=mithril.erebor.dev/pool
+node_selector_value=protected
+if [[ $recovered_entry_only == true ]]; then
+  node_selector_key=mithril.erebor.dev/recovered-entry-test
+  node_selector_value=enabled
+fi
 values=$work_a/values.yaml
 cat >"$values" <<EOF
 node:
@@ -1105,7 +1131,7 @@ node:
   runHostPath: /run/mithril
   containerRuntimeSocket: /run/k3s/containerd/containerd.sock
   nodeSelector:
-    mithril.erebor.dev/pool: protected
+    $node_selector_key: $node_selector_value
   affinity:
     nodeAffinity:
       requiredDuringSchedulingIgnoredDuringExecution:
@@ -1250,8 +1276,10 @@ wait_node_epoch_advance() {
 # begin quarantined. Retained recovery needs the measured config before its
 # exact installer and node containers can start.
 if [[ $reusing_environment == false ]]; then
-  wait_node_projection "$node_a_name" "" true
-  wait_node_projection "$node_b_name" "" true
+  if [[ $recovered_entry_only == false ]]; then
+    wait_node_projection "$node_a_name" "" true
+    wait_node_projection "$node_b_name" "" true
+  fi
   for index in 0 1; do
     node=$vm_a
     remote=$remote_a
@@ -1260,14 +1288,16 @@ if [[ $reusing_environment == false ]]; then
       "$remote/materials/node.json" /etc/mithril/node.json
   done
 fi
-remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
-  --timeout=300s >/dev/null
-wait_node_projection "$node_a_name" true false
-wait_node_projection "$node_b_name" true false
-assert_runtime_hook installed "$vm_a" "$remote_a"
-assert_runtime_hook installed "$vm_b" "$remote_b"
+if [[ $recovered_entry_only == false ]]; then
+  remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
+    --timeout=300s >/dev/null
+  wait_node_projection "$node_a_name" true false
+  wait_node_projection "$node_b_name" true false
+  assert_runtime_hook installed "$vm_a" "$remote_a"
+  assert_runtime_hook installed "$vm_b" "$remote_b"
+fi
 
-if [[ $protected_start_only == false ]]; then
+if [[ $protected_start_only == false && $recovered_entry_only == false ]]; then
   # The full suite proves Node UID replacement. The focused startup lane keeps
   # the retained Kubernetes Nodes stable and replaces only product resources.
   old_node_b_uid=$(remote_kubectl get node "$node_b_name" -o jsonpath='{.metadata.uid}')
@@ -1442,6 +1472,22 @@ render_pod() {
 render_pod protected
 render_pod gate-failure
 render_pod entry-roles
+render_pod recovered-entry
+
+incomplete_probe_base=$work_a/incomplete-argv-probe-base.yaml
+sed "s/MITHRIL_CONVERGENCE_NAMESPACE/$workload_namespace/g" \
+  "$repo_root/crates/mithril-e2e/fixtures/convergence/incomplete-argv-probe-v1.yaml" \
+  >"$incomplete_probe_base"
+"$provider" put "$vm_a" "$incomplete_probe_base" \
+  "$remote_a/incomplete-argv-probe-base.yaml"
+incomplete_probe=$work_a/incomplete-argv-probe.json
+remote_kubectl create --dry-run=client \
+  -f "$remote_a/incomplete-argv-probe-base.yaml" -o json | jq '
+    .spec.containers[0].startupProbe.exec.command +=
+      [range(0; 3000) | "/etc/hostname"]
+  ' >"$incomplete_probe"
+"$provider" put "$vm_a" "$incomplete_probe" \
+  "$remote_a/incomplete-argv-probe.json"
 
 unprotected=$work_a/unprotected.yaml
 sed "s/MITHRIL_CONVERGENCE_NAMESPACE/$workload_namespace/g" \
@@ -1457,11 +1503,13 @@ jq -e '
 
 protected_dry_run=$(remote_kubectl create --dry-run=server \
   -f "$remote_a/protected.yaml" -o json)
-jq -e --arg profile_id "$profile_id" '
+jq -e --arg profile_id "$profile_id" \
+  --arg node_selector_key "$node_selector_key" \
+  --arg node_selector_value "$node_selector_value" '
   .metadata.annotations["mithril.erebor.dev/profile-id"] == $profile_id and
   (.metadata.annotations["mithril.erebor.dev/policy-source-revision"] | length) == 64 and
   (.spec.nodeName // "") == "" and
-  .spec.nodeSelector["mithril.erebor.dev/pool"] == "protected" and
+  .spec.nodeSelector[$node_selector_key] == $node_selector_value and
   .spec.nodeSelector["mithril.erebor.dev/ready"] == "true" and
   any(.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[].matchExpressions[]?;
       .key == "kubernetes.io/arch" and .operator == "In" and .values == ["amd64"])
@@ -2054,13 +2102,6 @@ start_entry_effect_capture() {
   node_inspect "$node_name" effects \
     --socket-path /run/mithril/observation.sock \
     --cgroup-scope / --samples 6000 --sample-interval-ms 100 \
-    --reason APPLICATION_DEFAULT_ALLOW \
-    --reason PREPARED_RUNTIME_INFRASTRUCTURE \
-    --reason RUNTIME_ENTRY_INFRASTRUCTURE \
-    --reason EXECUTION_APPROVAL_VERIFICATION_FAILED \
-    --reason UNSUPPORTED_OBJECT \
-    --reason UNRESOLVED_OBJECT \
-    --reason PATH_TREE_POLICY_DENY \
     >"$output" 2>/dev/null &
   entry_effect_capture_pids+=("$!")
 }
@@ -2155,6 +2196,337 @@ max_effect_boottime() {
     END { printf "%.0f\n", maximum }
   '
 }
+
+if [[ $recovered_entry_only == true ]]; then
+  prepare_pod_markers recovered-entry true
+  for node in "$vm_a" "$vm_b"; do
+    "$provider" run "$node" sudo rm -f \
+      /var/lib/mithril-convergence/markers/recovered-entry.concurrent-startup-gate
+  done
+  if ! "$provider" run "$vm_a" command -v bpftrace >/dev/null; then
+    "$provider" run "$vm_a" \
+      'sudo apt-get update && sudo apt-get install -y --no-install-recommends bpftrace'
+  fi
+  "$provider" put "$vm_a" \
+    "$repo_root/crates/mithril-e2e/fixtures/convergence/recovered-entry-hooks.bt" \
+    "$remote_a/recovered-entry-hooks.bt"
+  recovered_dry_run=$(remote_kubectl create --dry-run=server \
+    -f "$remote_a/recovered-entry.yaml" -o json)
+  jq -e --arg profile_id "$profile_id" '
+    .metadata.annotations["mithril.erebor.dev/profile-id"] == $profile_id and
+    (.metadata.annotations["mithril.erebor.dev/policy-source-revision"] | length) == 64
+  ' <<<"$recovered_dry_run" >/dev/null
+  recovered_pod=$work_a/recovered-entry-before-mithril.json
+  jq --arg node_name "$node_a_name" '
+    del(
+      .metadata.creationTimestamp,
+      .metadata.generation,
+      .metadata.managedFields,
+      .metadata.resourceVersion,
+      .metadata.uid,
+      .status
+    ) |
+    .spec.nodeName = $node_name |
+    del(.spec.nodeSelector, .spec.affinity)
+  ' <<<"$recovered_dry_run" >"$recovered_pod"
+  "$provider" put "$vm_a" "$recovered_pod" \
+    "$remote_a/recovered-entry-before-mithril.json"
+
+  remote_kubectl delete mutatingwebhookconfiguration \
+    "mithril-control-$system_namespace" >/dev/null
+  remote_kubectl delete validatingwebhookconfiguration \
+    "mithril-control-bindings-$system_namespace" >/dev/null
+  remote_kubectl create -f \
+    "$remote_a/recovered-entry-before-mithril.json" >/dev/null
+
+  recovered_container_uri=
+  for _attempt in {1..180}; do
+    recovered_pod_json=$(remote_kubectl -n "$workload_namespace" \
+      get pod recovered-entry -o json 2>/dev/null || true)
+    recovered_container_uri=$(jq -er '
+      .status.containerStatuses[0] |
+      select(.state.running != null) |
+      .containerID
+    ' <<<"$recovered_pod_json" 2>/dev/null || true)
+    [[ $recovered_container_uri == containerd://* ]] && break
+    [[ $_attempt -lt 180 ]] || {
+      echo "the recovery Pod did not start before Mithril Node" >&2
+      exit 1
+    }
+    sleep 1
+  done
+  recovered_container_id=${recovered_container_uri#containerd://}
+  recovered_container_json=$("$provider" run "$vm_a" sudo \
+    /usr/local/bin/k3s crictl inspect "$recovered_container_id")
+  recovered_host_pid=$(jq -er '.info.pid | select(. > 0)' \
+    <<<"$recovered_container_json")
+  "$provider" run "$vm_a" sudo test ! -e \
+    /sys/fs/bpf/mithril-convergence
+  "$provider" run "$vm_a" sudo test ! -S "$runtime_hook_socket"
+
+  helm --kubeconfig "$kubeconfig" upgrade --install mithril \
+    "$repo_root/packaging/mithril/helm" --namespace "$system_namespace" \
+    --values "$values" >/dev/null
+  remote_kubectl label node "$node_a_name" \
+    mithril.erebor.dev/recovered-entry-test=enabled --overwrite >/dev/null
+  remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
+    --timeout=300s >/dev/null
+  wait_node_projection "$node_a_name" true false
+  assert_runtime_hook installed "$vm_a" "$remote_a"
+
+  recovered_initial_snapshot=
+  for _attempt in {1..300}; do
+    recovered_initial_snapshot=$(runtime_task_snapshot \
+      "$node_a_name" "$recovered_host_pid" 2>/dev/null || true)
+    if [[ -n $recovered_initial_snapshot ]] && jq -e '
+      .runtime_binding.lifecycle_state == "active_recovered" and
+      .active_role_id > 0 and
+      .admitted_entry_rule_id > 0 and
+      .root_class == "recovered_application_root" and
+      .entry_instance_id ==
+        .runtime_binding.prepared_container_entry_instance_id and
+      .recovered_container_activation.phase == "complete" and
+      .recovered_container_activation.recovery_attempt_id !=
+        "00000000000000000000000000000000" and
+      .recovered_container_activation.application_entry_instance_id ==
+        .entry_instance_id and
+      .recovered_container_activation.expected_task_count > 0 and
+      .recovered_container_activation.application_task_count > 0 and
+      .recovered_container_activation.expected_task_count ==
+        (.recovered_container_activation.application_task_count +
+         .recovered_container_activation.external_task_count) and
+      .recovered_container_activation.invalid_task_count == 0
+    ' <<<"$recovered_initial_snapshot" >/dev/null; then
+      break
+    fi
+    [[ $_attempt -lt 300 ]] || {
+      printf '%s\n' "$recovered_initial_snapshot" >&2
+      echo "BPF did not publish the recovered ptrace anchor" >&2
+      exit 1
+    }
+    sleep 1
+  done
+  recovered_task_cookie=$(jq -er '.task_cookie' \
+    <<<"$recovered_initial_snapshot")
+  recovered_application_role_id=$(jq -er '.active_role_id' \
+    <<<"$recovered_initial_snapshot")
+  recovered_application_rule_id=$(jq -er '.admitted_entry_rule_id' \
+    <<<"$recovered_initial_snapshot")
+  recovered_application_task_count=$(jq -er \
+    '.recovered_container_activation.application_task_count' \
+    <<<"$recovered_initial_snapshot")
+  recovered_external_task_count=$(jq -er \
+    '.recovered_container_activation.external_task_count' \
+    <<<"$recovered_initial_snapshot")
+
+  recovered_effect_capture=$output_directory/recovered-entry-effects.txt
+  start_entry_effect_capture "$node_a_name" "$recovered_effect_capture"
+  recovered_bpftrace_remote=$remote_a/recovered-entry-bpftrace.txt
+  recovered_bpftrace_error_remote=$remote_a/recovered-entry-bpftrace.stderr
+  recovered_bpftrace_pid=$(
+    "$provider" run "$vm_a" \
+      "sudo sh -c 'bpftrace -q $remote_a/recovered-entry-hooks.bt >$recovered_bpftrace_remote 2>$recovered_bpftrace_error_remote </dev/null & echo \$!'"
+  )
+  [[ $recovered_bpftrace_pid =~ ^[1-9][0-9]*$ ]] || {
+    echo "bpftrace did not publish its process ID" >&2
+    exit 1
+  }
+  sleep 1
+  "$provider" run "$vm_a" sudo touch \
+    /var/lib/mithril-convergence/markers/recovered-entry.concurrent-startup-gate
+  remote_kubectl -n "$workload_namespace" wait --for=condition=Ready \
+    pod/recovered-entry --timeout=300s >/dev/null
+
+  recovered_probe_gate=/var/lib/mithril-convergence/recovered-entry.probe-gate
+  "$provider" run "$vm_a" sudo mkfifo \
+    /var/lib/mithril-convergence/markers/recovered-entry.probe-gate
+  remote_kubectl -n "$workload_namespace" exec recovered-entry -- \
+    /bin/cat /var/lib/mithril-convergence/recovered-entry.lifecycle-ready \
+    "$recovered_probe_gate" \
+    >"$output_directory/recovered-entry-probe.stdout" \
+    2>"$output_directory/recovered-entry-probe.stderr" &
+  recovered_probe_command_pid=$!
+  recovered_probe_snapshot=
+  for _attempt in {1..60}; do
+    recovered_probe_pid=$("$provider" run "$vm_a" "sudo sh -c '
+      cgroup=\$(sed -n \"s/^0:://p\" /proc/$recovered_host_pid/cgroup)
+      for task in \$(cat /sys/fs/cgroup\"\$cgroup\"/cgroup.procs); do
+        if tr \"\\000\" \"\\n\" </proc/\"\$task\"/cmdline 2>/dev/null |
+          grep -Fxq $recovered_probe_gate; then echo \"\$task\"; fi
+      done'" || true)
+    if [[ $recovered_probe_pid =~ ^[1-9][0-9]*$ ]]; then
+      recovered_probe_snapshot=$(runtime_task_snapshot "$node_a_name" \
+        "$recovered_probe_pid" 2>/dev/null || true)
+      if jq -e --argjson application_role "$recovered_application_role_id" '
+        .runtime_binding.lifecycle_state == "active_recovered" and
+        .admitted_entry_rule_id > 0 and .active_role_id > 0 and
+        .active_role_id != $application_role
+      ' <<<"$recovered_probe_snapshot" >/dev/null 2>&1; then
+        break
+      fi
+    fi
+    recovered_probe_snapshot=
+    sleep 1
+  done
+  recovered_probe_role_id=$(jq -er '.active_role_id | select(. > 0)' \
+    <<<"$recovered_probe_snapshot")
+  recovered_probe_rule_id=$(jq -er '.admitted_entry_rule_id | select(. > 0)' \
+    <<<"$recovered_probe_snapshot")
+  printf '%s\n' "$recovered_probe_snapshot" \
+    >"$output_directory/recovered-entry-probe.json"
+  "$provider" run "$vm_a" \
+    "printf '%s\\n' release | sudo tee /var/lib/mithril-convergence/markers/recovered-entry.probe-gate >/dev/null"
+  wait "$recovered_probe_command_pid"
+  [[ $(cat "$output_directory/recovered-entry-probe.stdout") == $'READY\nrelease' ]] || {
+    echo "the inspected startup probe did not finish its reads" >&2
+    exit 1
+  }
+
+  "$provider" run "$vm_a" sudo test ! -e \
+    /var/lib/mithril-convergence/markers/startup-probe.denied
+  if remote_kubectl -n "$workload_namespace" exec recovered-entry -- \
+    /bin/cat /var/lib/mithril-convergence/startup-probe.denied \
+    >"$output_directory/recovered-entry-missing-file.stdout" \
+    2>"$output_directory/recovered-entry-missing-file.stderr"; then
+    echo "the missing recovered-probe target unexpectedly opened" >&2
+    exit 1
+  fi
+  grep -q 'No such file or directory' \
+    "$output_directory/recovered-entry-missing-file.stderr" || {
+    echo "the missing-file check did not reach the recovered probe" >&2
+    exit 1
+  }
+  "$provider" run "$vm_a" sudo touch \
+    /var/lib/mithril-convergence/markers/startup-probe.denied
+  if remote_kubectl -n "$workload_namespace" exec recovered-entry -- \
+    /bin/cat /var/lib/mithril-convergence/startup-probe.denied \
+    >"$output_directory/recovered-entry-policy-deny.stdout" \
+    2>"$output_directory/recovered-entry-policy-deny.stderr"; then
+    echo "the recovered probe did not enforce its signed file denial" >&2
+    exit 1
+  fi
+
+  set +e
+  remote_kubectl -n "$workload_namespace" exec recovered-entry -- \
+    /bin/mkdir /tmp/mithril-unmatched-entry \
+    >"$output_directory/recovered-entry-unmatched.stdout" \
+    2>"$output_directory/recovered-entry-unmatched.stderr"
+  recovered_unmatched_status=$?
+  set -e
+  ((recovered_unmatched_status != 0)) || {
+    echo "an unmatched Kubernetes exec passed after recovery" >&2
+    exit 1
+  }
+  sleep 2
+  stop_entry_effect_capture
+  "$provider" run "$vm_a" sudo kill -INT "$recovered_bpftrace_pid" \
+    >/dev/null 2>&1 || true
+  for _attempt in {1..30}; do
+    if ! "$provider" run "$vm_a" sudo kill -0 "$recovered_bpftrace_pid" \
+        >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+  "$provider" get "$vm_a" "$recovered_bpftrace_remote" \
+    "$output_directory/recovered-entry-bpftrace.txt"
+  "$provider" get "$vm_a" "$recovered_bpftrace_error_remote" \
+    "$output_directory/recovered-entry-bpftrace.stderr"
+  grep -Eq \
+    "hook=ptrace_access_check .*target_pid=$recovered_host_pid([[:space:]]|$)" \
+    "$output_directory/recovered-entry-bpftrace.txt" || {
+    echo "bpftrace did not observe ptrace against the recovered init task" >&2
+    exit 1
+  }
+  grep -Eq 'hook=bprm_check_security .*filename=.*/bin/cat([[:space:]]|$)' \
+    "$output_directory/recovered-entry-bpftrace.txt" || {
+    echo "bpftrace did not observe the recovered startup-probe executable" >&2
+    exit 1
+  }
+
+  ptrace_bootstrap_marker_observed=false
+  runtime_internal_exec_observed_with_rule_zero=false
+  unmatched_exec_denied=false
+  if awk -v task_cookie="$recovered_task_cookie" '
+    /reason=RUNTIME_ENTRY_INFRASTRUCTURE/ &&
+    /family=5/ && /admitted_entry_rule_id=0/ &&
+    $0 ~ ("target_task_cookie=" task_cookie "([[:space:]]|$)") { found=1 }
+    END { exit !found }
+  ' "$recovered_effect_capture"; then
+    ptrace_bootstrap_marker_observed=true
+  fi
+  if awk '
+    /reason=RUNTIME_ENTRY_INFRASTRUCTURE/ &&
+    /family=1/ && /operation=1/ && /admitted_entry_rule_id=0/ { found=1 }
+    END { exit !found }
+  ' "$recovered_effect_capture"; then
+    runtime_internal_exec_observed_with_rule_zero=true
+  fi
+  if awk '
+    /reason=UNSUPPORTED_OBJECT/ && /family=1/ && /operation=1/ &&
+    /admitted_entry_rule_id=0/ && /kernel_result=-13/ { found=1 }
+    END { exit !found }
+  ' "$recovered_effect_capture"; then
+    unmatched_exec_denied=true
+  fi
+  [[ $ptrace_bootstrap_marker_observed == true &&
+      $runtime_internal_exec_observed_with_rule_zero == true &&
+      $unmatched_exec_denied == true &&
+      $recovered_probe_role_id =~ ^[1-9][0-9]*$ &&
+      $recovered_probe_rule_id =~ ^[1-9][0-9]*$ ]] || {
+    echo "the recovered Kubernetes later-entry sequence failed" >&2
+    exit 1
+  }
+
+  awk -v role="$recovered_probe_role_id" -v rule="$recovered_probe_rule_id" '
+    /reason=EXACT_POLICY_DENY/ && /family=2/ && /operation=2/ &&
+    /kernel_result=-13/ &&
+    $0 ~ ("active_role_id=" role "([[:space:]]|$)") &&
+    $0 ~ ("admitted_entry_rule_id=" rule "([[:space:]]|$)") { found=1 }
+    END { exit !found }
+  ' "$recovered_effect_capture" || {
+    echo "the recovered probe has no signed file-denial evidence" >&2
+    exit 1
+  }
+
+  jq -n \
+    --arg node "$node_a_name" \
+    --arg container_id "$recovered_container_id" \
+    --argjson initial_host_pid "$recovered_host_pid" \
+    --argjson recovered_application_role_id "$recovered_application_role_id" \
+    --argjson recovered_application_rule_id "$recovered_application_rule_id" \
+    --argjson recovered_application_task_count "$recovered_application_task_count" \
+    --argjson recovered_external_task_count "$recovered_external_task_count" \
+    --argjson declared_probe_role_id "$recovered_probe_role_id" \
+    --argjson declared_probe_rule_id "$recovered_probe_rule_id" '
+    {
+      schema_version: 1,
+      node: $node,
+      container_id: $container_id,
+      initial_host_pid: $initial_host_pid,
+      container_started_before_bpf: true,
+      recovering_before_iterator: true,
+      active_recovered_before_ptrace: true,
+      recovered_application_role_id: $recovered_application_role_id,
+      recovered_application_rule_id: $recovered_application_rule_id,
+      recovered_application_task_count: $recovered_application_task_count,
+      recovered_external_task_count: $recovered_external_task_count,
+      ptrace_bootstrap_marker_observed: true,
+      runtime_internal_exec_observed_with_rule_zero: true,
+      declared_probe_role_id: $declared_probe_role_id,
+      declared_probe_rule_id: $declared_probe_rule_id,
+      declared_probe_policy_denied: true,
+      unmatched_exec_denied: true,
+      kubernetes_startup_probe_ready: true
+    }
+  ' >"$output_directory/recovered-container-kubernetes-entry.json"
+  printf '%s\n' "$recovered_initial_snapshot" \
+    >"$output_directory/recovered-container-initial-task.json"
+  install -m 0600 "$recovered_pod" \
+    "$output_directory/recovered-container-pod.json"
+  echo "Recovered-container Kubernetes entry probe passed"
+  exit 0
+fi
 
 prepare_pod_markers entry-roles
 entry_role_capture_a=$output_directory/declared-entry-role-capture-node-a.txt
@@ -2278,6 +2650,207 @@ install -m 0600 "$work_a/entry-roles.yaml" \
 install -m 0600 "$work_a/policy-v1.yaml" \
   "$output_directory/declared-entry-role-policy.yaml"
 wait_policy_delivery_empty "$entry_roles_node"
+
+incomplete_probe_capture_a=$output_directory/incomplete-argv-probe-capture-node-a.txt
+incomplete_probe_capture_b=$output_directory/incomplete-argv-probe-capture-node-b.txt
+start_entry_effect_capture "$node_a_name" "$incomplete_probe_capture_a"
+start_entry_effect_capture "$node_b_name" "$incomplete_probe_capture_b"
+sleep 1
+incomplete_probe_boundary_a=$(max_effect_boottime <"$incomplete_probe_capture_a")
+incomplete_probe_boundary_b=$(max_effect_boottime <"$incomplete_probe_capture_b")
+remote_kubectl create -f "$remote_a/incomplete-argv-probe.json" >/dev/null
+
+incomplete_probe_node=
+for _attempt in {1..120}; do
+  incomplete_probe_node=$(remote_kubectl -n "$workload_namespace" get pod \
+    incomplete-argv-probe -o jsonpath='{.spec.nodeName}' 2>/dev/null || true)
+  [[ -n $incomplete_probe_node ]] && break
+  [[ $_attempt -lt 120 ]] || {
+    echo "the incomplete-argv probe Pod was not scheduled" >&2
+    exit 1
+  }
+  sleep 1
+done
+[[ $incomplete_probe_node == "$node_a_name" ||
+   $incomplete_probe_node == "$node_b_name" ]] || {
+  echo "the incomplete-argv probe Pod scheduled outside the protected Node set" >&2
+  exit 1
+}
+incomplete_probe_vm=$vm_a
+incomplete_probe_capture=$incomplete_probe_capture_a
+incomplete_probe_boundary=$incomplete_probe_boundary_a
+if [[ $incomplete_probe_node == "$node_b_name" ]]; then
+  incomplete_probe_vm=$vm_b
+  incomplete_probe_capture=$incomplete_probe_capture_b
+  incomplete_probe_boundary=$incomplete_probe_boundary_b
+fi
+
+incomplete_probe_application_role=0
+incomplete_probe_host_pid=0
+for _attempt in {1..180}; do
+  incomplete_probe_pod=$(remote_kubectl -n "$workload_namespace" get pod \
+    incomplete-argv-probe -o json 2>/dev/null || true)
+  incomplete_probe_restarts=$(jq -r \
+    '[.status.containerStatuses[]?.restartCount] | add // 0' \
+    <<<"$incomplete_probe_pod")
+  incomplete_probe_phase=$(jq -r '.status.phase // "Unknown"' \
+    <<<"$incomplete_probe_pod")
+  if [[ $incomplete_probe_phase == Failed || $incomplete_probe_restarts -gt 0 ]]; then
+    printf '%s\n' "$incomplete_probe_pod" \
+      >"$output_directory/incomplete-argv-probe-failure-pod.json"
+    echo "the incomplete-argv probe container failed before its denial was observed" >&2
+    exit 1
+  fi
+  incomplete_probe_container_uri=$(jq -er '
+    .status.containerStatuses[0] |
+    select(.state.running != null) |
+    .containerID
+  ' <<<"$incomplete_probe_pod" 2>/dev/null || true)
+  if [[ $incomplete_probe_container_uri == containerd://* ]]; then
+    incomplete_probe_container_id=${incomplete_probe_container_uri#containerd://}
+    incomplete_probe_container=$(
+      "$provider" run "$incomplete_probe_vm" sudo \
+        /usr/local/bin/k3s crictl inspect "$incomplete_probe_container_id" \
+        2>/dev/null || true
+    )
+    incomplete_probe_host_pid=$(jq -er '.info.pid | select(. > 0)' \
+      <<<"$incomplete_probe_container" 2>/dev/null || true)
+    if [[ -n $incomplete_probe_host_pid ]]; then
+      incomplete_probe_task=$(runtime_task_snapshot \
+        "$incomplete_probe_node" "$incomplete_probe_host_pid" \
+        2>/dev/null || true)
+      incomplete_probe_application_role=$(jq -er \
+        '.active_role_id | select(. > 0)' \
+        <<<"$incomplete_probe_task" 2>/dev/null || true)
+      [[ -n $incomplete_probe_application_role ]] && break
+    fi
+  fi
+  sleep 1
+done
+[[ $incomplete_probe_application_role =~ ^[1-9][0-9]*$ ]] || {
+  echo "the incomplete-argv probe application did not install its role" >&2
+  exit 1
+}
+
+declared_probe_incomplete_argv_denied=false
+incomplete_probe_denial_count=0
+incomplete_probe_startup_failure=false
+for _attempt in {1..120}; do
+  incomplete_probe_pod=$(remote_kubectl -n "$workload_namespace" get pod \
+    incomplete-argv-probe -o json)
+  incomplete_probe_events=$(remote_kubectl -n "$workload_namespace" get events \
+    --field-selector involvedObject.name=incomplete-argv-probe -o json)
+  incomplete_probe_denial_count=$(awk \
+    -v marker="$incomplete_probe_boundary" \
+    -v application_role="$incomplete_probe_application_role" '
+      /^observed_boottime_ns=/ {
+        observed_boottime_ns = 0
+        reason = ""
+        family = 0
+        operation = 0
+        active_role_id = 0
+        admitted_entry_rule_id = 0
+        kernel_result = 0
+        for (field_index = 1; field_index <= NF; field_index++) {
+          split($field_index, field, "=")
+          if (field[1] == "observed_boottime_ns") {
+            observed_boottime_ns = field[2]
+          } else if (field[1] == "reason") {
+            reason = field[2]
+          } else if (field[1] == "family") {
+            family = field[2]
+          } else if (field[1] == "operation") {
+            operation = field[2]
+          } else if (field[1] == "active_role_id") {
+            active_role_id = field[2]
+          } else if (field[1] == "admitted_entry_rule_id") {
+            admitted_entry_rule_id = field[2]
+          } else if (field[1] == "kernel_result") {
+            kernel_result = field[2]
+          }
+        }
+        if (observed_boottime_ns > marker &&
+            reason == "UNSUPPORTED_OBJECT" && family == 1 && operation == 1 &&
+            active_role_id > 0 && active_role_id != application_role &&
+            admitted_entry_rule_id == 0 && kernel_result == -13) {
+          count++
+        }
+      }
+      END { print count + 0 }
+    ' "$incomplete_probe_capture")
+  if jq -e '
+      any(.items[]?;
+        .reason == "Unhealthy" and
+        (.message | test("^Startup probe")))
+    ' <<<"$incomplete_probe_events" >/dev/null; then
+    incomplete_probe_startup_failure=true
+  fi
+  if [[ $incomplete_probe_denial_count -gt 0 &&
+        $incomplete_probe_startup_failure == true ]] && jq -e '
+      .status.phase == "Running" and
+      .status.containerStatuses[0].state.running != null and
+      (.status.containerStatuses[0].started // false) == false and
+      .status.containerStatuses[0].ready == false and
+      .status.containerStatuses[0].restartCount == 0
+    ' <<<"$incomplete_probe_pod" >/dev/null; then
+    declared_probe_incomplete_argv_denied=true
+    break
+  fi
+  sleep 1
+done
+stop_entry_effect_capture
+printf '%s\n' "$incomplete_probe_pod" \
+  >"$output_directory/incomplete-argv-probe-pod.json"
+printf '%s\n' "$incomplete_probe_events" \
+  >"$output_directory/incomplete-argv-probe-events.json"
+install -m 0600 "$incomplete_probe" \
+  "$output_directory/incomplete-argv-probe-manifest.json"
+[[ $declared_probe_incomplete_argv_denied == true ]] || {
+  echo "kubelet did not receive the BPF denial for the incomplete-argv startup probe" >&2
+  exit 1
+}
+incomplete_probe_candidate=
+for _attempt in {1..120}; do
+  incomplete_probe_status=$(node_status "$incomplete_probe_node" \
+    2>/dev/null || true)
+  incomplete_probe_candidate=$(jq -er \
+    --arg container_id "$incomplete_probe_container_id" '
+      select(
+        .active_target_count == 1 and
+        .runtime_binding_count == 1 and
+        .active_targets[0].runtime_container_id == $container_id
+      ) |
+      .active_candidate_content_id
+    ' <<<"$incomplete_probe_status" 2>/dev/null || true)
+  [[ -n $incomplete_probe_candidate ]] && break
+  [[ $_attempt -lt 120 ]] || {
+    echo "the incomplete-argv probe did not publish its exact policy candidate" >&2
+    exit 1
+  }
+  sleep 0.25
+done
+jq -n \
+  --arg node "$incomplete_probe_node" \
+  --arg candidate "$incomplete_probe_candidate" \
+  --argjson application_role_id "$incomplete_probe_application_role" \
+  --argjson denial_count "$incomplete_probe_denial_count" \
+  --argjson startup_failure_observed "$incomplete_probe_startup_failure" '
+  {
+    schema_version: 1,
+    node: $node,
+    candidate_content_id: $candidate,
+    argument_count: 3000,
+    application_role_id: $application_role_id,
+    denial_count: $denial_count,
+    startup_failure_observed: $startup_failure_observed,
+    container_running: true,
+    container_restart_count: 0,
+    declared_probe_incomplete_argv_denied: true
+  }
+' >"$output_directory/incomplete-argv-probe-result.json"
+remote_kubectl -n "$workload_namespace" delete pod incomplete-argv-probe \
+  --wait=true --timeout=120s >/dev/null
+wait_policy_delivery_empty "$incomplete_probe_node"
 
 # Both possible scheduler targets receive the same inert files, not policy authority.
 prepare_pod_markers protected true
@@ -2477,7 +3050,7 @@ assert_prepared_container_activation() {
   jq -e --arg runtime_binding_id "$runtime_binding_id" '
     .runtime_binding.binding_id == ($runtime_binding_id | gsub("-"; "")) and
     .runtime_binding.root_cgroup_id > 0 and
-    .runtime_binding.prepared_container_state == "active" and
+    .runtime_binding.lifecycle_state == "active" and
     .runtime_binding.prepared_container_entry_instance_id != "00000000000000000000000000000000" and
     .entry_instance_id == .runtime_binding.prepared_container_entry_instance_id and
     .runtime_binding.prepared_container_exec_task_cookie == 0 and
@@ -2545,7 +3118,10 @@ selected_status=$(wait_runtime_delivery "$selected_node" "$profile_id")
 other_status=$(node_status "$other_node")
 initial_operation=ACTIVATE
 initial_predecessor=
-if [[ $selected_node == "$entry_roles_node" ]]; then
+if [[ $selected_node == "$incomplete_probe_node" ]]; then
+  initial_operation=REPLACE
+  initial_predecessor=$incomplete_probe_candidate
+elif [[ $selected_node == "$entry_roles_node" ]]; then
   initial_operation=REPLACE
   initial_predecessor=$entry_role_candidate
 fi
@@ -3025,7 +3601,7 @@ if [[ $protected_start_only == true ]]; then
   policy_source_revision=$(remote_kubectl -n "$workload_namespace" get pod protected \
     -o json | jq -er \
     '.metadata.annotations["mithril.erebor.dev/policy-source-revision"]')
-  prepared_state=$(jq -er '.runtime_binding.prepared_container_state' \
+  prepared_state=$(jq -er '.runtime_binding.lifecycle_state' \
     <<<"$task_before")
   admitted_entry_instance_id=$(jq -er '.entry_instance_id' <<<"$task_before")
   jq -n \
@@ -3049,6 +3625,8 @@ if [[ $protected_start_only == true ]]; then
     --argjson external_cgroup_entry_denied \
       "$external_cgroup_entry_denied" \
     --argjson declared_entry_role_count "$entry_role_count" \
+    --argjson declared_probe_incomplete_argv_denied \
+      "$declared_probe_incomplete_argv_denied" \
     '{
       schema_version: 1,
       kubernetes_version: $kubernetes_version,
@@ -3076,6 +3654,7 @@ if [[ $protected_start_only == true ]]; then
       liveness_probe_entry_allowed: true,
       declared_entry_roles_independent: ($declared_entry_role_count == 6),
       declared_entry_role_count: $declared_entry_role_count,
+      declared_probe_incomplete_argv_denied: $declared_probe_incomplete_argv_denied,
       unreachable_mount_cache_rows_collected: true,
       repository_owned_test_resources_removed: false
     }' >"$output_directory/protected-start-result.json"
@@ -3687,6 +4266,7 @@ jq -n \
     old_root_replay_refused: true,
     fresh_policy_uses_root_activation: true,
     direct_runc_runtime_gate_passed: true,
+    declared_probe_incomplete_argv_denied: true,
     rbac_boundary: true
   }' >"$output_directory/two-node-convergence.json"
 

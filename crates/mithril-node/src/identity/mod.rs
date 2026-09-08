@@ -10,7 +10,7 @@ pub use authorization::{
     AuthorizationTargetV1, IssuerTrustV1, PortableProfileGenerationIdentityV1,
     PreparedAuthorizationProofV1, ResolvedAdministrativeExecutableIdentityV1, TrustBundleV1,
 };
-pub(crate) use binding::ExactObjectBindingTargetV1;
+pub(crate) use binding::{binding_lifecycle_is_addressable, ExactObjectBindingTargetV1};
 pub use binding::{
     AdministrativeBindingTargetV1, RuntimeReconciliationResultV1, WorkloadBindingOwner,
 };

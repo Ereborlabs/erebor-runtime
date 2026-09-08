@@ -273,8 +273,7 @@ static __always_inline int create_external_root(
     if (!activation)
         return identity_deny(config);
     role_id = activation->external_role_id;
-    if (binding->prepared_container_state ==
-        prepared_container_state_v1_prepared) {
+    if (binding->lifecycle_state == binding_lifecycle_state_v1_prepared) {
         /* Iterator reconciliation runs in the reader's context. Read the
          * target task so the held-process proof does not depend on the caller. */
         BPF_CORE_READ_INTO(&host_tid, task, pid);
@@ -287,15 +286,12 @@ static __always_inline int create_external_root(
             host_tid != binding->prepared_container_initial_host_tgid)
             return PREPARED_CONTAINER_IDENTITY_DEFER_V1;
     }
-    if (binding->prepared_container_state ==
-        prepared_container_state_v1_recovering) {
+    if (binding->lifecycle_state == binding_lifecycle_state_v1_recovering) {
         root_class = external_root_class_v1_restored_or_unknown_root;
         role_class = installed_role_class_v1_fail_closed_unknown;
     }
     initial_root = consume_initial_root(binding);
 
-    if (binding->lifecycle_state != binding_lifecycle_state_v1_active)
-        return identity_deny(config);
     if (initial_root) {
         root_class = external_root_class_v1_initial_container_root;
         role_class = installed_role_class_v1_initial_role;
@@ -320,13 +316,11 @@ static __always_inline int create_external_root(
         process->transition_version++;
     }
     if (result && initial_root &&
-        binding->prepared_container_state ==
-            prepared_container_state_v1_prepared)
+        binding->lifecycle_state == binding_lifecycle_state_v1_prepared)
         prepared_container_mark_corrupt(binding);
     if (result || !initial_root)
         return result;
-    if (binding->prepared_container_state ==
-            prepared_container_state_v1_prepared &&
+    if (binding->lifecycle_state == binding_lifecycle_state_v1_prepared &&
         prepared_container_set_initial_entry(
             binding, &scratch->label.entry_instance_id)) {
         prepared_container_mark_corrupt(binding);
@@ -370,6 +364,29 @@ static __always_inline int finalize_task_coordinate(struct task_struct *task,
     coordinate->finalized_boottime_ns = bpf_ktime_get_ns();
     coordinate->transition_version++;
     coordinate->state = task_coordinate_state_v1_runnable;
+    return 0;
+}
+
+static __always_inline int label_restored_root(
+    struct task_struct *task, execution_set_binding_state_v1 *binding,
+    identity_runtime_config_v1 *config)
+{
+    struct identity_scratch_v1 *scratch = identity_scratch_record();
+    int claim = scratch ? claim_task_label(task) : -EACCES;
+
+    if (claim > 0)
+        return 0;
+    if (claim < 0)
+        return claim;
+    consume_initial_root(binding);
+    if (create_root(task, config, binding, scratch,
+                    external_root_class_v1_restored_or_unknown_root,
+                    installed_role_class_v1_fail_closed_unknown,
+                    binding->external_role_id) ||
+        finalize_task_coordinate(task, &scratch->label)) {
+        bpf_task_storage_delete(&task_labels, task);
+        return -EACCES;
+    }
     return 0;
 }
 
