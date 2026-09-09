@@ -56,7 +56,7 @@ use grpc_throughput_protocol::grpc_throughput_client::GrpcThroughputClient;
 use grpc_throughput_protocol::grpc_throughput_server::{GrpcThroughput, GrpcThroughputServer};
 use grpc_throughput_protocol::{FileChunk, FileReceipt};
 
-use crate::physical::wait_for_async;
+use crate::physical::{wait_for, wait_for_async};
 
 const OUTAGE_POLICY: &[u8] = include_bytes!("../fixtures/convergence/outage-policy-v1.json");
 const OUTAGE_TENANT_ID: &str = "00000000-0000-0001-0000-000000000002";
@@ -222,7 +222,13 @@ fn control_evidence_queue_reclaims_only_durably_consumed_segments() -> Result<()
     drop(retention);
     drop(intake);
     drop(store);
-    let reopened = ControlStore::open_with_evidence_limits(&store_path, limits)?;
+    let reopened = wait_for(
+        &store_path,
+        "the compact evidence owners to release the store lease",
+        Duration::from_secs(5),
+        || control_store_lease_ready(ControlStore::open_with_evidence_limits(&store_path, limits)),
+        || "a compact evidence owner still owns `owner.lock`".to_owned(),
+    )?;
     let retention = EvidenceRetentionOwner::from_store(reopened.clone());
     assert_eq!(retention.watermark(&identity)?.evidence_cursor, 2);
     assert_eq!(reopened.evidence_cursor(&identity)?, 3);
@@ -1159,17 +1165,11 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
         &store_path,
         "the stopped Control server to release its store lease",
         Duration::from_secs(5),
-        || match ControlStore::open_with_evidence_limits(&store_path, limits(10)) {
-            Ok(store) => Ok(Some(store)),
-            Err(mithril_control::Error::ControlStore { reason, .. })
-                if reason.starts_with("another Control store owner holds the lease") =>
-            {
-                Ok(None)
-            }
-            Err(source) => Err(crate::Error::Policy {
-                source,
-                location: snafu::Location::default(),
-            }),
+        || {
+            control_store_lease_ready(ControlStore::open_with_evidence_limits(
+                &store_path,
+                limits(10),
+            ))
         },
         || "the stopped server still owns `owner.lock`".to_owned(),
     )
@@ -2616,6 +2616,21 @@ async fn wait_for_decommission_state(
     .await
     .map_err(|_elapsed| format!("decommission did not reach {expected:?}"))?;
     Ok(())
+}
+
+fn control_store_lease_ready<T>(result: mithril_control::Result<T>) -> crate::Result<Option<T>> {
+    match result {
+        Ok(store) => Ok(Some(store)),
+        Err(mithril_control::Error::ControlStore { reason, .. })
+            if reason.starts_with("another Control store owner holds the lease") =>
+        {
+            Ok(None)
+        }
+        Err(source) => Err(crate::Error::Policy {
+            source,
+            location: snafu::Location::default(),
+        }),
+    }
 }
 
 async fn start_server(

@@ -121,7 +121,7 @@ physical run:
 - [ ] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`:
   wait for the accepted node session to leave the ready set and report the
   last ready sessions on timeout.
-- [ ] `control_evidence_queue_reclaims_only_durably_consumed_segments`: wait
+- [x] `control_evidence_queue_reclaims_only_durably_consumed_segments`: wait
   for the last compact owner to release the store lease before reopening it.
 - [ ] `node_decommission_https_accepts_the_same_signed_artifact_as_control`:
   wait for the HTTPS listener before the first request.
