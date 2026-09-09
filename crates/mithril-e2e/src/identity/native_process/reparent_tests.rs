@@ -27,34 +27,6 @@ fn leader_first_fixture_keeps_the_worker_until_release() -> crate::Result<()> {
 }
 
 #[test]
-fn native_process_fixture_executes_after_subreaper_reparenting() -> crate::Result<()> {
-    let runner = test_support::runner();
-    let mut fixture = NativeProcessFixture::start_subreaper(&runner.repo_root)?;
-    let outer_pid = fixture.outer_pid();
-
-    fixture.release_root()?;
-    let children_path = PathBuf::from(format!("/proc/{outer_pid}/task/{outer_pid}/children"));
-    let intermediate_pid =
-        runner.wait_for("subreaper intermediate creation", &children_path, || {
-            fixture.intermediate_pid()
-        })?;
-    fixture.open_intermediate_pidfd(intermediate_pid)?;
-    let native_pid = runner.wait_for("subreaper native child creation", &children_path, || {
-        fixture.intermediate_native_child_pid(intermediate_pid)
-    })?;
-    fixture.open_native_pidfd(native_pid)?;
-
-    fixture.release_intermediate_exit()?;
-    let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
-    runner.wait_for("subreaper native child adoption", &status_path, || {
-        Ok(parent_pid(native_pid)?.filter(|parent_pid| *parent_pid == outer_pid))
-    })?;
-
-    fixture.release_exec(native_pid)?;
-    fixture.wait_for_executable(native_pid, "sleep", "subreaper native child exec")
-}
-
-#[test]
 fn native_process_fixture_executes_after_namespace_init_reparenting() -> crate::Result<()> {
     let runner = test_support::runner();
     let mut fixture = NativeProcessFixture::start_namespace_init_reparenting(&runner.repo_root)?;

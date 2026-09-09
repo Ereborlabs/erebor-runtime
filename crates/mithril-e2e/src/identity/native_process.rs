@@ -37,12 +37,6 @@ impl NativeProcessFixture {
         )
     }
 
-    pub(super) fn start_subreaper(repo_root: &Path) -> Result<Self> {
-        let outer =
-            ProcessFixture::python(repo_root, "native_subreaper.py", std::iter::empty::<&str>())?;
-        Ok(Self::from_outer(outer))
-    }
-
     pub(super) fn start_namespace_init_reparenting(repo_root: &Path) -> Result<Self> {
         let script = ProcessFixture::script(repo_root, "native_namespace_init.py")?;
         let mut command = Command::new("/usr/bin/unshare");

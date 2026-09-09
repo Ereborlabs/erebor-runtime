@@ -883,6 +883,7 @@ impl IdentityTestRunner {
 
         let exec_case =
             scenarios::ExecCase::new(self, &host, &identity, &inspector, &binding, &procs_path);
+        let reparent_case = scenarios::ReparentCase::new(self, &inspector, &procs_path);
         let (external_root, before_exec, after_exec) = exec_case.child(&child_ready_path)?;
         child_ready_cleanup.cleanup()?;
         let retry_ready_cleanup = ProbeFile::new(&child_ready_path);
@@ -910,124 +911,10 @@ impl IdentityTestRunner {
         let (orphan_root, orphan_before, orphan_after) = exec_case.orphan(&child_ready_path)?;
         orphan_ready_cleanup.cleanup()?;
 
-        let mut subreaper_fixture = NativeProcessFixture::start_subreaper(&self.repo_root)?;
-        fs::write(&procs_path, subreaper_fixture.outer_pid().to_string())
-            .context(IoSnafu { path: &procs_path })?;
-        let subreaper_native_parent =
-            self.wait_for("subreaper native parent identity", &procs_path, || {
-                inspector
-                    .snapshot(subreaper_fixture.outer_pid())
-                    .context(NodeSnafu)
-            })?;
-        subreaper_fixture.release_root()?;
-        let subreaper_intermediate_pid =
-            self.wait_for("subreaper intermediate creation", &procs_path, || {
-                subreaper_fixture.intermediate_pid()
-            })?;
-        subreaper_fixture.open_intermediate_pidfd(subreaper_intermediate_pid)?;
-        let subreaper_native_child_pid =
-            self.wait_for("subreaper native child creation", &procs_path, || {
-                subreaper_fixture.intermediate_native_child_pid(subreaper_intermediate_pid)
-            })?;
-        subreaper_fixture.open_native_pidfd(subreaper_native_child_pid)?;
-        let subreaper_intermediate_before_exit =
-            self.wait_for("subreaper intermediate identity", &procs_path, || {
-                inspector
-                    .snapshot(subreaper_intermediate_pid)
-                    .context(NodeSnafu)
-            })?;
-        let subreaper_native_child_before_parent_exit =
-            self.wait_for("subreaper native child identity", &procs_path, || {
-                inspector
-                    .snapshot(subreaper_native_child_pid)
-                    .context(NodeSnafu)
-            })?;
-        ensure!(
-            subreaper_native_parent.root_class.as_deref() == Some("external_runtime_root")
-                && subreaper_native_parent.installed_role_class.as_deref()
-                    == Some("runtime_external_restricted")
-                && subreaper_intermediate_before_exit.creator_task_cookie
-                    == Some(subreaper_native_parent.task_cookie)
-                && subreaper_intermediate_before_exit.real_parent_task_cookie
-                    == subreaper_native_parent.task_cookie
-                && subreaper_intermediate_before_exit.real_parent_host_tid
-                    == subreaper_native_parent.host_tid
-                && subreaper_intermediate_before_exit.real_parent_host_tgid
-                    == subreaper_native_parent.host_tgid
-                && subreaper_intermediate_before_exit.root_class.is_none()
-                && subreaper_intermediate_before_exit
-                    .installed_role_class
-                    .is_none()
-                && subreaper_native_child_before_parent_exit.creator_task_cookie
-                    == Some(subreaper_intermediate_before_exit.task_cookie)
-                && subreaper_native_child_before_parent_exit.real_parent_task_cookie
-                    == subreaper_intermediate_before_exit.task_cookie
-                && subreaper_native_child_before_parent_exit.real_parent_host_tid
-                    == subreaper_intermediate_before_exit.host_tid
-                && subreaper_native_child_before_parent_exit.real_parent_host_tgid
-                    == subreaper_intermediate_before_exit.host_tgid
-                && subreaper_native_child_before_parent_exit
-                    .root_class
-                    .is_none()
-                && subreaper_native_child_before_parent_exit
-                    .installed_role_class
-                    .is_none()
-                && subreaper_native_child_before_parent_exit.coordinate_state
-                    == TaskCoordinateStateV1::Runnable as u8,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: "subreaper native child has the wrong pre-exit identity",
-            }
-        );
-        subreaper_fixture.release_intermediate_exit()?;
-        self.wait_for("subreaper intermediate exit", &procs_path, || {
-            Ok(subreaper_fixture
-                .intermediate_exited(subreaper_intermediate_pid)?
-                .then_some(()))
-        })?;
-        subreaper_fixture.release_exec(subreaper_native_child_pid)?;
-        let subreaper_native_child_after_parent_exit = self.wait_for(
-            "subreaper native child exec after parent exit",
-            &procs_path,
-            || {
-                let snapshot = inspector
-                    .snapshot(subreaper_native_child_pid)
-                    .context(NodeSnafu)?;
-                Ok(snapshot.filter(|snapshot| {
-                    snapshot.task_cookie == subreaper_native_child_before_parent_exit.task_cookie
-                        && snapshot.creator_task_cookie
-                            == Some(subreaper_intermediate_before_exit.task_cookie)
-                        && snapshot.real_parent_task_cookie == 0
-                        && snapshot.real_parent_host_tid == subreaper_native_parent.host_tid
-                        && snapshot.real_parent_host_tgid == subreaper_native_parent.host_tgid
-                        && snapshot.real_parent_interval_sequence
-                            > subreaper_native_child_before_parent_exit
-                                .real_parent_interval_sequence
-                        && snapshot.active_execution_id
-                            != subreaper_native_child_before_parent_exit.active_execution_id
-                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
-                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
-                        && snapshot.process_state_vector_state
-                            == ProcessStateVectorStateV1::Active as u8
-                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
-                }))
-            },
-        )?;
-        ensure!(
-            subreaper_native_child_after_parent_exit
-                .root_class
-                .is_none()
-                && subreaper_native_child_after_parent_exit
-                    .installed_role_class
-                    .is_none()
-                && subreaper_native_child_after_parent_exit.active_role_id
-                    == subreaper_native_parent.active_role_id,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: "subreaper native child lost its inherited restriction",
-            }
-        );
-        subreaper_fixture.stop()?;
+        let sub_cleanup = ProbeFile::new(&child_ready_path);
+        let (sub_root, sub_mid, sub_before, sub_after) =
+            reparent_case.subreaper(&child_ready_path)?;
+        sub_cleanup.cleanup()?;
 
         let mut namespace_init_fixture =
             NativeProcessFixture::start_namespace_init_reparenting(&self.repo_root)?;
@@ -2117,10 +2004,10 @@ impl IdentityTestRunner {
             orphaned_native_parent: orphan_root,
             orphaned_native_child_before_parent_exit: orphan_before,
             orphaned_native_child_after_parent_exit: orphan_after,
-            subreaper_native_parent,
-            subreaper_intermediate_before_exit,
-            subreaper_native_child_before_parent_exit,
-            subreaper_native_child_after_parent_exit,
+            subreaper_native_parent: sub_root,
+            subreaper_intermediate_before_exit: sub_mid,
+            subreaper_native_child_before_parent_exit: sub_before,
+            subreaper_native_child_after_parent_exit: sub_after,
             namespace_init_parent,
             namespace_init_pid_in_own_namespace,
             namespace_init_intermediate_before_exit,

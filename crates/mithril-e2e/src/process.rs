@@ -210,7 +210,6 @@ impl ProcessFixture {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn wait_pair(&mut self, path: &Path, operation: &str) -> Result<[u32; 2]> {
         let last = RefCell::new(String::from("<absent>"));
         self.wait_path(
@@ -236,6 +235,9 @@ impl ProcessFixture {
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
+                if ids.len() < 2 {
+                    return Ok(None);
+                }
                 ensure!(
                     ids.len() == 2 && ids[0] != ids[1],
                     InvalidInputSnafu {
@@ -271,6 +273,29 @@ impl ProcessFixture {
                     .lines()
                     .any(|line| line.starts_with("State:\tT"))
                     .then_some(()))
+            },
+            || format!("process {id}; last {}", last.borrow()),
+        )
+    }
+
+    pub(crate) fn wait_gone(&mut self, id: u32, operation: &str) -> Result<()> {
+        let path = PathBuf::from(format!("/proc/{id}/status"));
+        let last = RefCell::new(String::from("State: <absent>"));
+        self.wait_path(
+            &path,
+            operation,
+            START_LIMIT,
+            || match fs::read_to_string(&path) {
+                Ok(text) => {
+                    *last.borrow_mut() = text
+                        .lines()
+                        .find(|line| line.starts_with("State:"))
+                        .unwrap_or("State: <missing>")
+                        .to_owned();
+                    Ok(None)
+                }
+                Err(source) if source.kind() == ErrorKind::NotFound => Ok(Some(())),
+                Err(source) => Err(source).context(IoSnafu { path: &path }),
             },
             || format!("process {id}; last {}", last.borrow()),
         )
