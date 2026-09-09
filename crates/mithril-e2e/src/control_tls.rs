@@ -1127,40 +1127,35 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
     fs::remove_file(&store_path)?;
     fs::rename(retained_store_path, &store_path)?;
 
-    let blocked_store = ControlStore::open_with_evidence_limits(&store_path, limits(1))?;
-    let blocked_control = control(blocked_store.clone())?;
-    let blocked_address = free_address()?;
-    let (blocked_shutdown, blocked_server) =
-        start_server(blocked_address, &files, blocked_control.clone()).await?;
     let mut trust = TrustCache::load(directory.path())?;
-    let mut connection = NodeControlConnector::new(
-        files.node_config(blocked_address),
-        "node-a".to_owned(),
-        [7; 16],
-    )
-    .connect(registration(), false, &mut trust)
-    .await?;
-    connection
-        .send_evidence_group(observations.next_evidence_batches())
+    {
+        let blocked_store = ControlStore::open_with_evidence_limits(&store_path, limits(1))?;
+        let blocked_control = control(blocked_store.clone())?;
+        let blocked_server = ControlServerFixture::start(&files, blocked_control).await?;
+        let mut connection = NodeControlConnector::new(
+            files.node_config(blocked_server.address()),
+            "node-a".to_owned(),
+            [7; 16],
+        )
+        .connect(registration(), false, &mut trust)
         .await?;
-    if connection.next_message().await.is_ok() {
-        return Err("Control acknowledged evidence that exceeded durable capacity".into());
+        connection
+            .send_evidence_group(observations.next_evidence_batches())
+            .await?;
+        if connection.next_message().await.is_ok() {
+            return Err("Control acknowledged evidence that exceeded durable capacity".into());
+        }
+        assert_eq!(observations.pending_evidence_records(), 2);
+        assert_eq!(blocked_store.health()?.evidence_cursors, 0);
+        drop(connection);
+        blocked_server.shutdown().await?;
     }
-    assert_eq!(observations.pending_evidence_records(), 2);
-    assert_eq!(blocked_store.health()?.evidence_cursors, 0);
-    drop(connection);
-    let _result = blocked_shutdown.send(());
-    blocked_server.await??;
-    drop(blocked_control);
-    drop(blocked_store);
 
     let restored_store = ControlStore::open_with_evidence_limits(&store_path, limits(10))?;
     let restored_control = control(restored_store.clone())?;
-    let restored_address = free_address()?;
-    let (restored_shutdown, restored_server) =
-        start_server(restored_address, &files, restored_control).await?;
+    let restored_server = ControlServerFixture::start(&files, restored_control).await?;
     let mut connection = NodeControlConnector::new(
-        files.node_config(restored_address),
+        files.node_config(restored_server.address()),
         "node-a".to_owned(),
         [7; 16],
     )
@@ -1176,8 +1171,7 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
     assert_eq!(observations.pending_evidence_records(), 0);
     assert_eq!(restored_store.health()?.evidence_cursors, 1);
     drop(connection);
-    let _result = restored_shutdown.send(());
-    restored_server.await??;
+    restored_server.shutdown().await?;
     Ok(())
 }
 
@@ -2623,6 +2617,49 @@ async fn start_server(
         return Err(error.into());
     }
     Ok((shutdown, server))
+}
+
+struct ControlServerFixture {
+    address: SocketAddr,
+    shutdown: Option<oneshot::Sender<()>>,
+    server: Option<tokio::task::JoinHandle<mithril_control::Result<()>>>,
+}
+
+impl ControlServerFixture {
+    async fn start(
+        files: &CertificateFiles,
+        control: ControlPlane,
+    ) -> Result<Self, Box<dyn StdError>> {
+        let address = free_address()?;
+        let (shutdown, server) = start_server(address, files, control).await?;
+        Ok(Self {
+            address,
+            shutdown: Some(shutdown),
+            server: Some(server),
+        })
+    }
+
+    fn address(&self) -> SocketAddr {
+        self.address
+    }
+
+    async fn shutdown(mut self) -> Result<(), Box<dyn StdError>> {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _result = shutdown.send(());
+        }
+        if let Some(server) = self.server.take() {
+            server.await??;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ControlServerFixture {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _result = shutdown.send(());
+        }
+    }
 }
 
 #[derive(Clone)]
