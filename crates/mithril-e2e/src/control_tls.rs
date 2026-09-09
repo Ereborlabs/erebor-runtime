@@ -659,7 +659,6 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
     let directory = tempfile::tempdir()?;
     let certificates = Certificates::issue(false)?;
     let files = certificates.write(directory.path())?;
-    let address = free_address()?;
     let store = ControlStore::open(directory.path().join("control-store"))?;
     let control = ControlPlane::with_control_store(
         vec![AllowedNodeIdentity {
@@ -675,10 +674,13 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
         },
         store,
     )?;
-    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
+    let server = ControlServerFixture::start(&files, control.clone()).await?;
 
-    let connector =
-        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
+    let connector = NodeControlConnector::new(
+        files.node_config(server.address()),
+        "node-a".to_owned(),
+        [7; 16],
+    );
     let mut trust = TrustCache::load(&directory.path().join("node-trust"))?;
     let mut node = registration();
     node.kubernetes_node_name = "worker-a.example".to_owned();
@@ -742,9 +744,19 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
         NodeDecommissionStateV1::Accepted,
     )
     .await?;
-    assert!(control
-        .ready_kubernetes_node_sessions(Duration::from_secs(2))
-        .is_empty());
+    let last_ready = std::cell::RefCell::new(Vec::new());
+    wait_for_async(
+        directory.path(),
+        "the accepted node session to leave the ready set",
+        Duration::from_secs(2),
+        || {
+            *last_ready.borrow_mut() =
+                control.ready_kubernetes_node_sessions(Duration::from_secs(2));
+            Ok(last_ready.borrow().is_empty().then_some(()))
+        },
+        || format!("last ready sessions: {:?}", last_ready.borrow()),
+    )
+    .await?;
 
     control
         .confirm_node_decommission_quarantine_for_test(&session)
@@ -769,8 +781,7 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
     .await?;
 
     drop(connection);
-    let _result = shutdown.send(());
-    server.await??;
+    server.shutdown().await?;
     Ok(())
 }
 
