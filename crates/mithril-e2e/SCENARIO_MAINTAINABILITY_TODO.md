@@ -16,6 +16,10 @@ behavior clearly. A file split, wrapper, or moved function is not a migration
 if it hides the same orchestration or makes production operations harder to
 trace.
 
+No Rust source file in `crates/mithril-e2e` can exceed 2,000 lines at
+delivery. Each extracted module must own one clear scenario or fixture
+responsibility. This limit does not make a mechanical split sufficient.
+
 The suite keeps its current result schemas, security assertions, public owner
 calls, stock `runc` and containerd paths, and paired Kubernetes operations.
 
@@ -72,11 +76,18 @@ owners are:
 
 - Prefer one small test per security behavior.
 - Prefer a small file when it has one fixture or scenario responsibility.
+- Keep each Rust source file below 2,000 lines.
 - Keep a larger file only when a split would separate an action from its
   assertion or hide the production call order.
 - Keep fixture setup, action, and assertion visible in the test.
 - Put resource allocation, readiness, diagnostic capture, and cleanup in
   simple fixture owners.
+- Use one process fixture owner for identity and direct-runtime child
+  processes. Its start operation must return only after readiness. Its stop
+  and drop operations must be idempotent.
+- Put reusable process programs in small files under `fixtures/process`.
+  Execute the same files in focused identity and direct-runtime fixture tests.
+  Do not add embedded or copied variants.
 - Do not put policy delivery, binding reconciliation, admission, recovery,
   evidence acknowledgement, or another production sequence in a test helper.
 - Do not add a fixture trait, builder, macro, scenario registry, or custom
@@ -90,6 +101,10 @@ owners are:
   path, operation name, and caller-supplied last-state diagnostic.
 - [x] Add one child-process readiness function on top of the shared wait.
   Use it for native identity and direct-runtime process exit diagnostics.
+- [ ] Add one idempotent process owner for identity and direct-runtime
+  children. Move kill, wait, early-exit inspection, and drop cleanup into it.
+- [ ] Move reusable Python process programs to `fixtures/process` and execute
+  them from both identity and direct-runtime focused fixture tests.
 - [x] Add fresh-directory construction to the existing `ProbeDirectory`
   owner.
 - [x] Keep `ProbeDirectory`, `ProbeFile`, and `ProbeCgroup` cleanup
@@ -205,7 +220,8 @@ starting the complete privileged scenarios.
 - [x] Move native process startup, stop, exec-failure, and exit readiness into
   the small `identity/native_process.rs` fixture module.
 - [x] Move the complete `NativeProcessFixture` owner out of `identity.rs`.
-  Put each Python child program in a small file under `fixtures/identity`.
+- [ ] Move each Python child program from `fixtures/identity` to the shared
+  `fixtures/process` directory and use it in the direct-runtime fixture tests.
 - [ ] Move native child stop, failed-exec, and post-PONR checks to
   `identity/native_process/exec_tests.rs`. Reuse fixture-owned child and
   executable readiness.
@@ -214,7 +230,7 @@ starting the complete privileged scenarios.
   transition and parent assertion visible.
 - [ ] Move non-leader and concurrent-thread checks to
   `identity/native_process/thread_tests.rs`. Keep exact TID assertions.
-- [ ] Move the production object allocation check to
+- [x] Move the production object allocation check to
   `identity/verification_tests.rs`.
 - [ ] Move the authorization replay check to
   `identity/authorization_tests.rs`. Keep retarget, expiry, replay, restart,

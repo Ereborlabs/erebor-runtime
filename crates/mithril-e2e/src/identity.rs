@@ -1,5 +1,7 @@
 mod clone3;
 mod native_process;
+#[cfg(test)]
+mod verification_tests;
 
 use self::native_process::NativeProcessFixture;
 
@@ -9495,25 +9497,10 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
 
-    use super::{
-        IdentityTestRunner, NativeProcessFixture, IDENTITY_FIXTURES, REQUIRED_IDENTITY_MAPS,
-    };
+    use super::{IdentityTestRunner, NativeProcessFixture};
 
     fn test_runner() -> IdentityTestRunner {
         IdentityTestRunner::new(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."))
-    }
-
-    #[test]
-    fn production_object_and_identity_fixture_allocation_are_exact() -> crate::Result<()> {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let temporary = tempfile::tempdir().map_err(|error| {
-            super::invalid_state(format!("create identity test directory: {error}"))
-        })?;
-        let bundle = IdentityTestRunner::new(root).verify(temporary.path())?;
-        assert_eq!(bundle.schema_version, 1);
-        assert_eq!(bundle.layout.maps.len(), REQUIRED_IDENTITY_MAPS.len());
-        assert_eq!(bundle.identity_fixture_ids.len(), IDENTITY_FIXTURES.len());
-        Ok(())
     }
 
     #[test]
