@@ -74,6 +74,7 @@ protected_pod_fixture=$directory/../../fixtures/convergence/protected-pod-v1.yam
 grep -Fq 'do if command : </srv/team/blue/secrets/models/secret;' "$protected_pod_fixture"
 grep -Fq 'entry_containerd_path=/usr/bin/containerd' "$directory/run.sh"
 grep -Fq -- '--containerd-path "$entry_containerd_path"' "$directory/run.sh"
+grep -Fq 'fixtures/process/$fixture' "$directory/run.sh"
 if grep -Fq -- '--start-hook-path' "$directory/run.sh"; then
   echo "the direct runtime probe still uses the rejected start hook" >&2
   exit 1

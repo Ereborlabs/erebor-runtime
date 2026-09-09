@@ -271,6 +271,7 @@ fi
   "$remote_source/crates/mithril-e2e/fixtures/hugging-face/protected" \
   "$remote_source/crates/mithril-e2e/fixtures/convergence" \
   "$remote_source/crates/mithril-e2e/fixtures/identity" \
+  "$remote_source/crates/mithril-e2e/fixtures/process" \
   "$remote_source/crates/mithril-e2e/fixtures/mithril-policy" \
   "$remote_source/crates/mithril-e2e/harness/vm" \
   "$remote_root/harness" "$remote_bin"
@@ -325,6 +326,18 @@ done
 "$provider" put "$vm_name" \
   "$repo_root/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh" \
   "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh"
+for fixture in \
+  native_concurrent_thread_exec.py \
+  native_leader_first.py \
+  native_namespace_init.py \
+  native_non_leader_exec.py \
+  native_pid_tid_reuse.py \
+  native_subreaper.py \
+  process_exit.py; do
+  "$provider" put "$vm_name" \
+    "$repo_root/crates/mithril-e2e/fixtures/process/$fixture" \
+    "$remote_source/crates/mithril-e2e/fixtures/process/$fixture"
+done
 "$provider" put "$vm_name" \
   "$repo_root/crates/mithril-e2e/fixtures/convergence/direct-entry-roles-v1.yaml" \
   "$remote_source/crates/mithril-e2e/fixtures/convergence/direct-entry-roles-v1.yaml"

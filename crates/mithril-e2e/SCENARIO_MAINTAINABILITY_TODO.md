@@ -108,6 +108,7 @@ owners are:
   owner as each entry-role behavior moves to its small scenario module.
 - [x] Move reusable Python process programs to `fixtures/process` and execute
   them from both identity and direct-runtime focused fixture tests.
+- [x] Copy the shared Python process programs into each fresh single-node VM.
 - [x] Add fresh-directory construction to the existing `ProbeDirectory`
   owner.
 - [x] Keep `ProbeDirectory`, `ProbeFile`, and `ProbeCgroup` cleanup
