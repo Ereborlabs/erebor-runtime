@@ -110,6 +110,21 @@ physical run:
 - [x] `shared_mmap_target_reports_both_unrestricted_controls`: make the child
   readiness and request exchange deterministic without weakening the mmap
   allow assertions.
+- [ ] `native_process_fixture_reparents_double_fork_child_before_exec`: wait
+  for the reparented child to reach stopped state and report its last `/proc`
+  status when readiness fails.
+- [ ] `native_process_fixture_reparents_a_stopped_child_before_exec`: wait for
+  the child to reach stopped state before the test reads its parent identity.
+- [ ] `mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack`:
+  wait for the stopped Control server to release its store lease before the
+  restart.
+- [ ] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`:
+  wait for the accepted node session to leave the ready set and report the
+  last ready sessions on timeout.
+- [ ] `control_evidence_queue_reclaims_only_durably_consumed_segments`: wait
+  for the last compact owner to release the store lease before reopening it.
+- [ ] `node_decommission_https_accepts_the_same_signed_artifact_as_control`:
+  wait for the HTTPS listener before the first request.
 
 ## In-process scenario migration ledger
 

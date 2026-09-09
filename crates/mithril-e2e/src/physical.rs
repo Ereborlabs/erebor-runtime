@@ -72,6 +72,33 @@ pub(crate) fn wait_for<T>(
     }
 }
 
+#[cfg(test)]
+pub(crate) async fn wait_for_async<T>(
+    path: &Path,
+    operation: &str,
+    limit: Duration,
+    mut inspect: impl FnMut() -> Result<Option<T>>,
+    diagnostic: impl FnOnce() -> String,
+) -> Result<T> {
+    let deadline = tokio::time::Instant::now() + limit;
+    loop {
+        if let Some(value) = inspect()? {
+            return Ok(value);
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return TimeoutSnafu {
+                path,
+                operation,
+                limit,
+                diagnostic: diagnostic(),
+            }
+            .fail();
+        }
+        tokio::time::sleep(POLL_INTERVAL.min(remaining)).await;
+    }
+}
+
 impl Drop for ProbeDirectory {
     fn drop(&mut self) {
         if !self.cleaned {
@@ -181,7 +208,7 @@ mod tests {
     use erebor_runtime_error::{ErrorExt as _, StatusCode};
     use snafu::ResultExt as _;
 
-    use super::{wait_for, ProbeDirectory};
+    use super::{wait_for, wait_for_async, ProbeDirectory};
     use crate::error::{InvalidInputSnafu, IoSnafu};
 
     #[test]
@@ -212,6 +239,25 @@ mod tests {
         })?;
         assert_eq!(error.status_code(), StatusCode::DeadlineExceeded);
         assert!(error.to_string().contains("last state was STARTING"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn async_readiness_yields_until_the_fixture_is_ready() -> crate::Result<()> {
+        let path = Path::new("async readiness fixture");
+        let mut inspections = 0;
+        wait_for_async(
+            path,
+            "fixture readiness",
+            Duration::from_secs(1),
+            || {
+                inspections += 1;
+                Ok((inspections == 2).then_some(()))
+            },
+            || "fixture stayed busy".to_owned(),
+        )
+        .await?;
+        assert_eq!(inspections, 2);
         Ok(())
     }
 }

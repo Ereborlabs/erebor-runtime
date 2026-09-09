@@ -56,6 +56,8 @@ use grpc_throughput_protocol::grpc_throughput_client::GrpcThroughputClient;
 use grpc_throughput_protocol::grpc_throughput_server::{GrpcThroughput, GrpcThroughputServer};
 use grpc_throughput_protocol::{FileChunk, FileReceipt};
 
+use crate::physical::wait_for_async;
+
 const OUTAGE_POLICY: &[u8] = include_bytes!("../fixtures/convergence/outage-policy-v1.json");
 const OUTAGE_TENANT_ID: &str = "00000000-0000-0001-0000-000000000002";
 const OUTAGE_CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
@@ -1117,7 +1119,8 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
         );
     }
 
-    let initial_store = ControlStore::open_with_evidence_limits(&store_path, limits(10))?;
+    let initial_store = ControlStore::open_with_evidence_limits(&store_path, limits(10))
+        .map_err(|source| format!("initial Control store open failed: {source}"))?;
     drop(initial_store);
     let retained_store_path = directory.path().join("retained-control-evidence");
     fs::rename(&store_path, &retained_store_path)?;
@@ -1129,7 +1132,8 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
 
     let mut trust = TrustCache::load(directory.path())?;
     {
-        let blocked_store = ControlStore::open_with_evidence_limits(&store_path, limits(1))?;
+        let blocked_store = ControlStore::open_with_evidence_limits(&store_path, limits(1))
+            .map_err(|source| format!("blocked Control store open failed: {source}"))?;
         let blocked_control = control(blocked_store.clone())?;
         let blocked_server = ControlServerFixture::start(&files, blocked_control).await?;
         let mut connection = NodeControlConnector::new(
@@ -1151,7 +1155,25 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
         blocked_server.shutdown().await?;
     }
 
-    let restored_store = ControlStore::open_with_evidence_limits(&store_path, limits(10))?;
+    let restored_store = wait_for_async(
+        &store_path,
+        "the stopped Control server to release its store lease",
+        Duration::from_secs(5),
+        || match ControlStore::open_with_evidence_limits(&store_path, limits(10)) {
+            Ok(store) => Ok(Some(store)),
+            Err(mithril_control::Error::ControlStore { reason, .. })
+                if reason.starts_with("another Control store owner holds the lease") =>
+            {
+                Ok(None)
+            }
+            Err(source) => Err(crate::Error::Policy {
+                source,
+                location: snafu::Location::default(),
+            }),
+        },
+        || "the stopped server still owns `owner.lock`".to_owned(),
+    )
+    .await?;
     let restored_control = control(restored_store.clone())?;
     let restored_server = ControlServerFixture::start(&files, restored_control).await?;
     let mut connection = NodeControlConnector::new(
