@@ -1644,13 +1644,11 @@ async fn kubernetes_outage_partitioned_node_reconnects_to_running_control_and_re
 #[tokio::test]
 async fn kubernetes_outage_retained_evidence_allows_protected_pod_admission(
 ) -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let certificates = Certificates::issue(false)?;
-    let files = certificates.write(directory.path())?;
-    let store = ControlStore::open(directory.path().join("control-store"))?;
+    let tls = MtlsFixture::new(false)?;
+    let store = ControlStore::open(tls.path().join("control-store"))?;
     let observations = EffectObservationStore::durable(
         4,
-        directory.path().join("node-wal"),
+        tls.path().join("node-wal"),
         EvidenceWalLimits::default(),
         ObservationCanonicalizer::new(
             EvidenceIdV1::new(1, 2),
@@ -1712,8 +1710,8 @@ async fn kubernetes_outage_retained_evidence_allows_protected_pod_admission(
     let address = free_address()?;
     let config = KubernetesAdmissionHttpConfigV1 {
         listen: address,
-        tls_certificate_path: files.server_certificate.clone(),
-        tls_private_key_path: files.server_key.clone(),
+        tls_certificate_path: tls.files.server_certificate.clone(),
+        tls_private_key_path: tls.files.server_key.clone(),
         maximum_request_bytes: 1024 * 1024,
         request_timeout_ms: 1_000,
     };
@@ -1731,8 +1729,8 @@ async fn kubernetes_outage_retained_evidence_allows_protected_pod_admission(
         )
         .await
     });
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    let ca = reqwest::Certificate::from_pem(&fs::read(&files.ca)?)?;
+    let server = ControlServerFixture::from_running(address, shutdown, server).await?;
+    let ca = reqwest::Certificate::from_pem(&fs::read(&tls.files.ca)?)?;
     let client = reqwest::Client::builder()
         .add_root_certificate(ca)
         .timeout(Duration::from_secs(2))
@@ -1754,8 +1752,7 @@ async fn kubernetes_outage_retained_evidence_allows_protected_pod_admission(
         "protected Pod admission did not return a scheduler patch: {review}"
     );
 
-    let _result = shutdown.send(());
-    server.await??;
+    server.shutdown().await?;
     Ok(())
 }
 

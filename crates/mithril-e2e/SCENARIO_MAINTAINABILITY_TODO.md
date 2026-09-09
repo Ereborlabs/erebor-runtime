@@ -148,7 +148,7 @@ acknowledgement, or decommission operations directly.
 - [x] `mtls_storage_failure_withholds_ack_until_replay_is_durable`
 - [x] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
 - [x] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
-- [ ] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`
+- [x] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`
 - [x] `node_decommission_https_accepts_the_same_signed_artifact_as_control`
 - [ ] `mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound`
 - [ ] `mtls_evidence_backlog_exceeds_the_previous_baseline`
