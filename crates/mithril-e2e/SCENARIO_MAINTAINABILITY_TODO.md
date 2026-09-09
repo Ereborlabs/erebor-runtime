@@ -88,6 +88,8 @@ owners are:
 
 - [x] Add one synchronous readiness function with an exact timeout, resource
   path, operation name, and caller-supplied last-state diagnostic.
+- [x] Add one child-process readiness function on top of the shared wait.
+  Use it for native identity and direct-runtime process exit diagnostics.
 - [x] Add fresh-directory construction to the existing `ProbeDirectory`
   owner.
 - [x] Keep `ProbeDirectory`, `ProbeFile`, and `ProbeCgroup` cleanup
@@ -202,8 +204,23 @@ starting the complete privileged scenarios.
   shared wait. Preserve child status and snapshot diagnostics.
 - [x] Move native process startup, stop, exec-failure, and exit readiness into
   the small `identity/native_process.rs` fixture module.
-- [x] Keep each of the 13 `identity.rs` tests and the `clone3.rs` test
-  beside its fixture owner. Rerun them after each identity fixture change.
+- [ ] Move the complete `NativeProcessFixture` owner out of `identity.rs`.
+  Put embedded child programs in a separate constants module.
+- [ ] Move native child stop, failed-exec, and post-PONR checks to
+  `identity/native_process/exec_tests.rs`. Reuse fixture-owned child and
+  executable readiness.
+- [ ] Move subreaper, namespace-init, orphan, double-fork, and leader-first
+  checks to `identity/native_process/reparent_tests.rs`. Keep each process
+  transition and parent assertion visible.
+- [ ] Move non-leader and concurrent-thread checks to
+  `identity/native_process/thread_tests.rs`. Keep exact TID assertions.
+- [ ] Move the production object allocation check to
+  `identity/verification_tests.rs`.
+- [ ] Move the authorization replay check to
+  `identity/authorization_tests.rs`. Keep retarget, expiry, replay, restart,
+  and fresh-control assertions in the production owner call.
+- [ ] Rerun all 13 focused identity tests and the `clone3.rs` test after each
+  identity fixture change.
 
 ### Compact owner-local checks
 

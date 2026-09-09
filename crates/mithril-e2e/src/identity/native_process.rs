@@ -8,7 +8,7 @@ use snafu::{ensure, ResultExt as _};
 
 use super::{invalid_state, NativeProcessFixture, WAIT_LIMIT};
 use crate::error::{InvalidInputSnafu, IoSnafu};
-use crate::physical::wait_for;
+use crate::physical::{wait_for, wait_for_process};
 use crate::Result;
 
 const READY: &[u8] = b"native-fixture-ready\n";
@@ -26,60 +26,60 @@ impl NativeProcessFixture {
 
         let readiness_path = PathBuf::from(format!("{} readiness pipe", command.display()));
         let received = RefCell::new(Vec::new());
-        wait_for(
-            &readiness_path,
-            "the native fixture input barrier",
-            WAIT_LIMIT,
-            || {
-                let mut buffer = [0_u8; 64];
-                match self
-                    .ready_stdout
-                    .as_mut()
-                    .ok_or_else(|| invalid_state("native fixture readiness pipe closed early"))?
-                    .read(&mut buffer)
-                {
-                    Ok(0) => {
-                        let status = self.outer.try_wait().context(IoSnafu { path: command })?;
-                        Err(invalid_state(format!(
-                            "native fixture closed its readiness pipe before the input barrier; status {status:?}"
-                        )))
-                    }
-                    Ok(count) => {
-                        let mut received = received.borrow_mut();
-                        received.extend_from_slice(&buffer[..count]);
-                        if received.as_slice() == READY {
-                            Ok(Some(()))
-                        } else if READY.starts_with(received.as_slice()) {
-                            Ok(None)
-                        } else {
-                            Err(invalid_state(format!(
-                                "native fixture wrote an invalid readiness marker: {:?}",
-                                String::from_utf8_lossy(&received)
-                            )))
+        {
+            let stdout = self
+                .ready_stdout
+                .as_mut()
+                .ok_or_else(|| invalid_state("native fixture readiness pipe closed early"))?;
+            let stderr = &mut self.stderr;
+            wait_for_process(
+                &mut self.outer,
+                &readiness_path,
+                "the native fixture input barrier",
+                WAIT_LIMIT,
+                || {
+                    let mut buffer = [0_u8; 64];
+                    match stdout.read(&mut buffer) {
+                        Ok(0) => Err(invalid_state(
+                            "native fixture closed its readiness pipe before the input barrier",
+                        )),
+                        Ok(count) => {
+                            let mut received = received.borrow_mut();
+                            received.extend_from_slice(&buffer[..count]);
+                            if received.as_slice() == READY {
+                                Ok(Some(()))
+                            } else if READY.starts_with(received.as_slice()) {
+                                Ok(None)
+                            } else {
+                                Err(invalid_state(format!(
+                                    "native fixture wrote an invalid readiness marker: {:?}",
+                                    String::from_utf8_lossy(&received)
+                                )))
+                            }
                         }
+                        Err(source) if source.kind() == ErrorKind::WouldBlock => Ok(None),
+                        Err(source) => Err(source).context(IoSnafu {
+                            path: &readiness_path,
+                        }),
                     }
-                    Err(source) if source.kind() == ErrorKind::WouldBlock => {
-                        if let Some(status) =
-                            self.outer.try_wait().context(IoSnafu { path: command })?
-                        {
-                            return Err(invalid_state(format!(
-                                "native fixture exited before the input barrier with {status}"
-                            )));
-                        }
-                        Ok(None)
+                },
+                || {
+                    let mut output = String::new();
+                    if let Some(mut pipe) = stderr.take() {
+                        pipe.read_to_string(&mut output).context(IoSnafu {
+                            path: Path::new("native fixture stderr"),
+                        })?;
                     }
-                    Err(source) => Err(source).context(IoSnafu {
-                        path: &readiness_path,
-                    }),
-                }
-            },
-            || {
-                format!(
-                    "received readiness bytes {:?}",
-                    String::from_utf8_lossy(&received.borrow())
-                )
-            },
-        )?;
+                    Ok(format!("stderr: {:?}", output.trim()))
+                },
+                || {
+                    format!(
+                        "received readiness bytes {:?}",
+                        String::from_utf8_lossy(&received.borrow())
+                    )
+                },
+            )?;
+        }
         self.ready_stdout.take();
         Ok(())
     }

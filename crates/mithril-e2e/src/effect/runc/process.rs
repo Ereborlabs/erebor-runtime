@@ -2,11 +2,8 @@ use std::fs;
 use std::path::Path;
 use std::process::Child;
 
-use snafu::ResultExt as _;
-
 use super::WAIT_LIMIT;
-use crate::error::{InvalidInputSnafu, IoSnafu};
-use crate::physical::wait_for;
+use crate::physical::wait_for_process;
 use crate::Result;
 
 const MAXIMUM_DIAGNOSTIC_BYTES: usize = 8 * 1024;
@@ -17,29 +14,16 @@ pub(super) fn wait_for_path(
     operation: &str,
     output_paths: &[&Path],
 ) -> Result<()> {
-    wait_for(
+    wait_for_process(
+        child,
         path,
         operation,
         WAIT_LIMIT,
-        || {
-            if path.exists() {
-                return Ok(Some(()));
-            }
-            if let Some(status) = child.try_wait().context(IoSnafu { path })? {
-                return InvalidInputSnafu {
-                    path,
-                    reason: format!(
-                        "the runtime process exited with {status} before {operation}; {}",
-                        output_summary(output_paths)
-                    ),
-                }
-                .fail();
-            }
-            Ok(None)
-        },
+        || Ok(path.exists().then_some(())),
+        || Ok(output_summary(output_paths)),
         || {
             format!(
-                "the runtime process is still running; {}",
+                "the process is still running; {}",
                 output_summary(output_paths)
             )
         },
