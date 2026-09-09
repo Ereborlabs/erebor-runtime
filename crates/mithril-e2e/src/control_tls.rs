@@ -1447,28 +1447,14 @@ async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retaine
 #[tokio::test]
 async fn kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor(
 ) -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let certificates = Certificates::issue(false)?;
-    let files = certificates.write(directory.path())?;
-    let store = ControlStore::open(directory.path().join("control-store"))?;
+    let tls = MtlsFixture::new(false)?;
+    let store = ControlStore::open(tls.path().join("control-store"))?;
     let fixture = OutagePolicyFixture::new(store.clone());
     let first_resource = fixture.resource(1)?;
     let inventory = fixture.inventory(&first_resource)?;
-    let control = ControlPlane::with_control_store(
-        vec![AllowedNodeIdentity {
-            node_id: "node-a".to_owned(),
-            certificate_sha256: certificates.node_digest(),
-            tenant_id: OUTAGE_TENANT_ID.to_owned(),
-        }],
-        TrustGenerationV1 {
-            generation: 1,
-            bundle_digest: "d".repeat(64),
-            policy_issuer_sequence_epoch: 0,
-            policy_signers: Vec::new(),
-        },
-        store,
-    )?
-    .with_policy_desired_state(fixture.owner.clone());
+    let control = tls
+        .control_with_store(store, 1)?
+        .with_policy_desired_state(fixture.owner.clone());
     assert!(control.replace_kubernetes_workload_inventory(inventory.clone())?);
     let first = fixture.owner.reconcile(
         &first_resource,
@@ -1480,15 +1466,14 @@ async fn kubernetes_outage_partitioned_node_reconnects_to_running_control_and_re
     let first_candidate = first_bundle.candidate.candidate_content_id.clone();
     let first_digest = first_bundle.bundle_digest.clone();
 
-    let control_address = free_address()?;
-    let (shutdown, server) = start_server(control_address, &files, control.clone()).await?;
-    let proxy = TcpBlackholeOwner::start(control_address).await?;
+    let server = tls.start(control.clone()).await?;
+    let proxy = TcpBlackholeOwner::start(server.address()).await?;
     let connector = NodeControlConnector::new(
-        files.node_config(proxy.address()),
+        tls.node_config(proxy.address()),
         "node-a".to_owned(),
         [7; 16],
     );
-    let mut trust = TrustCache::load(&directory.path().join("trust"))?;
+    let mut trust = TrustCache::load(&tls.path().join("trust"))?;
     let mut first_connection = connector
         .connect(
             OutagePolicyFixture::registration([7; 16], false),
@@ -1535,7 +1520,7 @@ async fn kubernetes_outage_partitioned_node_reconnects_to_running_control_and_re
 
     let observations = EffectObservationStore::durable(
         4,
-        directory.path().join("node-wal"),
+        tls.path().join("node-wal"),
         EvidenceWalLimits::default(),
         ObservationCanonicalizer::new(
             EvidenceIdV1::new(1, 2),
@@ -1652,8 +1637,7 @@ async fn kubernetes_outage_partitioned_node_reconnects_to_running_control_and_re
 
     drop(reconnected);
     proxy.stop().await?;
-    let _result = shutdown.send(());
-    server.await??;
+    server.shutdown().await?;
     Ok(())
 }
 
@@ -2710,10 +2694,14 @@ impl MtlsFixture {
         node_boot_id: [u8; 16],
     ) -> NodeControlConnector {
         NodeControlConnector::new(
-            self.files.node_config(server.address()),
+            self.node_config(server.address()),
             node_id.to_owned(),
             node_boot_id,
         )
+    }
+
+    fn node_config(&self, address: SocketAddr) -> NodeControlConfig {
+        self.files.node_config(address)
     }
 }
 
