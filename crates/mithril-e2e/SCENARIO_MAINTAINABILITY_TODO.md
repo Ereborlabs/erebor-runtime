@@ -128,6 +128,13 @@ physical run:
 - [x] `mtls_evidence_backlog_exceeds_the_previous_baseline`: the first
   release-mode run measured 103.6 MiB/s against the existing 107.1 MiB/s
   floor. A clean release-mode rerun passed the existing floor.
+- [x] `IdentityTestRunner::physical_probe`: wait for the `CLONE_INTO_CGROUP`
+  child to enter the target mount namespace and reach the final executable
+  before the identity assertion.
+- [ ] `IdentityTestRunner::physical_probe`: the VM reproduced an unexpected
+  native fork denial twice. Preserve the waiting operation in the failure,
+  reproduce the exact condition in a focused lightweight check, and correct
+  the fixture or implementation only after the cause is known.
 
 ## In-process scenario migration ledger
 

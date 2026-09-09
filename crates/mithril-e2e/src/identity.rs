@@ -792,9 +792,11 @@ impl IdentityTestRunner {
                 reason: "CLONE_INTO_CGROUP root or its native child has the wrong identity",
             }
         );
-        let clone_child_mount_namespace = fs::read_link(format!("/proc/{clone_child_pid}/ns/mnt"))
+        let clone_child_mount_namespace_path =
+            PathBuf::from(format!("/proc/{clone_child_pid}/ns/mnt"));
+        let clone_child_mount_namespace = fs::read_link(&clone_child_mount_namespace_path)
             .context(IoSnafu {
-                path: PathBuf::from(format!("/proc/{clone_child_pid}/ns/mnt")),
+                path: &clone_child_mount_namespace_path,
             })?;
         let clone_target_mount_namespace = clone_fixture.target_mount_namespace()?;
         ensure!(
@@ -805,10 +807,23 @@ impl IdentityTestRunner {
             }
         );
         clone_fixture.release_child_into_mount_namespace()?;
+        let clone_child_comm_path = PathBuf::from(format!("/proc/{clone_child_pid}/comm"));
         let clone_native_child_after_namespace_move = self.wait_for(
             "CLONE_INTO_CGROUP native child mount-namespace entry",
-            &procs_path,
+            &clone_child_mount_namespace_path,
             || {
+                if fs::read_link(&clone_child_mount_namespace_path).context(IoSnafu {
+                    path: &clone_child_mount_namespace_path,
+                })? != clone_target_mount_namespace
+                    || fs::read_to_string(&clone_child_comm_path)
+                        .context(IoSnafu {
+                            path: &clone_child_comm_path,
+                        })?
+                        .trim()
+                        != "sleep"
+                {
+                    return Ok(None);
+                }
                 let snapshot = inspector.snapshot(clone_child_pid).context(NodeSnafu)?;
                 Ok(snapshot.filter(|snapshot| {
                     snapshot.task_cookie == clone_native_child.task_cookie
@@ -829,14 +844,14 @@ impl IdentityTestRunner {
                 }))
             },
         )?;
-        let clone_child_mount_namespace_after =
-            fs::read_link(format!("/proc/{clone_child_pid}/ns/mnt")).context(IoSnafu {
-                path: PathBuf::from(format!("/proc/{clone_child_pid}/ns/mnt")),
+        let clone_child_mount_namespace_after = fs::read_link(&clone_child_mount_namespace_path)
+            .context(IoSnafu {
+                path: &clone_child_mount_namespace_path,
             })?;
         ensure!(
             clone_child_mount_namespace_after == clone_target_mount_namespace,
             InvalidInputSnafu {
-                path: PathBuf::from(format!("/proc/{clone_child_pid}/ns/mnt")),
+                path: &clone_child_mount_namespace_path,
                 reason: "native child did not enter the target mount namespace",
             }
         );
