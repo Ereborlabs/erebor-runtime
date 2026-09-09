@@ -10478,11 +10478,8 @@ mod tests {
                 fixture.native_child_pid()
             })?;
         fixture.open_native_pidfd(native_pid)?;
+        fixture.wait_for_stopped_native_child(native_pid)?;
         let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
-        let status = fs::read_to_string(&status_path).map_err(|error| {
-            super::invalid_state(format!("read {}: {error}", status_path.display()))
-        })?;
-        assert!(status.lines().any(|line| line.starts_with("State:\tT")));
 
         fixture.release_parent_exit()?;
         fixture.wait_for_parent_exit()?;

@@ -113,7 +113,7 @@ physical run:
 - [ ] `native_process_fixture_reparents_double_fork_child_before_exec`: wait
   for the reparented child to reach stopped state and report its last `/proc`
   status when readiness fails.
-- [ ] `native_process_fixture_reparents_a_stopped_child_before_exec`: wait for
+- [x] `native_process_fixture_reparents_a_stopped_child_before_exec`: wait for
   the child to reach stopped state before the test reads its parent identity.
 - [x] `mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack`:
   wait for the stopped Control server to release its store lease before the
