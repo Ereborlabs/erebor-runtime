@@ -350,7 +350,7 @@ command passes.
   pending-exec, rollback, and recovery assertions visible.
 - [x] Post-PONR failure: use fixture-owned process readiness and keep the
   fatal-state assertions visible.
-- [ ] Moved-task exec: keep the physical cgroup move, denied exec, production
+- [x] Moved-task exec: keep the physical cgroup move, denied exec, production
   health checks, and placement-mismatch assertions visible.
 - [ ] Orphan, subreaper, namespace-init, and double-fork transitions: use the
   same native process fixture as their focused tests. Preserve every parent,

@@ -900,107 +900,11 @@ impl IdentityTestRunner {
         fatal_ready_cleanup.cleanup()?;
         post_ponr_execfail_cleanup.cleanup()?;
 
-        let mut moved_task_fixture = NativeProcessFixture::start()?;
-        fs::write(&procs_path, moved_task_fixture.outer_pid().to_string())
-            .context(IoSnafu { path: &procs_path })?;
-        let moved_task_parent =
-            self.wait_for("moved-task exec parent identity", &procs_path, || {
-                let snapshot = inspector
-                    .snapshot(moved_task_fixture.outer_pid())
-                    .context(NodeSnafu)?;
-                Ok(snapshot.filter(|snapshot| {
-                    snapshot.creator_task_cookie.is_none()
-                        && snapshot.root_class.as_deref() == Some("external_runtime_root")
-                        && snapshot.installed_role_class.as_deref()
-                            == Some("runtime_external_restricted")
-                        && snapshot.active_role_id == binding.external_role_id
-                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
-                        && snapshot.process_state_vector_state
-                            == ProcessStateVectorStateV1::Active as u8
-                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
-                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
-                }))
-            })?;
-        let health_before_moved_task_child = identity.health(&host).context(NodeSnafu)?;
-        let next_id_before_moved_task_child = identity_next_id(&host)?;
-        moved_task_fixture.release_root()?;
-        let moved_task_pid = match self.wait_for(
-            "moved-task exec child creation",
-            &procs_path,
-            || moved_task_fixture.native_child_pid(),
-        ) {
-            Ok(pid) => pid,
-            Err(source) => {
-                let health_after = identity.health(&host).context(NodeSnafu)?;
-                let next_id_after = identity_next_id(&host)?;
-                return Err(invalid_state(format!(
-                    "{source}; parent {moved_task_parent:?}; identity health changed from {health_before_moved_task_child:?} to {health_after:?}; child allocation advanced next_id by {}",
-                    next_id_after.saturating_sub(next_id_before_moved_task_child)
-                )));
-            }
-        };
-        moved_task_fixture.open_native_pidfd(moved_task_pid)?;
-        let moved_task_before_move =
-            self.wait_for("moved-task exec child identity", &procs_path, || {
-                inspector.snapshot(moved_task_pid).context(NodeSnafu)
-            })?;
-        ensure!(
-            moved_task_parent.root_class.as_deref() == Some("external_runtime_root")
-                && moved_task_parent.installed_role_class.as_deref()
-                    == Some("runtime_external_restricted")
-                && moved_task_before_move.creator_task_cookie
-                    == Some(moved_task_parent.task_cookie)
-                && moved_task_before_move.real_parent_task_cookie == moved_task_parent.task_cookie
-                && moved_task_before_move.task_cookie != moved_task_parent.task_cookie
-                && moved_task_before_move.coordinate_state == TaskCoordinateStateV1::Runnable as u8,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: "moved-task exec child has the wrong pre-move identity",
-            }
-        );
-        let health_before_moved_task = identity.health(&host).context(NodeSnafu)?;
-        fs::write(&parent_procs_path, moved_task_pid.to_string()).context(IoSnafu {
-            path: &parent_procs_path,
-        })?;
-        let moved_task_after_move = self.wait_for(
-            "moved-task exec fail-closed identity",
-            &parent_procs_path,
-            || {
-                let snapshot = inspector.snapshot(moved_task_pid).context(NodeSnafu)?;
-                Ok(snapshot.filter(|snapshot| {
-                    snapshot.task_cookie == moved_task_before_move.task_cookie
-                        && snapshot.creator_task_cookie
-                            == moved_task_before_move.creator_task_cookie
-                        && snapshot.real_parent_task_cookie
-                            == moved_task_before_move.real_parent_task_cookie
-                        && snapshot.coordinate_state
-                            == TaskCoordinateStateV1::FailClosedUnknown as u8
-                }))
-            },
-        )?;
-        let health_after_moved_task_move = identity.health(&host).context(NodeSnafu)?;
-        ensure!(
-            moved_task_after_move.root_class.is_none()
-                && moved_task_after_move.installed_role_class.is_none()
-                && health_after_moved_task_move.placement_mismatches
-                    > health_before_moved_task.placement_mismatches,
-            InvalidInputSnafu {
-                path: &parent_procs_path,
-                reason: "moving a labeled native child did not fail closed",
-            }
-        );
-        moved_task_fixture.release_exec(moved_task_pid)?;
-        moved_task_fixture.wait_for_native_exec_failure()?;
-        let health_after_moved_task_exec = identity.health(&host).context(NodeSnafu)?;
-        ensure!(
-            health_after_moved_task_exec.placement_mismatches
-                > health_after_moved_task_move.placement_mismatches,
-            InvalidInputSnafu {
-                path: &parent_procs_path,
-                reason: "a moved labeled native child did not record its denied exec",
-            }
-        );
-        moved_task_fixture.stop()?;
+        let moved_ready_cleanup = ProbeFile::new(&child_ready_path);
+        let moved_fail_cleanup = ProbeFile::new(&execfail_ready_path);
+        exec_case.moved(&child_ready_path, &execfail_ready_path, &parent_procs_path)?;
+        moved_ready_cleanup.cleanup()?;
+        moved_fail_cleanup.cleanup()?;
 
         let mut orphan_fixture = NativeProcessFixture::start_orphaning()?;
         fs::write(&procs_path, orphan_fixture.outer_pid().to_string())

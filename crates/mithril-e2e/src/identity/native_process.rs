@@ -402,30 +402,6 @@ impl NativeProcessFixture {
         )
     }
 
-    pub(super) fn wait_for_native_exec_failure(&mut self) -> Result<()> {
-        let path = Path::new("identity test shell");
-        wait_for(
-            path,
-            "the native child exec to fail",
-            Duration::from_secs(5),
-            || {
-                let Some(status) = self.outer.try_wait()? else {
-                    return Ok(None);
-                };
-                self.outer.close();
-                ensure!(
-                    !status.success(),
-                    InvalidInputSnafu {
-                        path,
-                        reason: format!("native child exec unexpectedly completed with {status}"),
-                    }
-                );
-                Ok(Some(()))
-            },
-            || "the identity test shell was still running".to_owned(),
-        )
-    }
-
     pub(super) fn wait_for_successful_exit(&mut self) -> Result<()> {
         let path = Path::new("leader-first identity fixture");
         wait_for(
