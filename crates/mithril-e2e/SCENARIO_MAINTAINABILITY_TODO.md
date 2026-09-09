@@ -228,7 +228,7 @@ starting the complete privileged scenarios.
 - [x] Move native child stop, failed-exec, and post-PONR checks to
   `identity/native_process/exec_tests.rs`. Reuse fixture-owned child and
   executable readiness.
-- [ ] Move subreaper, namespace-init, orphan, double-fork, and leader-first
+- [x] Move subreaper, namespace-init, orphan, double-fork, and leader-first
   checks to `identity/native_process/reparent_tests.rs`. Keep each process
   transition and parent assertion visible.
 - [ ] Move non-leader and concurrent-thread checks to

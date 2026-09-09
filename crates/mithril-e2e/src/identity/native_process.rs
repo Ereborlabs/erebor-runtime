@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod exec_tests;
 #[cfg(test)]
+mod reparent_tests;
+#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod tests;
