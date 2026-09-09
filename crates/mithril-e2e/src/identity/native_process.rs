@@ -5,9 +5,7 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-use std::cell::RefCell;
 use std::fs;
-use std::io::ErrorKind;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,7 +14,7 @@ use std::time::Duration;
 use rustix::process::{pidfd_send_signal, Signal};
 use snafu::{ensure, ResultExt as _};
 
-use super::{invalid_state, open_pidfd, WAIT_LIMIT};
+use super::{invalid_state, open_pidfd};
 use crate::error::{InvalidInputSnafu, IoSnafu};
 use crate::physical::wait_for;
 use crate::process::ProcessFixture;
@@ -24,9 +22,6 @@ use crate::Result;
 
 pub(super) struct NativeProcessFixture {
     outer: ProcessFixture,
-    native_pid: Option<u32>,
-    native_pidfd: Option<OwnedFd>,
-    intermediate_pidfd: Option<OwnedFd>,
     namespace_init_pidfd: Option<OwnedFd>,
 }
 
@@ -45,12 +40,6 @@ impl NativeProcessFixture {
             .arg(&script)
             .arg(work);
         Self::start_command(&mut command, &script)
-    }
-
-    pub(super) fn start_double_forking() -> Result<Self> {
-        Self::start_with_script(
-            "read _; ( ( read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 300 ) & wait ) & middle_pid=$!; wait \"$middle_pid\"; exec /bin/sleep 300",
-        )
     }
 
     pub(super) fn start_with_script(script: &str) -> Result<Self> {
@@ -77,53 +66,12 @@ impl NativeProcessFixture {
     fn from_outer(outer: ProcessFixture) -> Self {
         Self {
             outer,
-            native_pid: None,
-            native_pidfd: None,
-            intermediate_pidfd: None,
             namespace_init_pidfd: None,
         }
     }
 
     pub(super) fn outer_pid(&self) -> u32 {
         self.outer.id()
-    }
-
-    pub(super) fn open_native_pidfd(&mut self, pid: u32) -> Result<()> {
-        self.native_pid = Some(pid);
-        self.native_pidfd = Some(open_pidfd(pid)?);
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(super) fn wait_for_executable(
-        &self,
-        native_pid: u32,
-        executable: &str,
-        operation: &str,
-    ) -> Result<()> {
-        let path = PathBuf::from(format!("/proc/{native_pid}/comm"));
-        let last = RefCell::new(String::from("<unread>"));
-        wait_for(
-            &path,
-            operation,
-            WAIT_LIMIT,
-            || {
-                let name = fs::read_to_string(&path).context(IoSnafu { path: &path })?;
-                *last.borrow_mut() = name.trim().to_owned();
-                Ok((name.trim() == executable).then_some(()))
-            },
-            || {
-                format!(
-                    "last executable: {:?}; expected: {executable:?}",
-                    last.borrow()
-                )
-            },
-        )
-    }
-
-    pub(super) fn open_intermediate_pidfd(&mut self, pid: u32) -> Result<()> {
-        self.intermediate_pidfd = Some(open_pidfd(pid)?);
-        Ok(())
     }
 
     pub(super) fn open_namespace_init_pidfd(&mut self, pid: u32) -> Result<()> {
@@ -133,39 +81,6 @@ impl NativeProcessFixture {
 
     pub(super) fn release_root(&mut self) -> Result<()> {
         self.write_stdin("native root release", b"root\n")
-    }
-
-    pub(super) fn release_exec(&mut self, native_pid: u32) -> Result<()> {
-        self.wait_for_stopped_native_child(native_pid)?;
-        let pidfd = self
-            .native_pidfd
-            .as_ref()
-            .ok_or_else(|| invalid_state("native child has no pidfd"))?;
-        pidfd_send_signal(pidfd, Signal::CONT)
-            .map_err(|error| invalid_state(format!("release native child exec: {error}")))
-    }
-
-    pub(super) fn release_intermediate_exit(&mut self) -> Result<()> {
-        let pidfd = self
-            .intermediate_pidfd
-            .as_ref()
-            .ok_or_else(|| invalid_state("double-fork intermediate has no pidfd"))?;
-        pidfd_send_signal(pidfd, Signal::TERM)
-            .map_err(|error| invalid_state(format!("release intermediate exit: {error}")))
-    }
-
-    pub(super) fn intermediate_exited(&self, intermediate_pid: u32) -> Result<bool> {
-        let path = PathBuf::from(format!("/proc/{intermediate_pid}/status"));
-        match fs::read_to_string(&path) {
-            Ok(status) => Ok(status.lines().any(|line| line.starts_with("State:\tZ"))),
-            Err(source)
-                if source.kind() == std::io::ErrorKind::NotFound
-                    || source.raw_os_error() == Some(libc::ESRCH) =>
-            {
-                Ok(true)
-            }
-            Err(source) => Err(source).context(IoSnafu { path: &path }),
-        }
     }
 
     fn write_stdin(&mut self, _operation: &'static str, bytes: &[u8]) -> Result<()> {
@@ -208,17 +123,6 @@ impl NativeProcessFixture {
         Ok(Some(tid))
     }
 
-    pub(super) fn intermediate_pid(&mut self) -> Result<Option<u32>> {
-        self.native_child_pid()
-    }
-
-    pub(super) fn intermediate_native_child_pid(
-        &self,
-        intermediate_pid: u32,
-    ) -> Result<Option<u32>> {
-        self.first_child_pid(intermediate_pid)
-    }
-
     pub(super) fn namespace_init_pid(&mut self) -> Result<Option<u32>> {
         self.native_child_pid()
     }
@@ -242,14 +146,7 @@ impl NativeProcessFixture {
     }
 
     pub(super) fn stop(&mut self) -> Result<()> {
-        for pidfd in [
-            &self.native_pidfd,
-            &self.intermediate_pidfd,
-            &self.namespace_init_pidfd,
-        ]
-        .into_iter()
-        .flatten()
-        {
+        for pidfd in self.namespace_init_pidfd.iter() {
             match pidfd_send_signal(pidfd, Signal::KILL) {
                 Ok(()) | Err(rustix::io::Errno::SRCH) => {}
                 Err(error) => {
@@ -260,44 +157,6 @@ impl NativeProcessFixture {
             }
         }
         self.outer.stop()
-    }
-
-    pub(super) fn wait_for_stopped_native_child(&mut self, native_pid: u32) -> Result<()> {
-        let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
-        let last_state = RefCell::new(String::from("State: <unread>"));
-        wait_for(
-            &status_path,
-            "the native child to stop before exec release",
-            WAIT_LIMIT,
-            || {
-                let status = match fs::read_to_string(&status_path) {
-                    Ok(status) => status,
-                    Err(source) if source.kind() == ErrorKind::NotFound => {
-                        let outer = self.outer.try_wait()?;
-                        let stderr = if outer.is_some() {
-                            self.outer.close();
-                            format!("; outer {outer:?}; stderr {}", self.outer.stderr()?)
-                        } else {
-                            String::from("; outer still running")
-                        };
-                        return Err(invalid_state(format!(
-                            "native child {native_pid} exited before it stopped for exec release{stderr}"
-                        )));
-                    }
-                    Err(source) => return Err(source).context(IoSnafu { path: &status_path }),
-                };
-                *last_state.borrow_mut() = status
-                    .lines()
-                    .find(|line| line.starts_with("State:"))
-                    .unwrap_or("State: <missing>")
-                    .to_owned();
-                Ok(status
-                    .lines()
-                    .any(|line| line.starts_with("State:\tT"))
-                    .then_some(()))
-            },
-            || format!("native child {native_pid}; last {}", last_state.borrow()),
-        )
     }
 
     pub(super) fn wait_for_successful_exit(&mut self) -> Result<()> {

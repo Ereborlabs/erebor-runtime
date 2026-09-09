@@ -361,7 +361,7 @@ command passes.
 - [x] Namespace-init transition: use `native_namespace_init.py` through
   `ProcessFixture` in the focused test and physical scenario. Preserve the
   namespace PID, parent, role, execution, and tombstone assertions.
-- [ ] Double-fork transition: replace the embedded shell with one Python
+- [x] Double-fork transition: replace the embedded shell with one Python
   process file through `ProcessFixture`. Preserve the parent, role, execution,
   and tombstone assertions.
 - [ ] Leader-first thread exit and reference lifetime: keep the process and
@@ -591,7 +591,7 @@ entry when a test receives a shorter name or moves beside its real owner.
 - `prototype.rs::source_tg_runtime_join_accepts_only_authenticated_complete_fresh_roots`
 - `provenance.rs::dossier_closes_sources_licenses_owners_and_hostile_fixtures`
 
-The current tree also has seventeen reliability and common-owner tests added
+The current tree also has eighteen reliability and common-owner tests added
 after the baseline. Preserve them while the structural changes are replaced:
 
 - `effect/runc/process.rs::exit_reports_output`
@@ -606,6 +606,7 @@ after the baseline. Preserve them while the structural changes are replaced:
 - `identity/scenarios/exec/tests.rs::threads_race_exec`
 - `identity/scenarios/reparent/tests.rs::child_execs_after_subreaper`
 - `identity/scenarios/reparent/tests.rs::child_execs_after_namespace_init`
+- `identity/scenarios/reparent/tests.rs::child_execs_after_double_fork`
 - `physical.rs::async_readiness_yields_until_the_fixture_is_ready`
 - `physical.rs::readiness_reports_diagnostics_and_directory_cleanup_is_idempotent`
 - `process/tests.rs::exit_reports_stderr`

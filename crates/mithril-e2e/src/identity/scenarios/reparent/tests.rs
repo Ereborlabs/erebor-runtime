@@ -31,6 +31,31 @@ fn child_execs_after_subreaper() -> crate::Result<()> {
 }
 
 #[test]
+fn child_execs_after_double_fork() -> crate::Result<()> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let temp = tempfile::tempdir().context(IoSnafu {
+        path: std::path::Path::new("double-fork actor"),
+    })?;
+    let ready = temp.path().join("ready");
+    let mut actor = ProcessFixture::python(&root, "native_double_fork.py", [&ready])?;
+    let outer = actor.id();
+
+    actor.send(b"root\n")?;
+    let [mid, pid] = actor.wait_pair(&ready, "double-fork children")?;
+    actor.track(mid)?;
+    actor.track(pid)?;
+    actor.wait_stop(pid, "double-fork child stop")?;
+    assert_eq!(actor.parent(pid)?, Some(mid));
+    actor.signal(mid, Signal::TERM)?;
+    actor.wait_gone(mid, "double-fork middle exit")?;
+    assert!(PathBuf::from(format!("/proc/{outer}")).exists());
+    assert_ne!(actor.parent(pid)?, Some(mid));
+    actor.signal(pid, Signal::CONT)?;
+    actor.wait_comm(pid, "sleep", "double-fork child exec")?;
+    actor.stop()
+}
+
+#[test]
 fn child_execs_after_namespace_init() -> crate::Result<()> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let temp = tempfile::tempdir().context(IoSnafu {

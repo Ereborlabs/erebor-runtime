@@ -928,116 +928,10 @@ impl IdentityTestRunner {
         mid_cleanup.cleanup()?;
         ns_cleanup.cleanup()?;
 
-        let mut double_fork_fixture = NativeProcessFixture::start_double_forking()?;
-        fs::write(&procs_path, double_fork_fixture.outer_pid().to_string())
-            .context(IoSnafu { path: &procs_path })?;
-        let double_fork_outer_parent =
-            self.wait_for("double-fork outer parent identity", &procs_path, || {
-                inspector
-                    .snapshot(double_fork_fixture.outer_pid())
-                    .context(NodeSnafu)
-            })?;
-        double_fork_fixture.release_root()?;
-        let double_fork_intermediate_pid =
-            self.wait_for("double-fork intermediate creation", &procs_path, || {
-                double_fork_fixture.intermediate_pid()
-            })?;
-        double_fork_fixture.open_intermediate_pidfd(double_fork_intermediate_pid)?;
-        let double_fork_native_child_pid =
-            self.wait_for("double-fork native child creation", &procs_path, || {
-                double_fork_fixture.intermediate_native_child_pid(double_fork_intermediate_pid)
-            })?;
-        double_fork_fixture.open_native_pidfd(double_fork_native_child_pid)?;
-        let double_fork_intermediate_before_exit =
-            self.wait_for("double-fork intermediate identity", &procs_path, || {
-                inspector
-                    .snapshot(double_fork_intermediate_pid)
-                    .context(NodeSnafu)
-            })?;
-        let double_fork_native_child_before_intermediate_exit =
-            self.wait_for("double-fork native child identity", &procs_path, || {
-                inspector
-                    .snapshot(double_fork_native_child_pid)
-                    .context(NodeSnafu)
-            })?;
-        ensure!(
-            double_fork_outer_parent.root_class.as_deref() == Some("external_runtime_root")
-                && double_fork_outer_parent.installed_role_class.as_deref()
-                    == Some("runtime_external_restricted")
-                && double_fork_intermediate_before_exit.creator_task_cookie
-                    == Some(double_fork_outer_parent.task_cookie)
-                && double_fork_intermediate_before_exit.real_parent_task_cookie
-                    == double_fork_outer_parent.task_cookie
-                && double_fork_intermediate_before_exit.root_class.is_none()
-                && double_fork_intermediate_before_exit
-                    .installed_role_class
-                    .is_none()
-                && double_fork_native_child_before_intermediate_exit.creator_task_cookie
-                    == Some(double_fork_intermediate_before_exit.task_cookie)
-                && double_fork_native_child_before_intermediate_exit.real_parent_task_cookie
-                    == double_fork_intermediate_before_exit.task_cookie
-                && double_fork_native_child_before_intermediate_exit
-                    .root_class
-                    .is_none()
-                && double_fork_native_child_before_intermediate_exit
-                    .installed_role_class
-                    .is_none()
-                && double_fork_native_child_before_intermediate_exit.coordinate_state
-                    == TaskCoordinateStateV1::Runnable as u8,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: "double-fork native identity is incorrect before intermediate exit",
-            }
-        );
-        double_fork_fixture.release_intermediate_exit()?;
-        self.wait_for("double-fork intermediate exit", &procs_path, || {
-            Ok(double_fork_fixture
-                .intermediate_exited(double_fork_intermediate_pid)?
-                .then_some(()))
-        })?;
-        double_fork_fixture.release_exec(double_fork_native_child_pid)?;
-        let double_fork_native_child_after_intermediate_exit = self.wait_for(
-            "double-fork native child exec after intermediate exit",
-            &procs_path,
-            || {
-                let snapshot = inspector
-                    .snapshot(double_fork_native_child_pid)
-                    .context(NodeSnafu)?;
-                Ok(snapshot.filter(|snapshot| {
-                    snapshot.task_cookie
-                        == double_fork_native_child_before_intermediate_exit.task_cookie
-                        && snapshot.creator_task_cookie
-                            == Some(double_fork_intermediate_before_exit.task_cookie)
-                        && snapshot.real_parent_task_cookie
-                            != double_fork_intermediate_before_exit.task_cookie
-                        && snapshot.real_parent_interval_sequence
-                            > double_fork_native_child_before_intermediate_exit
-                                .real_parent_interval_sequence
-                        && snapshot.active_execution_id
-                            != double_fork_native_child_before_intermediate_exit.active_execution_id
-                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
-                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
-                        && snapshot.process_state_vector_state
-                            == ProcessStateVectorStateV1::Active as u8
-                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
-                }))
-            },
-        )?;
-        ensure!(
-            double_fork_native_child_after_intermediate_exit
-                .root_class
-                .is_none()
-                && double_fork_native_child_after_intermediate_exit
-                    .installed_role_class
-                    .is_none()
-                && double_fork_native_child_after_intermediate_exit.active_role_id
-                    == double_fork_outer_parent.active_role_id,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: "double-fork native child lost its inherited restriction",
-            }
-        );
-        double_fork_fixture.stop()?;
+        let double_cleanup = ProbeFile::new(&child_ready_path);
+        let (double_root, double_mid, double_before, double_after) =
+            reparent_case.double_fork(&child_ready_path)?;
+        double_cleanup.cleanup()?;
 
         self.wait_for("native reference baseline", &procs_path, || {
             Ok((profile_task_refs(&host)? == 0).then_some(()))
@@ -1889,10 +1783,10 @@ impl IdentityTestRunner {
             namespace_init_intermediate_before_exit: ns.middle,
             namespace_init_native_child_before_parent_exit: ns.before,
             namespace_init_native_child_after_parent_exit: ns.after,
-            double_fork_outer_parent,
-            double_fork_intermediate_before_exit,
-            double_fork_native_child_before_intermediate_exit,
-            double_fork_native_child_after_intermediate_exit,
+            double_fork_outer_parent: double_root,
+            double_fork_intermediate_before_exit: double_mid,
+            double_fork_native_child_before_intermediate_exit: double_before,
+            double_fork_native_child_after_intermediate_exit: double_after,
             no_pidfd_thread_observed,
             leader_first_worker_task_cookie,
             leader_first_process_refs_after_leader_exit,
