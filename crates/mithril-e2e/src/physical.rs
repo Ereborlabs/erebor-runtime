@@ -36,6 +36,10 @@ impl ProbeDirectory {
         }
     }
 
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub(crate) fn cleanup(mut self) -> Result<()> {
         match fs::remove_dir_all(&self.path) {
             Ok(()) => Ok(()),

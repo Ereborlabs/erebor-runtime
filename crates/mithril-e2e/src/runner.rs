@@ -2,6 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use std::collections::BTreeSet;
+use std::fs::File;
+use std::os::unix::fs::MetadataExt as _;
 
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
@@ -12,8 +14,8 @@ use crate::capability_matrix::KernelQualificationCapabilityMatrix;
 use crate::closure::QualificationRegistry;
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu};
 use crate::fixture::HuggingFaceFixture;
-use crate::loader::BpfQualificationLoader;
-use crate::physical::ProbeFile;
+use crate::loader::{BpfLinkRecordV1, BpfQualificationLoader};
+use crate::physical::{ProbeDirectory, ProbeFile};
 use crate::provenance::ProvenanceVerifier;
 use crate::{
     ClosureLedgerV1, CompileRecordV1, DigestV1, FixtureBaselineRecordV1, OpenBenchmarkRecordV1,
@@ -133,6 +135,50 @@ pub struct HostLifecycleBundleV1 {
 
 pub struct HostLifecycleRunner {
     repo_root: PathBuf,
+}
+
+struct PhysicalFileOpenFixture {
+    pin_root: ProbeDirectory,
+    lease: ProbeFile,
+    target: ProbeFile,
+    target_path: PathBuf,
+    target_inode: u64,
+}
+
+impl PhysicalFileOpenFixture {
+    fn new(output_directory: &Path, loader: &BpfQualificationLoader) -> Result<Self> {
+        fs::create_dir_all(output_directory).context(IoSnafu {
+            path: output_directory,
+        })?;
+        let pin_root = output_directory.join("decommission-pins");
+        ensure!(
+            !pin_root.exists(),
+            InvalidInputSnafu {
+                path: &pin_root,
+                reason: "the decommission probe pin root already exists",
+            }
+        );
+        let target_path = output_directory.join("kernel-qualification-file-open-deny-target");
+        let target = ProbeFile::new(&target_path);
+        fs::write(&target_path, b"kernel qualification BPF LSM probe\n")
+            .context(IoSnafu { path: &target_path })?;
+        let target_inode = fs::metadata(&target_path)
+            .context(IoSnafu { path: &target_path })?
+            .ino();
+        Ok(Self {
+            pin_root: ProbeDirectory::new(&pin_root),
+            lease: ProbeFile::new(&loader.lease_path()),
+            target,
+            target_path,
+            target_inode,
+        })
+    }
+
+    fn cleanup(self) -> Result<()> {
+        self.pin_root.cleanup()?;
+        self.lease.cleanup()?;
+        self.target.cleanup()
+    }
 }
 
 impl KernelQualificationRunner {
@@ -302,8 +348,68 @@ impl KernelQualificationRunner {
             Some(object_path) => self.prebuilt_compile_record(object_path)?,
             None => BpfPrototypeCompiler::new(&self.repo_root).compile(output_directory)?,
         };
-        let file_open = BpfQualificationLoader::new(&compile.object_path)
-            .run_file_open_probe(output_directory)?;
+        let loader = BpfQualificationLoader::new(&compile.object_path);
+        let fixture = PhysicalFileOpenFixture::new(output_directory, &loader)?;
+        let object_layout = loader.inspect()?;
+        let attachment = loader.attach_with_pin_root(fixture.pin_root.path())?;
+
+        let allowed_before_target_install = File::open(&fixture.target_path).is_ok();
+        ensure!(
+            allowed_before_target_install,
+            InvalidInputSnafu {
+                path: &fixture.target_path,
+                reason: "the file-open control failed before the deny target was installed",
+            }
+        );
+        BpfQualificationLoader::update_file_open_target(&attachment, fixture.target_inode)?;
+        let denied_after_target_install = matches!(
+            File::open(&fixture.target_path),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
+        );
+        ensure!(
+            denied_after_target_install,
+            InvalidInputSnafu {
+                path: &fixture.target_path,
+                reason: "the attached file_open hook did not return EACCES for its target",
+            }
+        );
+        BpfQualificationLoader::update_file_open_target(&attachment, 0)?;
+        let allowed_after_target_clear = File::open(&fixture.target_path).is_ok();
+        ensure!(
+            allowed_after_target_clear,
+            InvalidInputSnafu {
+                path: &fixture.target_path,
+                reason: "the file-open control did not recover after clearing the deny target",
+            }
+        );
+        let links = attachment
+            .manifest()
+            .links
+            .iter()
+            .map(|link| BpfLinkRecordV1 {
+                program: link.program.clone(),
+                link_id: link.link_id,
+                program_id: link.program_id,
+            })
+            .collect();
+        attachment.decommission().context(InterceptorSnafu)?;
+        ensure!(
+            !fixture.pin_root.path().exists() && File::open(&fixture.target_path).is_ok(),
+            InvalidInputSnafu {
+                path: fixture.pin_root.path(),
+                reason: "kernel decommission left pins or an active file-open decision",
+            }
+        );
+        let file_open = PhysicalFileOpenProbeV1 {
+            object_layout,
+            links,
+            target: fixture.target_path.clone(),
+            target_inode: fixture.target_inode,
+            allowed_before_target_install,
+            denied_after_target_install,
+            allowed_after_target_clear,
+        };
+        fixture.cleanup()?;
         let evidence = serde_json::to_vec(&file_open).context(JsonSnafu {
             path: PathBuf::from("in-memory physical file-open evidence"),
         })?;

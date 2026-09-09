@@ -205,7 +205,7 @@ command passes.
 
 ### Kernel and host lifecycle
 
-- [ ] `KernelQualificationRunner::physical_file_open_probe`: own the lease
+- [x] `KernelQualificationRunner::physical_file_open_probe`: own the lease
   and output paths with existing cleanup owners. Keep
   `BpfQualificationLoader` attachment and shutdown explicit.
 - [ ] `HostLifecycleRunner::host_lifecycle`: own the pin root and lease, use

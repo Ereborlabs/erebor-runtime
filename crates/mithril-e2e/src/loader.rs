@@ -1,6 +1,4 @@
 use std::fs;
-use std::fs::File;
-use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
 use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner};
@@ -8,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
 
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu};
-use crate::physical::ProbeFile;
 use crate::{DigestV1, Result};
 
 const FILE_PROBE_TARGETS: &str = "file_probe_targets";
@@ -100,86 +97,6 @@ impl BpfQualificationLoader {
         self.owner()?.start().context(InterceptorSnafu)
     }
 
-    pub fn run_file_open_probe(&self, output_directory: &Path) -> Result<PhysicalFileOpenProbeV1> {
-        let lease_cleanup = ProbeFile::new(&self.lease_path());
-        fs::create_dir_all(output_directory).context(IoSnafu {
-            path: output_directory,
-        })?;
-        let pin_root = output_directory.join("decommission-pins");
-        ensure!(
-            !pin_root.exists(),
-            InvalidInputSnafu {
-                path: &pin_root,
-                reason: "the decommission probe pin root already exists",
-            }
-        );
-        let target = output_directory.join("kernel-qualification-file-open-deny-target");
-        fs::write(&target, b"kernel qualification BPF LSM probe\n")
-            .context(IoSnafu { path: &target })?;
-        let target_inode = fs::metadata(&target)
-            .context(IoSnafu { path: &target })?
-            .ino();
-        let object_layout = self.inspect()?;
-        let attachment = self.attach_with_pin_root(&pin_root)?;
-        let allowed_before_target_install = File::open(&target).is_ok();
-        ensure!(
-            allowed_before_target_install,
-            InvalidInputSnafu {
-                path: &target,
-                reason: "the file-open control failed before the deny target was installed",
-            }
-        );
-        Self::update_file_open_target(&attachment, target_inode)?;
-        let denied_after_target_install = matches!(
-            File::open(&target),
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
-        );
-        ensure!(
-            denied_after_target_install,
-            InvalidInputSnafu {
-                path: &target,
-                reason: "the attached file_open hook did not return EACCES for its target",
-            }
-        );
-        Self::update_file_open_target(&attachment, 0)?;
-        let allowed_after_target_clear = File::open(&target).is_ok();
-        ensure!(
-            allowed_after_target_clear,
-            InvalidInputSnafu {
-                path: &target,
-                reason: "the file-open control did not recover after clearing the deny target",
-            }
-        );
-        let links = attachment
-            .manifest()
-            .links
-            .iter()
-            .map(|link| BpfLinkRecordV1 {
-                program: link.program.clone(),
-                link_id: link.link_id,
-                program_id: link.program_id,
-            })
-            .collect();
-        attachment.decommission().context(InterceptorSnafu)?;
-        ensure!(
-            !pin_root.exists() && File::open(&target).is_ok(),
-            InvalidInputSnafu {
-                path: &pin_root,
-                reason: "kernel decommission left pins or an active file-open decision",
-            }
-        );
-        lease_cleanup.cleanup()?;
-        Ok(PhysicalFileOpenProbeV1 {
-            object_layout,
-            links,
-            target,
-            target_inode,
-            allowed_before_target_install,
-            denied_after_target_install,
-            allowed_after_target_clear,
-        })
-    }
-
     pub(crate) fn lease_path(&self) -> PathBuf {
         self.object_path.with_extension("owner.lock")
     }
@@ -204,7 +121,7 @@ impl BpfQualificationLoader {
         )))
     }
 
-    fn attach_with_pin_root(&self, pin_root: &Path) -> Result<KernelHost> {
+    pub(crate) fn attach_with_pin_root(&self, pin_root: &Path) -> Result<KernelHost> {
         self.owner_with_pin_root(Some(pin_root.to_path_buf()))?
             .start()
             .context(InterceptorSnafu)
@@ -237,7 +154,7 @@ impl BpfQualificationLoader {
         Ok(())
     }
 
-    fn update_file_open_target(host: &KernelHost, inode: u64) -> Result<()> {
+    pub(crate) fn update_file_open_target(host: &KernelHost, inode: u64) -> Result<()> {
         let key = 0_u32.to_le_bytes();
         let value = inode.to_le_bytes();
         host.update_map(FILE_PROBE_TARGETS, &key, &value)
