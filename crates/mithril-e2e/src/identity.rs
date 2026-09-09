@@ -641,7 +641,7 @@ impl IdentityTestRunner {
         identity
             .recover_tasks(&mut host, false)
             .context(NodeSnafu)?;
-        binding_gap_fixture.stop();
+        binding_gap_fixture.stop()?;
 
         let mut external_ambiguity_first = NativeProcessFixture::start()?;
         let mut external_ambiguity_second = NativeProcessFixture::start()?;
@@ -701,8 +701,8 @@ impl IdentityTestRunner {
                 ),
             }
         );
-        external_ambiguity_first.stop();
-        external_ambiguity_second.stop();
+        external_ambiguity_first.stop()?;
+        external_ambiguity_second.stop()?;
 
         let mut escape_fixture = CloneIntoCgroupFixture::start(&cgroup_path)?;
         let escape_root_before_move = self.wait_for(
@@ -956,7 +956,7 @@ impl IdentityTestRunner {
                 )));
             }
         };
-        fixture.stop();
+        fixture.stop()?;
 
         let (non_leader_thread_exec_root, non_leader_thread_exec_after_exec) =
             scenarios::non_leader_exec::run(
@@ -1086,7 +1086,7 @@ impl IdentityTestRunner {
                 reason: "normal exec after the pre-PONR failure did not restore a runnable task",
             }
         );
-        failed_exec_fixture.stop();
+        failed_exec_fixture.stop()?;
         execfail_ready_cleanup.cleanup()?;
         execfail_cleanup.cleanup()?;
 
@@ -1203,7 +1203,7 @@ impl IdentityTestRunner {
                 reason: "post-PONR failure restored or replaced the source restriction",
             }
         );
-        post_ponr_fixture.stop();
+        post_ponr_fixture.stop()?;
         post_ponr_execfail_cleanup.cleanup()?;
 
         let mut moved_task_fixture = NativeProcessFixture::start()?;
@@ -1306,7 +1306,7 @@ impl IdentityTestRunner {
                 reason: "a moved labeled native child did not record its denied exec",
             }
         );
-        moved_task_fixture.stop();
+        moved_task_fixture.stop()?;
 
         let mut orphan_fixture = NativeProcessFixture::start_orphaning()?;
         fs::write(&procs_path, orphan_fixture.outer_pid().to_string())
@@ -1385,7 +1385,7 @@ impl IdentityTestRunner {
                 reason: "orphaned native child lost its inherited restriction",
             }
         );
-        orphan_fixture.stop();
+        orphan_fixture.stop()?;
 
         let mut subreaper_fixture = NativeProcessFixture::start_subreaper(&self.repo_root)?;
         fs::write(&procs_path, subreaper_fixture.outer_pid().to_string())
@@ -1504,7 +1504,7 @@ impl IdentityTestRunner {
                 reason: "subreaper native child lost its inherited restriction",
             }
         );
-        subreaper_fixture.stop();
+        subreaper_fixture.stop()?;
 
         let mut namespace_init_fixture =
             NativeProcessFixture::start_namespace_init_reparenting(&self.repo_root)?;
@@ -1640,7 +1640,7 @@ impl IdentityTestRunner {
                 reason: "PID-namespace native child lost its inherited restriction",
             }
         );
-        namespace_init_fixture.stop();
+        namespace_init_fixture.stop()?;
 
         let mut double_fork_fixture = NativeProcessFixture::start_double_forking()?;
         fs::write(&procs_path, double_fork_fixture.outer_pid().to_string())
@@ -1751,7 +1751,7 @@ impl IdentityTestRunner {
                 reason: "double-fork native child lost its inherited restriction",
             }
         );
-        double_fork_fixture.stop();
+        double_fork_fixture.stop()?;
 
         self.wait_for("native reference baseline", &procs_path, || {
             Ok((profile_task_refs(&host)? == 0).then_some(()))
@@ -1976,7 +1976,7 @@ impl IdentityTestRunner {
                     worker_released,
                 )))
         })?;
-        leader_first_fixture.stop();
+        leader_first_fixture.stop()?;
         leader_first_ready_cleanup.cleanup()?;
         leader_first_release_cleanup.cleanup()?;
 
@@ -2203,7 +2203,7 @@ impl IdentityTestRunner {
                 && tombstone.state == ReferenceTombstoneStateV1::Released)
                 .then_some(()))
         })?;
-        reuse_fixture.stop();
+        reuse_fixture.stop()?;
         reuse_cleanup.cleanup()?;
 
         let mut cgroup_escape_control = CloneIntoCgroupFixture::start_with_root_first_effect(
@@ -2523,7 +2523,7 @@ impl IdentityTestRunner {
                 reason: "the recreated cgroup path reused an old lifetime identity",
             }
         );
-        reused_fixture.stop();
+        reused_fixture.stop()?;
         recovered.shutdown().context(InterceptorSnafu)?;
         pin_cleanup.cleanup()?;
         lease_cleanup.cleanup()?;

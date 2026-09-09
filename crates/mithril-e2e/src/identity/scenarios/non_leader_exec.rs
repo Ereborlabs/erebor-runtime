@@ -100,6 +100,6 @@ pub(in crate::identity) fn run(
                 && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
         }))
     })?;
-    fixture.stop();
+    fixture.stop()?;
     Ok((root, after_exec))
 }

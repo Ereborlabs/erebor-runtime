@@ -1568,7 +1568,7 @@ impl ContainerdServer {
                 path: containerd_path,
             })?;
         let mut server = Self {
-            process: ProcessFixture::new(child),
+            process: ProcessFixture::new(child, containerd_path),
             state_directory,
         };
         let deadline = Instant::now() + WAIT_LIMIT;
@@ -1576,7 +1576,7 @@ impl ContainerdServer {
             if socket_path.exists() {
                 return Ok(server);
             }
-            if let Some(status) = server.process.try_wait(containerd_path)? {
+            if let Some(status) = server.process.try_wait()? {
                 return CommandSnafu {
                     program: containerd_path.display().to_string(),
                     reason: format!(
@@ -1602,7 +1602,7 @@ impl ContainerdServer {
     }
 
     fn cleanup(&mut self) -> Result<()> {
-        self.process.stop(&self.state_directory)?;
+        self.process.stop()?;
         if self.state_directory.exists() {
             fs::remove_dir_all(&self.state_directory).context(IoSnafu {
                 path: &self.state_directory,
@@ -1933,7 +1933,7 @@ impl RuncContainer {
     }
 
     fn cleanup(&mut self) -> Result<()> {
-        self.process.stop(Path::new("runc child"))?;
+        self.process.stop()?;
         let output = if let Some(containerd) = &self.containerd {
             Command::new(&containerd.runner_path)
                 .arg("containerd-cleanup-fixture")
@@ -2498,7 +2498,7 @@ impl EffectTestRunner {
             }
         );
         let mut container = RuncContainer {
-            process: ProcessFixture::new(initial_child),
+            process: ProcessFixture::new(initial_child, runc_path),
             runc_path: runc_path.to_path_buf(),
             state_root,
             bundle,
@@ -3805,7 +3805,7 @@ impl EffectTestRunner {
                 .context(IoSnafu { path: runc_path })?
         };
         let mut container = RuncContainer {
-            process: ProcessFixture::new(child),
+            process: ProcessFixture::new(child, runc_path),
             runc_path: runc_path.to_path_buf(),
             state_root: state_root.clone(),
             bundle: bundle.clone(),
@@ -3815,11 +3815,12 @@ impl EffectTestRunner {
         };
 
         let request_path = request_directory.join(format!("{container_id}.createRuntime.json"));
-        process::wait_for_path(
-            &mut container.process,
+        container.process.wait_path(
             &request_path,
             "the direct runc createRuntime request",
-            &[&stdout_path, &stderr_path],
+            WAIT_LIMIT,
+            || Ok(request_path.exists().then_some(())),
+            || process::output(&[&stdout_path, &stderr_path]),
         )?;
         let request: serde_json::Value =
             serde_json::from_slice(&fs::read(&request_path).context(IoSnafu {
@@ -4143,11 +4144,12 @@ impl EffectTestRunner {
             request_diagnostics
                 .extend([runner_stdout_path.as_path(), runner_stderr_path.as_path()]);
         }
-        process::wait_for_path(
-            &mut container.process,
+        container.process.wait_path(
             &create_container_request,
             "the direct runc createContainer request",
-            &request_diagnostics,
+            WAIT_LIMIT,
+            || Ok(create_container_request.exists().then_some(())),
+            || process::output(&request_diagnostics),
         )?;
         fs::copy(
             &create_container_request,
@@ -5488,7 +5490,7 @@ impl EffectTestRunner {
             reader
                 .poll(Duration::from_millis(25))
                 .context(InterceptorSnafu)?;
-            if let Some(status) = container.process.try_wait(Path::new("runc child"))? {
+            if let Some(status) = container.process.try_wait()? {
                 let diagnostic = format!(
                     "the running application exited before its replacement-generation exec result: status={status}, stderr={}, effects={:?}",
                     fs::read_to_string(&stderr_path).unwrap_or_default().trim(),
@@ -6321,7 +6323,7 @@ impl EffectTestRunner {
                         "the recovered administrative container exited before publishing its PID",
                 })?;
         let mut administrative_container = RuncContainer {
-            process: ProcessFixture::new(administrative_child),
+            process: ProcessFixture::new(administrative_child, runc_path),
             runc_path: runc_path.to_path_buf(),
             state_root: state_root.clone(),
             bundle: bundle.clone(),
@@ -7088,11 +7090,9 @@ impl EffectTestRunner {
             path: &role_directory,
         })?;
 
-        let status = container.process.wait_for_exit(
-            Path::new("runc child"),
-            "the direct runc workload release",
-            WAIT_LIMIT,
-        )?;
+        let status = container
+            .process
+            .wait_exit("the direct runc workload release", WAIT_LIMIT)?;
         ensure!(
             status.success(),
             CommandSnafu {

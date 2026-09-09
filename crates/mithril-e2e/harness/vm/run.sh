@@ -333,7 +333,8 @@ for fixture in \
   native_non_leader_exec.py \
   native_pid_tid_reuse.py \
   native_subreaper.py \
-  process_exit.py; do
+  process_exit.py \
+  ready.py; do
   "$provider" put "$vm_name" \
     "$repo_root/crates/mithril-e2e/fixtures/process/$fixture" \
     "$remote_source/crates/mithril-e2e/fixtures/process/$fixture"

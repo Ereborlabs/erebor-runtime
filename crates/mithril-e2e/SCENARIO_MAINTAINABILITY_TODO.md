@@ -169,30 +169,30 @@ count as maintainability migrations.
   restart order stays explicit in each scenario.
 - [ ] Keep host and direct-`runc` placement in Rust. Keep Kubernetes placement
   in a small Python harness. Use the same actor file in all three placements.
-- [ ] Keep one synchronous readiness function with an exact timeout, resource
+- [x] Keep one synchronous readiness function with an exact timeout, resource
   path, operation name, and caller-supplied last-state diagnostic.
-- [ ] Make `ProcessFixture` own spawn readiness, stdin actions, bounded exit
+- [x] Make `ProcessFixture` own spawn readiness, stdin actions, bounded exit
   diagnostics, explicit stop, and idempotent drop cleanup.
 - [ ] Remove `NativeProcessFixture`. Move only generic Linux process mechanics
   to `ProcessFixture`; keep identity assertions and production calls in the
   identity scenario.
-- [ ] Make `RuncContainer` and `ContainerdServer` delegate process lifecycle
+- [x] Make `RuncContainer` and `ContainerdServer` delegate process lifecycle
   to `ProcessFixture`. Keep runtime protocol and resource cleanup on their
   existing owners.
 - [ ] Move the remaining direct-runtime exec children to the shared process
   owner as each entry-role behavior moves to its scenario owner.
 - [ ] Replace every embedded native process script with an actual Python file
   in `fixtures/process`.
-- [ ] Execute the same Python process files from focused identity and direct
+- [x] Execute the same Python process files from focused identity and direct
   `runc` tests.
-- [ ] Copy all shared Python process programs into each fresh single-node VM.
-- [ ] Add fresh-directory construction to the existing `ProbeDirectory`
+- [x] Copy all shared Python process programs into each fresh single-node VM.
+- [x] Add fresh-directory construction to the existing `ProbeDirectory`
   owner.
-- [ ] Keep `ProbeDirectory`, `ProbeFile`, and `ProbeCgroup` cleanup
+- [x] Keep `ProbeDirectory`, `ProbeFile`, and `ProbeCgroup` cleanup
   idempotent.
-- [ ] Add small focused tests for successful start and stop, early exit,
+- [x] Add small focused tests for successful start and stop, early exit,
   timeout diagnostics, and repeated cleanup.
-- [ ] Verify with the focused support tests and Mithril e2e clippy before the
+- [x] Verify with the focused support tests and Mithril e2e clippy before the
   common-tooling commit.
 
 ## Baseline reliability failures
@@ -580,13 +580,17 @@ entry when a test receives a shorter name or moves beside its real owner.
 - `prototype.rs::source_tg_runtime_join_accepts_only_authenticated_complete_fresh_roots`
 - `provenance.rs::dossier_closes_sources_licenses_owners_and_hostile_fixtures`
 
-The current tree also has four reliability tests added after the baseline.
-Preserve them while the structural changes are replaced:
+The current tree also has eight reliability and common-owner tests added
+after the baseline. Preserve them while the structural changes are replaced:
 
-- `effect/runc/process.rs::runtime_request_wait_reports_process_exit_and_output`
-- `identity/native_process/tests.rs::startup_reports_shared_process_program_failure`
+- `effect/runc/process.rs::exit_reports_output`
+- `effect/runc/process.rs::runc_uses_python_actor`
+- `identity/native_process/tests.rs::startup_reports_exit`
 - `physical.rs::async_readiness_yields_until_the_fixture_is_ready`
 - `physical.rs::readiness_reports_diagnostics_and_directory_cleanup_is_idempotent`
+- `process/tests.rs::exit_reports_stderr`
+- `process/tests.rs::python_start_stop`
+- `process/tests.rs::stop_kills_actor`
 
 ## Documentation deliverable
 

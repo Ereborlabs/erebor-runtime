@@ -1,35 +1,9 @@
 use std::fs;
 use std::path::Path;
 
-use super::WAIT_LIMIT;
-use crate::process::{wait_for_process, ProcessFixture};
-use crate::Result;
-
 const MAXIMUM_DIAGNOSTIC_BYTES: usize = 8 * 1024;
 
-pub(super) fn wait_for_path(
-    process: &mut ProcessFixture,
-    path: &Path,
-    operation: &str,
-    output_paths: &[&Path],
-) -> Result<()> {
-    wait_for_process(
-        process,
-        path,
-        operation,
-        WAIT_LIMIT,
-        || Ok(path.exists().then_some(())),
-        || Ok(output_summary(output_paths)),
-        || {
-            format!(
-                "the process is still running; {}",
-                output_summary(output_paths)
-            )
-        },
-    )
-}
-
-fn output_summary(paths: &[&Path]) -> String {
+pub(super) fn output(paths: &[&Path]) -> String {
     paths
         .iter()
         .map(|path| {
@@ -53,12 +27,13 @@ mod tests {
 
     use snafu::ResultExt as _;
 
-    use super::wait_for_path;
+    use super::super::WAIT_LIMIT;
+    use super::output;
     use crate::error::{InvalidInputSnafu, IoSnafu};
-    use crate::process::{process_program, ProcessFixture};
+    use crate::process::ProcessFixture;
 
     #[test]
-    fn runtime_request_wait_reports_process_exit_and_output() -> crate::Result<()> {
+    fn exit_reports_output() -> crate::Result<()> {
         let temporary = tempfile::tempdir().context(IoSnafu {
             path: Path::new("runtime process diagnostic fixture"),
         })?;
@@ -66,20 +41,21 @@ mod tests {
         let stderr_path = temporary.path().join("runtime.stderr");
         let stderr = fs::File::create(&stderr_path).context(IoSnafu { path: &stderr_path })?;
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let script = process_program(&repo_root, "process_exit.py")?;
+        let script = ProcessFixture::script(&repo_root, "process_exit.py")?;
         let child = Command::new("python3")
             .arg(&script)
             .args(["17", "hook failed"])
             .stderr(Stdio::from(stderr))
             .spawn()
             .context(IoSnafu { path: &script })?;
-        let mut process = ProcessFixture::new(child);
+        let mut process = ProcessFixture::new(child, &script);
 
-        let error = match wait_for_path(
-            &mut process,
+        let error = match process.wait_path(
             &request,
             "the fixture request",
-            &[&stderr_path],
+            WAIT_LIMIT,
+            || Ok(request.exists().then_some(())),
+            || output(&[&stderr_path]),
         ) {
             Err(error) => error,
             Ok(()) => {
@@ -94,5 +70,14 @@ mod tests {
         assert!(message.contains("exit status: 17"), "{message}");
         assert!(message.contains("hook failed"), "{message}");
         Ok(())
+    }
+
+    #[test]
+    fn runc_uses_python_actor() -> crate::Result<()> {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut actor = ProcessFixture::python(&root, "ready.py", std::iter::empty::<&str>())?;
+
+        actor.stop()?;
+        actor.stop()
     }
 }
