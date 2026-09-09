@@ -110,7 +110,7 @@ physical run:
 - [x] `shared_mmap_target_reports_both_unrestricted_controls`: make the child
   readiness and request exchange deterministic without weakening the mmap
   allow assertions.
-- [ ] `native_process_fixture_reparents_double_fork_child_before_exec`: wait
+- [x] `native_process_fixture_reparents_double_fork_child_before_exec`: wait
   for the reparented child to reach stopped state and report its last `/proc`
   status when readiness fails.
 - [x] `native_process_fixture_reparents_a_stopped_child_before_exec`: wait for
