@@ -225,7 +225,7 @@ starting the complete privileged scenarios.
 - [x] Move the complete `NativeProcessFixture` owner out of `identity.rs`.
 - [x] Move each Python child program from `fixtures/identity` to the shared
   `fixtures/process` directory and use it in the direct-runtime fixture tests.
-- [ ] Move native child stop, failed-exec, and post-PONR checks to
+- [x] Move native child stop, failed-exec, and post-PONR checks to
   `identity/native_process/exec_tests.rs`. Reuse fixture-owned child and
   executable readiness.
 - [ ] Move subreaper, namespace-init, orphan, double-fork, and leader-first

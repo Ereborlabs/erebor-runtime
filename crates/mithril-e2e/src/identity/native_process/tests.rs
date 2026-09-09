@@ -1,13 +1,14 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
+use super::test_support;
 use super::NativeProcessFixture;
 use crate::error::InvalidInputSnafu;
 use crate::process::process_program;
 
 #[test]
 fn startup_reports_shared_process_program_failure() -> crate::Result<()> {
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let repo_root = test_support::runner().repo_root;
     let script = process_program(&repo_root, "process_exit.py")?;
     let mut command = Command::new("python3");
     command.arg(&script).args(["17", "shared process failed"]);

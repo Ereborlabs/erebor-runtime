@@ -1419,10 +1419,7 @@ impl IdentityTestRunner {
             })?;
         orphan_fixture.release_root()?;
         let orphaned_native_child_pid =
-            self.wait_for("orphaned native child creation", &procs_path, || {
-                orphan_fixture.native_child_pid()
-            })?;
-        orphan_fixture.open_native_pidfd(orphaned_native_child_pid)?;
+            orphan_fixture.wait_for_native_child("orphaned native child creation")?;
         let orphaned_native_child_before_parent_exit =
             self.wait_for("orphaned native child identity", &procs_path, || {
                 inspector
@@ -9495,52 +9492,12 @@ fn invalid_state(reason: impl Into<String>) -> crate::Error {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::process::ExitStatusExt as _;
     use std::path::PathBuf;
-    use std::process::Command;
 
     use super::{IdentityTestRunner, NativeProcessFixture};
 
     fn test_runner() -> IdentityTestRunner {
         IdentityTestRunner::new(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."))
-    }
-
-    #[test]
-    fn native_process_fixture_waits_for_stopped_child_before_exec() -> crate::Result<()> {
-        let runner = test_runner();
-        let mut fixture = NativeProcessFixture::start()?;
-        fixture.release_root()?;
-        let children_path =
-            PathBuf::from(format!("/proc/{0}/task/{0}/children", fixture.outer_pid()));
-        let native_pid = runner.wait_for("native child creation", &children_path, || {
-            fixture.native_child_pid()
-        })?;
-        fixture.open_native_pidfd(native_pid)?;
-        fixture.release_exec(native_pid)?;
-        let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
-        runner.wait_for("native child exec", &comm_path, || {
-            fs::read_to_string(&comm_path)
-                .map(|name| (name.trim() == "sleep").then_some(()))
-                .map_err(|error| {
-                    super::invalid_state(format!("read {}: {error}", comm_path.display()))
-                })
-        })?;
-        Ok(())
-    }
-
-    #[test]
-    fn post_ponr_fixture_terminates_the_exec_process() -> crate::Result<()> {
-        let temporary = tempfile::tempdir().map_err(|error| {
-            super::invalid_state(format!("create post-PONR test directory: {error}"))
-        })?;
-        let executable = temporary.path().join("post-ponr-execfail");
-        IdentityTestRunner::materialize_post_ponr_execfail(&executable)?;
-        let status = Command::new(&executable)
-            .status()
-            .map_err(|error| super::invalid_state(format!("execute post-PONR fixture: {error}")))?;
-        assert!(!status.success());
-        assert!(status.signal().is_some());
-        Ok(())
     }
 
     #[test]
@@ -9724,66 +9681,6 @@ mod tests {
         fixture.release_concurrent_thread_exec()?;
         let comm_path = PathBuf::from(format!("/proc/{outer_pid}/comm"));
         runner.wait_for("concurrent Python thread exec", &comm_path, || {
-            fs::read_to_string(&comm_path)
-                .map(|name| (name.trim() == "sleep").then_some(()))
-                .map_err(|error| {
-                    super::invalid_state(format!("read {}: {error}", comm_path.display()))
-                })
-        })?;
-        Ok(())
-    }
-
-    #[test]
-    fn native_process_fixture_reports_failed_exec() -> crate::Result<()> {
-        let runner = test_runner();
-        let mut fixture = NativeProcessFixture::start_with_script(
-            "read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /missing-native-exec) & wait \"$!\"",
-            false,
-        )?;
-        fixture.release_root()?;
-        let children_path =
-            PathBuf::from(format!("/proc/{0}/task/{0}/children", fixture.outer_pid()));
-        let native_pid = runner.wait_for("failed native child creation", &children_path, || {
-            fixture.native_child_pid()
-        })?;
-        fixture.open_native_pidfd(native_pid)?;
-        fixture.release_exec(native_pid)?;
-        fixture.wait_for_native_exec_failure()
-    }
-
-    #[test]
-    fn native_process_fixture_recovers_from_bash_execfail() -> crate::Result<()> {
-        let runner = test_runner();
-        let temporary = tempfile::tempdir().map_err(|error| {
-            super::invalid_state(format!("create exec-failure test directory: {error}"))
-        })?;
-        let execfail = temporary.path().join("execfail");
-        let ready = temporary.path().join("execfail-ready");
-        runner.materialize_execfail(&execfail)?;
-
-        let mut fixture = NativeProcessFixture::start_with_failed_exec(&execfail, &ready)?;
-        fixture.release_root()?;
-        let children_path =
-            PathBuf::from(format!("/proc/{0}/task/{0}/children", fixture.outer_pid()));
-        let native_pid = runner.wait_for("Bash execfail child creation", &children_path, || {
-            fixture.native_child_pid()
-        })?;
-        fixture.open_native_pidfd(native_pid)?;
-        fixture.release_exec(native_pid)?;
-        let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
-        runner.wait_for("Bash execfail recovery", &ready, || {
-            if !ready.exists() {
-                fixture.native_child_pid()?;
-                return Ok(None);
-            }
-            fs::read_to_string(&comm_path)
-                .map(|name| (name.trim() == "bash").then_some(()))
-                .map_err(|error| {
-                    super::invalid_state(format!("read {}: {error}", comm_path.display()))
-                })
-        })?;
-        fixture.release_exec(native_pid)?;
-        runner.wait_for("Bash execfail later normal exec", &comm_path, || {
             fs::read_to_string(&comm_path)
                 .map(|name| (name.trim() == "sleep").then_some(()))
                 .map_err(|error| {

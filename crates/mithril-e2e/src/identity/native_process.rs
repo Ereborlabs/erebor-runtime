@@ -1,4 +1,8 @@
 #[cfg(test)]
+mod exec_tests;
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
 mod tests;
 
 use std::cell::RefCell;
@@ -209,6 +213,47 @@ impl NativeProcessFixture {
         self.native_pid = Some(pid);
         self.native_pidfd = Some(open_pidfd(pid)?);
         Ok(())
+    }
+
+    pub(super) fn wait_for_native_child(&mut self, operation: &str) -> Result<u32> {
+        let outer_pid = self.outer_pid();
+        let path = PathBuf::from(format!("/proc/{outer_pid}/task/{outer_pid}/children"));
+        let pid = wait_for(
+            &path,
+            operation,
+            WAIT_LIMIT,
+            || self.native_child_pid(),
+            || format!("outer process {outer_pid} is running without a child"),
+        )?;
+        self.open_native_pidfd(pid)?;
+        Ok(pid)
+    }
+
+    #[cfg(test)]
+    pub(super) fn wait_for_executable(
+        &self,
+        native_pid: u32,
+        executable: &str,
+        operation: &str,
+    ) -> Result<()> {
+        let path = PathBuf::from(format!("/proc/{native_pid}/comm"));
+        let last = RefCell::new(String::from("<unread>"));
+        wait_for(
+            &path,
+            operation,
+            WAIT_LIMIT,
+            || {
+                let name = fs::read_to_string(&path).context(IoSnafu { path: &path })?;
+                *last.borrow_mut() = name.trim().to_owned();
+                Ok((name.trim() == executable).then_some(()))
+            },
+            || {
+                format!(
+                    "last executable: {:?}; expected: {executable:?}",
+                    last.borrow()
+                )
+            },
+        )
     }
 
     pub(super) fn open_intermediate_pidfd(&mut self, pid: u32) -> Result<()> {
