@@ -137,10 +137,11 @@ physical run:
   moved-task native fork denial. Wait for the fixture input barrier before
   cgroup attachment so the initial exec guard is complete before the fixture
   releases the fork barrier.
-- [ ] `EffectTestRunner::runc_entry_role_runtime_probe`: two fresh VM runs
-  timed out before the direct `runc` `createContainer` request appeared. Add
-  the exact process state and runtime output to lightweight diagnostics, then
-  fix the fixture readiness owner before another physical run.
+- [x] `EffectTestRunner::runc_entry_role_runtime_probe`: two fresh VM runs
+  timed out before the direct `runc` `createContainer` request appeared.
+  Report runtime process exit and bounded task and containerd output.
+- [ ] Use the new direct-runtime diagnostic to find and fix the missing
+  `createContainer` request before another complete physical run.
 
 ## In-process scenario migration ledger
 

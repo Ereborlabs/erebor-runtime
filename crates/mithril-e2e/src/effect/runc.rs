@@ -1,3 +1,5 @@
+mod process;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fs;
@@ -3856,7 +3858,15 @@ impl EffectTestRunner {
         };
 
         let request_path = request_directory.join(format!("{container_id}.createRuntime.json"));
-        wait_for_path(&request_path, true, "the direct runc createRuntime request")?;
+        process::wait_for_path(
+            container.child.as_mut().context(InvalidInputSnafu {
+                path: &request_path,
+                reason: "the direct runtime process handle is absent",
+            })?,
+            &request_path,
+            "the direct runc createRuntime request",
+            &[&stdout_path, &stderr_path],
+        )?;
         let request: serde_json::Value =
             serde_json::from_slice(&fs::read(&request_path).context(IoSnafu {
                 path: &request_path,
@@ -4172,10 +4182,21 @@ impl EffectTestRunner {
         })?;
         let create_container_request =
             request_directory.join(format!("{container_id}.createContainer.json"));
-        wait_for_path(
+        let mut request_diagnostics = vec![stdout_path.as_path(), stderr_path.as_path()];
+        let runner_stdout_path = output_directory.join("containerd-start-fixture.stdout");
+        let runner_stderr_path = output_directory.join("containerd-start-fixture.stderr");
+        if container.containerd.is_some() {
+            request_diagnostics
+                .extend([runner_stdout_path.as_path(), runner_stderr_path.as_path()]);
+        }
+        process::wait_for_path(
+            container.child.as_mut().context(InvalidInputSnafu {
+                path: &create_container_request,
+                reason: "the direct runtime process handle is absent",
+            })?,
             &create_container_request,
-            true,
             "the direct runc createContainer request",
+            &request_diagnostics,
         )?;
         fs::copy(
             &create_container_request,
