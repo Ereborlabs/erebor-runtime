@@ -23,6 +23,50 @@ responsibility. This limit does not make a mechanical split sufficient.
 The suite keeps its current result schemas, security assertions, public owner
 calls, stock `runc` and containerd paths, and paired Kubernetes operations.
 
+## Scenario model
+
+Every scenario has the same three components:
+
+- Control, through the real `mithril-control` owner.
+- Node, through the real `mithril-node` owner.
+- One Python actor process in a host, `runc`, or Kubernetes environment.
+
+The environment owner holds paths, component handles, readiness state, and
+cleanup state. It exposes direct start and stop operations for Control, Node,
+and the actor. It does not deliver policy, reconcile a binding, publish an
+identity, acknowledge evidence, or perform another production sequence for
+the scenario.
+
+The actor file performs one physical action. Use the same actor file for the
+host, `runc`, and Kubernetes forms of that case. Environment code changes
+placement and component availability only. It does not change the action or
+the production operation under test.
+
+Do not add an environment trait, scenario registry, command language, or
+backend matrix. Use small concrete owners in Rust and Python. Give each owner
+one `start` path, direct component stop operations, and one idempotent `stop`
+path.
+
+The rejected shape hides the test behind a stateful free function:
+
+```rust
+let result = scenario::run(self, &host, &node, &binding, &path, &ready)?;
+```
+
+The required shape keeps the case visible:
+
+```rust
+let mut env = TestEnv::host(root, "read_secret.py")?;
+env.control.stop().await?;
+env.actor.release()?;
+let result = node.public_operation(env.actor.pid())?;
+ensure!(result == expected, InvalidInputSnafu { path, reason });
+env.stop().await?;
+```
+
+The example is a shape, not a new test API. Each scenario must call the real
+public production operation in place of `public_operation`.
+
 ## Measured suite
 
 The inspection covers all 27 Rust source files in `crates/mithril-e2e/src`.
@@ -72,6 +116,17 @@ owners are:
 | `EffectTestRunner::recovered_container_entry_probe` | 1,028 | `two-node-convergence.sh` recovered-container entry lane |
 | `IdentityTestRunner::physical_kubernetes_probe` and its private cases | 4,900 combined | `run.sh --with-k3s` identity lane |
 
+## Acceptance reset
+
+The previous migration checkmarks are not accepted. The changes moved test
+code, but they did not make scenario setup, actions, and assertions simple.
+They also left stateful scenario code in loose functions and left separate
+native and direct-runtime process wrappers. Reassess every migration against
+the rules below before it receives a checkmark.
+
+The baseline reliability records remain as failure evidence. They do not
+count as maintainability migrations.
+
 ## Shape rules
 
 - Prefer one small test per security behavior.
@@ -82,12 +137,23 @@ owners are:
 - Keep fixture setup, action, and assertion visible in the test.
 - Put resource allocation, readiness, diagnostic capture, and cleanup in
   simple fixture owners.
-- Use one process fixture owner for identity and direct-runtime child
-  processes. Its start operation must return only after readiness. Its stop
-  and drop operations must be idempotent.
+- Use `ProcessFixture` as the one process lifecycle owner for identity,
+  direct `runc`, and containerd tests. Do not add a native-process lifecycle
+  wrapper or a second kill-and-wait implementation.
+- Make one start call return a ready process. Make one fallible stop call
+  complete normal cleanup. Keep `Drop` as an idempotent fallback.
 - Put reusable process programs in small files under `fixtures/process`.
-  Execute the same files in focused identity and direct-runtime fixture tests.
-  Do not add embedded or copied variants.
+  Use actual Python files for identity and direct-runtime process behavior.
+  Do not put process programs in Rust strings or shell `-c` arguments. Do not
+  add embedded or copied variants.
+- Put stateful scenario behavior on its runner or a specific scenario owner.
+  Do not move it to a loose `run` function with a list of borrowed owners.
+- Keep changed private function names to five or fewer underscore-separated
+  components. Keep changed variable names to three or fewer components. Do
+  not rename a public production API or a result-schema field for this rule.
+- A migrated scenario must be easier to read at its call site. It must show
+  the fixture setup, public production operations, physical action, security
+  assertions, and stop operation without unrelated orchestration.
 - Do not put policy delivery, binding reconciliation, admission, recovery,
   evidence acknowledgement, or another production sequence in a test helper.
 - Do not add a fixture trait, builder, macro, scenario registry, or custom
@@ -97,24 +163,36 @@ owners are:
 
 ## Common tooling deliverable
 
-- [x] Add one synchronous readiness function with an exact timeout, resource
+- [ ] Add one small environment owner for Control, Node, and one actor. Reuse
+  existing Control, node, path, cgroup, and process owners inside it.
+- [ ] Make Control, Node, and actor start or stop independently so outage and
+  restart order stays explicit in each scenario.
+- [ ] Keep host and direct-`runc` placement in Rust. Keep Kubernetes placement
+  in a small Python harness. Use the same actor file in all three placements.
+- [ ] Keep one synchronous readiness function with an exact timeout, resource
   path, operation name, and caller-supplied last-state diagnostic.
-- [x] Add one child-process readiness function on top of the shared wait.
-  Use it for native identity and direct-runtime process exit diagnostics.
-- [x] Add one idempotent process owner for native identity, the main `runc`
-  container, and containerd. Move their kill, wait, early-exit inspection,
-  and drop cleanup into it.
+- [ ] Make `ProcessFixture` own spawn readiness, stdin actions, bounded exit
+  diagnostics, explicit stop, and idempotent drop cleanup.
+- [ ] Remove `NativeProcessFixture`. Move only generic Linux process mechanics
+  to `ProcessFixture`; keep identity assertions and production calls in the
+  identity scenario.
+- [ ] Make `RuncContainer` and `ContainerdServer` delegate process lifecycle
+  to `ProcessFixture`. Keep runtime protocol and resource cleanup on their
+  existing owners.
 - [ ] Move the remaining direct-runtime exec children to the shared process
-  owner as each entry-role behavior moves to its small scenario module.
-- [x] Move reusable Python process programs to `fixtures/process` and execute
-  them from both identity and direct-runtime focused fixture tests.
-- [x] Copy the shared Python process programs into each fresh single-node VM.
-- [x] Add fresh-directory construction to the existing `ProbeDirectory`
+  owner as each entry-role behavior moves to its scenario owner.
+- [ ] Replace every embedded native process script with an actual Python file
+  in `fixtures/process`.
+- [ ] Execute the same Python process files from focused identity and direct
+  `runc` tests.
+- [ ] Copy all shared Python process programs into each fresh single-node VM.
+- [ ] Add fresh-directory construction to the existing `ProbeDirectory`
   owner.
-- [x] Keep `ProbeDirectory`, `ProbeFile`, and `ProbeCgroup` cleanup
+- [ ] Keep `ProbeDirectory`, `ProbeFile`, and `ProbeCgroup` cleanup
   idempotent.
-- [x] Add one small focused test for readiness failure diagnostics and cleanup.
-- [x] Verify with the focused support test and Mithril e2e clippy before the
+- [ ] Add small focused tests for successful start and stop, early exit,
+  timeout diagnostics, and repeated cleanup.
+- [ ] Verify with the focused support tests and Mithril e2e clippy before the
   common-tooling commit.
 
 ## Baseline reliability failures
@@ -167,8 +245,9 @@ physical run:
 
 ## In-process scenario migration ledger
 
-Each checked item is one verified scenario commit. A scenario can remain in
-its current module when a move does not reduce orchestration.
+All items in this ledger are reset. Each checkmark requires one verified
+scenario commit that reduces orchestration and keeps behavior explicit. A
+file move or copied function does not satisfy an item.
 
 ### Control and TLS
 
@@ -177,22 +256,22 @@ shutdown, and shutdown diagnostics. Each test must continue to call
 `NodeControlConnector`, `ControlPlane`, policy transfer, evidence upload,
 acknowledgement, or decommission operations directly.
 
-- [x] `mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce`
-- [x] `mtls_connection_renews_the_ready_session_while_its_owner_is_idle`
-- [x] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
-- [x] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`
-- [x] `mtls_rejects_wrong_node_binding_and_expired_client_identity`
-- [x] `mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered_session`
-- [x] `mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack`
-- [x] `mtls_storage_failure_withholds_ack_until_replay_is_durable`
-- [x] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
-- [x] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
-- [x] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`
-- [x] `node_decommission_https_accepts_the_same_signed_artifact_as_control`
-- [x] `mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound`
-- [x] `mtls_evidence_backlog_exceeds_the_previous_baseline`
-- [x] `mtls_coverage_upload_preserves_gap_truth_at_control`
-- [x] `mtls_administrative_services_route_matching_results_and_cancel_waiters`
+- [ ] `mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce`
+- [ ] `mtls_connection_renews_the_ready_session_while_its_owner_is_idle`
+- [ ] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
+- [ ] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`
+- [ ] `mtls_rejects_wrong_node_binding_and_expired_client_identity`
+- [ ] `mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered_session`
+- [ ] `mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack`
+- [ ] `mtls_storage_failure_withholds_ack_until_replay_is_durable`
+- [ ] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
+- [ ] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
+- [ ] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`
+- [ ] `node_decommission_https_accepts_the_same_signed_artifact_as_control`
+- [ ] `mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound`
+- [ ] `mtls_evidence_backlog_exceeds_the_previous_baseline`
+- [ ] `mtls_coverage_upload_preserves_gap_truth_at_control`
+- [ ] `mtls_administrative_services_route_matching_results_and_cancel_waiters`
 
 The following Control tests are already small owner-local checks. Keep them as
 regressions and verify them with every Control migration:
@@ -203,10 +282,10 @@ regressions and verify them with every Control migration:
 
 ### Effect child and observation support
 
-- [x] Replace the repeated child mailbox readiness loop with the shared wait.
-- [x] Replace repeated process and descriptor readiness loops with the shared
+- [ ] Replace the repeated child mailbox readiness loop with the shared wait.
+- [ ] Replace repeated process and descriptor readiness loops with the shared
   wait. Preserve PID, descriptor, and kernel-result diagnostics.
-- [x] Replace the observation deadline loop with the shared wait. Preserve the
+- [ ] Replace the observation deadline loop with the shared wait. Preserve the
   complete recent-observation summary on failure.
 
 Keep and rerun all 24 focused regressions in `effect/child.rs`,
@@ -220,27 +299,18 @@ starting the complete privileged scenarios.
 
 ### Native identity fixture checks
 
-- [x] Replace duplicated native child exit and exec readiness loops with the
+- [ ] Replace duplicated native child exit and exec readiness loops with the
   shared wait. Preserve child status and snapshot diagnostics.
-- [x] Move native process startup, stop, exec-failure, and exit readiness into
-  the small `identity/native_process.rs` fixture module.
-- [x] Move the complete `NativeProcessFixture` owner out of `identity.rs`.
-- [x] Move each Python child program from `fixtures/identity` to the shared
-  `fixtures/process` directory and use it in the direct-runtime fixture tests.
-- [x] Move native child stop, failed-exec, and post-PONR checks to
-  `identity/native_process/exec_tests.rs`. Reuse fixture-owned child and
-  executable readiness.
-- [x] Move subreaper, namespace-init, orphan, double-fork, and leader-first
-  checks to `identity/native_process/reparent_tests.rs`. Keep each process
-  transition and parent assertion visible.
-- [x] Move non-leader and concurrent-thread checks to
-  `identity/native_process/thread_tests.rs`. Keep exact TID assertions.
-- [x] Move the production object allocation check to
-  `identity/verification_tests.rs`.
-- [x] Move the authorization replay check to
-  `identity/authorization_tests.rs`. Keep retarget, expiry, replay, restart,
-  and fresh-control assertions in the production owner call.
-- [x] Rerun all 14 focused identity tests and the `clone3.rs` test after each
+- [ ] Delete `NativeProcessFixture` after its generic lifecycle and readiness
+  behavior moves to `ProcessFixture`.
+- [ ] Replace native child, failed-exec, post-PONR, subreaper, namespace-init,
+  orphan, double-fork, leader-first, non-leader, and concurrent-thread shell
+  commands with shared Python process files.
+- [ ] Keep process transitions in small focused tests. Use `ProcessFixture`
+  directly and keep the action and assertion visible.
+- [ ] Keep production object allocation and authorization replay tests beside
+  their actual runner owner. Do not use orphaned scenario functions.
+- [ ] Rerun every focused identity test and the `clone3.rs` test after each
   identity fixture change.
 
 ### Compact owner-local checks
@@ -272,9 +342,10 @@ command passes.
   first-effect action, and exact identity assertions visible.
 - [ ] Native child exec: keep the fork and exec actions, production identity
   snapshots, and allocation diagnostics visible.
-- [x] Non-leader thread exec: use fixture-owned thread readiness in
-  `identity/scenarios/non_leader_exec.rs`. Keep exact TID allocation and
-  post-exec identity assertions visible.
+- [ ] Non-leader thread exec: remove the loose
+  `identity/scenarios/non_leader_exec.rs::run` function. Put scenario state on
+  its owner, use `ProcessFixture` and the shared Python file directly, and
+  keep exact TID allocation and post-exec assertions visible.
 - [ ] Pre-PONR and post-PONR failures: use fixture-owned process readiness and
   keep pending-exec, rollback, fatal state, and recovery assertions visible.
 - [ ] Moved-task exec: keep the physical cgroup move, denied exec, production
@@ -292,7 +363,7 @@ command passes.
 
 ### Kernel and host lifecycle
 
-- [x] `KernelQualificationRunner::physical_file_open_probe`: own the lease
+- [ ] `KernelQualificationRunner::physical_file_open_probe`: own the lease
   and output paths with existing cleanup owners. Keep
   `BpfQualificationLoader` attachment and shutdown explicit.
 - [ ] `HostLifecycleRunner::host_lifecycle`: own the pin root and lease, use
@@ -408,6 +479,114 @@ setup, production actions, assertions, and focused test.
 Each Kubernetes identity case must keep the `k3s`, CRI, OCI hook, node
 process, and public production-owner operations that its physical harness
 uses.
+
+## Required pre-TODO test baseline
+
+Commit `95775f48f2ed9864ecbc40219c3ecf79a51a0ee7` is the source baseline
+immediately before this work. It contains 90 library tests and two binary
+tests. All 92 test names remain present. Preserve the behavior behind every
+entry when a test receives a shorter name or moves beside its real owner.
+
+- `benchmark.rs::benchmark_records_every_open_sample_at_requested_concurrency`
+- `benchmark.rs::benchmark_validation_accepts_json_rate_and_rejects_changed_rate`
+- `benchmark.rs::benchmark_validation_rejects_changed_raw_samples`
+- `bin/mithril_effect_test.rs::outer_process_id_is_available`
+- `bin/mithril_kernel_qualification.rs::physical_record_command_requires_all_evidence_paths`
+- `capability.rs::every_checked_in_vmlinux_header_compiles_the_feasibility_object`
+- `capability.rs::every_checked_in_vmlinux_header_compiles_the_production_identity_object`
+- `capability.rs::platform_probe_reports_bpf_lsm_as_a_measured_prerequisite`
+- `capability.rs::qualification_object_compiles_against_the_checked_in_vmlinux_header`
+- `capability_matrix.rs::every_allocated_surface_is_supported_or_explicitly_unsupported`
+- `control_tls.rs::control_evidence_queue_reclaims_only_durably_consumed_segments`
+- `control_tls.rs::kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
+- `control_tls.rs::kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
+- `control_tls.rs::kubernetes_outage_pending_policy_transfer_preempts_evidence_ack_backlog`
+- `control_tls.rs::kubernetes_outage_retained_control_store_starts_from_latest_state`
+- `control_tls.rs::kubernetes_outage_retained_evidence_allows_protected_pod_admission`
+- `control_tls.rs::mtls_administrative_services_route_matching_results_and_cancel_waiters`
+- `control_tls.rs::mtls_connection_renews_the_ready_session_while_its_owner_is_idle`
+- `control_tls.rs::mtls_connection_reports_local_readiness_transitions_without_reconnect`
+- `control_tls.rs::mtls_coverage_upload_preserves_gap_truth_at_control`
+- `control_tls.rs::mtls_evidence_backlog_exceeds_the_previous_baseline`
+- `control_tls.rs::mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack`
+- `control_tls.rs::mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered_session`
+- `control_tls.rs::mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound`
+- `control_tls.rs::mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce`
+- `control_tls.rs::mtls_rejects_wrong_node_binding_and_expired_client_identity`
+- `control_tls.rs::mtls_storage_failure_withholds_ack_until_replay_is_durable`
+- `control_tls.rs::node_decommission_https_accepts_the_same_signed_artifact_as_control`
+- `control_tls.rs::signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`
+- `digest.rs::sha256_digest_uses_fixed_lowercase_hex`
+- `effect.rs::kubernetes_mount_attack_matches_the_lightweight_security_boundary`
+- `effect.rs::local_enforcement_results_close_every_owned_fixture_exactly_once`
+- `effect.rs::runtime_entry_process_control_is_durable_with_exact_target`
+- `effect.rs::static_effect_classification_covers_every_branch_without_physical_claims`
+- `effect/child.rs::abstract_unix_stream_control_does_not_create_a_file`
+- `effect/child.rs::anonymous_mapping_controls_work_without_policy`
+- `effect/child.rs::batch_average_uses_every_attempt`
+- `effect/child.rs::deleted_executable_fixture_retains_its_descriptor_and_mapping`
+- `effect/child.rs::hard_denial_accepts_only_permission_errors`
+- `effect/child.rs::native_exec_and_descriptor_transfer_controls_work_without_policy`
+- `effect/child.rs::network_chain_keeps_file_read_results_separate`
+- `effect/child.rs::prepared_file_fixture_can_read_and_map_before_policy_activation`
+- `effect/child.rs::prepared_write_race_releases_every_preallocated_worker`
+- `effect/child.rs::process_control_target_is_live_until_its_owner_releases_it`
+- `effect/child.rs::ptmx_ioctl_requires_success_and_kernel_output`
+- `effect/child.rs::queued_descriptor_controls_arrive_in_declared_order`
+- `effect/child.rs::raw_bpf_map_create_attributes_match_the_linux_uapi_prefix`
+- `effect/child.rs::shared_mmap_target_reports_both_unrestricted_controls`
+- `effect/mailbox.rs::shared_mappings_round_trip_without_stream_io`
+- `effect/network.rs::network_fixture_matrix_requires_physical_proof`
+- `effect/network.rs::network_peer_server_requires_controls_and_denied_absence`
+- `effect/network.rs::signed_network_fixture_compiles_before_physical_use`
+- `effect/network.rs::signed_network_fixture_compiles_two_node_peer`
+- `effect/runc.rs::normal_path_tree_denial_requires_the_application_read_identity`
+- `effect/runc.rs::runc_seccomp_fixture_binds_inside_its_runtime`
+- `effect/support.rs::enforcement_fixture_is_a_verified_protect_artifact`
+- `effect/support.rs::exact_observation_match_rejects_the_same_reason_from_another_hook`
+- `effect/support.rs::health_delta_preserves_ring_accounting`
+- `effect/support.rs::io_uring_match_requires_exact_worker_request_identity`
+- `effect/support.rs::object_match_requires_the_selected_exact_or_unsupported_identity`
+- `fixture.rs::safe_fixture_has_exact_stages_replay_nodes_and_unchanged_digest`
+- `golden.rs::cfg_rollback_golden_rejects_replay_and_corruption`
+- `golden.rs::cfg_v1_golden_is_closed_deterministic_and_chassis_only`
+- `golden.rs::decision_set_golden_matches_closed_rust_and_c_layout`
+- `identity.rs::authorization_replay_fixture_persists_exact_rejections_and_fresh_control`
+- `identity.rs::leader_first_fixture_keeps_the_worker_until_release`
+- `identity.rs::native_process_fixture_executes_after_namespace_init_reparenting`
+- `identity.rs::native_process_fixture_executes_after_subreaper_reparenting`
+- `identity.rs::native_process_fixture_executes_non_leader_thread`
+- `identity.rs::native_process_fixture_races_two_thread_execs`
+- `identity.rs::native_process_fixture_recovers_from_bash_execfail`
+- `identity.rs::native_process_fixture_reparents_a_stopped_child_before_exec`
+- `identity.rs::native_process_fixture_reparents_double_fork_child_before_exec`
+- `identity.rs::native_process_fixture_reports_failed_exec`
+- `identity.rs::native_process_fixture_waits_for_stopped_child_before_exec`
+- `identity.rs::post_ponr_fixture_terminates_the_exec_process`
+- `identity.rs::production_object_and_identity_fixture_allocation_are_exact`
+- `identity/clone3.rs::clone_into_cgroup_fixture_recognizes_childless_eacces_exit`
+- `loader.rs::changed_digest_and_stale_pin_root_fail_before_privileged_load`
+- `loader.rs::direct_libbpf_inspection_validates_the_owned_feasibility_object`
+- `prototype.rs::bounded_component_graph_never_truncates_or_chooses_conflicting_authority`
+- `prototype.rs::jailer_task_alloc_copies_parent_before_first_child_effect`
+- `prototype.rs::meta_bind_alias_resolves_through_the_oldest_mount`
+- `prototype.rs::meta_mutation_guard_requires_one_stable_live_snapshot`
+- `prototype.rs::source_ka_capacity_n_plus_one_denies_without_corrupting_existing_rows`
+- `prototype.rs::source_ka_dns_bounds_never_truncate_to_a_name`
+- `prototype.rs::source_ka_partial_publication_keeps_the_complete_old_generation`
+- `prototype.rs::source_ka_reader_loss_never_changes_an_installed_deny`
+- `prototype.rs::source_tg_exec_map_requires_one_exact_stage_even_for_non_leader_exec`
+- `prototype.rs::source_tg_path_rename_preserves_prior_denial_and_argument_order`
+- `prototype.rs::source_tg_runtime_join_accepts_only_authenticated_complete_fresh_roots`
+- `provenance.rs::dossier_closes_sources_licenses_owners_and_hostile_fixtures`
+
+The current tree also has four reliability tests added after the baseline.
+Preserve them while the structural changes are replaced:
+
+- `effect/runc/process.rs::runtime_request_wait_reports_process_exit_and_output`
+- `identity/native_process/tests.rs::startup_reports_shared_process_program_failure`
+- `physical.rs::async_readiness_yields_until_the_fixture_is_ready`
+- `physical.rs::readiness_reports_diagnostics_and_directory_cleanup_is_idempotent`
 
 ## Documentation deliverable
 
