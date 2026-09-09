@@ -1014,7 +1014,12 @@ impl EffectProcessFixture {
                 }
                 Ok(None)
             },
-            || format!("last mailbox state: {}; child still running", last_state.get()),
+            || {
+                format!(
+                    "last mailbox state: {}; child still running",
+                    last_state.get()
+                )
+            },
         )
     }
 }
@@ -2181,6 +2186,7 @@ impl PreparedMountRace {
 struct PreparedPropagationPeer {
     process: libc::pid_t,
     control: SharedMailbox,
+    control_path: PathBuf,
 }
 
 impl PreparedPropagationPeer {
@@ -2203,7 +2209,11 @@ impl PreparedPropagationPeer {
                 fixture_syscalls::exit_process(code)
             }
         };
-        let mut peer = Self { process, control };
+        let mut peer = Self {
+            process,
+            control,
+            control_path,
+        };
         let ready = peer.exchange(b'r')?;
         ensure!(
             ready == 0,
@@ -2240,17 +2250,24 @@ impl PreparedPropagationPeer {
             }
         );
         self.control.publish(REQUEST, &command)?;
-        let start = Instant::now();
-        while self.control.state() != RESPONSE {
-            ensure!(
-                start.elapsed() < CHILD_WAIT_LIMIT,
-                InvalidInputSnafu {
-                    path: Path::new("propagation peer mailbox"),
-                    reason: "timed out waiting for the propagation peer",
-                }
-            );
-            thread::sleep(Duration::from_millis(1));
-        }
+        let last_state = std::cell::Cell::new(REQUEST);
+        wait_for(
+            &self.control_path,
+            "the propagation peer response",
+            CHILD_WAIT_LIMIT,
+            || {
+                let state = self.control.state();
+                last_state.set(state);
+                Ok((state == RESPONSE).then_some(()))
+            },
+            || {
+                format!(
+                    "last mailbox state: {}; peer PID: {}",
+                    last_state.get(),
+                    self.process
+                )
+            },
+        )?;
         let response = self.control.read()?;
         self.control.reset();
         Ok(response)
@@ -2926,26 +2943,37 @@ impl SharedMmapTarget {
 
     fn request(&mut self, request: u32) -> IoOutcome {
         self.signal.set_state(request);
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            let state = self.signal.state();
-            if state == SHARED_MMAP_ALLOWED {
-                self.signal.reset();
-                return allowed_outcome();
-            }
-            if state >= SHARED_MMAP_FAILURE_BASE {
-                self.signal.reset();
-                return error_outcome(io::Error::from_raw_os_error(
-                    (state - SHARED_MMAP_FAILURE_BASE) as i32,
-                ));
-            }
-            if Instant::now() >= deadline {
-                return error_outcome(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "shared-mmap target did not respond",
-                ));
-            }
-            thread::sleep(Duration::from_millis(1));
+        let last_state = std::cell::Cell::new(request);
+        let state = match wait_for(
+            &self.signal_path,
+            "the shared-mmap target response",
+            Duration::from_secs(2),
+            || {
+                let state = self.signal.state();
+                last_state.set(state);
+                Ok(
+                    (state == SHARED_MMAP_ALLOWED || state >= SHARED_MMAP_FAILURE_BASE)
+                        .then_some(state),
+                )
+            },
+            || {
+                format!(
+                    "last mailbox state: {}; target PID: {}",
+                    last_state.get(),
+                    self.pid
+                )
+            },
+        ) {
+            Ok(state) => state,
+            Err(error) => return error_outcome(io::Error::other(error.to_string())),
+        };
+        self.signal.reset();
+        if state == SHARED_MMAP_ALLOWED {
+            allowed_outcome()
+        } else {
+            error_outcome(io::Error::from_raw_os_error(
+                (state - SHARED_MMAP_FAILURE_BASE) as i32,
+            ))
         }
     }
 }
@@ -3143,19 +3171,31 @@ impl UnixStreamTarget {
 
     fn roundtrip(&mut self) -> IoOutcome {
         self.signal.set_state(REQUEST);
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while self.signal.state() == REQUEST {
-            if Instant::now() >= deadline {
+        let last_state = std::cell::Cell::new(REQUEST);
+        let state = match wait_for(
+            &self.signal_path,
+            "the Unix-stream fixture server readiness",
+            Duration::from_secs(2),
+            || {
+                let state = self.signal.state();
+                last_state.set(state);
+                Ok((state != REQUEST).then_some(state))
+            },
+            || {
+                format!(
+                    "last mailbox state: {}; server PID: {}",
+                    last_state.get(),
+                    self.pid()
+                )
+            },
+        ) {
+            Ok(state) => state,
+            Err(error) => {
                 let _result = self.wait();
-                return error_outcome(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "Unix-stream fixture server did not become ready",
-                ));
+                return error_outcome(io::Error::other(error.to_string()));
             }
-            thread::sleep(Duration::from_millis(1));
-        }
-        if self.signal.state() != READY {
-            let state = self.signal.state();
+        };
+        if state != READY {
             let _result = self.wait();
             if state >= UNIX_STREAM_FAILURE_BASE {
                 return error_outcome(io::Error::from_raw_os_error(

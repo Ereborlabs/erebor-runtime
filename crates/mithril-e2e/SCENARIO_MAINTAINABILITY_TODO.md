@@ -168,7 +168,7 @@ regressions and verify them with every Control migration:
 ### Effect child and observation support
 
 - [x] Replace the repeated child mailbox readiness loop with the shared wait.
-- [ ] Replace repeated process and descriptor readiness loops with the shared
+- [x] Replace repeated process and descriptor readiness loops with the shared
   wait. Preserve PID, descriptor, and kernel-result diagnostics.
 - [ ] Replace the observation deadline loop with the shared wait. Preserve the
   complete recent-observation summary on failure.
