@@ -1,6 +1,4 @@
 #[cfg(test)]
-mod reparent_tests;
-#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod tests;
@@ -49,15 +47,6 @@ impl NativeProcessFixture {
         Self::start_command(&mut command, Path::new("/bin/sh"))
     }
 
-    pub(super) fn start_with_leader_first_exit(
-        repo_root: &Path,
-        ready: &Path,
-        release: &Path,
-    ) -> Result<Self> {
-        let outer = ProcessFixture::python(repo_root, "native_leader_first.py", [ready, release])?;
-        Ok(Self::from_outer(outer))
-    }
-
     fn start_command(command: &mut Command, program: &Path) -> Result<Self> {
         let outer = ProcessFixture::start(command, program)?;
         Ok(Self::from_outer(outer))
@@ -96,31 +85,6 @@ impl NativeProcessFixture {
             )));
         }
         self.first_child_pid(self.outer.id())
-    }
-
-    pub(super) fn reported_tid(&mut self, ready: &Path) -> Result<Option<u32>> {
-        if let Some(status) = self.outer.try_wait()? {
-            let stderr = self.outer.stderr()?;
-            return Err(invalid_state(format!(
-                "non-leader thread fixture exited before it reported its TID ({status}): {}",
-                stderr
-            )));
-        }
-        let text = match fs::read_to_string(ready) {
-            Ok(text) => text,
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(source) => return Err(source).context(IoSnafu { path: ready }),
-        };
-        if text.trim().is_empty() {
-            return Ok(None);
-        }
-        let tid = text.trim().parse::<u32>().map_err(|source| {
-            invalid_state(format!(
-                "non-leader thread fixture wrote an invalid TID `{}`: {source}",
-                text.trim()
-            ))
-        })?;
-        Ok(Some(tid))
     }
 
     pub(super) fn namespace_init_pid(&mut self) -> Result<Option<u32>> {

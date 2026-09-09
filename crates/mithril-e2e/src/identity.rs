@@ -11,7 +11,7 @@ use self::native_process::NativeProcessFixture;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write as _;
-use std::mem::{offset_of, size_of};
+use std::mem::size_of;
 use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
@@ -25,10 +25,8 @@ use erebor_interceptor::{
     KernelObjectLayoutV1, KernelObjectManifestV1, BUNDLED_BPF_OBJECT, REQUIRED_IDENTITY_PROGRAMS,
 };
 use erebor_interceptor_abi::{
-    BindingLifecycleStateV1, CreatedByEdgeV1, EntryLifetimeStateV1, EntrySecurityStateV1,
-    ExecGuardStateV1, ExecutionSetBindingStateV1, Id128V1, IdentityRuntimeConfigV1,
-    ProcessExecutionInstanceV1, ProcessExecutionStateV1, ProcessSecurityStateKindV1,
-    ProcessSecurityStateV1, ProcessStateVectorStateV1, ProcessStateVectorV1,
+    BindingLifecycleStateV1, CreatedByEdgeV1, ExecGuardStateV1, ExecutionSetBindingStateV1,
+    Id128V1, IdentityRuntimeConfigV1, ProcessExecutionStateV1, ProcessStateVectorStateV1,
     ReferenceTombstoneStateV1, TaskCoordinateStateV1, TaskCoordinateV1, TaskReferenceTombstoneV1,
     TASK_REFERENCE_ALL_V1,
 };
@@ -884,6 +882,7 @@ impl IdentityTestRunner {
         let exec_case =
             scenarios::ExecCase::new(self, &host, &identity, &inspector, &binding, &procs_path);
         let reparent_case = scenarios::ReparentCase::new(self, &inspector, &procs_path);
+        let lifetime_case = scenarios::LifetimeCase::new(self, &host, &inspector, &procs_path);
         let (external_root, before_exec, after_exec) = exec_case.child(&child_ready_path)?;
         child_ready_cleanup.cleanup()?;
         let retry_ready_cleanup = ProbeFile::new(&child_ready_path);
@@ -933,230 +932,7 @@ impl IdentityTestRunner {
             reparent_case.double_fork(&child_ready_path)?;
         double_cleanup.cleanup()?;
 
-        self.wait_for("native reference baseline", &procs_path, || {
-            Ok((profile_task_refs(&host)? == 0).then_some(()))
-        })
-        .map_err(|source| {
-            invalid_state(format!(
-                "{source}; live cgroup tasks `{}`; profile refs {}",
-                fs::read_to_string(&procs_path).unwrap_or_default().trim(),
-                profile_task_refs(&host).unwrap_or(u64::MAX)
-            ))
-        })?;
-        let mut leader_first_fixture = NativeProcessFixture::start_with_leader_first_exit(
-            &self.repo_root,
-            &leader_first_ready_path,
-            &leader_first_release_path,
-        )?;
-        fs::write(&procs_path, leader_first_fixture.outer_pid().to_string())
-            .context(IoSnafu { path: &procs_path })?;
-        let leader_first_root = self.wait_for("leader-first root identity", &procs_path, || {
-            inspector
-                .snapshot(leader_first_fixture.outer_pid())
-                .context(NodeSnafu)
-        })?;
-        let leader_first_process_key = id_key(&leader_first_root.process_state_id)?;
-        let leader_first_process_before = required_abi_map::<ProcessSecurityStateV1>(
-            &host,
-            "process_states",
-            &leader_first_process_key,
-            "leader-first process state",
-        )?;
-        let leader_first_entry_key = id_bytes(leader_first_process_before.entry_instance_id);
-        let next_id_before_worker = identity_next_id(&host)?;
-        leader_first_fixture.release_root()?;
-        let leader_first_worker_tid = self.wait_for(
-            "leader-first worker thread",
-            &leader_first_ready_path,
-            || leader_first_fixture.reported_tid(&leader_first_ready_path),
-        )?;
-        let leader_first_worker_task_cookie = next_id_before_worker;
-        let no_pidfd_thread_observed = {
-            let raw = i32::try_from(leader_first_worker_tid).map_err(|error| {
-                invalid_state(format!(
-                    "worker TID {leader_first_worker_tid} is invalid: {error}"
-                ))
-            })?;
-            let tid = Pid::from_raw(raw)
-                .ok_or_else(|| invalid_state("worker TID zero cannot have a pidfd"))?;
-            pidfd_open(tid, PidfdFlags::empty()).is_err()
-        };
-        let leader_first_worker_coordinate = required_abi_map::<TaskCoordinateV1>(
-            &host,
-            "task_coordinates",
-            &leader_first_worker_task_cookie.to_ne_bytes(),
-            "leader-first worker coordinate",
-        )?;
-        let leader_first_created_by = required_abi_map::<CreatedByEdgeV1>(
-            &host,
-            "created_by_edges",
-            &leader_first_worker_task_cookie.to_ne_bytes(),
-            "leader-first worker creator edge",
-        )?;
-        ensure!(
-            no_pidfd_thread_observed
-                && identity_next_id(&host)? == next_id_before_worker + 2
-                && leader_first_worker_coordinate.task_cookie == leader_first_worker_task_cookie
-                && leader_first_worker_coordinate.host_tid == leader_first_worker_tid
-                && leader_first_worker_coordinate.host_tgid == leader_first_root.host_tgid
-                && leader_first_worker_coordinate.process_state_id
-                    == leader_first_process_before.process_state_id
-                && leader_first_worker_coordinate.state == TaskCoordinateStateV1::Runnable
-                && leader_first_created_by.child_task_cookie == leader_first_worker_task_cookie
-                && leader_first_created_by.creator_task_cookie == leader_first_root.task_cookie,
-            InvalidInputSnafu {
-                path: &leader_first_ready_path,
-                reason: "the non-leader thread did not receive one exact native identity",
-            }
-        );
-        let (
-            leader_first_process_refs_after_leader_exit,
-            leader_first_entry_refs_after_leader_exit,
-            leader_first_profile_refs_after_leader_exit,
-            leader_first_root_tombstone_released,
-            leader_first_worker_tombstone_owned,
-        ) = self.wait_for("leader-first reference transition", &procs_path, || {
-            let root_coordinate = required_abi_map::<TaskCoordinateV1>(
-                &host,
-                "task_coordinates",
-                &leader_first_root.task_cookie.to_ne_bytes(),
-                "leader-first root coordinate",
-            )?;
-            let process = required_abi_map::<ProcessSecurityStateV1>(
-                &host,
-                "process_states",
-                &leader_first_process_key,
-                "leader-first live process",
-            )?;
-            let entry = required_map_bytes(
-                &host,
-                "entry_states",
-                &leader_first_entry_key,
-                "leader-first live entry",
-            )?;
-            let entry_refs = read_u64(
-                &entry,
-                offset_of!(EntrySecurityStateV1, live_task_refs),
-                "leader-first live entry references",
-            )?;
-            let root_tombstone = required_abi_map::<TaskReferenceTombstoneV1>(
-                &host,
-                "task_reference_tombstones",
-                &leader_first_root.task_cookie.to_ne_bytes(),
-                "leader-first root tombstone",
-            )?;
-            let worker_tombstone = required_abi_map::<TaskReferenceTombstoneV1>(
-                &host,
-                "task_reference_tombstones",
-                &leader_first_worker_task_cookie.to_ne_bytes(),
-                "leader-first worker tombstone",
-            )?;
-            let profile_refs = profile_task_refs(&host)?;
-            let root_released = root_tombstone.task_free_observed == 1
-                && root_tombstone.released_bits == TASK_REFERENCE_ALL_V1
-                && root_tombstone.state == ReferenceTombstoneStateV1::Released;
-            let worker_owned = worker_tombstone.task_free_observed == 0
-                && worker_tombstone.released_bits == 0
-                && worker_tombstone.state == ReferenceTombstoneStateV1::Owned;
-            Ok((root_coordinate.state == TaskCoordinateStateV1::Exited
-                && process.state == ProcessSecurityStateKindV1::Active
-                && process.live_thread_refs == 1
-                && process.active_role_id == leader_first_root.active_role_id
-                && entry_refs == 1
-                && profile_refs == 1
-                && root_released
-                && worker_owned)
-                .then_some((
-                    process.live_thread_refs,
-                    entry_refs,
-                    profile_refs,
-                    root_released,
-                    worker_owned,
-                )))
-        })?;
-        fs::write(&leader_first_release_path, b"release\n").context(IoSnafu {
-            path: &leader_first_release_path,
-        })?;
-        leader_first_fixture.wait_for_successful_exit()?;
-        let (
-            leader_first_process_refs_after_worker_exit,
-            leader_first_entry_refs_after_worker_exit,
-            leader_first_profile_refs_after_worker_exit,
-            leader_first_process_reclaimable,
-            leader_first_entry_draining,
-            leader_first_worker_tombstone_released,
-        ) = self.wait_for("leader-first final reference release", &procs_path, || {
-            let worker_coordinate = required_abi_map::<TaskCoordinateV1>(
-                &host,
-                "task_coordinates",
-                &leader_first_worker_task_cookie.to_ne_bytes(),
-                "leader-first exited worker coordinate",
-            )?;
-            let process = required_abi_map::<ProcessSecurityStateV1>(
-                &host,
-                "process_states",
-                &leader_first_process_key,
-                "leader-first retired process",
-            )?;
-            let vector = required_abi_map::<ProcessStateVectorV1>(
-                &host,
-                "process_state_vectors",
-                &leader_first_process_key,
-                "leader-first retired process vector",
-            )?;
-            let execution = required_abi_map::<ProcessExecutionInstanceV1>(
-                &host,
-                "process_execution_instances",
-                &id_bytes(process.active_execution_id),
-                "leader-first completed execution",
-            )?;
-            let entry = required_map_bytes(
-                &host,
-                "entry_states",
-                &leader_first_entry_key,
-                "leader-first draining entry",
-            )?;
-            let entry_refs = read_u64(
-                &entry,
-                offset_of!(EntrySecurityStateV1, live_task_refs),
-                "leader-first final entry references",
-            )?;
-            let entry_lifetime = read_u8(
-                &entry,
-                offset_of!(EntrySecurityStateV1, lifetime_state),
-                "leader-first entry lifetime",
-            )?;
-            let worker_tombstone = required_abi_map::<TaskReferenceTombstoneV1>(
-                &host,
-                "task_reference_tombstones",
-                &leader_first_worker_task_cookie.to_ne_bytes(),
-                "leader-first released worker tombstone",
-            )?;
-            let profile_refs = profile_task_refs(&host)?;
-            let process_reclaimable = process.state == ProcessSecurityStateKindV1::Reclaimable
-                && process.live_thread_refs == 0
-                && vector.state == ProcessStateVectorStateV1::Retiring
-                && execution.state == ProcessExecutionStateV1::Complete;
-            let entry_draining =
-                entry_refs == 0 && entry_lifetime == EntryLifetimeStateV1::Draining as u8;
-            let worker_released = worker_tombstone.task_free_observed == 1
-                && worker_tombstone.released_bits == TASK_REFERENCE_ALL_V1
-                && worker_tombstone.state == ReferenceTombstoneStateV1::Released;
-            Ok((worker_coordinate.state == TaskCoordinateStateV1::Exited
-                && process_reclaimable
-                && entry_draining
-                && profile_refs == 0
-                && worker_released)
-                .then_some((
-                    process.live_thread_refs,
-                    entry_refs,
-                    profile_refs,
-                    process_reclaimable,
-                    entry_draining,
-                    worker_released,
-                )))
-        })?;
-        leader_first_fixture.stop()?;
+        let leader = lifetime_case.leader(&leader_first_ready_path, &leader_first_release_path)?;
         leader_first_ready_cleanup.cleanup()?;
         leader_first_release_cleanup.cleanup()?;
 
@@ -1787,19 +1563,19 @@ impl IdentityTestRunner {
             double_fork_intermediate_before_exit: double_mid,
             double_fork_native_child_before_intermediate_exit: double_before,
             double_fork_native_child_after_intermediate_exit: double_after,
-            no_pidfd_thread_observed,
-            leader_first_worker_task_cookie,
-            leader_first_process_refs_after_leader_exit,
-            leader_first_entry_refs_after_leader_exit,
-            leader_first_profile_refs_after_leader_exit,
-            leader_first_root_tombstone_released,
-            leader_first_worker_tombstone_owned,
-            leader_first_process_refs_after_worker_exit,
-            leader_first_entry_refs_after_worker_exit,
-            leader_first_profile_refs_after_worker_exit,
-            leader_first_process_reclaimable,
-            leader_first_entry_draining,
-            leader_first_worker_tombstone_released,
+            no_pidfd_thread_observed: leader.no_pidfd,
+            leader_first_worker_task_cookie: leader.task,
+            leader_first_process_refs_after_leader_exit: leader.leader.process,
+            leader_first_entry_refs_after_leader_exit: leader.leader.entry,
+            leader_first_profile_refs_after_leader_exit: leader.leader.profile,
+            leader_first_root_tombstone_released: leader.leader.root_done,
+            leader_first_worker_tombstone_owned: leader.leader.worker_owned,
+            leader_first_process_refs_after_worker_exit: leader.worker.process,
+            leader_first_entry_refs_after_worker_exit: leader.worker.entry,
+            leader_first_profile_refs_after_worker_exit: leader.worker.profile,
+            leader_first_process_reclaimable: leader.worker.process_done,
+            leader_first_entry_draining: leader.worker.entry_done,
+            leader_first_worker_tombstone_released: leader.worker.worker_done,
             reused_namespace_pid,
             pid_reuse_first,
             pid_reuse_second,
