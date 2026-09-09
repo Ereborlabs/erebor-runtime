@@ -2202,31 +2202,15 @@ fn batch_source_id(batch: &mithril_node::EvidenceBatchV1) -> Result<[u8; 16], Bo
 
 #[tokio::test]
 async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let certificates = Certificates::issue(false)?;
-    let files = certificates.write(directory.path())?;
-    let address = free_address()?;
-    let intake_path = directory.path().join("control-evidence");
+    let fixture = MtlsFixture::new(false)?;
+    let intake_path = fixture.path().join("control-evidence");
     let store = ControlStore::open(&intake_path)?;
     let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let control = ControlPlane::with_control_store(
-        vec![AllowedNodeIdentity {
-            node_id: "node-a".to_owned(),
-            certificate_sha256: certificates.node_digest(),
-            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
-        }],
-        TrustGenerationV1 {
-            generation: 1,
-            bundle_digest: "d".repeat(64),
-            policy_issuer_sequence_epoch: 0,
-            policy_signers: Vec::new(),
-        },
-        store,
-    )?;
-    let (shutdown, server) = start_server(address, &files, control).await?;
+    let control = fixture.control_with_store(store, 1)?;
+    let server = fixture.start(control).await?;
     let observations = EffectObservationStore::durable(
         4,
-        directory.path().join("node-wal"),
+        fixture.path().join("node-wal"),
         EvidenceWalLimits::default(),
         ObservationCanonicalizer::new(
             EvidenceIdV1::new(1, 2),
@@ -2263,11 +2247,9 @@ async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box
         }
         .as_bytes(),
     );
-    let connector =
-        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
-    let mut trust = TrustCache::load(directory.path())?;
+    let connector = fixture.connector(&server, "node-a", [7; 16]);
+    let mut trust = TrustCache::load(fixture.path())?;
     let mut connection = connector.connect(registration(), false, &mut trust).await?;
-    tokio::time::sleep(Duration::from_millis(20)).await;
     let snapshot = observations
         .coverage_snapshot()
         .ok_or("missing coverage snapshot")?;
@@ -2302,8 +2284,7 @@ async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box
     }
 
     drop(connection);
-    let _result = shutdown.send(());
-    server.await??;
+    server.shutdown().await?;
     Ok(())
 }
 

@@ -155,7 +155,7 @@ acknowledgement, or decommission operations directly.
 - [x] `node_decommission_https_accepts_the_same_signed_artifact_as_control`
 - [x] `mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound`
 - [x] `mtls_evidence_backlog_exceeds_the_previous_baseline`
-- [ ] `mtls_coverage_upload_preserves_gap_truth_at_control`
+- [x] `mtls_coverage_upload_preserves_gap_truth_at_control`
 - [ ] `mtls_administrative_services_route_matching_results_and_cancel_waiters`
 
 The following Control tests are already small owner-local checks. Keep them as
