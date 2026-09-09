@@ -2267,14 +2267,16 @@ if [[ $recovered_entry_only == true ]]; then
   "$provider" run "$vm_a" sudo test ! -S "$runtime_hook_socket"
 
   "$provider" run "$vm_a" sudo mkfifo \
-    /var/lib/mithril-convergence/markers/recovered-entry.external-stop
+    /var/lib/mithril-convergence/markers/recovered-entry.external-stop \
+    /var/lib/mithril-convergence/markers/recovered-entry.recovery-stop
   printf -v recovered_external_command '%q ' sudo /usr/local/bin/k3s crictl exec \
     "$recovered_container_id" /bin/sh -c \
-    'read -r stop < /var/lib/mithril-convergence/recovered-entry.external-stop & echo $$ > /var/lib/mithril-convergence/recovered-entry.external-ready; wait' \
+    'exec 3<>/var/lib/mithril-convergence/recovered-entry.external-stop 4<>/var/lib/mithril-convergence/recovered-entry.recovery-stop; read -r stop <&3 & read -r stop <&4 & echo $$ > /var/lib/mithril-convergence/recovered-entry.external-ready; wait' \
     recovered-external-tree
   "$provider" run "$vm_a" "$recovered_external_command" \
     >"$output_directory/recovered-existing-external.stdout" \
     2>"$output_directory/recovered-existing-external.stderr" &
+  recovered_external_command_pid=$!
   for _attempt in {1..60}; do
     if "$provider" run "$vm_a" sudo test -f \
       /var/lib/mithril-convergence/markers/recovered-entry.external-ready; then
@@ -2298,6 +2300,31 @@ if [[ $recovered_entry_only == true ]]; then
     exit 1
   }
 
+  recovered_cgroup_path=$("$provider" run "$vm_a" sudo sed -n \
+    's/^0:://p' "/proc/$recovered_host_pid/cgroup")
+  recovered_cgroup_path=/sys/fs/cgroup$recovered_cgroup_path
+  "$provider" put "$vm_a" "$repo_root/target/debug/mithril-effect-test" \
+    "$remote_a/recovery-task-observer"
+  "$provider" run "$vm_a" sudo "$remote_a/recovery-task-observer" \
+    --repo-root "$remote_a" recovery-task-exit \
+    --pin-root /sys/fs/bpf/mithril-convergence \
+    --cgroup-path "$recovered_cgroup_path" \
+    --release-path /var/lib/mithril-convergence/markers/recovered-entry.recovery-stop \
+    --output "$remote_a/recovered-exit-before.json" \
+    >"$output_directory/recovered-exit-before.log" 2>&1 &
+  recovered_exit_observer_pid=$!
+  for _attempt in {1..60}; do
+    if grep -qx READY "$output_directory/recovered-exit-before.log"; then
+      break
+    fi
+    if ! kill -0 "$recovered_exit_observer_pid" 2>/dev/null || [[ $_attempt -eq 60 ]]; then
+      cat "$output_directory/recovered-exit-before.log" >&2
+      echo "the recovery exit observer did not attach before Node started" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+
   helm --kubeconfig "$kubeconfig" upgrade --install mithril \
     "$repo_root/packaging/mithril/helm" --namespace "$system_namespace" \
     --values "$values" >/dev/null
@@ -2307,6 +2334,9 @@ if [[ $recovered_entry_only == true ]]; then
     --timeout=300s >/dev/null
   wait_node_projection "$node_a_name" true false
   assert_runtime_hook installed "$vm_a" "$remote_a"
+  wait "$recovered_exit_observer_pid"
+  "$provider" get "$vm_a" "$remote_a/recovered-exit-before.json" \
+    "$output_directory/recovered-exit-before.json"
 
   recovered_initial_snapshot=
   for _attempt in {1..300}; do
@@ -2353,6 +2383,10 @@ if [[ $recovered_entry_only == true ]]; then
   recovered_external_task_count=$(jq -er \
     '.recovered_container_activation.external_task_count' \
     <<<"$recovered_initial_snapshot")
+  jq -e --slurpfile before "$output_directory/recovered-exit-before.json" '
+    $before[0].lifecycle_state == "Recovering" and
+    .recovered_container_activation.task_set_generation > $before[0].task_set_generation
+  ' <<<"$recovered_initial_snapshot" >/dev/null
   recovered_external_snapshot=$(runtime_task_snapshot \
     "$node_a_name" "$recovered_external_pid")
   jq -e --argjson application "$recovered_initial_snapshot" '
@@ -2535,6 +2569,22 @@ if [[ $recovered_entry_only == true ]]; then
     exit 1
   }
 
+  "$provider" run "$vm_a" sudo "$remote_a/recovery-task-observer" \
+    --repo-root "$remote_a" recovery-task-exit \
+    --pin-root /sys/fs/bpf/mithril-convergence \
+    --cgroup-path "$recovered_cgroup_path" \
+    --release-path /var/lib/mithril-convergence/markers/recovered-entry.external-stop \
+    --output "$remote_a/recovered-exit-after.json" --after-cutover
+  wait "$recovered_external_command_pid"
+  "$provider" get "$vm_a" "$remote_a/recovered-exit-after.json" \
+    "$output_directory/recovered-exit-after.json"
+  recovered_after_exit=$(runtime_task_snapshot "$node_a_name" "$recovered_host_pid")
+  jq -e --argjson before "$recovered_initial_snapshot" '
+    .runtime_binding.lifecycle_state == "active_recovered" and
+    .entry_instance_id == $before.entry_instance_id and
+    .admitted_entry_rule_id == $before.admitted_entry_rule_id
+  ' <<<"$recovered_after_exit" >/dev/null
+
   jq -n \
     --arg node "$node_a_name" \
     --arg container_id "$recovered_container_id" \
@@ -2553,6 +2603,8 @@ if [[ $recovered_entry_only == true ]]; then
       container_started_before_bpf: true,
       recovering_before_iterator: true,
       active_recovered_before_ptrace: true,
+      recovery_task_change_retried: true,
+      post_cutover_exit_preserved_activation: true,
       recovered_application_role_id: $recovered_application_role_id,
       recovered_application_rule_id: $recovered_application_rule_id,
       recovered_application_task_count: $recovered_application_task_count,

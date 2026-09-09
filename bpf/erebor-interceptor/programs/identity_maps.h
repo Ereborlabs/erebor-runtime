@@ -1446,6 +1446,22 @@ static __always_inline binding_lifecycle_state_v1 policy_binding_lifecycle(
                : state;
 }
 
+static __always_inline __u64 binding_task_set_generation(
+    const execution_set_binding_state_v1 *binding)
+{
+    _Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
+                   "binding lifecycle word requires little-endian layout");
+    _Static_assert(__builtin_offsetof(execution_set_binding_state_v1,
+                                      lifecycle_state) % 8 == 0,
+                   "binding lifecycle word requires eight-byte alignment");
+    _Static_assert(__builtin_offsetof(execution_set_binding_state_v1,
+                                      task_set_generation) ==
+                       __builtin_offsetof(execution_set_binding_state_v1,
+                                          lifecycle_state) + 1,
+                   "binding generation must follow the lifecycle byte");
+    return *(const volatile __u64 *)&binding->lifecycle_state >> 8;
+}
+
 static __always_inline bool generation_allows_existing_holder(
     const profile_generation_descriptor_v1 *generation)
 {

@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fs;
-use std::io::Write as _;
+use std::io::{BufRead as _, BufReader, Write as _};
+use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
@@ -11,11 +12,12 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::SigningKey;
-use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner};
+use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner, KernelStateReader};
 use erebor_interceptor_abi::{
-    CanonicalMountRootKeyV1, CanonicalMountRootV1, EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1,
-    ExactFileObjectKeyV1, ExecGuardStateV1, ExecutionApprovalSlotStateV1, ExecutionApprovalSlotV1,
-    Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1, PendingExecStateV1, PendingExecV1,
+    BindingLifecycleStateV1, CanonicalMountRootKeyV1, CanonicalMountRootV1,
+    EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExactFileObjectKeyV1, ExecGuardStateV1,
+    ExecutionApprovalSlotStateV1, ExecutionApprovalSlotV1, ExecutionSetBindingStateV1, Id128V1,
+    KernelEffectFamilyV1, KernelEffectOperationV1, PendingExecStateV1, PendingExecV1,
     ProcessSecurityStateV1, RecoveredContainerActivationPhaseV1, RecoveredContainerActivationV1,
     TaskCoordinateStateV1, EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ARGV_V1,
     EXECUTION_APPROVAL_TRACE_STAGE_EXECVEAT_ENTRY_V1,
@@ -42,6 +44,7 @@ use mithril_node::{
     CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
     POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
 };
+use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
 use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
@@ -67,6 +70,122 @@ use crate::{DigestV1, Result};
 
 const WAIT_LIMIT: Duration = Duration::from_secs(30);
 
+struct RecoveryIteratorPause {
+    trace: Child,
+    lines: Receiver<std::io::Result<String>>,
+    owner: Option<OwnedFd>,
+}
+
+impl RecoveryIteratorPause {
+    fn start(owner_pid: Option<u32>, path: &Path) -> Result<Self> {
+        let name = match owner_pid {
+            Some(pid) => {
+                let path = PathBuf::from(format!("/proc/{pid}/comm"));
+                fs::read_to_string(&path).context(IoSnafu { path: &path })?
+            }
+            None => "mithril-node".to_owned(),
+        };
+        let name = serde_json::to_string(name.trim()).context(JsonSnafu { path })?;
+        let mut filter = format!("((struct task_struct *)curtask)->group_leader->comm == {name}");
+        if let Some(pid) = owner_pid {
+            filter.push_str(&format!(" && pid == {pid}"));
+        }
+        // Command 33 is BPF_ITER_CREATE. Stop before userspace reads the iterator.
+        let script = format!(
+            "BEGIN {{ printf(\"READY\\n\"); }}
+             tracepoint:syscalls:sys_enter_bpf /({filter}) && args->cmd == 33/ {{
+                 if (!@owner) {{ @owner = pid; }}
+                 if (@owner == pid) {{ @iterator[tid] = 1; }}
+             }}
+             tracepoint:syscalls:sys_exit_bpf /@iterator[tid]/ {{
+                 delete(@iterator[tid]);
+                 signal(\"SIGSTOP\"); printf(\"%d\\n\", pid);
+             }}
+             END {{ clear(@owner); clear(@iterator); }}"
+        );
+        let mut trace = Command::new("bpftrace")
+            .args(["--unsafe", "-q", "-B", "line", "-e", &script])
+            .stdout(Stdio::piped())
+            .spawn()
+            .context(IoSnafu { path })?;
+        let stdout = trace.stdout.take().context(InvalidInputSnafu {
+            path,
+            reason: "bpftrace has no output pipe",
+        })?;
+        let (sender, lines) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let pause = Self {
+            trace,
+            lines,
+            owner: None,
+        };
+        ensure!(
+            pause.line(path)? == "READY",
+            InvalidInputSnafu {
+                path,
+                reason: "bpftrace did not attach the recovery iterator pause",
+            }
+        );
+        Ok(pause)
+    }
+
+    fn line(&self, path: &Path) -> Result<String> {
+        self.lines
+            .recv_timeout(Duration::from_secs(180))
+            .map_err(|error| {
+                InvalidInputSnafu {
+                    path,
+                    reason: format!("the recovery iterator pause stopped: {error}"),
+                }
+                .build()
+            })?
+            .context(IoSnafu { path })
+    }
+
+    fn stop(&mut self, path: &Path) -> Result<()> {
+        let line = self.line(path)?;
+        let pid = line
+            .parse::<i32>()
+            .ok()
+            .and_then(Pid::from_raw)
+            .context(InvalidInputSnafu {
+                path,
+                reason: "bpftrace returned an invalid owner PID",
+            })?;
+        self.owner = Some(
+            pidfd_open(pid, PidfdFlags::empty())
+                .map_err(std::io::Error::from)
+                .context(IoSnafu { path })?,
+        );
+        Ok(())
+    }
+
+    fn resume(&self, path: &Path) -> Result<()> {
+        if let Some(owner) = &self.owner {
+            pidfd_send_signal(owner, Signal::CONT)
+                .map_err(std::io::Error::from)
+                .context(IoSnafu { path })?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for RecoveryIteratorPause {
+    fn drop(&mut self) {
+        let _ = self.trace.kill();
+        let _ = self.trace.wait();
+        if let Some(owner) = &self.owner {
+            let _ = pidfd_send_signal(owner, Signal::CONT);
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RecoveredContainerEntryProbeV1 {
     pub schema_version: u32,
@@ -74,6 +193,8 @@ pub struct RecoveredContainerEntryProbeV1 {
     pub container_started_before_bpf: bool,
     pub recovering_before_iterator: bool,
     pub active_recovered_before_ptrace: bool,
+    pub recovery_task_change_retried: bool,
+    pub post_cutover_exit_preserved_activation: bool,
     pub recovered_application_role_id: u32,
     pub recovered_application_rule_id: u32,
     pub recovered_application_task_count: u64,
@@ -2103,6 +2224,107 @@ impl EffectTestRunner {
         })
     }
 
+    pub fn release_recovery_task(
+        &self,
+        pin_root: &Path,
+        cgroup_path: &Path,
+        release_path: &Path,
+        after_cutover: bool,
+        owner_pid: Option<u32>,
+    ) -> Result<serde_json::Value> {
+        let key = fs::metadata(cgroup_path)
+            .context(IoSnafu { path: cgroup_path })?
+            .ino()
+            .to_ne_bytes();
+        let reader = KernelStateReader::new(pin_root);
+        let mut pause = if after_cutover {
+            None
+        } else {
+            Some(RecoveryIteratorPause::start(owner_pid, pin_root)?)
+        };
+        println!("READY");
+        let expected = if after_cutover {
+            BindingLifecycleStateV1::ActiveRecovered
+        } else {
+            BindingLifecycleStateV1::Recovering
+        };
+        let deadline = Instant::now() + Duration::from_secs(180);
+        loop {
+            if let Some(pause) = &mut pause {
+                pause.stop(pin_root)?;
+            }
+            if pin_root.join("maps/execution_set_bindings").exists() {
+                if let Some(bytes) = reader
+                    .lookup("execution_set_bindings", &key)
+                    .context(InterceptorSnafu)?
+                {
+                    let binding = ExecutionSetBindingStateV1::try_read_from_bytes(&bytes).map_err(
+                        |error| {
+                            InvalidInputSnafu {
+                                path: pin_root,
+                                reason: format!(
+                                    "the recovery exit observer read an invalid binding: {error}"
+                                ),
+                            }
+                            .build()
+                        },
+                    )?;
+                    if binding.lifecycle_state == expected {
+                        let task_file = cgroup_path.join("cgroup.procs");
+                        let before = fs::read_to_string(&task_file)
+                            .context(IoSnafu { path: &task_file })?
+                            .lines()
+                            .count();
+                        fs::write(release_path, b"exit\n")
+                            .context(IoSnafu { path: release_path })?;
+                        if pause.is_some() {
+                            loop {
+                                let remaining = fs::read_to_string(&task_file)
+                                    .context(IoSnafu { path: &task_file })?
+                                    .lines()
+                                    .count();
+                                if remaining < before {
+                                    break;
+                                }
+                                ensure!(
+                                    Instant::now() < deadline,
+                                    InvalidInputSnafu {
+                                        path: release_path,
+                                        reason: "the released recovery task did not exit",
+                                    }
+                                );
+                                thread::sleep(Duration::from_millis(1));
+                            }
+                        }
+                        return Ok(json!({
+                            "lifecycle_state": format!("{expected:?}"),
+                            "task_set_generation": binding.task_set_generation(),
+                        }));
+                    }
+                    ensure!(
+                        after_cutover
+                            || binding.lifecycle_state != BindingLifecycleStateV1::ActiveRecovered,
+                        InvalidInputSnafu {
+                            path: pin_root,
+                            reason: "the exit observer missed RECOVERING",
+                        }
+                    );
+                }
+            }
+            if let Some(pause) = &pause {
+                pause.resume(pin_root)?;
+            }
+            ensure!(
+                Instant::now() < deadline,
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "the exit observer did not see the required lifecycle state",
+                }
+            );
+            thread::yield_now();
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn recovered_container_entry_probe(
         &self,
@@ -2332,11 +2554,15 @@ impl EffectTestRunner {
             Command::new("/usr/bin/mkfifo").arg(role_directory.join("external.stop")),
             Path::new("/usr/bin/mkfifo"),
         )?;
+        run_checked(
+            Command::new("/usr/bin/mkfifo").arg(role_directory.join("external.recovery-stop")),
+            Path::new("/usr/bin/mkfifo"),
+        )?;
         let mut external_child = container.spawn_exec(
             "/bin/sh",
             &[
                 "-c",
-                "read -r stop < /var/lib/mithril-convergence/external.stop & echo $$ > /var/lib/mithril-convergence/external.ready; wait",
+                "exec 3<>/var/lib/mithril-convergence/external.stop 4<>/var/lib/mithril-convergence/external.recovery-stop; read -r stop <&3 & read -r stop <&4 & echo $$ > /var/lib/mithril-convergence/external.ready; wait",
                 "recovered-external-tree",
             ],
             &external_pid_path,
@@ -2366,7 +2592,7 @@ impl EffectTestRunner {
             })
             .count();
         ensure!(
-            marked_pids == 2,
+            marked_pids == 3,
             InvalidInputSnafu {
                 path: &external_stdout,
                 reason: "the external parent and child do not share the Kubernetes command line",
@@ -2596,9 +2822,57 @@ impl EffectTestRunner {
             }
         );
         let runtime_observation = running_container_observation(&binding, initial_host_pid)?;
-        let recovering_before_iterator = executor
+        let observer_result = output_directory.join("recovered-exit-before.json");
+        let mut observer = Command::new(env::current_exe().context(IoSnafu { path: pin_root })?)
+            .arg("recovery-task-exit")
+            .arg("--pin-root")
+            .arg(pin_root)
+            .arg("--cgroup-path")
+            .arg(&cgroup_path)
+            .arg("--release-path")
+            .arg(role_directory.join("external.recovery-stop"))
+            .arg("--owner-pid")
+            .arg(std::process::id().to_string())
+            .arg("--output")
+            .arg(&observer_result)
+            .stdout(Stdio::piped())
+            .spawn()
+            .context(IoSnafu { path: pin_root })?;
+        let mut ready = String::new();
+        BufReader::new(observer.stdout.take().context(InvalidInputSnafu {
+            path: pin_root,
+            reason: "the recovery observer has no output pipe",
+        })?)
+        .read_line(&mut ready)
+        .context(IoSnafu { path: pin_root })?;
+        ensure!(
+            ready.trim() == "READY",
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the recovery exit observer did not attach",
+            }
+        );
+        let installed = executor
             .block_on(reconciliation.reconcile(&mut host, Some(vec![runtime_observation.clone()])))
-            .context(NodeSnafu)?;
+            .context(NodeSnafu);
+        ensure!(
+            observer
+                .wait()
+                .context(IoSnafu { path: pin_root })?
+                .success(),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the recovery exit observer failed",
+            }
+        );
+        let recovering_before_iterator = installed?;
+        let recovery_exit: serde_json::Value =
+            serde_json::from_slice(&fs::read(&observer_result).context(IoSnafu {
+                path: &observer_result,
+            })?)
+            .context(JsonSnafu {
+                path: &observer_result,
+            })?;
         ensure!(
             recovering_before_iterator,
             InvalidInputSnafu {
@@ -2663,6 +2937,10 @@ impl EffectTestRunner {
             })?;
         ensure!(
             recovery.phase == RecoveredContainerActivationPhaseV1::Complete
+                && recovery.scan_generation
+                    > recovery_exit["task_set_generation"]
+                        .as_u64()
+                        .unwrap_or(u64::MAX)
                 && !recovery.application_entry_instance_id.is_zero()
                 && recovery.validation_application_task_count == 2
                 && recovery.validation_external_task_count == 2,
@@ -2988,10 +3266,41 @@ impl EffectTestRunner {
             }
         );
 
-        container.cleanup()?;
+        self.release_recovery_task(
+            pin_root,
+            &cgroup_path,
+            &role_directory.join("external.stop"),
+            true,
+            None,
+        )?;
         external_child.wait().context(IoSnafu {
             path: &external_stderr,
         })?;
+        let after_exit = host
+            .lookup_map("execution_set_bindings", &binding_key)
+            .context(InterceptorSnafu)?
+            .context(InvalidInputSnafu {
+                path: pin_root,
+                reason: "the active binding disappeared after external exit",
+            })?;
+        let after_exit =
+            ExecutionSetBindingStateV1::try_read_from_bytes(&after_exit).map_err(|error| {
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: format!("the post-cutover binding is invalid: {error}"),
+                }
+                .build()
+            })?;
+        ensure!(
+            after_exit.lifecycle_state == BindingLifecycleStateV1::ActiveRecovered
+                && after_exit.prepared_container_entry_instance_id
+                    == recovery.application_entry_instance_id,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "external exit changed the recovered application anchor"
+            }
+        );
+        container.cleanup()?;
         bindings
             .retire_binding_id_for_test(&host, &recovered_binding_id)
             .context(NodeSnafu)?;
@@ -3025,6 +3334,8 @@ impl EffectTestRunner {
             container_started_before_bpf,
             recovering_before_iterator,
             active_recovered_before_ptrace,
+            recovery_task_change_retried: true,
+            post_cutover_exit_preserved_activation: true,
             recovered_application_role_id: recovered_initial.active_role_id,
             recovered_application_rule_id: recovered_initial.admitted_entry_rule_id,
             recovered_application_task_count: recovery.validation_application_task_count,

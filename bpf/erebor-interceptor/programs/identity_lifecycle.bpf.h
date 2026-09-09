@@ -53,9 +53,7 @@ int BPF_PROG(erebor_task_alloc, struct task_struct *task,
             health->placement_mismatches++;
         return identity_deny(config);
     }
-    if (creator_binding && creator_binding->lifecycle_state ==
-                               binding_lifecycle_state_v1_recovering) {
-        recovered_container_task_set_changed(creator_binding, config);
+    if (recovered_container_task_set_changed(creator_binding)) {
         return identity_deny(config);
     }
     if (parent_label) {
@@ -122,9 +120,7 @@ int BPF_PROG(erebor_cgroup_attach_task, struct cgroup *cgroup,
         }
         return 0;
     }
-    if (binding && binding->lifecycle_state ==
-                       binding_lifecycle_state_v1_recovering) {
-        recovered_container_task_set_changed(binding, config);
+    if (recovered_container_task_set_changed(binding)) {
         return 0;
     }
     if (label) {
@@ -187,9 +183,7 @@ int BPF_PROG(erebor_wake_up_new_task, struct task_struct *task)
         if (task_cgroup(task, &cgroup))
             return 0;
         binding = binding_for_cgroup(cgroup, &binding_lookup);
-        if (!binding_lookup && binding && binding->lifecycle_state ==
-                                           binding_lifecycle_state_v1_recovering) {
-            recovered_container_task_set_changed(binding, config);
+        if (!binding_lookup && recovered_container_task_set_changed(binding)) {
             return 0;
         }
         if (!binding_lookup && binding)

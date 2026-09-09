@@ -39,9 +39,8 @@ int erebor_sched_process_exit(struct trace_event_raw_sched_process_template *con
     config = identity_runtime_config();
     if (config && !task_cgroup(task, &cgroup)) {
         binding = binding_for_cgroup(cgroup, &binding_lookup);
-        if (!binding_lookup && binding &&
-            binding->lifecycle_state == binding_lifecycle_state_v1_recovering)
-            recovered_container_task_set_changed(binding, config);
+        if (!binding_lookup)
+            recovered_container_task_set_changed(binding);
     }
     exit_task_effect_attempts(task);
     clear_provisional_exec_request(task);

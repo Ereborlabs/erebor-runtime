@@ -93,6 +93,20 @@ enum Command {
         #[arg(long)]
         containerd_path: Option<PathBuf>,
     },
+    RecoveryTaskExit {
+        #[arg(long)]
+        pin_root: PathBuf,
+        #[arg(long)]
+        cgroup_path: PathBuf,
+        #[arg(long)]
+        release_path: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        after_cutover: bool,
+        #[arg(long)]
+        owner_pid: Option<u32>,
+    },
     RecoveredContainerEntryProbe {
         #[arg(long)]
         output_directory: PathBuf,
@@ -865,6 +879,25 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 &result,
             )?;
             println!("Mithril direct runc entry-role probe passed");
+            Ok(())
+        }
+        Command::RecoveryTaskExit {
+            pin_root,
+            cgroup_path,
+            release_path,
+            output,
+            after_cutover,
+            owner_pid,
+        } => {
+            let runner = EffectTestRunner::new(cli.repo_root);
+            let result = runner.release_recovery_task(
+                &pin_root,
+                &cgroup_path,
+                &release_path,
+                after_cutover,
+                owner_pid,
+            )?;
+            runner.write_json(&output, &result)?;
             Ok(())
         }
         Command::RecoveredContainerEntryProbe {

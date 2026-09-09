@@ -1775,9 +1775,7 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
             health->placement_mismatches++;
         return identity_deny(config);
     }
-    if (binding && binding->lifecycle_state ==
-                       binding_lifecycle_state_v1_recovering) {
-        recovered_container_task_set_changed(binding, config);
+    if (recovered_container_task_set_changed(binding)) {
         return identity_deny(config);
     }
     if (!label) {

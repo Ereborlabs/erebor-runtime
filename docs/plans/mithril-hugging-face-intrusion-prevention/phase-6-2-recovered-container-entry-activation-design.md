@@ -527,6 +527,43 @@ of `RECOVERING`. Mithril Node cannot publish
 
 ## Recovery Flow
 
+### Approved atomic publication
+
+The binding stores its lifecycle byte and task-set generation in one aligned
+64-bit little-endian word. The upper 56 bits contain the counter. This counter
+is not a policy generation. Node initializes the counter to 1 when it publishes
+the initial `RECOVERING` binding. BPF owns subsequent counter changes.
+The recovery record stores the scanned generation, not a second live counter.
+
+A BPF task hook records a change
+  -> BPF atomically increments the counter in the binding lifecycle word
+  -> the previous word determines whether the event precedes the cutover
+  -> an event before the cutover invalidates the scanned generation
+  -> an event after the cutover uses normal active-state handling
+
+BPF publishes a validated candidate under the binding transition guard
+  -> BPF stores the candidate application anchor while effects remain denied
+  -> one compare-and-swap changes `(RECOVERING, G)` to `(ACTIVE_RECOVERED, G)`
+  -> a changed counter makes the compare-and-swap fail
+  -> failure clears the candidate binding anchor and restarts the scan
+  -> success records completion and releases the binding transition guard
+
+The existing lifecycle values, signed rules, and Node reconciliation API do
+not change. The packed counter is limited to values below `2^55`. A counter
+at that limit cannot activate. Further task-change handling marks the binding
+`CORRUPT` before the counter can wrap. This change does not qualify an upgrade
+from an older recovery-map layout while recovery is in progress.
+
+The paired exit test uses one external observer in lightweight and Kubernetes.
+bpftrace pauses the reconciliation owner at the task-iterator boundary. The
+observer reads the binding through the public kernel-state API. If the binding
+is `RECOVERING`, the observer releases an external child and waits for that
+child to leave the cgroup. It then removes the trace and resumes the owner.
+The test does not write BPF state or call a second policy sequence. BPF must
+advance the counter and complete recovery from the changed task set. A later
+exit must preserve the active application anchor. This test does not force an
+exit between two selected machine instructions.
+
 Mithril Node discovers one running protected container with no retained active
 entry identity
   -> `WorkloadBindingOwner` resolves one authenticated CRI container ID and
@@ -604,8 +641,10 @@ The BPF validation is complete
   count, application entry, and candidate-row counts again
   -> BPF stores its allocated application entry as the binding's application
   anchor
+  -> BPF atomically changes `(RECOVERING, G)` to `(ACTIVE_RECOVERED, G)`
+  only if the scanned generation still matches
+  -> a failed compare-and-swap clears the candidate binding anchor and retries
   -> BPF advances the binding transition version
-  -> BPF changes `RECOVERING` to `ACTIVE_RECOVERED`
   -> BPF releases the transition guard
   -> effects after this BPF cutover use the recovered identities
 

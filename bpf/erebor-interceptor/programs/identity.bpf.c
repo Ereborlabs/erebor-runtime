@@ -145,9 +145,8 @@ _Static_assert(sizeof(mount_mutation_attempt_v1) == 32,
 static __noinline int advance_recovered_container_activation(
     const policy_activation_probe_v1 *request,
     const identity_runtime_config_v1 *config);
-static __always_inline void recovered_container_task_set_changed(
-    execution_set_binding_state_v1 *binding,
-    const identity_runtime_config_v1 *config);
+static __always_inline bool recovered_container_task_set_changed(
+    execution_set_binding_state_v1 *binding);
 
 SEC("classifier")
 int erebor_policy_activation_probe(struct __sk_buff *context)

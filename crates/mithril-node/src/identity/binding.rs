@@ -140,7 +140,6 @@ impl PublishedBinding {
             profile_generation_ref_id: recovering.active_profile_generation_ref_id,
             root_cgroup_id: recovering.root_cgroup_id,
             expected_binding_transition_version: recovering.transition_version,
-            task_set_generation: 1,
             scan_generation: 1,
             scan_task_count: 0,
             scan_candidate_count: 0,
@@ -151,7 +150,6 @@ impl PublishedBinding {
             validation_application_task_count: 0,
             validation_external_task_count: 0,
             transition_version: 1,
-            transition_guard: 0,
             init_host_tgid: runtime.init_pid,
             invalid_task_count: 0,
             phase: RecoveredContainerActivationPhaseV1::Scanning,
@@ -306,6 +304,7 @@ impl PublishedBinding {
                 self.state.initial_root_state = InitialRootStateV1::Consumed;
                 self.state.prepared_container_initial_host_tgid = runtime.init_pid;
                 self.state.lifecycle_state = BindingLifecycleStateV1::Recovering;
+                self.state.task_set_generation = [1, 0, 0, 0, 0, 0, 0];
                 Ok(())
             }
         }
@@ -2475,7 +2474,7 @@ impl WorkloadBindingOwner {
                 initial_role_id: spec.initial_role_id,
                 external_role_id: spec.external_role_id,
                 lifecycle_state: BindingLifecycleStateV1::Preparing,
-                reserved: [0; 7],
+                task_set_generation: [0; 7],
                 initial_root_state: InitialRootStateV1::Unarmed,
                 transition_guard: 0,
                 prepared_container_entry_instance_id: Id128V1::ZERO,
@@ -2606,6 +2605,7 @@ impl WorkloadBindingOwner {
         live.initial_role_id = target.initial_role_id;
         live.external_role_id = target.external_role_id;
         live.lifecycle_state = target.lifecycle_state;
+        live.task_set_generation = target.task_set_generation;
         live.initial_root_state = target.initial_root_state;
         live.prepared_container_entry_instance_id = target.prepared_container_entry_instance_id;
         live.prepared_container_exec_task_cookie = target.prepared_container_exec_task_cookie;
@@ -2730,6 +2730,7 @@ fn same_runtime_binding(
     desired.initial_role_id = recovered.initial_role_id;
     desired.external_role_id = recovered.external_role_id;
     desired.lifecycle_state = recovered.lifecycle_state;
+    desired.task_set_generation = recovered.task_set_generation;
     desired.initial_root_state = recovered.initial_root_state;
     desired.prepared_container_entry_instance_id = recovered.prepared_container_entry_instance_id;
     desired.prepared_container_exec_task_cookie = recovered.prepared_container_exec_task_cookie;
@@ -2743,7 +2744,7 @@ fn completed_recovery_matches_binding(
     binding: &ExecutionSetBindingStateV1,
 ) -> bool {
     recovery.phase == RecoveredContainerActivationPhaseV1::Complete
-        && recovery.transition_guard == 0
+        && binding.transition_guard == 0
         && recovery.node_boot_id == binding.node_boot_id
         && recovery.label_epoch == binding.label_epoch
         && recovery.binding_id == binding.binding_id
@@ -2756,7 +2757,7 @@ fn completed_recovery_matches_binding(
         && recovery.application_entry_instance_id == binding.prepared_container_entry_instance_id
         && !recovery.recovery_attempt_id.is_zero()
         && !recovery.application_entry_instance_id.is_zero()
-        && recovery.task_set_generation == recovery.scan_generation
+        && recovery.scan_generation > 0
         && recovery.expected_task_count > 0
         && recovery.validation_task_count == recovery.expected_task_count
         && recovery.validation_application_task_count > 0
@@ -3136,8 +3137,14 @@ mod tests {
         recovered.external_role_id = 9;
         recovered.initial_root_state = InitialRootStateV1::Consumed;
         recovered.transition_version = 12;
+        recovered.task_set_generation = [17, 0, 0, 0, 0, 0, 0];
 
         assert!(same_runtime_binding(&desired, &recovered));
+        let mut changed = desired;
+        changed.task_set_generation = recovered.task_set_generation;
+        assert!(WorkloadBindingOwner::same_activation_identity(
+            &desired, &changed
+        ));
         recovered.root_cgroup_live_interval_id = Id128V1::new(11, 12);
         assert!(!same_runtime_binding(&desired, &recovered));
         recovered.root_cgroup_live_interval_id = desired.root_cgroup_live_interval_id;
@@ -3172,7 +3179,6 @@ mod tests {
             profile_generation_ref_id: binding.active_profile_generation_ref_id,
             root_cgroup_id: binding.root_cgroup_id,
             expected_binding_transition_version: binding.transition_version,
-            task_set_generation: 4,
             scan_generation: 4,
             scan_task_count: 2,
             scan_candidate_count: 2,
@@ -3183,7 +3189,6 @@ mod tests {
             validation_application_task_count: 1,
             validation_external_task_count: 1,
             transition_version: 5,
-            transition_guard: 0,
             init_host_tgid: binding.prepared_container_initial_host_tgid,
             invalid_task_count: 0,
             phase: RecoveredContainerActivationPhaseV1::Complete,

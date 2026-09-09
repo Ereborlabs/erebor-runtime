@@ -172,6 +172,105 @@ Stable ABI values, concurrent task and identity changes, Node restart during
 `RECOVERING`, and Kubernetes administrative approval remain open.
 Overall result: **Not done**.
 
+### Atomic recovery publication
+
+This change follows the approved atomic-publication addition to the recovery
+design. The working tree starts from `deef69a8`.
+
+[`PublishedBinding::prepare_initial_root`](../../../crates/mithril-node/src/identity/binding.rs) Node prepares the authenticated running container
+  -> [`ExecutionSetBindingStateV1`](../../../crates/erebor-interceptor-abi/src/abi/identity.rs) Node publishes `RECOVERING` with task-set generation 1 after policy installation
+  -> [`reconcile_recovered_task`](../../../bpf/erebor-interceptor/programs/identity_recovery.bpf.h) BPF measures and validates the task set
+
+[`recovered_container_task_set_changed`](../../../bpf/erebor-interceptor/programs/identity_recovery.bpf.h) A BPF task hook records a change
+  -> BPF atomically adds 256 to the binding lifecycle word
+  -> the returned lifecycle byte selects recovery handling or normal post-cutover handling
+
+[`advance_recovered_container_activation`](../../../bpf/erebor-interceptor/programs/identity_recovery.bpf.h) BPF publishes the validated result under the binding guard
+  -> BPF stores the candidate anchor while the binding remains `RECOVERING`
+  -> one 64-bit compare-and-swap changes `(RECOVERING, G)` to `(ACTIVE_RECOVERED, G)`
+  -> failure clears the candidate binding anchor and resets the scan
+  -> success updates completion evidence and releases the binding guard
+
+The binding remains 224 bytes. Its aligned word at byte offset 168 contains
+the lifecycle byte followed by seven counter bytes. The word is little-endian.
+The recovery record no longer contains a live task counter or an unused
+transition guard. `scan_generation` identifies the measured task set. The
+counter is not a policy generation. The signed entry rule and Node operation
+do not change.
+
+[`same_runtime_binding` and `same_activation_identity`](../../../crates/mithril-node/src/identity/binding.rs)
+retain the BPF-owned counter. The new lightweight exit case first failed this
+readback in run 45. The first implementation had treated the counter as an
+immutable runtime coordinate. The correction preserves the existing exact
+runtime and activation identity checks. A matching activation target still
+requires the same binding nonce.
+
+Verification evidence is under
+`target/mithril-recovery-qualification/20260908-atomic-recovery/`.
+Lightweight run 46 passes an external child exit during `RECOVERING`, a later
+scan generation, two application tasks, two remaining external tasks, later
+probe admission and denial, and external-tree exit after the cutover. Node
+reconciliation remains the production owner. The observer writes no BPF state.
+
+The ABI ordering test passes both atomic operation orders. The compiled-object
+test requires a 64-bit compare-and-swap at the binding lifecycle offset.
+The previous retained object has no such instruction. The new retained object
+passes the real kernel verifier and all four checked-in architecture builds.
+Its SHA-256 is
+`8bcc15c2fb687f0e26cc6f9d3c416fa2568c46e74a4198d48848906173bb141f`.
+
+The tests do not force an exit between two selected machine instructions.
+They combine an atomic-word ordering test, a compiled-instruction check, and
+real task exits through the production reconciliation operation. Normal-start
+lightweight run 23 passes. The final repository gate fails the existing
+`decision_abi_layout_and_values_are_closed` assertion: `Tombstoned` is 10,
+but the test requires 5.
+
+The first paired Kubernetes case fails its required task-change checkpoint. BPF
+publishes `ACTIVE_RECOVERED` with an exact application anchor, counter 1,
+two application tasks, and three external tasks. The observer reads
+`RECOVERING` before it writes the FIFO, but this read does not prove that the
+child exits before activation. The child is absent after the run. Lightweight
+run 47 reproduces the same five-task, counter-1 completion when a temporary
+100 ms delay separates the observer read from the FIFO write. The diagnostic
+delay has been removed. No production correction follows this failure.
+See `late-exit-red-run47.log`, `kubernetes.log`, and
+`kubernetes/recovered-exit-before.json` in the evidence directory.
+
+[`RecoveryIteratorPause::start`](../../../crates/mithril-e2e/src/effect/runc.rs) The external test observer attaches bpftrace before reconciliation
+  -> [`RecoveryIteratorPause::stop`](../../../crates/mithril-e2e/src/effect/runc.rs) bpftrace stops the owner after `BPF_ITER_CREATE` returns and before userspace reads the task iterator
+  -> [`release_recovery_task`](../../../crates/mithril-e2e/src/effect/runc.rs) the observer reads `RECOVERING`, releases the FIFO, and waits for a process to leave the cgroup
+  -> [`RecoveryIteratorPause::drop`](../../../crates/mithril-e2e/src/effect/runc.rs) the observer removes its trace and resumes the exact owner through a PID file descriptor
+  -> [`NodeBindingReconciliation::reconcile`](../../../crates/mithril-node/src/node.rs) the same production operation continues without a test-specific policy sequence
+
+The observer also resumes an owner paused before the binding exists. The
+observer waits for the next iterator boundary. Its error cleanup resumes the
+owner and removes the trace. No production pause hook is added. Both layers
+wait for observer readiness before the selected recovery cycle.
+
+The next Kubernetes attempt rejects `str()` around bpftrace's process-name
+field because the field is already a string. The lightweight VM reproduces
+this error in `selector-red.log` before correction. Both layers now compile
+the same process-name selector. Lightweight also selects its exact owner PID.
+Lightweight recovery runs 48, 49, and 50 pass; run 50 covers the common
+selector. The paired Kubernetes common-selector run passes in
+`kubernetes-shared-selector/recovered-container-kubernetes-entry.json`.
+BPF advances the counter from 1 to 2, validates two application tasks and two
+external tasks, and keeps the external entry rule at zero. Later bootstrap,
+probe admission, denial, and post-cutover exit checks pass. Normal lightweight
+run 24 and the paired normal-start Kubernetes check pass. The latter result
+is `kubernetes-normal-start/protected-start-result.json`. It proves normal
+application start, six declared entries, incomplete-argument denial, mount
+cache retirement, and external-entry denial.
+The final gate is in
+`repository-gate-shared-selector.log`; it still fails the lifecycle ABI value
+assertion described above. All 243 Node unit tests pass with local socket
+creation allowed; see `node-unit-tests.log`.
+
+Atomic publication and paired exit qualification are **Done**. The complete
+fork, reparent, identity-change, policy-change, and restart-during-recovery
+matrix remains open. Result for the complete recovery design: **Not done**.
+
 ### Intended end state
 
 Node keeps every matching non-`UNKNOWN` BPF lifecycle state. The display field

@@ -238,6 +238,19 @@ mod tests {
     }
 
     #[test]
+    fn recovery_publication_uses_a_wide_lifecycle_compare_exchange() {
+        use erebor_interceptor_abi::ExecutionSetBindingStateV1;
+        use libbpf_rs::libbpf_sys::{BPF_ATOMIC, BPF_CMPXCHG, BPF_DW, BPF_STX};
+
+        let offset = std::mem::offset_of!(ExecutionSetBindingStateV1, lifecycle_state) as i16;
+        assert!(BUNDLED_BPF_OBJECT.chunks_exact(8).any(|instruction| {
+            instruction[0] == (BPF_STX | BPF_ATOMIC | BPF_DW) as u8
+                && instruction[2..4] == offset.to_le_bytes()
+                && bpf_immediate(instruction) == Some(BPF_CMPXCHG as i32)
+        }));
+    }
+
+    #[test]
     fn task_alloc_bounds_the_configured_errno_for_lsm() -> crate::Result<()> {
         use erebor_interceptor_abi::IdentityRuntimeConfigV1;
         use libbpf_rs::libbpf_sys::{

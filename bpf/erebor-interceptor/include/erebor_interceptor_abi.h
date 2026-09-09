@@ -1272,7 +1272,6 @@ typedef struct recovered_container_activation_v1 {
   uint64_t profile_generation_ref_id;
   uint64_t root_cgroup_id;
   uint64_t expected_binding_transition_version;
-  uint64_t task_set_generation;
   uint64_t scan_generation;
   uint64_t scan_task_count;
   uint64_t scan_candidate_count;
@@ -1283,7 +1282,6 @@ typedef struct recovered_container_activation_v1 {
   uint64_t validation_application_task_count;
   uint64_t validation_external_task_count;
   uint64_t transition_version;
-  uint64_t transition_guard;
   uint32_t init_host_tgid;
   uint32_t invalid_task_count;
   recovered_container_activation_phase_v1 phase;
@@ -1321,7 +1319,7 @@ typedef struct execution_set_binding_state_v1 {
   uint32_t initial_role_id;
   uint32_t external_role_id;
   binding_lifecycle_state_v1 lifecycle_state;
-  uint8_t reserved[7];
+  uint8_t task_set_generation[7];
   initial_root_state_v1 initial_root_state;
   uint64_t transition_guard;
   struct id128_v1 prepared_container_entry_instance_id;

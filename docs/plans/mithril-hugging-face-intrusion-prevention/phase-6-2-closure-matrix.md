@@ -15,9 +15,10 @@ Phase 6.2 is **Not done**. The approved API correction replaces the flattened
 `WorkloadProtectionPolicy` and a separate bounded
 `WorkloadProtectionException`. The branch now implements both resources,
 their lowering, their durable Control and node lifecycles, and current
-automated and manual fixture flows. The complete current-source automated
-two-node physical fixture passes. It includes the evidence-health and final
-node-projection stress checks. The independent manual case passed on its
+automated and manual fixture flows. An earlier source checkpoint passed the
+complete automated two-node physical fixture, including the evidence-health
+and final node-projection stress checks. The current atomic-publication change
+does not have a new complete-suite pass. The independent manual case passed on its
 recorded source. The
 approved policy amendment replaces `initialRole` with an explicit application
 entry, adds declared additional entries and one approved administrative entry,
@@ -121,6 +122,31 @@ Kubernetes normal-start check also passes; its result is
 The repository gate still fails the stable lifecycle ABI assertion.
 See the implementation review for
 the object digest, exact evidence paths, and remaining recovery matrix.
+Result: **Not done**.
+
+The current atomic-publication change stores the lifecycle and task-set
+generation in one binding word. BPF uses one compare-and-swap to publish the
+recovered active state. Lightweight recovery run 46 and normal-start run 23
+pass. The paired Kubernetes case reaches the recovered active state, but its
+test child does not change the counter before activation. Lightweight run 47
+reproduces this test-ordering failure with a temporary delayed FIFO release.
+The delay has been removed. A shared bpftrace observer now pauses the
+reconciliation owner until the external child leaves the cgroup. The next
+Kubernetes run found a bpftrace selector error. The lightweight VM reproduced
+the same error before correction. Both layers now use the same process-name
+expression. Lightweight run 50 and the paired Kubernetes recovery case pass.
+Kubernetes advances the counter from 1 to 2 and validates two application
+tasks and two external tasks. The external tree retains rule zero. Later
+probe admission, denial, and post-cutover exit checks pass. Evidence is under
+`target/mithril-recovery-qualification/20260908-atomic-recovery/`.
+The Kubernetes result is in
+`kubernetes-shared-selector/recovered-container-kubernetes-entry.json`.
+Normal lightweight run 24 and the paired normal-start Kubernetes check pass.
+The latter result is `kubernetes-normal-start/protected-start-result.json`.
+Atomic publication and paired exit qualification are **Done**. Complete fork,
+reparent, identity-change, policy-change, and restart-during-recovery
+qualification remains open.
+The repository gate still fails the existing lifecycle ABI assertion.
 Result: **Not done**.
 
 The direct stock-`runc` application-start lane proves the `PREPARED` to

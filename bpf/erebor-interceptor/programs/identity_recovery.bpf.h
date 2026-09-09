@@ -28,7 +28,8 @@ static __always_inline bool recovery_record_matches_binding(
                binding->transition_version &&
            recovery->init_host_tgid ==
                binding->prepared_container_initial_host_tgid &&
-           recovery->task_set_generation &&
+           binding_task_set_generation(binding) &&
+           binding_task_set_generation(binding) < (1ULL << 55) &&
            !id128_is_zero(&recovery->recovery_attempt_id) &&
            binding->lifecycle_state == binding_lifecycle_state_v1_recovering;
 }
@@ -613,9 +614,10 @@ int erebor_reconcile_recovering_tasks(struct bpf_iter__task *context)
 }
 
 static __always_inline void reset_recovery_scan(
-    recovered_container_activation_v1 *recovery)
+    recovered_container_activation_v1 *recovery,
+    const execution_set_binding_state_v1 *binding)
 {
-    recovery->scan_generation = recovery->task_set_generation;
+    recovery->scan_generation = binding_task_set_generation(binding);
     recovery->scan_task_count = 0;
     recovery->scan_candidate_count = 0;
     recovery->scan_application_task_count = 0;
@@ -655,12 +657,12 @@ static __noinline int advance_recovered_container_activation(
         !recovery_record_matches_binding(recovery, binding, config))
         return 12;
     if (recovery->invalid_task_count) {
-        reset_recovery_scan(recovery);
+        reset_recovery_scan(recovery, binding);
         return 13;
     }
     if (recovery->phase ==
         recovered_container_activation_phase_v1_scanning) {
-        if (recovery->scan_generation != recovery->task_set_generation ||
+        if (recovery->scan_generation != binding_task_set_generation(binding) ||
             !recovery->scan_task_count ||
             recovery->scan_task_count != recovery->scan_candidate_count ||
             recovery->scan_candidate_count !=
@@ -668,7 +670,7 @@ static __noinline int advance_recovered_container_activation(
                     recovery->scan_external_task_count ||
             !recovery->scan_application_task_count ||
             id128_is_zero(&recovery->application_entry_instance_id)) {
-            reset_recovery_scan(recovery);
+            reset_recovery_scan(recovery, binding);
             return 13;
         }
         recovery->expected_task_count = recovery->scan_task_count;
@@ -686,8 +688,7 @@ static __noinline int advance_recovered_container_activation(
         return 12;
     if (__sync_val_compare_and_swap(&binding->transition_guard, 0, 1))
         return 13;
-    if (recovery->scan_generation != recovery->task_set_generation ||
-        recovery->validation_task_count != recovery->expected_task_count ||
+    if (recovery->validation_task_count != recovery->expected_task_count ||
         recovery->validation_task_count !=
             recovery->validation_application_task_count +
                 recovery->validation_external_task_count ||
@@ -698,14 +699,23 @@ static __noinline int advance_recovered_container_activation(
         goto retry;
     }
     if (!recovery_record_matches_binding(recovery, binding, config) ||
-        recovery->scan_generation != recovery->task_set_generation ||
         binding->lifecycle_state != binding_lifecycle_state_v1_recovering ||
         !id128_is_zero(&binding->prepared_container_entry_instance_id)) {
         goto retry;
     }
     binding->prepared_container_entry_instance_id =
         recovery->application_entry_instance_id;
-    binding->lifecycle_state = binding_lifecycle_state_v1_active_recovered;
+    __u64 expected = (recovery->scan_generation << 8) |
+                     binding_lifecycle_state_v1_recovering;
+    __u64 committed = (recovery->scan_generation << 8) |
+                      binding_lifecycle_state_v1_active_recovered;
+
+    if (__sync_val_compare_and_swap((__u64 *)&binding->lifecycle_state,
+                                    expected, committed) != expected) {
+        __builtin_memset(&binding->prepared_container_entry_instance_id, 0,
+                         sizeof(binding->prepared_container_entry_instance_id));
+        goto retry;
+    }
     binding->transition_version++;
     recovery->expected_binding_transition_version =
         binding->transition_version;
@@ -715,22 +725,26 @@ static __noinline int advance_recovered_container_activation(
     return 1;
 
 retry:
-    reset_recovery_scan(recovery);
+    reset_recovery_scan(recovery, binding);
     release_transition_guard(&binding->transition_guard);
     return 13;
 }
 
-static __always_inline void recovered_container_task_set_changed(
-    execution_set_binding_state_v1 *binding,
-    const identity_runtime_config_v1 *config)
+static __always_inline bool recovered_container_task_set_changed(
+    execution_set_binding_state_v1 *binding)
 {
-    recovered_container_activation_v1 *recovery;
+    __u64 previous;
 
-    recovery = recovery_for_binding(binding, config);
-    if (!recovery)
-        return;
-    __sync_fetch_and_add(&recovery->task_set_generation, 1);
-    recovery->transition_version++;
+    if (!binding || binding->lifecycle_state !=
+                        binding_lifecycle_state_v1_recovering)
+        return false;
+    previous = __sync_fetch_and_add((__u64 *)&binding->lifecycle_state,
+                                    1ULL << 8);
+    if ((__u8)previous != binding_lifecycle_state_v1_recovering)
+        return false;
+    if ((previous >> 8) >= (1ULL << 55))
+        binding->lifecycle_state = binding_lifecycle_state_v1_corrupt;
+    return true;
 }
 
 #endif /* EREBOR_IDENTITY_RECOVERY_BPF_H */

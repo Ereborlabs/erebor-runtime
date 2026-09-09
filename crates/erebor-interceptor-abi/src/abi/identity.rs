@@ -659,7 +659,8 @@ pub struct ExecutionSetBindingStateV1 {
     pub initial_role_id: u32,
     pub external_role_id: u32,
     pub lifecycle_state: super::BindingLifecycleStateV1,
-    pub reserved: [u8; 7],
+    /// The upper 56 bits of the little-endian atomic lifecycle word.
+    pub task_set_generation: [u8; 7],
     pub initial_root_state: InitialRootStateV1,
     pub transition_guard: u64,
     pub prepared_container_entry_instance_id: Id128V1,
@@ -667,6 +668,14 @@ pub struct ExecutionSetBindingStateV1 {
     pub prepared_container_initial_host_tgid: u32,
     /// Zero, pending, or complete for the one post-mount bootstrap exec.
     pub prepared_container_bootstrap_state: u32,
+}
+
+impl ExecutionSetBindingStateV1 {
+    pub fn task_set_generation(&self) -> u64 {
+        let mut bytes = [0; 8];
+        bytes[..7].copy_from_slice(&self.task_set_generation);
+        u64::from_le_bytes(bytes)
+    }
 }
 
 #[repr(C)]
@@ -721,7 +730,6 @@ pub struct RecoveredContainerActivationV1 {
     pub profile_generation_ref_id: u64,
     pub root_cgroup_id: u64,
     pub expected_binding_transition_version: u64,
-    pub task_set_generation: u64,
     pub scan_generation: u64,
     pub scan_task_count: u64,
     pub scan_candidate_count: u64,
@@ -732,7 +740,6 @@ pub struct RecoveredContainerActivationV1 {
     pub validation_application_task_count: u64,
     pub validation_external_task_count: u64,
     pub transition_version: u64,
-    pub transition_guard: u64,
     pub init_host_tgid: u32,
     pub invalid_task_count: u32,
     pub phase: RecoveredContainerActivationPhaseV1,
@@ -1080,9 +1087,54 @@ pub struct IdentityHealthV1 {
 #[cfg(test)]
 mod tests {
     use std::mem::{align_of, offset_of, size_of};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
     use crate::BindingLifecycleStateV1;
+
+    #[test]
+    fn lifecycle_word_orders_task_change_and_recovery_commit() {
+        let binding = ExecutionSetBindingStateV1 {
+            lifecycle_state: BindingLifecycleStateV1::Recovering,
+            task_set_generation: [10, 0, 0, 0, 0, 0, 0],
+            ..Default::default()
+        };
+        let offset = offset_of!(ExecutionSetBindingStateV1, lifecycle_state);
+        assert_eq!(offset % 8, 0);
+        assert_eq!(
+            offset_of!(ExecutionSetBindingStateV1, task_set_generation),
+            offset + 1
+        );
+        assert_eq!(binding.task_set_generation(), 10);
+        let expected = (10_u64 << 8) | u64::from(BindingLifecycleStateV1::Recovering as u8);
+        assert_eq!(
+            &binding.as_bytes()[offset..offset + 8],
+            &expected.to_le_bytes()
+        );
+        let committed = (10_u64 << 8) | u64::from(BindingLifecycleStateV1::ActiveRecovered as u8);
+        let word = AtomicU64::new(expected);
+        word.fetch_add(1 << 8, Ordering::SeqCst);
+        assert!(word
+            .compare_exchange(expected, committed, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err());
+        assert_eq!(
+            word.load(Ordering::SeqCst) as u8,
+            BindingLifecycleStateV1::Recovering as u8
+        );
+        let word = AtomicU64::new(expected);
+        assert!(word
+            .compare_exchange(expected, committed, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok());
+        let before_exit = word.fetch_add(1 << 8, Ordering::SeqCst);
+        assert_eq!(
+            before_exit as u8,
+            BindingLifecycleStateV1::ActiveRecovered as u8
+        );
+        assert_eq!(
+            word.load(Ordering::SeqCst) as u8,
+            BindingLifecycleStateV1::ActiveRecovered as u8
+        );
+    }
 
     #[test]
     fn native_identity_abi_has_stable_sizes_and_offsets() {

@@ -124,8 +124,16 @@ impl NativeIdentityInspector {
             "entry state",
         )?;
         let entry = read_abi_value::<EntrySecurityStateV1>(&entry, "entry state")?;
-        let runtime_binding = self.runtime_binding(host_pid, label.execution_set_id)?.map(
-            |(root_cgroup_id, binding)| NativeRuntimeBindingSnapshotV1 {
+        let runtime_binding = self.runtime_binding(host_pid, label.execution_set_id)?;
+        let recovered_container_activation = runtime_binding
+            .as_ref()
+            .map(|(root_cgroup_id, binding)| {
+                self.recovered_container_activation(*root_cgroup_id, binding.task_set_generation())
+            })
+            .transpose()?
+            .flatten();
+        let runtime_binding =
+            runtime_binding.map(|(root_cgroup_id, binding)| NativeRuntimeBindingSnapshotV1 {
                 binding_id: id_string(binding.binding_id),
                 root_cgroup_id,
                 lifecycle_state: binding_lifecycle_state_name(binding.lifecycle_state).to_owned(),
@@ -135,13 +143,7 @@ impl NativeIdentityInspector {
                 prepared_container_exec_task_cookie: binding.prepared_container_exec_task_cookie,
                 prepared_container_initial_host_tgid: binding.prepared_container_initial_host_tgid,
                 prepared_container_bootstrap_state: binding.prepared_container_bootstrap_state,
-            },
-        );
-        let recovered_container_activation = runtime_binding
-            .as_ref()
-            .map(|binding| self.recovered_container_activation(binding.root_cgroup_id))
-            .transpose()?
-            .flatten();
+            });
         let process = self.required(
             "process_states",
             process_state_id.as_bytes(),
@@ -251,6 +253,7 @@ impl NativeIdentityInspector {
     fn recovered_container_activation(
         &self,
         root_cgroup_id: u64,
+        task_set_generation: u64,
     ) -> Result<Option<NativeRecoveredContainerActivationSnapshotV1>> {
         let Some(value) = self
             .state
@@ -270,7 +273,7 @@ impl NativeIdentityInspector {
             phase: recovered_container_activation_phase_name(value.phase).to_owned(),
             recovery_attempt_id: id_string(value.recovery_attempt_id),
             application_entry_instance_id: id_string(value.application_entry_instance_id),
-            task_set_generation: value.task_set_generation,
+            task_set_generation,
             expected_task_count: value.expected_task_count,
             application_task_count: value.validation_application_task_count,
             external_task_count: value.validation_external_task_count,
