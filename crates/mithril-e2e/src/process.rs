@@ -141,6 +141,45 @@ impl ProcessFixture {
     }
 
     #[cfg(test)]
+    pub(crate) fn wait_pair(&mut self, path: &Path, operation: &str) -> Result<[u32; 2]> {
+        let last = RefCell::new(String::from("<absent>"));
+        self.wait_path(
+            path,
+            operation,
+            START_LIMIT,
+            || {
+                let text = match fs::read_to_string(path) {
+                    Ok(text) => text,
+                    Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
+                    Err(source) => return Err(source).context(IoSnafu { path }),
+                };
+                *last.borrow_mut() = text.trim().to_owned();
+                let ids = text
+                    .split_ascii_whitespace()
+                    .map(|value| {
+                        value.parse::<u32>().map_err(|source| {
+                            InvalidInputSnafu {
+                                path,
+                                reason: format!("the actor wrote an invalid PID: {source}"),
+                            }
+                            .build()
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                ensure!(
+                    ids.len() == 2 && ids[0] != ids[1],
+                    InvalidInputSnafu {
+                        path,
+                        reason: "the actor must report two distinct PIDs",
+                    }
+                );
+                Ok(Some([ids[0], ids[1]]))
+            },
+            || format!("last PID values: {:?}", last.borrow()),
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn wait_comm(&mut self, pid: u32, name: &str, operation: &str) -> Result<()> {
         let path = PathBuf::from(format!("/proc/{pid}/comm"));
         let last = RefCell::new(String::from("<absent>"));

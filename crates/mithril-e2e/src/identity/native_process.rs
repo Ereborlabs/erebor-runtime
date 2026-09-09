@@ -6,12 +6,8 @@ mod reparent_tests;
 mod test_support;
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod thread_tests;
 
 use std::cell::RefCell;
-#[cfg(test)]
-use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::os::fd::OwnedFd;
@@ -129,15 +125,6 @@ impl NativeProcessFixture {
         Ok(Self::from_outer(outer, false))
     }
 
-    #[cfg(test)]
-    pub(super) fn start_with_concurrent_thread_exec(
-        repo_root: &Path,
-        ready: &Path,
-    ) -> Result<Self> {
-        let outer = ProcessFixture::python(repo_root, "native_concurrent_thread_exec.py", [ready])?;
-        Ok(Self::from_outer(outer, false))
-    }
-
     fn start_command(
         command: &mut Command,
         parent_exit_mode: bool,
@@ -216,22 +203,6 @@ impl NativeProcessFixture {
         )
     }
 
-    #[cfg(test)]
-    pub(super) fn wait_for_concurrent_thread_tids(
-        &mut self,
-        ready: &Path,
-        operation: &str,
-    ) -> Result<[u32; 2]> {
-        let outer_pid = self.outer.id();
-        wait_for(
-            ready,
-            operation,
-            WAIT_LIMIT,
-            || self.concurrent_thread_tids(ready),
-            || format!("outer process {outer_pid} has not reported two distinct threads"),
-        )
-    }
-
     pub(super) fn open_intermediate_pidfd(&mut self, pid: u32) -> Result<()> {
         self.intermediate_pidfd = Some(open_pidfd(pid)?);
         Ok(())
@@ -248,11 +219,6 @@ impl NativeProcessFixture {
 
     pub(super) fn release_namespace_init(&mut self) -> Result<()> {
         self.write_stdin("namespace init release", b"namespace-init\n")
-    }
-
-    #[cfg(test)]
-    pub(super) fn release_concurrent_thread_exec(&mut self) -> Result<()> {
-        self.write_stdin("concurrent thread exec release", b"exec\n")
     }
 
     pub(super) fn release_exec(&mut self, native_pid: u32) -> Result<()> {
@@ -360,49 +326,6 @@ impl NativeProcessFixture {
             ))
         })?;
         Ok(Some(tid))
-    }
-
-    #[cfg(test)]
-    pub(super) fn concurrent_thread_tids(&mut self, ready: &Path) -> Result<Option<[u32; 2]>> {
-        if let Some(status) = self.outer.try_wait()? {
-            let stderr = self.outer.stderr()?;
-            return Err(invalid_state(format!(
-                "concurrent thread fixture exited before it reported its TIDs ({status}): {}",
-                stderr
-            )));
-        }
-        let text = match fs::read_to_string(ready) {
-            Ok(text) => text,
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(source) => return Err(source).context(IoSnafu { path: ready }),
-        };
-        let mut tids = text
-            .split_ascii_whitespace()
-            .map(|value| {
-                value.parse::<u32>().map_err(|source| {
-                    invalid_state(format!(
-                        "concurrent thread fixture wrote an invalid TID `{value}`: {source}"
-                    ))
-                })
-            })
-            .collect::<Result<BTreeSet<_>>>()?;
-        ensure!(
-            tids.len() == 2,
-            InvalidInputSnafu {
-                path: ready,
-                reason: format!(
-                    "concurrent thread fixture must report two distinct TIDs, got {}",
-                    tids.len()
-                ),
-            }
-        );
-        let first = tids
-            .pop_first()
-            .ok_or_else(|| invalid_state("first concurrent thread TID is missing"))?;
-        let second = tids
-            .pop_first()
-            .ok_or_else(|| invalid_state("second concurrent thread TID is missing"))?;
-        Ok(Some([first, second]))
     }
 
     pub(super) fn intermediate_pid(&mut self) -> Result<Option<u32>> {
