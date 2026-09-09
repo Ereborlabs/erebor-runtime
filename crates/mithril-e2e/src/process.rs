@@ -63,15 +63,33 @@ impl ProcessFixture {
         S: AsRef<OsStr>,
     {
         let script = Self::script(root, name)?;
-        let child = Command::new("python3")
+        let mut command = Command::new("python3");
+        command.arg(&script).args(args);
+        Self::start(&mut command, &script)
+    }
+
+    pub(crate) fn unshare<I, S>(root: &Path, name: &str, args: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let script = Self::script(root, name)?;
+        let mut command = Command::new("/usr/bin/unshare");
+        command
+            .args(["--user", "--map-root-user", "--pid", "--fork", "python3"])
             .arg(&script)
-            .args(args)
+            .args(args);
+        Self::start(&mut command, &script)
+    }
+
+    pub(crate) fn start(command: &mut Command, path: &Path) -> Result<Self> {
+        let child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .context(IoSnafu { path: &script })?;
-        let mut fixture = Self::new(child, &script);
+            .context(IoSnafu { path })?;
+        let mut fixture = Self::new(child, path);
         fixture.ready()?;
         Ok(fixture)
     }

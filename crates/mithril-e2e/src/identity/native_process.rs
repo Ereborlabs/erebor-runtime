@@ -10,7 +10,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Duration;
 
 use rustix::process::{pidfd_send_signal, Signal};
@@ -35,15 +35,6 @@ impl NativeProcessFixture {
         Self::start_with_script(
             "read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 300) & wait \"$!\"",
         )
-    }
-
-    pub(super) fn start_namespace_init_reparenting(repo_root: &Path) -> Result<Self> {
-        let script = ProcessFixture::script(repo_root, "native_namespace_init.py")?;
-        let mut command = Command::new("/usr/bin/unshare");
-        command
-            .args(["--user", "--map-root-user", "--pid", "--fork", "python3"])
-            .arg(&script);
-        Self::start_command(&mut command, &script)
     }
 
     pub(super) fn start_pid_tid_reuse(repo_root: &Path, work: &Path) -> Result<Self> {
@@ -79,14 +70,7 @@ impl NativeProcessFixture {
     }
 
     fn start_command(command: &mut Command, program: &Path) -> Result<Self> {
-        let outer = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context(IoSnafu { path: program })?;
-        let mut outer = ProcessFixture::new(outer, program);
-        outer.ready()?;
+        let outer = ProcessFixture::start(command, program)?;
         Ok(Self::from_outer(outer))
     }
 
@@ -151,10 +135,6 @@ impl NativeProcessFixture {
         self.write_stdin("native root release", b"root\n")
     }
 
-    pub(super) fn release_namespace_init(&mut self) -> Result<()> {
-        self.write_stdin("namespace init release", b"namespace-init\n")
-    }
-
     pub(super) fn release_exec(&mut self, native_pid: u32) -> Result<()> {
         self.wait_for_stopped_native_child(native_pid)?;
         let pidfd = self
@@ -172,16 +152,6 @@ impl NativeProcessFixture {
             .ok_or_else(|| invalid_state("double-fork intermediate has no pidfd"))?;
         pidfd_send_signal(pidfd, Signal::TERM)
             .map_err(|error| invalid_state(format!("release intermediate exit: {error}")))
-    }
-
-    pub(super) fn release_intermediate_start(&mut self, intermediate_pid: u32) -> Result<()> {
-        self.wait_for_stopped_native_child(intermediate_pid)?;
-        let pidfd = self
-            .intermediate_pidfd
-            .as_ref()
-            .ok_or_else(|| invalid_state("PID-namespace intermediate has no pidfd"))?;
-        pidfd_send_signal(pidfd, Signal::CONT)
-            .map_err(|error| invalid_state(format!("release intermediate start: {error}")))
     }
 
     pub(super) fn intermediate_exited(&self, intermediate_pid: u32) -> Result<bool> {
@@ -251,13 +221,6 @@ impl NativeProcessFixture {
 
     pub(super) fn namespace_init_pid(&mut self) -> Result<Option<u32>> {
         self.native_child_pid()
-    }
-
-    pub(super) fn namespace_init_intermediate_pid(
-        &self,
-        namespace_init_pid: u32,
-    ) -> Result<Option<u32>> {
-        self.first_child_pid(namespace_init_pid)
     }
 
     pub(super) fn first_child_pid(&self, pid: u32) -> Result<Option<u32>> {
