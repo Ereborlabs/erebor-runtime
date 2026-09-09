@@ -346,8 +346,10 @@ command passes.
   `identity/scenarios/non_leader_exec.rs::run` function. Put scenario state on
   its owner, use `ProcessFixture` and the shared Python file directly, and
   keep exact TID allocation and post-exec assertions visible.
-- [ ] Pre-PONR and post-PONR failures: use fixture-owned process readiness and
-  keep pending-exec, rollback, fatal state, and recovery assertions visible.
+- [x] Pre-PONR failure: use fixture-owned process readiness and keep the
+  pending-exec, rollback, and recovery assertions visible.
+- [ ] Post-PONR failure: use fixture-owned process readiness and keep the
+  fatal-state assertions visible.
 - [ ] Moved-task exec: keep the physical cgroup move, denied exec, production
   health checks, and placement-mismatch assertions visible.
 - [ ] Orphan, subreaper, namespace-init, and double-fork transitions: use the
@@ -580,7 +582,7 @@ entry when a test receives a shorter name or moves beside its real owner.
 - `prototype.rs::source_tg_runtime_join_accepts_only_authenticated_complete_fresh_roots`
 - `provenance.rs::dossier_closes_sources_licenses_owners_and_hostile_fixtures`
 
-The current tree also has eleven reliability and common-owner tests added
+The current tree also has thirteen reliability and common-owner tests added
 after the baseline. Preserve them while the structural changes are replaced:
 
 - `effect/runc/process.rs::exit_reports_output`
@@ -588,6 +590,8 @@ after the baseline. Preserve them while the structural changes are replaced:
 - `identity/native_process/tests.rs::startup_reports_exit`
 - `identity/scenarios/exec/tests.rs::thread_execs_process`
 - `identity/scenarios/exec/tests.rs::child_execs`
+- `identity/scenarios/exec/tests.rs::exec_failure_stops`
+- `identity/scenarios/exec/tests.rs::exec_recovers`
 - `identity/scenarios/exec/tests.rs::threads_race_exec`
 - `physical.rs::async_readiness_yields_until_the_fixture_is_ready`
 - `physical.rs::readiness_reports_diagnostics_and_directory_cleanup_is_idempotent`

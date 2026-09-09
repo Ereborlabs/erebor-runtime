@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use rustix::process::Signal;
 use snafu::ResultExt as _;
@@ -64,5 +65,75 @@ fn threads_race_exec() -> crate::Result<()> {
 
     actor.send(b"exec\n")?;
     actor.wait_comm(pid, "sleep", "concurrent thread exec")?;
+    actor.stop()
+}
+
+#[test]
+fn exec_failure_stops() -> crate::Result<()> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let temp = tempfile::tempdir().context(IoSnafu {
+        path: std::path::Path::new("exec failure actor"),
+    })?;
+    let ready = temp.path().join("ready");
+    let failed = temp.path().join("failed");
+    let mut actor = ProcessFixture::python(
+        &root,
+        "native_exec_retry.py",
+        [
+            &ready,
+            &failed,
+            std::path::Path::new("/missing-native-exec"),
+        ],
+    )?;
+
+    actor.send(b"root\n")?;
+    let pid = actor.wait_pid(&ready, "failed exec child")?;
+    actor.track(pid)?;
+    actor.wait_stop(pid, "pre-exec stop")?;
+    actor.signal(pid, Signal::CONT)?;
+    actor.wait_path(
+        &failed,
+        "exec failure",
+        Duration::from_secs(5),
+        || Ok(failed.exists().then_some(())),
+        || "the failure marker is absent".to_owned(),
+    )?;
+    actor.wait_stop(pid, "failed exec stop")?;
+    actor.stop()
+}
+
+#[test]
+fn exec_recovers() -> crate::Result<()> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let temp = tempfile::tempdir().context(IoSnafu {
+        path: std::path::Path::new("exec retry actor"),
+    })?;
+    let ready = temp.path().join("ready");
+    let failed = temp.path().join("failed");
+    let mut actor = ProcessFixture::python(
+        &root,
+        "native_exec_retry.py",
+        [
+            &ready,
+            &failed,
+            std::path::Path::new("/missing-native-exec"),
+        ],
+    )?;
+
+    actor.send(b"root\n")?;
+    let pid = actor.wait_pid(&ready, "retry exec child")?;
+    actor.track(pid)?;
+    actor.wait_stop(pid, "pre-exec stop")?;
+    actor.signal(pid, Signal::CONT)?;
+    actor.wait_path(
+        &failed,
+        "exec failure",
+        Duration::from_secs(5),
+        || Ok(failed.exists().then_some(())),
+        || "the failure marker is absent".to_owned(),
+    )?;
+    actor.wait_stop(pid, "failed exec stop")?;
+    actor.signal(pid, Signal::CONT)?;
+    actor.wait_comm(pid, "sleep", "exec recovery")?;
     actor.stop()
 }

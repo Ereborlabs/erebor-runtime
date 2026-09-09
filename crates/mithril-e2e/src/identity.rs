@@ -885,127 +885,13 @@ impl IdentityTestRunner {
             scenarios::ExecCase::new(self, &host, &identity, &inspector, &binding, &procs_path);
         let (external_root, before_exec, after_exec) = exec_case.child(&child_ready_path)?;
         child_ready_cleanup.cleanup()?;
+        let retry_ready_cleanup = ProbeFile::new(&child_ready_path);
         let (thread_root, thread_exec) = exec_case.non_leader(&non_leader_thread_ready_path)?;
         non_leader_thread_ready_cleanup.cleanup()?;
 
-        let mut failed_exec_fixture =
-            NativeProcessFixture::start_with_failed_exec(&execfail_path, &execfail_ready_path)?;
-        fs::write(&procs_path, failed_exec_fixture.outer_pid().to_string())
-            .context(IoSnafu { path: &procs_path })?;
-        let failed_exec_parent =
-            self.wait_for("pre-PONR failed-exec parent identity", &procs_path, || {
-                inspector
-                    .snapshot(failed_exec_fixture.outer_pid())
-                    .context(NodeSnafu)
-            })?;
-        failed_exec_fixture.release_root()?;
-        let failed_exec_pid =
-            self.wait_for("pre-PONR failed-exec child creation", &procs_path, || {
-                failed_exec_fixture.native_child_pid()
-            })?;
-        failed_exec_fixture.open_native_pidfd(failed_exec_pid)?;
-        failed_exec_fixture.wait_for_stopped_native_child(failed_exec_pid)?;
-        let failed_exec_before =
-            self.wait_for("pre-PONR failed-exec child identity", &procs_path, || {
-                inspector.snapshot(failed_exec_pid).context(NodeSnafu)
-            })?;
-        let failed_exec_pending = host
-            .lookup_map(
-                "pending_execs",
-                &failed_exec_before.task_cookie.to_ne_bytes(),
-            )
-            .context(InterceptorSnafu)?;
-        ensure!(
-            failed_exec_parent.root_class.as_deref() == Some("external_runtime_root")
-                && failed_exec_parent.installed_role_class.as_deref()
-                    == Some("runtime_external_restricted")
-                && failed_exec_pending.is_none()
-                && failed_exec_before.creator_task_cookie == Some(failed_exec_parent.task_cookie)
-                && failed_exec_before.real_parent_task_cookie == failed_exec_parent.task_cookie
-                && failed_exec_before.root_class.is_none()
-                && failed_exec_before.installed_role_class.is_none()
-                && failed_exec_before.process_execution_state
-                    == ProcessExecutionStateV1::Active as u8
-                && failed_exec_before.process_state_vector_state
-                    == ProcessStateVectorStateV1::Active as u8
-                && failed_exec_before.exec_guard_state == ExecGuardStateV1::None as u8,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: format!(
-                    "pre-PONR failed-exec child has the wrong initial identity; parent snapshot {failed_exec_parent:?}; child snapshot {failed_exec_before:?}; pending exec present {}",
-                    failed_exec_pending.is_some()
-                ),
-            }
-        );
-        failed_exec_fixture.release_exec(failed_exec_pid)?;
-        let failed_exec_after_failure = self.wait_for(
-            "pre-PONR failed-exec restoration",
-            &execfail_ready_path,
-            || {
-                if !execfail_ready_path.exists() {
-                    return Ok(None);
-                }
-                let Some(snapshot) = inspector.snapshot(failed_exec_pid).context(NodeSnafu)? else {
-                    return Ok(None);
-                };
-                let pending = host
-                    .lookup_map("pending_execs", &snapshot.task_cookie.to_ne_bytes())
-                    .context(InterceptorSnafu)?;
-                Ok((pending.is_none()
-                    && snapshot.task_cookie == failed_exec_before.task_cookie
-                    && snapshot.creator_task_cookie == failed_exec_before.creator_task_cookie
-                    && snapshot.real_parent_task_cookie
-                        == failed_exec_before.real_parent_task_cookie
-                    && snapshot.active_execution_id == failed_exec_before.active_execution_id
-                    && snapshot.image_provenance_id == failed_exec_before.image_provenance_id
-                    && snapshot.active_role_id == failed_exec_before.active_role_id
-                    && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
-                    && snapshot.process_state_vector_state
-                        == ProcessStateVectorStateV1::Active as u8
-                    && snapshot.exec_guard_state == ExecGuardStateV1::None as u8)
-                    .then_some(snapshot))
-            },
-        )?;
-        failed_exec_fixture.release_exec(failed_exec_pid)?;
-        let failed_exec_after_success = self.wait_for(
-            "pre-PONR failed-exec later normal commit",
-            &procs_path,
-            || {
-                let Some(snapshot) = inspector.snapshot(failed_exec_pid).context(NodeSnafu)? else {
-                    return Ok(None);
-                };
-                let pending = host
-                    .lookup_map("pending_execs", &snapshot.task_cookie.to_ne_bytes())
-                    .context(InterceptorSnafu)?;
-                Ok((pending.is_none()
-                    && snapshot.task_cookie == failed_exec_after_failure.task_cookie
-                    && snapshot.creator_task_cookie
-                        == failed_exec_after_failure.creator_task_cookie
-                    && snapshot.real_parent_task_cookie
-                        == failed_exec_after_failure.real_parent_task_cookie
-                    && snapshot.active_execution_id
-                        != failed_exec_after_failure.active_execution_id
-                    && snapshot.image_provenance_id
-                        != failed_exec_after_failure.image_provenance_id
-                    && snapshot.active_role_id == failed_exec_after_failure.active_role_id
-                    && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
-                    && snapshot.process_state_vector_state
-                        == ProcessStateVectorStateV1::Active as u8
-                    && snapshot.exec_guard_state == ExecGuardStateV1::None as u8)
-                    .then_some(snapshot))
-            },
-        )?;
-        ensure!(
-            failed_exec_after_success.root_class.is_none()
-                && failed_exec_after_success.installed_role_class.is_none()
-                && failed_exec_after_success.coordinate_state
-                    == TaskCoordinateStateV1::Runnable as u8,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: "normal exec after the pre-PONR failure did not restore a runnable task",
-            }
-        );
-        failed_exec_fixture.stop()?;
+        let (failed_before, failed_after, retry_after) =
+            exec_case.retry(&child_ready_path, &execfail_ready_path, &execfail_path)?;
+        retry_ready_cleanup.cleanup()?;
         execfail_ready_cleanup.cleanup()?;
         execfail_cleanup.cleanup()?;
 
@@ -2479,9 +2365,9 @@ impl IdentityTestRunner {
             moved_parent_fork_denied: true,
             moved_task_exec_denied: true,
             pre_ponr_failed_exec_restored: true,
-            pre_ponr_failed_exec_before: failed_exec_before,
-            pre_ponr_failed_exec_after_failure: failed_exec_after_failure,
-            pre_ponr_failed_exec_after_success: failed_exec_after_success,
+            pre_ponr_failed_exec_before: failed_before,
+            pre_ponr_failed_exec_after_failure: failed_after,
+            pre_ponr_failed_exec_after_success: retry_after,
             post_ponr_exec_fatal: true,
             post_ponr_pending_state: post_ponr_pending.state as u8,
             post_ponr_exec_guard_state: post_ponr_process.exec_guard_state as u8,

@@ -93,18 +93,6 @@ impl NativeProcessFixture {
         Self::start_command(&mut command, parent_exit_mode, Path::new("/bin/sh"))
     }
 
-    pub(super) fn start_with_failed_exec(execfail: &Path, ready: &Path) -> Result<Self> {
-        let mut command = Command::new("/bin/bash");
-        command
-            .args([
-                "-c",
-                "printf 'native-fixture-ready\\n'; read _; /bin/bash -c 'read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; shopt -s execfail; exec \"$0\"; : > \"$1\"; kill -STOP \"$child_pid\"; exec /bin/sleep 300' \"$0\" \"$1\" & wait \"$!\"",
-            ])
-            .arg(execfail)
-            .arg(ready);
-        Self::start_command(&mut command, false, Path::new("/bin/bash"))
-    }
-
     pub(super) fn start_with_post_ponr_exec(execfail: &Path) -> Result<Self> {
         let mut command = Command::new("/bin/sh");
         command

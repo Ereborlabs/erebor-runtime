@@ -354,6 +354,7 @@ impl ProcessFixture {
     pub(crate) fn stop(&mut self) -> Result<()> {
         self.close();
         let mut failed = None;
+        let ids = self.tasks.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         for (id, fd) in &self.tasks {
             match pidfd_send_signal(fd, Signal::KILL) {
                 Ok(()) | Err(rustix::io::Errno::SRCH) => {}
@@ -364,6 +365,18 @@ impl ProcessFixture {
         if !self.stopped && self.try_wait()?.is_none() {
             self.child.kill().context(IoSnafu { path: &self.path })?;
             self.wait()?;
+        }
+        for id in ids {
+            let path = PathBuf::from(format!("/proc/{id}"));
+            if let Err(source) = wait_for(
+                &path,
+                "tracked process cleanup",
+                START_LIMIT,
+                || Ok((!path.exists()).then_some(())),
+                || format!("tracked process {id} still exists"),
+            ) {
+                failed = Some(source.to_string());
+            }
         }
         match failed {
             Some(reason) => InvalidInputSnafu {
