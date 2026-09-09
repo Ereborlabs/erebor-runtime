@@ -498,42 +498,39 @@ impl OutagePolicyFixture {
 #[tokio::test]
 async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
 ) -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let certificates = Certificates::issue(false)?;
-    let files = certificates.write(directory.path())?;
-    let address = free_address()?;
-    let store = ControlStore::open(directory.path().join("control-store"))?;
-    let control = ControlPlane::with_control_store(
-        vec![AllowedNodeIdentity {
-            node_id: "node-a".to_owned(),
-            certificate_sha256: certificates.node_digest(),
-            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
-        }],
-        TrustGenerationV1 {
-            generation: 4,
-            bundle_digest: "d".repeat(64),
-            policy_issuer_sequence_epoch: 0,
-            policy_signers: Vec::new(),
-        },
-        store,
-    )?;
-    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
+    let fixture = MtlsFixture::new(false)?;
+    let control = fixture.control(4)?;
+    let server = fixture.start(control.clone()).await?;
 
-    let connector =
-        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
-    let mut trust = TrustCache::load(directory.path())?;
+    let connector = fixture.connector(&server, "node-a", [7; 16]);
+    let mut trust = TrustCache::load(fixture.path())?;
     let first = connector.connect(registration(), true, &mut trust).await?;
     assert_eq!(trust.installed().generation, 4);
     let first_nonce = trust.installed().control_connection_nonce.clone();
     drop(first);
     let second = connector.connect(registration(), true, &mut trust).await?;
     assert_ne!(trust.installed().control_connection_nonce, first_nonce);
-    for _ in 0..20 {
-        if control.registered_nonce_count() == 2 && control.acknowledged_trust("node-a").is_some() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    let last_state = std::cell::Cell::new((0, false));
+    wait_for_async(
+        fixture.path(),
+        "Control to register both nonces and acknowledge trust",
+        Duration::from_secs(2),
+        || {
+            let state = (
+                control.registered_nonce_count(),
+                control.acknowledged_trust("node-a").is_some(),
+            );
+            last_state.set(state);
+            Ok((state == (2, true)).then_some(()))
+        },
+        || {
+            format!(
+                "last nonce count and trust ACK state: {:?}",
+                last_state.get()
+            )
+        },
+    )
+    .await?;
     assert_eq!(control.registered_nonce_count(), 2);
     assert_eq!(
         control.acknowledged_trust("node-a"),
@@ -545,8 +542,7 @@ async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
         })
     );
     drop(second);
-    let _result = shutdown.send(());
-    server.await??;
+    server.shutdown().await?;
     Ok(())
 }
 
@@ -2685,6 +2681,77 @@ struct ControlServerFixture {
     address: SocketAddr,
     shutdown: Option<oneshot::Sender<()>>,
     server: Option<tokio::task::JoinHandle<mithril_control::Result<()>>>,
+}
+
+struct MtlsFixture {
+    directory: tempfile::TempDir,
+    certificates: Certificates,
+    files: CertificateFiles,
+}
+
+impl MtlsFixture {
+    fn new(expired_node: bool) -> Result<Self, Box<dyn StdError>> {
+        let directory = tempfile::tempdir()?;
+        let certificates = Certificates::issue(expired_node)?;
+        let files = certificates.write(directory.path())?;
+        Ok(Self {
+            directory,
+            certificates,
+            files,
+        })
+    }
+
+    fn path(&self) -> &Path {
+        self.directory.path()
+    }
+
+    fn control(&self, generation: u64) -> mithril_control::Result<ControlPlane> {
+        self.control_with_store(
+            ControlStore::open(self.path().join("control-store"))?,
+            generation,
+        )
+    }
+
+    fn control_with_store(
+        &self,
+        store: ControlStore,
+        generation: u64,
+    ) -> mithril_control::Result<ControlPlane> {
+        ControlPlane::with_control_store(
+            vec![AllowedNodeIdentity {
+                node_id: "node-a".to_owned(),
+                certificate_sha256: self.certificates.node_digest(),
+                tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
+            }],
+            TrustGenerationV1 {
+                generation,
+                bundle_digest: "d".repeat(64),
+                policy_issuer_sequence_epoch: 0,
+                policy_signers: Vec::new(),
+            },
+            store,
+        )
+    }
+
+    async fn start(
+        &self,
+        control: ControlPlane,
+    ) -> Result<ControlServerFixture, Box<dyn StdError>> {
+        ControlServerFixture::start(&self.files, control).await
+    }
+
+    fn connector(
+        &self,
+        server: &ControlServerFixture,
+        node_id: &str,
+        node_boot_id: [u8; 16],
+    ) -> NodeControlConnector {
+        NodeControlConnector::new(
+            self.files.node_config(server.address()),
+            node_id.to_owned(),
+            node_boot_id,
+        )
+    }
 }
 
 impl ControlServerFixture {

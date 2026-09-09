@@ -138,7 +138,7 @@ shutdown, and shutdown diagnostics. Each test must continue to call
 `NodeControlConnector`, `ControlPlane`, policy transfer, evidence upload,
 acknowledgement, or decommission operations directly.
 
-- [ ] `mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce`
+- [x] `mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce`
 - [ ] `mtls_connection_renews_the_ready_session_while_its_owner_is_idle`
 - [ ] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
 - [x] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`
