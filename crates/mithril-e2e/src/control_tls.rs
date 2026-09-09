@@ -1001,11 +1001,9 @@ async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
     let initial_store = ControlStore::open(&store_path)?;
     let initial_intake = EvidenceIntakeOwner::from_store(initial_store.clone());
     let initial_control = control(initial_store.clone())?;
-    let initial_address = free_address()?;
-    let (initial_shutdown, initial_server) =
-        start_server(initial_address, &files, initial_control.clone()).await?;
+    let initial_server = ControlServerFixture::start(&files, initial_control).await?;
     let mut trust = TrustCache::load(directory.path())?;
-    let mut connection = connector(initial_address)
+    let mut connection = connector(initial_server.address())
         .connect(registration(), false, &mut trust)
         .await?;
     connection.send_evidence_batch(batches[2].clone()).await?;
@@ -1016,21 +1014,24 @@ async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
     assert_eq!(initial_store.health()?.pending_evidence_records, 1);
     assert_eq!(observations.pending_evidence_records(), 3);
     drop(connection);
-    let _result = initial_shutdown.send(());
-    initial_server.await??;
-    drop(initial_control);
+    initial_server.shutdown().await?;
     drop(initial_intake);
     drop(initial_store);
 
-    let reopened_store = ControlStore::open(&store_path)?;
+    let reopened_store = wait_for_async(
+        &store_path,
+        "the stopped Control server to release its evidence-store lease",
+        Duration::from_secs(5),
+        || control_store_lease_ready(ControlStore::open(&store_path)),
+        || "the stopped server still owns the evidence store `owner.lock`".to_owned(),
+    )
+    .await?;
     let reopened_intake = EvidenceIntakeOwner::from_store(reopened_store.clone());
     assert_eq!(reopened_intake.contiguous_cursor(&identity)?, 0);
     assert_eq!(reopened_store.health()?.pending_evidence_records, 1);
     let reopened_control = control(reopened_store.clone())?;
-    let reopened_address = free_address()?;
-    let (reopened_shutdown, reopened_server) =
-        start_server(reopened_address, &files, reopened_control).await?;
-    let mut connection = connector(reopened_address)
+    let reopened_server = ControlServerFixture::start(&files, reopened_control).await?;
+    let mut connection = connector(reopened_server.address())
         .connect(registration(), false, &mut trust)
         .await?;
     connection
@@ -1060,8 +1061,7 @@ async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
         3
     );
     drop(connection);
-    let _result = reopened_shutdown.send(());
-    reopened_server.await??;
+    reopened_server.shutdown().await?;
     Ok(())
 }
 

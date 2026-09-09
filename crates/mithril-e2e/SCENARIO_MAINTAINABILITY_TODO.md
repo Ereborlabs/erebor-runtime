@@ -115,7 +115,7 @@ physical run:
   status when readiness fails.
 - [ ] `native_process_fixture_reparents_a_stopped_child_before_exec`: wait for
   the child to reach stopped state before the test reads its parent identity.
-- [ ] `mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack`:
+- [x] `mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack`:
   wait for the stopped Control server to release its store lease before the
   restart.
 - [ ] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`:
@@ -144,7 +144,7 @@ acknowledgement, or decommission operations directly.
 - [ ] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`
 - [ ] `mtls_rejects_wrong_node_binding_and_expired_client_identity`
 - [ ] `mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered_session`
-- [ ] `mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack`
+- [x] `mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack`
 - [x] `mtls_storage_failure_withholds_ack_until_replay_is_durable`
 - [x] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
 - [ ] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
