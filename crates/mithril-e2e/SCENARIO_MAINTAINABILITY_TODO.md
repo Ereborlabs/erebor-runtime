@@ -184,9 +184,9 @@ starting the complete privileged scenarios.
 
 ### Native identity fixture checks
 
-- [ ] Replace duplicated native child exit and exec readiness loops with the
+- [x] Replace duplicated native child exit and exec readiness loops with the
   shared wait. Preserve child status and snapshot diagnostics.
-- [ ] Keep each of the 13 `identity.rs` tests and the `clone3.rs` test
+- [x] Keep each of the 13 `identity.rs` tests and the `clone3.rs` test
   beside its fixture owner. Rerun them after each identity fixture change.
 
 ### Compact owner-local checks
