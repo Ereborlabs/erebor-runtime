@@ -123,7 +123,7 @@ physical run:
   last ready sessions on timeout.
 - [x] `control_evidence_queue_reclaims_only_durably_consumed_segments`: wait
   for the last compact owner to release the store lease before reopening it.
-- [ ] `node_decommission_https_accepts_the_same_signed_artifact_as_control`:
+- [x] `node_decommission_https_accepts_the_same_signed_artifact_as_control`:
   wait for the HTTPS listener before the first request.
 
 ## In-process scenario migration ledger
@@ -149,7 +149,7 @@ acknowledgement, or decommission operations directly.
 - [x] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
 - [ ] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
 - [ ] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`
-- [ ] `node_decommission_https_accepts_the_same_signed_artifact_as_control`
+- [x] `node_decommission_https_accepts_the_same_signed_artifact_as_control`
 - [ ] `mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound`
 - [ ] `mtls_evidence_backlog_exceeds_the_previous_baseline`
 - [ ] `mtls_coverage_upload_preserves_gap_truth_at_control`

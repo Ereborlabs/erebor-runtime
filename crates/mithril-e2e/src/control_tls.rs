@@ -1836,10 +1836,9 @@ async fn node_decommission_https_accepts_the_same_signed_artifact_as_control(
         },
         store,
     )?;
-    let grpc_address = free_address()?;
-    let (grpc_shutdown, grpc_server) = start_server(grpc_address, &files, control.clone()).await?;
+    let grpc_server = ControlServerFixture::start(&files, control.clone()).await?;
     let connector = NodeControlConnector::new(
-        files.node_config(grpc_address),
+        files.node_config(grpc_server.address()),
         "node-a".to_owned(),
         [1; 16],
     );
@@ -1879,7 +1878,7 @@ async fn node_decommission_https_accepts_the_same_signed_artifact_as_control(
         )
         .await
     });
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let server = ControlServerFixture::from_running(address, shutdown, server).await?;
 
     let artifact = SignedNodeDecommissionV1::sign(
         &NodeDecommissionAuthorizationV1::new(
@@ -1925,11 +1924,9 @@ async fn node_decommission_https_accepts_the_same_signed_artifact_as_control(
         submitted
     );
 
-    let _result = shutdown.send(());
-    server.await??;
+    server.shutdown().await?;
     drop(connection);
-    let _result = grpc_shutdown.send(());
-    grpc_server.await??;
+    grpc_server.shutdown().await?;
     Ok(())
 }
 
@@ -2706,6 +2703,37 @@ impl ControlServerFixture {
 
     fn address(&self) -> SocketAddr {
         self.address
+    }
+
+    async fn from_running(
+        address: SocketAddr,
+        shutdown: oneshot::Sender<()>,
+        server: tokio::task::JoinHandle<mithril_control::Result<()>>,
+    ) -> Result<Self, Box<dyn StdError>> {
+        let path = PathBuf::from(address.to_string());
+        if let Err(error) = wait_for_async(
+            &path,
+            "the test server to accept TCP connections",
+            Duration::from_secs(5),
+            || Ok(std::net::TcpStream::connect(address).ok().map(|_stream| ())),
+            || {
+                format!(
+                    "server task finished before readiness: {}",
+                    server.is_finished()
+                )
+            },
+        )
+        .await
+        {
+            let _result = shutdown.send(());
+            server.await??;
+            return Err(error.into());
+        }
+        Ok(Self {
+            address,
+            shutdown: Some(shutdown),
+            server: Some(server),
+        })
     }
 
     async fn shutdown(mut self) -> Result<(), Box<dyn StdError>> {
