@@ -104,7 +104,7 @@ physical run:
 
 - [x] `mtls_storage_failure_withholds_ack_until_replay_is_durable`: release the
   first `ControlStore` lease before the scenario reopens the same directory.
-- [ ] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`:
+- [x] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`:
   make server and connection readiness deterministic and include the server
   result in a connection failure diagnostic.
 - [ ] `shared_mmap_target_reports_both_unrestricted_controls`: make the child
@@ -131,7 +131,7 @@ acknowledgement, or decommission operations directly.
 - [ ] `mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered_session`
 - [ ] `mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack`
 - [x] `mtls_storage_failure_withholds_ack_until_replay_is_durable`
-- [ ] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
+- [x] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
 - [ ] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
 - [ ] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`
 - [ ] `node_decommission_https_accepts_the_same_signed_artifact_as_control`

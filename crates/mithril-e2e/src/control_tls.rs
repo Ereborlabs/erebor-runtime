@@ -1205,21 +1205,30 @@ async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retaine
     let control = ControlPlane::with_control_store(allowed(), trust_generation.clone(), store)?
         .with_policy_desired_state(fixture.owner.clone());
 
-    let address = free_address()?;
-    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
+    let first_server = ControlServerFixture::start(&files, control.clone()).await?;
     let old_connector = NodeControlConnector::new(
-        files.node_config(address),
+        files.node_config(first_server.address()),
         "node-a".to_owned(),
         node_boot_id,
     );
     let mut trust = TrustCache::load(&directory.path().join("trust"))?;
-    let mut old_connection = old_connector
+    let mut old_connection = match old_connector
         .connect(
             OutagePolicyFixture::registration(node_boot_id, false),
             false,
             &mut trust,
         )
-        .await?;
+        .await
+    {
+        Ok(connection) => connection,
+        Err(source) => {
+            let server_result = first_server.shutdown().await;
+            return Err(format!(
+                "initial Control connection failed: {source}; server result: {server_result:?}"
+            )
+            .into());
+        }
+    };
     old_connection.report_readiness(true, true).await?;
     control.bind_kubernetes_node_session("worker-a", "dddddddd-dddd-4ddd-8ddd-dddddddddddd")?;
     assert!(control.replace_kubernetes_workload_inventory(workload_inventory.clone())?);
@@ -1259,8 +1268,7 @@ async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retaine
     let first_candidate_id = first_bundle.candidate.candidate_content_id.clone();
     let first_bundle_digest = first_bundle.bundle_digest.clone();
     drop(old_connection);
-    let _result = shutdown.send(());
-    server.await??;
+    first_server.shutdown().await?;
     drop(control);
     drop(fixture);
 
@@ -1316,19 +1324,29 @@ async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retaine
     let control = ControlPlane::with_control_store(allowed(), trust_generation, store)?
         .with_policy_desired_state(fixture.owner.clone());
     assert!(control.replace_kubernetes_workload_inventory(workload_inventory.clone())?);
-    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
+    let second_server = ControlServerFixture::start(&files, control.clone()).await?;
     let connector = NodeControlConnector::new(
-        files.node_config(address),
+        files.node_config(second_server.address()),
         "node-a".to_owned(),
         node_boot_id,
     );
-    let mut connection = connector
+    let mut connection = match connector
         .connect(
             OutagePolicyFixture::registration(node_boot_id, true),
             true,
             &mut trust,
         )
-        .await?;
+        .await
+    {
+        Ok(connection) => connection,
+        Err(source) => {
+            let server_result = second_server.shutdown().await;
+            return Err(format!(
+                "recovered Control connection failed: {source}; server result: {server_result:?}"
+            )
+            .into());
+        }
+    };
     connection.report_readiness(true, true).await?;
     control.bind_kubernetes_node_session("worker-a", "dddddddd-dddd-4ddd-8ddd-dddddddddddd")?;
     let coverage = observations
@@ -1426,8 +1444,7 @@ async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retaine
     );
 
     drop(connection);
-    let _result = shutdown.send(());
-    server.await??;
+    second_server.shutdown().await?;
     Ok(())
 }
 
