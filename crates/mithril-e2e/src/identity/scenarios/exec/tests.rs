@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use rustix::process::Signal;
 use snafu::ResultExt as _;
 
 use crate::error::IoSnafu;
@@ -23,6 +24,26 @@ fn thread_execs_process() -> crate::Result<()> {
     actor.send(b"exec\n")?;
     actor.wait_comm(pid, "sleep", "non-leader thread exec")?;
     actor.stop()
+}
+
+#[test]
+fn child_execs() -> crate::Result<()> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let temp = tempfile::tempdir().context(IoSnafu {
+        path: std::path::Path::new("child exec actor"),
+    })?;
+    let ready = temp.path().join("ready");
+    let mut actor = ProcessFixture::python(&root, "native_child_exec.py", [&ready])?;
+
+    actor.send(b"root\n")?;
+    let pid = actor.wait_pid(&ready, "native child creation")?;
+    actor.track(pid)?;
+    actor.wait_stop(pid, "native child stop")?;
+    actor.signal(pid, Signal::CONT)?;
+    actor.wait_comm(pid, "sleep", "native child exec")?;
+    actor.stop()?;
+    assert!(!PathBuf::from(format!("/proc/{pid}")).exists());
+    Ok(())
 }
 
 #[test]

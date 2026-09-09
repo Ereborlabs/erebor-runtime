@@ -485,6 +485,7 @@ impl IdentityTestRunner {
         self.materialize_object(output_directory)?;
         let execfail_path = output_directory.join("execfail");
         let execfail_ready_path = output_directory.join("execfail-ready");
+        let child_ready_path = output_directory.join("native-child-ready");
         let post_ponr_execfail_path = output_directory.join("post-ponr-execfail");
         let non_leader_thread_ready_path = output_directory.join("non-leader-thread-ready");
         let leader_first_ready_path = output_directory.join("leader-first-ready");
@@ -494,6 +495,7 @@ impl IdentityTestRunner {
         ensure!(
             !execfail_path.exists()
                 && !execfail_ready_path.exists()
+                && !child_ready_path.exists()
                 && !post_ponr_execfail_path.exists()
                 && !non_leader_thread_ready_path.exists()
                 && !leader_first_ready_path.exists()
@@ -507,6 +509,7 @@ impl IdentityTestRunner {
         );
         let execfail_cleanup = ProbeFile::new(&execfail_path);
         let execfail_ready_cleanup = ProbeFile::new(&execfail_ready_path);
+        let child_ready_cleanup = ProbeFile::new(&child_ready_path);
         let post_ponr_execfail_cleanup = ProbeFile::new(&post_ponr_execfail_path);
         let non_leader_thread_ready_cleanup = ProbeFile::new(&non_leader_thread_ready_path);
         let leader_first_ready_cleanup = ProbeFile::new(&leader_first_ready_path);
@@ -878,87 +881,10 @@ impl IdentityTestRunner {
         );
         clone_fixture.stop();
 
-        let mut fixture = NativeProcessFixture::start()?;
-        fs::write(&procs_path, fixture.outer_pid().to_string())
-            .context(IoSnafu { path: &procs_path })?;
-        let external_root = self.wait_for("external root identity", &procs_path, || {
-            inspector.snapshot(fixture.outer_pid()).context(NodeSnafu)
-        })?;
-
-        let next_id_before_child = identity_next_id(&host)?;
-        fixture.release_root()?;
-        let native_pid = match self.wait_for("native child creation", &procs_path, || {
-            fixture.native_child_pid()
-        }) {
-            Ok(pid) => pid,
-            Err(source) => {
-                let health = identity.health(&host).context(NodeSnafu)?;
-                let next_id_after_child = identity_next_id(&host)?;
-                return Err(invalid_state(format!(
-                    "{source}; identity health {health:?}; child allocation advanced next_id by {}",
-                    next_id_after_child.saturating_sub(next_id_before_child)
-                )));
-            }
-        };
-        fixture.open_native_pidfd(native_pid)?;
-        let before_exec = self.wait_for("native child identity", &procs_path, || {
-            inspector.snapshot(native_pid).context(NodeSnafu)
-        })?;
-        ensure!(
-            external_root.creator_task_cookie.is_none()
-                && external_root.root_class.as_deref() == Some("external_runtime_root")
-                && external_root.installed_role_class.as_deref()
-                    == Some("runtime_external_restricted")
-                && external_root.active_role_id == binding.external_role_id
-                && external_root.coordinate_state == TaskCoordinateStateV1::Runnable as u8
-                && before_exec.creator_task_cookie == Some(external_root.task_cookie)
-                && before_exec.real_parent_task_cookie == external_root.task_cookie
-                && before_exec.task_cookie != external_root.task_cookie
-                && before_exec.active_role_id == external_root.active_role_id
-                && before_exec.image_provenance_id == external_root.image_provenance_id
-                && before_exec.image_candidate_count > 0
-                && before_exec.process_execution_state == ProcessExecutionStateV1::Active as u8
-                && before_exec.process_state_vector_state
-                    == ProcessStateVectorStateV1::Active as u8
-                && before_exec.coordinate_state == TaskCoordinateStateV1::Runnable as u8,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: "external root or native child identity is incorrect",
-            }
-        );
-
-        fixture.release_exec(native_pid)?;
-        let after_exec = self.wait_for("native exec commit", &procs_path, || {
-            let snapshot = inspector.snapshot(native_pid).context(NodeSnafu)?;
-            Ok(snapshot.filter(|snapshot| {
-                snapshot.active_execution_id != before_exec.active_execution_id
-                    && snapshot.image_provenance_id != before_exec.image_provenance_id
-                    && snapshot.image_candidate_count > 0
-                    && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
-                    && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
-            }))
-        });
-        let after_exec = match after_exec {
-            Ok(snapshot) => snapshot,
-            Err(source) => {
-                let snapshot = inspector.snapshot(native_pid).context(NodeSnafu)?;
-                let health = identity.health(&host).context(NodeSnafu)?;
-                let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
-                let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
-                let comm = fs::read_to_string(&comm_path)
-                    .unwrap_or_else(|error| format!("<unavailable: {error}>"));
-                let status = fs::read_to_string(&status_path)
-                    .unwrap_or_else(|error| format!("<unavailable: {error}>"));
-                return Err(invalid_state(format!(
-                    "{source}; live snapshot {snapshot:?}; identity health {health:?}; comm {}; status {}",
-                    comm.trim(),
-                    status.lines().next().unwrap_or("<empty>")
-                )));
-            }
-        };
-        fixture.stop()?;
-
-        let exec_case = scenarios::ExecCase::new(self, &host, &inspector, &binding, &procs_path);
+        let exec_case =
+            scenarios::ExecCase::new(self, &host, &identity, &inspector, &binding, &procs_path);
+        let (external_root, before_exec, after_exec) = exec_case.child(&child_ready_path)?;
+        child_ready_cleanup.cleanup()?;
         let (thread_root, thread_exec) = exec_case.non_leader(&non_leader_thread_ready_path)?;
         non_leader_thread_ready_cleanup.cleanup()?;
 

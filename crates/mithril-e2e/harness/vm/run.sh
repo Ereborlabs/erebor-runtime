@@ -327,6 +327,7 @@ done
   "$repo_root/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh" \
   "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh"
 for fixture in \
+  native_child_exec.py \
   native_concurrent_thread_exec.py \
   native_leader_first.py \
   native_namespace_init.py \

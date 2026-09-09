@@ -5,10 +5,12 @@ use std::cell::RefCell;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{ErrorKind, Read as _, Write as _};
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::time::Duration;
 
+use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
 
 use crate::error::{InvalidInputSnafu, IoSnafu};
@@ -26,6 +28,7 @@ pub(crate) struct ProcessFixture {
     stdin: Option<ChildStdin>,
     stdout: Option<ChildStdout>,
     stderr: Option<ChildStderr>,
+    tasks: Vec<(u32, OwnedFd)>,
     stopped: bool,
 }
 
@@ -35,6 +38,7 @@ impl ProcessFixture {
             stdin: child.stdin.take(),
             stdout: child.stdout.take(),
             stderr: child.stderr.take(),
+            tasks: Vec::new(),
             child,
             path: path.to_owned(),
             stopped: false,
@@ -74,6 +78,50 @@ impl ProcessFixture {
 
     pub(crate) fn id(&self) -> u32 {
         self.child.id()
+    }
+
+    pub(crate) fn track(&mut self, id: u32) -> Result<()> {
+        if self.tasks.iter().any(|(known, _)| *known == id) {
+            return Ok(());
+        }
+        let raw = i32::try_from(id).map_err(|source| {
+            InvalidInputSnafu {
+                path: &self.path,
+                reason: format!("the tracked PID is invalid: {source}"),
+            }
+            .build()
+        })?;
+        let pid = Pid::from_raw(raw).context(InvalidInputSnafu {
+            path: &self.path,
+            reason: "PID zero cannot identify a tracked process",
+        })?;
+        let fd = pidfd_open(pid, PidfdFlags::empty()).map_err(|source| {
+            InvalidInputSnafu {
+                path: &self.path,
+                reason: format!("open pidfd for {id}: {source}"),
+            }
+            .build()
+        })?;
+        self.tasks.push((id, fd));
+        Ok(())
+    }
+
+    pub(crate) fn signal(&self, id: u32, signal: Signal) -> Result<()> {
+        let fd = self
+            .tasks
+            .iter()
+            .find_map(|(known, fd)| (*known == id).then_some(fd))
+            .context(InvalidInputSnafu {
+                path: &self.path,
+                reason: "the process is not tracked",
+            })?;
+        pidfd_send_signal(fd, signal).map_err(|source| {
+            InvalidInputSnafu {
+                path: &self.path,
+                reason: format!("signal tracked process {id}: {source}"),
+            }
+            .build()
+        })
     }
 
     pub(crate) fn send(&mut self, bytes: &[u8]) -> Result<()> {
@@ -179,6 +227,33 @@ impl ProcessFixture {
         )
     }
 
+    pub(crate) fn wait_stop(&mut self, id: u32, operation: &str) -> Result<()> {
+        let path = PathBuf::from(format!("/proc/{id}/status"));
+        let last = RefCell::new(String::from("State: <absent>"));
+        self.wait_path(
+            &path,
+            operation,
+            START_LIMIT,
+            || {
+                let text = match fs::read_to_string(&path) {
+                    Ok(text) => text,
+                    Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
+                    Err(source) => return Err(source).context(IoSnafu { path: &path }),
+                };
+                *last.borrow_mut() = text
+                    .lines()
+                    .find(|line| line.starts_with("State:"))
+                    .unwrap_or("State: <missing>")
+                    .to_owned();
+                Ok(text
+                    .lines()
+                    .any(|line| line.starts_with("State:\tT"))
+                    .then_some(()))
+            },
+            || format!("process {id}; last {}", last.borrow()),
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn wait_comm(&mut self, pid: u32, name: &str, operation: &str) -> Result<()> {
         let path = PathBuf::from(format!("/proc/{pid}/comm"));
@@ -278,14 +353,26 @@ impl ProcessFixture {
 
     pub(crate) fn stop(&mut self) -> Result<()> {
         self.close();
-        if self.stopped {
-            return Ok(());
+        let mut failed = None;
+        for (id, fd) in &self.tasks {
+            match pidfd_send_signal(fd, Signal::KILL) {
+                Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+                Err(source) => failed = Some(format!("kill tracked process {id}: {source}")),
+            }
         }
-        if self.try_wait()?.is_none() {
+        self.tasks.clear();
+        if !self.stopped && self.try_wait()?.is_none() {
             self.child.kill().context(IoSnafu { path: &self.path })?;
             self.wait()?;
         }
-        Ok(())
+        match failed {
+            Some(reason) => InvalidInputSnafu {
+                path: &self.path,
+                reason,
+            }
+            .fail(),
+            None => Ok(()),
+        }
     }
 
     pub(crate) fn ready(&mut self) -> Result<()> {

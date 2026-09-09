@@ -6,17 +6,6 @@ use super::super::IdentityTestRunner;
 use super::{test_support, NativeProcessFixture};
 
 #[test]
-fn native_process_fixture_waits_for_stopped_child_before_exec() -> crate::Result<()> {
-    let mut fixture = NativeProcessFixture::start()?;
-    fixture.release_root()?;
-    let native_pid = fixture.wait_for_native_child("native child creation")?;
-
-    fixture.release_exec(native_pid)?;
-    fixture.wait_for_executable(native_pid, "sleep", "native child exec")?;
-    Ok(())
-}
-
-#[test]
 fn post_ponr_fixture_terminates_the_exec_process() -> crate::Result<()> {
     let temporary = tempfile::tempdir().map_err(|error| {
         super::invalid_state(format!("create post-PONR test directory: {error}"))

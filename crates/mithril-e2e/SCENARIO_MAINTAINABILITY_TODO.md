@@ -340,7 +340,7 @@ command passes.
   production health reads, fork action, and mismatch assertions visible.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
   first-effect action, and exact identity assertions visible.
-- [ ] Native child exec: keep the fork and exec actions, production identity
+- [x] Native child exec: keep the fork and exec actions, production identity
   snapshots, and allocation diagnostics visible.
 - [x] Non-leader thread exec: remove the loose
   `identity/scenarios/non_leader_exec.rs::run` function. Put scenario state on
@@ -580,13 +580,14 @@ entry when a test receives a shorter name or moves beside its real owner.
 - `prototype.rs::source_tg_runtime_join_accepts_only_authenticated_complete_fresh_roots`
 - `provenance.rs::dossier_closes_sources_licenses_owners_and_hostile_fixtures`
 
-The current tree also has ten reliability and common-owner tests added
+The current tree also has eleven reliability and common-owner tests added
 after the baseline. Preserve them while the structural changes are replaced:
 
 - `effect/runc/process.rs::exit_reports_output`
 - `effect/runc/process.rs::runc_uses_python_actor`
 - `identity/native_process/tests.rs::startup_reports_exit`
 - `identity/scenarios/exec/tests.rs::thread_execs_process`
+- `identity/scenarios/exec/tests.rs::child_execs`
 - `identity/scenarios/exec/tests.rs::threads_race_exec`
 - `physical.rs::async_readiness_yields_until_the_fixture_is_ready`
 - `physical.rs::readiness_reports_diagnostics_and_directory_cleanup_is_idempotent`
