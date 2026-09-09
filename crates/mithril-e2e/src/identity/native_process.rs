@@ -6,6 +6,8 @@ mod reparent_tests;
 mod test_support;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod thread_tests;
 
 use std::cell::RefCell;
 #[cfg(test)]
@@ -255,6 +257,34 @@ impl NativeProcessFixture {
                     last.borrow()
                 )
             },
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn wait_for_reported_tid(&mut self, ready: &Path, operation: &str) -> Result<u32> {
+        let outer_pid = self.outer.id();
+        wait_for(
+            ready,
+            operation,
+            WAIT_LIMIT,
+            || self.reported_tid(ready),
+            || format!("outer process {outer_pid} has not reported a thread"),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn wait_for_concurrent_thread_tids(
+        &mut self,
+        ready: &Path,
+        operation: &str,
+    ) -> Result<[u32; 2]> {
+        let outer_pid = self.outer.id();
+        wait_for(
+            ready,
+            operation,
+            WAIT_LIMIT,
+            || self.concurrent_thread_tids(ready),
+            || format!("outer process {outer_pid} has not reported two distinct threads"),
         )
     }
 

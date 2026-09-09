@@ -231,14 +231,14 @@ starting the complete privileged scenarios.
 - [x] Move subreaper, namespace-init, orphan, double-fork, and leader-first
   checks to `identity/native_process/reparent_tests.rs`. Keep each process
   transition and parent assertion visible.
-- [ ] Move non-leader and concurrent-thread checks to
+- [x] Move non-leader and concurrent-thread checks to
   `identity/native_process/thread_tests.rs`. Keep exact TID assertions.
 - [x] Move the production object allocation check to
   `identity/verification_tests.rs`.
 - [x] Move the authorization replay check to
   `identity/authorization_tests.rs`. Keep retarget, expiry, replay, restart,
   and fresh-control assertions in the production owner call.
-- [ ] Rerun all 13 focused identity tests and the `clone3.rs` test after each
+- [x] Rerun all 14 focused identity tests and the `clone3.rs` test after each
   identity fixture change.
 
 ### Compact owner-local checks
