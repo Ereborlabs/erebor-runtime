@@ -3001,10 +3001,14 @@ unsafe fn shared_mmap_target_child(
             }
             signal.set_state(SHARED_MMAP_ALLOWED);
         }
-        while signal.state() != EMPTY {
-            if signal.state() == SHARED_MMAP_EXIT_REQUEST {
+        loop {
+            let state = signal.state();
+            if state == SHARED_MMAP_EXIT_REQUEST {
                 // SAFETY: this terminates only the fork child.
                 unsafe { libc::_exit(0) };
+            }
+            if state != SHARED_MMAP_ALLOWED && state < SHARED_MMAP_FAILURE_BASE {
+                break;
             }
             std::hint::spin_loop();
         }
@@ -4224,8 +4228,10 @@ mod tests {
         })?;
 
         assert!(target.pid() > 0);
-        assert!(target.mmap_protected().allowed);
-        assert!(target.mmap_benign().allowed);
+        for _ in 0..32 {
+            assert!(target.mmap_protected().allowed);
+            assert!(target.mmap_benign().allowed);
+        }
         Ok(())
     }
 

@@ -107,7 +107,7 @@ physical run:
 - [x] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`:
   make server and connection readiness deterministic and include the server
   result in a connection failure diagnostic.
-- [ ] `shared_mmap_target_reports_both_unrestricted_controls`: make the child
+- [x] `shared_mmap_target_reports_both_unrestricted_controls`: make the child
   readiness and request exchange deterministic without weakening the mmap
   allow assertions.
 
