@@ -574,30 +574,12 @@ async fn mtls_connection_renews_the_ready_session_while_its_owner_is_idle(
 #[tokio::test]
 async fn mtls_connection_reports_local_readiness_transitions_without_reconnect(
 ) -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let certificates = Certificates::issue(false)?;
-    let files = certificates.write(directory.path())?;
-    let address = free_address()?;
-    let store = ControlStore::open(directory.path().join("control-store"))?;
-    let control = ControlPlane::with_control_store(
-        vec![AllowedNodeIdentity {
-            node_id: "node-a".to_owned(),
-            certificate_sha256: certificates.node_digest(),
-            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
-        }],
-        TrustGenerationV1 {
-            generation: 4,
-            bundle_digest: "d".repeat(64),
-            policy_issuer_sequence_epoch: 0,
-            policy_signers: Vec::new(),
-        },
-        store,
-    )?;
-    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
+    let fixture = MtlsFixture::new(false)?;
+    let control = fixture.control(4)?;
+    let server = fixture.start(control.clone()).await?;
 
-    let connector =
-        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
-    let mut trust = TrustCache::load(directory.path())?;
+    let connector = fixture.connector(&server, "node-a", [7; 16]);
+    let mut trust = TrustCache::load(fixture.path())?;
     let mut node = registration();
     node.kubernetes_node_name = "worker-a.example".to_owned();
     let connection = connector.connect(node, true, &mut trust).await?;
@@ -625,8 +607,7 @@ async fn mtls_connection_reports_local_readiness_transitions_without_reconnect(
     assert_eq!(control.registered_nonce_count(), 1);
 
     drop(connection);
-    let _result = shutdown.send(());
-    server.await??;
+    server.shutdown().await?;
     Ok(())
 }
 

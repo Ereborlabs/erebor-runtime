@@ -140,7 +140,7 @@ acknowledgement, or decommission operations directly.
 
 - [x] `mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce`
 - [x] `mtls_connection_renews_the_ready_session_while_its_owner_is_idle`
-- [ ] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
+- [x] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
 - [x] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`
 - [ ] `mtls_rejects_wrong_node_binding_and_expired_client_identity`
 - [ ] `mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered_session`
