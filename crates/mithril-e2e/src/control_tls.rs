@@ -2464,7 +2464,6 @@ async fn assert_wrong_ca_rejected() -> Result<(), Box<dyn StdError>> {
     let wrong_ca_directory = directory.path().join("wrong-ca");
     fs::create_dir(&wrong_ca_directory)?;
     let wrong_ca = Certificates::issue(false)?.write(&wrong_ca_directory)?;
-    let address = free_address()?;
     let control = ControlPlane::new(
         vec![AllowedNodeIdentity {
             node_id: "node-a".to_owned(),
@@ -2478,8 +2477,8 @@ async fn assert_wrong_ca_rejected() -> Result<(), Box<dyn StdError>> {
             policy_signers: Vec::new(),
         },
     );
-    let (shutdown, server) = start_server(address, &files, control).await?;
-    let mut config = files.node_config(address);
+    let server = ControlServerFixture::start(&files, control).await?;
+    let mut config = files.node_config(server.address());
     config.ca_path = wrong_ca.ca;
     let connector = NodeControlConnector::new(config, "node-a".to_owned(), [9; 16]);
     let mut trust = TrustCache::load(directory.path())?;
@@ -2487,8 +2486,7 @@ async fn assert_wrong_ca_rejected() -> Result<(), Box<dyn StdError>> {
         .connect(registration(), true, &mut trust)
         .await
         .is_err());
-    let _result = shutdown.send(());
-    server.await??;
+    server.shutdown().await?;
     Ok(())
 }
 
@@ -2499,7 +2497,6 @@ async fn assert_rejected_identity(
     let directory = tempfile::tempdir()?;
     let certificates = Certificates::issue(expired)?;
     let files = certificates.write(directory.path())?;
-    let address = free_address()?;
     let control = ControlPlane::new(
         vec![AllowedNodeIdentity {
             node_id: "node-a".to_owned(),
@@ -2513,9 +2510,9 @@ async fn assert_rejected_identity(
             policy_signers: Vec::new(),
         },
     );
-    let (shutdown, server) = start_server(address, &files, control).await?;
+    let server = ControlServerFixture::start(&files, control).await?;
     let connector = NodeControlConnector::new(
-        files.node_config(address),
+        files.node_config(server.address()),
         registered_node_id.to_owned(),
         [8; 16],
     );
@@ -2524,8 +2521,7 @@ async fn assert_rejected_identity(
         .connect(registration(), true, &mut trust)
         .await
         .is_err());
-    let _result = shutdown.send(());
-    server.await??;
+    server.shutdown().await?;
     Ok(())
 }
 

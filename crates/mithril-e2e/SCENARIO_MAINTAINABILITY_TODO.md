@@ -142,7 +142,7 @@ acknowledgement, or decommission operations directly.
 - [x] `mtls_connection_renews_the_ready_session_while_its_owner_is_idle`
 - [x] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
 - [x] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`
-- [ ] `mtls_rejects_wrong_node_binding_and_expired_client_identity`
+- [x] `mtls_rejects_wrong_node_binding_and_expired_client_identity`
 - [ ] `mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered_session`
 - [x] `mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack`
 - [x] `mtls_storage_failure_withholds_ack_until_replay_is_durable`
