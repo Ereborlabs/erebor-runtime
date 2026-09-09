@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Child;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -75,39 +74,6 @@ pub(crate) fn wait_for<T>(
         }
         thread::sleep(POLL_INTERVAL.min(remaining));
     }
-}
-
-pub(crate) fn wait_for_process<T>(
-    child: &mut Child,
-    path: &Path,
-    operation: &str,
-    limit: Duration,
-    mut inspect: impl FnMut() -> Result<Option<T>>,
-    mut exit_diagnostic: impl FnMut() -> Result<String>,
-    timeout_diagnostic: impl FnOnce() -> String,
-) -> Result<T> {
-    wait_for(
-        path,
-        operation,
-        limit,
-        || {
-            if let Some(value) = inspect()? {
-                return Ok(Some(value));
-            }
-            if let Some(status) = child.try_wait().context(IoSnafu { path })? {
-                return InvalidInputSnafu {
-                    path,
-                    reason: format!(
-                        "the process exited with {status} before {operation}; {}",
-                        exit_diagnostic()?
-                    ),
-                }
-                .fail();
-            }
-            Ok(None)
-        },
-        timeout_diagnostic,
-    )
 }
 
 #[cfg(test)]

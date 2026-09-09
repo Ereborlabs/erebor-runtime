@@ -13,6 +13,7 @@ mod golden;
 mod identity;
 mod loader;
 mod physical;
+mod process;
 #[cfg(test)]
 mod prototype;
 mod provenance;

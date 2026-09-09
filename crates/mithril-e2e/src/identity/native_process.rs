@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use std::cell::RefCell;
 #[cfg(test)]
 use std::collections::BTreeSet;
@@ -5,7 +8,7 @@ use std::fs;
 use std::io::{ErrorKind, Read as _, Write as _};
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::Duration;
 
 use rustix::process::{pidfd_send_signal, Signal};
@@ -13,14 +16,14 @@ use snafu::{ensure, ResultExt as _};
 
 use super::{invalid_state, open_pidfd, WAIT_LIMIT};
 use crate::error::{InvalidInputSnafu, IoSnafu};
-use crate::physical::{wait_for, wait_for_process};
+use crate::physical::wait_for;
+use crate::process::{process_program, wait_for_process, ProcessFixture};
 use crate::Result;
 
 const READY: &[u8] = b"native-fixture-ready\n";
-const SCRIPT_DIRECTORY: &str = "crates/mithril-e2e/fixtures/identity";
 
 pub(super) struct NativeProcessFixture {
-    outer: Child,
+    outer: ProcessFixture,
     stdin: Option<ChildStdin>,
     ready_stdout: Option<ChildStdout>,
     stderr: Option<ChildStderr>,
@@ -41,14 +44,14 @@ impl NativeProcessFixture {
     }
 
     pub(super) fn start_subreaper(repo_root: &Path) -> Result<Self> {
-        let script = Self::python_script(repo_root, "native_subreaper.py")?;
+        let script = process_program(repo_root, "native_subreaper.py")?;
         let mut command = Command::new("python3");
         command.arg(&script);
         Self::start_command(&mut command, false, Path::new("python3"), &script)
     }
 
     pub(super) fn start_namespace_init_reparenting(repo_root: &Path) -> Result<Self> {
-        let script = Self::python_script(repo_root, "native_namespace_init.py")?;
+        let script = process_program(repo_root, "native_namespace_init.py")?;
         let mut command = Command::new("/usr/bin/unshare");
         command
             .args(["--user", "--map-root-user", "--pid", "--fork", "python3"])
@@ -57,7 +60,7 @@ impl NativeProcessFixture {
     }
 
     pub(super) fn start_pid_tid_reuse(repo_root: &Path, work: &Path) -> Result<Self> {
-        let script = Self::python_script(repo_root, "native_pid_tid_reuse.py")?;
+        let script = process_program(repo_root, "native_pid_tid_reuse.py")?;
         let mut command = Command::new("/usr/bin/unshare");
         command
             .args(["--pid", "--fork", "--mount-proc", "python3"])
@@ -135,14 +138,14 @@ impl NativeProcessFixture {
         ready: &Path,
         release: &Path,
     ) -> Result<Self> {
-        let script = Self::python_script(repo_root, "native_leader_first.py")?;
+        let script = process_program(repo_root, "native_leader_first.py")?;
         let mut command = Command::new("python3");
         command.arg(&script).arg(ready).arg(release);
         Self::start_command(&mut command, false, Path::new("python3"), &script)
     }
 
     pub(super) fn start_with_non_leader_exec(repo_root: &Path, ready: &Path) -> Result<Self> {
-        let script = Self::python_script(repo_root, "native_non_leader_exec.py")?;
+        let script = process_program(repo_root, "native_non_leader_exec.py")?;
         let mut command = Command::new("python3");
         command.arg(&script).arg(ready);
         Self::start_command(&mut command, false, Path::new("python3"), &script)
@@ -153,22 +156,10 @@ impl NativeProcessFixture {
         repo_root: &Path,
         ready: &Path,
     ) -> Result<Self> {
-        let script = Self::python_script(repo_root, "native_concurrent_thread_exec.py")?;
+        let script = process_program(repo_root, "native_concurrent_thread_exec.py")?;
         let mut command = Command::new("python3");
         command.arg(&script).arg(ready);
         Self::start_command(&mut command, false, Path::new("python3"), &script)
-    }
-
-    fn python_script(repo_root: &Path, name: &str) -> Result<PathBuf> {
-        let path = repo_root.join(SCRIPT_DIRECTORY).join(name);
-        ensure!(
-            path.is_file(),
-            InvalidInputSnafu {
-                path: &path,
-                reason: "the native process Python fixture is missing",
-            }
-        );
-        Ok(path)
     }
 
     fn start_command(
@@ -196,7 +187,7 @@ impl NativeProcessFixture {
             .take()
             .ok_or_else(|| invalid_state("test shell has no stderr pipe"))?;
         let mut fixture = Self {
-            outer,
+            outer: ProcessFixture::new(outer),
             stdin: Some(stdin),
             ready_stdout: Some(ready_stdout),
             stderr: Some(stderr),
@@ -302,9 +293,7 @@ impl NativeProcessFixture {
     }
 
     pub(super) fn wait_for_parent_exit(&mut self) -> Result<()> {
-        let status = self.outer.wait().context(IoSnafu {
-            path: Path::new("identity test shell"),
-        })?;
+        let status = self.outer.wait(Path::new("identity test shell"))?;
         ensure!(
             status.success(),
             InvalidInputSnafu {
@@ -327,9 +316,7 @@ impl NativeProcessFixture {
     }
 
     pub(super) fn native_child_pid(&mut self) -> Result<Option<u32>> {
-        if let Some(status) = self.outer.try_wait().context(IoSnafu {
-            path: Path::new("identity test shell"),
-        })? {
+        if let Some(status) = self.outer.try_wait(Path::new("identity test shell"))? {
             let mut stderr = String::new();
             if let Some(mut pipe) = self.stderr.take() {
                 pipe.read_to_string(&mut stderr).context(IoSnafu {
@@ -345,9 +332,10 @@ impl NativeProcessFixture {
     }
 
     pub(super) fn non_leader_thread_tid(&mut self, ready: &Path) -> Result<Option<u32>> {
-        if let Some(status) = self.outer.try_wait().context(IoSnafu {
-            path: Path::new("non-leader thread fixture"),
-        })? {
+        if let Some(status) = self
+            .outer
+            .try_wait(Path::new("non-leader thread fixture"))?
+        {
             let mut stderr = String::new();
             if let Some(mut pipe) = self.stderr.take() {
                 pipe.read_to_string(&mut stderr).context(IoSnafu {
@@ -382,9 +370,10 @@ impl NativeProcessFixture {
 
     #[cfg(test)]
     pub(super) fn concurrent_thread_tids(&mut self, ready: &Path) -> Result<Option<[u32; 2]>> {
-        if let Some(status) = self.outer.try_wait().context(IoSnafu {
-            path: Path::new("concurrent thread fixture"),
-        })? {
+        if let Some(status) = self
+            .outer
+            .try_wait(Path::new("concurrent thread fixture"))?
+        {
             let mut stderr = String::new();
             if let Some(mut pipe) = self.stderr.take() {
                 pipe.read_to_string(&mut stderr).context(IoSnafu {
@@ -480,8 +469,7 @@ impl NativeProcessFixture {
         if let Some(pidfd) = &self.namespace_init_pidfd {
             let _result = pidfd_send_signal(pidfd, Signal::KILL);
         }
-        let _result = self.outer.kill();
-        let _result = self.outer.wait();
+        let _result = self.outer.stop(Path::new("identity test shell"));
         self.stdin.take();
     }
 
@@ -511,9 +499,7 @@ impl NativeProcessFixture {
                 || {
                     let mut buffer = [0_u8; 64];
                     match stdout.read(&mut buffer) {
-                        Ok(0) => Err(invalid_state(
-                            "native fixture closed its readiness pipe before the input barrier",
-                        )),
+                        Ok(0) => Ok(None),
                         Ok(count) => {
                             let mut received = received.borrow_mut();
                             received.extend_from_slice(&buffer[..count]);
@@ -566,9 +552,7 @@ impl NativeProcessFixture {
                 let status = match fs::read_to_string(&status_path) {
                     Ok(status) => status,
                     Err(source) if source.kind() == ErrorKind::NotFound => {
-                        let outer = self.outer.try_wait().context(IoSnafu {
-                            path: Path::new("identity test shell"),
-                        })?;
+                        let outer = self.outer.try_wait(Path::new("identity test shell"))?;
                         let stderr = if outer.is_some() {
                             self.stdin.take();
                             let mut stderr = String::new();
@@ -608,7 +592,7 @@ impl NativeProcessFixture {
             "the native child exec to fail",
             Duration::from_secs(5),
             || {
-                let Some(status) = self.outer.try_wait().context(IoSnafu { path })? else {
+                let Some(status) = self.outer.try_wait(path)? else {
                     return Ok(None);
                 };
                 self.stdin.take();
@@ -632,9 +616,9 @@ impl NativeProcessFixture {
             "the post-PONR exec failure to terminate its task",
             Duration::from_secs(5),
             || {
-                let Some(status) = self.outer.try_wait().context(IoSnafu {
-                    path: Path::new("post-PONR identity fixture"),
-                })?
+                let Some(status) = self
+                    .outer
+                    .try_wait(Path::new("post-PONR identity fixture"))?
                 else {
                     return Ok(None);
                 };
@@ -661,7 +645,7 @@ impl NativeProcessFixture {
             "the leader-first worker to exit",
             Duration::from_secs(5),
             || {
-                let Some(status) = self.outer.try_wait().context(IoSnafu { path })? else {
+                let Some(status) = self.outer.try_wait(path)? else {
                     return Ok(None);
                 };
                 self.stdin.take();

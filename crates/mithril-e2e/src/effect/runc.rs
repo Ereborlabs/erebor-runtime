@@ -68,6 +68,7 @@ use crate::error::{
 };
 use crate::identity::IdentityTestRunner;
 use crate::physical::{boot_identity, wait_for, ProbeDirectory, ProbeFile};
+use crate::process::ProcessFixture;
 use crate::{DigestV1, Result};
 
 const WAIT_LIMIT: Duration = Duration::from_secs(30);
@@ -513,7 +514,7 @@ impl RuncPolicyFixture {
 }
 
 struct RuncContainer {
-    child: Option<Child>,
+    process: ProcessFixture,
     runc_path: PathBuf,
     state_root: PathBuf,
     bundle: PathBuf,
@@ -531,7 +532,7 @@ struct ContainerdRuntime {
 }
 
 struct ContainerdServer {
-    child: Option<Child>,
+    process: ProcessFixture,
     state_directory: PathBuf,
 }
 
@@ -1567,7 +1568,7 @@ impl ContainerdServer {
                 path: containerd_path,
             })?;
         let mut server = Self {
-            child: Some(child),
+            process: ProcessFixture::new(child),
             state_directory,
         };
         let deadline = Instant::now() + WAIT_LIMIT;
@@ -1575,21 +1576,7 @@ impl ContainerdServer {
             if socket_path.exists() {
                 return Ok(server);
             }
-            if let Some(status) = server
-                .child
-                .as_mut()
-                .ok_or_else(|| {
-                    InvalidInputSnafu {
-                        path: containerd_path,
-                        reason: "the containerd process handle is absent".to_owned(),
-                    }
-                    .build()
-                })?
-                .try_wait()
-                .context(IoSnafu {
-                    path: containerd_path,
-                })?
-            {
+            if let Some(status) = server.process.try_wait(containerd_path)? {
                 return CommandSnafu {
                     program: containerd_path.display().to_string(),
                     reason: format!(
@@ -1615,22 +1602,7 @@ impl ContainerdServer {
     }
 
     fn cleanup(&mut self) -> Result<()> {
-        if let Some(mut child) = self.child.take() {
-            if child
-                .try_wait()
-                .context(IoSnafu {
-                    path: &self.state_directory,
-                })?
-                .is_none()
-            {
-                child.kill().context(IoSnafu {
-                    path: &self.state_directory,
-                })?;
-                child.wait().context(IoSnafu {
-                    path: &self.state_directory,
-                })?;
-            }
-        }
+        self.process.stop(&self.state_directory)?;
         if self.state_directory.exists() {
             fs::remove_dir_all(&self.state_directory).context(IoSnafu {
                 path: &self.state_directory,
@@ -1961,22 +1933,7 @@ impl RuncContainer {
     }
 
     fn cleanup(&mut self) -> Result<()> {
-        if let Some(mut child) = self.child.take() {
-            if child
-                .try_wait()
-                .context(IoSnafu {
-                    path: Path::new("runc child"),
-                })?
-                .is_none()
-            {
-                child.kill().context(IoSnafu {
-                    path: Path::new("runc child"),
-                })?;
-                child.wait().context(IoSnafu {
-                    path: Path::new("runc child"),
-                })?;
-            }
-        }
+        self.process.stop(Path::new("runc child"))?;
         let output = if let Some(containerd) = &self.containerd {
             Command::new(&containerd.runner_path)
                 .arg("containerd-cleanup-fixture")
@@ -2541,7 +2498,7 @@ impl EffectTestRunner {
             }
         );
         let mut container = RuncContainer {
-            child: Some(initial_child),
+            process: ProcessFixture::new(initial_child),
             runc_path: runc_path.to_path_buf(),
             state_root,
             bundle,
@@ -3848,7 +3805,7 @@ impl EffectTestRunner {
                 .context(IoSnafu { path: runc_path })?
         };
         let mut container = RuncContainer {
-            child: Some(child),
+            process: ProcessFixture::new(child),
             runc_path: runc_path.to_path_buf(),
             state_root: state_root.clone(),
             bundle: bundle.clone(),
@@ -3859,10 +3816,7 @@ impl EffectTestRunner {
 
         let request_path = request_directory.join(format!("{container_id}.createRuntime.json"));
         process::wait_for_path(
-            container.child.as_mut().context(InvalidInputSnafu {
-                path: &request_path,
-                reason: "the direct runtime process handle is absent",
-            })?,
+            &mut container.process,
             &request_path,
             "the direct runc createRuntime request",
             &[&stdout_path, &stderr_path],
@@ -4190,10 +4144,7 @@ impl EffectTestRunner {
                 .extend([runner_stdout_path.as_path(), runner_stderr_path.as_path()]);
         }
         process::wait_for_path(
-            container.child.as_mut().context(InvalidInputSnafu {
-                path: &create_container_request,
-                reason: "the direct runtime process handle is absent",
-            })?,
+            &mut container.process,
             &create_container_request,
             "the direct runc createContainer request",
             &request_diagnostics,
@@ -5537,21 +5488,7 @@ impl EffectTestRunner {
             reader
                 .poll(Duration::from_millis(25))
                 .context(InterceptorSnafu)?;
-            if let Some(status) = container
-                .child
-                .as_mut()
-                .ok_or_else(|| {
-                    InvalidInputSnafu {
-                        path: &replacement_exec_result,
-                        reason: "the direct runc process has no child handle",
-                    }
-                    .build()
-                })?
-                .try_wait()
-                .context(IoSnafu {
-                    path: Path::new("runc child"),
-                })?
-            {
+            if let Some(status) = container.process.try_wait(Path::new("runc child"))? {
                 let diagnostic = format!(
                     "the running application exited before its replacement-generation exec result: status={status}, stderr={}, effects={:?}",
                     fs::read_to_string(&stderr_path).unwrap_or_default().trim(),
@@ -6384,7 +6321,7 @@ impl EffectTestRunner {
                         "the recovered administrative container exited before publishing its PID",
                 })?;
         let mut administrative_container = RuncContainer {
-            child: Some(administrative_child),
+            process: ProcessFixture::new(administrative_child),
             runc_path: runc_path.to_path_buf(),
             state_root: state_root.clone(),
             bundle: bundle.clone(),
@@ -7151,13 +7088,11 @@ impl EffectTestRunner {
             path: &role_directory,
         })?;
 
-        let status = wait_for_child(container.child.as_mut().ok_or_else(|| {
-            InvalidInputSnafu {
-                path: runc_path,
-                reason: "the direct runc child disappeared",
-            }
-            .build()
-        })?)?;
+        let status = container.process.wait_for_exit(
+            Path::new("runc child"),
+            "the direct runc workload release",
+            WAIT_LIMIT,
+        )?;
         ensure!(
             status.success(),
             CommandSnafu {

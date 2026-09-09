@@ -101,9 +101,12 @@ owners are:
   path, operation name, and caller-supplied last-state diagnostic.
 - [x] Add one child-process readiness function on top of the shared wait.
   Use it for native identity and direct-runtime process exit diagnostics.
-- [ ] Add one idempotent process owner for identity and direct-runtime
-  children. Move kill, wait, early-exit inspection, and drop cleanup into it.
-- [ ] Move reusable Python process programs to `fixtures/process` and execute
+- [x] Add one idempotent process owner for native identity, the main `runc`
+  container, and containerd. Move their kill, wait, early-exit inspection,
+  and drop cleanup into it.
+- [ ] Move the remaining direct-runtime exec children to the shared process
+  owner as each entry-role behavior moves to its small scenario module.
+- [x] Move reusable Python process programs to `fixtures/process` and execute
   them from both identity and direct-runtime focused fixture tests.
 - [x] Add fresh-directory construction to the existing `ProbeDirectory`
   owner.
@@ -220,7 +223,7 @@ starting the complete privileged scenarios.
 - [x] Move native process startup, stop, exec-failure, and exit readiness into
   the small `identity/native_process.rs` fixture module.
 - [x] Move the complete `NativeProcessFixture` owner out of `identity.rs`.
-- [ ] Move each Python child program from `fixtures/identity` to the shared
+- [x] Move each Python child program from `fixtures/identity` to the shared
   `fixtures/process` directory and use it in the direct-runtime fixture tests.
 - [ ] Move native child stop, failed-exec, and post-PONR checks to
   `identity/native_process/exec_tests.rs`. Reuse fixture-owned child and

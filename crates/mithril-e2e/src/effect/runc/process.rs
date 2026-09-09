@@ -1,21 +1,20 @@
 use std::fs;
 use std::path::Path;
-use std::process::Child;
 
 use super::WAIT_LIMIT;
-use crate::physical::wait_for_process;
+use crate::process::{wait_for_process, ProcessFixture};
 use crate::Result;
 
 const MAXIMUM_DIAGNOSTIC_BYTES: usize = 8 * 1024;
 
 pub(super) fn wait_for_path(
-    child: &mut Child,
+    process: &mut ProcessFixture,
     path: &Path,
     operation: &str,
     output_paths: &[&Path],
 ) -> Result<()> {
     wait_for_process(
-        child,
+        process,
         path,
         operation,
         WAIT_LIMIT,
@@ -49,13 +48,14 @@ fn output_summary(paths: &[&Path]) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
 
     use snafu::ResultExt as _;
 
     use super::wait_for_path;
     use crate::error::{InvalidInputSnafu, IoSnafu};
+    use crate::process::{process_program, ProcessFixture};
 
     #[test]
     fn runtime_request_wait_reports_process_exit_and_output() -> crate::Result<()> {
@@ -65,25 +65,31 @@ mod tests {
         let request = temporary.path().join("missing-request.json");
         let stderr_path = temporary.path().join("runtime.stderr");
         let stderr = fs::File::create(&stderr_path).context(IoSnafu { path: &stderr_path })?;
-        let mut child = Command::new("/bin/sh")
-            .args(["-c", "printf 'hook failed' >&2; exit 17"])
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let script = process_program(&repo_root, "process_exit.py")?;
+        let child = Command::new("python3")
+            .arg(&script)
+            .args(["17", "hook failed"])
             .stderr(Stdio::from(stderr))
             .spawn()
-            .context(IoSnafu {
-                path: Path::new("/bin/sh"),
-            })?;
+            .context(IoSnafu { path: &script })?;
+        let mut process = ProcessFixture::new(child);
 
-        let error =
-            match wait_for_path(&mut child, &request, "the fixture request", &[&stderr_path]) {
-                Err(error) => error,
-                Ok(()) => {
-                    return InvalidInputSnafu {
-                        path: &request,
-                        reason: "an exited runtime published a missing request",
-                    }
-                    .fail()
+        let error = match wait_for_path(
+            &mut process,
+            &request,
+            "the fixture request",
+            &[&stderr_path],
+        ) {
+            Err(error) => error,
+            Ok(()) => {
+                return InvalidInputSnafu {
+                    path: &request,
+                    reason: "an exited runtime published a missing request",
                 }
-            };
+                .fail()
+            }
+        };
         let message = error.to_string();
         assert!(message.contains("exit status: 17"), "{message}");
         assert!(message.contains("hook failed"), "{message}");
