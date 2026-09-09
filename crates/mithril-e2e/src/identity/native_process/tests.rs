@@ -13,8 +13,7 @@ fn startup_reports_exit() -> crate::Result<()> {
     let mut command = Command::new("python3");
     command.arg(&script).args(["17", "shared process failed"]);
 
-    let error = match NativeProcessFixture::start_command(&mut command, false, Path::new("python3"))
-    {
+    let error = match NativeProcessFixture::start_command(&mut command, Path::new("python3")) {
         Err(error) => error,
         Ok(mut fixture) => {
             fixture.stop()?;

@@ -160,3 +160,26 @@ fn fatal_exec_kills_actor() -> crate::Result<()> {
     assert!(status.signal().is_some());
     actor.stop()
 }
+
+#[test]
+fn child_execs_after_orphan() -> crate::Result<()> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let temp = tempfile::tempdir().context(IoSnafu {
+        path: std::path::Path::new("orphan actor"),
+    })?;
+    let ready = temp.path().join("ready");
+    let mut actor = ProcessFixture::python(&root, "native_orphan.py", [&ready])?;
+    let outer = actor.id();
+
+    actor.send(b"root\n")?;
+    let pid = actor.wait_pid(&ready, "orphan child")?;
+    actor.track(pid)?;
+    actor.wait_stop(pid, "orphan child stop")?;
+    actor.send(b"parent-exit\n")?;
+    let status = actor.wait_exit("orphan parent exit", Duration::from_secs(5))?;
+    assert!(status.success());
+    assert_ne!(actor.parent(pid)?, Some(outer));
+    actor.signal(pid, Signal::CONT)?;
+    actor.wait_comm(pid, "sleep", "orphan child exec")?;
+    actor.stop()
+}

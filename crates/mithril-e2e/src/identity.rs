@@ -906,84 +906,9 @@ impl IdentityTestRunner {
         moved_ready_cleanup.cleanup()?;
         moved_fail_cleanup.cleanup()?;
 
-        let mut orphan_fixture = NativeProcessFixture::start_orphaning()?;
-        fs::write(&procs_path, orphan_fixture.outer_pid().to_string())
-            .context(IoSnafu { path: &procs_path })?;
-        let orphaned_native_parent =
-            self.wait_for("orphaned native parent identity", &procs_path, || {
-                inspector
-                    .snapshot(orphan_fixture.outer_pid())
-                    .context(NodeSnafu)
-            })?;
-        orphan_fixture.release_root()?;
-        let orphaned_native_child_pid =
-            orphan_fixture.wait_for_native_child("orphaned native child creation")?;
-        let orphaned_native_child_before_parent_exit =
-            self.wait_for("orphaned native child identity", &procs_path, || {
-                inspector
-                    .snapshot(orphaned_native_child_pid)
-                    .context(NodeSnafu)
-            })?;
-        ensure!(
-            orphaned_native_parent.root_class.as_deref() == Some("external_runtime_root")
-                && orphaned_native_parent.installed_role_class.as_deref()
-                    == Some("runtime_external_restricted")
-                && orphaned_native_child_before_parent_exit.creator_task_cookie
-                    == Some(orphaned_native_parent.task_cookie)
-                && orphaned_native_child_before_parent_exit.real_parent_task_cookie
-                    == orphaned_native_parent.task_cookie
-                && orphaned_native_child_before_parent_exit
-                    .root_class
-                    .is_none()
-                && orphaned_native_child_before_parent_exit
-                    .installed_role_class
-                    .is_none()
-                && orphaned_native_child_before_parent_exit.coordinate_state
-                    == TaskCoordinateStateV1::Runnable as u8,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: "orphaned native child has the wrong pre-exit identity",
-            }
-        );
-        orphan_fixture.release_parent_exit()?;
-        orphan_fixture.wait_for_parent_exit()?;
-        orphan_fixture.release_exec(orphaned_native_child_pid)?;
-        let orphaned_native_child_after_parent_exit = self.wait_for(
-            "orphaned native child exec after parent exit",
-            &procs_path,
-            || {
-                let snapshot = inspector
-                    .snapshot(orphaned_native_child_pid)
-                    .context(NodeSnafu)?;
-                Ok(snapshot.filter(|snapshot| {
-                    snapshot.task_cookie == orphaned_native_child_before_parent_exit.task_cookie
-                        && snapshot.creator_task_cookie == Some(orphaned_native_parent.task_cookie)
-                        && snapshot.real_parent_task_cookie != orphaned_native_parent.task_cookie
-                        && snapshot.real_parent_interval_sequence
-                            > orphaned_native_child_before_parent_exit.real_parent_interval_sequence
-                        && snapshot.active_execution_id
-                            != orphaned_native_child_before_parent_exit.active_execution_id
-                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
-                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
-                        && snapshot.process_state_vector_state
-                            == ProcessStateVectorStateV1::Active as u8
-                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
-                }))
-            },
-        )?;
-        ensure!(
-            orphaned_native_child_after_parent_exit.root_class.is_none()
-                && orphaned_native_child_after_parent_exit
-                    .installed_role_class
-                    .is_none()
-                && orphaned_native_child_after_parent_exit.active_role_id
-                    == orphaned_native_parent.active_role_id,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: "orphaned native child lost its inherited restriction",
-            }
-        );
-        orphan_fixture.stop()?;
+        let orphan_ready_cleanup = ProbeFile::new(&child_ready_path);
+        let (orphan_root, orphan_before, orphan_after) = exec_case.orphan(&child_ready_path)?;
+        orphan_ready_cleanup.cleanup()?;
 
         let mut subreaper_fixture = NativeProcessFixture::start_subreaper(&self.repo_root)?;
         fs::write(&procs_path, subreaper_fixture.outer_pid().to_string())
@@ -2189,9 +2114,9 @@ impl IdentityTestRunner {
             external_root,
             native_child_before_exec: before_exec,
             native_child_after_exec: after_exec,
-            orphaned_native_parent,
-            orphaned_native_child_before_parent_exit,
-            orphaned_native_child_after_parent_exit,
+            orphaned_native_parent: orphan_root,
+            orphaned_native_child_before_parent_exit: orphan_before,
+            orphaned_native_child_after_parent_exit: orphan_after,
             subreaper_native_parent,
             subreaper_intermediate_before_exit,
             subreaper_native_child_before_parent_exit,

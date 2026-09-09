@@ -334,6 +334,7 @@ for fixture in \
   native_leader_first.py \
   native_namespace_init.py \
   native_non_leader_exec.py \
+  native_orphan.py \
   native_pid_tid_reuse.py \
   native_subreaper.py \
   process_exit.py \

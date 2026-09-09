@@ -124,6 +124,28 @@ impl ProcessFixture {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn parent(&self, id: u32) -> Result<Option<u32>> {
+        let path = PathBuf::from(format!("/proc/{id}/status"));
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(source).context(IoSnafu { path: &path }),
+        };
+        text.lines()
+            .find_map(|line| line.strip_prefix("PPid:")?.split_whitespace().next())
+            .map(|value| {
+                value.parse().map_err(|source| {
+                    InvalidInputSnafu {
+                        path: &path,
+                        reason: format!("the parent PID is invalid: {source}"),
+                    }
+                    .build()
+                })
+            })
+            .transpose()
+    }
+
     pub(crate) fn send(&mut self, bytes: &[u8]) -> Result<()> {
         self.stdin
             .as_mut()
@@ -292,16 +314,18 @@ impl ProcessFixture {
                 if let Some(value) = inspect()? {
                     return Ok(Some(value));
                 }
-                if let Some(status) = self.try_wait()? {
-                    return InvalidInputSnafu {
-                        path,
-                        reason: format!(
-                            "the process exited with {status} before {operation}; {}; stderr: {:?}",
-                            state(),
-                            self.stderr()?
-                        ),
+                if !self.stopped {
+                    if let Some(status) = self.try_wait()? {
+                        return InvalidInputSnafu {
+                            path,
+                            reason: format!(
+                                "the process exited with {status} before {operation}; {}; stderr: {:?}",
+                                state(),
+                                self.stderr()?
+                            ),
+                        }
+                        .fail();
                     }
-                    .fail();
                 }
                 Ok(None)
             },

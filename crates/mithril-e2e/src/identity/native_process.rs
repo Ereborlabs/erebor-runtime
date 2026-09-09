@@ -28,22 +28,19 @@ pub(super) struct NativeProcessFixture {
     native_pidfd: Option<OwnedFd>,
     intermediate_pidfd: Option<OwnedFd>,
     namespace_init_pidfd: Option<OwnedFd>,
-    parent_exit_mode: bool,
 }
 
 impl NativeProcessFixture {
     pub(super) fn start() -> Result<Self> {
-        Self::start_with_parent_exit(false)
-    }
-
-    pub(super) fn start_orphaning() -> Result<Self> {
-        Self::start_with_parent_exit(true)
+        Self::start_with_script(
+            "read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 300) & wait \"$!\"",
+        )
     }
 
     pub(super) fn start_subreaper(repo_root: &Path) -> Result<Self> {
         let outer =
             ProcessFixture::python(repo_root, "native_subreaper.py", std::iter::empty::<&str>())?;
-        Ok(Self::from_outer(outer, false))
+        Ok(Self::from_outer(outer))
     }
 
     pub(super) fn start_namespace_init_reparenting(repo_root: &Path) -> Result<Self> {
@@ -52,7 +49,7 @@ impl NativeProcessFixture {
         command
             .args(["--user", "--map-root-user", "--pid", "--fork", "python3"])
             .arg(&script);
-        Self::start_command(&mut command, false, &script)
+        Self::start_command(&mut command, &script)
     }
 
     pub(super) fn start_pid_tid_reuse(repo_root: &Path, work: &Path) -> Result<Self> {
@@ -62,33 +59,20 @@ impl NativeProcessFixture {
             .args(["--pid", "--fork", "--mount-proc", "python3"])
             .arg(&script)
             .arg(work);
-        Self::start_command(&mut command, false, &script)
+        Self::start_command(&mut command, &script)
     }
 
     pub(super) fn start_double_forking() -> Result<Self> {
         Self::start_with_script(
             "read _; ( ( read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 300 ) & wait ) & middle_pid=$!; wait \"$middle_pid\"; exec /bin/sleep 300",
-            false,
         )
     }
 
-    fn start_with_parent_exit(parent_exit_mode: bool) -> Result<Self> {
-        let parent_wait = if parent_exit_mode {
-            "read _"
-        } else {
-            "wait \"$!\""
-        };
-        let script = format!(
-            "read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 300) & {parent_wait}"
-        );
-        Self::start_with_script(&script, parent_exit_mode)
-    }
-
-    pub(super) fn start_with_script(script: &str, parent_exit_mode: bool) -> Result<Self> {
+    pub(super) fn start_with_script(script: &str) -> Result<Self> {
         let mut command = Command::new("/bin/sh");
         let script = format!("printf 'native-fixture-ready\\n'; {script}");
         command.args(["-c", &script]);
-        Self::start_command(&mut command, parent_exit_mode, Path::new("/bin/sh"))
+        Self::start_command(&mut command, Path::new("/bin/sh"))
     }
 
     pub(super) fn start_with_leader_first_exit(
@@ -97,14 +81,10 @@ impl NativeProcessFixture {
         release: &Path,
     ) -> Result<Self> {
         let outer = ProcessFixture::python(repo_root, "native_leader_first.py", [ready, release])?;
-        Ok(Self::from_outer(outer, false))
+        Ok(Self::from_outer(outer))
     }
 
-    fn start_command(
-        command: &mut Command,
-        parent_exit_mode: bool,
-        program: &Path,
-    ) -> Result<Self> {
+    fn start_command(command: &mut Command, program: &Path) -> Result<Self> {
         let outer = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -113,17 +93,16 @@ impl NativeProcessFixture {
             .context(IoSnafu { path: program })?;
         let mut outer = ProcessFixture::new(outer, program);
         outer.ready()?;
-        Ok(Self::from_outer(outer, parent_exit_mode))
+        Ok(Self::from_outer(outer))
     }
 
-    fn from_outer(outer: ProcessFixture, parent_exit_mode: bool) -> Self {
+    fn from_outer(outer: ProcessFixture) -> Self {
         Self {
             outer,
             native_pid: None,
             native_pidfd: None,
             intermediate_pidfd: None,
             namespace_init_pidfd: None,
-            parent_exit_mode,
         }
     }
 
@@ -135,20 +114,6 @@ impl NativeProcessFixture {
         self.native_pid = Some(pid);
         self.native_pidfd = Some(open_pidfd(pid)?);
         Ok(())
-    }
-
-    pub(super) fn wait_for_native_child(&mut self, operation: &str) -> Result<u32> {
-        let outer_pid = self.outer_pid();
-        let path = PathBuf::from(format!("/proc/{outer_pid}/task/{outer_pid}/children"));
-        let pid = wait_for(
-            &path,
-            operation,
-            WAIT_LIMIT,
-            || self.native_child_pid(),
-            || format!("outer process {outer_pid} is running without a child"),
-        )?;
-        self.open_native_pidfd(pid)?;
-        Ok(pid)
     }
 
     #[cfg(test)]
@@ -206,17 +171,6 @@ impl NativeProcessFixture {
             .map_err(|error| invalid_state(format!("release native child exec: {error}")))
     }
 
-    pub(super) fn release_parent_exit(&mut self) -> Result<()> {
-        ensure!(
-            self.parent_exit_mode,
-            InvalidInputSnafu {
-                path: Path::new("identity test shell"),
-                reason: "native fixture does not have a parent-exit release",
-            }
-        );
-        self.write_stdin("native parent exit release", b"parent-exit\n")
-    }
-
     pub(super) fn release_intermediate_exit(&mut self) -> Result<()> {
         let pidfd = self
             .intermediate_pidfd
@@ -248,19 +202,6 @@ impl NativeProcessFixture {
             }
             Err(source) => Err(source).context(IoSnafu { path: &path }),
         }
-    }
-
-    pub(super) fn wait_for_parent_exit(&mut self) -> Result<()> {
-        let status = self.outer.wait()?;
-        ensure!(
-            status.success(),
-            InvalidInputSnafu {
-                path: Path::new("identity test shell"),
-                reason: format!("native parent exited with {status}"),
-            }
-        );
-        self.outer.close();
-        Ok(())
     }
 
     fn write_stdin(&mut self, _operation: &'static str, bytes: &[u8]) -> Result<()> {

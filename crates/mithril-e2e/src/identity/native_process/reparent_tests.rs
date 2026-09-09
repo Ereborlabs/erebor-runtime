@@ -96,28 +96,6 @@ fn native_process_fixture_executes_after_namespace_init_reparenting() -> crate::
 }
 
 #[test]
-fn native_process_fixture_reparents_a_stopped_child_before_exec() -> crate::Result<()> {
-    let runner = test_support::runner();
-    let mut fixture = NativeProcessFixture::start_orphaning()?;
-    let outer_pid = fixture.outer_pid();
-
-    fixture.release_root()?;
-    let native_pid = fixture.wait_for_native_child("orphaned native child creation")?;
-    fixture.wait_for_stopped_native_child(native_pid)?;
-
-    fixture.release_parent_exit()?;
-    fixture.wait_for_parent_exit()?;
-    assert!(!PathBuf::from(format!("/proc/{outer_pid}")).exists());
-    let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
-    runner.wait_for("native child reparenting", &status_path, || {
-        Ok(parent_pid(native_pid)?.filter(|parent_pid| *parent_pid != outer_pid))
-    })?;
-
-    fixture.release_exec(native_pid)?;
-    fixture.wait_for_executable(native_pid, "sleep", "orphaned native child exec")
-}
-
-#[test]
 fn native_process_fixture_reparents_double_fork_child_before_exec() -> crate::Result<()> {
     let runner = test_support::runner();
     let mut fixture = NativeProcessFixture::start_double_forking()?;
