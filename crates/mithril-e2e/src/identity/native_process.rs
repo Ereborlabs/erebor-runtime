@@ -260,7 +260,6 @@ impl NativeProcessFixture {
         )
     }
 
-    #[cfg(test)]
     pub(super) fn wait_for_reported_tid(&mut self, ready: &Path, operation: &str) -> Result<u32> {
         let outer_pid = self.outer.id();
         wait_for(

@@ -2,6 +2,7 @@
 mod authorization_tests;
 mod clone3;
 mod native_process;
+mod scenarios;
 #[cfg(test)]
 mod verification_tests;
 
@@ -957,116 +958,15 @@ impl IdentityTestRunner {
         };
         fixture.stop();
 
-        let mut non_leader_thread_fixture = NativeProcessFixture::start_with_non_leader_exec(
-            &self.repo_root,
-            &non_leader_thread_ready_path,
-        )?;
-        let non_leader_thread_root_pid = non_leader_thread_fixture.outer_pid();
-        fs::write(&procs_path, non_leader_thread_root_pid.to_string())
-            .context(IoSnafu { path: &procs_path })?;
-        let last_non_leader_root = std::cell::RefCell::new(None);
-        let non_leader_thread_exec_root = wait_for(
-            &procs_path,
-            "non-leader thread exec root identity",
-            WAIT_LIMIT,
-            || {
-                let Some(snapshot) = inspector
-                    .snapshot(non_leader_thread_root_pid)
-                    .context(NodeSnafu)?
-                else {
-                    return Ok(None);
-                };
-                *last_non_leader_root.borrow_mut() = Some(snapshot.clone());
-                let ready = {
-                    snapshot.creator_task_cookie.is_none()
-                        && snapshot.root_class.as_deref() == Some("external_runtime_root")
-                        && snapshot.installed_role_class.as_deref()
-                            == Some("runtime_external_restricted")
-                        && snapshot.active_role_id == binding.external_role_id
-                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
-                        && snapshot.process_state_vector_state
-                            == ProcessStateVectorStateV1::Active as u8
-                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
-                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
-                };
-                Ok(ready.then_some(snapshot))
-            },
-            || {
-                format!(
-                    "last identity snapshot: {:?}",
-                    last_non_leader_root.borrow()
-                )
-            },
-        )?;
-        ensure!(
-            non_leader_thread_exec_root.creator_task_cookie.is_none()
-                && non_leader_thread_exec_root.root_class.as_deref()
-                    == Some("external_runtime_root")
-                && non_leader_thread_exec_root.installed_role_class.as_deref()
-                    == Some("runtime_external_restricted")
-                && non_leader_thread_exec_root.active_role_id == binding.external_role_id
-                && non_leader_thread_exec_root.coordinate_state
-                    == TaskCoordinateStateV1::Runnable as u8,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: "non-leader thread exec root has the wrong identity",
-            }
-        );
-        let next_id_before_non_leader_thread = identity_next_id(&host)?;
-        let expected_next_id_after_non_leader_thread = next_id_before_non_leader_thread
-            .checked_add(2)
-            .ok_or_else(|| {
-                invalid_state("identity ID sequence overflowed for non-leader thread")
-            })?;
-        non_leader_thread_fixture.release_root()?;
-        let non_leader_thread_tid = self.wait_for(
-            "non-leader Python thread creation",
-            &non_leader_thread_ready_path,
-            || non_leader_thread_fixture.non_leader_thread_tid(&non_leader_thread_ready_path),
-        )?;
-        let non_leader_thread_path = PathBuf::from(format!(
-            "/proc/{non_leader_thread_root_pid}/task/{non_leader_thread_tid}"
-        ));
-        let next_id_after_non_leader_thread = identity_next_id(&host)?;
-        ensure!(
-            non_leader_thread_tid != non_leader_thread_root_pid
-                && non_leader_thread_path.is_dir()
-                && next_id_after_non_leader_thread == expected_next_id_after_non_leader_thread,
-            InvalidInputSnafu {
-                path: &non_leader_thread_path,
-                reason: format!(
-                    "non-leader Python thread did not receive one exact task identity; expected next ID {expected_next_id_after_non_leader_thread}, got {next_id_after_non_leader_thread}"
-                ),
-            }
-        );
-        non_leader_thread_fixture.release_non_leader_exec()?;
-        let non_leader_thread_exec_after_exec =
-            self.wait_for("non-leader thread exec commit", &procs_path, || {
-                let snapshot = inspector
-                    .snapshot(non_leader_thread_root_pid)
-                    .context(NodeSnafu)?;
-                Ok(snapshot.filter(|snapshot| {
-                    snapshot.task_cookie == next_id_before_non_leader_thread
-                        && snapshot.creator_task_cookie
-                            == Some(non_leader_thread_exec_root.task_cookie)
-                        && snapshot.process_state_id == non_leader_thread_exec_root.process_state_id
-                        && snapshot.active_execution_id
-                            != non_leader_thread_exec_root.active_execution_id
-                        && snapshot.image_provenance_id
-                            != non_leader_thread_exec_root.image_provenance_id
-                        && snapshot.active_role_id == non_leader_thread_exec_root.active_role_id
-                        && snapshot.root_class.is_none()
-                        && snapshot.installed_role_class.is_none()
-                        && snapshot.host_tid == non_leader_thread_root_pid
-                        && snapshot.host_tgid == non_leader_thread_root_pid
-                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
-                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
-                        && snapshot.process_state_vector_state
-                            == ProcessStateVectorStateV1::Active as u8
-                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
-                }))
-            })?;
-        non_leader_thread_fixture.stop();
+        let (non_leader_thread_exec_root, non_leader_thread_exec_after_exec) =
+            scenarios::non_leader_exec::run(
+                self,
+                &host,
+                &inspector,
+                &binding,
+                &procs_path,
+                &non_leader_thread_ready_path,
+            )?;
         non_leader_thread_ready_cleanup.cleanup()?;
 
         let mut failed_exec_fixture =

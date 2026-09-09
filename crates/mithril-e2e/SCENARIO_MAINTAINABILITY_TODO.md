@@ -257,6 +257,39 @@ Each item keeps the production calls in the scenario and moves only reusable
 fixture mechanics. Each item gets its own commit after its focused lightweight
 command passes.
 
+### Native identity
+
+- [ ] Probe resources and production owners: own the pin root, lease, cgroup,
+  fixture files, and cleanup. Keep `KernelHostOwner`, binding publication,
+  native identity activation, recovery, and shutdown visible in the scenario.
+- [ ] Binding-gap recovery: keep the terminal binding mutation and both public
+  recovery calls explicit. Preserve the fail-closed root assertions.
+- [ ] Concurrent external roots: keep both process starts and both complete
+  restricted-root identity assertions visible.
+- [ ] Cgroup escape and moved-parent fork: keep the physical cgroup move,
+  production health reads, fork action, and mismatch assertions visible.
+- [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
+  first-effect action, and exact identity assertions visible.
+- [ ] Native child exec: keep the fork and exec actions, production identity
+  snapshots, and allocation diagnostics visible.
+- [x] Non-leader thread exec: use fixture-owned thread readiness in
+  `identity/scenarios/non_leader_exec.rs`. Keep exact TID allocation and
+  post-exec identity assertions visible.
+- [ ] Pre-PONR and post-PONR failures: use fixture-owned process readiness and
+  keep pending-exec, rollback, fatal state, and recovery assertions visible.
+- [ ] Moved-task exec: keep the physical cgroup move, denied exec, production
+  health checks, and placement-mismatch assertions visible.
+- [ ] Orphan, subreaper, namespace-init, and double-fork transitions: use the
+  same native process fixture as their focused tests. Preserve every parent,
+  role, execution, and tombstone assertion.
+- [ ] Leader-first thread exit and reference lifetime: keep the process and
+  entry reference counts, tombstones, release action, and reclamation checks.
+- [ ] PID and TID reuse: keep namespace reuse actions and fresh identity checks
+  in separate small scenario files.
+- [ ] Cgroup lifetime reuse and retained-host restart: keep host shutdown,
+  retained map validation, production recovery, recreated cgroup, and fresh
+  binding identity assertions visible.
+
 ### Kernel and host lifecycle
 
 - [x] `KernelQualificationRunner::physical_file_open_probe`: own the lease
