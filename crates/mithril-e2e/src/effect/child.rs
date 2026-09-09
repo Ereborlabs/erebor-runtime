@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
 
 use crate::error::{InvalidInputSnafu, IoSnafu};
+use crate::physical::wait_for;
 use crate::Result;
 
 use super::fixture_syscalls;
@@ -375,6 +376,7 @@ pub(super) struct EffectProcessFixture {
     child: Child,
     mailbox: SharedMailbox,
     stderr: Option<ChildStderr>,
+    mailbox_path: PathBuf,
     pid: u32,
     stopped: bool,
 }
@@ -407,6 +409,7 @@ impl EffectProcessFixture {
             child,
             mailbox,
             stderr: Some(stderr),
+            mailbox_path,
             pid: 0,
             stopped: false,
         };
@@ -984,34 +987,35 @@ impl EffectProcessFixture {
     }
 
     fn wait_for_state(&mut self, expected: u32, operation: &str) -> Result<()> {
-        let start = Instant::now();
-        loop {
-            if self.mailbox.state() == expected {
-                return Ok(());
-            }
-            if let Some(status) = self.child.try_wait().context(IoSnafu {
-                path: Path::new("effect child"),
-            })? {
-                let mut stderr = String::new();
-                if let Some(mut pipe) = self.stderr.take() {
-                    pipe.read_to_string(&mut stderr).context(IoSnafu {
-                        path: Path::new("effect child stderr"),
-                    })?;
+        let last_state = std::cell::Cell::new(self.mailbox.state());
+        wait_for(
+            &self.mailbox_path,
+            &format!("effect child response during {operation}"),
+            CHILD_WAIT_LIMIT,
+            || {
+                let state = self.mailbox.state();
+                last_state.set(state);
+                if state == expected {
+                    return Ok(Some(()));
                 }
-                return Err(invalid_state(format!(
-                    "effect child exited during {operation} with {status}: {}",
-                    stderr.trim()
-                )));
-            }
-            ensure!(
-                start.elapsed() < CHILD_WAIT_LIMIT,
-                InvalidInputSnafu {
-                    path: Path::new("live effect state"),
-                    reason: format!("timed out waiting for effect child during {operation}"),
+                if let Some(status) = self.child.try_wait().context(IoSnafu {
+                    path: Path::new("effect child"),
+                })? {
+                    let mut stderr = String::new();
+                    if let Some(mut pipe) = self.stderr.take() {
+                        pipe.read_to_string(&mut stderr).context(IoSnafu {
+                            path: Path::new("effect child stderr"),
+                        })?;
+                    }
+                    return Err(invalid_state(format!(
+                        "effect child exited during {operation} with {status}: {}",
+                        stderr.trim()
+                    )));
                 }
-            );
-            thread::sleep(Duration::from_millis(1));
-        }
+                Ok(None)
+            },
+            || format!("last mailbox state: {}; child still running", last_state.get()),
+        )
     }
 }
 

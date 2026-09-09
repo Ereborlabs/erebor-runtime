@@ -9,7 +9,7 @@ use snafu::{ensure, ResultExt as _};
 use crate::error::{InvalidInputSnafu, IoSnafu, TimeoutSnafu};
 use crate::Result;
 
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
+const POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 pub(crate) struct ProbeDirectory {
     path: PathBuf,
