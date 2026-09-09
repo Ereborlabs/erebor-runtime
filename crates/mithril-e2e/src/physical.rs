@@ -1,11 +1,15 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use erebor_interceptor_abi::Id128V1;
 use snafu::{ensure, ResultExt as _};
 
-use crate::error::{InvalidInputSnafu, IoSnafu};
+use crate::error::{InvalidInputSnafu, IoSnafu, TimeoutSnafu};
 use crate::Result;
+
+const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 pub(crate) struct ProbeDirectory {
     path: PathBuf,
@@ -13,6 +17,18 @@ pub(crate) struct ProbeDirectory {
 }
 
 impl ProbeDirectory {
+    pub(crate) fn create(path: &Path) -> Result<Self> {
+        ensure!(
+            !path.exists(),
+            InvalidInputSnafu {
+                path,
+                reason: "the test directory must not already exist",
+            }
+        );
+        fs::create_dir_all(path).context(IoSnafu { path })?;
+        Ok(Self::new(path))
+    }
+
     pub(crate) fn new(path: &Path) -> Self {
         Self {
             path: path.to_path_buf(),
@@ -27,6 +43,32 @@ impl ProbeDirectory {
             Err(source) => Err(source).context(IoSnafu { path: &self.path }),
         }
         .inspect(|()| self.cleaned = true)
+    }
+}
+
+pub(crate) fn wait_for<T>(
+    path: &Path,
+    operation: &str,
+    limit: Duration,
+    mut inspect: impl FnMut() -> Result<Option<T>>,
+    diagnostic: impl FnOnce() -> String,
+) -> Result<T> {
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Some(value) = inspect()? {
+            return Ok(value);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return TimeoutSnafu {
+                path,
+                operation,
+                limit,
+                diagnostic: diagnostic(),
+            }
+            .fail();
+        }
+        thread::sleep(POLL_INTERVAL.min(remaining));
     }
 }
 
@@ -129,4 +171,47 @@ pub(crate) fn boot_identity() -> Result<(String, Id128V1)> {
         uuid.simple().to_string(),
         Id128V1::new((value >> 64) as u64, value as u64),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::time::Duration;
+
+    use erebor_runtime_error::{ErrorExt as _, StatusCode};
+    use snafu::ResultExt as _;
+
+    use super::{wait_for, ProbeDirectory};
+    use crate::error::{InvalidInputSnafu, IoSnafu};
+
+    #[test]
+    fn readiness_reports_diagnostics_and_directory_cleanup_is_idempotent() -> crate::Result<()> {
+        let temporary_path = Path::new("temporary readiness directory");
+        let parent = tempfile::tempdir().context(IoSnafu {
+            path: temporary_path,
+        })?;
+        let path = parent.path().join("owned");
+        let directory = ProbeDirectory::create(&path)?;
+        assert!(path.is_dir());
+        directory.cleanup()?;
+        ProbeDirectory::new(&path).cleanup()?;
+
+        let result = wait_for(
+            &path,
+            "fixture readiness",
+            Duration::ZERO,
+            || Ok::<_, crate::Error>(None::<()>),
+            || "last state was STARTING".to_owned(),
+        );
+        let error = result.err().ok_or_else(|| {
+            InvalidInputSnafu {
+                path: &path,
+                reason: "readiness did not time out",
+            }
+            .build()
+        })?;
+        assert_eq!(error.status_code(), StatusCode::DeadlineExceeded);
+        assert!(error.to_string().contains("last state was STARTING"));
+        Ok(())
+    }
 }

@@ -65,7 +65,7 @@ use crate::error::{
     CommandSnafu, InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu, PolicySnafu,
 };
 use crate::identity::IdentityTestRunner;
-use crate::physical::{boot_identity, ProbeDirectory, ProbeFile};
+use crate::physical::{boot_identity, wait_for, ProbeDirectory, ProbeFile};
 use crate::{DigestV1, Result};
 
 const WAIT_LIMIT: Duration = Duration::from_secs(30);
@@ -3399,16 +3399,7 @@ impl EffectTestRunner {
             path: output_directory,
         })?;
         let fixture_root = output_directory.join("runc-entry-role-fixture");
-        ensure!(
-            !fixture_root.exists(),
-            InvalidInputSnafu {
-                path: &fixture_root,
-                reason: "the direct runc fixture must start from an absent directory",
-            }
-        );
-        fs::create_dir_all(&fixture_root).context(IoSnafu {
-            path: &fixture_root,
-        })?;
+        let fixture_cleanup = ProbeDirectory::create(&fixture_root)?;
         let pin_cleanup = ProbeDirectory::new(pin_root);
         let lease_cleanup = ProbeFile::new(lease_path);
 
@@ -7261,9 +7252,7 @@ impl EffectTestRunner {
                 reason: "the direct runc cgroup survived container deletion",
             }
         );
-        fs::remove_dir_all(&fixture_root).context(IoSnafu {
-            path: &fixture_root,
-        })?;
+        fixture_cleanup.cleanup()?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
             schema_version: 38,
@@ -7701,20 +7690,13 @@ fn command_text(command: &mut Command, program: &Path) -> Result<String> {
 }
 
 fn wait_for_path(path: &Path, exists: bool, name: &str) -> Result<()> {
-    let deadline = Instant::now() + WAIT_LIMIT;
-    loop {
-        if path.exists() == exists {
-            return Ok(());
-        }
-        ensure!(
-            Instant::now() < deadline,
-            InvalidInputSnafu {
-                path,
-                reason: format!("timed out waiting for {name}"),
-            }
-        );
-        thread::sleep(Duration::from_millis(25));
-    }
+    wait_for(
+        path,
+        name,
+        WAIT_LIMIT,
+        || Ok((path.exists() == exists).then_some(())),
+        || format!("path exists: {}, expected: {exists}", path.exists()),
+    )
 }
 
 fn wait_for_post_ponr_terminal_exec(

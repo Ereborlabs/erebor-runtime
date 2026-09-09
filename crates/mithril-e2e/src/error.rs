@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use snafu::{Location, Snafu};
@@ -18,6 +19,17 @@ pub enum Error {
     Io {
         path: PathBuf,
         source: std::io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "Mithril test timed out after {limit:?} while waiting for {operation} at `{path:?}`: {diagnostic}"
+    ))]
+    Timeout {
+        path: PathBuf,
+        operation: String,
+        limit: Duration,
+        diagnostic: String,
         #[snafu(implicit)]
         location: Location,
     },
@@ -72,6 +84,7 @@ impl ErrorExt for Error {
         match self {
             Self::InvalidInput { .. } | Self::Json { .. } => StatusCode::InvalidArguments,
             Self::Io { .. } | Self::Command { .. } => StatusCode::External,
+            Self::Timeout { .. } => StatusCode::DeadlineExceeded,
             Self::Interceptor { source, .. } => source.status_code(),
             Self::Node { source, .. } => source.status_code(),
             Self::Policy { source, .. } => source.status_code(),
@@ -81,9 +94,10 @@ impl ErrorExt for Error {
     fn retry_hint(&self) -> RetryHint {
         match self {
             Self::Io { source, .. } => RetryHint::from_io_error(source),
-            Self::InvalidInput { .. } | Self::Json { .. } | Self::Command { .. } => {
-                RetryHint::NonRetryable
-            }
+            Self::InvalidInput { .. }
+            | Self::Json { .. }
+            | Self::Command { .. }
+            | Self::Timeout { .. } => RetryHint::NonRetryable,
             Self::Interceptor { source, .. } => source.retry_hint(),
             Self::Node { source, .. } => source.retry_hint(),
             Self::Policy { source, .. } => source.retry_hint(),

@@ -86,15 +86,30 @@ owners are:
 
 ## Common tooling deliverable
 
-- [ ] Add one synchronous readiness function with an exact timeout, resource
+- [x] Add one synchronous readiness function with an exact timeout, resource
   path, operation name, and caller-supplied last-state diagnostic.
-- [ ] Add fresh-directory construction to the existing `ProbeDirectory`
+- [x] Add fresh-directory construction to the existing `ProbeDirectory`
   owner.
-- [ ] Keep `ProbeDirectory`, `ProbeFile`, and `ProbeCgroup` cleanup
+- [x] Keep `ProbeDirectory`, `ProbeFile`, and `ProbeCgroup` cleanup
   idempotent.
-- [ ] Add one small focused test for readiness failure diagnostics and cleanup.
-- [ ] Verify with the focused support test and Mithril e2e clippy before the
+- [x] Add one small focused test for readiness failure diagnostics and cleanup.
+- [x] Verify with the focused support test and Mithril e2e clippy before the
   common-tooling commit.
+
+## Baseline reliability failures
+
+The first normal parallel package run outside the sandbox found these existing
+fixture failures. Fix and commit each test separately before another complete
+physical run:
+
+- [ ] `mtls_storage_failure_withholds_ack_until_replay_is_durable`: release the
+  first `ControlStore` lease before the scenario reopens the same directory.
+- [ ] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`:
+  make server and connection readiness deterministic and include the server
+  result in a connection failure diagnostic.
+- [ ] `shared_mmap_target_reports_both_unrestricted_controls`: make the child
+  readiness and request exchange deterministic without weakening the mmap
+  allow assertions.
 
 ## In-process scenario migration ledger
 
