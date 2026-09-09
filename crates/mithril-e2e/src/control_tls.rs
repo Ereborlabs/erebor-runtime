@@ -509,8 +509,7 @@ async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
         },
         store,
     )?;
-    let (shutdown, server) = start_server(address, &files, control.clone());
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
 
     let connector =
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
@@ -565,8 +564,7 @@ async fn mtls_connection_renews_the_ready_session_while_its_owner_is_idle(
         },
         store,
     )?;
-    let (shutdown, server) = start_server(address, &files, control.clone());
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
 
     let connector =
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
@@ -610,8 +608,7 @@ async fn mtls_connection_reports_local_readiness_transitions_without_reconnect(
         },
         store,
     )?;
-    let (shutdown, server) = start_server(address, &files, control.clone());
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
 
     let connector =
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
@@ -670,8 +667,7 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
         },
         store,
     )?;
-    let (shutdown, server) = start_server(address, &files, control.clone());
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
 
     let connector =
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
@@ -802,8 +798,7 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
         },
         store,
     )?;
-    let (shutdown, server) = start_server(address, &files, control.clone());
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
     let observations = EffectObservationStore::durable(
         4,
         directory.path().join("node-wal"),
@@ -1000,8 +995,7 @@ async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
     let initial_control = control(initial_store.clone())?;
     let initial_address = free_address()?;
     let (initial_shutdown, initial_server) =
-        start_server(initial_address, &files, initial_control.clone());
-    tokio::time::sleep(Duration::from_millis(20)).await;
+        start_server(initial_address, &files, initial_control.clone()).await?;
     let mut trust = TrustCache::load(directory.path())?;
     let mut connection = connector(initial_address)
         .connect(registration(), false, &mut trust)
@@ -1027,8 +1021,7 @@ async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
     let reopened_control = control(reopened_store.clone())?;
     let reopened_address = free_address()?;
     let (reopened_shutdown, reopened_server) =
-        start_server(reopened_address, &files, reopened_control);
-    tokio::time::sleep(Duration::from_millis(20)).await;
+        start_server(reopened_address, &files, reopened_control).await?;
     let mut connection = connector(reopened_address)
         .connect(registration(), false, &mut trust)
         .await?;
@@ -1138,8 +1131,7 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
     let blocked_control = control(blocked_store.clone())?;
     let blocked_address = free_address()?;
     let (blocked_shutdown, blocked_server) =
-        start_server(blocked_address, &files, blocked_control.clone());
-    tokio::time::sleep(Duration::from_millis(20)).await;
+        start_server(blocked_address, &files, blocked_control.clone()).await?;
     let mut trust = TrustCache::load(directory.path())?;
     let mut connection = NodeControlConnector::new(
         files.node_config(blocked_address),
@@ -1166,8 +1158,7 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
     let restored_control = control(restored_store.clone())?;
     let restored_address = free_address()?;
     let (restored_shutdown, restored_server) =
-        start_server(restored_address, &files, restored_control);
-    tokio::time::sleep(Duration::from_millis(20)).await;
+        start_server(restored_address, &files, restored_control).await?;
     let mut connection = NodeControlConnector::new(
         files.node_config(restored_address),
         "node-a".to_owned(),
@@ -1221,8 +1212,7 @@ async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retaine
         .with_policy_desired_state(fixture.owner.clone());
 
     let address = free_address()?;
-    let (shutdown, server) = start_server(address, &files, control.clone());
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
     let old_connector = NodeControlConnector::new(
         files.node_config(address),
         "node-a".to_owned(),
@@ -1332,8 +1322,7 @@ async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retaine
     let control = ControlPlane::with_control_store(allowed(), trust_generation, store)?
         .with_policy_desired_state(fixture.owner.clone());
     assert!(control.replace_kubernetes_workload_inventory(workload_inventory.clone())?);
-    let (shutdown, server) = start_server(address, &files, control.clone());
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
     let connector = NodeControlConnector::new(
         files.node_config(address),
         "node-a".to_owned(),
@@ -1485,8 +1474,7 @@ async fn kubernetes_outage_partitioned_node_reconnects_to_running_control_and_re
     let first_digest = first_bundle.bundle_digest.clone();
 
     let control_address = free_address()?;
-    let (shutdown, server) = start_server(control_address, &files, control.clone());
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (shutdown, server) = start_server(control_address, &files, control.clone()).await?;
     let proxy = TcpBlackholeOwner::start(control_address).await?;
     let connector = NodeControlConnector::new(
         files.node_config(proxy.address()),
@@ -1805,8 +1793,7 @@ async fn node_decommission_https_accepts_the_same_signed_artifact_as_control(
         store,
     )?;
     let grpc_address = free_address()?;
-    let (grpc_shutdown, grpc_server) = start_server(grpc_address, &files, control.clone());
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (grpc_shutdown, grpc_server) = start_server(grpc_address, &files, control.clone()).await?;
     let connector = NodeControlConnector::new(
         files.node_config(grpc_address),
         "node-a".to_owned(),
@@ -1926,8 +1913,7 @@ async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_th
         },
         store,
     )?;
-    let (shutdown, server) = start_server(address, &files, control.clone());
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
     let wal_root = directory.path().join("node-wal");
     let wal_limits = EvidenceWalLimits {
         maximum_retained_records: 3,
@@ -2086,8 +2072,7 @@ async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box
         },
         store.clone(),
     )?;
-    let (shutdown, server) = start_server(address, &files, control);
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (shutdown, server) = start_server(address, &files, control).await?;
 
     let observations = EffectObservationStore::durable(
         4,
@@ -2270,8 +2255,7 @@ async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box
         },
         store,
     )?;
-    let (shutdown, server) = start_server(address, &files, control);
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (shutdown, server) = start_server(address, &files, control).await?;
     let observations = EffectObservationStore::durable(
         4,
         directory.path().join("node-wal"),
@@ -2377,8 +2361,7 @@ async fn mtls_administrative_services_route_matching_results_and_cancel_waiters(
         },
         store,
     )?;
-    let (shutdown, server) = start_server(address, &files, control.clone());
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
     let connector =
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
     let mut trust = TrustCache::load(directory.path())?;
@@ -2496,8 +2479,7 @@ async fn assert_wrong_ca_rejected() -> Result<(), Box<dyn StdError>> {
             policy_signers: Vec::new(),
         },
     );
-    let (shutdown, server) = start_server(address, &files, control);
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (shutdown, server) = start_server(address, &files, control).await?;
     let mut config = files.node_config(address);
     config.ca_path = wrong_ca.ca;
     let connector = NodeControlConnector::new(config, "node-a".to_owned(), [9; 16]);
@@ -2532,8 +2514,7 @@ async fn assert_rejected_identity(
             policy_signers: Vec::new(),
         },
     );
-    let (shutdown, server) = start_server(address, &files, control);
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    let (shutdown, server) = start_server(address, &files, control).await?;
     let connector = NodeControlConnector::new(
         files.node_config(address),
         registered_node_id.to_owned(),
@@ -2604,23 +2585,44 @@ async fn wait_for_decommission_state(
     Ok(())
 }
 
-fn start_server(
+async fn start_server(
     address: SocketAddr,
     files: &CertificateFiles,
     control: ControlPlane,
-) -> (
-    oneshot::Sender<()>,
-    tokio::task::JoinHandle<mithril_control::Result<()>>,
-) {
+) -> Result<
+    (
+        oneshot::Sender<()>,
+        tokio::task::JoinHandle<mithril_control::Result<()>>,
+    ),
+    Box<dyn StdError>,
+> {
     let tls = files.server_tls();
     let (shutdown, receiver) = oneshot::channel();
-    let server = tokio::spawn(async move {
-        serve(address, &tls, control, async move {
+    let server = tokio::task::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|source| mithril_control::Error::Io {
+                path: PathBuf::from("Control test runtime"),
+                source,
+                location: snafu::Location::default(),
+            })?;
+        runtime.block_on(serve(address, &tls, control, async move {
             let _result = receiver.await;
-        })
-        .await
+        }))
     });
-    (shutdown, server)
+    if let Err(error) = tokio::time::timeout(Duration::from_secs(5), async {
+        while tokio::net::TcpStream::connect(address).await.is_err() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    {
+        let _result = shutdown.send(());
+        server.await??;
+        return Err(error.into());
+    }
+    Ok((shutdown, server))
 }
 
 #[derive(Clone)]

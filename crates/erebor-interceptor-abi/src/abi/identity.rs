@@ -1086,17 +1086,16 @@ pub struct IdentityHealthV1 {
 
 #[cfg(test)]
 mod tests {
-    use std::mem::{align_of, offset_of, size_of};
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::mem::{offset_of, size_of};
 
     use super::*;
     use crate::BindingLifecycleStateV1;
 
     #[test]
-    fn lifecycle_word_orders_task_change_and_recovery_commit() {
+    fn binding_generation_uses_the_packed_lifecycle_word() {
         let binding = ExecutionSetBindingStateV1 {
             lifecycle_state: BindingLifecycleStateV1::Recovering,
-            task_set_generation: [10, 0, 0, 0, 0, 0, 0],
+            task_set_generation: [10, 1, 0, 0, 0, 0, 0],
             ..Default::default()
         };
         let offset = offset_of!(ExecutionSetBindingStateV1, lifecycle_state);
@@ -1105,90 +1104,12 @@ mod tests {
             offset_of!(ExecutionSetBindingStateV1, task_set_generation),
             offset + 1
         );
-        assert_eq!(binding.task_set_generation(), 10);
-        let expected = (10_u64 << 8) | u64::from(BindingLifecycleStateV1::Recovering as u8);
+        assert_eq!(binding.task_set_generation(), 266);
+        let expected = (266_u64 << 8) | u64::from(BindingLifecycleStateV1::Recovering as u8);
         assert_eq!(
             &binding.as_bytes()[offset..offset + 8],
             &expected.to_le_bytes()
         );
-        let committed = (10_u64 << 8) | u64::from(BindingLifecycleStateV1::ActiveRecovered as u8);
-        let word = AtomicU64::new(expected);
-        word.fetch_add(1 << 8, Ordering::SeqCst);
-        assert!(word
-            .compare_exchange(expected, committed, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err());
-        assert_eq!(
-            word.load(Ordering::SeqCst) as u8,
-            BindingLifecycleStateV1::Recovering as u8
-        );
-        let word = AtomicU64::new(expected);
-        assert!(word
-            .compare_exchange(expected, committed, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok());
-        let before_exit = word.fetch_add(1 << 8, Ordering::SeqCst);
-        assert_eq!(
-            before_exit as u8,
-            BindingLifecycleStateV1::ActiveRecovered as u8
-        );
-        assert_eq!(
-            word.load(Ordering::SeqCst) as u8,
-            BindingLifecycleStateV1::ActiveRecovered as u8
-        );
-    }
-
-    #[test]
-    fn native_identity_abi_has_stable_sizes_and_offsets() {
-        assert_eq!(size_of::<Id128V1>(), 16);
-        assert_eq!(size_of::<TaskPlacementExpectationV1>(), 40);
-        assert_eq!(size_of::<TaskLabelV1>(), 328);
-        assert_eq!(offset_of!(TaskLabelV1, process_state_id), 64);
-        assert_eq!(offset_of!(TaskLabelV1, placement), 288);
-        assert_eq!(size_of::<TaskCoordinateV1>(), 88);
-        assert_eq!(size_of::<CreatedByEdgeV1>(), 80);
-        assert_eq!(align_of::<ProcessSecurityStateV1>(), 8);
-        assert_eq!(size_of::<ProcessSecurityStateV1>(), 248);
-        assert_eq!(
-            offset_of!(ProcessSecurityStateV1, exec_without_transition_task_cookie),
-            216
-        );
-        assert_eq!(size_of::<ExactExecutableCandidateV1>(), 32);
-        assert_eq!(size_of::<ProcessExecutionInstanceV1>(), 80);
-        assert_eq!(size_of::<ExecutionSetBindingStateV1>(), 224);
-        assert_eq!(size_of::<ProcessGenerationMigrationKeyV1>(), 32);
-        assert_eq!(size_of::<ProcessGenerationMigrationV1>(), 16);
-        assert_eq!(size_of::<IdentityRuntimeConfigV1>(), 48);
-        assert_eq!(size_of::<EntryAdmissionRuleV1>(), 64);
-        assert_eq!(size_of::<DeclaredEntryRequestV1>(), 4_104);
-        assert_eq!(size_of::<ExecutionArgvSnapshotV1>(), 40);
-        assert_eq!(size_of::<ExecutionArgvChunkKeyV1>(), 24);
-        assert_eq!(size_of::<ExecutionArgvChunkV1>(), 4_104);
-        assert_eq!(size_of::<ExecutionApprovalSlotV1>(), 208);
-        assert_eq!(
-            offset_of!(ExecutionApprovalSlotV1, exception_numeric_handle),
-            176
-        );
-        assert_eq!(
-            offset_of!(ExecutionApprovalSlotV1, deadline_boottime_ns),
-            184
-        );
-    }
-
-    #[test]
-    fn closed_identity_enums_keep_unknown_at_zero() {
-        assert_eq!(TaskCoordinateStateV1::Unknown as u8, 0);
-        assert_eq!(ExternalRootClassV1::UnresolvedProtected as u8, 4);
-        assert_eq!(ExecGuardStateV1::OutcomeUnknown as u8, 3);
-        assert_eq!(PendingExecStateV1::Success as u8, 5);
-        assert_eq!(InstalledRoleClassV1::ApprovedAdministrativeRole as u8, 5);
-        assert_eq!(InitialRootStateV1::Unarmed as u64, 0);
-        assert_eq!(InitialRootStateV1::Consumed as u64, 2);
-        assert_eq!(ExecutionApprovalSlotStateV1::Reserved as u64, 6);
-        assert_eq!(ExecutionApprovalSlotStateV1::Tampered as u64, 7);
-        assert_eq!(PendingExecutionApprovalStateV1::SlotReserved as u8, 2);
-        assert_eq!(PendingExecutionApprovalStateV1::KernelArgvVerified as u8, 3);
-        assert_eq!(PendingExecutionApprovalStateV1::SlotConsumed as u8, 4);
-        assert_eq!(PendingExecutionApprovalStateV1::Tampered as u8, 5);
-        assert_eq!(TASK_REFERENCE_ALL_V1, 0b111);
     }
 
     #[test]

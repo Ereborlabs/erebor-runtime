@@ -271,6 +271,55 @@ Atomic publication and paired exit qualification are **Done**. The complete
 fork, reparent, identity-change, policy-change, and restart-during-recovery
 matrix remains open. Result for the complete recovery design: **Not done**.
 
+### Test cleanup and repeat qualification
+
+This test-only change starts from `7728c1d2`. The user approved removal of
+declaration-only tests. The ABI tests no longer repeat enum numbers, fixed
+structure sizes, or comparisons between values that the test itself changes.
+The host-only atomic-operation model is also removed. It did not execute BPF.
+No production lifecycle value, generated header, Node operation, or BPF
+instruction changes.
+
+[`binding_generation_uses_the_packed_lifecycle_word`](../../../crates/erebor-interceptor-abi/src/abi/identity.rs) The test reads a multi-byte generation through the production ABI reader
+  -> [`checked_decoders_reject_invalid_enum_values`](../../../crates/erebor-interceptor-abi/src/abi/identity.rs) invalid binding and approval bytes fail decoding
+  -> [`enforcement_hooks_and_map_abis_are_in_the_compiled_object`](../../../crates/erebor-interceptor/src/bundled.rs) the test compares compiled BPF map sizes with Rust types
+  -> [`recovery_publication_uses_a_wide_lifecycle_compare_exchange`](../../../crates/erebor-interceptor/src/bundled.rs) the test checks the compiled recovery instruction
+  -> [`recovered_container_entry_probe`](../../../crates/mithril-e2e/src/effect/runc.rs) the physical fixture checks recovery and later-entry decisions
+
+The repository gate then found a real fixture shutdown failure. The Control
+TLS test reopened its store while detached stream tasks still held the old
+store lease. An isolated test pass did not reproduce that scheduling order.
+The shared fixture now owns the server runtime. It still calls production
+`serve`; it does not copy Control behavior. A second failure showed that the
+old 20 ms startup delay did not prove listener readiness.
+
+[`start_server`](../../../crates/mithril-e2e/src/control_tls.rs) The fixture starts production Control in its own runtime
+  -> [`serve`](../../../crates/mithril-control/src/server.rs) Control installs the production TLS services
+  -> [`start_server`](../../../crates/mithril-e2e/src/control_tls.rs) the fixture waits for the listener with a five-second bound
+  -> [`start_server`](../../../crates/mithril-e2e/src/control_tls.rs) shutdown completes and the fixture drops the runtime and its stream tasks
+  -> [`mtls_storage_failure_withholds_ack_until_replay_is_durable`](../../../crates/mithril-e2e/src/control_tls.rs) a new Control owner reopens the store and acknowledges only durable replay
+
+Evidence is under
+`target/mithril-recovery-qualification/20260908-atomic-recovery/`.
+The complete repository gate passes in
+`repository-gate-behavioral-tests.log`. The TLS suite
+passes 17 tests; two release-performance tests remain explicitly ignored.
+The storage-replay regression passes 20 consecutive runs. Lightweight
+`recovered-run51.json` and `entry-role-run25.json` pass. The paired Kubernetes
+recovery result passes in
+`kubernetes-final-recovery/recovered-container-kubernetes-entry.json`.
+The paired Kubernetes normal-start result passes in
+`kubernetes-final-normal/protected-start-result.json`. It includes declared
+entries, incomplete-argument denial, cache-row collection, and the
+state-preserving upgrade. Test cleanup and repeat qualification are **Done**.
+
+The production BPF object is unchanged. Its SHA-256 remains
+`8bcc15c2fb687f0e26cc6f9d3c416fa2568c46e74a4198d48848906173bb141f`.
+It compiles against all four checked-in architecture headers.
+The broader recovery matrix remains **Not done**. This test cleanup does not
+remove the Node numeric policy-target predicate or correct Node retirement
+writes during `RECOVERING`.
+
 ### Intended end state
 
 Node keeps every matching non-`UNKNOWN` BPF lifecycle state. The display field

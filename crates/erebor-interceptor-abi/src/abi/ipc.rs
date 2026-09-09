@@ -76,27 +76,3 @@ pub struct IpcSocketStateV1 {
     pub state: IpcSocketStateKindV1,
     pub reserved: [u8; 6],
 }
-
-#[cfg(test)]
-mod tests {
-    use std::mem::{align_of, offset_of, size_of};
-
-    use super::{
-        IpcChannelKindV1, IpcOperationV1, IpcRelationshipDecisionKeyV1, IpcSocketStateKindV1,
-        IpcSocketStateV1,
-    };
-
-    #[test]
-    fn unix_stream_relationship_abi_is_closed() {
-        assert_eq!(size_of::<IpcRelationshipDecisionKeyV1>(), 24);
-        assert_eq!(align_of::<IpcRelationshipDecisionKeyV1>(), 8);
-        assert_eq!(offset_of!(IpcRelationshipDecisionKeyV1, channel_kind), 16);
-        assert_eq!(size_of::<IpcSocketStateV1>(), 216);
-        assert_eq!(align_of::<IpcSocketStateV1>(), 8);
-        assert_eq!(offset_of!(IpcSocketStateV1, transition_version), 200);
-        assert_eq!(offset_of!(IpcSocketStateV1, state), 209);
-        assert_eq!(IpcChannelKindV1::UnixStream as u8, 1);
-        assert_eq!(IpcOperationV1::Receive as u8, 3);
-        assert_eq!(IpcSocketStateKindV1::Connected as u8, 2);
-    }
-}

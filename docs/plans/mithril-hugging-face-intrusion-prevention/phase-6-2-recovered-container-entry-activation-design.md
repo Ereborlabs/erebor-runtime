@@ -226,6 +226,33 @@ deferral, cache retirement, and external-entry denial. Result for the
 held-start correction: **Done**. The broader source gaps listed above remain
 open. Result for this recovery design: **Not done**.
 
+### User-approved test cleanup
+
+The user approved removal of declaration-only tests after the atomic-publication
+commit `7728c1d2`. The source removes the obsolete lifecycle-value assertion
+and the other tests that only repeat ABI declarations or compare values made
+by the test. The host-only atomic-operation model is also removed. The packed
+generation reader, invalid-value decoders, argv validation, byte encoding,
+compiled BPF checks, and physical qualification remain. No production enum
+value, Node behavior, or BPF instruction changes.
+
+The complete repository gate now passes. It first found a real Control TLS
+fixture failure: detached server tasks retained the old store lease after the
+fixture reported shutdown. The shared test server now owns its runtime and
+waits for its listener. The production `serve` API remains the service owner.
+All 17 enabled TLS tests pass. The storage-replay regression passes 20
+consecutive runs. See the implementation review for source links and limits.
+
+Evidence is under
+`target/mithril-recovery-qualification/20260908-atomic-recovery/`.
+`repository-gate-behavioral-tests.log` records the complete gate.
+`recovered-run51.json` and `entry-role-run25.json` record the lightweight
+passes. `kubernetes-final-recovery/recovered-container-kubernetes-entry.json`
+records the paired recovery pass.
+`kubernetes-final-normal/protected-start-result.json` records the paired
+normal-start pass. Test cleanup and repeat qualification are **Done**. The
+complete recovery design remains **Not done**.
+
 ## Intended End State
 
 Node reads the exact retained BPF binding before it starts recovery. A binding

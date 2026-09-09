@@ -169,32 +169,3 @@ pub struct NetworkResponseFloorV1 {
     pub scope: NetworkResponseScopeV1,
     pub reserved: [u8; 7],
 }
-
-#[cfg(test)]
-mod tests {
-    use std::mem::{align_of, offset_of, size_of};
-
-    use super::{
-        NetworkDestinationClassV1, NetworkDestinationDecisionKeyV1, NetworkIpv4LpmKeyV1,
-        NetworkIpv6LpmKeyV1, NetworkResponseFloorKeyV1, NetworkResponseFloorV1,
-        NetworkSocketStateV1,
-    };
-
-    #[test]
-    fn network_abi_is_closed() {
-        assert_eq!(size_of::<NetworkIpv4LpmKeyV1>(), 32);
-        assert_eq!(size_of::<NetworkIpv6LpmKeyV1>(), 40);
-        assert_eq!(size_of::<NetworkDestinationClassV1>(), 48);
-        assert_eq!(size_of::<NetworkDestinationDecisionKeyV1>(), 32);
-        assert_eq!(size_of::<NetworkSocketStateV1>(), 144);
-        assert_eq!(size_of::<NetworkResponseFloorKeyV1>(), 24);
-        assert_eq!(size_of::<NetworkResponseFloorV1>(), 8);
-        assert_eq!(align_of::<NetworkSocketStateV1>(), 8);
-        assert_eq!(offset_of!(NetworkSocketStateV1, socket_key_id), 24);
-        assert_eq!(offset_of!(NetworkSocketStateV1, peer_address), 116);
-        assert_eq!(
-            offset_of!(NetworkSocketStateV1, application_default_flow),
-            134
-        );
-    }
-}

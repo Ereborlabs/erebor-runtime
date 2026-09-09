@@ -149,6 +149,21 @@ qualification remains open.
 The repository gate still fails the existing lifecycle ABI assertion.
 Result: **Not done**.
 
+The user-approved test cleanup removes declaration-only ABI tests without
+changing production lifecycle values or BPF behavior. It retains the compiled
+BPF, decoder, encoding, argv, and physical checks. The complete repository
+gate now passes in `repository-gate-behavioral-tests.log`. A real Control TLS
+fixture shutdown failure found by the gate is corrected in the shared server
+fixture. Its storage-replay test passes 20 consecutive runs. Lightweight
+recovery run 51 and normal-start run 25 pass. Kubernetes recovery passes in
+`kubernetes-final-recovery/recovered-container-kubernetes-entry.json`.
+These records are under
+`target/mithril-recovery-qualification/20260908-atomic-recovery/`.
+Kubernetes normal start also passes in
+`kubernetes-final-normal/protected-start-result.json`. Test cleanup and repeat
+qualification are **Done**. The complete recovery matrix and Node
+lifecycle-owner corrections remain **Not done**.
+
 The direct stock-`runc` application-start lane proves the `PREPARED` to
 `ACTIVE` transition and dependency access with libc and the ELF loader absent
 from policy. The current complete Kubernetes fixture proves the same start

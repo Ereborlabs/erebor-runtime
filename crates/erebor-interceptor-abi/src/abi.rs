@@ -1324,133 +1324,12 @@ impl PhysicalDecisionV1 {
 
 #[cfg(test)]
 mod tests {
-    use std::mem::{align_of, offset_of, size_of};
-
     use super::{
-        BindingActivationTargetKeyV1, BindingLifecycleStateV1, DeviceEffectKeyV1,
-        EffectAttemptHookV1, EffectDecisionKeyV1, EffectDefaultKeyV1, EffectObservationHealthV1,
-        EffectObservationV1, ExactDeviceTypeV1, ExactFileMeasurementStateV1,
-        ExactFileMeasurementV1, ExactFileObjectKeyV1, ExactObjectBindingV1,
-        ExceptionBindingStateV1, ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1,
-        ExceptionReceiptStateV1, ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1,
-        ExceptionRuntimeStateV1, ExceptionUseIdentityKindV1, ExceptionUseIdentityV1,
-        ExceptionUseReceiptKeyV1, ExceptionUseReceiptV1, ExecutionApprovalTraceV1, FileOpenEventV1,
-        FileOpenTargetV1, Id128V1, IoUringActorSnapshotV1, IoUringExecutionStateKindV1,
-        IoUringExecutionStateV1, IoUringRequestStateKindV1, IoUringRequestStateV1,
-        IoUringRestrictionStateV1, IoUringRingStateKindV1, IoUringRingStateV1,
-        IoUringSetupStateKindV1, IoUringSetupStateV1, KernelEffectFamilyV1,
-        KernelEffectOperationV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
-        PolicyActivationProbeMapKindV1, PolicyActivationProbeV1, PolicyGenerationModeV1,
-        ProcessControlRuleKeyV1, ProfileGenerationDescriptorV1, TaskEffectAttemptFrameStateV1,
-        TaskEffectAttemptFrameV1, TaskEffectAttemptStateKindV1, TaskEffectAttemptStateV1,
-        TaskLabelCandidateV1, MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
+        BindingLifecycleStateV1, EffectDecisionKeyV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
     };
 
     #[test]
-    fn decision_abi_layout_and_values_are_closed() {
-        assert_eq!(size_of::<EffectDecisionKeyV1>(), 40);
-        assert_eq!(align_of::<EffectDecisionKeyV1>(), 8);
-        assert_eq!(offset_of!(EffectDecisionKeyV1, composite_atom_id), 16);
-        assert_eq!(offset_of!(EffectDecisionKeyV1, exact_object_key_id), 24);
-        assert_eq!(offset_of!(EffectDecisionKeyV1, binding_lifecycle_state), 36);
-        assert_eq!(size_of::<PhysicalDecisionV1>(), 16);
-        assert_eq!(align_of::<PhysicalDecisionV1>(), 4);
-        assert_eq!(size_of::<PolicyActivationProbeV1>(), 112);
-        assert_eq!(align_of::<PolicyActivationProbeV1>(), 4);
-        assert_eq!(offset_of!(PolicyActivationProbeV1, key), 16);
-        assert_eq!(offset_of!(PolicyActivationProbeV1, expected), 96);
-        assert_eq!(PolicyActivationProbeMapKindV1::EffectDecision as u8, 1);
-        assert_eq!(PolicyActivationProbeMapKindV1::MountReconciliation as u8, 7);
-        assert_eq!(size_of::<EffectDefaultKeyV1>(), 32);
-        assert_eq!(size_of::<DeviceEffectKeyV1>(), 80);
-        assert!(MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1 >= size_of::<DeviceEffectKeyV1>());
-        assert_eq!(size_of::<ProcessControlRuleKeyV1>(), 32);
-        assert_eq!(size_of::<BindingActivationTargetKeyV1>(), 24);
-        assert_eq!(align_of::<BindingActivationTargetKeyV1>(), 8);
-        assert_eq!(offset_of!(ProcessControlRuleKeyV1, operation_argument), 24);
-        assert_eq!(offset_of!(ProcessControlRuleKeyV1, argument_wildcard), 31);
-        assert_eq!(size_of::<ProfileGenerationDescriptorV1>(), 112);
-        assert_eq!(offset_of!(ProfileGenerationDescriptorV1, mode), 65);
-        assert_eq!(size_of::<ExceptionRuntimeStateKeyV1>(), 32);
-        assert_eq!(size_of::<ExceptionHandleBindingKeyV1>(), 16);
-        assert_eq!(size_of::<ExceptionHandleBindingV1>(), 40);
-        assert_eq!(ExceptionBindingStateV1::Active as u8, 2);
-        assert_eq!(size_of::<ExceptionRuntimeStateV1>(), 72);
-        assert_eq!(
-            offset_of!(ExceptionRuntimeStateV1, deadline_boottime_ns),
-            16
-        );
-        assert_eq!(
-            offset_of!(ExceptionRuntimeStateV1, exception_definition_sha256),
-            32
-        );
-        assert_eq!(PolicyGenerationModeV1::Observe as u8, 1);
-        assert_eq!(PolicyGenerationModeV1::Protect as u8, 2);
-        assert_eq!(ExceptionRuntimeStateKindV1::Active as u8, 1);
-        assert_eq!(ExceptionRuntimeStateKindV1::ReconciliationRequired as u8, 4);
-        assert_eq!(size_of::<ExceptionUseIdentityV1>(), 72);
-        assert_eq!(ExceptionUseIdentityKindV1::KernelEffectAttempt as u8, 2);
-        assert_eq!(size_of::<ExceptionUseReceiptKeyV1>(), 104);
-        assert_eq!(size_of::<ExceptionUseReceiptV1>(), 24);
-        assert_eq!(ExceptionReceiptStateV1::Consumed as u8, 2);
-        assert_eq!(size_of::<TaskEffectAttemptFrameV1>(), 24);
-        assert_eq!(offset_of!(TaskEffectAttemptFrameV1, state), 16);
-        assert_eq!(EffectAttemptHookV1::FileOpen as u16, 1);
-        assert_eq!(TaskEffectAttemptFrameStateV1::Decided as u8, 2);
-        assert_eq!(size_of::<TaskEffectAttemptStateV1>(), 128);
-        assert_eq!(offset_of!(TaskEffectAttemptStateV1, frames), 24);
-        assert_eq!(offset_of!(TaskEffectAttemptStateV1, depth), 120);
-        assert_eq!(TaskEffectAttemptStateKindV1::OverflowFailClosed as u8, 2);
-        assert_eq!(KernelEffectOperationV1::IoUringSetup as u16, 27);
-        assert_eq!(KernelEffectOperationV1::IoUringCommand as u16, 31);
-        assert_eq!(size_of::<IoUringSetupStateV1>(), 32);
-        assert_eq!(size_of::<IoUringActorSnapshotV1>(), 232);
-        assert_eq!(size_of::<IoUringRingStateV1>(), 528);
-        assert_eq!(size_of::<IoUringRequestStateV1>(), 344);
-        assert_eq!(size_of::<IoUringExecutionStateV1>(), 64);
-        assert_eq!(IoUringSetupStateKindV1::Authorized as u8, 2);
-        assert_eq!(IoUringRestrictionStateV1::ExactReadWrite as u8, 2);
-        assert_eq!(IoUringRingStateKindV1::Active as u8, 3);
-        assert_eq!(IoUringRequestStateKindV1::Submitted as u8, 1);
-        assert_eq!(IoUringExecutionStateKindV1::FailClosed as u8, 2);
-        assert_eq!(size_of::<ExactFileObjectKeyV1>(), 40);
-        assert_eq!(size_of::<ExactFileMeasurementV1>(), 48);
-        assert_eq!(align_of::<ExactFileMeasurementV1>(), 8);
-        assert_eq!(offset_of!(ExactFileMeasurementV1, state), 40);
-        assert_eq!(ExactFileMeasurementStateV1::Requested as u8, 1);
-        assert_eq!(ExactFileMeasurementStateV1::Measured as u8, 2);
-        assert_eq!(size_of::<ExactObjectBindingV1>(), 32);
-        assert_eq!(size_of::<EffectObservationV1>(), 624);
-        assert_eq!(size_of::<ExecutionApprovalTraceV1>(), 88);
-        assert_eq!(size_of::<EffectObservationHealthV1>(), 64);
-        assert_eq!(offset_of!(EffectObservationV1, source_sequence), 8);
-        assert_eq!(offset_of!(EffectObservationV1, source_cpu_id), 16);
-        assert_eq!(offset_of!(EffectObservationV1, file_object), 136);
-        assert_eq!(offset_of!(EffectObservationV1, kernel_result), 208);
-        assert_eq!(
-            offset_of!(EffectObservationV1, execution_approval_trace),
-            536
-        );
-        assert_eq!(PhysicalDecisionKindV1::Allow as u8, 0);
-        assert_eq!(PhysicalDecisionKindV1::AuditAllow as u8, 1);
-        assert_eq!(PhysicalDecisionKindV1::Deny as u8, 2);
-        assert_eq!(BindingLifecycleStateV1::Unknown as u8, 0);
-        assert_eq!(BindingLifecycleStateV1::Tombstoned as u8, 5);
-        assert_eq!(ExactDeviceTypeV1::Character as u8, 1);
-        assert_eq!(ExactDeviceTypeV1::Block as u8, 2);
-    }
-
-    #[test]
-    fn proven_file_open_abi_has_no_implicit_padding() {
-        assert_eq!(size_of::<TaskLabelCandidateV1>(), 8);
-        assert_eq!(size_of::<FileOpenTargetV1>(), 8);
-        assert_eq!(size_of::<FileOpenEventV1>(), 16);
-        assert_eq!(offset_of!(FileOpenEventV1, result), 8);
-        assert_eq!(offset_of!(FileOpenEventV1, reserved), 12);
-    }
-
-    #[test]
-    fn decision_set_golden_bytes_are_stable_and_missing_state_denies() {
+    fn decision_key_and_result_encode_little_endian() {
         let key = EffectDecisionKeyV1 {
             profile_generation_ref_id: 1,
             active_role_id: 2,
@@ -1469,7 +1348,7 @@ mod tests {
                 0, 0, 0, 0, 8, 0, 0, 0, 2, 0, 0, 0,
             ]
         );
-        let missing_state = PhysicalDecisionV1 {
+        let decision = PhysicalDecisionV1 {
             decision: PhysicalDecisionKindV1::Deny,
             reserved: 0,
             errno: -13,
@@ -1478,39 +1357,8 @@ mod tests {
             exception_numeric_handle: 0,
         };
         assert_eq!(
-            missing_state.encode_le(),
+            decision.encode_le(),
             [2, 0, 243, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-        );
-    }
-
-    #[test]
-    fn synchronous_open_operations_have_distinct_exact_attempt_identities() {
-        let read = ExceptionUseIdentityV1 {
-            kind: ExceptionUseIdentityKindV1::KernelEffectAttempt,
-            task_cookie: 7,
-            process_state_id: Id128V1::new(8, 9),
-            syscall_entry_sequence: 10,
-            effect_attempt_sequence: 1,
-            effect_family: KernelEffectFamilyV1::File as u16,
-            operation: KernelEffectOperationV1::OpenRead as u16,
-            ..ExceptionUseIdentityV1::default()
-        };
-        let write = ExceptionUseIdentityV1 {
-            effect_attempt_sequence: 2,
-            operation: KernelEffectOperationV1::OpenWrite as u16,
-            ..read
-        };
-
-        assert_ne!(read, write);
-        assert_ne!(
-            ExceptionUseReceiptKeyV1 {
-                runtime_state_key: ExceptionRuntimeStateKeyV1::default(),
-                use_identity: read,
-            },
-            ExceptionUseReceiptKeyV1 {
-                runtime_state_key: ExceptionRuntimeStateKeyV1::default(),
-                use_identity: write,
-            }
         );
     }
 }
