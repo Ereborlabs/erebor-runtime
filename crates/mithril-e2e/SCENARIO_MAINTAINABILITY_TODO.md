@@ -131,6 +131,8 @@ physical run:
 - [x] `IdentityTestRunner::physical_probe`: wait for the `CLONE_INTO_CGROUP`
   child to enter the target mount namespace and reach the final executable
   before the identity assertion.
+- [x] `IdentityTestRunner::physical_probe`: wait for cgroup attachment to
+  publish the complete non-leader-thread root identity before asserting it.
 - [ ] `IdentityTestRunner::physical_probe`: the VM reproduced an unexpected
   native fork denial twice. Preserve the waiting operation in the failure,
   reproduce the exact condition in a focused lightweight check, and correct

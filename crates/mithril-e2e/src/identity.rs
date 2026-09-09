@@ -944,9 +944,17 @@ impl IdentityTestRunner {
             .context(IoSnafu { path: &procs_path })?;
         let non_leader_thread_exec_root =
             self.wait_for("non-leader thread exec root identity", &procs_path, || {
-                inspector
+                let snapshot = inspector
                     .snapshot(non_leader_thread_root_pid)
-                    .context(NodeSnafu)
+                    .context(NodeSnafu)?;
+                Ok(snapshot.filter(|snapshot| {
+                    snapshot.creator_task_cookie.is_none()
+                        && snapshot.root_class.as_deref() == Some("external_runtime_root")
+                        && snapshot.installed_role_class.as_deref()
+                            == Some("runtime_external_restricted")
+                        && snapshot.active_role_id == binding.external_role_id
+                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
+                }))
             })?;
         ensure!(
             non_leader_thread_exec_root.creator_task_cookie.is_none()
