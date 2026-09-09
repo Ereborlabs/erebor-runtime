@@ -150,7 +150,7 @@ acknowledgement, or decommission operations directly.
 - [x] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
 - [x] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`
 - [x] `node_decommission_https_accepts_the_same_signed_artifact_as_control`
-- [ ] `mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound`
+- [x] `mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound`
 - [ ] `mtls_evidence_backlog_exceeds_the_previous_baseline`
 - [ ] `mtls_coverage_upload_preserves_gap_truth_at_control`
 - [ ] `mtls_administrative_services_route_matching_results_and_cancel_waiters`

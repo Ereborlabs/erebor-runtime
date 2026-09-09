@@ -1877,29 +1877,13 @@ async fn node_decommission_https_accepts_the_same_signed_artifact_as_control(
 #[tokio::test]
 async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound(
 ) -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let certificates = Certificates::issue(false)?;
-    let files = certificates.write(directory.path())?;
-    let address = free_address()?;
-    let intake_path = directory.path().join("control-evidence");
+    let fixture = MtlsFixture::new(false)?;
+    let intake_path = fixture.path().join("control-evidence");
     let store = ControlStore::open(&intake_path)?;
     let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let control = ControlPlane::with_control_store(
-        vec![AllowedNodeIdentity {
-            node_id: "node-a".to_owned(),
-            certificate_sha256: certificates.node_digest(),
-            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
-        }],
-        TrustGenerationV1 {
-            generation: 1,
-            bundle_digest: "d".repeat(64),
-            policy_issuer_sequence_epoch: 0,
-            policy_signers: Vec::new(),
-        },
-        store,
-    )?;
-    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
-    let wal_root = directory.path().join("node-wal");
+    let control = fixture.control_with_store(store, 1)?;
+    let server = fixture.start(control.clone()).await?;
+    let wal_root = fixture.path().join("node-wal");
     let wal_limits = EvidenceWalLimits {
         maximum_retained_records: 3,
         maximum_batch_records: 4_096,
@@ -1969,9 +1953,8 @@ async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_th
         );
     }
     assert_eq!(observations.pending_evidence_records(), 303);
-    let connector =
-        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
-    let mut trust = TrustCache::load(directory.path())?;
+    let connector = fixture.connector(&server, "node-a", [7; 16]);
+    let mut trust = TrustCache::load(fixture.path())?;
     let mut connection = connector.connect(registration(), false, &mut trust).await?;
     let batches = observations.next_evidence_batches();
     let upload_records = batches
@@ -2017,8 +2000,7 @@ async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_th
         303
     );
     drop(connection);
-    let _result = shutdown.send(());
-    server.await??;
+    server.shutdown().await?;
     Ok(())
 }
 
