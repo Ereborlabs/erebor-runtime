@@ -754,31 +754,15 @@ async fn mtls_rejects_wrong_node_binding_and_expired_client_identity(
 #[tokio::test]
 async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered_session(
 ) -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let certificates = Certificates::issue(false)?;
-    let files = certificates.write(directory.path())?;
-    let address = free_address()?;
-    let intake_path = directory.path().join("control-evidence");
+    let fixture = MtlsFixture::new(false)?;
+    let intake_path = fixture.path().join("control-evidence");
     let store = ControlStore::open(&intake_path)?;
     let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let control = ControlPlane::with_control_store(
-        vec![AllowedNodeIdentity {
-            node_id: "node-a".to_owned(),
-            certificate_sha256: certificates.node_digest(),
-            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
-        }],
-        TrustGenerationV1 {
-            generation: 1,
-            bundle_digest: "d".repeat(64),
-            policy_issuer_sequence_epoch: 0,
-            policy_signers: Vec::new(),
-        },
-        store,
-    )?;
-    let (shutdown, server) = start_server(address, &files, control.clone()).await?;
+    let control = fixture.control_with_store(store, 1)?;
+    let server = fixture.start(control.clone()).await?;
     let observations = EffectObservationStore::durable(
         4,
-        directory.path().join("node-wal"),
+        fixture.path().join("node-wal"),
         EvidenceWalLimits {
             maximum_retained_records: 10,
             maximum_batch_records: 10,
@@ -833,22 +817,44 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
         }
         .as_bytes(),
     );
-    let connector =
-        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
-    let mut trust = TrustCache::load(directory.path())?;
+    let connector = fixture.connector(&server, "node-a", [7; 16]);
+    let mut trust = TrustCache::load(fixture.path())?;
     let mut first = connector.connect(registration(), false, &mut trust).await?;
-    tokio::time::sleep(Duration::from_millis(20)).await;
     let first_batch = observations
         .next_evidence_batch()
         .ok_or("missing WAL batch")?;
     let first_source = batch_source_id(&first_batch)?;
     first.send_evidence_batch(first_batch.clone()).await?;
+    let first_identity = EvidenceIntakeIdentityV1 {
+        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+        node_id: "node-a".to_owned(),
+        node_boot_id: [7; 16],
+        label_epoch: 1,
+        source_id: first_source,
+        source_epoch: 1,
+    };
+    let last_control_cursor = std::cell::Cell::new(0);
+    wait_for_async(
+        &intake_path,
+        "Control to durably receive the first evidence batch",
+        Duration::from_secs(2),
+        || {
+            let cursor = intake
+                .contiguous_cursor(&first_identity)
+                .map_err(|source| crate::Error::Policy {
+                    source,
+                    location: snafu::Location::default(),
+                })?;
+            last_control_cursor.set(cursor);
+            Ok((cursor == first_batch.last_cursor).then_some(()))
+        },
+        || format!("last durable Control cursor: {}", last_control_cursor.get()),
+    )
+    .await?;
     drop(first);
-    tokio::time::sleep(Duration::from_millis(20)).await;
     assert!(observations.next_evidence_batch().is_some());
 
     let mut second = connector.connect(registration(), false, &mut trust).await?;
-    tokio::time::sleep(Duration::from_millis(20)).await;
     let replay = observations
         .next_evidence_batch()
         .ok_or("missing replay batch")?;
@@ -887,8 +893,7 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
     }
 
     drop(second);
-    let _result = shutdown.send(());
-    server.await??;
+    server.shutdown().await?;
     Ok(())
 }
 
