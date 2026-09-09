@@ -170,7 +170,7 @@ regressions and verify them with every Control migration:
 - [x] Replace the repeated child mailbox readiness loop with the shared wait.
 - [x] Replace repeated process and descriptor readiness loops with the shared
   wait. Preserve PID, descriptor, and kernel-result diagnostics.
-- [ ] Replace the observation deadline loop with the shared wait. Preserve the
+- [x] Replace the observation deadline loop with the shared wait. Preserve the
   complete recent-observation summary on failure.
 
 Keep and rerun all 24 focused regressions in `effect/child.rs`,

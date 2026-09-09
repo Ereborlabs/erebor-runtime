@@ -3,7 +3,7 @@ use std::fs::File;
 use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use erebor_interceptor::{EffectObservationReader, KernelHost};
 use erebor_interceptor_abi::{
@@ -18,6 +18,7 @@ use zerocopy::TryFromBytes as _;
 
 use super::PROFILE_GENERATION_REF_ID;
 use crate::error::{CommandSnafu, InterceptorSnafu, InvalidInputSnafu, IoSnafu, NodeSnafu};
+use crate::physical::wait_for;
 use crate::Result;
 
 const WAIT_LIMIT: Duration = Duration::from_secs(5);
@@ -537,52 +538,57 @@ fn wait_for_observation(
     expected_effect: Option<(u32, u32)>,
     expected_object: Option<ObjectExpectation>,
 ) -> Result<()> {
-    let deadline = Instant::now() + WAIT_LIMIT;
-    loop {
-        reader
-            .poll(Duration::from_millis(50))
-            .context(InterceptorSnafu)?;
-        if store.recent_since(marker).iter().any(|event| {
-            observation_matches(
-                &event.reason,
-                event.effect_family,
-                event.operation,
-                expected_reason,
-                expected_effect,
-            ) && object_matches(event, expected_object)
-        }) {
-            return Ok(());
-        }
-        ensure!(
-            Instant::now() < deadline,
-            InvalidInputSnafu {
-                path: Path::new("effect_observations"),
-                reason: format!(
-                    "timed out waiting for reason {expected_reason}, effect {expected_effect:?}, and object {expected_object:?}; observed {:?}",
-                    store
-                        .recent_since(marker)
-                        .iter()
-                        .map(|event| {
-                            (
-                                event.reason.as_str(),
-                                event.effect_family,
-                                event.operation,
-                                event.active_role_id,
-                                event.operation_argument,
-                                event.exact_object_key_id,
-                                event.composite_atom_id,
-                                event.mount_namespace_inode,
-                                event.mount_id_unique,
-                                event.filesystem_device,
-                                event.inode,
-                                event.inode_generation,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                ),
-            }
-        );
-    }
+    let operation = format!(
+        "reason {expected_reason}, effect {expected_effect:?}, and object {expected_object:?}"
+    );
+    wait_for(
+        Path::new("effect_observations"),
+        &operation,
+        WAIT_LIMIT,
+        || {
+            reader
+                .poll(Duration::from_millis(50))
+                .context(InterceptorSnafu)?;
+            Ok(store
+                .recent_since(marker)
+                .iter()
+                .any(|event| {
+                    observation_matches(
+                        &event.reason,
+                        event.effect_family,
+                        event.operation,
+                        expected_reason,
+                        expected_effect,
+                    ) && object_matches(event, expected_object)
+                })
+                .then_some(()))
+        },
+        || {
+            format!(
+                "observed {:?}",
+                store
+                    .recent_since(marker)
+                    .iter()
+                    .map(|event| {
+                        (
+                            event.reason.as_str(),
+                            event.effect_family,
+                            event.operation,
+                            event.active_role_id,
+                            event.operation_argument,
+                            event.exact_object_key_id,
+                            event.composite_atom_id,
+                            event.mount_namespace_inode,
+                            event.mount_id_unique,
+                            event.filesystem_device,
+                            event.inode,
+                            event.inode_generation,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            )
+        },
+    )
 }
 
 fn object_matches(
