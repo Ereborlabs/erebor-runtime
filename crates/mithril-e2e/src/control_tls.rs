@@ -2017,7 +2017,6 @@ async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box
     let directory = tempfile::tempdir_in(target)?;
     let certificates = Certificates::issue(false)?;
     let files = certificates.write(directory.path())?;
-    let address = free_address()?;
     let store = ControlStore::open_with_evidence_limits(
         directory.path().join("control-evidence"),
         EvidenceStoreLimitsV1 {
@@ -2039,7 +2038,7 @@ async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box
         },
         store.clone(),
     )?;
-    let (shutdown, server) = start_server(address, &files, control).await?;
+    let server = ControlServerFixture::start(&files, control).await?;
 
     let observations = EffectObservationStore::durable(
         4,
@@ -2097,8 +2096,11 @@ async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box
         "raw mTLS gRPC transferred {accepted_bytes} bytes in {grpc_elapsed:?}: {grpc_mib_per_second:.1} MiB/s; durable receiver completed in {durable_grpc_elapsed:?}: {durable_grpc_mib_per_second:.1} MiB/s"
     );
 
-    let connector =
-        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
+    let connector = NodeControlConnector::new(
+        files.node_config(server.address()),
+        "node-a".to_owned(),
+        [7; 16],
+    );
     let mut trust = TrustCache::load(&directory.path().join("trust"))?;
     let mut connection = connector.connect(registration(), false, &mut trust).await?;
     let intake = EvidenceIntakeOwner::from_store(store.clone());
@@ -2185,8 +2187,7 @@ async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box
     assert_eq!(acknowledgement_count, expected_acknowledgements);
     assert_eq!(store.health()?.pending_evidence_records, 0);
     drop(connection);
-    let _result = shutdown.send(());
-    server.await??;
+    server.shutdown().await?;
     assert!(mib_per_second > PREVIOUS_MIB_PER_SECOND);
     Ok(())
 }
