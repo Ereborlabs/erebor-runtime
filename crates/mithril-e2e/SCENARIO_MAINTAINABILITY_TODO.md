@@ -161,8 +161,9 @@ physical run:
 - [x] `EffectTestRunner::runc_entry_role_runtime_probe`: two fresh VM runs
   timed out before the direct `runc` `createContainer` request appeared.
   Report runtime process exit and bounded task and containerd output.
-- [ ] Use the new direct-runtime diagnostic to find and fix the missing
-  `createContainer` request before another complete physical run.
+- [x] Rerun the direct-runtime lane in a fresh VM with the new diagnostic.
+  The `createContainer` request appeared, and the complete schema 38 lane
+  passed. No implementation change was required.
 
 ## In-process scenario migration ledger
 
