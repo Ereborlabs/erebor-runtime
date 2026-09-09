@@ -133,10 +133,14 @@ physical run:
   before the identity assertion.
 - [x] `IdentityTestRunner::physical_probe`: wait for cgroup attachment to
   publish the complete non-leader-thread root identity before asserting it.
-- [ ] `IdentityTestRunner::physical_probe`: the VM reproduced an unexpected
-  native fork denial twice. Preserve the waiting operation in the failure,
-  reproduce the exact condition in a focused lightweight check, and correct
-  the fixture or implementation only after the cause is known.
+- [x] `IdentityTestRunner::physical_probe`: the VM reproduced an unexpected
+  moved-task native fork denial. Wait for the fixture input barrier before
+  cgroup attachment so the initial exec guard is complete before the fixture
+  releases the fork barrier.
+- [ ] `EffectTestRunner::runc_entry_role_runtime_probe`: two fresh VM runs
+  timed out before the direct `runc` `createContainer` request appeared. Add
+  the exact process state and runtime output to lightweight diagnostics, then
+  fix the fixture readiness owner before another physical run.
 
 ## In-process scenario migration ledger
 
@@ -195,6 +199,8 @@ starting the complete privileged scenarios.
 
 - [x] Replace duplicated native child exit and exec readiness loops with the
   shared wait. Preserve child status and snapshot diagnostics.
+- [x] Move native process startup, stop, exec-failure, and exit readiness into
+  the small `identity/native_process.rs` fixture module.
 - [x] Keep each of the 13 `identity.rs` tests and the `clone3.rs` test
   beside its fixture owner. Rerun them after each identity fixture change.
 

@@ -1,4 +1,5 @@
 mod clone3;
+mod native_process;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -7,7 +8,7 @@ use std::mem::{offset_of, size_of};
 use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -808,23 +809,28 @@ impl IdentityTestRunner {
         );
         clone_fixture.release_child_into_mount_namespace()?;
         let clone_child_comm_path = PathBuf::from(format!("/proc/{clone_child_pid}/comm"));
-        let clone_native_child_after_namespace_move = self.wait_for(
-            "CLONE_INTO_CGROUP native child mount-namespace entry",
+        let last_clone_namespace = std::cell::RefCell::new(clone_child_mount_namespace.clone());
+        let last_clone_comm = std::cell::RefCell::new(String::new());
+        let last_clone_snapshot = std::cell::RefCell::new(None);
+        let clone_native_child_after_namespace_move = wait_for(
             &clone_child_mount_namespace_path,
+            "CLONE_INTO_CGROUP native child mount-namespace entry",
+            WAIT_LIMIT,
             || {
-                if fs::read_link(&clone_child_mount_namespace_path).context(IoSnafu {
-                    path: &clone_child_mount_namespace_path,
-                })? != clone_target_mount_namespace
-                    || fs::read_to_string(&clone_child_comm_path)
-                        .context(IoSnafu {
-                            path: &clone_child_comm_path,
-                        })?
-                        .trim()
-                        != "sleep"
-                {
+                let namespace =
+                    fs::read_link(&clone_child_mount_namespace_path).context(IoSnafu {
+                        path: &clone_child_mount_namespace_path,
+                    })?;
+                let comm = fs::read_to_string(&clone_child_comm_path).context(IoSnafu {
+                    path: &clone_child_comm_path,
+                })?;
+                let snapshot = inspector.snapshot(clone_child_pid).context(NodeSnafu)?;
+                *last_clone_namespace.borrow_mut() = namespace.clone();
+                *last_clone_comm.borrow_mut() = comm.trim().to_owned();
+                *last_clone_snapshot.borrow_mut() = snapshot.clone();
+                if namespace != clone_target_mount_namespace || comm.trim() != "sleep" {
                     return Ok(None);
                 }
-                let snapshot = inspector.snapshot(clone_child_pid).context(NodeSnafu)?;
                 Ok(snapshot.filter(|snapshot| {
                     snapshot.task_cookie == clone_native_child.task_cookie
                         && snapshot.creator_task_cookie == clone_native_child.creator_task_cookie
@@ -842,6 +848,14 @@ impl IdentityTestRunner {
                             == ProcessStateVectorStateV1::Active as u8
                         && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
                 }))
+            },
+            || {
+                format!(
+                    "target namespace {clone_target_mount_namespace:?}; last namespace {:?}; last executable {:?}; last identity {:?}",
+                    last_clone_namespace.borrow(),
+                    last_clone_comm.borrow(),
+                    last_clone_snapshot.borrow()
+                )
             },
         )?;
         let clone_child_mount_namespace_after = fs::read_link(&clone_child_mount_namespace_path)
@@ -942,20 +956,40 @@ impl IdentityTestRunner {
         let non_leader_thread_root_pid = non_leader_thread_fixture.outer_pid();
         fs::write(&procs_path, non_leader_thread_root_pid.to_string())
             .context(IoSnafu { path: &procs_path })?;
-        let non_leader_thread_exec_root =
-            self.wait_for("non-leader thread exec root identity", &procs_path, || {
-                let snapshot = inspector
+        let last_non_leader_root = std::cell::RefCell::new(None);
+        let non_leader_thread_exec_root = wait_for(
+            &procs_path,
+            "non-leader thread exec root identity",
+            WAIT_LIMIT,
+            || {
+                let Some(snapshot) = inspector
                     .snapshot(non_leader_thread_root_pid)
-                    .context(NodeSnafu)?;
-                Ok(snapshot.filter(|snapshot| {
+                    .context(NodeSnafu)?
+                else {
+                    return Ok(None);
+                };
+                *last_non_leader_root.borrow_mut() = Some(snapshot.clone());
+                let ready = {
                     snapshot.creator_task_cookie.is_none()
                         && snapshot.root_class.as_deref() == Some("external_runtime_root")
                         && snapshot.installed_role_class.as_deref()
                             == Some("runtime_external_restricted")
                         && snapshot.active_role_id == binding.external_role_id
+                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
+                        && snapshot.process_state_vector_state
+                            == ProcessStateVectorStateV1::Active as u8
                         && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
-                }))
-            })?;
+                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
+                };
+                Ok(ready.then_some(snapshot))
+            },
+            || {
+                format!(
+                    "last identity snapshot: {:?}",
+                    last_non_leader_root.borrow()
+                )
+            },
+        )?;
         ensure!(
             non_leader_thread_exec_root.creator_task_cookie.is_none()
                 && non_leader_thread_exec_root.root_class.as_deref()
@@ -1269,15 +1303,40 @@ impl IdentityTestRunner {
             .context(IoSnafu { path: &procs_path })?;
         let moved_task_parent =
             self.wait_for("moved-task exec parent identity", &procs_path, || {
-                inspector
+                let snapshot = inspector
                     .snapshot(moved_task_fixture.outer_pid())
-                    .context(NodeSnafu)
+                    .context(NodeSnafu)?;
+                Ok(snapshot.filter(|snapshot| {
+                    snapshot.creator_task_cookie.is_none()
+                        && snapshot.root_class.as_deref() == Some("external_runtime_root")
+                        && snapshot.installed_role_class.as_deref()
+                            == Some("runtime_external_restricted")
+                        && snapshot.active_role_id == binding.external_role_id
+                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
+                        && snapshot.process_state_vector_state
+                            == ProcessStateVectorStateV1::Active as u8
+                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
+                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
+                }))
             })?;
+        let health_before_moved_task_child = identity.health(&host).context(NodeSnafu)?;
+        let next_id_before_moved_task_child = identity_next_id(&host)?;
         moved_task_fixture.release_root()?;
-        let moved_task_pid =
-            self.wait_for("moved-task exec child creation", &procs_path, || {
-                moved_task_fixture.native_child_pid()
-            })?;
+        let moved_task_pid = match self.wait_for(
+            "moved-task exec child creation",
+            &procs_path,
+            || moved_task_fixture.native_child_pid(),
+        ) {
+            Ok(pid) => pid,
+            Err(source) => {
+                let health_after = identity.health(&host).context(NodeSnafu)?;
+                let next_id_after = identity_next_id(&host)?;
+                return Err(invalid_state(format!(
+                    "{source}; parent {moved_task_parent:?}; identity health changed from {health_before_moved_task_child:?} to {health_after:?}; child allocation advanced next_id by {}",
+                    next_id_after.saturating_sub(next_id_before_moved_task_child)
+                )));
+            }
+        };
         moved_task_fixture.open_native_pidfd(moved_task_pid)?;
         let moved_task_before_move =
             self.wait_for("moved-task exec child identity", &procs_path, || {
@@ -3298,20 +3357,17 @@ impl IdentityTestRunner {
     where
         F: FnMut() -> Result<Option<T>>,
     {
-        let deadline = Instant::now() + limit;
-        loop {
-            if let Some(value) = inspect()? {
-                return Ok(value);
-            }
-            ensure!(
-                Instant::now() < deadline,
-                InvalidInputSnafu {
-                    path,
-                    reason: format!("timed out waiting for {description}"),
-                }
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
+        wait_for(
+            path,
+            description,
+            limit,
+            || {
+                inspect().map_err(|source| {
+                    invalid_state(format!("failed while waiting for {description}: {source}"))
+                })
+            },
+            || "the last readiness inspection returned no value".to_owned(),
+        )
     }
 
     fn physical_kubernetes_exec_probe(
@@ -8757,6 +8813,7 @@ impl IdentityTestRunner {
 struct NativeProcessFixture {
     outer: Child,
     stdin: Option<ChildStdin>,
+    ready_stdout: Option<ChildStdout>,
     stderr: Option<ChildStderr>,
     native_pid: Option<u32>,
     native_pidfd: Option<OwnedFd>,
@@ -8783,6 +8840,7 @@ import os
 import signal
 import sys
 
+print("native-fixture-ready", flush=True)
 sys.stdin.readline()
 if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0):
     raise OSError(ctypes.get_errno(), "set child subreaper")
@@ -8814,6 +8872,7 @@ os.waitpid(-1, 0)
 import signal
 import sys
 
+print("native-fixture-ready", flush=True)
 sys.stdin.readline()
 middle = os.fork()
 if middle == 0:
@@ -8846,6 +8905,7 @@ import threading
 import time
 
 work = sys.argv[1]
+print("native-fixture-ready", flush=True)
 sys.stdin.readline()
 
 def path(name):
@@ -8925,7 +8985,8 @@ mark("complete")
 
     fn start_with_script(script: &str, parent_exit_mode: bool) -> Result<Self> {
         let mut command = Command::new("/bin/sh");
-        command.args(["-c", script]);
+        let script = format!("printf 'native-fixture-ready\\n'; {script}");
+        command.args(["-c", &script]);
         Self::start_command(&mut command, parent_exit_mode, Path::new("/bin/sh"))
     }
 
@@ -8934,7 +8995,7 @@ mark("complete")
         command
             .args([
                 "-c",
-                "read _; /bin/bash -c 'read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; shopt -s execfail; exec \"$0\"; : > \"$1\"; kill -STOP \"$child_pid\"; exec /bin/sleep 300' \"$0\" \"$1\" & wait \"$!\"",
+                "printf 'native-fixture-ready\\n'; read _; /bin/bash -c 'read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; shopt -s execfail; exec \"$0\"; : > \"$1\"; kill -STOP \"$child_pid\"; exec /bin/sleep 300' \"$0\" \"$1\" & wait \"$!\"",
             ])
             .arg(execfail)
             .arg(ready);
@@ -8946,7 +9007,7 @@ mark("complete")
         command
             .args([
                 "-c",
-                "read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec \"$0\") & wait \"$!\"",
+                "printf 'native-fixture-ready\\n'; read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec \"$0\") & wait \"$!\"",
             ])
             .arg(execfail);
         Self::start_command(&mut command, false, Path::new("/bin/sh"))
@@ -8965,6 +9026,7 @@ import time
 
 ready = sys.argv[1]
 release = sys.argv[2]
+print("native-fixture-ready", flush=True)
 sys.stdin.readline()
 
 def worker():
@@ -9002,6 +9064,7 @@ import threading
 
 ready = sys.argv[1]
 release = threading.Event()
+print("native-fixture-ready", flush=True)
 sys.stdin.readline()
 
 def execute():
@@ -9032,6 +9095,7 @@ import sys
 import threading
 
 ready = sys.argv[1]
+print("native-fixture-ready", flush=True)
 sys.stdin.readline()
 release = threading.Event()
 started = threading.Barrier(3)
@@ -9070,7 +9134,7 @@ second.join()
     fn start_command(command: &mut Command, parent_exit_mode: bool, path: &Path) -> Result<Self> {
         let mut outer = command
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .context(IoSnafu { path })?;
@@ -9078,20 +9142,27 @@ second.join()
             .stdin
             .take()
             .ok_or_else(|| invalid_state("test shell has no stdin pipe"))?;
+        let ready_stdout = outer
+            .stdout
+            .take()
+            .ok_or_else(|| invalid_state("test shell has no readiness pipe"))?;
         let stderr = outer
             .stderr
             .take()
             .ok_or_else(|| invalid_state("test shell has no stderr pipe"))?;
-        Ok(Self {
+        let mut fixture = Self {
             outer,
             stdin: Some(stdin),
+            ready_stdout: Some(ready_stdout),
             stderr: Some(stderr),
             native_pid: None,
             native_pidfd: None,
             intermediate_pidfd: None,
             namespace_init_pidfd: None,
             parent_exit_mode,
-        })
+        };
+        fixture.wait_for_startup(path)?;
+        Ok(fixture)
     }
 
     fn outer_pid(&self) -> u32 {
@@ -9115,20 +9186,20 @@ second.join()
     }
 
     fn release_root(&mut self) -> Result<()> {
-        self.write_stdin(b"root\n")
+        self.write_stdin("native root release", b"root\n")
     }
 
     fn release_namespace_init(&mut self) -> Result<()> {
-        self.write_stdin(b"namespace-init\n")
+        self.write_stdin("namespace init release", b"namespace-init\n")
     }
 
     fn release_non_leader_exec(&mut self) -> Result<()> {
-        self.write_stdin(b"exec\n")
+        self.write_stdin("non-leader exec release", b"exec\n")
     }
 
     #[cfg(test)]
     fn release_concurrent_thread_exec(&mut self) -> Result<()> {
-        self.write_stdin(b"exec\n")
+        self.write_stdin("concurrent thread exec release", b"exec\n")
     }
 
     fn release_exec(&mut self, native_pid: u32) -> Result<()> {
@@ -9141,129 +9212,6 @@ second.join()
             .map_err(|error| invalid_state(format!("release native child exec: {error}")))
     }
 
-    fn wait_for_stopped_native_child(&mut self, native_pid: u32) -> Result<()> {
-        let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
-        let last_state = std::cell::RefCell::new(String::from("State: <unread>"));
-        wait_for(
-            &status_path,
-            "the native child to stop before exec release",
-            WAIT_LIMIT,
-            || {
-                let status = match fs::read_to_string(&status_path) {
-                    Ok(status) => status,
-                    Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-                        let outer = self.outer.try_wait().context(IoSnafu {
-                            path: Path::new("identity test shell"),
-                        })?;
-                        let stderr = if outer.is_some() {
-                            self.stdin.take();
-                            let mut stderr = String::new();
-                            if let Some(mut pipe) = self.stderr.take() {
-                                pipe.read_to_string(&mut stderr).context(IoSnafu {
-                                    path: Path::new("identity test shell stderr"),
-                                })?;
-                            }
-                            format!("; outer {outer:?}; stderr {}", stderr.trim())
-                        } else {
-                            String::from("; outer still running")
-                        };
-                        return Err(invalid_state(format!(
-                        "native child {native_pid} exited before it stopped for exec release{stderr}"
-                    )));
-                    }
-                    Err(source) => return Err(source).context(IoSnafu { path: &status_path }),
-                };
-                *last_state.borrow_mut() = status
-                    .lines()
-                    .find(|line| line.starts_with("State:"))
-                    .unwrap_or("State: <missing>")
-                    .to_owned();
-                Ok(status
-                    .lines()
-                    .any(|line| line.starts_with("State:\tT"))
-                    .then_some(()))
-            },
-            || format!("native child {native_pid}; last {}", last_state.borrow()),
-        )
-    }
-
-    fn wait_for_native_exec_failure(&mut self) -> Result<()> {
-        let path = Path::new("identity test shell");
-        wait_for(
-            path,
-            "the native child exec to fail",
-            Duration::from_secs(5),
-            || {
-                let Some(status) = self.outer.try_wait().context(IoSnafu { path })? else {
-                    return Ok(None);
-                };
-                self.stdin.take();
-                ensure!(
-                    !status.success(),
-                    InvalidInputSnafu {
-                        path,
-                        reason: format!("native child exec unexpectedly completed with {status}"),
-                    }
-                );
-                Ok(Some(()))
-            },
-            || "the identity test shell was still running".to_owned(),
-        )
-    }
-
-    fn wait_for_post_ponr_fatal(&mut self, native_pid: u32) -> Result<()> {
-        let path = PathBuf::from(format!("/proc/{native_pid}"));
-        wait_for(
-            &path,
-            "the post-PONR exec failure to terminate its task",
-            Duration::from_secs(5),
-            || {
-                let Some(status) = self.outer.try_wait().context(IoSnafu {
-                    path: Path::new("post-PONR identity fixture"),
-                })?
-                else {
-                    return Ok(None);
-                };
-                self.stdin.take();
-                ensure!(
-                    !status.success() && !path.exists(),
-                    InvalidInputSnafu {
-                        path: &path,
-                        reason: format!(
-                            "post-PONR exec did not terminate its task; outer status {status}"
-                        ),
-                    }
-                );
-                Ok(Some(()))
-            },
-            || format!("native child {native_pid} and its outer shell were still running"),
-        )
-    }
-
-    fn wait_for_successful_exit(&mut self) -> Result<()> {
-        let path = Path::new("leader-first identity fixture");
-        wait_for(
-            path,
-            "the leader-first worker to exit",
-            Duration::from_secs(5),
-            || {
-                let Some(status) = self.outer.try_wait().context(IoSnafu { path })? else {
-                    return Ok(None);
-                };
-                self.stdin.take();
-                ensure!(
-                    status.success(),
-                    InvalidInputSnafu {
-                        path,
-                        reason: format!("leader-first fixture exited with {status}"),
-                    }
-                );
-                Ok(Some(()))
-            },
-            || "the leader-first worker was still running".to_owned(),
-        )
-    }
-
     fn release_parent_exit(&mut self) -> Result<()> {
         ensure!(
             self.parent_exit_mode,
@@ -9272,7 +9220,7 @@ second.join()
                 reason: "native fixture does not have a parent-exit release",
             }
         );
-        self.write_stdin(b"parent-exit\n")
+        self.write_stdin("native parent exit release", b"parent-exit\n")
     }
 
     fn release_intermediate_exit(&mut self) -> Result<()> {
@@ -9323,13 +9271,13 @@ second.join()
         Ok(())
     }
 
-    fn write_stdin(&mut self, bytes: &[u8]) -> Result<()> {
+    fn write_stdin(&mut self, operation: &'static str, bytes: &[u8]) -> Result<()> {
         self.stdin
             .as_mut()
             .ok_or_else(|| invalid_state("test shell stdin is closed"))?
             .write_all(bytes)
             .context(IoSnafu {
-                path: Path::new("test shell stdin"),
+                path: Path::new(operation),
             })
     }
 
