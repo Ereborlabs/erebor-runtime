@@ -3,6 +3,7 @@ mod tests;
 
 use std::cell::RefCell;
 use std::ffi::OsStr;
+use std::fs;
 use std::io::{ErrorKind, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
@@ -108,6 +109,55 @@ impl ProcessFixture {
             limit,
             || self.try_wait(),
             || "the process is still running".to_owned(),
+        )
+    }
+
+    pub(crate) fn wait_pid(&mut self, path: &Path, operation: &str) -> Result<u32> {
+        let last = RefCell::new(String::from("<absent>"));
+        self.wait_path(
+            path,
+            operation,
+            START_LIMIT,
+            || {
+                let text = match fs::read_to_string(path) {
+                    Ok(text) => text,
+                    Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
+                    Err(source) => return Err(source).context(IoSnafu { path }),
+                };
+                *last.borrow_mut() = text.trim().to_owned();
+                if text.trim().is_empty() {
+                    return Ok(None);
+                }
+                text.trim().parse::<u32>().map(Some).map_err(|source| {
+                    InvalidInputSnafu {
+                        path,
+                        reason: format!("the actor wrote an invalid PID: {source}"),
+                    }
+                    .build()
+                })
+            },
+            || format!("last PID value: {:?}", last.borrow()),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn wait_comm(&mut self, pid: u32, name: &str, operation: &str) -> Result<()> {
+        let path = PathBuf::from(format!("/proc/{pid}/comm"));
+        let last = RefCell::new(String::from("<absent>"));
+        self.wait_path(
+            &path,
+            operation,
+            START_LIMIT,
+            || {
+                let text = match fs::read_to_string(&path) {
+                    Ok(text) => text,
+                    Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
+                    Err(source) => return Err(source).context(IoSnafu { path: &path }),
+                };
+                *last.borrow_mut() = text.trim().to_owned();
+                Ok((text.trim() == name).then_some(()))
+            },
+            || format!("last process name: {:?}; expected: {name:?}", last.borrow()),
         )
     }
 

@@ -958,15 +958,8 @@ impl IdentityTestRunner {
         };
         fixture.stop()?;
 
-        let (non_leader_thread_exec_root, non_leader_thread_exec_after_exec) =
-            scenarios::non_leader_exec::run(
-                self,
-                &host,
-                &inspector,
-                &binding,
-                &procs_path,
-                &non_leader_thread_ready_path,
-            )?;
+        let exec_case = scenarios::ExecCase::new(self, &host, &inspector, &binding, &procs_path);
+        let (thread_root, thread_exec) = exec_case.non_leader(&non_leader_thread_ready_path)?;
         non_leader_thread_ready_cleanup.cleanup()?;
 
         let mut failed_exec_fixture =
@@ -2579,8 +2572,8 @@ impl IdentityTestRunner {
             authorization_replay_wal_records,
             authorization_replay_state_removed: true,
             non_leader_thread_exec_committed: true,
-            non_leader_thread_exec_root,
-            non_leader_thread_exec_after_exec,
+            non_leader_thread_exec_root: thread_root,
+            non_leader_thread_exec_after_exec: thread_exec,
             clone_into_cgroup_external_root: clone_external_root,
             clone_into_cgroup_native_child: clone_native_child,
             clone_into_cgroup_native_child_after_namespace_move:

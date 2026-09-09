@@ -129,11 +129,6 @@ impl NativeProcessFixture {
         Ok(Self::from_outer(outer, false))
     }
 
-    pub(super) fn start_with_non_leader_exec(repo_root: &Path, ready: &Path) -> Result<Self> {
-        let outer = ProcessFixture::python(repo_root, "native_non_leader_exec.py", [ready])?;
-        Ok(Self::from_outer(outer, false))
-    }
-
     #[cfg(test)]
     pub(super) fn start_with_concurrent_thread_exec(
         repo_root: &Path,
@@ -221,17 +216,6 @@ impl NativeProcessFixture {
         )
     }
 
-    pub(super) fn wait_for_reported_tid(&mut self, ready: &Path, operation: &str) -> Result<u32> {
-        let outer_pid = self.outer.id();
-        wait_for(
-            ready,
-            operation,
-            WAIT_LIMIT,
-            || self.reported_tid(ready),
-            || format!("outer process {outer_pid} has not reported a thread"),
-        )
-    }
-
     #[cfg(test)]
     pub(super) fn wait_for_concurrent_thread_tids(
         &mut self,
@@ -264,10 +248,6 @@ impl NativeProcessFixture {
 
     pub(super) fn release_namespace_init(&mut self) -> Result<()> {
         self.write_stdin("namespace init release", b"namespace-init\n")
-    }
-
-    pub(super) fn release_non_leader_exec(&mut self) -> Result<()> {
-        self.write_stdin("non-leader exec release", b"exec\n")
     }
 
     #[cfg(test)]
@@ -357,7 +337,7 @@ impl NativeProcessFixture {
         self.first_child_pid(self.outer.id())
     }
 
-    pub(super) fn non_leader_thread_tid(&mut self, ready: &Path) -> Result<Option<u32>> {
+    pub(super) fn reported_tid(&mut self, ready: &Path) -> Result<Option<u32>> {
         if let Some(status) = self.outer.try_wait()? {
             let stderr = self.outer.stderr()?;
             return Err(invalid_state(format!(
@@ -380,10 +360,6 @@ impl NativeProcessFixture {
             ))
         })?;
         Ok(Some(tid))
-    }
-
-    pub(super) fn reported_tid(&mut self, ready: &Path) -> Result<Option<u32>> {
-        self.non_leader_thread_tid(ready)
     }
 
     #[cfg(test)]
