@@ -204,8 +204,8 @@ starting the complete privileged scenarios.
   shared wait. Preserve child status and snapshot diagnostics.
 - [x] Move native process startup, stop, exec-failure, and exit readiness into
   the small `identity/native_process.rs` fixture module.
-- [ ] Move the complete `NativeProcessFixture` owner out of `identity.rs`.
-  Put embedded child programs in a separate constants module.
+- [x] Move the complete `NativeProcessFixture` owner out of `identity.rs`.
+  Put each Python child program in a small file under `fixtures/identity`.
 - [ ] Move native child stop, failed-exec, and post-PONR checks to
   `identity/native_process/exec_tests.rs`. Reuse fixture-owned child and
   executable readiness.
