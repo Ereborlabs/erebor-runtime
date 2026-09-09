@@ -1,6 +1,4 @@
 #[cfg(test)]
-mod exec_tests;
-#[cfg(test)]
 mod reparent_tests;
 #[cfg(test)]
 mod test_support;
@@ -91,17 +89,6 @@ impl NativeProcessFixture {
         let script = format!("printf 'native-fixture-ready\\n'; {script}");
         command.args(["-c", &script]);
         Self::start_command(&mut command, parent_exit_mode, Path::new("/bin/sh"))
-    }
-
-    pub(super) fn start_with_post_ponr_exec(execfail: &Path) -> Result<Self> {
-        let mut command = Command::new("/bin/sh");
-        command
-            .args([
-                "-c",
-                "printf 'native-fixture-ready\\n'; read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec \"$0\") & wait \"$!\"",
-            ])
-            .arg(execfail);
-        Self::start_command(&mut command, false, Path::new("/bin/sh"))
     }
 
     pub(super) fn start_with_leader_first_exit(
@@ -436,32 +423,6 @@ impl NativeProcessFixture {
                 Ok(Some(()))
             },
             || "the identity test shell was still running".to_owned(),
-        )
-    }
-
-    pub(super) fn wait_for_post_ponr_fatal(&mut self, native_pid: u32) -> Result<()> {
-        let path = PathBuf::from(format!("/proc/{native_pid}"));
-        wait_for(
-            &path,
-            "the post-PONR exec failure to terminate its task",
-            Duration::from_secs(5),
-            || {
-                let Some(status) = self.outer.try_wait()? else {
-                    return Ok(None);
-                };
-                self.outer.close();
-                ensure!(
-                    !status.success() && !path.exists(),
-                    InvalidInputSnafu {
-                        path: &path,
-                        reason: format!(
-                            "post-PONR exec did not terminate its task; outer status {status}"
-                        ),
-                    }
-                );
-                Ok(Some(()))
-            },
-            || format!("native child {native_pid} and its outer shell were still running"),
         )
     }
 

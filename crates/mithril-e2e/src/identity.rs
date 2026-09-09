@@ -27,10 +27,10 @@ use erebor_interceptor::{
 use erebor_interceptor_abi::{
     BindingLifecycleStateV1, CreatedByEdgeV1, EntryLifetimeStateV1, EntrySecurityStateV1,
     ExecGuardStateV1, ExecutionSetBindingStateV1, Id128V1, IdentityRuntimeConfigV1,
-    PendingExecStateV1, PendingExecV1, ProcessExecutionInstanceV1, ProcessExecutionStateV1,
-    ProcessSecurityStateKindV1, ProcessSecurityStateV1, ProcessStateVectorStateV1,
-    ProcessStateVectorV1, ReferenceTombstoneStateV1, TaskCoordinateStateV1, TaskCoordinateV1,
-    TaskReferenceTombstoneV1, TASK_REFERENCE_ALL_V1,
+    ProcessExecutionInstanceV1, ProcessExecutionStateV1, ProcessSecurityStateKindV1,
+    ProcessSecurityStateV1, ProcessStateVectorStateV1, ProcessStateVectorV1,
+    ReferenceTombstoneStateV1, TaskCoordinateStateV1, TaskCoordinateV1, TaskReferenceTombstoneV1,
+    TASK_REFERENCE_ALL_V1,
 };
 use libbpf_rs::{MapCore as _, MapHandle, MapType};
 use mithril_control::{
@@ -894,121 +894,10 @@ impl IdentityTestRunner {
         retry_ready_cleanup.cleanup()?;
         execfail_ready_cleanup.cleanup()?;
         execfail_cleanup.cleanup()?;
+        let fatal_ready_cleanup = ProbeFile::new(&child_ready_path);
 
-        let mut post_ponr_fixture =
-            NativeProcessFixture::start_with_post_ponr_exec(&post_ponr_execfail_path)?;
-        fs::write(&procs_path, post_ponr_fixture.outer_pid().to_string())
-            .context(IoSnafu { path: &procs_path })?;
-        let post_ponr_parent = self.wait_for("post-PONR parent identity", &procs_path, || {
-            inspector
-                .snapshot(post_ponr_fixture.outer_pid())
-                .context(NodeSnafu)
-        })?;
-        post_ponr_fixture.release_root()?;
-        let post_ponr_pid = self.wait_for("post-PONR native child", &procs_path, || {
-            post_ponr_fixture.native_child_pid()
-        })?;
-        post_ponr_fixture.open_native_pidfd(post_ponr_pid)?;
-        post_ponr_fixture.wait_for_stopped_native_child(post_ponr_pid)?;
-        let post_ponr_before = self.wait_for("post-PONR child identity", &procs_path, || {
-            inspector.snapshot(post_ponr_pid).context(NodeSnafu)
-        })?;
-        ensure!(
-            post_ponr_parent.root_class.as_deref() == Some("external_runtime_root")
-                && post_ponr_before.creator_task_cookie == Some(post_ponr_parent.task_cookie)
-                && post_ponr_before.active_role_id == post_ponr_parent.active_role_id
-                && post_ponr_before.exec_guard_state == ExecGuardStateV1::None as u8,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: "the post-PONR child did not start with the inherited restricted identity",
-            }
-        );
-        let post_ponr_task_key = post_ponr_before.task_cookie.to_ne_bytes();
-        let post_ponr_process_key = id_key(&post_ponr_before.process_state_id)?;
-        post_ponr_fixture.release_exec(post_ponr_pid)?;
-        post_ponr_fixture.wait_for_post_ponr_fatal(post_ponr_pid)?;
-        let (
-            post_ponr_pending,
-            post_ponr_process,
-            post_ponr_coordinate,
-            post_ponr_tombstone,
-            post_ponr_source_execution,
-            post_ponr_target_execution,
-        ) = self.wait_for("post-PONR fatal identity", &procs_path, || {
-            let Some(pending) = optional_abi_map::<PendingExecV1>(
-                &host,
-                "pending_execs",
-                &post_ponr_task_key,
-                "post-PONR pending exec",
-            )?
-            else {
-                return Ok(None);
-            };
-            let process = required_abi_map::<ProcessSecurityStateV1>(
-                &host,
-                "process_states",
-                &post_ponr_process_key,
-                "post-PONR process state",
-            )?;
-            let coordinate = required_abi_map::<TaskCoordinateV1>(
-                &host,
-                "task_coordinates",
-                &post_ponr_before.task_cookie.to_ne_bytes(),
-                "post-PONR task coordinate",
-            )?;
-            let tombstone = required_abi_map::<TaskReferenceTombstoneV1>(
-                &host,
-                "task_reference_tombstones",
-                &post_ponr_before.task_cookie.to_ne_bytes(),
-                "post-PONR task tombstone",
-            )?;
-            let source_execution = required_abi_map::<ProcessExecutionInstanceV1>(
-                &host,
-                "process_execution_instances",
-                &id_bytes(pending.source_execution_id),
-                "post-PONR source execution",
-            )?;
-            let target_execution = required_abi_map::<ProcessExecutionInstanceV1>(
-                &host,
-                "process_execution_instances",
-                &id_bytes(pending.target_execution_id),
-                "post-PONR target execution",
-            )?;
-            Ok((pending.state == PendingExecStateV1::PostPonrFatal
-                && process.exec_guard_state == ExecGuardStateV1::OutcomeUnknown
-                && process.state == ProcessSecurityStateKindV1::Reclaimable
-                && process.live_thread_refs == 0
-                && coordinate.state == TaskCoordinateStateV1::Exited
-                && tombstone.task_free_observed == 1
-                && tombstone.released_bits == TASK_REFERENCE_ALL_V1
-                && tombstone.state == ReferenceTombstoneStateV1::Released
-                && source_execution.state == ProcessExecutionStateV1::Complete
-                && target_execution.state == ProcessExecutionStateV1::OutcomeUnknown)
-                .then_some((
-                    pending,
-                    process,
-                    coordinate,
-                    tombstone,
-                    source_execution,
-                    target_execution,
-                )))
-        })?;
-        ensure!(
-            post_ponr_process.active_role_id == post_ponr_before.active_role_id
-                && post_ponr_process.active_execution_id == post_ponr_pending.source_execution_id
-                && post_ponr_pending.source_role_id == post_ponr_before.active_role_id
-                && post_ponr_coordinate.task_cookie == post_ponr_before.task_cookie
-                && post_ponr_tombstone.task_cookie == post_ponr_before.task_cookie
-                && post_ponr_source_execution.process_execution_instance_id
-                    == post_ponr_pending.source_execution_id
-                && post_ponr_target_execution.process_execution_instance_id
-                    == post_ponr_pending.target_execution_id,
-            InvalidInputSnafu {
-                path: &post_ponr_execfail_path,
-                reason: "post-PONR failure restored or replaced the source restriction",
-            }
-        );
-        post_ponr_fixture.stop()?;
+        let fatal = exec_case.fatal(&child_ready_path, &post_ponr_execfail_path)?;
+        fatal_ready_cleanup.cleanup()?;
         post_ponr_execfail_cleanup.cleanup()?;
 
         let mut moved_task_fixture = NativeProcessFixture::start()?;
@@ -2369,9 +2258,9 @@ impl IdentityTestRunner {
             pre_ponr_failed_exec_after_failure: failed_after,
             pre_ponr_failed_exec_after_success: retry_after,
             post_ponr_exec_fatal: true,
-            post_ponr_pending_state: post_ponr_pending.state as u8,
-            post_ponr_exec_guard_state: post_ponr_process.exec_guard_state as u8,
-            post_ponr_task_coordinate_state: post_ponr_coordinate.state as u8,
+            post_ponr_pending_state: fatal.pending,
+            post_ponr_exec_guard_state: fatal.guard,
+            post_ponr_task_coordinate_state: fatal.coord,
             authorization_retarget_rejected: true,
             authorization_expired_rejected: true,
             authorization_signature_mismatch_rejected: true,

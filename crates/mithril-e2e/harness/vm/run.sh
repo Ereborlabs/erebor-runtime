@@ -330,6 +330,7 @@ for fixture in \
   native_child_exec.py \
   native_concurrent_thread_exec.py \
   native_exec_retry.py \
+  native_fatal_exec.py \
   native_leader_first.py \
   native_namespace_init.py \
   native_non_leader_exec.py \

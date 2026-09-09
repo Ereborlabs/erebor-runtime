@@ -1,3 +1,4 @@
+use std::os::unix::process::ExitStatusExt as _;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -5,6 +6,7 @@ use rustix::process::Signal;
 use snafu::ResultExt as _;
 
 use crate::error::IoSnafu;
+use crate::identity::IdentityTestRunner;
 use crate::process::ProcessFixture;
 
 #[test]
@@ -135,5 +137,26 @@ fn exec_recovers() -> crate::Result<()> {
     actor.wait_stop(pid, "failed exec stop")?;
     actor.signal(pid, Signal::CONT)?;
     actor.wait_comm(pid, "sleep", "exec recovery")?;
+    actor.stop()
+}
+
+#[test]
+fn fatal_exec_kills_actor() -> crate::Result<()> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let temp = tempfile::tempdir().context(IoSnafu {
+        path: std::path::Path::new("fatal exec actor"),
+    })?;
+    let ready = temp.path().join("ready");
+    let target = temp.path().join("execfail");
+    IdentityTestRunner::materialize_post_ponr_execfail(&target)?;
+    let mut actor = ProcessFixture::python(&root, "native_fatal_exec.py", [&ready, &target])?;
+
+    actor.send(b"root\n")?;
+    let pid = actor.wait_pid(&ready, "fatal exec child")?;
+    actor.track(pid)?;
+    actor.wait_stop(pid, "fatal exec stop")?;
+    actor.signal(pid, Signal::CONT)?;
+    let status = actor.wait_exit("fatal exec", Duration::from_secs(5))?;
+    assert!(status.signal().is_some());
     actor.stop()
 }
