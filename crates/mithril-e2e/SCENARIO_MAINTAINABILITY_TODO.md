@@ -83,6 +83,24 @@ acknowledgement in the test when that operation is under test.
 - A compatibility artifact writer can serialize scenario results. It must not
   execute a hidden scenario or own setup, action, assertion, or teardown.
 
+### Cross-environment test shape
+
+- Keep each migrated behavior as a small standard Rust `#[test]`.
+- Use one Python actor file for the same behavior on the host, in direct
+  `runc`, and in Kubernetes.
+- Use one Rust result type and one Rust assertion function for the meaningful
+  result fields in all applicable environments.
+- Keep host, direct-`runc`, and Kubernetes resource placement and lifecycle
+  setup separate. Environment setup can change paths, process placement, and
+  component availability only.
+- Do not make a host-only `TestEnv` the scenario API. A shared scenario must
+  be able to use the result from each applicable physical environment.
+- Keep the VM and Kubernetes launchers thin. They can copy inputs, create the
+  environment, pass paths, and invoke the exact standard Rust test. They must
+  not duplicate scenario assertions or Mithril production sequencing.
+- Do not add an environment trait, backend matrix, factory, registry, or
+  scenario language to implement this shape.
+
 ### Production behavior
 
 - Call public `mithril-control`, `mithril-node`, and Interceptor owner APIs.
@@ -302,8 +320,9 @@ count as maintainability migrations.
 
 ## Common tooling deliverable
 
-- [ ] Add one small environment owner for Control, Node, and one actor. Reuse
-  existing Control, node, path, cgroup, and process owners inside it.
+- [ ] Add small concrete physical setup owners for Control, Node, and one
+  actor. Reuse existing Control, node, path, cgroup, and process owners. Keep
+  environment-specific setup separate from shared result assertions.
 - [ ] Make Control, Node, and actor start or stop independently so outage and
   restart order stays explicit in each scenario.
 - [ ] Keep host and direct-`runc` placement in Rust. Keep Kubernetes placement
@@ -514,10 +533,12 @@ command passes.
   role, execution, and tombstone assertions. Remove the actor-only test.
 - [ ] Leader-first thread exit and reference lifetime: keep the process and
   entry reference counts, tombstones, release action, and reclamation checks.
-- [ ] Node-first PID reuse: start Control and Node, install the production
-  binding and policy, and require readiness before the Python actor enters.
-  Keep the two namespace-PID actions and fresh process identity checks
-  visible.
+- [ ] Node-first PID reuse: keep a small standard Rust test, one shared Python
+  actor, one shared result assertion, environment-specific physical setup,
+  and thin VM and Kubernetes launchers. Start Control and Node, install the
+  production binding and policy, and require readiness before the actor
+  enters. Keep the two namespace-PID actions and fresh process identity
+  checks visible.
 - [ ] TID reuse: use one Python actor through `ProcessFixture`. Keep the two
   namespace-TID actions, exact thread coordinates, and tombstone checks
   visible in a separate small scenario file.
