@@ -1,4 +1,4 @@
-use erebor_interceptor_abi::TaskCoordinateV1;
+use erebor_interceptor_abi::{CreatedByEdgeV1, TaskCoordinateV1, TaskReferenceTombstoneV1};
 use mithril_node::NativeTaskSnapshotV1;
 use std::path::Path;
 
@@ -19,6 +19,13 @@ pub(crate) struct Task {
     pub(crate) ns_pid: u32,
     pub(crate) snapshot: NativeTaskSnapshotV1,
     pub(crate) coordinate: TaskCoordinateV1,
+}
+
+pub(crate) struct Thread {
+    pub(crate) pid: u32,
+    pub(crate) ns_tid: u32,
+    pub(crate) coordinate: TaskCoordinateV1,
+    pub(crate) edge: CreatedByEdgeV1,
 }
 
 pub(crate) trait Platform: Sized {
@@ -55,6 +62,18 @@ pub(crate) trait Platform: Sized {
     }
     fn task(&mut self, _pid: u32, _name: &str) -> TestResult<Task> {
         pending("read task")
+    }
+    fn next_id(&self) -> TestResult<u64> {
+        pending("read next identity ID")
+    }
+    fn thread(&mut self, _pid: u32, _ns_tid: u32, _task: u64, _name: &str) -> TestResult<Thread> {
+        pending("read thread")
+    }
+    fn task_exit(&mut self, _task: u64, _name: &str) -> TestResult<TaskCoordinateV1> {
+        pending("wait for task exit")
+    }
+    fn task_release(&mut self, _task: u64, _name: &str) -> TestResult<TaskReferenceTombstoneV1> {
+        pending("wait for task release")
     }
     fn work(&self) -> &Path {
         Path::new(".")

@@ -8,7 +8,7 @@ use mithril_node::{NativeIdentityInspector, NativeTaskSnapshotV1};
 use rustix::process::Signal;
 use snafu::{ensure, ResultExt as _};
 
-use super::super::{pid_in_own_namespace, IdentityTestRunner};
+use super::super::IdentityTestRunner;
 use crate::error::{InvalidInputSnafu, IoSnafu, NodeSnafu};
 use crate::process::ProcessFixture;
 use crate::Result;
@@ -222,7 +222,7 @@ impl<'a> ReparentCase<'a> {
             ProcessFixture::unshare(&self.runner.repo_root, "native_namespace_init.py", ready)?;
         let init = actor.wait_pid(init_path, "namespace init")?;
         actor.track(init)?;
-        let nspid = pid_in_own_namespace(init)?;
+        let nspid = ProcessFixture::namespace_pid(init)?;
         ensure!(
             nspid == 1,
             InvalidInputSnafu {

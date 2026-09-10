@@ -756,6 +756,11 @@ command passes.
 - [ ] TID reuse: use one Python actor through `ProcessFixture`. Keep the two
   namespace-TID actions, exact thread coordinates, and tombstone checks
   visible in a separate small scenario file.
+  - [x] The Host generated case passes in the retained privileged VM.
+  - [x] Remove the TID behavior from `IdentityTestRunner::physical_probe`.
+    The old bundle reads only the asserted compatibility result.
+  - [ ] The direct-`runc` generated case passes with the same Python actor.
+  - [ ] The Kubernetes generated case passes with the same Python actor.
 - [ ] Workload-first recovery: create the cgroup and one ready Python actor
   before Node starts. Use the public production recovery operation. Keep the
   recovered binding, process identity, role, and first-effect assertions

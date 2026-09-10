@@ -400,15 +400,19 @@ if [[ $entry_role_runtime_only == false && $recovered_entry_only == false ]]; th
     >"$output_directory/platform.txt"
 
   identity_output=$remote_root/identity
-  "$provider" run "$vm_name" sudo env \
-    "RUST_LOG=mithril_control=debug,mithril_node=debug" \
-    "MITHRIL_TEST_ROOT=$remote_source" \
-    "MITHRIL_TEST_OUTPUT=$identity_output" \
-    "MITHRIL_TEST_PIN=/sys/fs/bpf/$vm_name-pid-reuse" \
-    "MITHRIL_TEST_LEASE=$identity_output/pid-owner.lock" \
-    "MITHRIL_TEST_CGROUP=/sys/fs/cgroup/$vm_name-pid-reuse" \
-    "$remote_bin/mithril-e2e-tests" \
-    identity::pid_reuse::pid_reuse_is_fresh::host --exact --ignored --nocapture
+  for test_case in \
+    identity::pid_reuse::pid_reuse_is_fresh::host \
+    identity::tid_reuse::tid_reuse_is_fresh::host; do
+    "$provider" run "$vm_name" sudo env \
+      "RUST_LOG=mithril_control=debug,mithril_node=debug" \
+      "MITHRIL_TEST_ROOT=$remote_source" \
+      "MITHRIL_TEST_OUTPUT=$identity_output" \
+      "MITHRIL_TEST_PIN=/sys/fs/bpf/$vm_name-pid-reuse" \
+      "MITHRIL_TEST_LEASE=$identity_output/pid-owner.lock" \
+      "MITHRIL_TEST_CGROUP=/sys/fs/cgroup/$vm_name-pid-reuse" \
+      "$remote_bin/mithril-e2e-tests" \
+      "$test_case" --exact --ignored --nocapture
+  done
   "$provider" run "$vm_name" sudo "$remote_bin/mithril-identity-test" \
     --repo-root "$remote_source" --output-directory "$identity_output" \
     physical-probe --pin-root "/sys/fs/bpf/$vm_name-identity" \

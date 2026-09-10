@@ -34,7 +34,6 @@ pub(crate) struct ProcessFixture {
 }
 
 impl ProcessFixture {
-    #[cfg(test)]
     pub(crate) fn namespace_pid(pid: u32) -> Result<u32> {
         let path = PathBuf::from(format!("/proc/{pid}/status"));
         let status = fs::read_to_string(&path).context(IoSnafu { path: &path })?;
@@ -100,6 +99,7 @@ impl ProcessFixture {
         Self::start(&mut command, &script)
     }
 
+    #[cfg(test)]
     pub(crate) fn pidns<I, S>(root: &Path, name: &str, args: I) -> Result<Self>
     where
         I: IntoIterator<Item = S>,
@@ -313,6 +313,7 @@ impl ProcessFixture {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn wait_child(&mut self, pid: u32, operation: &str) -> Result<u32> {
         let path = PathBuf::from(format!("/proc/{pid}/task/{pid}/children"));
         let last = RefCell::new(String::from("<absent>"));
@@ -341,6 +342,43 @@ impl ProcessFixture {
                     .transpose()
             },
             || format!("parent PID {pid}; last child PIDs: {:?}", last.borrow()),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn wait_thread(&mut self, ns_tid: u32, operation: &str) -> Result<u32> {
+        let pid = self.actor_pid;
+        let path = PathBuf::from(format!("/proc/{pid}/task"));
+        let last = RefCell::new(String::from("<absent>"));
+        self.wait_path(
+            &path,
+            operation,
+            START_LIMIT,
+            || {
+                let entries = match fs::read_dir(&path) {
+                    Ok(entries) => entries,
+                    Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
+                    Err(source) => return Err(source).context(IoSnafu { path: &path }),
+                };
+                let mut tids = Vec::new();
+                for entry in entries {
+                    let entry = entry.context(IoSnafu { path: &path })?;
+                    let Some(tid) = entry
+                        .file_name()
+                        .to_str()
+                        .and_then(|value| value.parse::<u32>().ok())
+                    else {
+                        continue;
+                    };
+                    tids.push(tid);
+                    if tid != pid && Self::namespace_pid(tid)? == ns_tid {
+                        return Ok(Some(tid));
+                    }
+                }
+                *last.borrow_mut() = format!("{tids:?}");
+                Ok(None)
+            },
+            || format!("namespace TID {ns_tid}; last host TIDs: {}", last.borrow()),
         )
     }
 
