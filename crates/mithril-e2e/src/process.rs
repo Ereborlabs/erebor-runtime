@@ -82,6 +82,20 @@ impl ProcessFixture {
         Self::start(&mut command, &script)
     }
 
+    pub(crate) fn pidns<I, S>(root: &Path, name: &str, args: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let script = Self::script(root, name)?;
+        let mut command = Command::new("/usr/bin/unshare");
+        command
+            .args(["--pid", "--fork", "--mount-proc", "python3"])
+            .arg(&script)
+            .args(args);
+        Self::start(&mut command, &script)
+    }
+
     pub(crate) fn start(command: &mut Command, path: &Path) -> Result<Self> {
         let child = command
             .stdin(Stdio::piped())
@@ -244,6 +258,37 @@ impl ProcessFixture {
                 Ok(Some([ids[0], ids[1]]))
             },
             || format!("last PID values: {:?}", last.borrow()),
+        )
+    }
+
+    pub(crate) fn wait_child(&mut self, pid: u32, operation: &str) -> Result<u32> {
+        let path = PathBuf::from(format!("/proc/{pid}/task/{pid}/children"));
+        let last = RefCell::new(String::from("<absent>"));
+        self.wait_path(
+            &path,
+            operation,
+            START_LIMIT,
+            || {
+                let text = match fs::read_to_string(&path) {
+                    Ok(text) => text,
+                    Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
+                    Err(source) => return Err(source).context(IoSnafu { path: &path }),
+                };
+                *last.borrow_mut() = text.trim().to_owned();
+                text.split_ascii_whitespace()
+                    .next()
+                    .map(|value| {
+                        value.parse::<u32>().map_err(|source| {
+                            InvalidInputSnafu {
+                                path: &path,
+                                reason: format!("the child PID is invalid: {source}"),
+                            }
+                            .build()
+                        })
+                    })
+                    .transpose()
+            },
+            || format!("parent PID {pid}; last child PIDs: {:?}", last.borrow()),
         )
     }
 
