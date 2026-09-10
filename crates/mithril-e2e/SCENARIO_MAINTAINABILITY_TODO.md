@@ -128,6 +128,14 @@ reimplement a production owner operation.
   in the test process as a substitute for that Node. The deployed Node must
   perform binding publication, prepared activation, recovery, and policy
   reconciliation through its production CRI, OCI, and Control paths.
+- Use the existing Helm chart for the Control Deployment, Node DaemonSet,
+  Service, RBAC, webhooks, CRDs, and runtime-hook installation. Do not build
+  these resources as JSON in a test.
+- Keep the Node config, Control config, policy, PVC, and actor Pod as checked
+  fixture documents. Bind only run-specific paths, names, images,
+  certificates, and trust data in the platform fixture. The chart consumes
+  the Node config by host path and the Control config by Secret; it does not
+  generate either config from Helm values.
 - Lightweight and direct-`runc` forms can call public production owners
   directly. Keep those calls visible in the test and require the same
   meaningful state transitions as the Kubernetes form.
@@ -739,6 +747,12 @@ command passes.
   fixture owns async runtime setup; the test function does not call `block_on`.
   Keep the one-test `pid_reuse.rs` file below 100 lines. Put no host,
   direct-`runc`, or Kubernetes runner function in that file.
+  - [x] The Host generated case passes in the retained privileged VM.
+  - [x] The direct-`runc` generated case passes in the same VM.
+  - [x] The Kubernetes generated case passes with the production Helm chart,
+    policy CRD, Control, Node, OCI hook, and actor Pod.
+  - [ ] Replace the old PID-reuse shell and CLI path with a thin exact-test
+    launcher before this behavior is complete.
 - [ ] TID reuse: use one Python actor through `ProcessFixture`. Keep the two
   namespace-TID actions, exact thread coordinates, and tombstone checks
   visible in a separate small scenario file.

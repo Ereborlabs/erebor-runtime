@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pid-reuse
+  labels:
+    app.kubernetes.io/name: pid-reuse
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: worker
+      image: MITHRIL_TEST_ACTOR_IMAGE
+      imagePullPolicy: Never
+      command:
+        - MITHRIL_TEST_ACTOR_PYTHON
+      args:
+        - /fixtures/native_pid_reuse.py
+        - /work
+      stdin: true
+      stdinOnce: true
+      securityContext:
+        privileged: true
+        allowPrivilegeEscalation: true
+        appArmorProfile:
+          type: Unconfined
+        seccompProfile:
+          type: Unconfined
+        capabilities:
+          add:
+            - CHECKPOINT_RESTORE
+            - SYS_ADMIN
+      volumeMounts:
+        - name: fixtures
+          mountPath: /fixtures
+          readOnly: true
+        - name: work
+          mountPath: /work
+  volumes:
+    - name: fixtures
+      hostPath:
+        path: MITHRIL_TEST_FIXTURE_PATH
+        type: Directory
+    - name: work
+      hostPath:
+        path: MITHRIL_TEST_WORK_PATH
+        type: Directory

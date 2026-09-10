@@ -4,10 +4,12 @@ use std::path::Path;
 
 mod cri;
 mod host;
+mod kubernetes;
 mod runc;
 
 pub(crate) use self::cri::CriFixture;
 pub(crate) use self::host::Host;
+pub(crate) use self::kubernetes::Kubernetes;
 pub(crate) use self::runc::Runc;
 pub(crate) use mithril_e2e_macros::platform_test;
 pub(crate) type TestResult<T> = Result<T, Box<dyn std::error::Error>>;

@@ -41,6 +41,17 @@ impl MtlsFixture {
         })
     }
 
+    pub(crate) fn kubernetes(server_name: &str) -> Result<Self, Box<dyn StdError>> {
+        let directory = tempfile::tempdir()?;
+        let certificates = Certificates::issue_for(false, &["localhost", server_name])?;
+        let files = certificates.write(directory.path())?;
+        Ok(Self {
+            directory,
+            certificates,
+            files,
+        })
+    }
+
     pub(crate) fn path(&self) -> &Path {
         self.directory.path()
     }
@@ -210,12 +221,21 @@ pub(crate) struct Certificates {
 
 impl Certificates {
     pub(crate) fn issue(expired_node: bool) -> Result<Self, rcgen::Error> {
+        Self::issue_for(expired_node, &["localhost"])
+    }
+
+    fn issue_for(expired_node: bool, server_names: &[&str]) -> Result<Self, rcgen::Error> {
         let mut ca_params = CertificateParams::new(Vec::<String>::new())?;
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         let ca_key = KeyPair::generate()?;
         let ca = ca_params.self_signed(&ca_key)?;
 
-        let mut server_params = CertificateParams::new(vec!["localhost".to_owned()])?;
+        let mut server_params = CertificateParams::new(
+            server_names
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>(),
+        )?;
         server_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
         let server_key = KeyPair::generate()?;
         let server = server_params.signed_by(&server_key, &ca, &ca_key)?;

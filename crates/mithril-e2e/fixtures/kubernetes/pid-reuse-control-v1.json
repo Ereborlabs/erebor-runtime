@@ -1,0 +1,52 @@
+{
+  "listen": "0.0.0.0:8443",
+  "tls": {
+    "certificate_path": "/etc/mithril/tls.crt",
+    "private_key_path": "/etc/mithril/tls.key",
+    "node_ca_path": "/etc/mithril/ca.pem"
+  },
+  "allowed_nodes": [
+    {
+      "node_id": "node-a",
+      "certificate_sha256": "",
+      "tenant_id": "00000000-0000-0001-0000-000000000002"
+    }
+  ],
+  "trust": {
+    "generation": 0,
+    "bundle_digest": "",
+    "policy_issuer_sequence_epoch": 0,
+    "policy_signers": []
+  },
+  "evidence_directory": "/var/lib/mithril-control/evidence",
+  "evidence_store": {
+    "maximum_retained_bytes": 67108864,
+    "maximum_retained_records": 100000,
+    "capacity_policy": "RETAIN"
+  },
+  "control_store_directory": "/var/lib/mithril-control/store",
+  "kubernetes_policy": {
+    "tenant_id": "00000000-0000-0001-0000-000000000002",
+    "cluster_uid": "55555555-5555-4555-8555-555555555555",
+    "signer": {
+      "signing_key_id": "effect-observation-test-key",
+      "signing_key_path": "/etc/mithril/policy-signing-key",
+      "seal_request_path": "/etc/mithril/profile-seal-request.json",
+      "distribution_sequence_epoch": 1,
+      "candidate_validity_ns": 300000000000
+    }
+  },
+  "kubernetes_nodes": {
+    "daemon_set_namespace": "",
+    "daemon_set_name": "mithril-node",
+    "session_ttl_seconds": 5,
+    "reconcile_interval_ms": 250
+  },
+  "kubernetes_admission": {
+    "listen": "0.0.0.0:9443",
+    "tls_certificate_path": "/etc/mithril/admission-tls/tls.crt",
+    "tls_private_key_path": "/etc/mithril/admission-tls/tls.key",
+    "maximum_request_bytes": 1048576,
+    "request_timeout_ms": 4000
+  }
+}

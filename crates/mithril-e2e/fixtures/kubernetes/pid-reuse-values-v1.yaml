@@ -1,0 +1,26 @@
+node:
+  imagePullPolicy: Never
+  logFilter: info,mithril_node::node=debug,mithril_node::policy=debug
+  containerRuntimeSocket: /run/k3s/containerd/containerd.sock
+  runtimeHook:
+    hostBinaryDirectory: /usr/libexec/oci/hooks.d
+    containerdConfigHostDirectory: /var/lib/rancher/k3s/agent/etc/containerd
+    containerdDropInDirectory: config-v3.toml.d
+    runtimeCliHostPath: /usr/local/bin/k3s
+    runtimeCliArgs:
+      - ctr
+      - oci
+      - spec
+    runtimeServices:
+      - k3s
+    timeoutMs: 4000
+    runtimeTimeoutSeconds: 5
+control:
+  enabled: true
+  imagePullPolicy: Never
+  logFilter: info,mithril_control=debug
+  administrativeExec:
+    enabled: false
+  admission:
+    enabled: true
+    webhookTimeoutSeconds: 5
