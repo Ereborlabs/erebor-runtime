@@ -307,8 +307,8 @@ These Rust files exceed 2,000 lines:
 
 | Source | Current lines |
 | --- | ---: |
-| `effect/runc.rs` | 8,414 |
-| `identity.rs` | 8,224 |
+| `effect/runc.rs` | 8,343 |
+| `identity.rs` | 8,056 |
 | `effect.rs` | 5,118 |
 | `effect/child.rs` | 4,472 |
 | `control_tls.rs` | 2,734 |
@@ -358,15 +358,15 @@ behavior is replaced. Do not add a new violation in an intermediate commit.
 
 ## Physical harness migration audit
 
-The audited VM and Kubernetes shell harness contains 10,371 lines in 13 files.
+The audited VM and Kubernetes shell harness contains 10,533 lines in 14 files.
 These files provision environments, execute scenarios, parse production
 results, and assert security behavior. The mixed ownership must be removed one
 scenario at a time.
 
 | Source | Lines | Current responsibility | Required end state |
 | --- | ---: | --- | --- |
-| `harness/vm/run.sh` | 727 | Builds one VM, runs native, direct-`runc`, and Kubernetes probes, checks JSON, and checks cleanup | Provision the VM, copy inputs, invoke exact Rust tests, collect diagnostics, and remove resources only |
-| `harness/vm/test.sh` | 793 | Tests shell text, fake Kubernetes oracles, cleanup, and provider wiring | Test only launcher argument, provider, and cleanup behavior that must remain in shell |
+| `harness/vm/run.sh` | 732 | Builds one VM, runs native, direct-`runc`, and Kubernetes probes, checks JSON, and checks cleanup | Provision the VM, copy inputs, invoke exact Rust tests, collect diagnostics, and remove resources only |
+| `harness/vm/test.sh` | 791 | Tests shell text, fake Kubernetes oracles, cleanup, and provider wiring | Test only launcher argument, provider, and cleanup behavior that must remain in shell |
 | `harness/vm/guest.sh` | 1,764 | Installs K3s and its hook, then owns K3s qualification, CRI effect, and administrative-exec scenarios | Install or remove K3s and the runtime hook, then invoke exact Rust tests |
 | `harness/vm/two-node-convergence.sh` | 4,371 | Provisions two nodes and owns policy, runtime, effect, exception, restart, upgrade, and cleanup assertions | Provision or reuse two nodes, deploy Mithril, invoke exact Rust tests, collect diagnostics, and clean up only |
 | `harness/vm/two-node-outage-recovery.sh` | 1,115 | Owns Control, storage, network, API, watch, WAL, replay, and recovery scenarios | Apply the requested outage, invoke its exact Rust test, restore the environment, and collect diagnostics only |
@@ -748,18 +748,23 @@ command passes.
   Keep the one-test `pid_reuse.rs` file below 100 lines. Put no host,
   direct-`runc`, or Kubernetes runner function in that file.
   - [x] The Host generated case passes in the retained privileged VM.
-  - [x] The direct-`runc` generated case passes in the same VM.
+  - [ ] The direct-`runc` generated case passes through the production OCI
+    hooks in the same VM. The earlier pass used a real `runc` container, but
+    `Runc::stage` and `Runc::admit` delegated to the Host request path. That
+    pass does not satisfy the runtime-transport requirement.
   - [x] The Kubernetes generated case passes with the production Helm chart,
     policy CRD, Control, Node, OCI hook, and actor Pod.
   - [ ] Replace the old PID-reuse shell and CLI path with a thin exact-test
     launcher before this behavior is complete.
-- [x] TID reuse: use one Python actor through `ProcessFixture`. Keep the two
+- [ ] TID reuse: use one Python actor through `ProcessFixture`. Keep the two
   namespace-TID actions, exact thread coordinates, and tombstone checks
   visible in a separate small scenario file.
   - [x] The Host generated case passes in the retained privileged VM.
   - [x] Remove the TID behavior from `IdentityTestRunner::physical_probe`.
     The old bundle reads only the asserted compatibility result.
-  - [x] The direct-`runc` generated case passes with the same Python actor.
+  - [ ] The direct-`runc` generated case passes with the same Python actor and
+    the production OCI hooks. The earlier real-container pass used the Host
+    request path after actor startup and is not sufficient.
   - [x] Reproduce the Kubernetes `SIGTERM` cleanup condition in a lightweight
     Node entry-point test. Before the fix, the exact test exited with signal
     15. It now proves that `SIGTERM` starts normal Node shutdown.
