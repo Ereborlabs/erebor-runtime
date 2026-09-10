@@ -200,6 +200,16 @@ impl ProbeCgroup {
         fs::write(&target, std::process::id().to_string()).context(IoSnafu { path: target })
     }
 
+    #[cfg(test)]
+    pub(crate) fn move_out(&self, pid: u32) -> Result<()> {
+        let previous = self.previous.as_ref().context(InvalidInputSnafu {
+            path: &self.path,
+            reason: "the test process has no previous cgroup",
+        })?;
+        let target = previous.join("cgroup.procs");
+        fs::write(&target, pid.to_string()).context(IoSnafu { path: target })
+    }
+
     fn leave(&mut self) -> Result<()> {
         let Some(previous) = self.previous.take() else {
             return Ok(());

@@ -73,8 +73,14 @@ pub(crate) trait Platform: Sized {
     fn admit(&mut self, _pid: u32) -> TestResult<()> {
         pending("admit actor")
     }
+    fn running(&mut self, _pid: u32) -> TestResult<()> {
+        pending("observe running actor")
+    }
     fn task(&mut self, _pid: u32, _name: &str) -> TestResult<Task> {
         pending("read task")
+    }
+    fn recovered(&mut self, _pid: u32, _name: &str) -> TestResult<Task> {
+        pending("wait for recovered task")
     }
     fn maps(&self) -> (&Path, &KernelStateReader);
     fn coordinate(&self, task: u64) -> crate::Result<Option<TaskCoordinateV1>> {

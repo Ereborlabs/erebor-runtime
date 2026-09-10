@@ -20,8 +20,8 @@ use mithril_control::{
 };
 use mithril_node::{
     AdministrativeAuthorizationConfig, ContainerKindV1, ContainerRuntimeConfig, EvidenceConfig,
-    EvidenceWalCapacityPolicyV1, InterceptorConfig, NativeIdentityInspector, NodeChassis,
-    NodeConfig, NodeReadinessV1, RuntimeAdmissionClient, RuntimeAdmissionConfig,
+    EvidenceWalCapacityPolicyV1, InterceptorConfig, NativeIdentityInspector, NativeTaskSnapshotV1,
+    NodeChassis, NodeConfig, NodeReadinessV1, RuntimeAdmissionClient, RuntimeAdmissionConfig,
     RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1, ScheduledRuntimeBindingV1,
     WorkloadBindingConfig, CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION,
     POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION,
@@ -148,7 +148,11 @@ impl Host {
     }
 
     pub(super) fn observe(&mut self) -> TestResult<()> {
-        let value = runtime_observation(self.binding()?, 0, ContainerState::ContainerCreated)?;
+        self.observe_state(0, ContainerState::ContainerCreated)
+    }
+
+    fn observe_state(&mut self, pid: u32, state: ContainerState) -> TestResult<()> {
+        let value = runtime_observation(self.binding()?, pid, state)?;
         self.cri.as_ref().ok_or("CRI is not running")?.set(value)?;
         Ok(())
     }
@@ -222,6 +226,22 @@ impl Host {
             lease.cleanup()?;
         }
         Ok(())
+    }
+
+    fn task_from(&self, pid: u32, snapshot: NativeTaskSnapshotV1) -> TestResult<Task> {
+        let bytes = self
+            .reader
+            .lookup("task_coordinates", &snapshot.task_cookie.to_ne_bytes())
+            .context(InterceptorSnafu)?
+            .ok_or("task coordinate is missing")?;
+        let coordinate = TaskCoordinateV1::try_read_from_bytes(&bytes)
+            .map_err(|source| format!("task coordinate is invalid: {source}"))?;
+        Ok(Task {
+            pid,
+            ns_pid: ProcessFixture::namespace_pid(pid)?,
+            snapshot,
+            coordinate,
+        })
     }
 }
 
@@ -626,7 +646,12 @@ impl Platform for Host {
         let mut args = vec![self.work_path.clone().into_os_string()];
         args.extend(extra.iter().map(OsString::from));
         let mut actor = ProcessFixture::pidns(&self.root, name, args)?;
-        let pid = actor.wait_child(actor.id(), "PID namespace root")?;
+        let parent = actor.id();
+        let pid = actor.wait_child(parent, "PID namespace root")?;
+        self.node_cgroup
+            .as_ref()
+            .ok_or("the Node cgroup is not owned")?
+            .move_out(parent)?;
         actor.set_init(pid)?;
         self.init_pid = Some(pid);
         Ok(actor)
@@ -667,6 +692,10 @@ impl Platform for Host {
         Ok(())
     }
 
+    fn running(&mut self, pid: u32) -> TestResult<()> {
+        self.observe_state(pid, ContainerState::ContainerRunning)
+    }
+
     fn task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
         let snapshot = self.runtime.block_on(wait_for_async(
             &self.pin_path,
@@ -675,19 +704,34 @@ impl Platform for Host {
             || self.inspector.snapshot(pid).context(NodeSnafu),
             || format!("PID {pid} has no published identity"),
         ))?;
-        let bytes = self
-            .reader
-            .lookup("task_coordinates", &snapshot.task_cookie.to_ne_bytes())
-            .context(InterceptorSnafu)?
-            .ok_or("task coordinate is missing")?;
-        let coordinate = TaskCoordinateV1::try_read_from_bytes(&bytes)
-            .map_err(|source| format!("task coordinate is invalid: {source}"))?;
-        Ok(Task {
-            pid,
-            ns_pid: ProcessFixture::namespace_pid(pid)?,
-            snapshot,
-            coordinate,
-        })
+        self.task_from(pid, snapshot)
+    }
+
+    fn recovered(&mut self, pid: u32, name: &str) -> TestResult<Task> {
+        let last = RefCell::new(String::from("<absent>"));
+        let snapshot = self.runtime.block_on(wait_for_async(
+            &self.pin_path,
+            name,
+            READY_LIMIT,
+            || {
+                let snapshot = self.inspector.snapshot(pid).context(NodeSnafu)?;
+                if let Some(value) = snapshot.as_ref() {
+                    *last.borrow_mut() = format!("{value:?}");
+                }
+                Ok(snapshot.filter(|value| {
+                    value
+                        .runtime_binding
+                        .as_ref()
+                        .is_some_and(|binding| binding.lifecycle_state == "active_recovered")
+                        && value
+                            .recovered_container_activation
+                            .as_ref()
+                            .is_some_and(|recovery| recovery.phase == "complete")
+                }))
+            },
+            || format!("PID {pid}; last identity: {}", last.borrow()),
+        ))?;
+        self.task_from(pid, snapshot)
     }
 
     fn maps(&self) -> (&Path, &KernelStateReader) {

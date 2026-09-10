@@ -108,7 +108,7 @@ impl ProcessFixture {
         let script = Self::script(root, name)?;
         let mut command = Command::new("/usr/bin/unshare");
         command
-            .args(["--pid", "--fork", "--mount-proc", "python3"])
+            .args(["--pid", "--fork", "--mount-proc", "/usr/bin/python3"])
             .arg(&script)
             .args(args);
         Self::start(&mut command, &script)

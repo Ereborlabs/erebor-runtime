@@ -45,6 +45,13 @@
             "recursive": false,
             "operations": ["Execute"],
             "action": "Allow"
+          },
+          {
+            "name": "false",
+            "path": "/usr/bin/false",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Deny"
           }
         ],
         "network": {
