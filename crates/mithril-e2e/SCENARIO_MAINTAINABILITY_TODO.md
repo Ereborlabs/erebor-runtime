@@ -748,10 +748,9 @@ command passes.
   Keep the one-test `pid_reuse.rs` file below 100 lines. Put no host,
   direct-`runc`, or Kubernetes runner function in that file.
   - [x] The Host generated case passes in the retained privileged VM.
-  - [ ] The direct-`runc` generated case passes through the production OCI
-    hooks in the same VM. The earlier pass used a real `runc` container, but
-    `Runc::stage` and `Runc::admit` delegated to the Host request path. That
-    pass does not satisfy the runtime-transport requirement.
+  - [x] The direct-`runc` generated case passes through the production OCI
+    hooks in the retained VM. The hook stages runtime facts, prepares the
+    container, and prepares its declared entry before the Python PID 1 runs.
   - [x] The Kubernetes generated case passes with the production Helm chart,
     policy CRD, Control, Node, OCI hook, and actor Pod.
   - [ ] Replace the old PID-reuse shell and CLI path with a thin exact-test
