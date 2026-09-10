@@ -35,6 +35,8 @@ These rules control every checkmark and commit in this file.
 - Parameterize a cross-environment behavior with one small platform value.
   The same test function must select host, direct-`runc`, or Kubernetes
   physical setup from that value. Do not copy the test into platform modules.
+- Keep a source file that contains one test below 100 lines. Put no platform
+  runner functions in that file.
 - Give each scenario Control, Node, and one Python actor process.
 - Place the actor explicitly on the host, in `runc`, or in Kubernetes.
 - Ask the actor to perform one action. Assert the expected production result.
@@ -45,7 +47,11 @@ These rules control every checkmark and commit in this file.
 - Make setup, action, assertion, and teardown easy to identify.
 - Prefer one security behavior per test and one responsibility per file. A
   focused file can contain several related real tests.
-- Do not use a large custom runner method as the hidden test implementation.
+- Let a small registration macro attach the standard `#[test]` function to
+  the platform fixture. Do not add scenario logic to the macro.
+- Put platform setup, async execution, result output, and cleanup in a
+  platform trait implementation. Keep actor behavior and result assertions
+  shared.
 - Do not build or drive an async runtime in a test function. The selected
   physical fixture owns the runtime when its production APIs require async
   work.
@@ -115,8 +121,9 @@ acknowledgement in the test when that operation is under test.
 - Keep the VM and Kubernetes launchers thin. They can copy inputs, create the
   environment, pass paths, and invoke the exact standard Rust test. They must
   not duplicate scenario assertions or Mithril production sequencing.
-- Use one plain platform enum and a direct `match`. Do not add an
-  environment trait, backend registry, factory, macro, or scenario language.
+- Use one small platform value, one platform fixture trait, and one direct
+  selection point. A small test-registration macro is permitted. Do not add a
+  backend registry, factory, option layer, or scenario language.
 
 ### Production behavior
 
@@ -707,6 +714,8 @@ command passes.
   setup can call the same public production owners directly. Keep the two
   namespace-PID actions and fresh process identity checks visible. The fixture
   owns async runtime setup; the test function does not call `block_on`.
+  Keep the one-test `pid_reuse.rs` file below 100 lines. Put no host,
+  direct-`runc`, or Kubernetes runner function in that file.
 - [ ] TID reuse: use one Python actor through `ProcessFixture`. Keep the two
   namespace-TID actions, exact thread coordinates, and tombstone checks
   visible in a separate small scenario file.
