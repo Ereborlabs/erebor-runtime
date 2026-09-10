@@ -23,6 +23,143 @@ responsibility. This limit does not make a mechanical split sufficient.
 The suite keeps its current result schemas, security assertions, public owner
 calls, stock `runc` and containerd paths, and paired Kubernetes operations.
 
+## Binding acceptance rules
+
+These rules control every checkmark and commit in this file.
+
+### Scenario shape
+
+- Write each test case as one small standard Rust `#[test]` function. A
+  scenario module can contain as many `#[test]` functions as it needs. Every
+  test must exercise real Mithril production behavior.
+- Give each scenario Control, Node, and one Python actor process.
+- Place the actor explicitly on the host, in `runc`, or in Kubernetes.
+- Ask the actor to perform one action. Assert the expected production result.
+- Keep component start, stop, outage, and restart order visible in the test.
+- Make setup, action, assertion, and teardown easy to identify.
+- Prefer one security behavior per test and one responsibility per file. A
+  focused file can contain several related real tests.
+- Do not use a large custom runner method as the hidden test implementation.
+- Dismantle `IdentityTestRunner::physical_probe` and the other monolithic
+  probes one verified scenario at a time. Moving their bodies is not enough.
+
+### Rust test execution
+
+- Use the standard Rust test harness. `cargo test --no-run` must compile the
+  scenario functions into a test executable.
+- Mark tests that need root, BPF LSM, `runc`, containerd, or Kubernetes with a
+  precise `#[ignore = "..."]` reason when the normal host cannot run them.
+- Make the VM harness copy the compiled test executable and run each
+  privileged test by its exact test name.
+- Keep ordinary lightweight scenarios as non-ignored `#[test]` functions.
+- Do not add a custom test registry, test language, or replacement harness.
+- Do not add scenario-specific tests that only prove Python actor behavior.
+  The production-backed scenario must prove the actor transition and the
+  Mithril result together.
+- Keep only generic `ProcessFixture` tests for start readiness, diagnostics,
+  process control, stop, and idempotent cleanup.
+- A compatibility artifact writer can serialize scenario results. It must not
+  execute a hidden scenario or own setup, action, assertion, or teardown.
+
+### Production behavior
+
+- Call public `mithril-control`, `mithril-node`, and Interceptor owner APIs.
+- Exercise real processes, syscalls, runtimes, identities, policies, evidence,
+  and decisions when the scenario covers them.
+- Do not reproduce policy delivery, binding reconciliation, identity
+  publication, recovery, admission, or evidence acknowledgement in a helper.
+- Use the same production operations and meaningful state transitions in the
+  lightweight, direct-`runc`, and Kubernetes forms of one behavior.
+- Allow environment identities and timestamps to differ. Require decisions
+  and meaningful result fields to match.
+- Keep production architecture and public result schemas unchanged.
+
+### Shared fixtures
+
+- Use `ProcessFixture` as the only process lifecycle owner for host, `runc`,
+  and containerd scenarios.
+- Use the same Python actor file in every applicable host, `runc`, and
+  Kubernetes scenario.
+- Put actor programs in `fixtures/process`. Do not embed shell or Python
+  source in Rust.
+- Do not keep separate native and `runc` process wrappers.
+- Make one start call return a ready actor.
+- Make one fallible stop call perform normal cleanup. Use `Drop` only as an
+  idempotent fallback.
+- Bound every readiness wait. Report the operation, resource path, last state,
+  process exit status, and captured stderr when applicable.
+- Keep setup, stop, restart, and teardown simple in every scenario.
+
+### Structure and readability
+
+- Do not accept a file move or split when orchestration stays difficult to
+  read or extend.
+- Put stateful behavior on one concrete fixture or scenario owner. Do not add
+  orphaned stateful free functions.
+- Do not split one owner's implementation across unrelated files.
+- Do not add traits, builders, registries, macros, factories, backend
+  matrices, or a custom scenario language.
+- Reuse existing owners, the Rust standard library, and standard Linux
+  mechanisms before adding code.
+- Keep security and lifecycle assertions explicit in the test.
+- Prefer deletion and direct code over speculative abstractions.
+
+### Size and naming
+
+- Keep every Rust source file under `crates/mithril-e2e` below 2,000 lines at
+  delivery.
+- Prefer small test files and small responsibility-focused scenario files.
+- Keep changed private function names to four or five underscore-separated
+  components at most.
+- Keep changed variable names to three underscore-separated components at
+  most.
+- Do not rename a public production API or public result field only to meet a
+  naming limit.
+
+### Coverage and reliability
+
+- Preserve meaningful fail-closed, attribution, identity, lifecycle, replay,
+  cleanup, and security assertions.
+- Preserve the reliability fixes found before this acceptance reset.
+- Compare coverage with pre-TODO commit
+  `95775f48f2ed9864ecbc40219c3ecf79a51a0ee7`.
+- A baseline test name can disappear only after its behavior and assertions
+  move into a production-backed scenario. Record the replacement in this
+  file. Do not keep a duplicate actor-only test.
+- Replace every rejected move-only structural refactor from the earlier work.
+- A generic fixture test supplements production coverage. It does not replace
+  a production-backed scenario.
+
+### Incremental workflow
+
+- Keep this TODO inventory complete and current.
+- Implement and verify shared tooling before a dependent scenario.
+- Migrate one behavior at a time. Do not move all scenarios in one commit.
+- Run the smallest exact test first. Then run related tests, harness checks,
+  formatting, clippy, and the complete lightweight suite.
+- Commit each verified behavior separately.
+- Do not stage `.agents/planning.md` or unrelated files.
+
+### Kubernetes gate
+
+- Pass the lightweight scenario before its paired Kubernetes scenario.
+- If Kubernetes exposes a missing condition, reproduce that exact condition
+  in lightweight first.
+- Fix implementation only after the lightweight reproduction exists.
+- Rerun lightweight before Kubernetes.
+- Pass the complete lightweight and Kubernetes suites before delivery.
+
+### Final delivery
+
+- Document how to add and run a scenario.
+- Include a short plan and one concrete before-and-after scenario example.
+- Document exact focused, local harness, VM, Kubernetes, and full-suite
+  commands.
+- Use direct ASD-STE100 text in documents and changed comments.
+- Do not complete the excluded product phase.
+- Do not claim completion until every Rust source file is below 2,000 lines
+  and all required lightweight and Kubernetes checks pass.
+
 ## Scenario model
 
 Every scenario has the same three components:
@@ -183,8 +320,9 @@ count as maintainability migrations.
   owner as each entry-role behavior moves to its scenario owner.
 - [ ] Replace every embedded native process script with an actual Python file
   in `fixtures/process`.
-- [x] Execute the same Python process files from focused identity and direct
-  `runc` tests.
+- [ ] Execute the same Python process file from production-backed host,
+  direct-`runc`, and Kubernetes tests when the behavior applies. Do not count
+  an actor-only test as coverage.
 - [x] Copy all shared Python process programs into each fresh single-node VM.
 - [x] Add fresh-directory construction to the existing `ProbeDirectory`
   owner.
@@ -306,12 +444,13 @@ starting the complete privileged scenarios.
 - [ ] Replace native child, failed-exec, post-PONR, subreaper, namespace-init,
   orphan, double-fork, leader-first, non-leader, and concurrent-thread shell
   commands with shared Python process files.
-- [ ] Keep process transitions in small focused tests. Use `ProcessFixture`
-  directly and keep the action and assertion visible.
+- [ ] Keep process transitions in small production-backed `#[test]`
+  functions. Use `ProcessFixture` directly and keep the production action and
+  assertion visible. Do not keep a second actor-only scenario test.
 - [ ] Keep production object allocation and authorization replay tests beside
   their actual runner owner. Do not use orphaned scenario functions.
-- [ ] Rerun every focused identity test and the `clone3.rs` test after each
-  identity fixture change.
+- [ ] Rerun every exact production-backed identity test and the `clone3.rs`
+  owner test after each identity fixture change.
 
 ### Compact owner-local checks
 
@@ -340,34 +479,39 @@ command passes.
   production health reads, fork action, and mismatch assertions visible.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
   first-effect action, and exact identity assertions visible.
-- [x] Native child exec: keep the fork and exec actions, production identity
+- [ ] Native child exec: keep the fork and exec actions, production identity
   snapshots, and allocation diagnostics visible.
-- [x] Non-leader thread exec: remove the loose
+- [ ] Non-leader thread exec: remove the loose
   `identity/scenarios/non_leader_exec.rs::run` function. Put scenario state on
   its owner, use `ProcessFixture` and the shared Python file directly, and
   keep exact TID allocation and post-exec assertions visible.
-- [x] Pre-PONR failure: use fixture-owned process readiness and keep the
+- [ ] Pre-PONR failure: use fixture-owned process readiness and keep the
   pending-exec, rollback, and recovery assertions visible.
-- [x] Post-PONR failure: use fixture-owned process readiness and keep the
+- [ ] Post-PONR failure: use fixture-owned process readiness and keep the
   fatal-state assertions visible.
-- [x] Moved-task exec: keep the physical cgroup move, denied exec, production
+- [ ] Moved-task exec: keep the physical cgroup move, denied exec, production
   health checks, and placement-mismatch assertions visible.
-- [x] Orphan transition: use `native_orphan.py` through `ProcessFixture` in
-  the focused test and the physical scenario. Preserve the parent, role, and
-  execution assertions.
-- [x] Subreaper transition: use `native_subreaper.py` through
-  `ProcessFixture` in the focused test and physical scenario. Preserve the
-  intermediate-parent, adopted-child, role, and execution assertions.
-- [x] Namespace-init transition: use `native_namespace_init.py` through
-  `ProcessFixture` in the focused test and physical scenario. Preserve the
-  namespace PID, parent, role, execution, and tombstone assertions.
-- [x] Double-fork transition: replace the embedded shell with one Python
-  process file through `ProcessFixture`. Preserve the parent, role, execution,
-  and tombstone assertions.
-- [x] Leader-first thread exit and reference lifetime: keep the process and
+- [ ] Orphan transition: use `native_orphan.py` through `ProcessFixture` in
+  one production-backed `#[test]`. Preserve the parent, role, and execution
+  assertions. Remove the actor-only test.
+- [ ] Subreaper transition: use `native_subreaper.py` through
+  `ProcessFixture` in one production-backed `#[test]`. Preserve the
+  intermediate-parent, adopted-child, role, and execution assertions. Remove
+  the actor-only test.
+- [ ] Namespace-init transition: use `native_namespace_init.py` through
+  `ProcessFixture` in one production-backed `#[test]`. Preserve the namespace
+  PID, parent, role, execution, and tombstone assertions. Remove the actor-only
+  test.
+- [ ] Double-fork transition: use `native_double_fork.py` through
+  `ProcessFixture` in one production-backed `#[test]`. Preserve the parent,
+  role, execution, and tombstone assertions. Remove the actor-only test.
+- [ ] Leader-first thread exit and reference lifetime: keep the process and
   entry reference counts, tombstones, release action, and reclamation checks.
-- [ ] PID and TID reuse: keep namespace reuse actions and fresh identity checks
-  in separate small scenario files.
+- [ ] PID reuse: use one Python actor through `ProcessFixture`. Keep the two
+  namespace-PID actions and fresh process identity checks visible.
+- [ ] TID reuse: use one Python actor through `ProcessFixture`. Keep the two
+  namespace-TID actions, exact thread coordinates, and tombstone checks
+  visible in a separate small scenario file.
 - [ ] Cgroup lifetime reuse and retained-host restart: keep host shutdown,
   retained map validation, production recovery, recreated cgroup, and fresh
   binding identity assertions visible.
@@ -495,8 +639,9 @@ uses.
 
 Commit `95775f48f2ed9864ecbc40219c3ecf79a51a0ee7` is the source baseline
 immediately before this work. It contains 90 library tests and two binary
-tests. All 92 test names remain present. Preserve the behavior behind every
-entry when a test receives a shorter name or moves beside its real owner.
+tests. Account for the behavior and assertions behind all 92 entries. A test
+name can disappear after a real production-backed test replaces it. Do not
+keep an actor-only duplicate only to preserve the old name.
 
 - `benchmark.rs::benchmark_records_every_open_sample_at_requested_concurrency`
 - `benchmark.rs::benchmark_validation_accepts_json_rate_and_rejects_changed_rate`
@@ -591,8 +736,18 @@ entry when a test receives a shorter name or moves beside its real owner.
 - `prototype.rs::source_tg_runtime_join_accepts_only_authenticated_complete_fresh_roots`
 - `provenance.rs::dossier_closes_sources_licenses_owners_and_hostile_fixtures`
 
-The current tree also has nineteen reliability and common-owner tests added
-after the baseline. Preserve them while the structural changes are replaced:
+The current tree also has nineteen tests added after the baseline. Keep these
+five generic owner tests:
+
+- `physical.rs::async_readiness_yields_until_the_fixture_is_ready`
+- `physical.rs::readiness_reports_diagnostics_and_directory_cleanup_is_idempotent`
+- `process/tests.rs::exit_reports_stderr`
+- `process/tests.rs::python_start_stop`
+- `process/tests.rs::stop_kills_actor`
+
+Remove these scenario-specific actor or wrapper tests as their production
+scenarios become standard Rust tests. They do not count as Mithril behavior
+coverage:
 
 - `effect/runc/process.rs::exit_reports_output`
 - `effect/runc/process.rs::runc_uses_python_actor`
@@ -608,11 +763,6 @@ after the baseline. Preserve them while the structural changes are replaced:
 - `identity/scenarios/reparent/tests.rs::child_execs_after_namespace_init`
 - `identity/scenarios/reparent/tests.rs::child_execs_after_double_fork`
 - `identity/scenarios/lifetime/tests.rs::worker_lives_after_leader`
-- `physical.rs::async_readiness_yields_until_the_fixture_is_ready`
-- `physical.rs::readiness_reports_diagnostics_and_directory_cleanup_is_idempotent`
-- `process/tests.rs::exit_reports_stderr`
-- `process/tests.rs::python_start_stop`
-- `process/tests.rs::stop_kills_actor`
 
 ## Documentation deliverable
 
@@ -630,6 +780,7 @@ commands only after the earlier layer passes.
 
 ```text
 cargo test -p mithril-e2e <exact-test-name> -- --exact
+  -> cargo test -p mithril-e2e <privileged-test-name> -- --exact --ignored
   -> cargo test -p mithril-e2e
   -> bash crates/mithril-e2e/harness/vm/test.sh
   -> bash crates/mithril-e2e/harness/vm/run.sh --entry-role-runtime-only ...
