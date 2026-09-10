@@ -241,7 +241,7 @@ These Rust files exceed 2,000 lines:
 | `identity.rs` | 8,224 |
 | `effect.rs` | 5,118 |
 | `effect/child.rs` | 4,472 |
-| `control_tls.rs` | 3,018 |
+| `control_tls.rs` | 2,734 |
 | `effect/network.rs` | 2,329 |
 
 The diff from `95775f48` adds or relocates these private test functions with
@@ -305,6 +305,8 @@ count as maintainability migrations.
   restart order stays explicit in each scenario.
 - [ ] Keep host and direct-`runc` placement in Rust. Keep Kubernetes placement
   in a small Python harness. Use the same actor file in all three placements.
+- [x] Put the existing Control TLS lifecycle owner in one small shared module.
+  Reuse it for production Control and Node connections.
 - [x] Keep one synchronous readiness function with an exact timeout, resource
   path, operation name, and caller-supplied last-state diagnostic.
 - [x] Make `ProcessFixture` own spawn readiness, stdin actions, bounded exit

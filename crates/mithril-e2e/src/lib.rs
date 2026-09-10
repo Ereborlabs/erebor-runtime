@@ -3,6 +3,8 @@ mod capability;
 mod capability_matrix;
 mod closure;
 #[cfg(test)]
+mod control_fixture;
+#[cfg(test)]
 mod control_tls;
 mod digest;
 mod effect;
