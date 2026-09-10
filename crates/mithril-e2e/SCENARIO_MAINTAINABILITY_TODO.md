@@ -29,9 +29,12 @@ These rules control every checkmark and commit in this file.
 
 ### Scenario shape
 
-- Write each test case as one small standard Rust `#[test]` function. A
-  scenario module can contain as many `#[test]` functions as it needs. Every
-  test must exercise real Mithril production behavior.
+- Write each behavior as one small standard Rust `#[test]` function in its
+  scenario module. A scenario module can contain as many real `#[test]`
+  functions as it needs.
+- Parameterize a cross-environment behavior with one small platform value.
+  The same test function must select host, direct-`runc`, or Kubernetes
+  physical setup from that value. Do not copy the test into platform modules.
 - Give each scenario Control, Node, and one Python actor process.
 - Place the actor explicitly on the host, in `runc`, or in Kubernetes.
 - Ask the actor to perform one action. Assert the expected production result.
@@ -43,6 +46,9 @@ These rules control every checkmark and commit in this file.
 - Prefer one security behavior per test and one responsibility per file. A
   focused file can contain several related real tests.
 - Do not use a large custom runner method as the hidden test implementation.
+- Do not build or drive an async runtime in a test function. The selected
+  physical fixture owns the runtime when its production APIs require async
+  work.
 - Dismantle `IdentityTestRunner::physical_probe` and the other monolithic
   probes one verified scenario at a time. Moving their bodies is not enough.
 
@@ -69,6 +75,8 @@ acknowledgement in the test when that operation is under test.
 
 - Use the standard Rust test harness. `cargo test --no-run` must compile the
   scenario functions into a test executable.
+- Keep the test function in the behavior module. The launcher passes the
+  platform value and invokes the same exact test name in every environment.
 - Mark tests that need root, BPF LSM, `runc`, containerd, or Kubernetes with a
   precise `#[ignore = "..."]` reason when the normal host cannot run them.
 - Make the VM harness copy the compiled test executable and run each
@@ -85,14 +93,15 @@ acknowledgement in the test when that operation is under test.
 
 ### Cross-environment test shape
 
-- Keep each migrated behavior as a small standard Rust `#[test]`.
+- Keep each migrated behavior as one small parameterized standard Rust
+  `#[test]`.
 - Use one Python actor file for the same behavior on the host, in direct
   `runc`, and in Kubernetes.
 - Use one Rust result type and one Rust assertion function for the meaningful
   result fields in all applicable environments.
-- Keep host, direct-`runc`, and Kubernetes resource placement and lifecycle
-  setup separate. Environment setup can change paths, process placement, and
-  component availability only.
+- Let the platform parameter select host, direct-`runc`, or Kubernetes
+  resource placement and lifecycle setup. Environment setup can change paths,
+  process placement, and component availability only.
 - In the Kubernetes form, send external runtime input to the deployed Node.
   Do not instantiate `WorkloadBindingOwner` or `NativeSecurityStateOwner`
   in the test process as a substitute for that Node. The deployed Node must
@@ -106,8 +115,8 @@ acknowledgement in the test when that operation is under test.
 - Keep the VM and Kubernetes launchers thin. They can copy inputs, create the
   environment, pass paths, and invoke the exact standard Rust test. They must
   not duplicate scenario assertions or Mithril production sequencing.
-- Do not add an environment trait, backend matrix, factory, registry, or
-  scenario language to implement this shape.
+- Use one plain platform enum and a direct `match`. Do not add an
+  environment trait, backend registry, factory, macro, or scenario language.
 
 ### Production behavior
 
@@ -351,6 +360,8 @@ Use these patterns:
 
 - [ ] Run the same standard Rust test executable on the local host, in a kernel
   VM, and against a Kubernetes cluster.
+- [ ] Pass the platform value to the same test function. Keep the test name,
+  actor action, result type, and result assertions unchanged.
 - [ ] Let the launcher select exact test names and pass environment inputs.
   Do not let it parse Mithril domain results.
 - [ ] Let each Kubernetes Rust test use the existing `kube` client dependency
@@ -686,14 +697,16 @@ command passes.
   role, execution, and tombstone assertions. Remove the actor-only test.
 - [ ] Leader-first thread exit and reference lifetime: keep the process and
   entry reference counts, tombstones, release action, and reclamation checks.
-- [ ] Node-first PID reuse: keep a small standard Rust test, one shared Python
-  actor, one shared result assertion, environment-specific physical setup,
-  and thin VM and Kubernetes launchers. Start Control and Node, install the
-  production policy, and require readiness before the actor enters. The
-  Kubernetes form must send the actor's real runtime event through the
-  deployed Node admission path. Lightweight and direct-`runc` forms can call
-  the same public production owners directly. Keep the two namespace-PID
-  actions and fresh process identity checks visible.
+- [ ] Node-first PID reuse: keep one small parameterized Rust test in
+  `pid_reuse.rs`, one shared Python actor, one shared result assertion, and
+  thin VM and Kubernetes launchers. The platform value selects host,
+  direct-`runc`, or Kubernetes physical setup. Start Control and Node,
+  install the production policy, and require readiness before the actor
+  enters. The Kubernetes setup must send the actor's real runtime event
+  through the deployed Node admission path. Lightweight and direct-`runc`
+  setup can call the same public production owners directly. Keep the two
+  namespace-PID actions and fresh process identity checks visible. The fixture
+  owns async runtime setup; the test function does not call `block_on`.
 - [ ] TID reuse: use one Python actor through `ProcessFixture`. Keep the two
   namespace-TID actions, exact thread coordinates, and tombstone checks
   visible in a separate small scenario file.
