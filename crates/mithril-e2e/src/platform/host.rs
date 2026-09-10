@@ -9,10 +9,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use erebor_interceptor::KernelStateReader;
-use erebor_interceptor_abi::{
-    CreatedByEdgeV1, IdentityRuntimeConfigV1, ReferenceTombstoneStateV1, TaskCoordinateStateV1,
-    TaskCoordinateV1, TaskReferenceTombstoneV1, TASK_REFERENCE_ALL_V1,
-};
+use erebor_interceptor_abi::TaskCoordinateV1;
 use k8s_cri::v1::ContainerState;
 use mithril_control::{
     lower_kubernetes_policy, workload_target_fact_digest, AllowedNodeIdentity,
@@ -34,7 +31,7 @@ use snafu::{ensure, ResultExt as _};
 use tokio::sync::watch;
 use zerocopy::TryFromBytes as _;
 
-use super::{CriFixture, Platform, Task, TestResult, Thread};
+use super::{CriFixture, Platform, Task, TestResult};
 use crate::control_fixture::{ControlServerFixture, MtlsFixture};
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
 use crate::physical::{wait_for, wait_for_async, ProbeCgroup, ProbeDirectory, ProbeFile};
@@ -92,63 +89,6 @@ impl Host {
         self.binding
             .as_ref()
             .ok_or_else(|| "the policy is not installed".into())
-    }
-
-    fn coordinate(&self, task: u64) -> crate::Result<Option<TaskCoordinateV1>> {
-        let Some(bytes) = self
-            .reader
-            .lookup("task_coordinates", &task.to_ne_bytes())
-            .context(InterceptorSnafu)?
-        else {
-            return Ok(None);
-        };
-        TaskCoordinateV1::try_read_from_bytes(&bytes)
-            .map(Some)
-            .map_err(|source| {
-                InvalidInputSnafu {
-                    path: &self.pin_path,
-                    reason: format!("task coordinate is invalid: {source}"),
-                }
-                .build()
-            })
-    }
-
-    fn edge(&self, task: u64) -> crate::Result<Option<CreatedByEdgeV1>> {
-        let Some(bytes) = self
-            .reader
-            .lookup("created_by_edges", &task.to_ne_bytes())
-            .context(InterceptorSnafu)?
-        else {
-            return Ok(None);
-        };
-        CreatedByEdgeV1::try_read_from_bytes(&bytes)
-            .map(Some)
-            .map_err(|source| {
-                InvalidInputSnafu {
-                    path: &self.pin_path,
-                    reason: format!("creator edge is invalid: {source}"),
-                }
-                .build()
-            })
-    }
-
-    fn tombstone(&self, task: u64) -> crate::Result<Option<TaskReferenceTombstoneV1>> {
-        let Some(bytes) = self
-            .reader
-            .lookup("task_reference_tombstones", &task.to_ne_bytes())
-            .context(InterceptorSnafu)?
-        else {
-            return Ok(None);
-        };
-        TaskReferenceTombstoneV1::try_read_from_bytes(&bytes)
-            .map(Some)
-            .map_err(|source| {
-                InvalidInputSnafu {
-                    path: &self.pin_path,
-                    reason: format!("task tombstone is invalid: {source}"),
-                }
-                .build()
-            })
     }
 
     pub(super) fn source(&self) -> &Path {
@@ -714,73 +654,8 @@ impl Platform for Host {
         })
     }
 
-    fn next_id(&self) -> TestResult<u64> {
-        let bytes = self
-            .reader
-            .lookup("identity_config", &0_u32.to_ne_bytes())
-            .context(InterceptorSnafu)?
-            .ok_or("identity runtime configuration is missing")?;
-        Ok(IdentityRuntimeConfigV1::try_read_from_bytes(&bytes)
-            .map_err(|source| format!("identity runtime configuration is invalid: {source}"))?
-            .next_id)
-    }
-
-    fn thread(&mut self, pid: u32, ns_tid: u32, task: u64, name: &str) -> TestResult<Thread> {
-        let last = RefCell::new(String::from("coordinate=<absent>; edge=<absent>"));
-        Ok(wait_for(
-            &self.pin_path,
-            name,
-            READY_LIMIT,
-            || {
-                let coordinate = self.coordinate(task)?;
-                let edge = self.edge(task)?;
-                *last.borrow_mut() = format!("coordinate={coordinate:?}; edge={edge:?}");
-                Ok(coordinate.zip(edge).map(|(coordinate, edge)| Thread {
-                    pid,
-                    ns_tid,
-                    coordinate,
-                    edge,
-                }))
-            },
-            || format!("task cookie {task}; last state: {}", last.borrow()),
-        )?)
-    }
-
-    fn task_exit(&mut self, task: u64, name: &str) -> TestResult<TaskCoordinateV1> {
-        let last = RefCell::new(String::from("<absent>"));
-        Ok(wait_for(
-            &self.pin_path,
-            name,
-            READY_LIMIT,
-            || {
-                let Some(value) = self.coordinate(task)? else {
-                    return Ok(None);
-                };
-                *last.borrow_mut() = format!("{value:?}");
-                Ok((value.state == TaskCoordinateStateV1::Exited).then_some(value))
-            },
-            || format!("task cookie {task}; last coordinate: {}", last.borrow()),
-        )?)
-    }
-
-    fn task_release(&mut self, task: u64, name: &str) -> TestResult<TaskReferenceTombstoneV1> {
-        let last = RefCell::new(String::from("<absent>"));
-        Ok(wait_for(
-            &self.pin_path,
-            name,
-            READY_LIMIT,
-            || {
-                let Some(value) = self.tombstone(task)? else {
-                    return Ok(None);
-                };
-                *last.borrow_mut() = format!("{value:?}");
-                Ok((value.task_free_observed == 1
-                    && value.released_bits == TASK_REFERENCE_ALL_V1
-                    && value.state == ReferenceTombstoneStateV1::Released)
-                    .then_some(value))
-            },
-            || format!("task cookie {task}; last tombstone: {}", last.borrow()),
-        )?)
+    fn maps(&self) -> (&Path, &KernelStateReader) {
+        (&self.pin_path, &self.reader)
     }
 
     fn work(&self) -> &Path {

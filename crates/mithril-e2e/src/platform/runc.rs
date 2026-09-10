@@ -3,10 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use erebor_interceptor_abi::{TaskCoordinateV1, TaskReferenceTombstoneV1};
+use erebor_interceptor::KernelStateReader;
 use serde_json::{json, Value};
 
-use super::{Host, Platform, Task, TestResult, Thread};
+use super::{Host, Platform, Task, TestResult};
 use crate::physical::ProbeDirectory;
 use crate::process::ProcessFixture;
 
@@ -222,20 +222,8 @@ impl Platform for Runc {
         self.host.task(pid, name)
     }
 
-    fn next_id(&self) -> TestResult<u64> {
-        self.host.next_id()
-    }
-
-    fn thread(&mut self, pid: u32, ns_tid: u32, task: u64, name: &str) -> TestResult<Thread> {
-        self.host.thread(pid, ns_tid, task, name)
-    }
-
-    fn task_exit(&mut self, task: u64, name: &str) -> TestResult<TaskCoordinateV1> {
-        self.host.task_exit(task, name)
-    }
-
-    fn task_release(&mut self, task: u64, name: &str) -> TestResult<TaskReferenceTombstoneV1> {
-        self.host.task_release(task, name)
+    fn maps(&self) -> (&Path, &KernelStateReader) {
+        self.host.maps()
     }
 
     fn work(&self) -> &Path {

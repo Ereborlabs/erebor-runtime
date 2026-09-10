@@ -1113,6 +1113,10 @@ impl Platform for Kubernetes {
         })
     }
 
+    fn maps(&self) -> (&Path, &KernelStateReader) {
+        (&self.pin_path, &self.reader)
+    }
+
     fn work(&self) -> &Path {
         &self.work_path
     }
