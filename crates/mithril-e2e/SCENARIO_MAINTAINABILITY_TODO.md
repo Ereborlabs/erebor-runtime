@@ -760,6 +760,11 @@ command passes.
   - [x] Remove the TID behavior from `IdentityTestRunner::physical_probe`.
     The old bundle reads only the asserted compatibility result.
   - [x] The direct-`runc` generated case passes with the same Python actor.
+  - [x] Reproduce the Kubernetes `SIGTERM` cleanup condition in a lightweight
+    Node entry-point test. Before the fix, the exact test exited with signal
+    15. It now proves that `SIGTERM` starts normal Node shutdown.
+  - [ ] Verify that normal Kubernetes shutdown removes both runtime admission
+    socket paths before accepting the Kubernetes result.
   - [ ] The Kubernetes generated case passes with the same Python actor.
 - [ ] Workload-first recovery: create the cgroup and one ready Python actor
   before Node starts. Use the public production recovery operation. Keep the
