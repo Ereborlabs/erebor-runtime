@@ -5,6 +5,8 @@ use std::fs;
 #[cfg(test)]
 use std::time::Duration;
 
+pub(super) use result::read;
+
 #[cfg(test)]
 use self::result::ReuseResult;
 #[cfg(test)]

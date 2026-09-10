@@ -14,6 +14,9 @@ entry_role_runtime_only=false
 recovered_entry_only=false
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
 source_mount=${MITHRIL_VM_SOURCE_MOUNT:-}
+pid_node_image=docker.io/library/mithril-node:pid-reuse
+pid_control_image=docker.io/library/mithril-control:pid-reuse
+pid_actor_image=docker.io/library/python@sha256:92d838fe88b56f5b9c8b001e7460e7da819b40110d8bc7fbdb9a6241f1006520
 
 usage() {
   echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--skip-administrative-exec] [--entry-role-runtime-only] [--recovered-entry-only] [--keep-vm] [--manual]" >&2
@@ -226,6 +229,26 @@ else
   "$repo_root/target/debug/mithril-effect-test" \
     --repo-root "$repo_root" compile-retained-identity \
     --output-directory "$retained_identity_build"
+
+  if [[ $with_k3s == true && $entry_role_runtime_only == false &&
+        $recovered_entry_only == false ]]; then
+    helm_path=$(command -v helm || true)
+    [[ -x $helm_path ]] || {
+      echo "Helm is required for Kubernetes Rust tests" >&2
+      exit 2
+    }
+    (cd -- "$repo_root" && docker build --file packaging/mithril/Dockerfile \
+      --target node --tag "$pid_node_image" .)
+    (cd -- "$repo_root" && docker build --file packaging/mithril/Dockerfile \
+      --target control --tag "$pid_control_image" .)
+    docker pull "$pid_actor_image"
+    image_archive=$work_directory/pid-reuse-images.tar
+    docker save --output "$image_archive" \
+      "$pid_node_image" "$pid_control_image" "$pid_actor_image"
+    chart_archive=$work_directory/pid-reuse-kubernetes.tar.gz
+    tar --create --gzip --file "$chart_archive" --directory "$repo_root" \
+      packaging/mithril/helm crates/mithril-e2e/fixtures/kubernetes
+  fi
 fi
 
 "$provider" create "$vm_name" "$work_directory" "$ssh_public_key"
@@ -319,6 +342,19 @@ fi
   "$remote_bin/feasibility.bpf.o"
 "$provider" put "$vm_name" "$retained_identity_build/retained-identity.bpf.o" \
   "$remote_bin/retained-identity.bpf.o"
+if [[ $with_k3s == true && $entry_role_runtime_only == false &&
+      $recovered_entry_only == false ]]; then
+  "$provider" put "$vm_name" "$helm_path" "$remote_bin/helm"
+  "$provider" put "$vm_name" "$chart_archive" \
+    "$remote_root/pid-reuse-kubernetes.tar.gz"
+  "$provider" put "$vm_name" "$image_archive" \
+    "$remote_root/pid-reuse-images.tar"
+  "$provider" run "$vm_name" chmod 0755 "$remote_bin/helm"
+  "$provider" run "$vm_name" tar --extract --gzip \
+    --file "$remote_root/pid-reuse-kubernetes.tar.gz" \
+    --directory "$remote_source"
+  "$provider" run "$vm_name" rm -- "$remote_root/pid-reuse-kubernetes.tar.gz"
+fi
 "$provider" put "$vm_name" \
   "$repo_root/bpf/erebor-interceptor/qualification/feasibility.bpf.c" \
   "$remote_source/bpf/erebor-interceptor/qualification/feasibility.bpf.c"
@@ -352,8 +388,9 @@ for fixture in \
   native_namespace_init.py \
   native_non_leader_exec.py \
   native_orphan.py \
-  native_pid_tid_reuse.py \
+  native_pid_reuse.py \
   native_subreaper.py \
+  native_tid_reuse.py \
   process_exit.py \
   ready.py; do
   "$provider" put "$vm_name" \
@@ -363,7 +400,7 @@ done
 "$provider" put "$vm_name" \
   "$repo_root/crates/mithril-e2e/fixtures/convergence/direct-entry-roles-v1.yaml" \
   "$remote_source/crates/mithril-e2e/fixtures/convergence/direct-entry-roles-v1.yaml"
-for fixture in observe-profile-seal-request.json test-public-key.hex test-signing-key.hex observe-policy-v1.yaml; do
+for fixture in pid-reuse-policy-v1.json observe-profile-seal-request.json test-public-key.hex test-signing-key.hex observe-policy-v1.yaml; do
   "$provider" put "$vm_name" \
     "$repo_root/crates/mithril-e2e/fixtures/mithril-policy/$fixture" \
     "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/$fixture"
@@ -400,6 +437,28 @@ if [[ $entry_role_runtime_only == false && $recovered_entry_only == false ]]; th
     >"$output_directory/platform.txt"
 
   identity_output=$remote_root/identity
+  "$provider" run "$vm_name" sudo env \
+    "RUST_LOG=mithril_control=debug,mithril_node=debug" \
+    "MITHRIL_TEST_ROOT=$remote_source" \
+    "MITHRIL_TEST_OUTPUT=$identity_output" \
+    "MITHRIL_TEST_PIN=/sys/fs/bpf/$vm_name-pid-reuse" \
+    "MITHRIL_TEST_LEASE=$identity_output/pid-owner.lock" \
+    "MITHRIL_TEST_CGROUP=/sys/fs/cgroup/$vm_name-pid-reuse" \
+    "$remote_bin/mithril-e2e-tests" \
+    identity::pid_reuse::pid_reuse_is_fresh::host --exact --ignored --nocapture
+  runc_pid_output=$remote_root/pid-reuse-runc
+  "$provider" run "$vm_name" sudo env \
+    "RUST_LOG=mithril_control=debug,mithril_node=debug" \
+    "MITHRIL_TEST_ROOT=$remote_source" \
+    "MITHRIL_TEST_OUTPUT=$runc_pid_output" \
+    "MITHRIL_TEST_PIN=/sys/fs/bpf/$vm_name-pid-reuse-runc" \
+    "MITHRIL_TEST_LEASE=$runc_pid_output/owner.lock" \
+    "MITHRIL_TEST_CGROUP=/sys/fs/cgroup/$vm_name-pid-reuse-runc" \
+    "MITHRIL_TEST_RUNC=$entry_runc_path" \
+    "$remote_bin/mithril-e2e-tests" \
+    identity::pid_reuse::pid_reuse_is_fresh::runc --exact --ignored --nocapture
+  "$provider" get "$vm_name" "$runc_pid_output/pid-reuse.json" \
+    "$output_directory/pid-reuse-runc.json"
   "$provider" run "$vm_name" sudo "$remote_bin/mithril-identity-test" \
     --repo-root "$remote_source" --output-directory "$identity_output" \
     physical-probe --pin-root "/sys/fs/bpf/$vm_name-identity" \
@@ -594,6 +653,25 @@ if [[ $with_k3s == true ]]; then
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
     k3s-install "$k3s_version" "$remote_root/harness/k3s-config-v1.yaml" \
     "$remote_root"
+  if [[ $entry_role_runtime_only == false && $recovered_entry_only == false ]]; then
+    "$provider" run "$vm_name" sudo k3s ctr images import \
+      "$remote_root/pid-reuse-images.tar"
+    "$provider" run "$vm_name" rm -- "$remote_root/pid-reuse-images.tar"
+    kubernetes_pid_output=$remote_root/pid-reuse-kubernetes
+    "$provider" run "$vm_name" sudo env \
+      "RUST_LOG=warn" \
+      "MITHRIL_TEST_ROOT=$remote_source" \
+      "MITHRIL_TEST_OUTPUT=$kubernetes_pid_output" \
+      "MITHRIL_TEST_HELM=$remote_bin/helm" \
+      "MITHRIL_TEST_NODE_IMAGE=$pid_node_image" \
+      "MITHRIL_TEST_CONTROL_IMAGE=$pid_control_image" \
+      "MITHRIL_TEST_ACTOR_IMAGE=$pid_actor_image" \
+      "$remote_bin/mithril-e2e-tests" \
+      identity::pid_reuse::pid_reuse_is_fresh::kubernetes \
+      --exact --ignored --nocapture --test-threads=1
+    "$provider" get "$vm_name" "$kubernetes_pid_output/pid-reuse.json" \
+      "$output_directory/pid-reuse-kubernetes.json"
+  fi
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
     k3s-runtime-hook \
     "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh" \
@@ -686,15 +764,21 @@ if [[ $with_k3s == true ]]; then
 fi
 
 verify_absent "/sys/fs/bpf/$vm_name-identity"
+verify_absent "/sys/fs/bpf/$vm_name-pid-reuse"
+verify_absent "/sys/fs/bpf/$vm_name-pid-reuse-runc"
 verify_absent "/sys/fs/bpf/$vm_name-runc-entry-roles"
 verify_absent "/sys/fs/bpf/$vm_name-effect-observation"
 verify_absent "/sys/fs/bpf/$vm_name-local-enforcement"
 verify_absent "/sys/fs/bpf/$vm_name-network-enforcement"
 verify_absent "/sys/fs/cgroup/$vm_name-identity"
+verify_absent "/sys/fs/cgroup/$vm_name-pid-reuse"
+verify_absent "/sys/fs/cgroup/$vm_name-pid-reuse-runc"
 verify_absent "/sys/fs/cgroup/$vm_name-effect-observation"
 verify_absent "/sys/fs/cgroup/$vm_name-local-enforcement"
 verify_absent "/sys/fs/cgroup/$vm_name-network-enforcement"
 verify_absent "$identity_output/owner.lock"
+verify_absent "$identity_output/pid-owner.lock"
+verify_absent "$runc_pid_output/owner.lock"
 verify_absent "$entry_role_output/owner.lock"
 if [[ $with_k3s == true ]]; then
   verify_absent "$remote_root/kubernetes-identity/kubernetes-entry"

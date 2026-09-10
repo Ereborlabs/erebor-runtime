@@ -30,6 +30,11 @@ pub(in crate::identity) struct PidResult {
     pub(in crate::identity) fresh: bool,
 }
 
+pub(in crate::identity) fn read(path: &Path) -> Result<PidResult> {
+    let bytes = fs::read(path).context(IoSnafu { path })?;
+    serde_json::from_slice(&bytes).context(JsonSnafu { path })
+}
+
 #[cfg(test)]
 pub(crate) type ReuseResult = PidResult;
 

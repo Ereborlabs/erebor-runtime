@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write as _;
 use std::mem::size_of;
-use std::os::fd::{AsRawFd as _, OwnedFd};
+use std::os::fd::AsRawFd as _;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -50,6 +50,7 @@ use crate::closure::QualificationRegistry;
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
 use crate::identity::clone3::CloneIntoCgroupFixture;
 use crate::physical::{boot_identity, wait_for, ProbeCgroup, ProbeDirectory, ProbeFile};
+use crate::process::ProcessFixture;
 use crate::Result;
 
 const WAIT_LIMIT: Duration = Duration::from_secs(30);
@@ -937,222 +938,128 @@ impl IdentityTestRunner {
         leader_first_ready_cleanup.cleanup()?;
         leader_first_release_cleanup.cleanup()?;
 
-        let reuse_work = output_directory.join("pid-tid-reuse");
-        ensure!(
-            !reuse_work.exists(),
-            InvalidInputSnafu {
-                path: &reuse_work,
-                reason: "the PID/TID reuse fixture directory must not already exist",
-            }
-        );
-        fs::create_dir(&reuse_work).context(IoSnafu { path: &reuse_work })?;
-        let reuse_cleanup = ProbeDirectory::new(&reuse_work);
-        let mut reuse_fixture =
-            NativeProcessFixture::start_pid_tid_reuse(&self.repo_root, &reuse_work)?;
-        let reuse_namespace_init_pid =
-            self.wait_for("PID/TID reuse namespace init", &reuse_work, || {
-                reuse_fixture.namespace_init_pid()
-            })?;
-        reuse_fixture.open_namespace_init_pidfd(reuse_namespace_init_pid)?;
-        fs::write(&procs_path, reuse_namespace_init_pid.to_string())
-            .context(IoSnafu { path: &procs_path })?;
-        let reuse_namespace_init = self.wait_for(
-            "PID/TID reuse namespace-init external identity",
-            &procs_path,
-            || {
-                inspector
-                    .snapshot(reuse_namespace_init_pid)
-                    .context(NodeSnafu)
-            },
-        )?;
-        reuse_fixture.release_root()?;
-        let reused_namespace_pid = self.wait_for(
-            "first reusable namespace PID",
-            &reuse_work.join("process-first"),
-            || read_marker_pid(&reuse_work.join("process-first")),
-        )?;
-        let first_reused_host_pid =
-            self.wait_for("first reusable host PID", &reuse_work, || {
-                reuse_fixture.first_child_pid(reuse_namespace_init_pid)
-            })?;
-        let first_live_namespace_pid = pid_in_own_namespace(first_reused_host_pid)?;
-        let pid_reuse_first = self.wait_for("first reused-PID identity", &procs_path, || {
-            inspector.snapshot(first_reused_host_pid).context(NodeSnafu)
-        })?;
-        let pid_reuse_first_coordinate = required_abi_map::<TaskCoordinateV1>(
-            &host,
-            "task_coordinates",
-            &pid_reuse_first.task_cookie.to_ne_bytes(),
-            "first reused-PID coordinate",
-        )?;
-        fs::write(reuse_work.join("release-process-first"), b"release\n").context(IoSnafu {
-            path: reuse_work.join("release-process-first"),
-        })?;
-        let second_namespace_pid = self.wait_for(
-            "second reusable namespace PID",
-            &reuse_work.join("process-second"),
-            || read_marker_pid(&reuse_work.join("process-second")),
-        )?;
-        let second_reused_host_pid =
-            self.wait_for("second reusable host PID", &reuse_work, || {
-                reuse_fixture.first_child_pid(reuse_namespace_init_pid)
-            })?;
-        let second_live_namespace_pid = pid_in_own_namespace(second_reused_host_pid)?;
-        let pid_reuse_second = self.wait_for("second reused-PID identity", &procs_path, || {
-            inspector
-                .snapshot(second_reused_host_pid)
-                .context(NodeSnafu)
-        })?;
-        let pid_reuse_second_coordinate = required_abi_map::<TaskCoordinateV1>(
-            &host,
-            "task_coordinates",
-            &pid_reuse_second.task_cookie.to_ne_bytes(),
-            "second reused-PID coordinate",
-        )?;
-        let pid_reuse_fresh_identity = reused_namespace_pid == second_namespace_pid
-            && first_reused_host_pid != second_reused_host_pid
-            && pid_reuse_first.task_cookie != pid_reuse_second.task_cookie
-            && pid_reuse_first.process_state_id != pid_reuse_second.process_state_id
-            && pid_reuse_first.active_execution_id != pid_reuse_second.active_execution_id
-            && pid_reuse_first.creator_task_cookie == Some(reuse_namespace_init.task_cookie)
-            && pid_reuse_second.creator_task_cookie == Some(reuse_namespace_init.task_cookie)
-            && pid_reuse_first_coordinate.pid_namespace_inode
-                == pid_reuse_second_coordinate.pid_namespace_inode
-            && pid_reuse_first_coordinate.task_start_boottime_ns
-                != pid_reuse_second_coordinate.task_start_boottime_ns;
-        ensure!(
-            reuse_namespace_init.root_class.as_deref() == Some("external_runtime_root")
-                && reuse_namespace_init.creator_task_cookie.is_none()
-                && reused_namespace_pid > 1
-                && first_live_namespace_pid == reused_namespace_pid
-                && second_live_namespace_pid == reused_namespace_pid
-                && pid_reuse_fresh_identity,
-            InvalidInputSnafu {
-                path: &reuse_work,
-                reason: "reusing a namespace PID attached stale native identity",
-            }
-        );
-        fs::write(reuse_work.join("release-process-second"), b"release\n").context(IoSnafu {
-            path: reuse_work.join("release-process-second"),
-        })?;
-        self.wait_for(
-            "process-reuse completion gate",
-            &reuse_work.join("processes-done"),
-            || Ok(reuse_work.join("processes-done").exists().then_some(())),
-        )?;
+        let pid = pid_reuse::read(&output_directory.join("pid-reuse.json"))?;
 
-        let next_id_before_first_reused_tid = identity_next_id(&host)?;
-        fs::write(reuse_work.join("start-thread-first"), b"start\n").context(IoSnafu {
-            path: reuse_work.join("start-thread-first"),
+        let tid_work = output_directory.join("tid-reuse");
+        let tid_cleanup = ProbeDirectory::create(&tid_work)?;
+        let mut tid_actor =
+            ProcessFixture::pidns(&self.repo_root, "native_tid_reuse.py", [&tid_work])?;
+        let tid_outer = tid_actor.id();
+        let tid_init = tid_actor.wait_child(tid_outer, "TID namespace init")?;
+        tid_actor.track(tid_init)?;
+        fs::write(&procs_path, tid_init.to_string()).context(IoSnafu { path: &procs_path })?;
+        let tid_root = self.wait_for("TID-reuse namespace root", &procs_path, || {
+            inspector.snapshot(tid_init).context(NodeSnafu)
         })?;
-        let reused_namespace_tid = self.wait_for(
-            "first reusable namespace TID",
-            &reuse_work.join("thread-first"),
-            || read_marker_pid(&reuse_work.join("thread-first")),
-        )?;
-        let tid_reuse_first_host_tid = self.wait_for(
-            "first reusable host TID",
-            &reuse_work.join("thread-first"),
-            || host_thread_for_namespace_tid(reuse_namespace_init_pid, reused_namespace_tid),
-        )?;
-        let tid_reuse_first_task_cookie = next_id_before_first_reused_tid;
-        let tid_reuse_first_coordinate = required_abi_map::<TaskCoordinateV1>(
+
+        let first_task = identity_next_id(&host)?;
+        tid_actor.send(b"first\n")?;
+        let first_path = tid_work.join("first");
+        let first_ns = tid_actor.wait_pid(&first_path, "first reusable namespace TID")?;
+        let first_tid = self.wait_for("first reusable host TID", &first_path, || {
+            host_thread_for_namespace_tid(tid_init, first_ns)
+        })?;
+        let first_coord = required_abi_map::<TaskCoordinateV1>(
             &host,
             "task_coordinates",
-            &tid_reuse_first_task_cookie.to_ne_bytes(),
+            &first_task.to_ne_bytes(),
             "first reused-TID coordinate",
         )?;
-        let tid_reuse_first_edge = required_abi_map::<CreatedByEdgeV1>(
+        let first_edge = required_abi_map::<CreatedByEdgeV1>(
             &host,
             "created_by_edges",
-            &tid_reuse_first_task_cookie.to_ne_bytes(),
+            &first_task.to_ne_bytes(),
             "first reused-TID creator edge",
         )?;
         ensure!(
-            identity_next_id(&host)? == next_id_before_first_reused_tid + 2
-                && tid_reuse_first_coordinate.host_tid == tid_reuse_first_host_tid
-                && tid_reuse_first_coordinate.host_tgid == reuse_namespace_init.host_tgid
-                && tid_reuse_first_coordinate.process_state_id
-                    == id_value(&reuse_namespace_init.process_state_id)?
-                && tid_reuse_first_edge.creator_task_cookie == reuse_namespace_init.task_cookie,
+            tid_root.root_class.as_deref() == Some("external_runtime_root")
+                && tid_root.creator_task_cookie.is_none()
+                && identity_next_id(&host)? == first_task + 2
+                && first_coord.host_tid == first_tid
+                && first_coord.host_tgid == tid_root.host_tgid
+                && first_coord.process_state_id == id_value(&tid_root.process_state_id)?
+                && first_edge.creator_task_cookie == tid_root.task_cookie,
             InvalidInputSnafu {
-                path: &reuse_work,
+                path: &tid_work,
                 reason: "the first reusable TID did not receive an exact thread identity",
             }
         );
-        fs::write(reuse_work.join("release-thread-first"), b"release\n").context(IoSnafu {
-            path: reuse_work.join("release-thread-first"),
+        let first_release = tid_work.join("release-first");
+        fs::write(&first_release, b"release\n").context(IoSnafu {
+            path: &first_release,
         })?;
-        self.wait_for(
+        let first_done = tid_work.join("first-done");
+        tid_actor.wait_path(
+            &first_done,
             "first reusable TID exit",
-            &reuse_work.join("thread-first-done"),
+            WAIT_LIMIT,
             || {
-                if !reuse_work.join("thread-first-done").exists() {
+                if !first_done.exists() {
                     return Ok(None);
                 }
-                let coordinate = required_abi_map::<TaskCoordinateV1>(
+                let coord = required_abi_map::<TaskCoordinateV1>(
                     &host,
                     "task_coordinates",
-                    &tid_reuse_first_task_cookie.to_ne_bytes(),
+                    &first_task.to_ne_bytes(),
                     "exited first reused-TID coordinate",
                 )?;
-                Ok((coordinate.state == TaskCoordinateStateV1::Exited).then_some(()))
+                Ok((coord.state == TaskCoordinateStateV1::Exited).then_some(()))
             },
+            || "the first thread or its identity is still live".to_owned(),
         )?;
-        let next_id_before_second_reused_tid = identity_next_id(&host)?;
-        fs::write(reuse_work.join("start-thread-second"), b"start\n").context(IoSnafu {
-            path: reuse_work.join("start-thread-second"),
+
+        let second_task = identity_next_id(&host)?;
+        tid_actor.send(b"second\n")?;
+        let second_path = tid_work.join("second");
+        let second_ns = tid_actor.wait_pid(&second_path, "second reusable namespace TID")?;
+        let second_tid = self.wait_for("second reusable host TID", &second_path, || {
+            host_thread_for_namespace_tid(tid_init, second_ns)
         })?;
-        let second_namespace_tid = self.wait_for(
-            "second reusable namespace TID",
-            &reuse_work.join("thread-second"),
-            || read_marker_pid(&reuse_work.join("thread-second")),
-        )?;
-        let tid_reuse_second_host_tid = self.wait_for(
-            "second reusable host TID",
-            &reuse_work.join("thread-second"),
-            || host_thread_for_namespace_tid(reuse_namespace_init_pid, second_namespace_tid),
-        )?;
-        let tid_reuse_second_task_cookie = next_id_before_second_reused_tid;
-        let tid_reuse_second_coordinate = required_abi_map::<TaskCoordinateV1>(
+        let second_coord = required_abi_map::<TaskCoordinateV1>(
             &host,
             "task_coordinates",
-            &tid_reuse_second_task_cookie.to_ne_bytes(),
+            &second_task.to_ne_bytes(),
             "second reused-TID coordinate",
         )?;
-        let tid_reuse_second_edge = required_abi_map::<CreatedByEdgeV1>(
+        let second_edge = required_abi_map::<CreatedByEdgeV1>(
             &host,
             "created_by_edges",
-            &tid_reuse_second_task_cookie.to_ne_bytes(),
+            &second_task.to_ne_bytes(),
             "second reused-TID creator edge",
         )?;
-        let tid_reuse_fresh_identity = reused_namespace_tid == second_namespace_tid
-            && tid_reuse_first_host_tid != tid_reuse_second_host_tid
-            && tid_reuse_first_task_cookie != tid_reuse_second_task_cookie
-            && tid_reuse_first_coordinate.task_start_boottime_ns
-                != tid_reuse_second_coordinate.task_start_boottime_ns
-            && tid_reuse_first_coordinate.pid_namespace_inode
-                == tid_reuse_second_coordinate.pid_namespace_inode
-            && tid_reuse_second_edge.creator_task_cookie == reuse_namespace_init.task_cookie;
+        let fresh_tid = first_ns == second_ns
+            && first_tid != second_tid
+            && first_task != second_task
+            && first_coord.task_start_boottime_ns != second_coord.task_start_boottime_ns
+            && first_coord.pid_namespace_inode == second_coord.pid_namespace_inode
+            && second_edge.creator_task_cookie == tid_root.task_cookie;
         ensure!(
-            identity_next_id(&host)? == next_id_before_second_reused_tid + 2
-                && tid_reuse_second_coordinate.host_tid == tid_reuse_second_host_tid
-                && tid_reuse_second_coordinate.host_tgid == reuse_namespace_init.host_tgid
-                && tid_reuse_fresh_identity,
+            identity_next_id(&host)? == second_task + 2
+                && second_coord.host_tid == second_tid
+                && second_coord.host_tgid == tid_root.host_tgid
+                && fresh_tid,
             InvalidInputSnafu {
-                path: &reuse_work,
+                path: &tid_work,
                 reason: "reusing a namespace TID attached stale native identity",
             }
         );
-        fs::write(reuse_work.join("release-thread-second"), b"release\n").context(IoSnafu {
-            path: reuse_work.join("release-thread-second"),
+        let second_release = tid_work.join("release-second");
+        fs::write(&second_release, b"release\n").context(IoSnafu {
+            path: &second_release,
         })?;
-        reuse_fixture.wait_for_successful_exit()?;
-        self.wait_for("reused TID final release", &reuse_work, || {
+        let status = tid_actor.wait_exit("TID-reuse actor exit", Duration::from_secs(5))?;
+        ensure!(
+            status.success(),
+            InvalidInputSnafu {
+                path: &tid_work,
+                reason: format!("the TID-reuse actor exited with {status}"),
+            }
+        );
+        self.wait_for("reused TID final release", &tid_work, || {
             let tombstone = required_abi_map::<TaskReferenceTombstoneV1>(
                 &host,
                 "task_reference_tombstones",
-                &tid_reuse_second_task_cookie.to_ne_bytes(),
+                &second_task.to_ne_bytes(),
                 "second reused-TID tombstone",
             )?;
             Ok((tombstone.task_free_observed == 1
@@ -1160,8 +1067,8 @@ impl IdentityTestRunner {
                 && tombstone.state == ReferenceTombstoneStateV1::Released)
                 .then_some(()))
         })?;
-        reuse_fixture.stop()?;
-        reuse_cleanup.cleanup()?;
+        tid_actor.stop()?;
+        tid_cleanup.cleanup()?;
 
         let mut cgroup_escape_control = CloneIntoCgroupFixture::start_with_root_first_effect(
             &cgroup_path,
@@ -1577,16 +1484,16 @@ impl IdentityTestRunner {
             leader_first_process_reclaimable: leader.worker.process_done,
             leader_first_entry_draining: leader.worker.entry_done,
             leader_first_worker_tombstone_released: leader.worker.worker_done,
-            reused_namespace_pid,
-            pid_reuse_first,
-            pid_reuse_second,
-            pid_reuse_fresh_identity,
-            reused_namespace_tid,
-            tid_reuse_first_task_cookie,
-            tid_reuse_second_task_cookie,
-            tid_reuse_first_host_tid,
-            tid_reuse_second_host_tid,
-            tid_reuse_fresh_identity,
+            reused_namespace_pid: pid.nspid,
+            pid_reuse_first: pid.first,
+            pid_reuse_second: pid.second,
+            pid_reuse_fresh_identity: pid.fresh,
+            reused_namespace_tid: first_ns,
+            tid_reuse_first_task_cookie: first_task,
+            tid_reuse_second_task_cookie: second_task,
+            tid_reuse_first_host_tid: first_tid,
+            tid_reuse_second_host_tid: second_tid,
+            tid_reuse_fresh_identity: fresh_tid,
             cgroup_reuse_path: cgroup_path.clone(),
             cgroup_reuse_first_root: binding_gap_reconciled_root.clone(),
             cgroup_reuse_second_root,
@@ -7850,14 +7757,6 @@ fn verify_live_manifest_negative_fixture(host: &KernelHost) -> Result<bool> {
     Ok(true)
 }
 
-fn open_pidfd(pid: u32) -> Result<OwnedFd> {
-    let raw = i32::try_from(pid)
-        .map_err(|error| invalid_state(format!("PID {pid} is out of range: {error}")))?;
-    let pid = Pid::from_raw(raw).ok_or_else(|| invalid_state("PID zero cannot have a pidfd"))?;
-    pidfd_open(pid, PidfdFlags::empty())
-        .map_err(|error| invalid_state(format!("pidfd_open({raw}) failed: {error}")))
-}
-
 fn pid_in_own_namespace(host_pid: u32) -> Result<u32> {
     let path = PathBuf::from(format!("/proc/{host_pid}/status"));
     let status = fs::read_to_string(&path).context(IoSnafu { path: &path })?;
@@ -8287,28 +8186,6 @@ where
 {
     optional_abi_map(host, map, key, name)?
         .ok_or_else(|| invalid_state(format!("{name} is missing")))
-}
-
-fn read_marker_pid(path: &Path) -> Result<Option<u32>> {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => return Err(source).context(IoSnafu { path }),
-    };
-    let pid = text.trim().parse::<u32>().map_err(|error| {
-        invalid_state(format!(
-            "PID marker `{}` has an invalid value: {error}",
-            path.display()
-        ))
-    })?;
-    ensure!(
-        pid > 0,
-        InvalidInputSnafu {
-            path,
-            reason: "PID marker contains PID zero",
-        }
-    );
-    Ok(Some(pid))
 }
 
 fn id128_hex(value: Id128V1) -> String {
