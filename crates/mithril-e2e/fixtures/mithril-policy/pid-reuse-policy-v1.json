@@ -1,0 +1,82 @@
+{
+  "apiVersion": "mithril.erebor.dev/v1alpha1",
+  "kind": "WorkloadProtectionPolicy",
+  "metadata": {
+    "name": "pid-reuse",
+    "namespace": "default",
+    "uid": "22222222-2222-4222-8222-222222222222",
+    "generation": 1,
+    "resourceVersion": "1"
+  },
+  "spec": {
+    "podSelector": {
+      "matchLabels": {
+        "app.kubernetes.io/name": "pid-reuse"
+      },
+      "matchExpressions": []
+    },
+    "mode": "Protect",
+    "containers": [
+      {
+        "names": ["worker"],
+        "kinds": ["Application"],
+        "images": [
+          "fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ],
+        "applicationEntry": {
+          "executionRule": "python",
+          "role": "worker"
+        },
+        "additionalEntries": [],
+        "administrativeEntry": {
+          "role": "administrator"
+        },
+        "externalRole": "external"
+      }
+    ],
+    "roles": [
+      {
+        "name": "worker",
+        "files": [],
+        "execution": [
+          {
+            "name": "python",
+            "path": "/usr/bin/python3",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "network": {
+          "socketControls": [],
+          "destinations": []
+        },
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "administrator",
+        "files": [],
+        "execution": [],
+        "network": {
+          "socketControls": [],
+          "destinations": []
+        },
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "external",
+        "files": [],
+        "execution": [],
+        "network": {
+          "socketControls": [],
+          "destinations": []
+        },
+        "processControl": [],
+        "unixStreams": []
+      }
+    ],
+    "exceptionGrants": []
+  }
+}

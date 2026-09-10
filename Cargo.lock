@@ -3231,6 +3231,7 @@ dependencies = [
  "erebor-interceptor-abi",
  "erebor-runtime-error",
  "erebor-runtime-ipc",
+ "erebor-telemetry",
  "hex",
  "k8s-cri",
  "k8s-openapi",

@@ -2,6 +2,7 @@
 mod authorization_tests;
 mod clone3;
 mod native_process;
+mod pid_reuse;
 mod scenarios;
 #[cfg(test)]
 mod verification_tests;

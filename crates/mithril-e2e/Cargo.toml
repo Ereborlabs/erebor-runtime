@@ -43,15 +43,17 @@ zerocopy.workspace = true
 [dev-dependencies]
 axum.workspace = true
 crc32c.workspace = true
+erebor-telemetry = { path = "../erebor-telemetry" }
 k8s-openapi.workspace = true
 kube.workspace = true
+mithril-e2e-macros = { path = "../mithril-e2e-macros" }
 prost.workspace = true
 rcgen = "0.13.2"
 reqwest.workspace = true
 serde-saphyr.workspace = true
 tempfile = "3.23.0"
 tokio.workspace = true
-tokio-stream.workspace = true
+tokio-stream = { workspace = true, features = ["net"] }
 tonic.workspace = true
 tower.workspace = true
 

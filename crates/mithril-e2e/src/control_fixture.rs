@@ -45,6 +45,10 @@ impl MtlsFixture {
         self.directory.path()
     }
 
+    pub(crate) fn node_digest(&self) -> String {
+        self.certificates.node_digest()
+    }
+
     pub(crate) fn control(&self, generation: u64) -> mithril_control::Result<ControlPlane> {
         self.control_with_store(
             ControlStore::open(self.path().join("control-store"))?,

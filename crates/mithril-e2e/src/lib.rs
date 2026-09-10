@@ -15,12 +15,14 @@ mod golden;
 mod identity;
 mod loader;
 mod physical;
+#[cfg(test)]
+mod platform;
 mod process;
 #[cfg(test)]
 mod prototype;
-mod runtime_input;
 mod provenance;
 mod runner;
+mod runtime_input;
 
 pub use benchmark::{LatencyDistributionV1, OpenBenchmarkRecordV1};
 pub use capability::{CompileRecordV1, PlatformProbeV1};

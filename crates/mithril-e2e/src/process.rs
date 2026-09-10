@@ -24,6 +24,7 @@ const START_LIMIT: Duration = Duration::from_secs(30);
 
 pub(crate) struct ProcessFixture {
     child: Child,
+    actor_pid: u32,
     path: PathBuf,
     stdin: Option<ChildStdin>,
     stdout: Option<ChildStdout>,
@@ -33,13 +34,30 @@ pub(crate) struct ProcessFixture {
 }
 
 impl ProcessFixture {
+    #[cfg(test)]
+    pub(crate) fn namespace_pid(pid: u32) -> Result<u32> {
+        let path = PathBuf::from(format!("/proc/{pid}/status"));
+        let status = fs::read_to_string(&path).context(IoSnafu { path: &path })?;
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix("NSpid:"))
+            .and_then(|value| value.split_ascii_whitespace().last())
+            .and_then(|value| value.parse().ok())
+            .context(InvalidInputSnafu {
+                path,
+                reason: "the process status has no namespace PID",
+            })
+    }
+
     pub(crate) fn new(mut child: Child, path: &Path) -> Self {
+        let actor_pid = child.id();
         Self {
             stdin: child.stdin.take(),
             stdout: child.stdout.take(),
             stderr: child.stderr.take(),
             tasks: Vec::new(),
             child,
+            actor_pid,
             path: path.to_owned(),
             stopped: false,
         }
@@ -109,7 +127,26 @@ impl ProcessFixture {
     }
 
     pub(crate) fn id(&self) -> u32 {
-        self.child.id()
+        self.actor_pid
+    }
+
+    #[cfg(test)]
+    fn set_actor(&mut self, pid: u32) -> Result<()> {
+        self.track(pid)?;
+        self.actor_pid = pid;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_init(&mut self, pid: u32) -> Result<()> {
+        ensure!(
+            Self::namespace_pid(pid)? == 1,
+            InvalidInputSnafu {
+                path: &self.path,
+                reason: "the initial actor is not PID 1",
+            }
+        );
+        self.set_actor(pid)
     }
 
     pub(crate) fn track(&mut self, id: u32) -> Result<()> {
@@ -172,6 +209,21 @@ impl ProcessFixture {
             .try_wait()
             .context(IoSnafu { path: &self.path })
             .inspect(|status| self.stopped |= status.is_some())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ensure_running(&mut self, operation: &str) -> Result<()> {
+        let Some(status) = self.try_wait()? else {
+            return Ok(());
+        };
+        let stderr = self.stderr()?;
+        InvalidInputSnafu {
+            path: &self.path,
+            reason: format!(
+                "the process exited with {status} before {operation}; stderr: {stderr:?}"
+            ),
+        }
+        .fail()
     }
 
     pub(crate) fn wait(&mut self) -> Result<ExitStatus> {
@@ -312,7 +364,7 @@ impl ProcessFixture {
                     .to_owned();
                 Ok(text
                     .lines()
-                    .any(|line| line.starts_with("State:\tT"))
+                    .any(|line| line.starts_with("State:\tT") || line.starts_with("State:\tt"))
                     .then_some(()))
             },
             || format!("process {id}; last {}", last.borrow()),
@@ -481,7 +533,7 @@ impl ProcessFixture {
 
         let path = self.path.clone();
         let received = RefCell::new(Vec::new());
-        self.wait_path(
+        let result = self.wait_path(
             &path,
             "the process input barrier",
             START_LIMIT,
@@ -517,7 +569,9 @@ impl ProcessFixture {
                     String::from_utf8_lossy(&received.borrow())
                 )
             },
-        )
+        );
+        self.stdout = Some(stdout);
+        result
     }
 }
 

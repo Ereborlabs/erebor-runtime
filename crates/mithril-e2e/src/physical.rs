@@ -4,6 +4,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use erebor_interceptor_abi::Id128V1;
+#[cfg(test)]
+use snafu::OptionExt as _;
 use snafu::{ensure, ResultExt as _};
 
 use crate::error::{InvalidInputSnafu, IoSnafu, TimeoutSnafu};
@@ -144,6 +146,7 @@ impl Drop for ProbeFile {
 
 pub(crate) struct ProbeCgroup {
     path: PathBuf,
+    previous: Option<PathBuf>,
     cleaned: bool,
 }
 
@@ -160,6 +163,7 @@ impl ProbeCgroup {
         let path = fs::canonicalize(path).context(IoSnafu { path })?;
         Ok(Self {
             path,
+            previous: None,
             cleaned: false,
         })
     }
@@ -168,7 +172,44 @@ impl ProbeCgroup {
         &self.path
     }
 
+    #[cfg(test)]
+    pub(crate) fn enter(&mut self) -> Result<()> {
+        ensure!(
+            self.previous.is_none(),
+            InvalidInputSnafu {
+                path: &self.path,
+                reason: "the test process already entered this cgroup",
+            }
+        );
+        let source = Path::new("/proc/self/cgroup");
+        let text = fs::read_to_string(source).context(IoSnafu { path: source })?;
+        let mut paths = text.lines().filter_map(|line| line.strip_prefix("0::"));
+        let relative = paths.next().context(InvalidInputSnafu {
+            path: source,
+            reason: "the test process has no unified cgroup",
+        })?;
+        ensure!(
+            paths.next().is_none() && relative.starts_with('/'),
+            InvalidInputSnafu {
+                path: source,
+                reason: "the test process has an ambiguous unified cgroup",
+            }
+        );
+        self.previous = Some(Path::new("/sys/fs/cgroup").join(relative.trim_start_matches('/')));
+        let target = self.path.join("cgroup.procs");
+        fs::write(&target, std::process::id().to_string()).context(IoSnafu { path: target })
+    }
+
+    fn leave(&mut self) -> Result<()> {
+        let Some(previous) = self.previous.take() else {
+            return Ok(());
+        };
+        let target = previous.join("cgroup.procs");
+        fs::write(&target, std::process::id().to_string()).context(IoSnafu { path: target })
+    }
+
     pub(crate) fn cleanup(mut self) -> Result<()> {
+        self.leave()?;
         match fs::remove_dir(&self.path) {
             Ok(()) => Ok(()),
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -181,6 +222,7 @@ impl ProbeCgroup {
 impl Drop for ProbeCgroup {
     fn drop(&mut self) {
         if !self.cleaned {
+            let _result = self.leave();
             let _result = fs::write(self.path.join("cgroup.kill"), b"1");
             let _result = fs::remove_dir(&self.path);
         }
