@@ -753,7 +753,7 @@ command passes.
     policy CRD, Control, Node, OCI hook, and actor Pod.
   - [ ] Replace the old PID-reuse shell and CLI path with a thin exact-test
     launcher before this behavior is complete.
-- [ ] TID reuse: use one Python actor through `ProcessFixture`. Keep the two
+- [x] TID reuse: use one Python actor through `ProcessFixture`. Keep the two
   namespace-TID actions, exact thread coordinates, and tombstone checks
   visible in a separate small scenario file.
   - [x] The Host generated case passes in the retained privileged VM.
@@ -763,9 +763,9 @@ command passes.
   - [x] Reproduce the Kubernetes `SIGTERM` cleanup condition in a lightweight
     Node entry-point test. Before the fix, the exact test exited with signal
     15. It now proves that `SIGTERM` starts normal Node shutdown.
-  - [ ] Verify that normal Kubernetes shutdown removes both runtime admission
+  - [x] Verify that normal Kubernetes shutdown removes both runtime admission
     socket paths before accepting the Kubernetes result.
-  - [ ] The Kubernetes generated case passes with the same Python actor.
+  - [x] The Kubernetes generated case passes with the same Python actor.
 - [ ] Workload-first recovery: create the cgroup and one ready Python actor
   before Node starts. Use the public production recovery operation. Keep the
   recovered binding, process identity, role, and first-effect assertions

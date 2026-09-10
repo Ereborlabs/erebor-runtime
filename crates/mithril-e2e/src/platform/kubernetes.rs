@@ -53,6 +53,7 @@ pub(crate) struct Kubernetes {
     pin_path: PathBuf,
     lease_path: PathBuf,
     socket_path: PathBuf,
+    seccomp_path: PathBuf,
     kube_path: PathBuf,
     helm_path: PathBuf,
     k3s_path: PathBuf,
@@ -78,6 +79,7 @@ pub(crate) struct Kubernetes {
     pin: Option<ProbeDirectory>,
     lease: Option<ProbeFile>,
     socket: Option<ProbeFile>,
+    seccomp: Option<ProbeFile>,
     system_up: bool,
     work_up: bool,
     helm_up: bool,
@@ -581,6 +583,23 @@ impl Kubernetes {
         }
     }
 
+    fn wait_sockets(&self) -> TestResult<()> {
+        wait_for(
+            &self.seccomp_path,
+            "Node runtime socket cleanup",
+            STOP_LIMIT,
+            || Ok((!self.socket_path.exists() && !self.seccomp_path.exists()).then_some(())),
+            || {
+                format!(
+                    "admission socket exists: {}; seccomp socket exists: {}",
+                    self.socket_path.exists(),
+                    self.seccomp_path.exists(),
+                )
+            },
+        )?;
+        Ok(())
+    }
+
     fn close(&mut self) -> TestResult<()> {
         let mut failed = None;
         if self.work_up {
@@ -598,6 +617,7 @@ impl Kubernetes {
                 &mut failed,
                 Self::run(&mut command, "uninstall Mithril").map(|_| ()),
             );
+            Self::retain(&mut failed, self.wait_sockets());
             self.helm_up = false;
         }
         if self.system_up {
@@ -662,6 +682,9 @@ impl Kubernetes {
         if let Some(socket) = self.socket.take() {
             Self::retain(&mut failed, socket.cleanup().map_err(Into::into));
         }
+        if let Some(seccomp) = self.seccomp.take() {
+            Self::retain(&mut failed, seccomp.cleanup().map_err(Into::into));
+        }
         match failed {
             Some(source) => Err(source),
             None => Ok(()),
@@ -702,7 +725,8 @@ impl Platform for Kubernetes {
         let pin_path = PathBuf::from(format!("/sys/fs/bpf/mithril-pid-{token}"));
         let lease_path = PathBuf::from(format!("/run/erebor-interceptor/mithril-pid-{token}.lock"));
         let socket_path = PathBuf::from(format!("/run/mithril/mithril-pid-{token}.sock"));
-        for path in [&pin_path, &lease_path, &socket_path] {
+        let seccomp_path = socket_path.with_extension("seccomp.sock");
+        for path in [&pin_path, &lease_path, &socket_path, &seccomp_path] {
             if path.exists() {
                 return Err(
                     format!("the Kubernetes fixture path exists: {}", path.display()).into(),
@@ -712,6 +736,7 @@ impl Platform for Kubernetes {
         let pin = ProbeDirectory::new(&pin_path);
         let lease = ProbeFile::new(&lease_path);
         let socket = ProbeFile::new(&socket_path);
+        let seccomp = ProbeFile::new(&seccomp_path);
         let kube_path = Self::path("MITHRIL_TEST_KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")?;
         let helm_path = Self::path("MITHRIL_TEST_HELM", "/usr/local/bin/helm")?;
         let k3s_path = Self::path("MITHRIL_TEST_K3S", "/usr/local/bin/k3s")?;
@@ -789,6 +814,7 @@ impl Platform for Kubernetes {
             pin_path,
             lease_path,
             socket_path,
+            seccomp_path,
             kube_path,
             helm_path,
             k3s_path,
@@ -814,6 +840,7 @@ impl Platform for Kubernetes {
             pin: Some(pin),
             lease: Some(lease),
             socket: Some(socket),
+            seccomp: Some(seccomp),
             system_up: false,
             work_up: false,
             helm_up: false,
