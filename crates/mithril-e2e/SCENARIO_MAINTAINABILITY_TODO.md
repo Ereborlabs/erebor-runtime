@@ -731,7 +731,7 @@ command passes.
   role, execution, and tombstone assertions. Remove the actor-only test.
 - [ ] Leader-first thread exit and reference lifetime: keep the process and
   entry reference counts, tombstones, release action, and reclamation checks.
-- [x] Node-first PID reuse: keep one small parameterized Rust test in
+- [ ] Node-first PID reuse: keep one small parameterized Rust test in
   `pid_reuse.rs`, one shared Python actor, one shared result assertion, and
   thin VM and Kubernetes launchers. Use
   `#[platform_test(host, runc, kubernetes)]` on that one function. Each
@@ -751,7 +751,7 @@ command passes.
   - [x] The direct-`runc` generated case passes in the same VM.
   - [x] The Kubernetes generated case passes with the production Helm chart,
     policy CRD, Control, Node, OCI hook, and actor Pod.
-  - [x] Replace the old PID-reuse shell and CLI path with a thin exact-test
+  - [ ] Replace the old PID-reuse shell and CLI path with a thin exact-test
     launcher before this behavior is complete.
 - [ ] TID reuse: use one Python actor through `ProcessFixture`. Keep the two
   namespace-TID actions, exact thread coordinates, and tombstone checks
