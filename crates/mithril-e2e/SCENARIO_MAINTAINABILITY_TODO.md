@@ -36,6 +36,9 @@ These rules control every checkmark and commit in this file.
 - Place the actor explicitly on the host, in `runc`, or in Kubernetes.
 - Ask the actor to perform one action. Assert the expected production result.
 - Keep component start, stop, outage, and restart order visible in the test.
+- Test each supported component order in a separate function. Do not make a
+  Node-first admission test pass by starting its actor before Node. Do not
+  replace a workload-first recovery test with a Node-first test.
 - Make setup, action, assertion, and teardown easy to identify.
 - Prefer one security behavior per test and one responsibility per file. A
   focused file can contain several related real tests.
@@ -511,14 +514,22 @@ command passes.
   role, execution, and tombstone assertions. Remove the actor-only test.
 - [ ] Leader-first thread exit and reference lifetime: keep the process and
   entry reference counts, tombstones, release action, and reclamation checks.
-- [ ] PID reuse: use one Python actor through `ProcessFixture`. Keep the two
-  namespace-PID actions and fresh process identity checks visible.
+- [ ] Node-first PID reuse: start Control and Node, install the production
+  binding and policy, and require readiness before the Python actor enters.
+  Keep the two namespace-PID actions and fresh process identity checks
+  visible.
 - [ ] TID reuse: use one Python actor through `ProcessFixture`. Keep the two
   namespace-TID actions, exact thread coordinates, and tombstone checks
   visible in a separate small scenario file.
-- [ ] Cgroup lifetime reuse and retained-host restart: keep host shutdown,
-  retained map validation, production recovery, recreated cgroup, and fresh
-  binding identity assertions visible.
+- [ ] Workload-first recovery: create the cgroup and one ready Python actor
+  before Node starts. Use the public production recovery operation. Keep the
+  recovered binding, process identity, role, and first-effect assertions
+  visible.
+- [ ] Retained-host restart: keep host shutdown, retained map validation,
+  production recovery, stable map IDs, and ownership rejection visible.
+- [ ] Cgroup lifetime reuse: recreate the cgroup path after recovery. Keep the
+  new cgroup ID, binding nonce, live interval, process identity, and role
+  assertions visible.
 
 ### Kernel and host lifecycle
 
@@ -632,7 +643,10 @@ setup, production actions, assertions, and focused test.
 - [ ] `physical_kubernetes_prestop_probe`
 - [ ] `physical_kubernetes_poststart_probe`
 - [ ] `physical_kubernetes_stock_hook_failure_probe`
-- [ ] `physical_kubernetes_resilience_probe`
+- [ ] `physical_kubernetes_resilience_probe`: keep the Pod and its cgroup
+  running before Node starts. Require public production recovery, exact
+  identity retention across the Kubernetes service and Node outages, and
+  fresh identity after same-name Pod and container recreation.
 - [ ] `physical_kubernetes_network_probe`
 
 Each Kubernetes identity case must keep the `k3s`, CRI, OCI hook, node
