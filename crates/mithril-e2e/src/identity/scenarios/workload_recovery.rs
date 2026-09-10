@@ -4,7 +4,7 @@ use rustix::io::Errno;
 
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 fn workload_recovers<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("workload-recovery")?;
     let mut actor = env.start_actor("native_recovery.py", &[])?;

@@ -102,6 +102,14 @@ impl Host {
         &self.cgroup_path
     }
 
+    pub(super) fn move_out(&self, pid: u32) -> TestResult<()> {
+        self.node_cgroup
+            .as_ref()
+            .ok_or("the Node cgroup is not owned")?
+            .move_out(pid)?;
+        Ok(())
+    }
+
     pub(super) fn set_hook(&mut self, path: &Path) {
         self.hook_path = path.to_owned();
     }
@@ -648,10 +656,7 @@ impl Platform for Host {
         let mut actor = ProcessFixture::pidns(&self.root, name, args)?;
         let parent = actor.id();
         let pid = actor.wait_child(parent, "PID namespace root")?;
-        self.node_cgroup
-            .as_ref()
-            .ok_or("the Node cgroup is not owned")?
-            .move_out(parent)?;
+        self.move_out(parent)?;
         actor.set_init(pid)?;
         self.init_pid = Some(pid);
         Ok(actor)

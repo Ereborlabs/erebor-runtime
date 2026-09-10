@@ -779,11 +779,11 @@ command passes.
   admitted entry rule, complete recovery counts, and first denied executable
   assertion visible. Use the same Python actor in every environment. Keep the
   one-test file below 100 lines.
-  - [ ] Add the shared physical support for a workload that exists before
+  - [x] Add the shared physical support for a workload that exists before
     Node. The platform supplies runtime placement and the external CRI input;
     it does not call or reproduce the recovery owner sequence.
   - [x] Pass the Host generated case in the retained privileged VM.
-  - [ ] Pass the direct-`runc` generated case with the actor as container PID
+  - [x] Pass the direct-`runc` generated case with the actor as container PID
     1. The preexisting container must not use a test-only OCI hook.
   - [ ] Pass the Kubernetes generated case with a real Pod that exists before
     the Helm Node installation and the policy CRD.

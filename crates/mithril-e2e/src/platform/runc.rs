@@ -249,12 +249,14 @@ impl Platform for Runc {
             .arg(&self.bundle_path)
             .arg(&id);
         let mut actor = ProcessFixture::start(&mut command, &script)?;
+        let parent = actor.id();
         let state = self.state(&id)?;
         let pid = state["pid"]
             .as_u64()
             .and_then(|pid| u32::try_from(pid).ok())
             .filter(|pid| *pid > 0)
             .ok_or("runc state has no actor PID")?;
+        self.host.move_out(parent)?;
         actor.set_init(pid)?;
         Ok(actor)
     }
@@ -301,8 +303,16 @@ impl Platform for Runc {
         Ok(())
     }
 
+    fn running(&mut self, pid: u32) -> TestResult<()> {
+        self.host.running(pid)
+    }
+
     fn task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
         self.host.task(pid, name)
+    }
+
+    fn recovered(&mut self, pid: u32, name: &str) -> TestResult<Task> {
+        self.host.recovered(pid, name)
     }
 
     fn maps(&self) -> (&Path, &KernelStateReader) {
