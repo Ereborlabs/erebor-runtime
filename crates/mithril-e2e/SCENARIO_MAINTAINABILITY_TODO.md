@@ -93,6 +93,14 @@ acknowledgement in the test when that operation is under test.
 - Keep host, direct-`runc`, and Kubernetes resource placement and lifecycle
   setup separate. Environment setup can change paths, process placement, and
   component availability only.
+- In the Kubernetes form, send external runtime input to the deployed Node.
+  Do not instantiate `WorkloadBindingOwner` or `NativeSecurityStateOwner`
+  in the test process as a substitute for that Node. The deployed Node must
+  perform binding publication, prepared activation, recovery, and policy
+  reconciliation through its production CRI, OCI, and Control paths.
+- Lightweight and direct-`runc` forms can call public production owners
+  directly. Keep those calls visible in the test and require the same
+  meaningful state transitions as the Kubernetes form.
 - Do not make a host-only `TestEnv` the scenario API. A shared scenario must
   be able to use the result from each applicable physical environment.
 - Keep the VM and Kubernetes launchers thin. They can copy inputs, create the
@@ -307,6 +315,149 @@ Public production fields and public result-schema fields are excluded from
 this audit. Shorten or delete every listed private identifier as its owning
 behavior is replaced. Do not add a new violation in an intermediate commit.
 
+## Physical harness migration audit
+
+The audited VM and Kubernetes shell harness contains 10,371 lines in 13 files.
+These files provision environments, execute scenarios, parse production
+results, and assert security behavior. The mixed ownership must be removed one
+scenario at a time.
+
+| Source | Lines | Current responsibility | Required end state |
+| --- | ---: | --- | --- |
+| `harness/vm/run.sh` | 727 | Builds one VM, runs native, direct-`runc`, and Kubernetes probes, checks JSON, and checks cleanup | Provision the VM, copy inputs, invoke exact Rust tests, collect diagnostics, and remove resources only |
+| `harness/vm/test.sh` | 793 | Tests shell text, fake Kubernetes oracles, cleanup, and provider wiring | Test only launcher argument, provider, and cleanup behavior that must remain in shell |
+| `harness/vm/guest.sh` | 1,764 | Installs K3s and its hook, then owns K3s qualification, CRI effect, and administrative-exec scenarios | Install or remove K3s and the runtime hook, then invoke exact Rust tests |
+| `harness/vm/two-node-convergence.sh` | 4,371 | Provisions two nodes and owns policy, runtime, effect, exception, restart, upgrade, and cleanup assertions | Provision or reuse two nodes, deploy Mithril, invoke exact Rust tests, collect diagnostics, and clean up only |
+| `harness/vm/two-node-outage-recovery.sh` | 1,115 | Owns Control, storage, network, API, watch, WAL, replay, and recovery scenarios | Apply the requested outage, invoke its exact Rust test, restore the environment, and collect diagnostics only |
+| `harness/vm/two-node-network.sh` | 342 | Provisions two nodes and owns both network directions and result assertions | Provision the nodes and invoke one exact Rust test for each direction |
+| `harness/kubernetes-oracles.sh` | 497 | Parses Kubernetes and Mithril state and owns scenario assertions | Delete each oracle after its assertion moves to the responsible Rust result owner |
+| `harness/vm/concurrent-exec-overlap.sh` | 76 | Starts concurrent containerd exec actions and asserts their results | Replace it with the shared actor and a Rust Kubernetes physical setup owner |
+| `harness/vm/convergence-cleanup.sh` | 89 | Collects diagnostics and removes the Helm release | Keep only bounded diagnostics and idempotent launcher cleanup |
+| `harness/vm/clock.sh` | 20 | Checks guest clock readiness | Keep as environment readiness while the VM launcher owns clock correction |
+| `harness/vm/runtime-hook-oracle.sh` | 172 | Checks installed, retained, and removed runtime-hook resources | Keep installation readiness only; move runtime decisions to Rust tests |
+| `harness/vm/providers/libvirt.sh` | 264 | Owns VM lifecycle and file transport | Keep as the environment provider |
+| `harness/vm/oidc-fixture.py` | 159 | Supplies the external OIDC test service | Keep as an external input; move approval assertions to Rust |
+| `harness/vm/manual.sh` | 141 | Opens a retained operator environment | Keep separate from automated qualification |
+
+### Tetragon patterns to use
+
+The local Tetragon tree at commit `dbb59576f` uses its standard Go test
+binary as the test authority in Kubernetes and kernel VMs. Its outer runners
+provision an environment, install the product, invoke selected tests, retain
+diagnostics on failure, and report test-harness results. The tests use the
+Kubernetes client and production agent endpoints for actions and assertions.
+
+Use these patterns:
+
+- [ ] Run the same standard Rust test executable on the local host, in a kernel
+  VM, and against a Kubernetes cluster.
+- [ ] Let the launcher select exact test names and pass environment inputs.
+  Do not let it parse Mithril domain results.
+- [ ] Let each Kubernetes Rust test use the existing `kube` client dependency
+  for Pod, policy, outage, and lifecycle actions.
+- [ ] Connect result checks to the deployed Control and Node endpoints. Do not
+  replace a deployed owner with an in-process test owner.
+- [ ] Start bounded result observation before the actor action when ordering
+  matters.
+- [ ] Create one namespace or resource set per test. Delete it with a bounded
+  wait.
+- [ ] Retain bounded logs, owner state, Kubernetes events, and last observed
+  values on failure. Remove successful-test artifacts unless retention is
+  requested.
+- [ ] Keep actor programs separate from test orchestration and reuse the same
+  actor across applicable environments.
+- [ ] Let a launcher attach to an existing cluster or provision a temporary
+  cluster without changing the test body.
+
+Do not copy Tetragon's feature builders, global runner, event-checker language,
+or option layers. Mithril uses direct `#[test]` functions and small concrete
+fixtures.
+
+### Required Kubernetes Rust scenarios
+
+Replace each group below with small standard Rust `#[test]` functions. One
+focused module can contain several related tests. Each test uses the same
+actor and shared result assertions as its lightweight pair.
+
+Single-node and guest cases:
+
+- [ ] K3s and CRI readiness: use a real Pod, containerd ID, image digest,
+  workload root, projected token, and overlay snapshotter.
+- [ ] CRI effect recovery: start the Pod before Node, require conservative
+  initial identity, recover the running binding, and check direct-CRI and
+  Kubernetes exec identities and effects.
+- [ ] Administrative exec: use real Control, Node, OIDC, TokenReview,
+  admission, approval, one-use slot consumption, replay denial, and restricted
+  direct-runtime fallback.
+- [ ] Replace native, direct-`runc`, kernel, local-effect, and local-network CLI
+  probes in `run.sh` with exact standard Rust test invocations as their
+  scenario owners migrate.
+
+Two-node convergence cases:
+
+- [ ] Node projection, scheduler selection, exact policy delivery, and exact
+  runtime target.
+- [ ] Node-first create admission, held runtime release, prepared activation,
+  and first application effect.
+- [ ] Workload-first running-container recovery and task-change retry.
+- [ ] Application, external, lifecycle, probe, PostStart, PreStop, and
+  administrative entry roles.
+- [ ] Incomplete declared-probe argv and unmatched entry denials.
+- [ ] Concurrent containerd exec, reader saturation, fail-closed effects, and
+  unchanged mount topology.
+- [ ] Stale mount-cache repair and unreachable-row retirement.
+- [ ] Runtime hook installer, forged installer, retained recovery, and binary
+  upgrade decisions.
+- [ ] Live policy replacement, running task migration, predecessor retention,
+  and acknowledgement.
+- [ ] One-use, overlap, expiry, revocation, maximum-bound, recreation, and
+  target-retirement exception behavior.
+- [ ] Unavailable runtime-admission endpoint denial and later release.
+- [ ] Container restart with fresh runtime binding, prepared entry, and task
+  identity.
+- [ ] Node process restart with active policy and runtime binding recovery.
+- [ ] Node UID replacement, unready-node quarantine, and DaemonSet selector
+  derivation.
+- [ ] Host reboot with a new boot identity, label epoch, Pod UID, and root
+  policy chain.
+- [ ] Control restart, desired-inventory cleanup, stale-close non-replay, and
+  fresh root activation.
+
+Two-node outage cases:
+
+- [ ] Control outage keeps local denial active and blocks new protected Pods.
+- [ ] Node WAL retains unacknowledged evidence across a Node restart and
+  truncates only after the Control acknowledgement.
+- [ ] Control storage failure withholds acknowledgement and replays the exact
+  retained evidence after storage recovery.
+- [ ] Node-to-Control network partition keeps the predecessor policy, then
+  converges the replacement after reconnect.
+- [ ] Kubernetes API outage keeps worker denial active and converges after the
+  API returns.
+- [ ] Compacted and interrupted Kubernetes watches relist without restarting
+  Control and do not replay a deleted policy UID.
+
+Two-node network cases:
+
+- [ ] Node A to Node B uses the shared network actor and Rust result
+  assertions.
+- [ ] Node B to Node A uses the same actor and assertions in a separate test.
+
+### Harness completion gates
+
+- [ ] Build and copy the standard Rust test executable to every physical VM.
+- [ ] Invoke every privileged scenario by its exact Rust test name.
+- [ ] Keep Bash and Python launchers limited to environment provisioning,
+  physical fault injection, test invocation, diagnostics, and cleanup.
+- [ ] Remove all `jq`, `grep`, and shell-condition scenario assertions after
+  their Rust replacement passes.
+- [ ] Remove each obsolete CLI scenario command after its exact Rust test
+  replaces it.
+- [ ] Keep each physical fault visible in its Rust test inputs and test name.
+- [ ] Run the lightweight test before its paired Kubernetes test.
+- [ ] Confirm that no automated shell or Python file owns a Mithril result
+  assertion or reproduces a Control or Node production sequence.
+
 ## Acceptance reset
 
 The previous migration checkmarks are not accepted. The changes moved test
@@ -325,8 +476,10 @@ count as maintainability migrations.
   environment-specific setup separate from shared result assertions.
 - [ ] Make Control, Node, and actor start or stop independently so outage and
   restart order stays explicit in each scenario.
-- [ ] Keep host and direct-`runc` placement in Rust. Keep Kubernetes placement
-  in a small Python harness. Use the same actor file in all three placements.
+- [ ] Keep host, direct-`runc`, and Kubernetes placement in focused Rust
+  physical setup owners. Keep VM and Kubernetes shell or Python launchers
+  limited to provisioning and exact test invocation. Use the same actor file
+  in all three placements.
 - [x] Put the existing Control TLS lifecycle owner in one small shared module.
   Reuse it for production Control and Node connections.
 - [x] Keep one synchronous readiness function with an exact timeout, resource
@@ -536,9 +689,11 @@ command passes.
 - [ ] Node-first PID reuse: keep a small standard Rust test, one shared Python
   actor, one shared result assertion, environment-specific physical setup,
   and thin VM and Kubernetes launchers. Start Control and Node, install the
-  production binding and policy, and require readiness before the actor
-  enters. Keep the two namespace-PID actions and fresh process identity
-  checks visible.
+  production policy, and require readiness before the actor enters. The
+  Kubernetes form must send the actor's real runtime event through the
+  deployed Node admission path. Lightweight and direct-`runc` forms can call
+  the same public production owners directly. Keep the two namespace-PID
+  actions and fresh process identity checks visible.
 - [ ] TID reuse: use one Python actor through `ProcessFixture`. Keep the two
   namespace-TID actions, exact thread coordinates, and tombstone checks
   visible in a separate small scenario file.
