@@ -216,7 +216,7 @@ mod tests {
     use crate::error::{InvalidInputSnafu, IoSnafu};
 
     #[test]
-    fn readiness_reports_diagnostics_and_directory_cleanup_is_idempotent() -> crate::Result<()> {
+    fn readiness_reports_cleanup() -> crate::Result<()> {
         let temporary_path = Path::new("temporary readiness directory");
         let parent = tempfile::tempdir().context(IoSnafu {
             path: temporary_path,
@@ -247,7 +247,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn async_readiness_yields_until_the_fixture_is_ready() -> crate::Result<()> {
+    async fn async_wait_yields() -> crate::Result<()> {
         let path = Path::new("async readiness fixture");
         let mut inspections = 0;
         wait_for_async(

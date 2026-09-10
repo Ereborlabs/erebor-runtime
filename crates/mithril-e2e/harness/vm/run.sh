@@ -198,6 +198,21 @@ else
     cargo rustc --locked -p mithril-node --bin mithril-oci-hook -- \
       -C target-feature=+crt-static)
 
+  test_json=$(cd -- "$repo_root" && cargo test --locked -p mithril-e2e \
+    --lib --no-run --message-format=json)
+  test_bin=$(jq -r '
+    select(
+      .reason == "compiler-artifact" and
+      .profile.test == true and
+      .target.name == "mithril_e2e" and
+      .executable != null
+    ) | .executable
+  ' <<<"$test_json")
+  [[ -x $test_bin ]] || {
+    echo "the Mithril Rust test executable was not built: $test_bin" >&2
+    exit 1
+  }
+
   open_probe_target=$work_directory/open-probe-build
   mkdir -p -- "$open_probe_target"
   rustc --edition=2021 -C target-feature=+crt-static \
@@ -278,6 +293,7 @@ fi
 
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-identity-test" \
   "$remote_bin/mithril-identity-test"
+"$provider" put "$vm_name" "$test_bin" "$remote_bin/mithril-e2e-tests"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-effect-test" \
   "$remote_bin/mithril-effect-test"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-network-test" \

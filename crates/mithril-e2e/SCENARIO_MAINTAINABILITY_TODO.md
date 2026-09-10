@@ -250,8 +250,6 @@ more than five name components:
 - `authorization_replay_fixture_persists_exact_rejections_and_fresh_control`
 - `production_object_and_identity_fixture_allocation_are_exact`
 - `kubernetes_network_probe_container_no_task`
-- `readiness_reports_diagnostics_and_directory_cleanup_is_idempotent`
-- `async_readiness_yields_until_the_fixture_is_ready`
 
 The same diff adds or relocates these local variables with more than three
 name components:
@@ -324,6 +322,9 @@ count as maintainability migrations.
 - [ ] Execute the same Python process file from production-backed host,
   direct-`runc`, and Kubernetes tests when the behavior applies. Do not count
   an actor-only test as coverage.
+- [x] Build the standard Rust libtest executable and copy it into each fresh
+  single-node VM. Scenario migrations must invoke each privileged test by its
+  exact test name.
 - [x] Copy all shared Python process programs into each fresh single-node VM.
 - [x] Add fresh-directory construction to the existing `ProbeDirectory`
   owner.
@@ -740,8 +741,8 @@ keep an actor-only duplicate only to preserve the old name.
 The current tree also has nineteen tests added after the baseline. Keep these
 five generic owner tests:
 
-- `physical.rs::async_readiness_yields_until_the_fixture_is_ready`
-- `physical.rs::readiness_reports_diagnostics_and_directory_cleanup_is_idempotent`
+- `physical.rs::async_wait_yields`
+- `physical.rs::readiness_reports_cleanup`
 - `process/tests.rs::exit_reports_stderr`
 - `process/tests.rs::python_start_stop`
 - `process/tests.rs::stop_kills_actor`
