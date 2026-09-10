@@ -44,6 +44,7 @@ const CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
 const NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
 const POD_UID: &str = "99999999-9999-4999-8999-999999999999";
 const NODE_UID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const ACTOR_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 pub(crate) struct Host {
     root: PathBuf,
@@ -109,8 +110,12 @@ impl Host {
         &self.admit_path
     }
 
-    pub(super) fn runtime_id(&self) -> TestResult<&str> {
-        Ok(&self.binding()?.container_id)
+    pub(super) fn actor_id(&self) -> &str {
+        ACTOR_ID
+    }
+
+    pub(super) fn has_policy(&self) -> bool {
+        self.binding.is_some()
     }
 
     pub(super) fn annotations(&self) -> TestResult<BTreeMap<String, String>> {
@@ -375,7 +380,7 @@ impl Platform for Host {
             container_runtime: Some(ContainerRuntimeConfig {
                 socket_path: self.cri_path.clone(),
                 effect_controller_cgroup_path: self.node_path.clone(),
-                reconciliation_interval_ms: 60_000,
+                reconciliation_interval_ms: 100,
             }),
             workload_bindings: Vec::new(),
             policy_candidates: Vec::new(),
@@ -540,7 +545,7 @@ impl Platform for Host {
             }
         );
 
-        let container_id = "a".repeat(64);
+        let container_id = ACTOR_ID.to_owned();
         self.revision = Some(source.policy_source_revision_id);
         self.binding = Some(WorkloadBindingConfig {
             binding_id: ScheduledRuntimeBindingV1::runtime_binding_id(&authority, &container_id),

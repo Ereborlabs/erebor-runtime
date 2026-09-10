@@ -183,7 +183,6 @@ impl Platform for Runc {
         });
         config["root"]["path"] = json!("rootfs");
         config["root"]["readonly"] = json!(false);
-        config["annotations"] = json!(self.host.annotations()?);
         let cgroup = self
             .host
             .cgroup()
@@ -201,41 +200,46 @@ impl Platform for Runc {
         }
         Self::mount(&mut config, fixtures, "/fixtures", false)?;
         Self::mount(&mut config, self.host.work(), "/work", true)?;
-        for (source, writable) in [
-            (
-                self.hook_path
-                    .parent()
-                    .ok_or("the OCI hook has no parent directory")?,
-                false,
-            ),
-            (
-                self.host
-                    .admit_path()
-                    .parent()
-                    .ok_or("the admission socket has no parent directory")?,
-                true,
-            ),
-        ] {
-            let relative = source.strip_prefix("/")?;
-            fs::create_dir_all(rootfs.join(relative))?;
-            let target = source
-                .to_str()
-                .ok_or("a runc mount path is not valid UTF-8")?;
-            Self::mount(&mut config, source, target, writable)?;
-        }
-        let config = OciBaseSpecOwner::build(
-            &serde_json::to_vec(&config)?,
-            &self.hook_path,
-            &self.manifest_path,
-            self.host.admit_path(),
-            5_000,
-            6,
-            "info",
-        )?;
+        let config = if self.host.has_policy() {
+            config["annotations"] = json!(self.host.annotations()?);
+            for (source, writable) in [
+                (
+                    self.hook_path
+                        .parent()
+                        .ok_or("the OCI hook has no parent directory")?,
+                    false,
+                ),
+                (
+                    self.host
+                        .admit_path()
+                        .parent()
+                        .ok_or("the admission socket has no parent directory")?,
+                    true,
+                ),
+            ] {
+                let relative = source.strip_prefix("/")?;
+                fs::create_dir_all(rootfs.join(relative))?;
+                let target = source
+                    .to_str()
+                    .ok_or("a runc mount path is not valid UTF-8")?;
+                Self::mount(&mut config, source, target, writable)?;
+            }
+            self.host.observe()?;
+            OciBaseSpecOwner::build(
+                &serde_json::to_vec(&config)?,
+                &self.hook_path,
+                &self.manifest_path,
+                self.host.admit_path(),
+                5_000,
+                6,
+                "info",
+            )?
+        } else {
+            serde_json::to_vec_pretty(&config)?
+        };
         fs::write(&path, config)?;
-        self.host.observe()?;
 
-        let id = self.host.runtime_id()?.to_owned();
+        let id = self.host.actor_id().to_owned();
         self.container_id = Some(id.clone());
         let mut command = Command::new(&self.runc_path);
         command
