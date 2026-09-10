@@ -18,7 +18,7 @@ use self::result::ReuseResult;
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[cfg(test)]
-#[platform_test(host)]
+#[platform_test(host, runc)]
 fn tid_reuse_is_fresh<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("tid-reuse")?;
     env.start_control()?;

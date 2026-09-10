@@ -759,7 +759,7 @@ command passes.
   - [x] The Host generated case passes in the retained privileged VM.
   - [x] Remove the TID behavior from `IdentityTestRunner::physical_probe`.
     The old bundle reads only the asserted compatibility result.
-  - [ ] The direct-`runc` generated case passes with the same Python actor.
+  - [x] The direct-`runc` generated case passes with the same Python actor.
   - [ ] The Kubernetes generated case passes with the same Python actor.
 - [ ] Workload-first recovery: create the cgroup and one ready Python actor
   before Node starts. Use the public production recovery operation. Keep the
