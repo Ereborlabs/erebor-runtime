@@ -1,9 +1,11 @@
 use std::env;
 use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use erebor_interceptor::KernelStateReader;
+use mithril_node::OciBaseSpecOwner;
 use serde_json::{json, Value};
 
 use super::{Host, Platform, Task, TestResult};
@@ -15,6 +17,8 @@ pub(crate) struct Runc {
     runc_path: PathBuf,
     state_path: PathBuf,
     bundle_path: PathBuf,
+    hook_path: PathBuf,
+    manifest_path: PathBuf,
     cleanup: Option<ProbeDirectory>,
     container_id: Option<String>,
 }
@@ -51,6 +55,18 @@ impl Runc {
         Ok(())
     }
 
+    fn state(&self, id: &str) -> TestResult<Value> {
+        let mut command = Command::new(&self.runc_path);
+        command
+            .arg("--root")
+            .arg(&self.state_path)
+            .args(["state", id]);
+        Ok(serde_json::from_slice(&Self::run(
+            &mut command,
+            &self.runc_path,
+        )?)?)
+    }
+
     fn close(&mut self) -> TestResult<()> {
         let deleted = if let Some(id) = self.container_id.take() {
             let mut command = Command::new(&self.runc_path);
@@ -72,7 +88,7 @@ impl Runc {
 
 impl Platform for Runc {
     fn setup(name: &str) -> TestResult<Self> {
-        let host = Host::setup(name)?;
+        let mut host = Host::setup(name)?;
         let runc_path = env::var_os("MITHRIL_TEST_RUNC")
             .map(PathBuf::from)
             .ok_or("MITHRIL_TEST_RUNC is not set")?;
@@ -83,9 +99,26 @@ impl Platform for Runc {
         let cleanup = ProbeDirectory::create(&dir_path)?;
         let state_path = dir_path.join("state");
         let bundle_path = dir_path.join("bundle");
+        let hook_dir = dir_path.join("hook");
         fs::create_dir(&state_path)?;
         fs::create_dir(&bundle_path)?;
+        fs::create_dir(&hook_dir)?;
         fs::create_dir(bundle_path.join("rootfs"))?;
+        let hook_src = env::var_os("MITHRIL_TEST_OCI_HOOK")
+            .map(PathBuf::from)
+            .ok_or("MITHRIL_TEST_OCI_HOOK is not set")?;
+        if !hook_src.is_file() {
+            return Err(format!("OCI hook is missing: {}", hook_src.display()).into());
+        }
+        let hook_path = hook_dir.join("mithril-oci-hook");
+        fs::copy(&hook_src, &hook_path)?;
+        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755))?;
+        let manifest_src = host
+            .source()
+            .join("crates/mithril-e2e/fixtures/convergence/direct-runc-recovery-v1.json");
+        let manifest_path = hook_dir.join("runtime-recovery.json");
+        fs::copy(&manifest_src, &manifest_path)?;
+        host.set_hook(&hook_path);
         let mut command = Command::new(&runc_path);
         command.arg("spec").arg("--bundle").arg(&bundle_path);
         Self::run(&mut command, &runc_path)?;
@@ -94,6 +127,8 @@ impl Platform for Runc {
             runc_path,
             state_path,
             bundle_path,
+            hook_path,
+            manifest_path,
             cleanup: Some(cleanup),
             container_id: None,
         })
@@ -148,6 +183,7 @@ impl Platform for Runc {
         });
         config["root"]["path"] = json!("rootfs");
         config["root"]["readonly"] = json!(false);
+        config["annotations"] = json!(self.host.annotations()?);
         let cgroup = self
             .host
             .cgroup()
@@ -165,9 +201,41 @@ impl Platform for Runc {
         }
         Self::mount(&mut config, fixtures, "/fixtures", false)?;
         Self::mount(&mut config, self.host.work(), "/work", true)?;
-        fs::write(&path, serde_json::to_vec_pretty(&config)?)?;
+        for (source, writable) in [
+            (
+                self.hook_path
+                    .parent()
+                    .ok_or("the OCI hook has no parent directory")?,
+                false,
+            ),
+            (
+                self.host
+                    .admit_path()
+                    .parent()
+                    .ok_or("the admission socket has no parent directory")?,
+                true,
+            ),
+        ] {
+            let relative = source.strip_prefix("/")?;
+            fs::create_dir_all(rootfs.join(relative))?;
+            let target = source
+                .to_str()
+                .ok_or("a runc mount path is not valid UTF-8")?;
+            Self::mount(&mut config, source, target, writable)?;
+        }
+        let config = OciBaseSpecOwner::build(
+            &serde_json::to_vec(&config)?,
+            &self.hook_path,
+            &self.manifest_path,
+            self.host.admit_path(),
+            5_000,
+            6,
+            "info",
+        )?;
+        fs::write(&path, config)?;
+        self.host.observe()?;
 
-        let id = format!("mithril-{name}-{}", std::process::id());
+        let id = self.host.runtime_id()?.to_owned();
         self.container_id = Some(id.clone());
         let mut command = Command::new(&self.runc_path);
         command
@@ -177,12 +245,7 @@ impl Platform for Runc {
             .arg(&self.bundle_path)
             .arg(&id);
         let mut actor = ProcessFixture::start(&mut command, &script)?;
-        let mut state = Command::new(&self.runc_path);
-        state
-            .arg("--root")
-            .arg(&self.state_path)
-            .args(["state", &id]);
-        let state: Value = serde_json::from_slice(&Self::run(&mut state, &self.runc_path)?)?;
+        let state = self.state(&id)?;
         let pid = state["pid"]
             .as_u64()
             .and_then(|pid| u32::try_from(pid).ok())
@@ -211,11 +274,27 @@ impl Platform for Runc {
     }
 
     fn stage(&mut self) -> TestResult<()> {
-        self.host.stage()
+        let id = self
+            .container_id
+            .as_deref()
+            .ok_or("the runc actor is not started")?;
+        let state = self.state(id)?;
+        if state["status"].as_str() != Some("running") {
+            return Err(format!("the admitted runc actor is not running: {state}").into());
+        }
+        Ok(())
     }
 
     fn admit(&mut self, pid: u32) -> TestResult<()> {
-        self.host.admit(pid)
+        let task = self.host.task(pid, "direct runc admission")?;
+        let binding = task
+            .snapshot
+            .runtime_binding
+            .ok_or("the direct runc actor has no runtime binding")?;
+        if binding.lifecycle_state != "active" {
+            return Err(format!("the direct runc binding is not active: {binding:?}").into());
+        }
+        Ok(())
     }
 
     fn task(&mut self, pid: u32, name: &str) -> TestResult<Task> {

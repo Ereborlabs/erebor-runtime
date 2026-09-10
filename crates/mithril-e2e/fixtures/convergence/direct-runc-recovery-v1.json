@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "executable": "/usr/local/bin/mithril-node",
+      "args": [
+        "/usr/local/bin/mithril-node",
+        "--config",
+        "/etc/mithril/node.json"
+      ],
+      "requiredMounts": [
+        {
+          "source": "/etc/mithril/node.json",
+          "destination": "/etc/mithril/node.json",
+          "readOnly": true
+        }
+      ]
+    }
+  ]
+}

@@ -58,6 +58,7 @@ pub(crate) struct Host {
     admit_path: PathBuf,
     work: Option<ProbeDirectory>,
     state: Option<ProbeDirectory>,
+    admit: Option<ProbeDirectory>,
     cgroup: Option<ProbeCgroup>,
     node_cgroup: Option<ProbeCgroup>,
     pin: Option<ProbeDirectory>,
@@ -76,6 +77,7 @@ pub(crate) struct Host {
     inspector: NativeIdentityInspector,
     reader: KernelStateReader,
     runtime: tokio::runtime::Runtime,
+    hook_path: PathBuf,
 }
 
 impl Host {
@@ -99,16 +101,59 @@ impl Host {
         &self.cgroup_path
     }
 
+    pub(super) fn set_hook(&mut self, path: &Path) {
+        self.hook_path = path.to_owned();
+    }
+
+    pub(super) fn admit_path(&self) -> &Path {
+        &self.admit_path
+    }
+
+    pub(super) fn runtime_id(&self) -> TestResult<&str> {
+        Ok(&self.binding()?.container_id)
+    }
+
+    pub(super) fn annotations(&self) -> TestResult<BTreeMap<String, String>> {
+        let binding = self.binding()?;
+        let revision = self
+            .revision
+            .as_ref()
+            .ok_or("the policy revision is not installed")?;
+        Ok(BTreeMap::from([
+            (
+                POD_NAMESPACE_ANNOTATION.to_owned(),
+                binding.namespace.clone(),
+            ),
+            (POD_UID_ANNOTATION.to_owned(), binding.pod_uid.clone()),
+            (
+                CONTAINER_NAME_ANNOTATION.to_owned(),
+                binding.container_name.clone(),
+            ),
+            (
+                IMAGE_NAME_ANNOTATION.to_owned(),
+                format!("fixture@{}", binding.image_digest),
+            ),
+            (SANDBOX_ID_ANNOTATION.to_owned(), binding.sandbox_id.clone()),
+            (PROFILE_ID_ANNOTATION.to_owned(), binding.profile_id.clone()),
+            (
+                POLICY_SOURCE_REVISION_ANNOTATION.to_owned(),
+                revision.clone(),
+            ),
+        ]))
+    }
+
+    pub(super) fn observe(&mut self) -> TestResult<()> {
+        let value = runtime_observation(self.binding()?, 0, ContainerState::ContainerCreated)?;
+        self.cri.as_ref().ok_or("CRI is not running")?.set(value)?;
+        Ok(())
+    }
+
     fn request(
         &self,
         operation: RuntimeAdmissionOperationV1,
         pid: Option<u32>,
     ) -> TestResult<RuntimeAdmissionRequestV1> {
         let binding = self.binding()?;
-        let revision = self
-            .revision
-            .as_ref()
-            .ok_or("the policy revision is not installed")?;
         Ok(RuntimeAdmissionRequestV1 {
             operation,
             container_id: binding.container_id.clone(),
@@ -117,27 +162,7 @@ impl Host {
                 .then(|| self.cgroup_path.clone()),
             oci_bundle: None,
             oci_root_fd: None,
-            annotations: BTreeMap::from([
-                (
-                    POD_NAMESPACE_ANNOTATION.to_owned(),
-                    binding.namespace.clone(),
-                ),
-                (POD_UID_ANNOTATION.to_owned(), binding.pod_uid.clone()),
-                (
-                    CONTAINER_NAME_ANNOTATION.to_owned(),
-                    binding.container_name.clone(),
-                ),
-                (
-                    IMAGE_NAME_ANNOTATION.to_owned(),
-                    format!("fixture@{}", binding.image_digest),
-                ),
-                (SANDBOX_ID_ANNOTATION.to_owned(), binding.sandbox_id.clone()),
-                (PROFILE_ID_ANNOTATION.to_owned(), binding.profile_id.clone()),
-                (
-                    POLICY_SOURCE_REVISION_ANNOTATION.to_owned(),
-                    revision.clone(),
-                ),
-            ]),
+            annotations: self.annotations()?,
         })
     }
 
@@ -176,6 +201,9 @@ impl Host {
         if let Some(cgroup) = self.node_cgroup.take() {
             cgroup.cleanup()?;
         }
+        if let Some(admit) = self.admit.take() {
+            admit.cleanup()?;
+        }
         if let Some(work) = self.work.take() {
             work.cleanup()?;
         }
@@ -209,7 +237,8 @@ impl Platform for Host {
         );
         let node_path = cgroup_path.with_file_name(node_name);
         let cri_path = out.join("cri.sock");
-        let admit_path = out.join("admission.sock");
+        let admit_dir = out.join("admission");
+        let admit_path = admit_dir.join("runtime.sock");
         ensure!(
             !out.exists() || out.is_dir(),
             InvalidInputSnafu {
@@ -222,6 +251,7 @@ impl Platform for Host {
         let state_path = out.join("node");
         let work = ProbeDirectory::create(&work_path)?;
         let state = ProbeDirectory::create(&state_path)?;
+        let admit = ProbeDirectory::create(&admit_dir)?;
         let cgroup = ProbeCgroup::create(&cgroup_path)?;
         let mut node_cgroup = ProbeCgroup::create(&node_path)?;
         node_cgroup.enter()?;
@@ -243,6 +273,7 @@ impl Platform for Host {
             admit_path,
             work: Some(work),
             state: Some(state),
+            admit: Some(admit),
             cgroup: Some(cgroup),
             node_cgroup: Some(node_cgroup),
             pin: Some(ProbeDirectory::new(&pin_path)),
@@ -261,6 +292,7 @@ impl Platform for Host {
             inspector,
             reader,
             runtime,
+            hook_path: env::current_exe()?,
         })
     }
 
@@ -336,7 +368,7 @@ impl Platform for Host {
             runtime_observation: None,
             runtime_admission: Some(RuntimeAdmissionConfig {
                 socket_path: self.admit_path.clone(),
-                trusted_start_hook_path: env::current_exe()?,
+                trusted_start_hook_path: self.hook_path.clone(),
                 maximum_request_bytes: 64 * 1_024,
                 timeout_ms: 5_000,
             }),
@@ -602,8 +634,7 @@ impl Platform for Host {
     }
 
     fn stage(&mut self) -> TestResult<()> {
-        let value = runtime_observation(self.binding()?, 0, ContainerState::ContainerCreated)?;
-        self.cri.as_ref().ok_or("CRI is not running")?.set(value)?;
+        self.observe()?;
         let client = RuntimeAdmissionClient::new(self.admit_path.clone(), READY_LIMIT)?;
         let request = self.request(RuntimeAdmissionOperationV1::StageRuntimeFacts, None)?;
         let response = self.runtime.block_on(client.submit(&request))?;
