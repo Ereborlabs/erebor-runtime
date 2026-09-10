@@ -43,6 +43,25 @@ These rules control every checkmark and commit in this file.
 - Dismantle `IdentityTestRunner::physical_probe` and the other monolithic
   probes one verified scenario at a time. Moving their bodies is not enough.
 
+The required test shape keeps the behavior visible. This example shows the
+shape only. It does not define a new test API:
+
+```rust
+#[test]
+fn secret_read_is_denied() -> Result<()> {
+    let mut env = TestEnv::host(root, "read_secret.py")?;
+    env.control.stop()?;
+    env.actor.send(b"read\n")?;
+    let result = env.node.public_operation(env.actor.id())?;
+    assert_eq!(result, expected);
+    env.stop()
+}
+```
+
+Replace `public_operation` with the real public production operation. Keep
+policy delivery, binding reconciliation, recovery, admission, and evidence
+acknowledgement in the test when that operation is under test.
+
 ### Rust test execution
 
 - Use the standard Rust test harness. `cargo test --no-run` must compile the
@@ -160,51 +179,7 @@ These rules control every checkmark and commit in this file.
 - Do not claim completion until every Rust source file is below 2,000 lines
   and all required lightweight and Kubernetes checks pass.
 
-## Scenario model
-
-Every scenario has the same three components:
-
-- Control, through the real `mithril-control` owner.
-- Node, through the real `mithril-node` owner.
-- One Python actor process in a host, `runc`, or Kubernetes environment.
-
-The environment owner holds paths, component handles, readiness state, and
-cleanup state. It exposes direct start and stop operations for Control, Node,
-and the actor. It does not deliver policy, reconcile a binding, publish an
-identity, acknowledge evidence, or perform another production sequence for
-the scenario.
-
-The actor file performs one physical action. Use the same actor file for the
-host, `runc`, and Kubernetes forms of that case. Environment code changes
-placement and component availability only. It does not change the action or
-the production operation under test.
-
-Do not add an environment trait, scenario registry, command language, or
-backend matrix. Use small concrete owners in Rust and Python. Give each owner
-one `start` path, direct component stop operations, and one idempotent `stop`
-path.
-
-The rejected shape hides the test behind a stateful free function:
-
-```rust
-let result = scenario::run(self, &host, &node, &binding, &path, &ready)?;
-```
-
-The required shape keeps the case visible:
-
-```rust
-let mut env = TestEnv::host(root, "read_secret.py")?;
-env.control.stop().await?;
-env.actor.release()?;
-let result = node.public_operation(env.actor.pid())?;
-ensure!(result == expected, InvalidInputSnafu { path, reason });
-env.stop().await?;
-```
-
-The example is a shape, not a new test API. Each scenario must call the real
-public production operation in place of `public_operation`.
-
-## Measured suite
+## Baseline measured suite
 
 The inspection covers all 27 Rust source files in `crates/mithril-e2e/src`.
 The files contain 41,790 lines. `cargo test -p mithril-e2e --lib -- --list`
@@ -253,6 +228,66 @@ owners are:
 | `EffectTestRunner::recovered_container_entry_probe` | 1,028 | `two-node-convergence.sh` recovered-container entry lane |
 | `IdentityTestRunner::physical_kubernetes_probe` and its private cases | 4,900 combined | `run.sh --with-k3s` identity lane |
 
+## Current compliance audit
+
+The current tree does not meet the size or naming gates. Do not mark the work
+complete while these entries remain.
+
+These Rust files exceed 2,000 lines:
+
+| Source | Current lines |
+| --- | ---: |
+| `effect/runc.rs` | 8,414 |
+| `identity.rs` | 8,224 |
+| `effect.rs` | 5,118 |
+| `effect/child.rs` | 4,472 |
+| `control_tls.rs` | 3,018 |
+| `effect/network.rs` | 2,329 |
+
+The diff from `95775f48` adds or relocates these private test functions with
+more than five name components:
+
+- `authorization_replay_fixture_persists_exact_rejections_and_fresh_control`
+- `production_object_and_identity_fixture_allocation_are_exact`
+- `kubernetes_network_probe_container_no_task`
+- `readiness_reports_diagnostics_and_directory_cleanup_is_idempotent`
+- `async_readiness_yields_until_the_fixture_is_ready`
+
+The same diff adds or relocates these local variables with more than three
+name components:
+
+- `clone_child_mount_namespace_path`
+- `clone_child_mount_namespace`
+- `clone_child_comm_path`
+- `clone_native_child_after_namespace_move`
+- `clone_child_mount_namespace_after`
+- `cgroup_escape_unmoved_control`
+- `cgroup_escape_unmoved_root`
+- `health_before_cgroup_escape`
+- `health_after_cgroup_escape`
+- `health_after_cgroup_escape_effect`
+- `clone_first_effect_fixture`
+- `clone_into_cgroup_first_effect_root`
+- `clone_into_cgroup_first_effect_child_pid`
+- `clone_into_cgroup_first_effect_child`
+- `profile_task_refs_after_exit`
+- `cgroup_reuse_first_root_id`
+- `cgroup_reuse_first_binding`
+- `retired_pin_root_owner_rejected`
+- `live_manifest_mismatch_detected`
+- `map_ids_stable_across_restart`
+- `cgroup_reuse_second_root`
+- `cgroup_reuse_second_root_id`
+- `cgroup_reuse_second_binding`
+- `cgroup_reuse_fresh_identity`
+- `allowed_before_target_install`
+- `denied_after_target_install`
+- `allowed_after_target_clear`
+
+Public production fields and public result-schema fields are excluded from
+this audit. Shorten or delete every listed private identifier as its owning
+behavior is replaced. Do not add a new violation in an intermediate commit.
+
 ## Acceptance reset
 
 The previous migration checkmarks are not accepted. The changes moved test
@@ -263,40 +298,6 @@ the rules below before it receives a checkmark.
 
 The baseline reliability records remain as failure evidence. They do not
 count as maintainability migrations.
-
-## Shape rules
-
-- Prefer one small test per security behavior.
-- Prefer a small file when it has one fixture or scenario responsibility.
-- Keep each Rust source file below 2,000 lines.
-- Keep a larger file only when a split would separate an action from its
-  assertion or hide the production call order.
-- Keep fixture setup, action, and assertion visible in the test.
-- Put resource allocation, readiness, diagnostic capture, and cleanup in
-  simple fixture owners.
-- Use `ProcessFixture` as the one process lifecycle owner for identity,
-  direct `runc`, and containerd tests. Do not add a native-process lifecycle
-  wrapper or a second kill-and-wait implementation.
-- Make one start call return a ready process. Make one fallible stop call
-  complete normal cleanup. Keep `Drop` as an idempotent fallback.
-- Put reusable process programs in small files under `fixtures/process`.
-  Use actual Python files for identity and direct-runtime process behavior.
-  Do not put process programs in Rust strings or shell `-c` arguments. Do not
-  add embedded or copied variants.
-- Put stateful scenario behavior on its runner or a specific scenario owner.
-  Do not move it to a loose `run` function with a list of borrowed owners.
-- Keep changed private function names to five or fewer underscore-separated
-  components. Keep changed variable names to three or fewer components. Do
-  not rename a public production API or a result-schema field for this rule.
-- A migrated scenario must be easier to read at its call site. It must show
-  the fixture setup, public production operations, physical action, security
-  assertions, and stop operation without unrelated orchestration.
-- Do not put policy delivery, binding reconciliation, admission, recovery,
-  evidence acknowledgement, or another production sequence in a test helper.
-- Do not add a fixture trait, builder, macro, scenario registry, or custom
-  assertion language.
-- Preserve every fail-closed, attribution, lifecycle, replay, and cleanup
-  assertion.
 
 ## Common tooling deliverable
 
@@ -789,13 +790,5 @@ cargo test -p mithril-e2e <exact-test-name> -- --exact
   -> bash .github/scripts/verify-rust-ci.sh
 ```
 
-The lightweight case must pass before its paired Kubernetes case. If
-Kubernetes finds a condition that the lightweight case did not detect, stop.
-Add the exact condition and expected result to lightweight qualification. Make
-that case pass before an implementation change or Kubernetes retry.
-
-## Commit rule
-
-Commit the common tooling after its focused checks pass. Then commit each
-small scenario or behavior group separately after its focused lightweight
-check passes. Do not combine all scenario migrations into one commit.
+Apply the Kubernetes gate in the binding acceptance rules before each paired
+physical command.
