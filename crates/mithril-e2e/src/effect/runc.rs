@@ -1,6 +1,6 @@
 mod process;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::{BufRead as _, BufReader, Write as _};
@@ -26,9 +26,7 @@ use erebor_interceptor_abi::{
     EXECUTION_APPROVAL_TRACE_STAGE_EXECVE_ENTRY_V1,
 };
 use erebor_runtime_ipc::v1::MithrilEffectObservation;
-use k8s_cri::v1::{
-    Container, ContainerMetadata, ContainerState, ContainerStatus, ContainerStatusResponse,
-};
+use k8s_cri::v1::ContainerState;
 use mithril_control::{
     encode_administrative_authorization_fixture, lower_kubernetes_policy, policy_custom_resource,
     CapabilityRecord, KubernetesWorkloadIdentityV1, PolicyBundleV1, PolicyDeliveryCandidateV1,
@@ -37,13 +35,13 @@ use mithril_control::{
     WorkloadProtectionPolicySpec, WorkloadTargetFactV1,
 };
 use mithril_node::{
-    AdministrativeAuthorizationConfig, AdministrativeExecTestOwner,
-    CriRuntimeContainerObservationV1, EffectObservationStore, EvidenceWalCapacityPolicyV1,
-    EvidenceWalLimits, NativeIdentityInspector, NativeSecurityStateOwner, NativeTaskSnapshotV1,
-    NodeBindingReconciliation, NodePolicyDeliveryOwner, NodePolicyGenerationOwner,
-    ObservationCanonicalizer, RuntimeSeccompTestNotification, RuntimeSeccompTestServer,
-    ScheduledRuntimeBindingV1, TrustCache, WorkloadBindingConfig, WorkloadBindingOwner,
-    CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
+    AdministrativeAuthorizationConfig, AdministrativeExecTestOwner, EffectObservationStore,
+    EvidenceWalCapacityPolicyV1, EvidenceWalLimits, NativeIdentityInspector,
+    NativeSecurityStateOwner, NativeTaskSnapshotV1, NodeBindingReconciliation,
+    NodePolicyDeliveryOwner, NodePolicyGenerationOwner, ObservationCanonicalizer,
+    RuntimeSeccompTestNotification, RuntimeSeccompTestServer, ScheduledRuntimeBindingV1,
+    TrustCache, WorkloadBindingConfig, WorkloadBindingOwner, CONTAINER_NAME_ANNOTATION,
+    IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
     POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
 };
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
@@ -69,6 +67,7 @@ use crate::error::{
 use crate::identity::IdentityTestRunner;
 use crate::physical::{boot_identity, wait_for, ProbeDirectory, ProbeFile};
 use crate::process::ProcessFixture;
+use crate::runtime_input::runtime_observation;
 use crate::{DigestV1, Result};
 
 const WAIT_LIMIT: Duration = Duration::from_secs(30);
@@ -2780,7 +2779,8 @@ impl EffectTestRunner {
                 reason: "BPF started recovery before CRI published the concrete binding",
             }
         );
-        let runtime_observation = running_container_observation(&binding, initial_host_pid)?;
+        let runtime_observation =
+            runtime_observation(&binding, initial_host_pid, ContainerState::ContainerRunning)?;
         let observer_result = output_directory.join("recovered-exit-before.json");
         let mut observer = Command::new(env::current_exe().context(IoSnafu { path: pin_root })?)
             .arg("recovery-task-exit")
@@ -3953,17 +3953,7 @@ impl EffectTestRunner {
             "initial policy generation install: {:?}",
             policy_start.elapsed()
         );
-        let mut observation = running_container_observation(&binding, 0)?;
-        observation.listed.state = ContainerState::ContainerCreated as i32;
-        observation
-            .status
-            .status
-            .as_mut()
-            .context(InvalidInputSnafu {
-                path: &fixture_root,
-                reason: "the held fixture has no CRI status",
-            })?
-            .state = ContainerState::ContainerCreated as i32;
+        let observation = runtime_observation(&binding, 0, ContainerState::ContainerCreated)?;
         bindings
             .publish_held_activated_root(&host, &binding, initial_pid, &observation)
             .context(NodeSnafu)?;
@@ -6475,10 +6465,15 @@ impl EffectTestRunner {
                 .block_on(reconciliation.reconcile(
                     &mut host,
                     Some(vec![
-                        running_container_observation(&replacement_binding, initial_pid)?,
-                        running_container_observation(
+                        runtime_observation(
+                            &replacement_binding,
+                            initial_pid,
+                            ContainerState::ContainerRunning,
+                        )?,
+                        runtime_observation(
                             &administrative_binding,
                             administrative_initial_pid,
+                            ContainerState::ContainerRunning,
                         )?,
                     ]),
                 ))
@@ -7380,86 +7375,6 @@ impl EffectTestRunner {
             role_ids,
         })
     }
-}
-
-fn running_container_observation(
-    binding: &WorkloadBindingConfig,
-    init_pid: u32,
-) -> Result<CriRuntimeContainerObservationV1> {
-    let cgroup_path = binding
-        .root_cgroup_path
-        .as_ref()
-        .context(InvalidInputSnafu {
-            path: Path::new("runtime observation"),
-            reason: "the running fixture has no cgroup path",
-        })?;
-    let relative = cgroup_path
-        .strip_prefix("/sys/fs/cgroup")
-        .map_err(|error| {
-            InvalidInputSnafu {
-                path: cgroup_path,
-                reason: format!("the runtime cgroup is outside the unified root: {error}"),
-            }
-            .build()
-        })?;
-    let labels = [
-        (
-            "io.kubernetes.pod.namespace".to_owned(),
-            binding.namespace.clone(),
-        ),
-        ("io.kubernetes.pod.uid".to_owned(), binding.pod_uid.clone()),
-        (
-            "io.kubernetes.container.name".to_owned(),
-            binding.container_name.clone(),
-        ),
-    ]
-    .into_iter()
-    .collect::<HashMap<_, _>>();
-    let metadata = Some(ContainerMetadata {
-        name: binding.container_name.clone(),
-        attempt: 0,
-    });
-    Ok(CriRuntimeContainerObservationV1 {
-        listed: Container {
-            id: binding.container_id.clone(),
-            pod_sandbox_id: binding.sandbox_id.clone(),
-            metadata: metadata.clone(),
-            image_ref: "sha256:local-content-id".to_owned(),
-            state: ContainerState::ContainerRunning as i32,
-            labels: labels.clone(),
-            ..Container::default()
-        },
-        status: ContainerStatusResponse {
-            status: Some(ContainerStatus {
-                id: binding.container_id.clone(),
-                metadata,
-                state: ContainerState::ContainerRunning as i32,
-                created_at: i64::try_from(binding.container_generation).map_err(|error| {
-                    InvalidInputSnafu {
-                        path: cgroup_path,
-                        reason: format!("the runtime generation is invalid: {error}"),
-                    }
-                    .build()
-                })?,
-                image_ref: format!("direct-runc@{}", binding.image_digest),
-                labels,
-                ..ContainerStatus::default()
-            }),
-            info: [(
-                "info".to_owned(),
-                json!({
-                    "pid": init_pid,
-                    "runtimeSpec": {
-                        "process": { "cwd": "/", "env": ["PATH=/bin:/usr/bin"] },
-                        "linux": { "cgroupsPath": Path::new("/").join(relative) }
-                    }
-                })
-                .to_string(),
-            )]
-            .into_iter()
-            .collect(),
-        },
-    })
 }
 
 fn prepare_entry_role_root(
