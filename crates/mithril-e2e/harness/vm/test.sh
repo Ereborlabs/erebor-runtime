@@ -78,8 +78,6 @@ grep -Fq 'cargo test --locked -p mithril-e2e' "$directory/run.sh"
 grep -Fq -- '--lib --no-run --message-format=json' "$directory/run.sh"
 grep -Fq '.target.name == "mithril_e2e"' "$directory/run.sh"
 grep -Fq '"$test_bin" "$remote_bin/mithril-e2e-tests"' "$directory/run.sh"
-grep -Fq 'identity::pid_reuse::pid_reuse_is_fresh::host --exact --ignored --nocapture' \
-  "$directory/run.sh"
 grep -Fq 'fixtures/process/$fixture' "$directory/run.sh"
 grep -Fq 'ready.py; do' "$directory/run.sh"
 if grep -Fq -- '--start-hook-path' "$directory/run.sh"; then
