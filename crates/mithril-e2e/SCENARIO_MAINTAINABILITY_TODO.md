@@ -770,23 +770,33 @@ command passes.
     socket paths before accepting the Kubernetes result.
   - [x] The Kubernetes generated case passes with the same Python actor.
 - [ ] Workload-first recovery: keep one small parameterized Rust test in
-  `identity/scenarios/workload_recovery.rs`. Start one ready Python actor and
-  place it before Control and Node start. Start Control and Node, install the
-  signed policy, and require readiness. Then supply the external CRI Running
-  observation. The running Node must invoke `NodeBindingReconciliation` and
-  native identity recovery through its production runtime loop. Keep the
+  `identity/scenarios/workload_recovery.rs`. Start Control and install the
+  signed policy. Start one ready Python actor while Node is absent. Start Node
+  and let Control and the real or supplied CRI inventory report the running
+  actor. The new Node must invoke
+  `NodeBindingReconciliation` and native identity recovery through its
+  production runtime loop. Keep the
   `active_recovered` binding, recovered application root, initial role,
   admitted entry rule, complete recovery counts, and first denied executable
   assertion visible. Use the same Python actor in every environment. Keep the
   one-test file below 100 lines.
-  - [x] Add the shared physical support for a workload that exists before
+  - [x] Record the Kubernetes admission condition. Production admission adds
+    the ready-Node scheduling constraint. A newly protected Pod cannot start
+    while Mithril Node is absent. The recovery case therefore uses an actor
+    with admission facts that Control produced before the recovering Node
+    starts. Do not treat an unannotated Pod as protected.
+  - [x] Require Node's real task map before accepting its readiness projection.
+    Treat bounded map absence as recovery wait state. Include the map path and
+    the last inspection error in diagnostics.
+  - [ ] Complete the shared physical support for a workload that exists before
     Node. The platform supplies runtime placement and the external CRI input;
     it does not call or reproduce the recovery owner sequence.
-  - [x] Pass the Host generated case in the retained privileged VM.
+  - [x] Pass the Host generated case in the retained privileged VM with the
+    corrected Control, policy, actor, and Node order.
   - [x] Pass the direct-`runc` generated case with the actor as container PID
     1. The preexisting container must not use a test-only OCI hook.
-  - [ ] Pass the Kubernetes generated case with a real Pod that exists before
-    the Helm Node installation and the policy CRD.
+  - [ ] Pass the Kubernetes generated case with one real admitted Pod running
+    before the Helm Node DaemonSet is scheduled.
   - [ ] Remove only the matching workload-first assertions from the old
     monolithic probes after all three generated cases pass. Preserve their
     other recovered-entry and concurrency assertions for later migrations.

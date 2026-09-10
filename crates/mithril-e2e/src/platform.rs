@@ -54,6 +54,9 @@ pub(crate) trait Platform: Sized {
     fn install_policy(&mut self) -> TestResult<()> {
         pending("install policy")
     }
+    fn sync_policy(&mut self) -> TestResult<()> {
+        pending("synchronize policy")
+    }
     fn node_ready(&mut self) -> TestResult<()> {
         pending("wait for Node")
     }

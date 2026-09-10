@@ -146,6 +146,10 @@ impl Platform for Runc {
         self.host.install_policy()
     }
 
+    fn sync_policy(&mut self) -> TestResult<()> {
+        self.host.sync_policy()
+    }
+
     fn node_ready(&mut self) -> TestResult<()> {
         self.host.node_ready()
     }

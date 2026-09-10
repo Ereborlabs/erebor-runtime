@@ -7,13 +7,15 @@ use crate::platform::{platform_test, Platform, TestResult};
 #[platform_test(host, runc)]
 fn workload_recovers<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("workload-recovery")?;
+    env.start_control()?;
+    env.install_policy()?;
+
     let mut actor = env.start_actor("native_recovery.py", &[])?;
     let pid = actor.id();
     env.place(pid)?;
 
-    env.start_control()?;
     env.start_node()?;
-    env.install_policy()?;
+    env.sync_policy()?;
     env.node_ready()?;
     env.running(pid)?;
 

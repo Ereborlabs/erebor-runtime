@@ -68,6 +68,7 @@ pub(crate) struct Host {
     control: Option<ControlServerFixture>,
     plane: Option<ControlPlane>,
     policy: Option<PolicyDesiredStateOwner>,
+    resource: Option<WorkloadProtectionPolicy>,
     binding: Option<WorkloadBindingConfig>,
     revision: Option<String>,
     cri: Option<CriFixture>,
@@ -210,6 +211,7 @@ impl Host {
         }
         self.plane.take();
         self.policy.take();
+        self.resource.take();
         self.binding.take();
         self.revision.take();
         if let Some(cgroup) = self.cgroup.take() {
@@ -315,6 +317,7 @@ impl Platform for Host {
             control: None,
             plane: None,
             policy: None,
+            resource: None,
             binding: None,
             revision: None,
             cri: None,
@@ -464,6 +467,37 @@ impl Platform for Host {
     }
 
     fn install_policy(&mut self) -> TestResult<()> {
+        if self.resource.is_some() {
+            return Err("the policy is already installed".into());
+        }
+        let path = self
+            .root
+            .join("crates/mithril-e2e/fixtures/mithril-policy/pid-reuse-policy-v1.json");
+        let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
+        let resource: WorkloadProtectionPolicy =
+            serde_json::from_slice(&bytes).context(JsonSnafu { path: &path })?;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
+        let policy = self
+            .policy
+            .as_ref()
+            .ok_or("Control policy is not running")?;
+        let result = policy.reconcile(&resource, NAMESPACE_UID, &[], now)?;
+        ensure!(
+            result.bundles.is_empty(),
+            InvalidInputSnafu {
+                path: &path,
+                reason: "Control produced a policy bundle without a workload target",
+            }
+        );
+        self.revision = Some(result.source_revision.policy_source_revision_id);
+        self.resource = Some(resource);
+        if self.node_task.is_some() {
+            self.sync_policy()?;
+        }
+        Ok(())
+    }
+
+    fn sync_policy(&mut self) -> TestResult<()> {
         let ready = self.ready.as_ref().ok_or("Node is not running")?;
         let task = self.node_task.as_ref().ok_or("Node is not running")?;
         let last = RefCell::new(String::from("<absent>"));
@@ -504,12 +538,13 @@ impl Platform for Host {
         let path = self
             .root
             .join("crates/mithril-e2e/fixtures/mithril-policy/pid-reuse-policy-v1.json");
-        let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
-        let resource: WorkloadProtectionPolicy =
-            serde_json::from_slice(&bytes).context(JsonSnafu { path: &path })?;
-        let document = lower_kubernetes_policy(&resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID)?;
+        let resource = self
+            .resource
+            .as_ref()
+            .ok_or("the policy is not installed")?;
+        let document = lower_kubernetes_policy(resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID)?;
         let source = PolicySourceRevisionV1::from_resource(
-            &resource,
+            resource,
             &document,
             TENANT_ID,
             CLUSTER_UID,
@@ -564,7 +599,7 @@ impl Platform for Host {
             .policy
             .as_ref()
             .ok_or("Control policy is not running")?;
-        let result = policy.reconcile(&resource, NAMESPACE_UID, &[target.clone()], now)?;
+        let result = policy.reconcile(resource, NAMESPACE_UID, &[target.clone()], now)?;
         ensure!(
             result.bundles.len() == 1,
             InvalidInputSnafu {
