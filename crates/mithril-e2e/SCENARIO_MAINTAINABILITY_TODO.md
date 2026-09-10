@@ -40,10 +40,21 @@ These rules control every checkmark and commit in this file.
   must not contain a platform implementation or branch. Do not read an
   environment variable to dispatch inside the test. Do not copy the test body
   into platform modules.
+- Treat every `impl Platform` block as custom platform code. Keep it out of
+  scenario modules. It can contain reusable physical setup and lifecycle
+  mechanics only. It must not contain a scenario or a production operation
+  sequence.
 - Keep a source file that contains one test below 100 lines. Put no platform
   runner functions in that file.
 - Give each scenario Control, Node, and one Python actor process.
 - Place the actor explicitly on the host, in `runc`, or in Kubernetes.
+- Make `start_actor` create the environment and start the actor as PID 1 in
+  its PID namespace or container. It must not enter an already-running
+  environment.
+- Use `add_actor` only when the behavior requires a process to enter an
+  already-running namespace or container. Host, direct-`runc`, and Kubernetes
+  implementations must use their real process-entry mechanism. Keep this
+  behavior in a separate test from initial actor startup.
 - Ask the actor to perform one action. Assert the expected production result.
 - Keep component start, stop, outage, and restart order visible in the test.
 - Test each supported component order in a separate function. Do not make a
@@ -518,7 +529,8 @@ count as maintainability migrations.
   to `ProcessFixture`. Keep runtime protocol and resource cleanup on their
   existing owners.
 - [ ] Move the remaining direct-runtime exec children to the shared process
-  owner as each entry-role behavior moves to its scenario owner.
+  owner through `Platform::add_actor` as each entry-role behavior moves to its
+  scenario owner. Keep `Platform::start_actor` for the container PID 1.
 - [ ] Replace every embedded native process script with an actual Python file
   in `fixtures/process`.
 - [ ] Execute the same Python process file from production-backed host,
@@ -715,13 +727,16 @@ command passes.
   `pid_reuse.rs`, one shared Python actor, one shared result assertion, and
   thin VM and Kubernetes launchers. Use
   `#[platform_test(host, runc, kubernetes)]` on that one function. Each
-  generated case selects its platform trait implementation. Start Control and Node,
-  install the production policy, and require readiness before the actor
-  enters. The Kubernetes setup must send the actor's real runtime event
-  through the deployed Node admission path. Lightweight and direct-`runc`
-  setup can call the same public production owners directly. Keep the two
-  namespace-PID actions and fresh process identity checks visible. The fixture
-  owns async runtime setup; the test function does not call `block_on`.
+  generated case selects its custom physical platform implementation. Start
+  Control and Node, install the signed policy, and require readiness. Then use
+  `start_actor` to create the environment with the held Python actor as PID 1.
+  Place it, stage its runtime facts, and admit its initial process through the
+  public production boundary before release. The Host setup can
+  supply CRI inventory as external test input. Direct `runc` must use its OCI
+  hooks. Kubernetes must use its real CRI and OCI input. Keep stage and
+  admission calls, both namespace-PID actions, and fresh process identity
+  checks visible. Keep workload-first Node recovery in a separate test. The
+  fixture owns async runtime setup; the test function does not call `block_on`.
   Keep the one-test `pid_reuse.rs` file below 100 lines. Put no host,
   direct-`runc`, or Kubernetes runner function in that file.
 - [ ] TID reuse: use one Python actor through `ProcessFixture`. Keep the two
