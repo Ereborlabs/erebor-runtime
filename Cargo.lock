@@ -3240,6 +3240,7 @@ dependencies = [
  "linux-raw-sys",
  "memmap2",
  "mithril-control",
+ "mithril-e2e-macros",
  "mithril-node",
  "prost",
  "prost-types",
@@ -3259,6 +3260,14 @@ dependencies = [
  "tower 0.4.13",
  "uuid",
  "zerocopy",
+]
+
+[[package]]
+name = "mithril-e2e-macros"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

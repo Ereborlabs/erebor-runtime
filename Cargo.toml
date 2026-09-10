@@ -22,6 +22,7 @@ members = [
     "crates/erebor-runtime-terminal",
     "crates/mithril-control",
     "crates/mithril-e2e",
+    "crates/mithril-e2e-macros",
     "crates/mithril-node",
 ]
 resolver = "2"

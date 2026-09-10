@@ -29,12 +29,17 @@ These rules control every checkmark and commit in this file.
 
 ### Scenario shape
 
-- Write each behavior as one small standard Rust `#[test]` function in its
-  scenario module. A scenario module can contain as many real `#[test]`
-  functions as it needs.
-- Parameterize a cross-environment behavior with one small platform value.
-  The same test function must select host, direct-`runc`, or Kubernetes
-  physical setup from that value. Do not copy the test into platform modules.
+- Write each behavior as one small Rust function in its scenario module. A
+  scenario module can contain as many real test functions as it needs.
+- Mark a cross-environment function with
+  `#[platform_test(host, runc, kubernetes)]`. List only the platforms that the
+  behavior supports. The attribute must generate one standard `#[test]` case
+  for each listed platform from the same function body.
+- Give the function one generic `Platform` type parameter. Implement `Host`,
+  `Runc`, and `Kubernetes` once in common fixture tooling. A scenario module
+  must not contain a platform implementation or branch. Do not read an
+  environment variable to dispatch inside the test. Do not copy the test body
+  into platform modules.
 - Keep a source file that contains one test below 100 lines. Put no platform
   runner functions in that file.
 - Give each scenario Control, Node, and one Python actor process.
@@ -47,11 +52,13 @@ These rules control every checkmark and commit in this file.
 - Make setup, action, assertion, and teardown easy to identify.
 - Prefer one security behavior per test and one responsibility per file. A
   focused file can contain several related real tests.
-- Let a small registration macro attach the standard `#[test]` function to
-  the platform fixture. Do not add scenario logic to the macro.
-- Put platform setup, async execution, result output, and cleanup in a
-  platform trait implementation. Keep actor behavior and result assertions
-  shared.
+- Use only the `platform_test` attribute for cross-environment test
+  registration. It can validate the function shape and generate named test
+  cases. It must not contain scenario logic.
+- Put reusable physical setup, async execution, result output, and cleanup in
+  the common platform implementations. Do not put scenario actions or
+  production operation sequences in those implementations. Keep actor
+  behavior and result assertions shared.
 - Do not build or drive an async runtime in a test function. The selected
   physical fixture owns the runtime when its production APIs require async
   work.
@@ -59,30 +66,27 @@ These rules control every checkmark and commit in this file.
   probes one verified scenario at a time. Moving their bodies is not enough.
 
 The required test shape keeps the behavior visible. This example shows the
-shape only. It does not define a new test API:
+attribute and generic platform shape:
 
 ```rust
-#[test]
-fn secret_read_is_denied() -> Result<()> {
-    let mut env = TestEnv::host(root, "read_secret.py")?;
-    env.control.stop()?;
-    env.actor.send(b"read\n")?;
-    let result = env.node.public_operation(env.actor.id())?;
-    assert_eq!(result, expected);
-    env.stop()
+#[platform_test(host, runc, kubernetes)]
+fn secret_read_is_denied<P: Platform>() -> TestResult<()> {
+    let result = P::read_secret()?;
+    result.assert_denied();
+    result.save()
 }
 ```
 
-Replace `public_operation` with the real public production operation. Keep
-policy delivery, binding reconciliation, recovery, admission, and evidence
-acknowledgement in the test when that operation is under test.
+The platform implementation uses the public production operation. It owns
+physical setup, readiness, the async runtime, and cleanup. It must not
+reimplement a production owner operation.
 
 ### Rust test execution
 
 - Use the standard Rust test harness. `cargo test --no-run` must compile the
   scenario functions into a test executable.
-- Keep the test function in the behavior module. The launcher passes the
-  platform value and invokes the same exact test name in every environment.
+- Keep the attributed function in the behavior module. The launcher invokes
+  its exact generated case, such as `secret_read_is_denied::kubernetes`.
 - Mark tests that need root, BPF LSM, `runc`, containerd, or Kubernetes with a
   precise `#[ignore = "..."]` reason when the normal host cannot run them.
 - Make the VM harness copy the compiled test executable and run each
@@ -99,8 +103,8 @@ acknowledgement in the test when that operation is under test.
 
 ### Cross-environment test shape
 
-- Keep each migrated behavior as one small parameterized standard Rust
-  `#[test]`.
+- Keep each migrated behavior as one small attributed Rust function. The
+  attribute generates its standard Rust `#[test]` cases.
 - Use one Python actor file for the same behavior on the host, in direct
   `runc`, and in Kubernetes.
 - Use one Rust result type and one Rust assertion function for the meaningful
@@ -121,9 +125,10 @@ acknowledgement in the test when that operation is under test.
 - Keep the VM and Kubernetes launchers thin. They can copy inputs, create the
   environment, pass paths, and invoke the exact standard Rust test. They must
   not duplicate scenario assertions or Mithril production sequencing.
-- Use one small platform value, one platform fixture trait, and one direct
-  selection point. A small test-registration macro is permitted. Do not add a
-  backend registry, factory, option layer, or scenario language.
+- Use one platform fixture trait and one `platform_test` attribute. The
+  attribute arguments are the only platform selection point. Do not add a
+  runtime dispatcher, backend registry, factory, option layer, or scenario
+  language.
 
 ### Production behavior
 
@@ -162,7 +167,8 @@ acknowledgement in the test when that operation is under test.
   orphaned stateful free functions.
 - Do not split one owner's implementation across unrelated files.
 - Do not add traits, builders, registries, macros, factories, backend
-  matrices, or a custom scenario language.
+  matrices, or a custom scenario language beyond the required platform trait
+  and `platform_test` attribute.
 - Reuse existing owners, the Rust standard library, and standard Linux
   mechanisms before adding code.
 - Keep security and lifecycle assertions explicit in the test.
@@ -367,8 +373,9 @@ Use these patterns:
 
 - [ ] Run the same standard Rust test executable on the local host, in a kernel
   VM, and against a Kubernetes cluster.
-- [ ] Pass the platform value to the same test function. Keep the test name,
-  actor action, result type, and result assertions unchanged.
+- [ ] Use `platform_test` to generate each environment case from the same
+  function. Keep the scenario name, actor action, result type, and result
+  assertions unchanged.
 - [ ] Let the launcher select exact test names and pass environment inputs.
   Do not let it parse Mithril domain results.
 - [ ] Let each Kubernetes Rust test use the existing `kube` client dependency
@@ -706,8 +713,9 @@ command passes.
   entry reference counts, tombstones, release action, and reclamation checks.
 - [ ] Node-first PID reuse: keep one small parameterized Rust test in
   `pid_reuse.rs`, one shared Python actor, one shared result assertion, and
-  thin VM and Kubernetes launchers. The platform value selects host,
-  direct-`runc`, or Kubernetes physical setup. Start Control and Node,
+  thin VM and Kubernetes launchers. Use
+  `#[platform_test(host, runc, kubernetes)]` on that one function. Each
+  generated case selects its platform trait implementation. Start Control and Node,
   install the production policy, and require readiness before the actor
   enters. The Kubernetes setup must send the actor's real runtime event
   through the deployed Node admission path. Lightweight and direct-`runc`
