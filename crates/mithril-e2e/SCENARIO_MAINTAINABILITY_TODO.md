@@ -769,10 +769,27 @@ command passes.
   - [x] Verify that normal Kubernetes shutdown removes both runtime admission
     socket paths before accepting the Kubernetes result.
   - [x] The Kubernetes generated case passes with the same Python actor.
-- [ ] Workload-first recovery: create the cgroup and one ready Python actor
-  before Node starts. Use the public production recovery operation. Keep the
-  recovered binding, process identity, role, and first-effect assertions
-  visible.
+- [ ] Workload-first recovery: keep one small parameterized Rust test in
+  `identity/scenarios/workload_recovery.rs`. Start one ready Python actor and
+  place it before Control and Node start. Start Control and Node, install the
+  signed policy, and require readiness. Then supply the external CRI Running
+  observation. The running Node must invoke `NodeBindingReconciliation` and
+  native identity recovery through its production runtime loop. Keep the
+  `active_recovered` binding, recovered application root, initial role,
+  admitted entry rule, complete recovery counts, and first denied executable
+  assertion visible. Use the same Python actor in every environment. Keep the
+  one-test file below 100 lines.
+  - [ ] Add the shared physical support for a workload that exists before
+    Node. The platform supplies runtime placement and the external CRI input;
+    it does not call or reproduce the recovery owner sequence.
+  - [ ] Pass the Host generated case in the retained privileged VM.
+  - [ ] Pass the direct-`runc` generated case with the actor as container PID
+    1. The preexisting container must not use a test-only OCI hook.
+  - [ ] Pass the Kubernetes generated case with a real Pod that exists before
+    the Helm Node installation and the policy CRD.
+  - [ ] Remove only the matching workload-first assertions from the old
+    monolithic probes after all three generated cases pass. Preserve their
+    other recovered-entry and concurrency assertions for later migrations.
 - [ ] Retained-host restart: keep host shutdown, retained map validation,
   production recovery, stable map IDs, and ownership rejection visible.
 - [ ] Cgroup lifetime reuse: recreate the cgroup path after recovery. Keep the
