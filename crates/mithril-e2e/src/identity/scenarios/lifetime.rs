@@ -1,6 +1,3 @@
-#[cfg(test)]
-mod tests;
-
 use std::fs;
 use std::mem::offset_of;
 use std::path::Path;

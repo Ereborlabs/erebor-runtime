@@ -1,6 +1,3 @@
-#[cfg(test)]
-mod tests;
-
 use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};

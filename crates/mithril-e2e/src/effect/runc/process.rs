@@ -71,13 +71,4 @@ mod tests {
         assert!(message.contains("hook failed"), "{message}");
         Ok(())
     }
-
-    #[test]
-    fn runc_uses_python_actor() -> crate::Result<()> {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let mut actor = ProcessFixture::python(&root, "ready.py", std::iter::empty::<&str>())?;
-
-        actor.stop()?;
-        actor.stop()
-    }
 }

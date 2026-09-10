@@ -142,28 +142,6 @@ impl ProcessFixture {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn parent(&self, id: u32) -> Result<Option<u32>> {
-        let path = PathBuf::from(format!("/proc/{id}/status"));
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(source) => return Err(source).context(IoSnafu { path: &path }),
-        };
-        text.lines()
-            .find_map(|line| line.strip_prefix("PPid:")?.split_whitespace().next())
-            .map(|value| {
-                value.parse().map_err(|source| {
-                    InvalidInputSnafu {
-                        path: &path,
-                        reason: format!("the parent PID is invalid: {source}"),
-                    }
-                    .build()
-                })
-            })
-            .transpose()
-    }
-
     pub(crate) fn send(&mut self, bytes: &[u8]) -> Result<()> {
         self.stdin
             .as_mut()
@@ -316,27 +294,6 @@ impl ProcessFixture {
                 Err(source) => Err(source).context(IoSnafu { path: &path }),
             },
             || format!("process {id}; last {}", last.borrow()),
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn wait_comm(&mut self, pid: u32, name: &str, operation: &str) -> Result<()> {
-        let path = PathBuf::from(format!("/proc/{pid}/comm"));
-        let last = RefCell::new(String::from("<absent>"));
-        self.wait_path(
-            &path,
-            operation,
-            START_LIMIT,
-            || {
-                let text = match fs::read_to_string(&path) {
-                    Ok(text) => text,
-                    Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
-                    Err(source) => return Err(source).context(IoSnafu { path: &path }),
-                };
-                *last.borrow_mut() = text.trim().to_owned();
-                Ok((text.trim() == name).then_some(()))
-            },
-            || format!("last process name: {:?}; expected: {name:?}", last.borrow()),
         )
     }
 

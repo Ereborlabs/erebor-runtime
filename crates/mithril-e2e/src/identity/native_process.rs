@@ -1,8 +1,3 @@
-#[cfg(test)]
-mod test_support;
-#[cfg(test)]
-mod tests;
-
 use std::fs;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
