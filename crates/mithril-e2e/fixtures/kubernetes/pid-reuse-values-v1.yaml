@@ -1,8 +1,15 @@
 node:
+  image: test.invalid/mithril-node:replace
   imagePullPolicy: Never
   logFilter: info,mithril_node::node=debug,mithril_node::policy=debug
+  configHostPath: /replace/node.json
+  identityHostPath: /replace/identity
+  stateHostPath: /replace/state
   containerRuntimeSocket: /run/k3s/containerd/containerd.sock
+  nodeSelector:
+    mithril.e2e/run: replace
   runtimeHook:
+    socketPath: /run/mithril/replace.sock
     hostBinaryDirectory: /usr/libexec/oci/hooks.d
     containerdConfigHostDirectory: /var/lib/rancher/k3s/agent/etc/containerd
     containerdDropInDirectory: config-v3.toml.d
@@ -17,10 +24,14 @@ node:
     runtimeTimeoutSeconds: 5
 control:
   enabled: true
+  image: test.invalid/mithril-control:replace
   imagePullPolicy: Never
   logFilter: info,mithril_control=debug
+  nodeSelector:
+    kubernetes.io/hostname: replace
   administrativeExec:
     enabled: false
   admission:
     enabled: true
+    caBundle: replace
     webhookTimeoutSeconds: 5

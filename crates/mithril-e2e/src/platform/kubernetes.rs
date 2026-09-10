@@ -389,25 +389,39 @@ impl Kubernetes {
         let node_selector = BTreeMap::from([(SELECTOR.to_owned(), self.token.clone())]);
         let control_selector =
             BTreeMap::from([("kubernetes.io/hostname".to_owned(), self.node_name.clone())]);
-        let values = json!({
-            "node": {
-                "image": self.node_image,
-                "configHostPath": self.config_path,
-                "identityHostPath": self.identity_path,
-                "stateHostPath": self.state_path,
-                "nodeSelector": node_selector,
-                "runtimeHook": {
-                    "socketPath": self.socket_path,
-                },
-            },
-            "control": {
-                "image": self.control_image,
-                "nodeSelector": control_selector,
-                "admission": {
-                    "caBundle": self.ca_bundle()?,
-                },
-            },
-        });
+        let mut values: Value =
+            serde_saphyr::from_slice(&fs::read(self.fixture("pid-reuse-values-v1.yaml"))?)?;
+        for (path, value) in [
+            ("/node/image", Value::String(self.node_image.clone())),
+            (
+                "/node/configHostPath",
+                Value::String(self.config_path.display().to_string()),
+            ),
+            (
+                "/node/identityHostPath",
+                Value::String(self.identity_path.display().to_string()),
+            ),
+            (
+                "/node/stateHostPath",
+                Value::String(self.state_path.display().to_string()),
+            ),
+            ("/node/nodeSelector", serde_json::to_value(node_selector)?),
+            (
+                "/node/runtimeHook/socketPath",
+                Value::String(self.socket_path.display().to_string()),
+            ),
+            ("/control/image", Value::String(self.control_image.clone())),
+            (
+                "/control/nodeSelector",
+                serde_json::to_value(control_selector)?,
+            ),
+            (
+                "/control/admission/caBundle",
+                Value::String(self.ca_bundle()?),
+            ),
+        ] {
+            Self::set(&mut values, path, value)?;
+        }
         fs::write(&self.values_path, serde_saphyr::to_string(&values)?)?;
         Ok(())
     }
@@ -815,7 +829,6 @@ impl Platform for Kubernetes {
     fn start_control(&mut self) -> TestResult<()> {
         self.create_system()?;
         let chart = self.root.join("packaging/mithril/helm");
-        let base = self.fixture("pid-reuse-values-v1.yaml");
         let mut command = Command::new(&self.helm_path);
         command
             .args(["--kubeconfig"])
@@ -823,8 +836,6 @@ impl Platform for Kubernetes {
             .args(["upgrade", "--install", "mithril"])
             .arg(&chart)
             .args(["--namespace", &self.system, "--values"])
-            .arg(base)
-            .arg("--values")
             .arg(&self.values_path);
         Self::run(&mut command, "install Mithril Control")?;
         self.helm_up = true;
