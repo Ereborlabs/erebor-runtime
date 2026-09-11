@@ -92,6 +92,7 @@ pub(crate) trait Platform: Sized {
         &mut self,
         _actor: &mut crate::process::ProcessFixture,
         _pid: u32,
+        _cookie: u64,
         _before: &Task,
         _name: &str,
     ) -> TestResult<Task> {

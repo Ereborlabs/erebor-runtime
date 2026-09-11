@@ -4,7 +4,7 @@ use erebor_interceptor_abi::{
 
 use crate::platform::{platform_test, Platform, Task, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 fn non_leader_exec<P: Platform>() -> TestResult<()> {
     let active = |task: &Task| {
         assert_eq!(
@@ -65,7 +65,7 @@ fn non_leader_exec<P: Platform>() -> TestResult<()> {
     assert_eq!(env.next_id()?, after_id);
 
     actor.send(b"exec\n")?;
-    let after = match env.wait_exec(&mut actor, root_pid, &root, "non-leader thread exec") {
+    let after = match env.wait_exec(&mut actor, root_pid, next, &root, "non-leader thread exec") {
         Ok(after) => after,
         Err(source) => {
             let health = env.health()?;

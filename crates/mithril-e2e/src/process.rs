@@ -50,7 +50,6 @@ pub(crate) struct ProcessFixture {
     stderr: Option<File>,
     #[cfg(test)]
     gate: Option<UnixStream>,
-    #[cfg(test)]
     group: Option<PathBuf>,
     tasks: Vec<(u32, OwnedFd)>,
     stopped: bool,
@@ -88,7 +87,6 @@ impl ProcessFixture {
                 .map(|output| File::from(OwnedFd::from(output))),
             #[cfg(test)]
             gate: None,
-            #[cfg(test)]
             group: None,
             tasks: Vec::new(),
             child: Some(child),
@@ -111,7 +109,6 @@ impl ProcessFixture {
             stderr: None,
             #[cfg(test)]
             gate: None,
-            #[cfg(test)]
             group: None,
             tasks: Vec::new(),
             stopped: false,
@@ -414,6 +411,11 @@ impl ProcessFixture {
         })?;
         self.tasks.push((id, fd));
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_group(&mut self, path: &Path) {
+        self.group = Some(path.to_owned());
     }
 
     pub(crate) fn signal(&self, id: u32, signal: Signal) -> Result<()> {
@@ -771,7 +773,6 @@ impl ProcessFixture {
         let mut failed = None;
         let ids = self.tasks.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         if !self.stopped {
-            #[cfg(test)]
             let killed = self.group.as_ref().is_some_and(|group| {
                 let path = group.join("cgroup.kill");
                 match fs::write(&path, "1") {
@@ -782,8 +783,6 @@ impl ProcessFixture {
                     }
                 }
             });
-            #[cfg(not(test))]
-            let killed = false;
             if !killed {
                 for (id, fd) in &self.tasks {
                     match pidfd_send_signal(fd, Signal::KILL) {
@@ -818,16 +817,39 @@ impl ProcessFixture {
                 self.stopped = true;
             }
         }
-        for id in ids {
-            let path = PathBuf::from(format!("/proc/{id}"));
+        let group = self.group.as_ref();
+        if let Some(group) = group {
+            let path = group.join("cgroup.procs");
+            let last = RefCell::new(String::new());
             if let Err(source) = wait_for(
                 &path,
-                "tracked process cleanup",
+                "actor cgroup cleanup",
                 START_LIMIT,
-                || Ok((!path.exists()).then_some(())),
-                || format!("tracked process {id} still exists"),
+                || {
+                    let value = match fs::read_to_string(&path) {
+                        Ok(value) => value,
+                        Err(source) if source.kind() == ErrorKind::NotFound => return Ok(Some(())),
+                        Err(source) => return Err(source).context(IoSnafu { path: &path }),
+                    };
+                    *last.borrow_mut() = value;
+                    Ok(last.borrow().trim().is_empty().then_some(()))
+                },
+                || format!("last cgroup.procs: {:?}", last.borrow()),
             ) {
                 failed = Some(source.to_string());
+            }
+        } else {
+            for id in ids {
+                let path = PathBuf::from(format!("/proc/{id}"));
+                if let Err(source) = wait_for(
+                    &path,
+                    "tracked process cleanup",
+                    START_LIMIT,
+                    || Ok((!path.exists()).then_some(())),
+                    || format!("tracked process {id} still exists"),
+                ) {
+                    failed = Some(source.to_string());
+                }
             }
         }
         match failed {

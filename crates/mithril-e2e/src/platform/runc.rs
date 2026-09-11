@@ -262,6 +262,7 @@ impl Platform for Runc {
             .ok_or("runc state has no actor PID")?;
         self.host.move_out(parent)?;
         actor.set_init(pid)?;
+        actor.set_group(self.host.cgroup());
         Ok(actor)
     }
 
@@ -327,10 +328,11 @@ impl Platform for Runc {
         &mut self,
         actor: &mut ProcessFixture,
         pid: u32,
+        cookie: u64,
         before: &Task,
         name: &str,
     ) -> TestResult<Task> {
-        self.host.wait_exec(actor, pid, before, name)
+        self.host.wait_exec(actor, pid, cookie, before, name)
     }
 
     fn recovered(&mut self, pid: u32, name: &str) -> TestResult<Task> {

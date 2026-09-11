@@ -71,7 +71,13 @@ fn child_exec_keeps_identity<P: Platform>() -> TestResult<()> {
     active(&before);
 
     actor.send(b"continue\n")?;
-    let after = env.wait_exec(&mut actor, pid, &before, "native child exec")?;
+    let after = env.wait_exec(
+        &mut actor,
+        pid,
+        pre.task_cookie,
+        &before,
+        "native child exec",
+    )?;
     let post = &after.snapshot;
     assert_eq!(post.task_cookie, pre.task_cookie);
     assert_eq!(post.creator_task_cookie, pre.creator_task_cookie);

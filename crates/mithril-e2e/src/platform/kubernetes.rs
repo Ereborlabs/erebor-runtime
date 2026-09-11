@@ -1238,6 +1238,7 @@ impl Platform for Kubernetes {
         &mut self,
         actor: &mut ProcessFixture,
         pid: u32,
+        cookie: u64,
         before: &Task,
         name: &str,
     ) -> TestResult<Task> {
@@ -1258,7 +1259,8 @@ impl Platform for Kubernetes {
                     *last.borrow_mut() = format!("{value:?}");
                 }
                 Ok(snapshot.filter(|value| {
-                    value.active_execution_id != before.snapshot.active_execution_id
+                    value.task_cookie == cookie
+                        && value.active_execution_id != before.snapshot.active_execution_id
                 }))
             },
             || format!("PID {pid}; last identity: {}", last.borrow()),

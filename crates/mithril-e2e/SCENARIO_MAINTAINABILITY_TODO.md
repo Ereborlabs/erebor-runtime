@@ -733,7 +733,7 @@ command passes.
   Keep exact TID allocation and post-exec assertions visible.
   - [x] Add the small generated test and use the shared actor and assertions.
   - [x] Pass the Host generated case in the retained privileged VM.
-  - [ ] Pass the direct-`runc` generated case with the same actor and checks.
+  - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [ ] Pass the Kubernetes generated case with the same actor and checks.
   - [ ] Remove the matching old monolithic case and compatibility fields.
 - [ ] Pre-PONR failure: use fixture-owned process readiness and keep the
