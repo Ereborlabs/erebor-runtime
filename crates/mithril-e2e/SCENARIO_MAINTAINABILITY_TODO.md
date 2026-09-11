@@ -743,7 +743,7 @@ command passes.
   - [x] The small Host generated case uses the shared actor and production
     runtime admission path.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
-  - [ ] Pass the Kubernetes generated case with the same actor and checks.
+  - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [ ] Remove the matching old probe code and compatibility bundle fields.
 - [x] Node-first PID reuse: keep one small parameterized Rust test in
   `pid_reuse.rs`, one shared Python actor, one shared result assertion, and
