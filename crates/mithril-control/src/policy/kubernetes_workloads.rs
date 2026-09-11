@@ -760,20 +760,8 @@ impl KubernetesWorkloadInventoryOwner {
         if Self::pod_is_terminal(pod) {
             return Ok(Vec::new());
         }
-        let annotations = pod.metadata.annotations.as_ref();
-        let Some(profile_id) =
-            annotations.and_then(|values| values.get(KUBERNETES_PROFILE_ANNOTATION))
-        else {
-            return Ok(Vec::new());
-        };
-        // Keep the admission revision as provenance. The current live revision
-        // drives rollout updates for the same profile.
-        let Some(admitted_source_revision_id) = annotations
-            .and_then(|values| values.get(KUBERNETES_SOURCE_ANNOTATION))
-            .cloned()
-        else {
-            return Ok(Vec::new());
-        };
+        let identity = pod_policy_identity(pod)?;
+        let admitted = identity.is_some();
         let namespace_name = pod
             .namespace()
             .ok_or_else(|| admission_error("protected bound Pod has no namespace"))?;
@@ -799,7 +787,67 @@ impl KubernetesWorkloadInventoryOwner {
         let node = nodes
             .get(kubernetes_node_name)
             .ok_or_else(|| admission_error("protected Pod Node is absent"))?;
+        let namespace_uid = namespaces
+            .get(&namespace_name)
+            .ok_or_else(|| admission_error("protected Pod namespace identity is absent"))?;
+        let service_account_name = spec.service_account_name.as_deref().unwrap_or("default");
+        let service_account_uid = service_accounts
+            .get(&(namespace_name.clone(), service_account_name.to_owned()))
+            .ok_or_else(|| admission_error("protected Pod ServiceAccount identity is absent"))?;
+        let controller_uid = pod
+            .metadata
+            .owner_references
+            .iter()
+            .flatten()
+            .find(|owner| owner.controller == Some(true))
+            .map_or(pod_uid, |owner| owner.uid.as_str());
+        let facts = pod_admission_facts(
+            pod,
+            self.policies.cluster_uid(),
+            namespace_uid,
+            service_account_uid,
+        );
+        let policies = self.policies.live_policies_in_namespace(&namespace_name)?;
+        // Keep an admitted source revision. Use the current revision when a new policy first
+        // selects a running Pod.
+        let (source_id, policy) = match identity {
+            Some((profile_id, source_id)) => {
+                let (_, policy, _) = policies
+                    .into_iter()
+                    .find(|(_, policy, compiled)| policy.profile_id() == profile_id && *compiled)
+                    .ok_or_else(|| {
+                        admission_error("protected Pod profile has no current compiled policy")
+                    })?;
+                (source_id.to_owned(), policy)
+            }
+            None => {
+                let mut matches = policies
+                    .into_iter()
+                    .filter(|(_, policy, compiled)| *compiled && policy_matches_pod(policy, &facts))
+                    .collect::<Vec<_>>();
+                ensure!(
+                    matches.len() <= 1,
+                    InvalidConfigurationSnafu {
+                        reason: "more than one compiled policy matches an existing Pod",
+                    }
+                );
+                let Some((source, policy, _)) = matches.pop() else {
+                    return Ok(Vec::new());
+                };
+                (source.policy_source_revision_id, policy)
+            }
+        };
+        validate_kubernetes_policy_shape(&policy)?;
+        let profile_id = policy.profile_id().to_owned();
         let node_annotations = node.metadata.annotations.as_ref();
+        // A Pod that predates its policy waits for the new Node identity projection.
+        if !admitted
+            && node_annotations
+                .and_then(|values| values.get(KUBERNETES_NODE_ID_ANNOTATION))
+                .is_none()
+        {
+            return Ok(Vec::new());
+        }
         // Use only the readiness owner's current Node projection for node identity facts.
         let node_id = node_annotations
             .and_then(|values| values.get(KUBERNETES_NODE_ID_ANNOTATION))
@@ -826,36 +874,6 @@ impl KubernetesWorkloadInventoryOwner {
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|value| *value > 0)
             .ok_or_else(|| admission_error("protected Pod Node has no valid label epoch"))?;
-        let namespace_uid = namespaces
-            .get(&namespace_name)
-            .ok_or_else(|| admission_error("protected Pod namespace identity is absent"))?;
-        let service_account_name = spec.service_account_name.as_deref().unwrap_or("default");
-        let service_account_uid = service_accounts
-            .get(&(namespace_name.clone(), service_account_name.to_owned()))
-            .ok_or_else(|| admission_error("protected Pod ServiceAccount identity is absent"))?;
-        let controller_uid = pod
-            .metadata
-            .owner_references
-            .iter()
-            .flatten()
-            .find(|owner| owner.controller == Some(true))
-            .map_or(pod_uid, |owner| owner.uid.as_str());
-        // The current live revision updates existing Pods without changing their admitted profile.
-        let (_source_revision, policy, _compiled) = self
-            .policies
-            .live_policies_in_namespace(&namespace_name)?
-            .into_iter()
-            .find(|(_source, policy, compiled)| policy.profile_id() == profile_id && *compiled)
-            .ok_or_else(|| {
-                admission_error("protected Pod profile has no current compiled policy")
-            })?;
-        validate_kubernetes_policy_shape(&policy)?;
-        let facts = pod_admission_facts(
-            pod,
-            self.policies.cluster_uid(),
-            namespace_uid,
-            service_account_uid,
-        );
         let mut targets = Vec::new();
         for container in &facts.containers {
             let Some(selector_id) = matching_selector_id(&policy, &facts, container)? else {
@@ -883,7 +901,7 @@ impl KubernetesWorkloadInventoryOwner {
                 namespace_name: namespace_name.clone(),
                 pod_name: pod_name.to_owned(),
                 profile_id: profile_id.clone(),
-                policy_source_revision_id: admitted_source_revision_id.clone(),
+                policy_source_revision_id: source_id.clone(),
                 binding_id,
                 protected_scope_id: policy.protected_universe.protected_scope_ids[0].clone(),
                 workload_selector_id: selector_id,
@@ -1834,6 +1852,90 @@ mod tests {
             super::KubernetesAdmissionOwner::health().await,
             axum::http::StatusCode::OK
         );
+    }
+
+    #[tokio::test]
+    async fn existing_pod_enters_new_policy() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = TempDir::new()?;
+        let policies = test_policy_owner(directory.path())?;
+        let spec = WorkloadProtectionPolicySpec::parse(
+            std::path::Path::new("kubernetes-policy-v1.yaml"),
+            KUBERNETES_POLICY.as_bytes(),
+        )?;
+        let resource: WorkloadProtectionPolicy = serde_json::from_value(json!({
+            "apiVersion": "mithril.erebor.dev/v1alpha1",
+            "kind": "WorkloadProtectionPolicy",
+            "metadata": {
+                "name": "profile-a",
+                "namespace": "tenant-a",
+                "uid": "30000000-0000-4000-8000-000000000001",
+                "generation": 1,
+                "resourceVersion": "source-1"
+            },
+            "spec": spec,
+        }))?;
+        let source = policies.reconcile(&resource, NAMESPACE_UID, &[], 1)?;
+        let service = service_fn(|_request: Request<KubeBody>| async move {
+            Ok::<_, Infallible>(Response::new(Body::empty()))
+        });
+        let owner = KubernetesWorkloadInventoryOwner::new(
+            Client::new(service, "default"),
+            policies,
+            ControlPlane::new(
+                Vec::new(),
+                TrustGenerationV1 {
+                    generation: 1,
+                    bundle_digest: "0".repeat(64),
+                    policy_issuer_sequence_epoch: 0,
+                    policy_signers: Vec::new(),
+                },
+            ),
+        );
+        let node_uid = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+        let node = Node {
+            metadata: ObjectMeta {
+                name: Some("worker-a".to_owned()),
+                uid: Some(node_uid.to_owned()),
+                annotations: Some(BTreeMap::from([
+                    (
+                        KUBERNETES_NODE_ID_ANNOTATION.to_owned(),
+                        "node-a".to_owned(),
+                    ),
+                    (
+                        KUBERNETES_NODE_UID_ANNOTATION.to_owned(),
+                        node_uid.to_owned(),
+                    ),
+                    (KUBERNETES_NODE_BOOT_ANNOTATION.to_owned(), "01".repeat(16)),
+                    (KUBERNETES_LABEL_EPOCH_ANNOTATION.to_owned(), "1".to_owned()),
+                ])),
+                ..ObjectMeta::default()
+            },
+            ..Node::default()
+        };
+        let mut actor = pod();
+        actor.metadata.name = Some("converter-pod".to_owned());
+        actor.metadata.uid = Some("99999999-9999-4999-8999-999999999999".to_owned());
+        actor.spec.as_mut().ok_or("the Pod has no spec")?.node_name = Some("worker-a".to_owned());
+
+        let targets = owner.targets_for_pods(
+            &[actor],
+            &BTreeMap::from([("worker-a".to_owned(), node)]),
+            &BTreeMap::from([("tenant-a".to_owned(), NAMESPACE_UID.to_owned())]),
+            &BTreeMap::from([(
+                ("tenant-a".to_owned(), "default".to_owned()),
+                "77777777-7777-4777-8777-777777777777".to_owned(),
+            )]),
+        )?;
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0]
+                .kubernetes
+                .as_ref()
+                .map(|identity| identity.policy_source_revision_id.as_str()),
+            Some(source.source_revision.policy_source_revision_id.as_str())
+        );
+        Ok(())
     }
 
     #[tokio::test]
