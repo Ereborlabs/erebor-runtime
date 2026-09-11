@@ -12,8 +12,8 @@ cache=$2
 archive=$3
 shift 3
 
-[[ $(id -u) -eq 0 && -x $k3s && -r $archive ]] || {
-  echo "K3s image setup requires root, K3s, and a readable archive" >&2
+[[ $(id -u) -eq 0 && -x $k3s ]] || {
+  echo "K3s image setup requires root and K3s" >&2
   exit 2
 }
 [[ $cache =~ ^[a-z0-9-]+$ ]] || {
@@ -23,6 +23,16 @@ shift 3
 systemctl is-active --quiet k3s || {
   echo "K3s is not active" >&2
   exit 1
+}
+
+missing=false
+for image in "$@"; do
+  "$k3s" crictl inspecti "$image" >/dev/null || missing=true
+done
+[[ $missing == true ]] || exit 0
+[[ -r $archive ]] || {
+  echo "K3s image setup needs a readable archive for a missing image" >&2
+  exit 2
 }
 
 image_dir=/var/lib/rancher/k3s/agent/images

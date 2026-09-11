@@ -710,7 +710,7 @@ verify_absent "$enforcement_output/owner.lock"
 verify_absent "$network_output/owner.lock"
 verify_absent "$remote_bin/feasibility.bpf.owner.lock"
 
-if [[ $with_k3s == true ]]; then
+if [[ $with_k3s == true && $keep_vm == false ]]; then
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
     k3s-remove "$remote_root"
 fi
