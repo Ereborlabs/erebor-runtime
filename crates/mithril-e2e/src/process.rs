@@ -1,17 +1,30 @@
+#![allow(unsafe_code)]
+
 #[cfg(test)]
 mod tests;
 
 use std::cell::RefCell;
-use std::ffi::OsStr;
-use std::fs;
 #[cfg(test)]
-use std::fs::File;
+use std::ffi::CString;
+use std::ffi::OsStr;
+#[cfg(test)]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
 use std::io::{ErrorKind, Read as _, Write};
+#[cfg(test)]
+use std::os::fd::AsRawFd as _;
 use std::os::fd::OwnedFd;
+#[cfg(test)]
+use std::os::unix::ffi::OsStrExt as _;
+#[cfg(test)]
+use std::os::unix::net::UnixStream;
+use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::Duration;
 
+#[cfg(test)]
+use linux_raw_sys::general::clone_args;
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
 
@@ -21,17 +34,24 @@ use crate::Result;
 
 const FIXTURE_DIR: &str = "crates/mithril-e2e/fixtures/process";
 const LOG_LIMIT: usize = 8 * 1024;
+#[cfg(test)]
+const HELD: &[u8] = b"held\n";
 const READY: &[u8] = b"native-fixture-ready\n";
 const START_LIMIT: Duration = Duration::from_secs(30);
 const STOP_GRACE: Duration = Duration::from_secs(1);
 
 pub(crate) struct ProcessFixture {
     child: Option<Child>,
+    raw_pid: Option<u32>,
     actor_pid: u32,
     path: PathBuf,
     stdin: Option<Box<dyn Write + Send>>,
-    stdout: Option<ChildStdout>,
-    stderr: Option<ChildStderr>,
+    stdout: Option<File>,
+    stderr: Option<File>,
+    #[cfg(test)]
+    gate: Option<UnixStream>,
+    #[cfg(test)]
+    group: Option<PathBuf>,
     tasks: Vec<(u32, OwnedFd)>,
     stopped: bool,
 }
@@ -58,10 +78,21 @@ impl ProcessFixture {
                 .stdin
                 .take()
                 .map(|input| Box::new(input) as Box<dyn Write + Send>),
-            stdout: child.stdout.take(),
-            stderr: child.stderr.take(),
+            stdout: child
+                .stdout
+                .take()
+                .map(|output| File::from(OwnedFd::from(output))),
+            stderr: child
+                .stderr
+                .take()
+                .map(|output| File::from(OwnedFd::from(output))),
+            #[cfg(test)]
+            gate: None,
+            #[cfg(test)]
+            group: None,
             tasks: Vec::new(),
             child: Some(child),
+            raw_pid: None,
             actor_pid,
             path: path.to_owned(),
             stopped: false,
@@ -72,11 +103,16 @@ impl ProcessFixture {
     pub(crate) fn from_pid(pid: u32, input: File, path: &Path) -> Self {
         Self {
             child: None,
+            raw_pid: None,
             actor_pid: pid,
             path: path.to_owned(),
             stdin: Some(Box::new(input)),
             stdout: None,
             stderr: None,
+            #[cfg(test)]
+            gate: None,
+            #[cfg(test)]
+            group: None,
             tasks: Vec::new(),
             stopped: false,
         }
@@ -132,6 +168,191 @@ impl ProcessFixture {
             .arg(&script)
             .args(args);
         Self::start(&mut command, &script)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn held_pidns<I, S>(
+        root: &Path,
+        name: &str,
+        args: I,
+        cgroup: &Path,
+        rootfs: &Path,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let script = Self::script(root, name)?;
+        let python = c"/usr/bin/python3".to_owned();
+        let actor = cstring(&Path::new("/fixtures").join(name))?;
+        let root_c = cstring(rootfs)?;
+        let mut values = vec![python.clone(), actor];
+        for arg in args {
+            values.push(cstring(Path::new(arg.as_ref()))?);
+        }
+        let mut argv = values
+            .iter()
+            .map(|value| value.as_ptr())
+            .collect::<Vec<_>>();
+        argv.push(std::ptr::null());
+        let group = File::open(cgroup).context(IoSnafu { path: cgroup })?;
+        let pipe = || {
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
+                .map_err(std::io::Error::from)
+                .context(IoSnafu { path: &script })
+        };
+        let (child_in, input) = pipe()?;
+        let output_path = rootfs.join("work/actor.stdout");
+        let error_path = rootfs.join("work/actor.stderr");
+        let child_out = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&output_path)
+            .context(IoSnafu { path: &output_path })?;
+        let child_err = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&error_path)
+            .context(IoSnafu { path: &error_path })?;
+        let output = File::open(&output_path).context(IoSnafu { path: &output_path })?;
+        let errors = File::open(&error_path).context(IoSnafu { path: &error_path })?;
+        let (gate, child_gate) = UnixStream::pair().context(IoSnafu { path: &script })?;
+        let clone = clone_args {
+            flags: linux_raw_sys::general::CLONE_INTO_CGROUP
+                | u64::from(linux_raw_sys::general::CLONE_NEWPID),
+            pidfd: 0,
+            child_tid: 0,
+            parent_tid: 0,
+            exit_signal: libc::SIGCHLD as u64,
+            stack: 0,
+            stack_size: 0,
+            tls: 0,
+            set_tid: 0,
+            set_tid_size: 0,
+            cgroup: group.as_raw_fd() as u64,
+        };
+        let result =
+            unsafe { libc::syscall(libc::SYS_clone3, &raw const clone, size_of::<clone_args>()) };
+        if result == 0 {
+            run_held(
+                &python,
+                &argv,
+                &child_in,
+                &child_out,
+                &child_err,
+                &child_gate,
+                &root_c,
+            );
+        }
+        ensure!(
+            result > 0,
+            InvalidInputSnafu {
+                path: &script,
+                reason: format!(
+                    "clone3 held actor failed: {}",
+                    std::io::Error::last_os_error()
+                ),
+            }
+        );
+        drop((child_in, child_out, child_err, child_gate));
+        let pid = u32::try_from(result).map_err(|source| {
+            InvalidInputSnafu {
+                path: &script,
+                reason: format!("clone3 returned an invalid PID: {source}"),
+            }
+            .build()
+        })?;
+        let mut fixture = Self {
+            child: None,
+            raw_pid: Some(pid),
+            actor_pid: pid,
+            path: script,
+            stdin: Some(Box::new(File::from(input))),
+            stdout: Some(output),
+            stderr: Some(errors),
+            gate: Some(gate),
+            group: Some(cgroup.to_owned()),
+            tasks: Vec::new(),
+            stopped: false,
+        };
+        fixture.set_init(pid)?;
+        fixture.wait_held()?;
+        Ok(fixture)
+    }
+
+    #[cfg(test)]
+    fn wait_held(&mut self) -> Result<()> {
+        let mut gate = self.gate.take().context(InvalidInputSnafu {
+            path: &self.path,
+            reason: "the process has no pre-exec gate",
+        })?;
+        let flags = rustix::fs::fcntl_getfl(&gate).map_err(|source| {
+            InvalidInputSnafu {
+                path: &self.path,
+                reason: format!("read pre-exec gate flags: {source}"),
+            }
+            .build()
+        })?;
+        rustix::fs::fcntl_setfl(&gate, flags | rustix::fs::OFlags::NONBLOCK).map_err(|source| {
+            InvalidInputSnafu {
+                path: &self.path,
+                reason: format!("make pre-exec gate nonblocking: {source}"),
+            }
+            .build()
+        })?;
+        let path = self.path.clone();
+        let received = RefCell::new(Vec::new());
+        let result = self.wait_path(
+            &path,
+            "held actor pre-exec readiness",
+            START_LIMIT,
+            || {
+                let mut buffer = [0_u8; 16];
+                match gate.read(&mut buffer) {
+                    Ok(0) => Ok(None),
+                    Ok(count) => {
+                        let mut received = received.borrow_mut();
+                        received.extend_from_slice(&buffer[..count]);
+                        if received.as_slice() == HELD {
+                            Ok(Some(()))
+                        } else if HELD.starts_with(received.as_slice()) {
+                            Ok(None)
+                        } else {
+                            InvalidInputSnafu {
+                                path: &path,
+                                reason: format!(
+                                    "invalid pre-exec marker: {:?}",
+                                    String::from_utf8_lossy(&received)
+                                ),
+                            }
+                            .fail()
+                        }
+                    }
+                    Err(source) if source.kind() == ErrorKind::WouldBlock => Ok(None),
+                    Err(source) => Err(source).context(IoSnafu { path: &path }),
+                }
+            },
+            || {
+                format!(
+                    "received pre-exec bytes {:?}",
+                    String::from_utf8_lossy(&received.borrow())
+                )
+            },
+        );
+        self.gate = Some(gate);
+        result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn release(&mut self) -> Result<()> {
+        self.gate
+            .take()
+            .context(InvalidInputSnafu {
+                path: &self.path,
+                reason: "the process is not held before exec",
+            })?
+            .write_all(b"1")
+            .context(IoSnafu { path: &self.path })
     }
 
     pub(crate) fn start(command: &mut Command, path: &Path) -> Result<Self> {
@@ -225,15 +446,27 @@ impl ProcessFixture {
     }
 
     pub(crate) fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
-        self.child
-            .as_mut()
-            .context(InvalidInputSnafu {
-                path: &self.path,
-                reason: "the external process has no child exit status",
-            })?
-            .try_wait()
-            .context(IoSnafu { path: &self.path })
-            .inspect(|status| self.stopped |= status.is_some())
+        if let Some(child) = self.child.as_mut() {
+            return child
+                .try_wait()
+                .context(IoSnafu { path: &self.path })
+                .inspect(|status| self.stopped |= status.is_some());
+        }
+        let pid = self.raw_pid.context(InvalidInputSnafu {
+            path: &self.path,
+            reason: "the external process has no child exit status",
+        })?;
+        let mut status = 0;
+        let result = unsafe { libc::waitpid(pid as libc::pid_t, &raw mut status, libc::WNOHANG) };
+        if result < 0 {
+            return Err(std::io::Error::last_os_error()).context(IoSnafu { path: &self.path });
+        }
+        if result == 0 {
+            return Ok(None);
+        }
+        self.raw_pid = None;
+        self.stopped = true;
+        Ok(Some(ExitStatus::from_raw(status)))
     }
 
     #[cfg(test)]
@@ -525,6 +758,10 @@ impl ProcessFixture {
     }
 
     pub(crate) fn close(&mut self) {
+        #[cfg(test)]
+        {
+            self.gate.take();
+        }
         self.stdin.take();
     }
 
@@ -534,10 +771,27 @@ impl ProcessFixture {
         let mut failed = None;
         let ids = self.tasks.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         if !self.stopped {
-            for (id, fd) in &self.tasks {
-                match pidfd_send_signal(fd, Signal::KILL) {
-                    Ok(()) | Err(rustix::io::Errno::SRCH) => {}
-                    Err(source) => failed = Some(format!("kill tracked process {id}: {source}")),
+            #[cfg(test)]
+            let killed = self.group.as_ref().is_some_and(|group| {
+                let path = group.join("cgroup.kill");
+                match fs::write(&path, "1") {
+                    Ok(()) => true,
+                    Err(source) => {
+                        failed = Some(format!("kill actor cgroup {}: {source}", group.display()));
+                        false
+                    }
+                }
+            });
+            #[cfg(not(test))]
+            let killed = false;
+            if !killed {
+                for (id, fd) in &self.tasks {
+                    match pidfd_send_signal(fd, Signal::KILL) {
+                        Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+                        Err(source) => {
+                            failed = Some(format!("kill tracked process {id}: {source}"));
+                        }
+                    }
                 }
             }
         }
@@ -551,6 +805,16 @@ impl ProcessFixture {
             {
                 child.kill().context(IoSnafu { path: &self.path })?;
                 child.wait().context(IoSnafu { path: &self.path })?;
+                self.stopped = true;
+            }
+        } else if let Some(pid) = self.raw_pid.take() {
+            let mut status = 0;
+            if unsafe { libc::waitpid(pid as libc::pid_t, &raw mut status, 0) } < 0 {
+                failed = Some(format!(
+                    "reap tracked process {pid}: {}",
+                    std::io::Error::last_os_error()
+                ));
+            } else {
                 self.stopped = true;
             }
         }
@@ -639,6 +903,49 @@ impl ProcessFixture {
         );
         self.stdout = Some(stdout);
         result
+    }
+}
+
+#[cfg(test)]
+fn cstring(path: &Path) -> Result<CString> {
+    CString::new(path.as_os_str().as_bytes()).map_err(|source| {
+        InvalidInputSnafu {
+            path,
+            reason: format!("the actor argument contains a null byte: {source}"),
+        }
+        .build()
+    })
+}
+
+#[cfg(test)]
+fn run_held(
+    python: &CString,
+    argv: &[*const libc::c_char],
+    input: &OwnedFd,
+    output: &File,
+    errors: &File,
+    gate: &UnixStream,
+    rootfs: &CString,
+) -> ! {
+    unsafe {
+        if libc::chroot(rootfs.as_ptr()) < 0 || libc::chdir(c"/".as_ptr()) < 0 {
+            libc::_exit(125);
+        }
+        if libc::dup2(input.as_raw_fd(), libc::STDIN_FILENO) < 0
+            || libc::dup2(output.as_raw_fd(), libc::STDOUT_FILENO) < 0
+            || libc::dup2(errors.as_raw_fd(), libc::STDERR_FILENO) < 0
+        {
+            libc::_exit(126);
+        }
+        if libc::write(gate.as_raw_fd(), HELD.as_ptr().cast(), HELD.len()) != HELD.len() as isize {
+            libc::_exit(126);
+        }
+        let mut release = 0_u8;
+        if libc::read(gate.as_raw_fd(), (&raw mut release).cast(), 1) != 1 {
+            libc::_exit(126);
+        }
+        libc::execv(python.as_ptr(), argv.as_ptr());
+        libc::_exit(127);
     }
 }
 

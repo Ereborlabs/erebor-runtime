@@ -2,7 +2,8 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, File};
+use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
@@ -58,6 +59,7 @@ pub(crate) struct Host {
     cri_path: PathBuf,
     admit_path: PathBuf,
     work: Option<ProbeDirectory>,
+    bundle: Option<ProbeDirectory>,
     state: Option<ProbeDirectory>,
     admit: Option<ProbeDirectory>,
     cgroup: Option<ProbeCgroup>,
@@ -76,6 +78,9 @@ pub(crate) struct Host {
     node_task: Option<thread::JoinHandle<mithril_node::Result<()>>>,
     ready: Option<watch::Receiver<NodeReadinessV1>>,
     init_pid: Option<u32>,
+    staged: bool,
+    admitted: bool,
+    mounts: Vec<PathBuf>,
     inspector: NativeIdentityInspector,
     reader: KernelStateReader,
     runtime: tokio::runtime::Runtime,
@@ -184,6 +189,58 @@ impl Host {
         })
     }
 
+    fn bind(&mut self, source: &Path, target: &Path) -> TestResult<()> {
+        fs::create_dir_all(target).context(IoSnafu { path: target })?;
+        rustix::mount::mount_bind(source, target)
+            .map_err(std::io::Error::from)
+            .context(IoSnafu { path: target })?;
+        self.mounts.push(target.to_owned());
+        Ok(())
+    }
+
+    fn actor_root(&mut self, name: &str) -> TestResult<PathBuf> {
+        let bundle_path = self.out.join("bundle");
+        let rootfs = bundle_path.join("rootfs");
+        let bundle = ProbeDirectory::create(&bundle_path)?;
+        fs::create_dir_all(rootfs.join("bundle"))?;
+        self.bind(&rootfs, &rootfs)?;
+        for path in ["/usr", "/lib", "/lib64", "/proc"] {
+            let source = Path::new(path);
+            if source.exists() {
+                self.bind(source, &rootfs.join(path.trim_start_matches('/')))?;
+            }
+        }
+        let script = ProcessFixture::script(&self.root, name)?;
+        let fixtures = script
+            .parent()
+            .ok_or("the actor has no fixture directory")?;
+        self.bind(fixtures, &rootfs.join("fixtures"))?;
+        let work = self.work_path.clone();
+        self.bind(&work, &rootfs.join("work"))?;
+        self.bundle = Some(bundle);
+        Ok(rootfs)
+    }
+
+    fn stage_entries(&self, rootfs: &Path) -> TestResult<()> {
+        let config = rootfs.join("bundle/config.json");
+        fs::write(&config, br#"{"root":{"path":"/"}}"#).context(IoSnafu { path: &config })?;
+        let root = File::open(rootfs).context(IoSnafu { path: rootfs })?;
+        let mut request =
+            self.request(RuntimeAdmissionOperationV1::PrepareDeclaredEntries, None)?;
+        request.oci_bundle = Some(PathBuf::from("/bundle"));
+        request.oci_root_fd = Some(u32::try_from(root.as_raw_fd())?);
+        let client = RuntimeAdmissionClient::new(self.admit_path.clone(), READY_LIMIT)?;
+        let response = self.runtime.block_on(client.submit(&request))?;
+        ensure!(
+            response.allowed && response.reason_code == "DECLARED_ENTRY_CANDIDATE_STAGED",
+            InvalidInputSnafu {
+                path: &self.admit_path,
+                reason: format!("Node rejected declared entries: {response:?}"),
+            }
+        );
+        Ok(())
+    }
+
     fn close(&mut self) -> TestResult<()> {
         if let Some(stop) = self.node_stop.take() {
             stop.send_replace(true);
@@ -228,6 +285,14 @@ impl Host {
         }
         if let Some(cgroup) = self.node_cgroup.take() {
             cgroup.cleanup()?;
+        }
+        for target in self.mounts.drain(..).rev() {
+            rustix::mount::unmount(&target, rustix::mount::UnmountFlags::DETACH)
+                .map_err(std::io::Error::from)
+                .context(IoSnafu { path: &target })?;
+        }
+        if let Some(bundle) = self.bundle.take() {
+            bundle.cleanup()?;
         }
         if let Some(admit) = self.admit.take() {
             admit.cleanup()?;
@@ -316,6 +381,7 @@ impl Platform for Host {
             cri_path,
             admit_path,
             work: Some(work),
+            bundle: None,
             state: Some(state),
             admit: Some(admit),
             cgroup: Some(cgroup),
@@ -334,6 +400,9 @@ impl Platform for Host {
             node_task: None,
             ready: None,
             init_pid: None,
+            staged: false,
+            admitted: false,
+            mounts: Vec::new(),
             inspector,
             reader,
             runtime,
@@ -695,6 +764,24 @@ impl Platform for Host {
                 reason: "the initial actor is already running",
             }
         );
+        if self.node_task.is_some() && self.binding.is_some() {
+            let rootfs = self.actor_root(name)?;
+            let mut args = vec![OsString::from("/work")];
+            args.extend(extra.iter().map(OsString::from));
+            let mut actor =
+                ProcessFixture::held_pidns(&self.root, name, args, &self.cgroup_path, &rootfs)?;
+            let pid = actor.id();
+            self.init_pid = Some(pid);
+            self.stage()?;
+            self.admit(pid)?;
+            self.stage_entries(&rootfs)?;
+            actor.release()?;
+            if let Err(source) = actor.ready() {
+                return Err(format!("{source}; identity health: {:?}", self.health()?).into());
+            }
+            self.running(pid)?;
+            return Ok(actor);
+        }
         let mut args = vec![self.work_path.clone().into_os_string()];
         args.extend(extra.iter().map(OsString::from));
         let mut actor = ProcessFixture::pidns(&self.root, name, args)?;
@@ -713,6 +800,9 @@ impl Platform for Host {
     }
 
     fn stage(&mut self) -> TestResult<()> {
+        if self.staged {
+            return Ok(());
+        }
         self.observe()?;
         let client = RuntimeAdmissionClient::new(self.admit_path.clone(), READY_LIMIT)?;
         let request = self.request(RuntimeAdmissionOperationV1::StageRuntimeFacts, None)?;
@@ -724,10 +814,21 @@ impl Platform for Host {
                 reason: format!("Node rejected runtime staging: {response:?}"),
             }
         );
+        self.staged = true;
         Ok(())
     }
 
     fn admit(&mut self, pid: u32) -> TestResult<()> {
+        if self.admitted {
+            ensure!(
+                self.init_pid == Some(pid),
+                InvalidInputSnafu {
+                    path: &self.admit_path,
+                    reason: "the admitted actor PID changed",
+                }
+            );
+            return Ok(());
+        }
         let client = RuntimeAdmissionClient::new(self.admit_path.clone(), READY_LIMIT)?;
         let request = self.request(RuntimeAdmissionOperationV1::PrepareContainer, Some(pid))?;
         let response = self.runtime.block_on(client.submit(&request))?;
@@ -738,6 +839,7 @@ impl Platform for Host {
                 reason: format!("Node rejected runtime preparation: {response:?}"),
             }
         );
+        self.admitted = true;
         Ok(())
     }
 
