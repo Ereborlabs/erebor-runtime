@@ -792,7 +792,7 @@ command passes.
   - [ ] Complete the shared physical support for a workload that exists before
     Node. The platform supplies runtime placement and the external CRI input;
     it does not call or reproduce the recovery owner sequence.
-  - [ ] Pass the Host generated case in the retained privileged VM with the
+  - [x] Pass the Host generated case in the retained privileged VM with the
     Control, actor, policy, and Node order.
   - [ ] Pass the direct-`runc` generated case with the actor as container PID
     1. The preexisting container must not use a test-only OCI hook.
