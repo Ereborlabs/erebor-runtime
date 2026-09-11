@@ -131,6 +131,13 @@ reimplement a production owner operation.
 - Use the existing Helm chart for the Control Deployment, Node DaemonSet,
   Service, RBAC, webhooks, CRDs, and runtime-hook installation. Do not build
   these resources as JSON in a test.
+- Keep VM, K3s, OCI-hook, Helm, and image preparation in infrastructure
+  setup. The Kubernetes Rust platform must not install, restart, or remove
+  K3s. It must not build, import, tag, or repair an image. It can verify that
+  the prepared cluster and required images are ready before a test starts.
+- Retain K3s, its OCI hook, and its prepared image cache between focused Rust
+  test runs. Recreate them only when the operator requests a clean environment
+  or readiness proves that the retained environment is unusable.
 - Keep the Node config, Control config, policy, PVC, and actor Pod as checked
   fixture documents. Bind only run-specific paths, names, images,
   certificates, and trust data in the platform fixture. The chart consumes
@@ -431,8 +438,10 @@ Single-node and guest cases:
     helper to install the Control, Node, and actor archives in the persistent
     K3s image store. The Rust platform only verifies each required image
     before use. Both actor-first and Node-first order pass.
-  - [ ] Make the thin retained-VM launcher call the image helper before its
-    first exact Rust test. Keep K3s and its prepared images between test runs.
+  - [ ] Make the thin retained-VM launcher call the image helper once before
+    its first exact Rust test when an image is absent. Keep K3s, its OCI hook,
+    and its prepared images between test runs. Do not uninstall K3s or import
+    unchanged archives between exact tests.
   - [x] Require lightweight and Kubernetes cleanup to prove that Node removed
     both runtime sockets. The Kubernetes `preStop` hook must close admission
     and seccomp endpoints before the termination deadline.
