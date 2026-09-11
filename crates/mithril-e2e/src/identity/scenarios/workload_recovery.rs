@@ -4,7 +4,7 @@ use rustix::io::Errno;
 
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 fn workload_recovers<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("workload-recovery")?;
     env.start_control()?;
@@ -57,7 +57,7 @@ fn workload_recovers<P: Platform>() -> TestResult<()> {
     assert_eq!(recovery.invalid_task_count, 0);
 
     actor.send(b"effect\n")?;
-    let status = actor.wait_exit("denied executable", Duration::from_secs(5))?;
-    assert_eq!(status.code(), Some(Errno::ACCESS.raw_os_error()));
+    let code = env.actor_code(&mut actor, "denied executable", Duration::from_secs(5))?;
+    assert_eq!(code, Errno::ACCESS.raw_os_error());
     env.stop()
 }

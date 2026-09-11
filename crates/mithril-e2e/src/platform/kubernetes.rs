@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::env;
-use std::fs;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -23,7 +23,8 @@ use mithril_control::{
     KUBERNETES_PROFILE_ANNOTATION, KUBERNETES_READY_LABEL, KUBERNETES_SOURCE_ANNOTATION,
 };
 use mithril_node::{
-    NativeIdentityInspector, NodeConfig, RuntimeIntegrationDecommissionV1, RuntimeIntegrationOwner,
+    NativeIdentityInspector, NativeTaskSnapshotV1, NodeConfig, RuntimeIntegrationDecommissionV1,
+    RuntimeIntegrationOwner,
 };
 use serde_json::{json, Value};
 use snafu::ResultExt as _;
@@ -31,7 +32,7 @@ use zerocopy::TryFromBytes as _;
 
 use super::{Platform, Task, TestResult};
 use crate::control_fixture::MtlsFixture;
-use crate::error::{InvalidInputSnafu, NodeSnafu};
+use crate::error::{InvalidInputSnafu, IoSnafu, NodeSnafu};
 use crate::physical::{wait_for, wait_for_async, ProbeDirectory, ProbeFile};
 use crate::process::ProcessFixture;
 
@@ -261,6 +262,7 @@ impl Kubernetes {
         let nodes = Api::<Node>::all(self.client.clone());
         let last = RefCell::new(String::from("<absent>"));
         let path = Self::resource("", "node", &self.node_name);
+        let task_map = self.pin_path.join("maps/task_labels");
         Ok(wait_for(
             &path,
             "authenticated Node readiness",
@@ -292,7 +294,8 @@ impl Kubernetes {
                         && notes.get(KUBERNETES_NODE_UID_ANNOTATION) == node.metadata.uid.as_ref()
                         && boot
                         && epoch
-                        && !tainted;
+                        && !tainted
+                        && task_map.is_file();
                     Ok(ready.then_some(()))
                 }
                 Err(source) => {
@@ -300,7 +303,14 @@ impl Kubernetes {
                     Ok(None)
                 }
             },
-            || format!("last Node state: {}", last.borrow()),
+            || {
+                format!(
+                    "last Node state: {}; task map {} exists: {}",
+                    last.borrow(),
+                    task_map.display(),
+                    task_map.is_file()
+                )
+            },
         )?)
     }
 
@@ -505,6 +515,44 @@ impl Kubernetes {
         Ok(())
     }
 
+    fn create_work(&mut self) -> TestResult<()> {
+        let namespaces = Api::<Namespace>::all(self.client.clone());
+        let namespace = Namespace {
+            metadata: ObjectMeta {
+                name: Some(self.namespace.clone()),
+                ..ObjectMeta::default()
+            },
+            ..Namespace::default()
+        };
+        self.runtime
+            .block_on(namespaces.create(&PostParams::default(), &namespace))?;
+        self.work_up = true;
+
+        let accounts = Api::<ServiceAccount>::namespaced(self.client.clone(), &self.namespace);
+        let account = Self::resource(&self.namespace, "serviceaccount", "default");
+        wait_for(
+            &account,
+            "default ServiceAccount readiness",
+            READY_LIMIT,
+            || {
+                Ok(self
+                    .runtime
+                    .block_on(accounts.get_opt("default"))
+                    .map_err(|source| {
+                        InvalidInputSnafu {
+                            path: &self.values_path,
+                            reason: source.to_string(),
+                        }
+                        .build()
+                    })?
+                    .is_some()
+                    .then_some(()))
+            },
+            || "the default ServiceAccount is absent".to_owned(),
+        )?;
+        Ok(())
+    }
+
     fn wait_policy(&self, active: u32) -> TestResult<()> {
         let policies =
             Api::<WorkloadProtectionPolicy>::namespaced(self.client.clone(), &self.namespace);
@@ -598,6 +646,32 @@ impl Kubernetes {
             },
         )?;
         Ok(())
+    }
+
+    fn running_id(&self, id: &str) -> TestResult<()> {
+        let mut command = Command::new(&self.k3s_path);
+        command.args(["crictl", "inspect", id]);
+        let output = Self::run(&mut command, "inspect the running actor")?;
+        let state: Value = serde_json::from_str(&output)?;
+        if state.pointer("/status/state").and_then(Value::as_str) != Some("CONTAINER_RUNNING") {
+            return Err(format!("the Kubernetes actor is not running: {state}").into());
+        }
+        Ok(())
+    }
+
+    fn task_from(&self, pid: u32, snapshot: NativeTaskSnapshotV1) -> TestResult<Task> {
+        let bytes = self
+            .reader
+            .lookup("task_coordinates", &snapshot.task_cookie.to_ne_bytes())?
+            .ok_or("task coordinate is missing")?;
+        let coordinate = TaskCoordinateV1::try_read_from_bytes(&bytes)
+            .map_err(|source| format!("task coordinate is invalid: {source}"))?;
+        Ok(Task {
+            pid,
+            ns_pid: ProcessFixture::namespace_pid(pid)?,
+            snapshot,
+            coordinate,
+        })
     }
 
     fn close(&mut self) -> TestResult<()> {
@@ -802,7 +876,7 @@ impl Platform for Kubernetes {
         let tls = MtlsFixture::kubernetes(&server_name)?;
         let inspector = NativeIdentityInspector::new(&pin_path);
         let reader = KernelStateReader::new(&pin_path);
-        let fixture = Self {
+        let mut fixture = Self {
             root,
             out,
             work_path,
@@ -850,6 +924,7 @@ impl Platform for Kubernetes {
             actor_cgroup: None,
         };
         fixture.write_inputs()?;
+        fixture.create_work()?;
         Ok(fixture)
     }
 
@@ -882,43 +957,6 @@ impl Platform for Kubernetes {
     }
 
     fn install_policy(&mut self) -> TestResult<()> {
-        self.ready_node()?;
-        let namespaces = Api::<Namespace>::all(self.client.clone());
-        let namespace = Namespace {
-            metadata: ObjectMeta {
-                name: Some(self.namespace.clone()),
-                ..ObjectMeta::default()
-            },
-            ..Namespace::default()
-        };
-        self.runtime
-            .block_on(namespaces.create(&PostParams::default(), &namespace))?;
-        self.work_up = true;
-
-        let accounts = Api::<ServiceAccount>::namespaced(self.client.clone(), &self.namespace);
-        let account = Self::resource(&self.namespace, "serviceaccount", "default");
-        wait_for(
-            &account,
-            "default ServiceAccount readiness",
-            READY_LIMIT,
-            || {
-                let present = self
-                    .runtime
-                    .block_on(accounts.get_opt("default"))
-                    .map_err(|source| {
-                        InvalidInputSnafu {
-                            path: &self.values_path,
-                            reason: source.to_string(),
-                        }
-                        .build()
-                    })?
-                    .is_some()
-                    .then_some(());
-                Ok(present)
-            },
-            || "the default ServiceAccount is absent".to_owned(),
-        )?;
-
         let path = self
             .root
             .join("crates/mithril-e2e/fixtures/mithril-policy/pid-reuse-policy-v1.json");
@@ -951,6 +989,10 @@ impl Platform for Kubernetes {
         self.runtime
             .block_on(policies.create(&PostParams::default(), &policy))?;
         self.wait_policy(0)
+    }
+
+    fn sync_policy(&mut self) -> TestResult<()> {
+        self.wait_policy(1)
     }
 
     fn node_ready(&mut self) -> TestResult<()> {
@@ -1029,27 +1071,37 @@ impl Platform for Kubernetes {
         let pid = self.inspect_pid(&id)?;
         let cgroup = Self::cgroup(pid)?;
 
-        let mut command = Command::new(&self.k3s_path);
-        command
-            .arg("kubectl")
-            .args(["--kubeconfig"])
-            .arg(&self.kube_path)
-            .args([
-                "-n",
-                &self.namespace,
-                "attach",
-                "-i",
-                ACTOR,
-                "-c",
-                CONTAINER,
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let child = command.spawn()?;
-        let mut actor = ProcessFixture::new(child, &script);
+        let mut actor = if self.hook_up {
+            let mut command = Command::new(&self.k3s_path);
+            command
+                .arg("kubectl")
+                .args(["--kubeconfig"])
+                .arg(&self.kube_path)
+                .args([
+                    "-n",
+                    &self.namespace,
+                    "attach",
+                    "-i",
+                    ACTOR,
+                    "-c",
+                    CONTAINER,
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let child = command.spawn()?;
+            let mut actor = ProcessFixture::new(child, &script);
+            actor.ensure_running("Kubernetes actor attach")?;
+            actor
+        } else {
+            let input_path = PathBuf::from(format!("/proc/{pid}/fd/0"));
+            let input = File::options()
+                .write(true)
+                .open(&input_path)
+                .context(IoSnafu { path: &input_path })?;
+            ProcessFixture::from_pid(pid, input, &script)
+        };
         actor.set_init(pid)?;
-        actor.ensure_running("Kubernetes actor attach")?;
         self.actor_id = Some(id);
         self.actor_pid = Some(pid);
         self.actor_cgroup = Some(cgroup);
@@ -1093,14 +1145,7 @@ impl Platform for Kubernetes {
             )
             .into());
         }
-        let mut command = Command::new(&self.k3s_path);
-        command.args(["crictl", "inspect", expected]);
-        let output = Self::run(&mut command, "read the staged CRI actor")?;
-        let inspect: Value = serde_json::from_str(&output)?;
-        if inspect.pointer("/status/state").and_then(Value::as_str) != Some("CONTAINER_RUNNING") {
-            return Err(format!("the staged CRI actor is not running: {inspect}").into());
-        }
-        Ok(())
+        self.running_id(expected)
     }
 
     fn admit(&mut self, pid: u32) -> TestResult<()> {
@@ -1118,6 +1163,18 @@ impl Platform for Kubernetes {
         Ok(())
     }
 
+    fn running(&mut self, pid: u32) -> TestResult<()> {
+        let expected = self
+            .actor_id
+            .as_deref()
+            .ok_or("the Kubernetes actor has no recorded container ID")?;
+        if self.actor_pid != Some(pid) || self.container_id()? != expected {
+            return Err("the preexisting Kubernetes actor changed identity".into());
+        }
+        self.running_id(expected)?;
+        self.wait_policy(1)
+    }
+
     fn task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
         let snapshot = self.runtime.block_on(wait_for_async(
             &self.pin_path,
@@ -1126,18 +1183,75 @@ impl Platform for Kubernetes {
             || self.inspector.snapshot(pid).context(NodeSnafu),
             || format!("PID {pid} has no published identity"),
         ))?;
-        let bytes = self
-            .reader
-            .lookup("task_coordinates", &snapshot.task_cookie.to_ne_bytes())?
-            .ok_or("task coordinate is missing")?;
-        let coordinate = TaskCoordinateV1::try_read_from_bytes(&bytes)
-            .map_err(|source| format!("task coordinate is invalid: {source}"))?;
-        Ok(Task {
-            pid,
-            ns_pid: ProcessFixture::namespace_pid(pid)?,
-            snapshot,
-            coordinate,
-        })
+        self.task_from(pid, snapshot)
+    }
+
+    fn recovered(&mut self, pid: u32, name: &str) -> TestResult<Task> {
+        let last = RefCell::new(String::from("<absent>"));
+        let snapshot = self.runtime.block_on(wait_for_async(
+            &self.pin_path,
+            name,
+            READY_LIMIT,
+            || {
+                let snapshot = match self.inspector.snapshot(pid) {
+                    Ok(snapshot) => snapshot,
+                    Err(source) => {
+                        *last.borrow_mut() = source.to_string();
+                        return Ok(None);
+                    }
+                };
+                if let Some(value) = snapshot.as_ref() {
+                    *last.borrow_mut() = format!("{value:?}");
+                }
+                Ok(snapshot.filter(|value| {
+                    value
+                        .runtime_binding
+                        .as_ref()
+                        .is_some_and(|binding| binding.lifecycle_state == "active_recovered")
+                        && value
+                            .recovered_container_activation
+                            .as_ref()
+                            .is_some_and(|recovery| recovery.phase == "complete")
+                }))
+            },
+            || format!("PID {pid}; last identity: {}", last.borrow()),
+        ))?;
+        self.task_from(pid, snapshot)
+    }
+
+    fn actor_code(
+        &mut self,
+        _actor: &mut ProcessFixture,
+        operation: &str,
+        limit: Duration,
+    ) -> TestResult<i32> {
+        let pods = Api::<Pod>::namespaced(self.client.clone(), &self.namespace);
+        let path = Self::resource(&self.namespace, "pod", ACTOR);
+        let last = RefCell::new(String::from("<absent>"));
+        Ok(wait_for(
+            &path,
+            operation,
+            limit,
+            || match self.runtime.block_on(pods.get(ACTOR)) {
+                Ok(pod) => {
+                    *last.borrow_mut() = format!("{:?}", pod.status);
+                    Ok(pod
+                        .status
+                        .and_then(|status| status.container_statuses)
+                        .and_then(|statuses| {
+                            statuses.into_iter().find(|status| status.name == CONTAINER)
+                        })
+                        .and_then(|status| status.state)
+                        .and_then(|state| state.terminated)
+                        .map(|state| state.exit_code))
+                }
+                Err(source) => {
+                    *last.borrow_mut() = source.to_string();
+                    Ok(None)
+                }
+            },
+            || format!("last Pod state: {}", last.borrow()),
+        )?)
     }
 
     fn maps(&self) -> (&Path, &KernelStateReader) {

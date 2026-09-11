@@ -85,6 +85,17 @@ pub(crate) trait Platform: Sized {
     fn recovered(&mut self, _pid: u32, _name: &str) -> TestResult<Task> {
         pending("wait for recovered task")
     }
+    fn actor_code(
+        &mut self,
+        actor: &mut crate::process::ProcessFixture,
+        operation: &str,
+        limit: Duration,
+    ) -> TestResult<i32> {
+        actor
+            .wait_exit(operation, limit)?
+            .code()
+            .ok_or_else(|| "the actor exited without an exit code".into())
+    }
     fn maps(&self) -> (&Path, &KernelStateReader);
     fn coordinate(&self, task: u64) -> crate::Result<Option<TaskCoordinateV1>> {
         let (pin, reader) = self.maps();

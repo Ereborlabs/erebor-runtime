@@ -4,10 +4,12 @@ mod tests;
 use std::cell::RefCell;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{ErrorKind, Read as _, Write as _};
+#[cfg(test)]
+use std::fs::File;
+use std::io::{ErrorKind, Read as _, Write};
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::time::Duration;
 
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
@@ -23,10 +25,10 @@ const READY: &[u8] = b"native-fixture-ready\n";
 const START_LIMIT: Duration = Duration::from_secs(30);
 
 pub(crate) struct ProcessFixture {
-    child: Child,
+    child: Option<Child>,
     actor_pid: u32,
     path: PathBuf,
-    stdin: Option<ChildStdin>,
+    stdin: Option<Box<dyn Write + Send>>,
     stdout: Option<ChildStdout>,
     stderr: Option<ChildStderr>,
     tasks: Vec<(u32, OwnedFd)>,
@@ -51,13 +53,30 @@ impl ProcessFixture {
     pub(crate) fn new(mut child: Child, path: &Path) -> Self {
         let actor_pid = child.id();
         Self {
-            stdin: child.stdin.take(),
+            stdin: child
+                .stdin
+                .take()
+                .map(|input| Box::new(input) as Box<dyn Write + Send>),
             stdout: child.stdout.take(),
             stderr: child.stderr.take(),
             tasks: Vec::new(),
-            child,
+            child: Some(child),
             actor_pid,
             path: path.to_owned(),
+            stopped: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_pid(pid: u32, input: File, path: &Path) -> Self {
+        Self {
+            child: None,
+            actor_pid: pid,
+            path: path.to_owned(),
+            stdin: Some(Box::new(input)),
+            stdout: None,
+            stderr: None,
+            tasks: Vec::new(),
             stopped: false,
         }
     }
@@ -206,6 +225,11 @@ impl ProcessFixture {
 
     pub(crate) fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
         self.child
+            .as_mut()
+            .context(InvalidInputSnafu {
+                path: &self.path,
+                reason: "the external process has no child exit status",
+            })?
             .try_wait()
             .context(IoSnafu { path: &self.path })
             .inspect(|status| self.stopped |= status.is_some())
@@ -224,13 +248,6 @@ impl ProcessFixture {
             ),
         }
         .fail()
-    }
-
-    pub(crate) fn wait(&mut self) -> Result<ExitStatus> {
-        self.child
-            .wait()
-            .context(IoSnafu { path: &self.path })
-            .inspect(|_status| self.stopped = true)
     }
 
     pub(crate) fn wait_exit(&mut self, operation: &str, limit: Duration) -> Result<ExitStatus> {
@@ -521,9 +538,17 @@ impl ProcessFixture {
             }
         }
         self.tasks.clear();
-        if !self.stopped && self.try_wait()?.is_none() {
-            self.child.kill().context(IoSnafu { path: &self.path })?;
-            self.wait()?;
+        if let Some(child) = self.child.as_mut() {
+            if !self.stopped
+                && child
+                    .try_wait()
+                    .context(IoSnafu { path: &self.path })?
+                    .is_none()
+            {
+                child.kill().context(IoSnafu { path: &self.path })?;
+                child.wait().context(IoSnafu { path: &self.path })?;
+                self.stopped = true;
+            }
         }
         for id in ids {
             let path = PathBuf::from(format!("/proc/{id}"));

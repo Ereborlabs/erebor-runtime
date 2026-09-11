@@ -789,15 +789,17 @@ command passes.
   - [x] Require Node's real task map before accepting its readiness projection.
     Treat bounded map absence as recovery wait state. Include the map path and
     the last inspection error in diagnostics.
-  - [ ] Complete the shared physical support for a workload that exists before
+  - [x] Complete the shared physical support for a workload that exists before
     Node. The platform supplies runtime placement and the external CRI input;
     it does not call or reproduce the recovery owner sequence.
   - [x] Pass the Host generated case in the retained privileged VM with the
     Control, actor, policy, and Node order.
   - [x] Pass the direct-`runc` generated case with the actor as container PID
     1. The preexisting container must not use a test-only OCI hook.
-  - [ ] Pass the Kubernetes generated case with one normally scheduled actor
-    Pod running before its policy and the Helm Node DaemonSet.
+  - [x] Pass the Kubernetes generated case with one normally scheduled actor
+    Pod running before its policy and the Helm Node DaemonSet. The platform
+    keeps actor input across the required K3s runtime restart. The recovered
+    actor then receives the shared action and exits with the denied result.
   - [ ] Remove only the matching workload-first assertions from the old
     monolithic probes after all three generated cases pass. Preserve their
     other recovered-entry and concurrency assertions for later migrations.
