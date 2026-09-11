@@ -341,23 +341,10 @@ done
 "$provider" put "$vm_name" \
   "$repo_root/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh" \
   "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh"
-for fixture in \
-  native_child_exec.py \
-  native_concurrent_thread_exec.py \
-  native_double_fork.py \
-  native_exec_retry.py \
-  native_fatal_exec.py \
-  native_leader_first.py \
-  native_namespace_init.py \
-  native_non_leader_exec.py \
-  native_orphan.py \
-  native_pid_reuse.py \
-  native_subreaper.py \
-  native_tid_reuse.py \
-  process_exit.py \
-  ready.py; do
+for source in "$repo_root/crates/mithril-e2e/fixtures/process/"*.py; do
+  fixture=${source##*/}
   "$provider" put "$vm_name" \
-    "$repo_root/crates/mithril-e2e/fixtures/process/$fixture" \
+    "$source" \
     "$remote_source/crates/mithril-e2e/fixtures/process/$fixture"
 done
 "$provider" put "$vm_name" \

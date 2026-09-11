@@ -79,7 +79,7 @@ grep -Fq -- '--lib --no-run --message-format=json' "$directory/run.sh"
 grep -Fq '.target.name == "mithril_e2e"' "$directory/run.sh"
 grep -Fq '"$test_bin" "$remote_bin/mithril-e2e-tests"' "$directory/run.sh"
 grep -Fq 'fixtures/process/$fixture' "$directory/run.sh"
-grep -Fq 'ready.py; do' "$directory/run.sh"
+grep -Fq 'fixtures/process/"*.py; do' "$directory/run.sh"
 if grep -Fq -- '--start-hook-path' "$directory/run.sh"; then
   echo "the direct runtime probe still uses the rejected start hook" >&2
   exit 1
