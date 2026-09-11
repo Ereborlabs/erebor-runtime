@@ -759,8 +759,8 @@ command passes.
   namespace-TID actions, exact thread coordinates, and tombstone checks
   visible in a separate small scenario file.
   - [x] The Host generated case passes in the retained privileged VM.
-  - [x] Remove the TID behavior from `IdentityTestRunner::physical_probe`.
-    The old bundle reads only the asserted compatibility result.
+  - [x] Remove the TID behavior and compatibility result bridge from
+    `IdentityTestRunner::physical_probe`.
   - [x] The direct-`runc` generated case passes with the same Python actor and
     the production OCI hooks.
   - [x] Reproduce the Kubernetes `SIGTERM` cleanup condition in a lightweight

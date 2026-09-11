@@ -1,27 +1,16 @@
-use std::fs;
-use std::path::Path;
-
 use mithril_node::NativeTaskSnapshotV1;
-use serde::{Deserialize, Serialize};
-use snafu::ResultExt as _;
 
-use crate::error::{IoSnafu, JsonSnafu};
-use crate::Result;
-
-#[derive(Deserialize, Serialize)]
-pub(in crate::identity) struct TidResult {
-    pub(in crate::identity) ns_tid: u32,
-    pub(in crate::identity) second_ns: u32,
-    pub(in crate::identity) root: NativeTaskSnapshotV1,
-    pub(in crate::identity) first: ThreadStamp,
-    pub(in crate::identity) second: ThreadStamp,
-    pub(in crate::identity) fresh: bool,
+pub(crate) struct ReuseResult {
+    ns_tid: u32,
+    second_ns: u32,
+    root: NativeTaskSnapshotV1,
+    first: ThreadStamp,
+    second: ThreadStamp,
 }
 
-#[derive(Deserialize, Serialize)]
-pub(in crate::identity) struct ThreadStamp {
-    pub(in crate::identity) task_cookie: u64,
-    pub(in crate::identity) host_tid: u32,
+struct ThreadStamp {
+    task_cookie: u64,
+    host_tid: u32,
     ns_tid: u32,
     host_tgid: u32,
     pidns_inode: u32,
@@ -30,16 +19,7 @@ pub(in crate::identity) struct ThreadStamp {
     creator_task: u64,
 }
 
-pub(in crate::identity) fn read(path: &Path) -> Result<TidResult> {
-    let bytes = fs::read(path).context(IoSnafu { path })?;
-    serde_json::from_slice(&bytes).context(JsonSnafu { path })
-}
-
-#[cfg(test)]
-pub(crate) type ReuseResult = TidResult;
-
-#[cfg(test)]
-impl TidResult {
+impl ReuseResult {
     pub(crate) fn new(
         ns_tid: u32,
         second_ns: u32,
@@ -47,18 +27,12 @@ impl TidResult {
         first: crate::platform::Thread,
         second: crate::platform::Thread,
     ) -> Self {
-        let fresh = ns_tid == second_ns
-            && first.pid != second.pid
-            && first.coordinate.task_cookie != second.coordinate.task_cookie
-            && first.coordinate.task_start_boottime_ns != second.coordinate.task_start_boottime_ns
-            && first.coordinate.pid_namespace_inode == second.coordinate.pid_namespace_inode;
         Self {
             ns_tid,
             second_ns,
             root: root.snapshot,
             first: ThreadStamp::new(first),
             second: ThreadStamp::new(second),
-            fresh,
         }
     }
 
@@ -86,16 +60,9 @@ impl TidResult {
         assert_eq!(self.second.host_tgid, self.root.host_tgid);
         assert_eq!(self.first.pidns_inode, self.second.pidns_inode);
         assert_ne!(self.first.start_ns, self.second.start_ns);
-        assert!(self.fresh);
-    }
-
-    pub(crate) fn write(&self, path: &Path) -> Result<()> {
-        let bytes = serde_json::to_vec_pretty(self).context(JsonSnafu { path })?;
-        fs::write(path, bytes).context(IoSnafu { path })
     }
 }
 
-#[cfg(test)]
 impl ThreadStamp {
     fn new(thread: crate::platform::Thread) -> Self {
         Self {

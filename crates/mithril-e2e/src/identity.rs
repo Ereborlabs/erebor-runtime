@@ -259,12 +259,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub leader_first_process_reclaimable: bool,
     pub leader_first_entry_draining: bool,
     pub leader_first_worker_tombstone_released: bool,
-    pub reused_namespace_tid: u32,
-    pub tid_reuse_first_task_cookie: u64,
-    pub tid_reuse_second_task_cookie: u64,
-    pub tid_reuse_first_host_tid: u32,
-    pub tid_reuse_second_host_tid: u32,
-    pub tid_reuse_fresh_identity: bool,
     pub cgroup_reuse_path: PathBuf,
     pub cgroup_reuse_first_root: NativeTaskSnapshotV1,
     pub cgroup_reuse_second_root: NativeTaskSnapshotV1,
@@ -933,8 +927,6 @@ impl IdentityTestRunner {
         leader_first_ready_cleanup.cleanup()?;
         leader_first_release_cleanup.cleanup()?;
 
-        let tid = tid_reuse::read(&output_directory.join("tid-reuse.json"))?;
-
         let mut cgroup_escape_control = CloneIntoCgroupFixture::start_with_root_first_effect(
             &cgroup_path,
             &cgroup_escape_sentinel_path,
@@ -1349,12 +1341,6 @@ impl IdentityTestRunner {
             leader_first_process_reclaimable: leader.worker.process_done,
             leader_first_entry_draining: leader.worker.entry_done,
             leader_first_worker_tombstone_released: leader.worker.worker_done,
-            reused_namespace_tid: tid.ns_tid,
-            tid_reuse_first_task_cookie: tid.first.task_cookie,
-            tid_reuse_second_task_cookie: tid.second.task_cookie,
-            tid_reuse_first_host_tid: tid.first.host_tid,
-            tid_reuse_second_host_tid: tid.second.host_tid,
-            tid_reuse_fresh_identity: tid.fresh,
             cgroup_reuse_path: cgroup_path.clone(),
             cgroup_reuse_first_root: binding_gap_reconciled_root.clone(),
             cgroup_reuse_second_root,

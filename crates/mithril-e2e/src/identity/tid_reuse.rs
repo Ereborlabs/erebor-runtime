@@ -1,11 +1,10 @@
+#[cfg(test)]
 mod result;
 
 #[cfg(test)]
 use std::fs;
 #[cfg(test)]
 use std::time::Duration;
-
-pub(super) use result::read;
 
 #[cfg(test)]
 use erebor_interceptor_abi::{
@@ -62,6 +61,5 @@ fn tid_reuse_is_fresh<P: Platform>() -> TestResult<()> {
 
     let result = ReuseResult::new(first_ns, second_ns, root, first, second);
     result.assert_fresh();
-    result.write(&env.output().join("tid-reuse.json"))?;
     env.stop()
 }
