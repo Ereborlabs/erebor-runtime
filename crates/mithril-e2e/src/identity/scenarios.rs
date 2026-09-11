@@ -7,6 +7,8 @@ mod lifetime_result;
 mod lifetime_test;
 #[cfg(test)]
 mod moved_exec;
+#[cfg(test)]
+mod non_leader_exec;
 mod reparent;
 #[cfg(test)]
 mod workload_recovery;
