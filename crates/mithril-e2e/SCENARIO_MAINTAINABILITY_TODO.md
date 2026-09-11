@@ -726,7 +726,7 @@ command passes.
   - [x] Add the small shared actor, result assertions, and generated test.
   - [x] Pass the Host generated case in the retained privileged VM.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
-  - [ ] Pass the Kubernetes generated case with the same actor and checks.
+  - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [ ] Remove the matching old monolithic case and compatibility fields.
 - [ ] Non-leader thread exec: remove the loose
   `identity/scenarios/non_leader_exec.rs::run` function. Put scenario state on

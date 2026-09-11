@@ -1234,6 +1234,38 @@ impl Platform for Kubernetes {
         self.task_from(pid, snapshot)
     }
 
+    fn wait_exec(
+        &mut self,
+        actor: &mut ProcessFixture,
+        pid: u32,
+        before: &Task,
+        name: &str,
+    ) -> TestResult<Task> {
+        let last = RefCell::new(String::from("<absent>"));
+        let snapshot = actor.wait_path(
+            &self.pin_path,
+            name,
+            READY_LIMIT,
+            || {
+                let snapshot = match self.inspector.snapshot(pid) {
+                    Ok(snapshot) => snapshot,
+                    Err(source) => {
+                        *last.borrow_mut() = source.to_string();
+                        return Ok(None);
+                    }
+                };
+                if let Some(value) = snapshot.as_ref() {
+                    *last.borrow_mut() = format!("{value:?}");
+                }
+                Ok(snapshot.filter(|value| {
+                    value.active_execution_id != before.snapshot.active_execution_id
+                }))
+            },
+            || format!("PID {pid}; last identity: {}", last.borrow()),
+        )?;
+        self.task_from(pid, snapshot)
+    }
+
     fn recovered(&mut self, pid: u32, name: &str) -> TestResult<Task> {
         let last = RefCell::new(String::from("<absent>"));
         let snapshot = self.runtime.block_on(wait_for_async(

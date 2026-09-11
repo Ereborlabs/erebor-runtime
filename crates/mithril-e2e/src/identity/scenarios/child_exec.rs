@@ -3,7 +3,7 @@ use erebor_interceptor_abi::{
     ExecGuardStateV1, ProcessExecutionStateV1, ProcessStateVectorStateV1, TaskCoordinateStateV1,
 };
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 fn child_exec_keeps_identity<P: Platform>() -> TestResult<()> {
     let active = |task: &Task| {
         let state = &task.snapshot;
