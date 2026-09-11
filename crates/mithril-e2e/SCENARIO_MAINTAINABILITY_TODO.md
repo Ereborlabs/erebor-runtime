@@ -733,7 +733,7 @@ command passes.
   entry reference counts, tombstones, release action, and reclamation checks.
   - [x] The small Host generated case uses the shared actor and production
     runtime admission path.
-  - [ ] Pass the direct-`runc` generated case with the same actor and checks.
+  - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [ ] Pass the Kubernetes generated case with the same actor and checks.
   - [ ] Remove the matching old probe code and compatibility bundle fields.
 - [x] Node-first PID reuse: keep one small parameterized Rust test in
