@@ -405,7 +405,7 @@ impl NativeSecurityStateOwner {
     }
 }
 
-fn aggregate_health(bytes: &[u8]) -> Result<ReconciliationReportV1> {
+pub(super) fn aggregate_health(bytes: &[u8]) -> Result<ReconciliationReportV1> {
     ensure!(
         !bytes.is_empty() && bytes.len().is_multiple_of(size_of::<IdentityHealthV1>()),
         IdentityStateSnafu {

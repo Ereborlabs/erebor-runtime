@@ -20,6 +20,8 @@ use zerocopy::{IntoBytes as _, KnownLayout, TryFromBytes};
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu, JsonSnafu};
 use crate::Result;
 
+use super::native::{aggregate_health, ReconciliationReportV1};
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct NativeTaskSnapshotV1 {
     pub task_cookie: u64,
@@ -248,6 +250,17 @@ impl NativeIdentityInspector {
             exec_guard_state: process.exec_guard_state as u8,
             profile_generation_ref_id,
         }))
+    }
+
+    pub fn health(&self) -> Result<ReconciliationReportV1> {
+        let bytes = self
+            .state
+            .lookup("identity_health", &0_u32.to_ne_bytes())
+            .context(InterceptorSnafu)?
+            .context(IdentityStateSnafu {
+                reason: "identity health map has no zero-key record",
+            })?;
+        aggregate_health(&bytes)
     }
 
     fn recovered_container_activation(
