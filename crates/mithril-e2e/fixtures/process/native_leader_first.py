@@ -4,8 +4,9 @@ import sys
 import threading
 import time
 
-ready = sys.argv[1]
-release = sys.argv[2]
+work = sys.argv[1]
+ready = os.path.join(work, "leader-first-ready")
+release = os.path.join(work, "leader-first-release")
 print("native-fixture-ready", flush=True)
 sys.stdin.readline()
 
@@ -26,4 +27,3 @@ libc.pthread_exit.argtypes = [ctypes.c_void_p]
 libc.pthread_exit.restype = None
 libc.pthread_exit(None)
 raise RuntimeError("pthread_exit returned")
-

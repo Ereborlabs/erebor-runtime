@@ -1,5 +1,9 @@
 mod exec;
 mod lifetime;
+#[cfg(test)]
+mod lifetime_result;
+#[cfg(test)]
+mod lifetime_test;
 mod reparent;
 #[cfg(test)]
 mod workload_recovery;

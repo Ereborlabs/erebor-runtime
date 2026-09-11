@@ -81,11 +81,11 @@ impl<'a> LifetimeCase<'a> {
                 ))
             })?;
 
-        let mut actor = ProcessFixture::python(
-            &self.runner.repo_root,
-            "native_leader_first.py",
-            [ready, release],
-        )?;
+        let work = ready
+            .parent()
+            .ok_or_else(|| invalid_state("leader-first ready path has no parent"))?;
+        let mut actor =
+            ProcessFixture::python(&self.runner.repo_root, "native_leader_first.py", [work])?;
         let pid = actor.id();
         fs::write(self.procs, pid.to_string()).context(IoSnafu { path: self.procs })?;
         let root = self.runner.wait_for("leader-first root", self.procs, || {
