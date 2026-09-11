@@ -5,14 +5,14 @@ use rustix::io::Errno;
 
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 fn moved_exec_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("moved-exec")?;
     env.start_control()?;
     env.start_node()?;
     env.install_policy()?;
     env.node_ready()?;
-    let mut actor = env.start_actor("native_moved_exec.py", &["/bin/true"])?;
+    let mut actor = env.start_actor("native_moved_exec.py", &["/usr/bin/true"])?;
 
     let root_pid = actor.id();
     actor.track(root_pid)?;

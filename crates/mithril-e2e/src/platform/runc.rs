@@ -311,6 +311,14 @@ impl Platform for Runc {
         self.host.running(pid)
     }
 
+    fn health(&self) -> TestResult<mithril_node::ReconciliationReportV1> {
+        self.host.health()
+    }
+
+    fn move_task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
+        self.host.move_task(pid, name)
+    }
+
     fn task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
         self.host.task(pid, name)
     }
