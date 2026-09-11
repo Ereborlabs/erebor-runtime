@@ -246,19 +246,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub double_fork_intermediate_before_exit: NativeTaskSnapshotV1,
     pub double_fork_native_child_before_intermediate_exit: NativeTaskSnapshotV1,
     pub double_fork_native_child_after_intermediate_exit: NativeTaskSnapshotV1,
-    pub no_pidfd_thread_observed: bool,
-    pub leader_first_worker_task_cookie: u64,
-    pub leader_first_process_refs_after_leader_exit: u64,
-    pub leader_first_entry_refs_after_leader_exit: u64,
-    pub leader_first_profile_refs_after_leader_exit: u64,
-    pub leader_first_root_tombstone_released: bool,
-    pub leader_first_worker_tombstone_owned: bool,
-    pub leader_first_process_refs_after_worker_exit: u64,
-    pub leader_first_entry_refs_after_worker_exit: u64,
-    pub leader_first_profile_refs_after_worker_exit: u64,
-    pub leader_first_process_reclaimable: bool,
-    pub leader_first_entry_draining: bool,
-    pub leader_first_worker_tombstone_released: bool,
     pub cgroup_reuse_path: PathBuf,
     pub cgroup_reuse_first_root: NativeTaskSnapshotV1,
     pub cgroup_reuse_second_root: NativeTaskSnapshotV1,
@@ -477,8 +464,6 @@ impl IdentityTestRunner {
         let child_ready_path = output_directory.join("native-child-ready");
         let post_ponr_execfail_path = output_directory.join("post-ponr-execfail");
         let non_leader_thread_ready_path = output_directory.join("non-leader-thread-ready");
-        let leader_first_ready_path = output_directory.join("leader-first-ready");
-        let leader_first_release_path = output_directory.join("leader-first-release");
         let cgroup_escape_sentinel_path = output_directory.join("cgroup-escape-sentinel");
         let authorization_state_directory = output_directory.join("authorization-replay");
         ensure!(
@@ -487,8 +472,6 @@ impl IdentityTestRunner {
                 && !child_ready_path.exists()
                 && !post_ponr_execfail_path.exists()
                 && !non_leader_thread_ready_path.exists()
-                && !leader_first_ready_path.exists()
-                && !leader_first_release_path.exists()
                 && !cgroup_escape_sentinel_path.exists()
                 && !authorization_state_directory.exists(),
             InvalidInputSnafu {
@@ -501,8 +484,6 @@ impl IdentityTestRunner {
         let child_ready_cleanup = ProbeFile::new(&child_ready_path);
         let post_ponr_execfail_cleanup = ProbeFile::new(&post_ponr_execfail_path);
         let non_leader_thread_ready_cleanup = ProbeFile::new(&non_leader_thread_ready_path);
-        let leader_first_ready_cleanup = ProbeFile::new(&leader_first_ready_path);
-        let leader_first_release_cleanup = ProbeFile::new(&leader_first_release_path);
         let cgroup_escape_sentinel_cleanup = ProbeFile::new(&cgroup_escape_sentinel_path);
         let authorization_state_cleanup = ProbeDirectory::new(&authorization_state_directory);
         self.materialize_execfail(&execfail_path)?;
@@ -873,7 +854,6 @@ impl IdentityTestRunner {
         let exec_case =
             scenarios::ExecCase::new(self, &host, &identity, &inspector, &binding, &procs_path);
         let reparent_case = scenarios::ReparentCase::new(self, &inspector, &procs_path);
-        let lifetime_case = scenarios::LifetimeCase::new(self, &host, &inspector, &procs_path);
         let (external_root, before_exec, after_exec) = exec_case.child(&child_ready_path)?;
         child_ready_cleanup.cleanup()?;
         let retry_ready_cleanup = ProbeFile::new(&child_ready_path);
@@ -922,10 +902,6 @@ impl IdentityTestRunner {
         let (double_root, double_mid, double_before, double_after) =
             reparent_case.double_fork(&child_ready_path)?;
         double_cleanup.cleanup()?;
-
-        let leader = lifetime_case.leader(&leader_first_ready_path, &leader_first_release_path)?;
-        leader_first_ready_cleanup.cleanup()?;
-        leader_first_release_cleanup.cleanup()?;
 
         let mut cgroup_escape_control = CloneIntoCgroupFixture::start_with_root_first_effect(
             &cgroup_path,
@@ -1328,19 +1304,6 @@ impl IdentityTestRunner {
             double_fork_intermediate_before_exit: double_mid,
             double_fork_native_child_before_intermediate_exit: double_before,
             double_fork_native_child_after_intermediate_exit: double_after,
-            no_pidfd_thread_observed: leader.no_pidfd,
-            leader_first_worker_task_cookie: leader.task,
-            leader_first_process_refs_after_leader_exit: leader.leader.process,
-            leader_first_entry_refs_after_leader_exit: leader.leader.entry,
-            leader_first_profile_refs_after_leader_exit: leader.leader.profile,
-            leader_first_root_tombstone_released: leader.leader.root_done,
-            leader_first_worker_tombstone_owned: leader.leader.worker_owned,
-            leader_first_process_refs_after_worker_exit: leader.worker.process,
-            leader_first_entry_refs_after_worker_exit: leader.worker.entry,
-            leader_first_profile_refs_after_worker_exit: leader.worker.profile,
-            leader_first_process_reclaimable: leader.worker.process_done,
-            leader_first_entry_draining: leader.worker.entry_done,
-            leader_first_worker_tombstone_released: leader.worker.worker_done,
             cgroup_reuse_path: cgroup_path.clone(),
             cgroup_reuse_first_root: binding_gap_reconciled_root.clone(),
             cgroup_reuse_second_root,
@@ -7612,13 +7575,6 @@ fn read_u64(bytes: &[u8], offset: usize, name: &str) -> Result<u64> {
     Ok(u64::from_ne_bytes(value))
 }
 
-fn read_u8(bytes: &[u8], offset: usize, name: &str) -> Result<u8> {
-    bytes
-        .get(offset)
-        .copied()
-        .ok_or_else(|| invalid_state(format!("{name} is truncated")))
-}
-
 fn read_u16(bytes: &[u8], offset: usize, name: &str) -> Result<u16> {
     let value = bytes
         .get(offset..offset + size_of::<u16>())
@@ -7992,12 +7948,6 @@ fn id_bytes(value: Id128V1) -> [u8; 16] {
     bytes[..8].copy_from_slice(&value.high.to_ne_bytes());
     bytes[8..].copy_from_slice(&value.low.to_ne_bytes());
     bytes
-}
-
-fn required_map_bytes(host: &KernelHost, map: &str, key: &[u8], name: &str) -> Result<Vec<u8>> {
-    host.lookup_map(map, key)
-        .context(InterceptorSnafu)?
-        .ok_or_else(|| invalid_state(format!("{name} is missing")))
 }
 
 fn optional_abi_map<T>(host: &KernelHost, map: &str, key: &[u8], name: &str) -> Result<Option<T>>
