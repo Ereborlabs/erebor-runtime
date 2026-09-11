@@ -9,9 +9,7 @@ use erebor_interceptor_abi::{
     ProcessStateVectorStateV1, ReferenceTombstoneStateV1, TaskCoordinateStateV1, TaskCoordinateV1,
     TaskReferenceTombstoneV1, TASK_REFERENCE_ALL_V1,
 };
-use mithril_node::{
-    NativeIdentityInspector, NativeSecurityStateOwner, NativeTaskSnapshotV1, WorkloadBindingConfig,
-};
+use mithril_node::{NativeIdentityInspector, NativeTaskSnapshotV1, WorkloadBindingConfig};
 use rustix::process::Signal;
 use snafu::{ensure, ResultExt as _};
 
@@ -27,7 +25,6 @@ use crate::Result;
 pub(in crate::identity) struct ExecCase<'a> {
     runner: &'a IdentityTestRunner,
     host: &'a KernelHost,
-    native: &'a NativeSecurityStateOwner,
     inspector: &'a NativeIdentityInspector,
     binding: &'a WorkloadBindingConfig,
     procs: &'a Path,
@@ -43,7 +40,6 @@ impl<'a> ExecCase<'a> {
     pub(in crate::identity) fn new(
         runner: &'a IdentityTestRunner,
         host: &'a KernelHost,
-        native: &'a NativeSecurityStateOwner,
         inspector: &'a NativeIdentityInspector,
         binding: &'a WorkloadBindingConfig,
         procs: &'a Path,
@@ -51,75 +47,10 @@ impl<'a> ExecCase<'a> {
         Self {
             runner,
             host,
-            native,
             inspector,
             binding,
             procs,
         }
-    }
-
-    pub(in crate::identity) fn child(
-        &self,
-        ready: &Path,
-    ) -> Result<(
-        NativeTaskSnapshotV1,
-        NativeTaskSnapshotV1,
-        NativeTaskSnapshotV1,
-    )> {
-        let work = ready
-            .parent()
-            .ok_or_else(|| invalid_state("native child ready path has no parent"))?;
-        let mut actor =
-            ProcessFixture::python(&self.runner.repo_root, "native_child_exec.py", [work])?;
-        let root_pid = actor.id();
-        fs::write(self.procs, root_pid.to_string()).context(IoSnafu { path: self.procs })?;
-        let root = self.wait_root(root_pid)?;
-
-        let next = identity_next_id(self.host)?;
-        actor.send(b"root\n")?;
-        let pid = match actor.wait_pid(ready, "native child creation") {
-            Ok(pid) => pid,
-            Err(source) => {
-                let health = self.native.health(self.host).context(NodeSnafu)?;
-                let after = identity_next_id(self.host)?;
-                return Err(invalid_state(format!(
-                    "{source}; identity health {health:?}; child allocation advanced next_id by {}",
-                    after.saturating_sub(next)
-                )));
-            }
-        };
-        actor.track(pid)?;
-        actor.wait_stop(pid, "native child stop")?;
-        let before = self
-            .runner
-            .wait_for("native child identity", self.procs, || {
-                self.inspector.snapshot(pid).context(NodeSnafu)
-            })?;
-        ensure!(
-            root.creator_task_cookie.is_none()
-                && root.root_class.as_deref() == Some("external_runtime_root")
-                && root.installed_role_class.as_deref() == Some("runtime_external_restricted")
-                && root.active_role_id == self.binding.external_role_id
-                && root.coordinate_state == TaskCoordinateStateV1::Runnable as u8
-                && before.creator_task_cookie == Some(root.task_cookie)
-                && before.real_parent_task_cookie == root.task_cookie
-                && before.task_cookie != root.task_cookie
-                && before.active_role_id == root.active_role_id
-                && before.image_provenance_id == root.image_provenance_id
-                && before.image_candidate_count > 0
-                && before.process_execution_state == ProcessExecutionStateV1::Active as u8
-                && before.process_state_vector_state == ProcessStateVectorStateV1::Active as u8
-                && before.coordinate_state == TaskCoordinateStateV1::Runnable as u8,
-            InvalidInputSnafu {
-                path: self.procs,
-                reason: "external root or native child identity is incorrect",
-            }
-        );
-
-        actor.signal(pid, Signal::CONT)?;
-        let after = self.wait_child_exec(pid, &before)?;
-        actor.stop()?;
-        Ok((root, before, after))
     }
 
     pub(in crate::identity) fn non_leader(
@@ -511,38 +442,5 @@ impl<'a> ExecCase<'a> {
                         && got.exec_guard_state == ExecGuardStateV1::None as u8
                 }))
             })
-    }
-
-    fn wait_child_exec(
-        &self,
-        pid: u32,
-        before: &NativeTaskSnapshotV1,
-    ) -> Result<NativeTaskSnapshotV1> {
-        let found = self.runner.wait_for("native exec commit", self.procs, || {
-            let got = self.inspector.snapshot(pid).context(NodeSnafu)?;
-            Ok(got.filter(|got| {
-                got.active_execution_id != before.active_execution_id
-                    && got.image_provenance_id != before.image_provenance_id
-                    && got.image_candidate_count > 0
-                    && got.process_execution_state == ProcessExecutionStateV1::Active as u8
-                    && got.exec_guard_state == ExecGuardStateV1::None as u8
-            }))
-        });
-        match found {
-            Ok(got) => Ok(got),
-            Err(source) => {
-                let got = self.inspector.snapshot(pid).context(NodeSnafu)?;
-                let health = self.native.health(self.host).context(NodeSnafu)?;
-                let comm = fs::read_to_string(format!("/proc/{pid}/comm"))
-                    .unwrap_or_else(|error| format!("<unavailable: {error}>"));
-                let status = fs::read_to_string(format!("/proc/{pid}/status"))
-                    .unwrap_or_else(|error| format!("<unavailable: {error}>"));
-                Err(invalid_state(format!(
-                    "{source}; live snapshot {got:?}; identity health {health:?}; comm {}; status {}",
-                    comm.trim(),
-                    status.lines().next().unwrap_or("<empty>")
-                )))
-            }
-        }
     }
 }

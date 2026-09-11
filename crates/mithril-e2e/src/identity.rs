@@ -226,9 +226,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub clone_into_cgroup_first_effect_root: NativeTaskSnapshotV1,
     pub clone_into_cgroup_first_effect_child: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child_first_effect_allowed: bool,
-    pub external_root: NativeTaskSnapshotV1,
-    pub native_child_before_exec: NativeTaskSnapshotV1,
-    pub native_child_after_exec: NativeTaskSnapshotV1,
     pub orphaned_native_parent: NativeTaskSnapshotV1,
     pub orphaned_native_child_before_parent_exit: NativeTaskSnapshotV1,
     pub orphaned_native_child_after_parent_exit: NativeTaskSnapshotV1,
@@ -480,7 +477,7 @@ impl IdentityTestRunner {
         );
         let execfail_cleanup = ProbeFile::new(&execfail_path);
         let execfail_ready_cleanup = ProbeFile::new(&execfail_ready_path);
-        let child_ready_cleanup = ProbeFile::new(&child_ready_path);
+        let retry_ready_cleanup = ProbeFile::new(&child_ready_path);
         let post_ponr_execfail_cleanup = ProbeFile::new(&post_ponr_execfail_path);
         let non_leader_thread_ready_cleanup = ProbeFile::new(&non_leader_thread_ready_path);
         let cgroup_escape_sentinel_cleanup = ProbeFile::new(&cgroup_escape_sentinel_path);
@@ -850,12 +847,8 @@ impl IdentityTestRunner {
         );
         clone_fixture.stop();
 
-        let exec_case =
-            scenarios::ExecCase::new(self, &host, &identity, &inspector, &binding, &procs_path);
+        let exec_case = scenarios::ExecCase::new(self, &host, &inspector, &binding, &procs_path);
         let reparent_case = scenarios::ReparentCase::new(self, &inspector, &procs_path);
-        let (external_root, before_exec, after_exec) = exec_case.child(&child_ready_path)?;
-        child_ready_cleanup.cleanup()?;
-        let retry_ready_cleanup = ProbeFile::new(&child_ready_path);
         let (thread_root, thread_exec) = exec_case.non_leader(&non_leader_thread_ready_path)?;
         non_leader_thread_ready_cleanup.cleanup()?;
 
@@ -1233,7 +1226,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 28,
+            schema_version: 29,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -1277,9 +1270,6 @@ impl IdentityTestRunner {
             clone_into_cgroup_first_effect_root,
             clone_into_cgroup_first_effect_child,
             clone_into_cgroup_native_child_first_effect_allowed: true,
-            external_root,
-            native_child_before_exec: before_exec,
-            native_child_after_exec: after_exec,
             orphaned_native_parent: orphan_root,
             orphaned_native_child_before_parent_exit: orphan_before,
             orphaned_native_child_after_parent_exit: orphan_after,
@@ -1622,7 +1612,8 @@ impl IdentityTestRunner {
             && bundle.kubernetes_reuse_same_names == Some(true)
             && bundle.kubernetes_reuse_fresh_full_identity == Some(true)
             && bundle.kubernetes_reuse_fresh_binding_identity == Some(true);
-        let schema_compatible = bundle.schema_version == 28
+        let schema_compatible = bundle.schema_version == 29
+            || bundle.schema_version == 28
             || (bundle.schema_version == 27 && stock_hook_failure_results_missing)
             || (bundle.schema_version == 26
                 && reuse_results_missing
@@ -1655,7 +1646,7 @@ impl IdentityTestRunner {
                 reason: "the prior identity bundle cannot accept the next Kubernetes result",
             }
         );
-        bundle.schema_version = 28;
+        bundle.schema_version = 29;
         if entry_results_missing {
             self.physical_kubernetes_exec_probe(
                 output_directory,

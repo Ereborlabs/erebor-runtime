@@ -727,7 +727,7 @@ command passes.
   - [x] Pass the Host generated case in the retained privileged VM.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
-  - [ ] Remove the matching old monolithic case and compatibility fields.
+  - [x] Remove the matching old monolithic case and compatibility fields.
 - [ ] Non-leader thread exec: remove the loose
   `identity/scenarios/non_leader_exec.rs::run` function. Put scenario state on
   its owner, use `ProcessFixture` and the shared Python file directly, and

@@ -61,6 +61,7 @@ fn child_exec_keeps_identity<P: Platform>() -> TestResult<()> {
     assert_eq!(pre.real_parent_task_cookie, initial.task_cookie);
     assert_ne!(pre.task_cookie, initial.task_cookie);
     assert_eq!(pre.active_role_id, initial.active_role_id);
+    assert_eq!(pre.image_provenance_id, initial.image_provenance_id);
     assert_eq!(
         (pre.root_class.as_ref(), pre.installed_role_class.as_ref()),
         (None, None)
