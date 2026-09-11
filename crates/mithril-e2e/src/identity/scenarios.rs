@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod child_exec;
 mod exec;
 #[cfg(test)]
 mod lifetime_result;

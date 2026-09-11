@@ -1,8 +1,9 @@
 import os
 import signal
 import sys
+from pathlib import Path
 
-ready = sys.argv[1]
+ready = Path(sys.argv[1]) / "child"
 print("native-fixture-ready", flush=True)
 sys.stdin.readline()
 
@@ -11,7 +12,7 @@ if pid == 0:
     with open(ready, "x", encoding="ascii") as output:
         output.write(f"{os.getpid()}\n")
     os.kill(os.getpid(), signal.SIGSTOP)
-    os.execv("/bin/sleep", ["/bin/sleep", "300"])
+    os.execv("/usr/bin/sleep", ["/usr/bin/sleep", "300"])
 
 _, status = os.waitpid(pid, 0)
 sys.exit(os.waitstatus_to_exitcode(status))

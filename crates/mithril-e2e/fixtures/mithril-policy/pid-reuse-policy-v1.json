@@ -47,6 +47,13 @@
             "action": "Allow"
           },
           {
+            "name": "sleep",
+            "path": "/usr/bin/sleep",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          },
+          {
             "name": "false",
             "path": "/usr/bin/false",
             "recursive": false,

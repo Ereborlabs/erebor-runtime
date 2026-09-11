@@ -66,8 +66,11 @@ impl<'a> ExecCase<'a> {
         NativeTaskSnapshotV1,
         NativeTaskSnapshotV1,
     )> {
+        let work = ready
+            .parent()
+            .ok_or_else(|| invalid_state("native child ready path has no parent"))?;
         let mut actor =
-            ProcessFixture::python(&self.runner.repo_root, "native_child_exec.py", [ready])?;
+            ProcessFixture::python(&self.runner.repo_root, "native_child_exec.py", [work])?;
         let root_pid = actor.id();
         fs::write(self.procs, root_pid.to_string()).context(IoSnafu { path: self.procs })?;
         let root = self.wait_root(root_pid)?;

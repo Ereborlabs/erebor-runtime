@@ -88,6 +88,15 @@ pub(crate) trait Platform: Sized {
     fn task(&mut self, _pid: u32, _name: &str) -> TestResult<Task> {
         pending("read task")
     }
+    fn wait_exec(
+        &mut self,
+        _actor: &mut crate::process::ProcessFixture,
+        _pid: u32,
+        _before: &Task,
+        _name: &str,
+    ) -> TestResult<Task> {
+        pending("wait for actor exec")
+    }
     fn recovered(&mut self, _pid: u32, _name: &str) -> TestResult<Task> {
         pending("wait for recovered task")
     }
