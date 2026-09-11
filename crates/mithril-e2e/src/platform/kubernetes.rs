@@ -133,6 +133,16 @@ impl Kubernetes {
         Ok(String::from_utf8(output.stdout)?)
     }
 
+    fn require_image(k3s: &Path, image: &str) -> TestResult<()> {
+        let mut command = Command::new(k3s);
+        command.args(["crictl", "inspecti", image]);
+        Self::run(&mut command, "verify prepared Kubernetes image")
+            .map(|_| ())
+            .map_err(|source| {
+                format!("Kubernetes infrastructure did not prepare image {image}: {source}").into()
+            })
+    }
+
     fn logs(&self, namespace: &str, target: &str) -> TestResult<String> {
         let mut command = Command::new(&self.k3s_path);
         command
@@ -842,7 +852,6 @@ impl Platform for Kubernetes {
                 "MITHRIL_TEST_ACTOR_IMAGE must be pinned by a lowercase SHA-256 digest".into(),
             );
         }
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -929,6 +938,8 @@ impl Platform for Kubernetes {
     }
 
     fn start_control(&mut self) -> TestResult<()> {
+        Self::require_image(&self.k3s_path, &self.control_image)?;
+        Self::require_image(&self.k3s_path, &self.node_image)?;
         self.create_system()?;
         let chart = self.root.join("packaging/mithril/helm");
         let mut command = Command::new(&self.helm_path);
@@ -1000,6 +1011,7 @@ impl Platform for Kubernetes {
     }
 
     fn start_actor(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
+        Self::require_image(&self.k3s_path, &self.actor_image)?;
         if self.actor_id.is_some() {
             return Err("the Kubernetes actor is already running".into());
         }

@@ -202,6 +202,15 @@ impl Host {
                 .map_err(|_panic| "Node thread panicked")?
                 .context(NodeSnafu)?;
         }
+        let seccomp = self.admit_path.with_extension("seccomp.sock");
+        if self.admit_path.exists() || seccomp.exists() {
+            return Err(format!(
+                "Node shutdown left runtime sockets: admission={}, seccomp={}",
+                self.admit_path.exists(),
+                seccomp.exists(),
+            )
+            .into());
+        }
         self.ready.take();
         if let Some(control) = self.control.take() {
             self.runtime.block_on(control.shutdown())?;

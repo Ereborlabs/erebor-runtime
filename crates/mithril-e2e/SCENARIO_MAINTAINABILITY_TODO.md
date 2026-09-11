@@ -427,6 +427,15 @@ Single-node and guest cases:
 
 - [ ] K3s and CRI readiness: use a real Pod, containerd ID, image digest,
   workload root, projected token, and overlay snapshotter.
+  - [x] Keep archive import out of Rust. Use the small infrastructure image
+    helper to install the Control, Node, and actor archives in the persistent
+    K3s image store. The Rust platform only verifies each required image
+    before use. Both actor-first and Node-first order pass.
+  - [ ] Make the thin retained-VM launcher call the image helper before its
+    first exact Rust test. Keep K3s and its prepared images between test runs.
+  - [x] Require lightweight and Kubernetes cleanup to prove that Node removed
+    both runtime sockets. The Kubernetes `preStop` hook must close admission
+    and seccomp endpoints before the termination deadline.
 - [ ] CRI effect recovery: start the Pod before Node, require conservative
   initial identity, recover the running binding, and check direct-CRI and
   Kubernetes exec identities and effects.

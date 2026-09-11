@@ -1,5 +1,7 @@
 {{- $runtimeAdmissionSocket := required "node.runtimeHook.socketPath is required" .Values.node.runtimeHook.socketPath }}
 {{- $cleanRuntimeAdmissionSocket := clean $runtimeAdmissionSocket }}
+{{- $runtimeSocketExt := ext $runtimeAdmissionSocket }}
+{{- $runtimeSeccompSocket := printf "%s.seccomp.sock" (trimSuffix $runtimeSocketExt $runtimeAdmissionSocket) }}
 {{- $containerRuntimeSocket := required "node.containerRuntimeSocket is required" .Values.node.containerRuntimeSocket }}
 {{- $cleanContainerRuntimeSocket := clean $containerRuntimeSocket }}
 {{- $containerRuntimeDirectory := dir $containerRuntimeSocket }}
@@ -165,8 +167,8 @@ spec:
           lifecycle:
             preStop:
               exec:
-                # Close the host endpoint before Kubernetes terminates this owner.
-                command: ["/bin/rm", "-f", "--", {{ $runtimeAdmissionSocket | quote }}]
+                # Close both host endpoints before Kubernetes terminates this owner.
+                command: ["/bin/rm", "-f", "--", {{ $runtimeAdmissionSocket | quote }}, {{ $runtimeSeccompSocket | quote }}]
           startupProbe:
             exec:
               # Direct argv keeps the configured socket path out of shell interpretation.
