@@ -1,11 +1,10 @@
+#[cfg(test)]
 mod result;
 
 #[cfg(test)]
 use std::fs;
 #[cfg(test)]
 use std::time::Duration;
-
-pub(super) use result::read;
 
 #[cfg(test)]
 use self::result::ReuseResult;
@@ -49,6 +48,5 @@ fn pid_reuse_is_fresh<P: Platform>() -> TestResult<()> {
 
     let result = ReuseResult::new(first_ns, second_ns, root, first, second);
     result.assert_fresh();
-    result.write(&env.output().join("pid-reuse.json"))?;
     env.stop()
 }
