@@ -323,6 +323,16 @@ impl Platform for Runc {
         self.host.task(pid, name)
     }
 
+    fn wait_exec(
+        &mut self,
+        actor: &mut ProcessFixture,
+        pid: u32,
+        before: &Task,
+        name: &str,
+    ) -> TestResult<Task> {
+        self.host.wait_exec(actor, pid, before, name)
+    }
+
     fn recovered(&mut self, pid: u32, name: &str) -> TestResult<Task> {
         self.host.recovered(pid, name)
     }

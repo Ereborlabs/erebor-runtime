@@ -14,5 +14,9 @@ if pid == 0:
     os.kill(os.getpid(), signal.SIGSTOP)
     os.execv("/usr/bin/sleep", ["/usr/bin/sleep", "300"])
 
+sys.stdin.readline()
+os.kill(pid, signal.SIGCONT)
+sys.stdin.readline()
+os.kill(pid, signal.SIGTERM)
 _, status = os.waitpid(pid, 0)
 sys.exit(os.waitstatus_to_exitcode(status))

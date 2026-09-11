@@ -1,11 +1,9 @@
+use crate::platform::{platform_test, Platform, Task, TestResult};
 use erebor_interceptor_abi::{
     ExecGuardStateV1, ProcessExecutionStateV1, ProcessStateVectorStateV1, TaskCoordinateStateV1,
 };
-use rustix::process::Signal;
 
-use crate::platform::{platform_test, Platform, Task, TestResult};
-
-#[platform_test(host)]
+#[platform_test(host, runc)]
 fn child_exec_keeps_identity<P: Platform>() -> TestResult<()> {
     let active = |task: &Task| {
         let state = &task.snapshot;
@@ -71,7 +69,7 @@ fn child_exec_keeps_identity<P: Platform>() -> TestResult<()> {
     assert_eq!(env.health()?.allocation_failures, failures);
     active(&before);
 
-    actor.signal(pid, Signal::CONT)?;
+    actor.send(b"continue\n")?;
     let after = env.wait_exec(&mut actor, pid, &before, "native child exec")?;
     let post = &after.snapshot;
     assert_eq!(post.task_cookie, pre.task_cookie);

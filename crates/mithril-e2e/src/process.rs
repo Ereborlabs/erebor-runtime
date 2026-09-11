@@ -23,6 +23,7 @@ const FIXTURE_DIR: &str = "crates/mithril-e2e/fixtures/process";
 const LOG_LIMIT: usize = 8 * 1024;
 const READY: &[u8] = b"native-fixture-ready\n";
 const START_LIMIT: Duration = Duration::from_secs(30);
+const STOP_GRACE: Duration = Duration::from_secs(1);
 
 pub(crate) struct ProcessFixture {
     child: Option<Child>,
@@ -529,12 +530,15 @@ impl ProcessFixture {
 
     pub(crate) fn stop(&mut self) -> Result<()> {
         self.close();
+        let _ = self.wait_exit("graceful process cleanup", STOP_GRACE);
         let mut failed = None;
         let ids = self.tasks.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-        for (id, fd) in &self.tasks {
-            match pidfd_send_signal(fd, Signal::KILL) {
-                Ok(()) | Err(rustix::io::Errno::SRCH) => {}
-                Err(source) => failed = Some(format!("kill tracked process {id}: {source}")),
+        if !self.stopped {
+            for (id, fd) in &self.tasks {
+                match pidfd_send_signal(fd, Signal::KILL) {
+                    Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+                    Err(source) => failed = Some(format!("kill tracked process {id}: {source}")),
+                }
             }
         }
         self.tasks.clear();
