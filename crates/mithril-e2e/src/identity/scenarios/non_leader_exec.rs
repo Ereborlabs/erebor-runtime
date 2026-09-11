@@ -4,7 +4,7 @@ use erebor_interceptor_abi::{
 
 use crate::platform::{platform_test, Platform, Task, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 fn non_leader_exec<P: Platform>() -> TestResult<()> {
     let active = |task: &Task| {
         assert_eq!(

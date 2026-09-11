@@ -781,18 +781,23 @@ impl Kubernetes {
 }
 
 impl Platform for Kubernetes {
-    fn setup(_name: &str) -> TestResult<Self> {
+    fn setup(name: &str) -> TestResult<Self> {
         erebor_telemetry::init_test_logging();
         let root = fs::canonicalize(Self::path("MITHRIL_TEST_ROOT", ".")?)?;
-        let out = Self::path("MITHRIL_TEST_OUTPUT", "")?;
-        if out.as_os_str().is_empty() || !out.is_absolute() || out.exists() {
+        let base = Self::path("MITHRIL_TEST_OUTPUT", "")?;
+        if base.as_os_str().is_empty() || !base.is_absolute() || base.is_file() {
             return Err(format!(
-                "MITHRIL_TEST_OUTPUT must name a fresh absolute path: {}",
-                out.display()
+                "MITHRIL_TEST_OUTPUT must name an absolute directory: {}",
+                base.display()
             )
             .into());
         }
-        fs::create_dir_all(&out)?;
+        fs::create_dir_all(&base)?;
+        let out = base.join(name);
+        if out.exists() {
+            return Err(format!("the scenario output path exists: {}", out.display()).into());
+        }
+        fs::create_dir(&out)?;
         let work_path = out.join("actor");
         let state_path = out.join("node");
         let identity_path = out.join("identity");
@@ -1119,6 +1124,7 @@ impl Platform for Kubernetes {
             ProcessFixture::from_pid(pid, input, &script)
         };
         actor.set_init(pid)?;
+        actor.set_group(&cgroup);
         self.actor_id = Some(id);
         self.actor_pid = Some(pid);
         self.actor_cgroup = Some(cgroup);

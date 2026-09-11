@@ -734,7 +734,7 @@ command passes.
   - [x] Add the small generated test and use the shared actor and assertions.
   - [x] Pass the Host generated case in the retained privileged VM.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
-  - [ ] Pass the Kubernetes generated case with the same actor and checks.
+  - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [ ] Remove the matching old monolithic case and compatibility fields.
 - [ ] Pre-PONR failure: use fixture-owned process readiness and keep the
   pending-exec, rollback, and recovery assertions visible.
@@ -791,6 +791,8 @@ command passes.
     container, and prepares its declared entry before the Python PID 1 runs.
   - [x] The Kubernetes generated case passes with the production Helm chart,
     policy CRD, Control, Node, OCI hook, and actor Pod.
+  - [x] Use the shared work-directory release file so the actor cannot start
+    its PID-reuse action before the test releases it on any platform.
   - [x] Replace the old PID-reuse shell and CLI path with a thin exact-test
     launcher before this behavior is complete.
 - [x] TID reuse: use one Python actor through `ProcessFixture`. Keep the two

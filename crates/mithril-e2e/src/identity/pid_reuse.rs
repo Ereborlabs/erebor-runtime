@@ -30,7 +30,7 @@ fn pid_reuse_is_fresh<P: Platform>() -> TestResult<()> {
     let root = env.task(root_pid, "namespace root identity")?;
     let first_path = env.work().join("first");
     assert!(!first_path.exists(), "actor ran before release");
-    actor.send(b"start\n")?;
+    fs::write(env.work().join("start"), b"start\n")?;
 
     let first_ns = actor.wait_pid(&first_path, "first namespace PID")?;
     let first_pid = actor.wait_child(root_pid, "first reused PID")?;

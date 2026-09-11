@@ -29,7 +29,7 @@ def child(name, release):
 
 
 print("native-fixture-ready", flush=True)
-sys.stdin.readline()
+wait("start")
 
 first = os.fork()
 if first == 0:
