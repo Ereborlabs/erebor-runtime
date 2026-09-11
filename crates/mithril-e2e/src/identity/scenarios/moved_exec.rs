@@ -5,7 +5,7 @@ use rustix::io::Errno;
 
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 fn moved_exec_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("moved-exec")?;
     env.start_control()?;

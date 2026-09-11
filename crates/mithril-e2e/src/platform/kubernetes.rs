@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use erebor_interceptor::KernelStateReader;
-use erebor_interceptor_abi::TaskCoordinateV1;
+use erebor_interceptor_abi::{TaskCoordinateStateV1, TaskCoordinateV1};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment};
 use k8s_openapi::api::core::v1::{
     Namespace, Node, PersistentVolumeClaim, Pod, Secret, ServiceAccount,
@@ -33,7 +33,7 @@ use zerocopy::TryFromBytes as _;
 use super::{Platform, Task, TestResult};
 use crate::control_fixture::MtlsFixture;
 use crate::error::{InvalidInputSnafu, IoSnafu, NodeSnafu};
-use crate::physical::{wait_for, wait_for_async, ProbeDirectory, ProbeFile};
+use crate::physical::{wait_for, wait_for_async, ProbeCgroup, ProbeDirectory, ProbeFile};
 use crate::process::ProcessFixture;
 
 const READY_LIMIT: Duration = Duration::from_secs(180);
@@ -81,6 +81,7 @@ pub(crate) struct Kubernetes {
     lease: Option<ProbeFile>,
     socket: Option<ProbeFile>,
     seccomp: Option<ProbeFile>,
+    move_group: Option<ProbeCgroup>,
     system_up: bool,
     work_up: bool,
     helm_up: bool,
@@ -769,6 +770,9 @@ impl Kubernetes {
         if let Some(seccomp) = self.seccomp.take() {
             Self::retain(&mut failed, seccomp.cleanup().map_err(Into::into));
         }
+        if let Some(group) = self.move_group.take() {
+            Self::retain(&mut failed, group.cleanup().map_err(Into::into));
+        }
         match failed {
             Some(source) => Err(source),
             None => Ok(()),
@@ -924,6 +928,7 @@ impl Platform for Kubernetes {
             lease: Some(lease),
             socket: Some(socket),
             seccomp: Some(seccomp),
+            move_group: None,
             system_up: false,
             work_up: false,
             helm_up: false,
@@ -1185,6 +1190,37 @@ impl Platform for Kubernetes {
         }
         self.running_id(expected)?;
         self.wait_policy(1)
+    }
+
+    fn health(&self) -> TestResult<mithril_node::ReconciliationReportV1> {
+        Ok(self.inspector.health()?)
+    }
+
+    fn move_task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
+        let path = Self::path("MITHRIL_TEST_CGROUP", "")?;
+        if path.as_os_str().is_empty() {
+            return Err("MITHRIL_TEST_CGROUP is not set".into());
+        }
+        let group = ProbeCgroup::create(&path)?;
+        group.move_in(pid)?;
+        self.move_group = Some(group);
+        let last = RefCell::new(String::from("<absent>"));
+        let snapshot = self.runtime.block_on(wait_for_async(
+            &self.pin_path,
+            name,
+            READY_LIMIT,
+            || {
+                let snapshot = self.inspector.snapshot(pid).context(NodeSnafu)?;
+                if let Some(value) = snapshot.as_ref() {
+                    *last.borrow_mut() = format!("{value:?}");
+                }
+                Ok(snapshot.filter(|value| {
+                    value.coordinate_state == TaskCoordinateStateV1::FailClosedUnknown as u8
+                }))
+            },
+            || format!("PID {pid}; last identity: {}", last.borrow()),
+        ))?;
+        self.task_from(pid, snapshot)
     }
 
     fn task(&mut self, pid: u32, name: &str) -> TestResult<Task> {

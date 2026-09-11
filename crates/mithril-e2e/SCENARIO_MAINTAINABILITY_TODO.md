@@ -728,7 +728,7 @@ command passes.
     runtime admission and identity inspection APIs.
   - [x] The Host generated case passes in the retained privileged VM.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
-  - [ ] Pass the Kubernetes generated case with the same actor and checks.
+  - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [ ] Remove the matching old monolithic case and compatibility field.
 - [ ] Orphan transition: use `native_orphan.py` through `ProcessFixture` in
   one production-backed `#[test]`. Preserve the parent, role, and execution
