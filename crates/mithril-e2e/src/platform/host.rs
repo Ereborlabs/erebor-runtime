@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use erebor_interceptor::KernelStateReader;
-use erebor_interceptor_abi::TaskCoordinateV1;
+use erebor_interceptor_abi::{TaskCoordinateStateV1, TaskCoordinateV1};
 use k8s_cri::v1::ContainerState;
 use mithril_control::{
     lower_kubernetes_policy, workload_target_fact_digest, AllowedNodeIdentity,
@@ -743,6 +743,31 @@ impl Platform for Host {
 
     fn running(&mut self, pid: u32) -> TestResult<()> {
         self.observe_state(pid, ContainerState::ContainerRunning)
+    }
+
+    fn health(&self) -> TestResult<mithril_node::ReconciliationReportV1> {
+        Ok(self.inspector.health()?)
+    }
+
+    fn move_task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
+        Host::move_out(self, pid)?;
+        let last = RefCell::new(String::from("<absent>"));
+        let snapshot = self.runtime.block_on(wait_for_async(
+            &self.pin_path,
+            name,
+            READY_LIMIT,
+            || {
+                let snapshot = self.inspector.snapshot(pid).context(NodeSnafu)?;
+                if let Some(value) = snapshot.as_ref() {
+                    *last.borrow_mut() = format!("{value:?}");
+                }
+                Ok(snapshot.filter(|value| {
+                    value.coordinate_state == TaskCoordinateStateV1::FailClosedUnknown as u8
+                }))
+            },
+            || format!("PID {pid}; last identity: {}", last.borrow()),
+        ))?;
+        self.task_from(pid, snapshot)
     }
 
     fn task(&mut self, pid: u32, name: &str) -> TestResult<Task> {

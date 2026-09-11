@@ -1,4 +1,4 @@
-use mithril_node::NativeTaskSnapshotV1;
+use mithril_node::{NativeTaskSnapshotV1, ReconciliationReportV1};
 use std::cell::RefCell;
 use std::path::Path;
 use std::time::Duration;
@@ -78,6 +78,12 @@ pub(crate) trait Platform: Sized {
     }
     fn running(&mut self, _pid: u32) -> TestResult<()> {
         pending("observe running actor")
+    }
+    fn health(&self) -> TestResult<ReconciliationReportV1> {
+        pending("read identity health")
+    }
+    fn move_task(&mut self, _pid: u32, _name: &str) -> TestResult<Task> {
+        pending("move actor task")
     }
     fn task(&mut self, _pid: u32, _name: &str) -> TestResult<Task> {
         pending("read task")

@@ -724,6 +724,12 @@ command passes.
   fatal-state assertions visible.
 - [ ] Moved-task exec: keep the physical cgroup move, denied exec, production
   health checks, and placement-mismatch assertions visible.
+  - [x] The small generated test uses one shared Python actor and the public
+    runtime admission and identity inspection APIs.
+  - [x] The Host generated case passes in the retained privileged VM.
+  - [ ] Pass the direct-`runc` generated case with the same actor and checks.
+  - [ ] Pass the Kubernetes generated case with the same actor and checks.
+  - [ ] Remove the matching old monolithic case and compatibility field.
 - [ ] Orphan transition: use `native_orphan.py` through `ProcessFixture` in
   one production-backed `#[test]`. Preserve the parent, role, and execution
   assertions. Remove the actor-only test.
