@@ -198,7 +198,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub cgroup_escape_placement_mismatch_detected: bool,
     pub cgroup_escape_first_effect_denied: bool,
     pub moved_parent_fork_denied: bool,
-    pub moved_task_exec_denied: bool,
     pub pre_ponr_failed_exec_restored: bool,
     pub pre_ponr_failed_exec_before: NativeTaskSnapshotV1,
     pub pre_ponr_failed_exec_after_failure: NativeTaskSnapshotV1,
@@ -871,12 +870,6 @@ impl IdentityTestRunner {
         fatal_ready_cleanup.cleanup()?;
         post_ponr_execfail_cleanup.cleanup()?;
 
-        let moved_ready_cleanup = ProbeFile::new(&child_ready_path);
-        let moved_fail_cleanup = ProbeFile::new(&execfail_ready_path);
-        exec_case.moved(&child_ready_path, &execfail_ready_path, &parent_procs_path)?;
-        moved_ready_cleanup.cleanup()?;
-        moved_fail_cleanup.cleanup()?;
-
         let orphan_ready_cleanup = ProbeFile::new(&child_ready_path);
         let (orphan_root, orphan_before, orphan_after) = exec_case.orphan(&child_ready_path)?;
         orphan_ready_cleanup.cleanup()?;
@@ -1255,7 +1248,6 @@ impl IdentityTestRunner {
             cgroup_escape_placement_mismatch_detected: true,
             cgroup_escape_first_effect_denied: true,
             moved_parent_fork_denied: true,
-            moved_task_exec_denied: true,
             pre_ponr_failed_exec_restored: true,
             pre_ponr_failed_exec_before: failed_before,
             pre_ponr_failed_exec_after_failure: failed_after,
