@@ -924,7 +924,13 @@ impl Platform for Host {
             name,
             READY_LIMIT,
             || {
-                let snapshot = self.inspector.snapshot(pid).context(NodeSnafu)?;
+                let snapshot = match self.inspector.snapshot(pid) {
+                    Ok(snapshot) => snapshot,
+                    Err(source) => {
+                        *last.borrow_mut() = source.to_string();
+                        return Ok(None);
+                    }
+                };
                 if let Some(value) = snapshot.as_ref() {
                     *last.borrow_mut() = format!("{value:?}");
                 }
