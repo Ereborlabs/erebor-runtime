@@ -1089,9 +1089,29 @@ impl Platform for Kubernetes {
                 format!("last Pod state: {pod}; last logs: {:?}", last.borrow())
             },
         )?;
-        let id = self.container_id()?;
-        let pid = self.inspect_pid(&id)?;
-        let cgroup = Self::cgroup(pid)?;
+        let last_id = RefCell::new(String::from("<absent>"));
+        let (id, pid, cgroup) = wait_for(
+            &script,
+            "Kubernetes actor runtime identity",
+            READY_LIMIT,
+            || match self.container_id().and_then(|id| {
+                self.inspect_pid(&id)
+                    .and_then(|pid| Self::cgroup(pid).map(|cgroup| (id, pid, cgroup)))
+            }) {
+                Ok(value) => Ok(Some(value)),
+                Err(source) => {
+                    *last_id.borrow_mut() = source.to_string();
+                    Ok(None)
+                }
+            },
+            || {
+                let pod = self
+                    .pod()
+                    .map(|pod| format!("{:?}", pod.status))
+                    .unwrap_or_else(|source| source.to_string());
+                format!("last runtime state: {}; Pod state: {pod}", last_id.borrow())
+            },
+        )?;
 
         let mut actor = if self.hook_up {
             let mut command = Command::new(&self.k3s_path);
