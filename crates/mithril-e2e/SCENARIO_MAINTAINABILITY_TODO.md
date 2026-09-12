@@ -730,7 +730,7 @@ test does not close a row when its physical condition or an assertion changed.
 | Post-PONR failure | Reopened | Use `add_actor` and restore the original root classification check. Keep all terminal pending-exec, process, execution, coordinate, and tombstone checks. |
 | Moved-task exec | Reopened | Use `add_actor` and restore the original root classification and installed-role checks. |
 | Leader-first lifetime | Reopened | Use `add_actor`. Restore the runnable worker-coordinate and child-edge checks. |
-| Workload-first recovery | Open | The Control, actor, policy, Node order is correct. Restore the nonzero recovery-attempt check. Do not remove the larger recovered-entry cases. |
+| Workload-first recovery | Accepted | The Control, actor, policy, Node order and nonzero recovery-attempt check remain. Keep the larger recovered-entry cases. |
 | Namespace init | Accepted | PID 1 is the correct cross-platform actor. Intermediate and child host-parent fields, root and role absence, runnable state, and post-exec identity changes remain. |
 
 - [ ] Probe resources and production owners: own the pin root, lease, cgroup,
@@ -911,7 +911,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [ ] Remove only the matching workload-first assertions from the old
     monolithic probes after all three generated cases pass. Preserve their
     other recovered-entry and concurrency assertions for later migrations.
-  - [ ] Restore the nonzero recovery-attempt assertion and rerun all three
+  - [x] Restore the nonzero recovery-attempt assertion and rerun all three
     generated cases before the old workload-first assertions are removed.
 - [ ] Retained-host restart: keep host shutdown, retained map validation,
   production recovery, stable map IDs, and ownership rejection visible.

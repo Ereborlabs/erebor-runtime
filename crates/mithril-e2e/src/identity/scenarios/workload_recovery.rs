@@ -47,6 +47,10 @@ fn workload_recovers<P: Platform>() -> TestResult<()> {
     assert!(root.snapshot.admitted_entry_rule_id > 0);
     assert_eq!(root.snapshot.creator_task_cookie, None);
     assert_eq!(recovery.phase, "complete");
+    assert_ne!(
+        recovery.recovery_attempt_id,
+        "00000000000000000000000000000000"
+    );
     assert_eq!(
         recovery.application_entry_instance_id,
         root.snapshot.entry_instance_id
