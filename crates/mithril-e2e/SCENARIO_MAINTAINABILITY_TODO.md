@@ -793,7 +793,8 @@ command passes.
     retained privileged VM.
   - [x] Pass the direct-`runc` generated case with namespace PIDs mapped to
     host PIDs through the real parent-child process tree.
-  - [ ] Pass the Kubernetes generated case with the same actor and checks.
+  - [x] Pass the Kubernetes generated case with the deployed Control, Node,
+    OCI hook, and the same actor and checks.
   - [ ] Remove the matching legacy probe method, result fields, and call site.
 - [ ] Double-fork transition: use `native_double_fork.py` through
   `ProcessFixture` in one production-backed `#[test]`. Preserve the parent,

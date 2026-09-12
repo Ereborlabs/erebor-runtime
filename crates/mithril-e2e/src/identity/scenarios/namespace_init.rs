@@ -4,7 +4,7 @@ use erebor_interceptor_abi::{
     ExecGuardStateV1, ProcessExecutionStateV1, ProcessStateVectorStateV1, TaskCoordinateStateV1,
 };
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 fn namespace_init_reparents_child<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("namespace-init")?;
     env.start_control()?;
