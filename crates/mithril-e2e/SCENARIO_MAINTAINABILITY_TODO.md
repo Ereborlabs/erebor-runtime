@@ -921,6 +921,11 @@ test does not close a row when its physical condition or an assertion changed.
   - [ ] Remove only the matching workload-first assertions from the old
     monolithic probes after all three generated cases pass. Preserve their
     other recovered-entry and concurrency assertions for later migrations.
+  - [ ] Do not remove the legacy multi-task case until small tests preserve
+    its two application and two external tasks, iterator retry, ptrace
+    bootstrap, internal exec, declared-probe isolation, unmatched denial,
+    post-cutover activation, and cleanup assertions. The focused one-task
+    recovery test does not replace these behaviors.
   - [x] Restore the nonzero recovery-attempt assertion and rerun all three
     generated cases before the old workload-first assertions are removed.
 - [ ] Retained-host restart: keep host shutdown, retained map validation,
