@@ -54,6 +54,13 @@
             "action": "Allow"
           },
           {
+            "name": "fatal-exec",
+            "path": "/work/post-ponr-execfail",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          },
+          {
             "name": "false",
             "path": "/usr/bin/false",
             "recursive": false,

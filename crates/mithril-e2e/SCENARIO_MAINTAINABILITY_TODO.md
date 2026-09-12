@@ -748,9 +748,9 @@ command passes.
   fatal-state assertions visible.
   - [x] Put the architecture-aware malformed executable in `ProcessFixture`
     and preserve its focused termination check.
-  - [ ] Add the small generated test with the shared Python actor and result
+  - [x] Add the small generated test with the shared Python actor and result
     assertions.
-  - [ ] Pass the Host generated case in the retained privileged VM.
+  - [x] Pass the Host generated case in the retained privileged VM.
   - [ ] Pass the direct-`runc` generated case with the same actor and checks.
   - [ ] Pass the Kubernetes generated case with the same actor and checks.
   - [ ] Remove the matching old monolithic case and compatibility fields.

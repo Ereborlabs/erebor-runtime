@@ -2,7 +2,8 @@ import os
 import signal
 import sys
 
-ready, target = sys.argv[1:]
+work, target = sys.argv[1:]
+ready = os.path.join(work, "fatal-child")
 print("native-fixture-ready", flush=True)
 sys.stdin.readline()
 
@@ -13,6 +14,8 @@ if pid == 0:
     os.kill(os.getpid(), signal.SIGSTOP)
     os.execv(target, [target])
 
+sys.stdin.readline()
+os.kill(pid, signal.SIGCONT)
 _, status = os.waitpid(pid, 0)
 code = os.waitstatus_to_exitcode(status)
 if code < 0:

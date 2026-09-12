@@ -5,11 +5,12 @@ use std::time::Duration;
 
 use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{
-    CreatedByEdgeV1, IdentityRuntimeConfigV1, ReferenceTombstoneStateV1, TaskCoordinateStateV1,
-    TaskCoordinateV1, TaskReferenceTombstoneV1, TASK_REFERENCE_ALL_V1,
+    CreatedByEdgeV1, Id128V1, IdentityRuntimeConfigV1, PendingExecV1, ProcessExecutionInstanceV1,
+    ProcessSecurityStateV1, ReferenceTombstoneStateV1, TaskCoordinateStateV1, TaskCoordinateV1,
+    TaskReferenceTombstoneV1, TASK_REFERENCE_ALL_V1,
 };
 use snafu::ResultExt as _;
-use zerocopy::TryFromBytes as _;
+use zerocopy::{IntoBytes as _, KnownLayout, TryFromBytes};
 
 use crate::error::{InterceptorSnafu, InvalidInputSnafu};
 use crate::physical::wait_for;
@@ -113,6 +114,38 @@ pub(crate) trait Platform: Sized {
             .ok_or_else(|| "the actor exited without an exit code".into())
     }
     fn maps(&self) -> (&Path, &KernelStateReader);
+    fn state<T>(&self, map: &str, key: &[u8], name: &str) -> TestResult<Option<T>>
+    where
+        T: KnownLayout + TryFromBytes,
+    {
+        let (pin, reader) = self.maps();
+        let Some(bytes) = reader.lookup(map, key).context(InterceptorSnafu)? else {
+            return Ok(None);
+        };
+        T::try_read_from_bytes(&bytes)
+            .map(Some)
+            .map_err(|source| format!("{}: {name} is invalid: {source}", pin.display()).into())
+    }
+    fn pending_exec(&self, task: u64) -> TestResult<Option<PendingExecV1>> {
+        self.state("pending_execs", &task.to_ne_bytes(), "pending exec")
+    }
+    fn process(&self, value: &str) -> TestResult<ProcessSecurityStateV1> {
+        if value.len() != 32 {
+            return Err(format!("process state ID `{value}` is not 128 bits").into());
+        }
+        let value = u128::from_str_radix(value, 16)?;
+        let id = Id128V1::new((value >> 64) as u64, value as u64);
+        self.state("process_states", id.as_bytes(), "process state")?
+            .ok_or_else(|| "process state is missing".into())
+    }
+    fn execution(&self, id: Id128V1) -> TestResult<ProcessExecutionInstanceV1> {
+        self.state(
+            "process_execution_instances",
+            id.as_bytes(),
+            "process execution",
+        )?
+        .ok_or_else(|| "process execution is missing".into())
+    }
     fn coordinate(&self, task: u64) -> crate::Result<Option<TaskCoordinateV1>> {
         let (pin, reader) = self.maps();
         let Some(bytes) = reader
