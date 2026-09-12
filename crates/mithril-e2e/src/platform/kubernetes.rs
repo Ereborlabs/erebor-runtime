@@ -659,6 +659,27 @@ impl Kubernetes {
         Ok(())
     }
 
+    fn wait_api(&self) -> TestResult<()> {
+        let nodes = Api::<Node>::all(self.client.clone());
+        let last = RefCell::new(String::from("<absent>"));
+        Ok(wait_for(
+            &self.kube_path,
+            "Kubernetes API after runtime restart",
+            READY_LIMIT,
+            || match self.runtime.block_on(nodes.get(&self.node_name)) {
+                Ok(node) => {
+                    *last.borrow_mut() = format!("{:?}", node.status);
+                    Ok(Some(()))
+                }
+                Err(source) => {
+                    *last.borrow_mut() = source.to_string();
+                    Ok(None)
+                }
+            },
+            || format!("last Node state: {}", last.borrow()),
+        )?)
+    }
+
     fn running_id(&self, id: &str) -> TestResult<()> {
         let mut command = Command::new(&self.k3s_path);
         command.args(["crictl", "inspect", id]);
@@ -691,20 +712,6 @@ impl Kubernetes {
             Self::retain(&mut failed, self.delete_ns(&self.namespace));
             self.work_up = false;
         }
-        if self.helm_up {
-            let mut command = Command::new(&self.helm_path);
-            command
-                .args(["--kubeconfig"])
-                .arg(&self.kube_path)
-                .args(["uninstall", "mithril", "--namespace", &self.system])
-                .args(["--wait", "--timeout", "2m"]);
-            Self::retain(
-                &mut failed,
-                Self::run(&mut command, "uninstall Mithril").map(|_| ()),
-            );
-            Self::retain(&mut failed, self.wait_sockets());
-            self.helm_up = false;
-        }
         if self.system_up {
             let nodes = Api::<Node>::all(self.client.clone());
             let patch = json!({"metadata": {"labels": {(SELECTOR): null}}});
@@ -719,10 +726,9 @@ impl Kubernetes {
                     .map(|_| ())
                     .map_err(Into::into),
             );
-            Self::retain(&mut failed, self.delete_ns(&self.system));
-            self.system_up = false;
         }
         if self.hook_up {
+            Self::retain(&mut failed, self.wait_sockets());
             let input = RuntimeIntegrationDecommissionV1 {
                 owner: format!("{}/mithril", self.system),
                 hook_directory: PathBuf::from("/usr/libexec/oci/hooks.d"),
@@ -738,7 +744,25 @@ impl Kubernetes {
                     .map(|_| ())
                     .map_err(Into::into),
             );
+            Self::retain(&mut failed, self.wait_api());
             self.hook_up = false;
+        }
+        if self.helm_up {
+            let mut command = Command::new(&self.helm_path);
+            command
+                .args(["--kubeconfig"])
+                .arg(&self.kube_path)
+                .args(["uninstall", "mithril", "--namespace", &self.system])
+                .args(["--wait", "--timeout", "2m"]);
+            Self::retain(
+                &mut failed,
+                Self::run(&mut command, "uninstall Mithril").map(|_| ()),
+            );
+            self.helm_up = false;
+        }
+        if self.system_up {
+            Self::retain(&mut failed, self.delete_ns(&self.system));
+            self.system_up = false;
         }
         if let Some(work) = self.work.take() {
             Self::retain(&mut failed, work.cleanup().map_err(Into::into));
