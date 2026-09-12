@@ -198,10 +198,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub cgroup_escape_placement_mismatch_detected: bool,
     pub cgroup_escape_first_effect_denied: bool,
     pub moved_parent_fork_denied: bool,
-    pub post_ponr_exec_fatal: bool,
-    pub post_ponr_pending_state: u8,
-    pub post_ponr_exec_guard_state: u8,
-    pub post_ponr_task_coordinate_state: u8,
     pub authorization_retarget_rejected: bool,
     pub authorization_expired_rejected: bool,
     pub authorization_signature_mismatch_rejected: bool,
@@ -450,14 +446,12 @@ impl IdentityTestRunner {
         self.materialize_object(output_directory)?;
         let ns_mid_path = output_directory.join("namespace-mid-ready");
         let child_ready_path = output_directory.join("native-child-ready");
-        let post_ponr_execfail_path = output_directory.join("post-ponr-execfail");
         let ns_exec_path = output_directory.join("namespace-exec-ready");
         let cgroup_escape_sentinel_path = output_directory.join("cgroup-escape-sentinel");
         let authorization_state_directory = output_directory.join("authorization-replay");
         ensure!(
             !ns_mid_path.exists()
                 && !child_ready_path.exists()
-                && !post_ponr_execfail_path.exists()
                 && !ns_exec_path.exists()
                 && !cgroup_escape_sentinel_path.exists()
                 && !authorization_state_directory.exists(),
@@ -466,10 +460,8 @@ impl IdentityTestRunner {
                 reason: "identity exec probe files must not already exist",
             }
         );
-        let post_ponr_execfail_cleanup = ProbeFile::new(&post_ponr_execfail_path);
         let cgroup_escape_sentinel_cleanup = ProbeFile::new(&cgroup_escape_sentinel_path);
         let authorization_state_cleanup = ProbeDirectory::new(&authorization_state_directory);
-        Self::materialize_post_ponr_execfail(&post_ponr_execfail_path)?;
         fs::write(
             &cgroup_escape_sentinel_path,
             b"identity cgroup escape sentinel\n",
@@ -833,13 +825,8 @@ impl IdentityTestRunner {
         );
         clone_fixture.stop();
 
-        let exec_case = scenarios::ExecCase::new(self, &host, &inspector, &binding, &procs_path);
+        let exec_case = scenarios::ExecCase::new(self, &inspector, &binding, &procs_path);
         let reparent_case = scenarios::ReparentCase::new(self, &inspector, &procs_path);
-        let fatal_ready_cleanup = ProbeFile::new(&child_ready_path);
-
-        let fatal = exec_case.fatal(&child_ready_path, &post_ponr_execfail_path)?;
-        fatal_ready_cleanup.cleanup()?;
-        post_ponr_execfail_cleanup.cleanup()?;
 
         let orphan_ready_cleanup = ProbeFile::new(&child_ready_path);
         let (orphan_root, orphan_before, orphan_after) = exec_case.orphan(&child_ready_path)?;
@@ -1215,10 +1202,6 @@ impl IdentityTestRunner {
             cgroup_escape_placement_mismatch_detected: true,
             cgroup_escape_first_effect_denied: true,
             moved_parent_fork_denied: true,
-            post_ponr_exec_fatal: true,
-            post_ponr_pending_state: fatal.pending,
-            post_ponr_exec_guard_state: fatal.guard,
-            post_ponr_task_coordinate_state: fatal.coord,
             authorization_retarget_rejected: true,
             authorization_expired_rejected: true,
             authorization_signature_mismatch_rejected: true,
@@ -7711,32 +7694,6 @@ fn encode_fixture_signed_authorization(
     )
     .map_err(|error| invalid_state(format!("encode authorization fixture: {error}")))
 }
-fn id_key(value: &str) -> Result<[u8; 16]> {
-    id_value(value).map(id_bytes)
-}
-
-fn id_value(value: &str) -> Result<Id128V1> {
-    ensure!(
-        value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit()),
-        InvalidInputSnafu {
-            path: Path::new("native identity ID"),
-            reason: format!("`{value}` is not a 128-bit identity"),
-        }
-    );
-    let high = u64::from_str_radix(&value[..16], 16)
-        .map_err(|error| invalid_state(format!("parse identity high word: {error}")))?;
-    let low = u64::from_str_radix(&value[16..], 16)
-        .map_err(|error| invalid_state(format!("parse identity low word: {error}")))?;
-    Ok(Id128V1::new(high, low))
-}
-
-fn id_bytes(value: Id128V1) -> [u8; 16] {
-    let mut bytes = [0_u8; 16];
-    bytes[..8].copy_from_slice(&value.high.to_ne_bytes());
-    bytes[8..].copy_from_slice(&value.low.to_ne_bytes());
-    bytes
-}
-
 fn optional_abi_map<T>(host: &KernelHost, map: &str, key: &[u8], name: &str) -> Result<Option<T>>
 where
     T: KnownLayout + TryFromBytes,

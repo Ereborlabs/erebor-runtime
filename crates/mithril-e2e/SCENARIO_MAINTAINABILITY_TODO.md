@@ -744,7 +744,7 @@ command passes.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [x] Remove the matching old monolithic case and compatibility fields.
-- [ ] Post-PONR failure: use fixture-owned process readiness and keep the
+- [x] Post-PONR failure: use fixture-owned process readiness and keep the
   fatal-state assertions visible.
   - [x] Put the architecture-aware malformed executable in `ProcessFixture`
     and preserve its focused termination check.
@@ -753,7 +753,7 @@ command passes.
   - [x] Pass the Host generated case in the retained privileged VM.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
-  - [ ] Remove the matching old monolithic case and compatibility fields.
+  - [x] Remove the matching old monolithic case and compatibility fields.
 - [x] Moved-task exec: keep the physical cgroup move, denied exec, production
   health checks, and placement-mismatch assertions visible.
   - [x] The small generated test uses one shared Python actor and the public
