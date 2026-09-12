@@ -219,11 +219,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub subreaper_intermediate_before_exit: NativeTaskSnapshotV1,
     pub subreaper_native_child_before_parent_exit: NativeTaskSnapshotV1,
     pub subreaper_native_child_after_parent_exit: NativeTaskSnapshotV1,
-    pub namespace_init_parent: NativeTaskSnapshotV1,
-    pub namespace_init_pid_in_own_namespace: u32,
-    pub namespace_init_intermediate_before_exit: NativeTaskSnapshotV1,
-    pub namespace_init_native_child_before_parent_exit: NativeTaskSnapshotV1,
-    pub namespace_init_native_child_after_parent_exit: NativeTaskSnapshotV1,
     pub double_fork_outer_parent: NativeTaskSnapshotV1,
     pub double_fork_intermediate_before_exit: NativeTaskSnapshotV1,
     pub double_fork_native_child_before_intermediate_exit: NativeTaskSnapshotV1,
@@ -441,15 +436,11 @@ impl IdentityTestRunner {
         let procs_path = cgroup_path.join("cgroup.procs");
 
         self.materialize_object(output_directory)?;
-        let ns_mid_path = output_directory.join("namespace-mid-ready");
         let child_ready_path = output_directory.join("native-child-ready");
-        let ns_exec_path = output_directory.join("namespace-exec-ready");
         let cgroup_escape_sentinel_path = output_directory.join("cgroup-escape-sentinel");
         let authorization_state_directory = output_directory.join("authorization-replay");
         ensure!(
-            !ns_mid_path.exists()
-                && !child_ready_path.exists()
-                && !ns_exec_path.exists()
+            !child_ready_path.exists()
                 && !cgroup_escape_sentinel_path.exists()
                 && !authorization_state_directory.exists(),
             InvalidInputSnafu {
@@ -830,14 +821,6 @@ impl IdentityTestRunner {
         let (sub_root, sub_mid, sub_before, sub_after) =
             reparent_case.subreaper(&child_ready_path)?;
         sub_cleanup.cleanup()?;
-
-        let init_cleanup = ProbeFile::new(&child_ready_path);
-        let mid_cleanup = ProbeFile::new(&ns_mid_path);
-        let ns_cleanup = ProbeFile::new(&ns_exec_path);
-        let ns = reparent_case.namespace([&child_ready_path, &ns_mid_path, &ns_exec_path])?;
-        init_cleanup.cleanup()?;
-        mid_cleanup.cleanup()?;
-        ns_cleanup.cleanup()?;
 
         let double_cleanup = ProbeFile::new(&child_ready_path);
         let (double_root, double_mid, double_before, double_after) =
@@ -1220,11 +1203,6 @@ impl IdentityTestRunner {
             subreaper_intermediate_before_exit: sub_mid,
             subreaper_native_child_before_parent_exit: sub_before,
             subreaper_native_child_after_parent_exit: sub_after,
-            namespace_init_parent: ns.root,
-            namespace_init_pid_in_own_namespace: ns.nspid,
-            namespace_init_intermediate_before_exit: ns.middle,
-            namespace_init_native_child_before_parent_exit: ns.before,
-            namespace_init_native_child_after_parent_exit: ns.after,
             double_fork_outer_parent: double_root,
             double_fork_intermediate_before_exit: double_mid,
             double_fork_native_child_before_intermediate_exit: double_before,

@@ -57,6 +57,7 @@ pub(crate) struct ProcessFixture {
 }
 
 impl ProcessFixture {
+    #[cfg(test)]
     pub(crate) fn namespace_pid(pid: u32) -> Result<u32> {
         let path = PathBuf::from(format!("/proc/{pid}/status"));
         let status = fs::read_to_string(&path).context(IoSnafu { path: &path })?;
@@ -215,20 +216,6 @@ impl ProcessFixture {
         let script = Self::script(root, name)?;
         let mut command = Command::new("python3");
         command.arg(&script).args(args);
-        Self::start(&mut command, &script)
-    }
-
-    pub(crate) fn unshare<I, S>(root: &Path, name: &str, args: I) -> Result<Self>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        let script = Self::script(root, name)?;
-        let mut command = Command::new("/usr/bin/unshare");
-        command
-            .args(["--user", "--map-root-user", "--pid", "--fork", "python3"])
-            .arg(&script)
-            .args(args);
         Self::start(&mut command, &script)
     }
 
@@ -646,6 +633,7 @@ impl ProcessFixture {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn wait_child(&mut self, pid: u32, operation: &str) -> Result<u32> {
         let path = PathBuf::from(format!("/proc/{pid}/task/{pid}/children"));
         let last = RefCell::new(String::from("<absent>"));

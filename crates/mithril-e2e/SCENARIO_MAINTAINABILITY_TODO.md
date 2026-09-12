@@ -783,7 +783,7 @@ command passes.
   `ProcessFixture` in one production-backed `#[test]`. Preserve the
   intermediate-parent, adopted-child, role, and execution assertions. Remove
   the actor-only test.
-- [ ] Namespace-init transition: use `native_namespace_init.py` through
+- [x] Namespace-init transition: use `native_namespace_init.py` through
   `ProcessFixture` in one production-backed `#[test]`. Preserve the namespace
   PID, parent, role, execution, and tombstone assertions. Remove the actor-only
   test.
@@ -795,7 +795,7 @@ command passes.
     host PIDs through the real parent-child process tree.
   - [x] Pass the Kubernetes generated case with the deployed Control, Node,
     OCI hook, and the same actor and checks.
-  - [ ] Remove the matching legacy probe method, result fields, and call site.
+  - [x] Remove the matching legacy probe method, result fields, and call site.
 - [ ] Double-fork transition: use `native_double_fork.py` through
   `ProcessFixture` in one production-backed `#[test]`. Preserve the parent,
   role, execution, and tombstone assertions. Remove the actor-only test.
