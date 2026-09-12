@@ -31,6 +31,30 @@ fn stop_kills_actor() -> crate::Result<()> {
 }
 
 #[test]
+fn stop_kills_child_after_exit() -> crate::Result<()> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let dir = tempfile::tempdir().context(IoSnafu {
+        path: "temporary directory",
+    })?;
+    let ready = dir.path().join("orphan.pid");
+    let mut actor = ProcessFixture::python(&root, "native_orphan.py", [&ready])?;
+    actor.set_group(&dir.path().join("removed-cgroup"));
+    let root_pid = actor.id();
+    actor.track(root_pid)?;
+    actor.send(b"fork\n")?;
+    let child_pid = actor.wait_pid(&ready, "actor child")?;
+    actor.track(child_pid)?;
+    actor.wait_stop(child_pid, "actor child stop")?;
+    actor.send(b"exit\n")?;
+    assert!(actor
+        .wait_exit("parent exit", Duration::from_secs(5))?
+        .success());
+
+    actor.stop()?;
+    actor.stop()
+}
+
+#[test]
 fn fatal_exec_dies() -> crate::Result<()> {
     let dir = tempfile::tempdir().context(IoSnafu {
         path: "temporary directory",

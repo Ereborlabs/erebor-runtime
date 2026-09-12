@@ -852,24 +852,23 @@ impl ProcessFixture {
         let _ = self.wait_exit("graceful process cleanup", STOP_GRACE);
         let mut failed = None;
         let ids = self.tasks.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-        if !self.stopped {
-            let killed = self.group.as_ref().is_some_and(|group| {
-                let path = group.join("cgroup.kill");
-                match fs::write(&path, "1") {
-                    Ok(()) => true,
-                    Err(source) => {
-                        failed = Some(format!("kill actor cgroup {}: {source}", group.display()));
-                        false
-                    }
+        let killed = self.group.as_ref().is_some_and(|group| {
+            let path = group.join("cgroup.kill");
+            match fs::write(&path, "1") {
+                Ok(()) => true,
+                Err(source) if source.kind() == ErrorKind::NotFound => false,
+                Err(source) => {
+                    failed = Some(format!("kill actor cgroup {}: {source}", group.display()));
+                    false
                 }
-            });
-            if !killed {
-                for (id, fd) in &self.tasks {
-                    match pidfd_send_signal(fd, Signal::KILL) {
-                        Ok(()) | Err(rustix::io::Errno::SRCH) => {}
-                        Err(source) => {
-                            failed = Some(format!("kill tracked process {id}: {source}"));
-                        }
+            }
+        });
+        if !killed {
+            for (id, fd) in &self.tasks {
+                match pidfd_send_signal(fd, Signal::KILL) {
+                    Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+                    Err(source) => {
+                        failed = Some(format!("kill tracked process {id}: {source}"));
                     }
                 }
             }

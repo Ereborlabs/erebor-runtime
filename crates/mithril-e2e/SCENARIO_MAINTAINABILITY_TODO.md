@@ -625,6 +625,9 @@ physical run:
 - [x] Rerun the direct-runtime lane in a fresh VM with the new diagnostic.
   The `createContainer` request appeared, and the complete schema 38 lane
   passed. No implementation change was required.
+- [x] Generated direct-`runc` actor cleanup: allow an already-removed actor
+  cgroup, then kill tracked descendants through their existing pidfds. The
+  exact cleanup regression and all generated Host and direct-`runc` cases pass.
 
 ## In-process scenario migration ledger
 
