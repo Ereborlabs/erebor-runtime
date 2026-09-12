@@ -197,10 +197,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub cgroup_escape_placement_mismatch_detected: bool,
     pub cgroup_escape_first_effect_denied: bool,
     pub moved_parent_fork_denied: bool,
-    pub pre_ponr_failed_exec_restored: bool,
-    pub pre_ponr_failed_exec_before: NativeTaskSnapshotV1,
-    pub pre_ponr_failed_exec_after_failure: NativeTaskSnapshotV1,
-    pub pre_ponr_failed_exec_after_success: NativeTaskSnapshotV1,
     pub post_ponr_exec_fatal: bool,
     pub post_ponr_pending_state: u8,
     pub post_ponr_exec_guard_state: u8,
@@ -451,16 +447,14 @@ impl IdentityTestRunner {
         let procs_path = cgroup_path.join("cgroup.procs");
 
         self.materialize_object(output_directory)?;
-        let execfail_path = output_directory.join("execfail");
-        let execfail_ready_path = output_directory.join("execfail-ready");
+        let ns_mid_path = output_directory.join("namespace-mid-ready");
         let child_ready_path = output_directory.join("native-child-ready");
         let post_ponr_execfail_path = output_directory.join("post-ponr-execfail");
         let ns_exec_path = output_directory.join("namespace-exec-ready");
         let cgroup_escape_sentinel_path = output_directory.join("cgroup-escape-sentinel");
         let authorization_state_directory = output_directory.join("authorization-replay");
         ensure!(
-            !execfail_path.exists()
-                && !execfail_ready_path.exists()
+            !ns_mid_path.exists()
                 && !child_ready_path.exists()
                 && !post_ponr_execfail_path.exists()
                 && !ns_exec_path.exists()
@@ -471,13 +465,9 @@ impl IdentityTestRunner {
                 reason: "identity exec probe files must not already exist",
             }
         );
-        let execfail_cleanup = ProbeFile::new(&execfail_path);
-        let execfail_ready_cleanup = ProbeFile::new(&execfail_ready_path);
-        let retry_ready_cleanup = ProbeFile::new(&child_ready_path);
         let post_ponr_execfail_cleanup = ProbeFile::new(&post_ponr_execfail_path);
         let cgroup_escape_sentinel_cleanup = ProbeFile::new(&cgroup_escape_sentinel_path);
         let authorization_state_cleanup = ProbeDirectory::new(&authorization_state_directory);
-        self.materialize_execfail(&execfail_path)?;
         Self::materialize_post_ponr_execfail(&post_ponr_execfail_path)?;
         fs::write(
             &cgroup_escape_sentinel_path,
@@ -844,11 +834,6 @@ impl IdentityTestRunner {
 
         let exec_case = scenarios::ExecCase::new(self, &host, &inspector, &binding, &procs_path);
         let reparent_case = scenarios::ReparentCase::new(self, &inspector, &procs_path);
-        let (failed_before, failed_after, retry_after) =
-            exec_case.retry(&child_ready_path, &execfail_ready_path, &execfail_path)?;
-        retry_ready_cleanup.cleanup()?;
-        execfail_ready_cleanup.cleanup()?;
-        execfail_cleanup.cleanup()?;
         let fatal_ready_cleanup = ProbeFile::new(&child_ready_path);
 
         let fatal = exec_case.fatal(&child_ready_path, &post_ponr_execfail_path)?;
@@ -865,10 +850,9 @@ impl IdentityTestRunner {
         sub_cleanup.cleanup()?;
 
         let init_cleanup = ProbeFile::new(&child_ready_path);
-        let mid_cleanup = ProbeFile::new(&execfail_ready_path);
+        let mid_cleanup = ProbeFile::new(&ns_mid_path);
         let ns_cleanup = ProbeFile::new(&ns_exec_path);
-        let ns =
-            reparent_case.namespace([&child_ready_path, &execfail_ready_path, &ns_exec_path])?;
+        let ns = reparent_case.namespace([&child_ready_path, &ns_mid_path, &ns_exec_path])?;
         init_cleanup.cleanup()?;
         mid_cleanup.cleanup()?;
         ns_cleanup.cleanup()?;
@@ -1230,10 +1214,6 @@ impl IdentityTestRunner {
             cgroup_escape_placement_mismatch_detected: true,
             cgroup_escape_first_effect_denied: true,
             moved_parent_fork_denied: true,
-            pre_ponr_failed_exec_restored: true,
-            pre_ponr_failed_exec_before: failed_before,
-            pre_ponr_failed_exec_after_failure: failed_after,
-            pre_ponr_failed_exec_after_success: retry_after,
             post_ponr_exec_fatal: true,
             post_ponr_pending_state: fatal.pending,
             post_ponr_exec_guard_state: fatal.guard,
@@ -1784,32 +1764,6 @@ impl IdentityTestRunner {
         let path = output_directory.join("erebor-interceptor.bpf.o");
         fs::write(&path, BUNDLED_BPF_OBJECT).context(IoSnafu { path: &path })?;
         Ok(path)
-    }
-
-    fn materialize_execfail(&self, path: &Path) -> Result<()> {
-        let source = Path::new("/bin/true");
-        let mut bytes = fs::read(source).context(IoSnafu { path: source })?;
-        let (linker_offset, linker) = [
-            b"/lib64/ld-linux-x86-64.so.2\0".as_slice(),
-            b"/lib/ld-linux-aarch64.so.1\0".as_slice(),
-            b"/lib/ld-linux-armhf.so.3\0".as_slice(),
-            b"/lib/ld-linux-riscv64-lp64d.so.1\0".as_slice(),
-        ]
-        .into_iter()
-        .find_map(|linker| {
-            bytes
-                .windows(linker.len())
-                .position(|candidate| candidate == linker)
-                .map(|offset| (offset, linker))
-        })
-        .ok_or_else(|| invalid_state("/bin/true has no supported ELF interpreter"))?;
-        let mut missing_linker = linker.to_vec();
-        missing_linker[1] = b'z';
-        bytes[linker_offset..linker_offset + linker.len()].copy_from_slice(&missing_linker);
-        fs::write(path, bytes).context(IoSnafu { path })?;
-        let mut permissions = fs::metadata(path).context(IoSnafu { path })?.permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(path, permissions).context(IoSnafu { path })
     }
 
     pub(crate) fn materialize_post_ponr_execfail(path: &Path) -> Result<()> {

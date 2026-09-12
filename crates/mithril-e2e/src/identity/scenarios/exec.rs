@@ -16,7 +16,7 @@ use snafu::{ensure, ResultExt as _};
 use super::super::{
     id_bytes, id_key, optional_abi_map, required_abi_map, IdentityTestRunner, WAIT_LIMIT,
 };
-use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, NodeSnafu};
+use crate::error::{InvalidInputSnafu, IoSnafu, NodeSnafu};
 use crate::physical::wait_for;
 use crate::process::ProcessFixture;
 use crate::Result;
@@ -50,122 +50,6 @@ impl<'a> ExecCase<'a> {
             binding,
             procs,
         }
-    }
-
-    pub(in crate::identity) fn retry(
-        &self,
-        ready: &Path,
-        failed: &Path,
-        target: &Path,
-    ) -> Result<(
-        NativeTaskSnapshotV1,
-        NativeTaskSnapshotV1,
-        NativeTaskSnapshotV1,
-    )> {
-        let mut actor = ProcessFixture::python(
-            &self.runner.repo_root,
-            "native_exec_retry.py",
-            [ready, failed, target],
-        )?;
-        let root_pid = actor.id();
-        fs::write(self.procs, root_pid.to_string()).context(IoSnafu { path: self.procs })?;
-        let root = self.wait_root(root_pid)?;
-
-        actor.send(b"root\n")?;
-        let pid = actor.wait_pid(ready, "failed exec child")?;
-        actor.track(pid)?;
-        actor.wait_stop(pid, "pre-exec stop")?;
-        let before = self
-            .runner
-            .wait_for("failed exec child identity", self.procs, || {
-                self.inspector.snapshot(pid).context(NodeSnafu)
-            })?;
-        let pending = self
-            .host
-            .lookup_map("pending_execs", &before.task_cookie.to_ne_bytes())
-            .context(InterceptorSnafu)?;
-        ensure!(
-            root.root_class.as_deref() == Some("external_runtime_root")
-                && root.installed_role_class.as_deref() == Some("runtime_external_restricted")
-                && pending.is_none()
-                && before.creator_task_cookie == Some(root.task_cookie)
-                && before.real_parent_task_cookie == root.task_cookie
-                && before.root_class.is_none()
-                && before.installed_role_class.is_none()
-                && before.process_execution_state == ProcessExecutionStateV1::Active as u8
-                && before.process_state_vector_state == ProcessStateVectorStateV1::Active as u8
-                && before.exec_guard_state == ExecGuardStateV1::None as u8,
-            InvalidInputSnafu {
-                path: self.procs,
-                reason: format!(
-                    "failed-exec child has the wrong identity; parent {root:?}; child {before:?}; pending {}",
-                    pending.is_some()
-                ),
-            }
-        );
-
-        actor.signal(pid, Signal::CONT)?;
-        let restored = self
-            .runner
-            .wait_for("failed exec restoration", failed, || {
-                if !failed.exists() {
-                    return Ok(None);
-                }
-                let Some(got) = self.inspector.snapshot(pid).context(NodeSnafu)? else {
-                    return Ok(None);
-                };
-                let pending = self
-                    .host
-                    .lookup_map("pending_execs", &got.task_cookie.to_ne_bytes())
-                    .context(InterceptorSnafu)?;
-                Ok((pending.is_none()
-                    && got.task_cookie == before.task_cookie
-                    && got.creator_task_cookie == before.creator_task_cookie
-                    && got.real_parent_task_cookie == before.real_parent_task_cookie
-                    && got.active_execution_id == before.active_execution_id
-                    && got.image_provenance_id == before.image_provenance_id
-                    && got.active_role_id == before.active_role_id
-                    && got.process_execution_state == ProcessExecutionStateV1::Active as u8
-                    && got.process_state_vector_state == ProcessStateVectorStateV1::Active as u8
-                    && got.exec_guard_state == ExecGuardStateV1::None as u8)
-                    .then_some(got))
-            })?;
-
-        actor.wait_stop(pid, "failed exec stop")?;
-        actor.signal(pid, Signal::CONT)?;
-        let after = self
-            .runner
-            .wait_for("normal exec after failure", self.procs, || {
-                let Some(got) = self.inspector.snapshot(pid).context(NodeSnafu)? else {
-                    return Ok(None);
-                };
-                let pending = self
-                    .host
-                    .lookup_map("pending_execs", &got.task_cookie.to_ne_bytes())
-                    .context(InterceptorSnafu)?;
-                Ok((pending.is_none()
-                    && got.task_cookie == restored.task_cookie
-                    && got.creator_task_cookie == restored.creator_task_cookie
-                    && got.real_parent_task_cookie == restored.real_parent_task_cookie
-                    && got.active_execution_id != restored.active_execution_id
-                    && got.image_provenance_id != restored.image_provenance_id
-                    && got.active_role_id == restored.active_role_id
-                    && got.process_execution_state == ProcessExecutionStateV1::Active as u8
-                    && got.process_state_vector_state == ProcessStateVectorStateV1::Active as u8
-                    && got.exec_guard_state == ExecGuardStateV1::None as u8)
-                    .then_some(got))
-            })?;
-        ensure!(
-            after.root_class.is_none()
-                && after.installed_role_class.is_none()
-                && after.coordinate_state == TaskCoordinateStateV1::Runnable as u8,
-            InvalidInputSnafu {
-                path: self.procs,
-                reason: "normal exec after failure did not restore a runnable task",
-            }
-        );
-        actor.stop()?;
-        Ok((before, restored, after))
     }
 
     pub(in crate::identity) fn fatal(&self, ready: &Path, target: &Path) -> Result<FatalState> {
