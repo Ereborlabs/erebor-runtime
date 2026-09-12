@@ -8,7 +8,7 @@ use erebor_interceptor_abi::{
 use crate::platform::{platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 fn fatal_exec_is_terminal<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("fatal-exec")?;
     let target = env.work().join("post-ponr-execfail");
