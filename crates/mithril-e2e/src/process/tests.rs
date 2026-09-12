@@ -1,3 +1,4 @@
+use std::os::unix::process::ExitStatusExt as _;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -27,6 +28,21 @@ fn stop_kills_actor() -> crate::Result<()> {
 
     actor.stop()?;
     actor.stop()
+}
+
+#[test]
+fn fatal_exec_dies() -> crate::Result<()> {
+    let dir = tempfile::tempdir().context(IoSnafu {
+        path: "temporary directory",
+    })?;
+    let path = dir.path().join("post-ponr-execfail");
+    ProcessFixture::fatal_exec(&path)?;
+
+    let status = Command::new(&path)
+        .status()
+        .context(IoSnafu { path: &path })?;
+    assert!(status.signal().is_some());
+    Ok(())
 }
 
 #[test]

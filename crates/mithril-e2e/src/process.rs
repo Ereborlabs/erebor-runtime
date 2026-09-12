@@ -16,6 +16,7 @@ use std::os::fd::AsRawFd as _;
 use std::os::fd::OwnedFd;
 #[cfg(test)]
 use std::os::unix::ffi::OsStrExt as _;
+use std::os::unix::fs::PermissionsExt as _;
 #[cfg(test)]
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt as _;
@@ -125,6 +126,85 @@ impl ProcessFixture {
             }
         );
         Ok(path)
+    }
+
+    pub(crate) fn fatal_exec(path: &Path) -> Result<()> {
+        const PT_LOAD: u32 = 1;
+
+        let source = Path::new("/bin/true");
+        let mut bytes = fs::read(source).context(IoSnafu { path: source })?;
+        ensure!(
+            bytes.get(0..4) == Some(b"\x7fELF") && bytes.get(5) == Some(&1),
+            InvalidInputSnafu {
+                path: source,
+                reason: "the post-PONR fixture requires a little-endian ELF",
+            }
+        );
+        let (program_offset, entry_size, entry_count, filesz_offset, memsz_offset) =
+            match bytes.get(4).copied() {
+                Some(2) => (
+                    read_u64_le(&bytes, 32, "ELF64 program-header offset")? as usize,
+                    read_u16(&bytes, 54, "ELF64 program-header size")? as usize,
+                    read_u16(&bytes, 56, "ELF64 program-header count")? as usize,
+                    32,
+                    40,
+                ),
+                Some(1) => (
+                    read_u32(&bytes, 28, "ELF32 program-header offset")? as usize,
+                    read_u16(&bytes, 42, "ELF32 program-header size")? as usize,
+                    read_u16(&bytes, 44, "ELF32 program-header count")? as usize,
+                    16,
+                    20,
+                ),
+                class => {
+                    return Err(bad_elf(format!(
+                        "unsupported ELF class {class:?} for the post-PONR fixture"
+                    )))
+                }
+            };
+        let field_size = if bytes[4] == 2 { 8 } else { 4 };
+        let mut patched = false;
+        for index in 0..entry_count {
+            let offset = program_offset
+                .checked_add(index.saturating_mul(entry_size))
+                .ok_or_else(|| bad_elf("ELF program-header offset overflowed"))?;
+            if read_u32(&bytes, offset, "ELF program-header type")? != PT_LOAD {
+                continue;
+            }
+            let filesz = read_uint(
+                &bytes,
+                offset + filesz_offset,
+                field_size,
+                "ELF PT_LOAD file size",
+            )?;
+            ensure!(
+                filesz > 0,
+                InvalidInputSnafu {
+                    path: source,
+                    reason: "the first ELF PT_LOAD segment has no file bytes",
+                }
+            );
+            write_uint(
+                &mut bytes,
+                offset + memsz_offset,
+                field_size,
+                filesz - 1,
+                "ELF PT_LOAD memory size",
+            )?;
+            patched = true;
+            break;
+        }
+        ensure!(
+            patched,
+            InvalidInputSnafu {
+                path: source,
+                reason: "the source ELF has no PT_LOAD segment",
+            }
+        );
+        fs::write(path, bytes).context(IoSnafu { path })?;
+        let mut mode = fs::metadata(path).context(IoSnafu { path })?.permissions();
+        mode.set_mode(0o700);
+        fs::set_permissions(path, mode).context(IoSnafu { path })
     }
 
     pub(crate) fn python<I, S>(root: &Path, name: &str, args: I) -> Result<Self>
@@ -926,6 +1006,62 @@ impl ProcessFixture {
         self.stdout = Some(stdout);
         result
     }
+}
+
+fn read_u16(bytes: &[u8], offset: usize, name: &str) -> Result<u16> {
+    let value = bytes
+        .get(offset..offset + size_of::<u16>())
+        .and_then(|value| value.try_into().ok())
+        .ok_or_else(|| bad_elf(format!("{name} is truncated")))?;
+    Ok(u16::from_le_bytes(value))
+}
+
+fn read_u32(bytes: &[u8], offset: usize, name: &str) -> Result<u32> {
+    let value = bytes
+        .get(offset..offset + size_of::<u32>())
+        .and_then(|value| value.try_into().ok())
+        .ok_or_else(|| bad_elf(format!("{name} is truncated")))?;
+    Ok(u32::from_le_bytes(value))
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize, name: &str) -> Result<u64> {
+    let value = bytes
+        .get(offset..offset + size_of::<u64>())
+        .and_then(|value| value.try_into().ok())
+        .ok_or_else(|| bad_elf(format!("{name} is truncated")))?;
+    Ok(u64::from_le_bytes(value))
+}
+
+fn read_uint(bytes: &[u8], offset: usize, size: usize, name: &str) -> Result<u64> {
+    match size {
+        4 => read_u32(bytes, offset, name).map(u64::from),
+        8 => read_u64_le(bytes, offset, name),
+        _ => Err(bad_elf(format!("{name} has unsupported size {size}"))),
+    }
+}
+
+fn write_uint(bytes: &mut [u8], offset: usize, size: usize, value: u64, name: &str) -> Result<()> {
+    let encoded = match size {
+        4 => u32::try_from(value)
+            .map_err(|source| bad_elf(format!("{name} does not fit ELF32: {source}")))?
+            .to_le_bytes()
+            .to_vec(),
+        8 => value.to_le_bytes().to_vec(),
+        _ => return Err(bad_elf(format!("{name} has unsupported size {size}"))),
+    };
+    let target = bytes
+        .get_mut(offset..offset + size)
+        .ok_or_else(|| bad_elf(format!("{name} is truncated")))?;
+    target.copy_from_slice(&encoded);
+    Ok(())
+}
+
+fn bad_elf(reason: impl Into<String>) -> crate::Error {
+    InvalidInputSnafu {
+        path: Path::new("/bin/true"),
+        reason: reason.into(),
+    }
+    .build()
 }
 
 #[cfg(test)]
