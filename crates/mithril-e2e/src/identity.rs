@@ -28,8 +28,7 @@ use erebor_interceptor::{
 };
 use erebor_interceptor_abi::{
     BindingLifecycleStateV1, ExecGuardStateV1, ExecutionSetBindingStateV1, Id128V1,
-    IdentityRuntimeConfigV1, ProcessExecutionStateV1, ProcessStateVectorStateV1,
-    TaskCoordinateStateV1,
+    ProcessExecutionStateV1, ProcessStateVectorStateV1, TaskCoordinateStateV1,
 };
 use libbpf_rs::{MapCore as _, MapHandle, MapType};
 use mithril_control::{
@@ -44,7 +43,7 @@ use mithril_node::{
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
-use zerocopy::{FromBytes as _, IntoBytes as _, KnownLayout, TryFromBytes};
+use zerocopy::{IntoBytes as _, KnownLayout, TryFromBytes};
 
 use crate::closure::QualificationRegistry;
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
@@ -217,9 +216,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub authorization_replay_wal_sha256: String,
     pub authorization_replay_wal_records: u64,
     pub authorization_replay_state_removed: bool,
-    pub non_leader_thread_exec_committed: bool,
-    pub non_leader_thread_exec_root: NativeTaskSnapshotV1,
-    pub non_leader_thread_exec_after_exec: NativeTaskSnapshotV1,
     pub clone_into_cgroup_external_root: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child_after_namespace_move: NativeTaskSnapshotV1,
@@ -459,7 +455,7 @@ impl IdentityTestRunner {
         let execfail_ready_path = output_directory.join("execfail-ready");
         let child_ready_path = output_directory.join("native-child-ready");
         let post_ponr_execfail_path = output_directory.join("post-ponr-execfail");
-        let non_leader_thread_ready_path = output_directory.join("non-leader-thread-ready");
+        let ns_exec_path = output_directory.join("namespace-exec-ready");
         let cgroup_escape_sentinel_path = output_directory.join("cgroup-escape-sentinel");
         let authorization_state_directory = output_directory.join("authorization-replay");
         ensure!(
@@ -467,7 +463,7 @@ impl IdentityTestRunner {
                 && !execfail_ready_path.exists()
                 && !child_ready_path.exists()
                 && !post_ponr_execfail_path.exists()
-                && !non_leader_thread_ready_path.exists()
+                && !ns_exec_path.exists()
                 && !cgroup_escape_sentinel_path.exists()
                 && !authorization_state_directory.exists(),
             InvalidInputSnafu {
@@ -479,7 +475,6 @@ impl IdentityTestRunner {
         let execfail_ready_cleanup = ProbeFile::new(&execfail_ready_path);
         let retry_ready_cleanup = ProbeFile::new(&child_ready_path);
         let post_ponr_execfail_cleanup = ProbeFile::new(&post_ponr_execfail_path);
-        let non_leader_thread_ready_cleanup = ProbeFile::new(&non_leader_thread_ready_path);
         let cgroup_escape_sentinel_cleanup = ProbeFile::new(&cgroup_escape_sentinel_path);
         let authorization_state_cleanup = ProbeDirectory::new(&authorization_state_directory);
         self.materialize_execfail(&execfail_path)?;
@@ -849,9 +844,6 @@ impl IdentityTestRunner {
 
         let exec_case = scenarios::ExecCase::new(self, &host, &inspector, &binding, &procs_path);
         let reparent_case = scenarios::ReparentCase::new(self, &inspector, &procs_path);
-        let (thread_root, thread_exec) = exec_case.non_leader(&non_leader_thread_ready_path)?;
-        non_leader_thread_ready_cleanup.cleanup()?;
-
         let (failed_before, failed_after, retry_after) =
             exec_case.retry(&child_ready_path, &execfail_ready_path, &execfail_path)?;
         retry_ready_cleanup.cleanup()?;
@@ -874,12 +866,9 @@ impl IdentityTestRunner {
 
         let init_cleanup = ProbeFile::new(&child_ready_path);
         let mid_cleanup = ProbeFile::new(&execfail_ready_path);
-        let ns_cleanup = ProbeFile::new(&non_leader_thread_ready_path);
-        let ns = reparent_case.namespace([
-            &child_ready_path,
-            &execfail_ready_path,
-            &non_leader_thread_ready_path,
-        ])?;
+        let ns_cleanup = ProbeFile::new(&ns_exec_path);
+        let ns =
+            reparent_case.namespace([&child_ready_path, &execfail_ready_path, &ns_exec_path])?;
         init_cleanup.cleanup()?;
         mid_cleanup.cleanup()?;
         ns_cleanup.cleanup()?;
@@ -1260,9 +1249,6 @@ impl IdentityTestRunner {
             authorization_replay_wal_sha256,
             authorization_replay_wal_records,
             authorization_replay_state_removed: true,
-            non_leader_thread_exec_committed: true,
-            non_leader_thread_exec_root: thread_root,
-            non_leader_thread_exec_after_exec: thread_exec,
             clone_into_cgroup_external_root: clone_external_root,
             clone_into_cgroup_native_child: clone_native_child,
             clone_into_cgroup_native_child_after_namespace_move:
@@ -7415,20 +7401,6 @@ fn profile_task_refs(host: &KernelHost) -> Result<u64> {
         .context(InterceptorSnafu)?
         .ok_or_else(|| invalid_state("profile-generation reference state is missing"))?;
     read_u64(&value, 0, "profile-generation task references")
-}
-
-fn identity_next_id(host: &KernelHost) -> Result<u64> {
-    let value = host
-        .lookup_map("identity_config", &0_u32.to_ne_bytes())
-        .context(InterceptorSnafu)?
-        .ok_or_else(|| invalid_state("identity runtime configuration is missing"))?;
-    IdentityRuntimeConfigV1::read_from_bytes(&value)
-        .map(|config| config.next_id)
-        .map_err(|error| {
-            invalid_state(format!(
-                "identity runtime configuration is invalid: {error}"
-            ))
-        })
 }
 
 fn map_ids(manifest: &KernelObjectManifestV1) -> BTreeMap<&str, u32> {

@@ -728,14 +728,14 @@ command passes.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [x] Remove the matching old monolithic case and compatibility fields.
-- [ ] Non-leader thread exec: replace `ExecCase::non_leader` with one small
+- [x] Non-leader thread exec: replace `ExecCase::non_leader` with one small
   generated test. Use `ProcessFixture` and the shared Python file directly.
   Keep exact TID allocation and post-exec assertions visible.
   - [x] Add the small generated test and use the shared actor and assertions.
   - [x] Pass the Host generated case in the retained privileged VM.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
-  - [ ] Remove the matching old monolithic case and compatibility fields.
+  - [x] Remove the matching old monolithic case and compatibility fields.
 - [ ] Pre-PONR failure: use fixture-owned process readiness and keep the
   pending-exec, rollback, and recovery assertions visible.
 - [ ] Post-PONR failure: use fixture-owned process readiness and keep the
