@@ -2,6 +2,8 @@
 mod child_exec;
 mod exec;
 #[cfg(test)]
+mod exec_retry;
+#[cfg(test)]
 mod lifetime_result;
 #[cfg(test)]
 mod lifetime_test;

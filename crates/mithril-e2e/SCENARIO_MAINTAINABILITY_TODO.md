@@ -738,6 +738,12 @@ command passes.
   - [x] Remove the matching old monolithic case and compatibility fields.
 - [ ] Pre-PONR failure: use fixture-owned process readiness and keep the
   pending-exec, rollback, and recovery assertions visible.
+  - [x] Add the small generated test with the shared Python actor and result
+    assertions.
+  - [x] Pass the Host generated case in the retained privileged VM.
+  - [ ] Pass the direct-`runc` generated case with the same actor and checks.
+  - [ ] Pass the Kubernetes generated case with the same actor and checks.
+  - [ ] Remove the matching old monolithic case and compatibility fields.
 - [ ] Post-PONR failure: use fixture-owned process readiness and keep the
   fatal-state assertions visible.
 - [x] Moved-task exec: keep the physical cgroup move, denied exec, production

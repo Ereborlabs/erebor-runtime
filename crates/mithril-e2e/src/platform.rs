@@ -177,6 +177,13 @@ pub(crate) trait Platform: Sized {
             .map_err(|source| format!("identity runtime configuration is invalid: {source}"))?
             .next_id)
     }
+    fn pending(&self, task: u64) -> TestResult<bool> {
+        let (_, reader) = self.maps();
+        Ok(reader
+            .lookup("pending_execs", &task.to_ne_bytes())
+            .context(InterceptorSnafu)?
+            .is_some())
+    }
     fn thread(&mut self, pid: u32, ns_tid: u32, task: u64, name: &str) -> TestResult<Thread> {
         let pin = self.maps().0;
         let last = RefCell::new(String::from("coordinate=<absent>; edge=<absent>"));
