@@ -646,7 +646,6 @@ impl ProcessFixture {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn wait_child(&mut self, pid: u32, operation: &str) -> Result<u32> {
         let path = PathBuf::from(format!("/proc/{pid}/task/{pid}/children"));
         let last = RefCell::new(String::from("<absent>"));

@@ -227,11 +227,12 @@ impl<'a> ReparentCase<'a> {
         })?;
         let mut actor =
             ProcessFixture::unshare(&self.runner.repo_root, "native_namespace_init.py", [work])?;
-        let init = actor.wait_pid(init_path, "namespace init")?;
+        let init_ns = actor.wait_pid(init_path, "namespace init PID")?;
+        let init = actor.wait_child(actor.id(), "namespace init host PID")?;
         actor.track(init)?;
         let nspid = ProcessFixture::namespace_pid(init)?;
         ensure!(
-            nspid == 1,
+            nspid == init_ns && nspid == 1,
             InvalidInputSnafu {
                 path: init_path,
                 reason: "the namespace init process does not have namespace PID 1",
@@ -241,7 +242,15 @@ impl<'a> ReparentCase<'a> {
         let root = self.root(init)?;
 
         actor.send(b"root\n")?;
-        let mid = actor.wait_pid(mid_path, "namespace middle")?;
+        let mid_ns = actor.wait_pid(mid_path, "namespace middle PID")?;
+        let mid = actor.wait_child(init, "namespace middle host PID")?;
+        ensure!(
+            ProcessFixture::namespace_pid(mid)? == mid_ns,
+            InvalidInputSnafu {
+                path: mid_path,
+                reason: "the namespace middle PID did not map to its host PID",
+            }
+        );
         actor.track(mid)?;
         actor.wait_stop(mid, "namespace middle stop")?;
         let middle = self
@@ -250,7 +259,15 @@ impl<'a> ReparentCase<'a> {
                 self.inspector.snapshot(mid).context(NodeSnafu)
             })?;
         actor.send(b"continue\n")?;
-        let pid = actor.wait_pid(child_path, "namespace child")?;
+        let child_ns = actor.wait_pid(child_path, "namespace child PID")?;
+        let pid = actor.wait_child(mid, "namespace child host PID")?;
+        ensure!(
+            ProcessFixture::namespace_pid(pid)? == child_ns,
+            InvalidInputSnafu {
+                path: child_path,
+                reason: "the namespace child PID did not map to its host PID",
+            }
+        );
         actor.track(pid)?;
         actor.wait_stop(pid, "namespace child stop")?;
         let before = self

@@ -789,9 +789,10 @@ command passes.
   test.
   - [x] Make PID 1 own descendant continuation and reparenting in the shared
     actor. The external test process does not bypass production signal policy.
-  - [x] Add the 77-line generated test and pass its Host case in the retained
-    privileged VM.
-  - [ ] Pass the direct-`runc` generated case with the same actor and checks.
+  - [x] Add the under-100-line generated test and pass its Host case in the
+    retained privileged VM.
+  - [x] Pass the direct-`runc` generated case with namespace PIDs mapped to
+    host PIDs through the real parent-child process tree.
   - [ ] Pass the Kubernetes generated case with the same actor and checks.
   - [ ] Remove the matching legacy probe method, result fields, and call site.
 - [ ] Double-fork transition: use `native_double_fork.py` through

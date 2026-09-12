@@ -4,7 +4,7 @@ use erebor_interceptor_abi::{
     ExecGuardStateV1, ProcessExecutionStateV1, ProcessStateVectorStateV1, TaskCoordinateStateV1,
 };
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 fn namespace_init_reparents_child<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("namespace-init")?;
     env.start_control()?;
@@ -25,7 +25,12 @@ fn namespace_init_reparents_child<P: Platform>() -> TestResult<()> {
     assert_eq!(init.installed_role_class.as_deref(), Some("initial_role"));
 
     actor.send(b"fork\n")?;
-    let mid_pid = actor.wait_pid(&env.work().join("namespace-mid-ready"), "middle process")?;
+    let mid_ns = actor.wait_pid(
+        &env.work().join("namespace-mid-ready"),
+        "middle namespace PID",
+    )?;
+    let mid_pid = actor.wait_child(root_pid, "middle host PID")?;
+    assert_eq!(ProcessFixture::namespace_pid(mid_pid)?, mid_ns);
     actor.track(mid_pid)?;
     actor.wait_stop(mid_pid, "middle process stop")?;
     let middle = env.task(mid_pid, "middle process identity")?;
@@ -34,7 +39,12 @@ fn namespace_init_reparents_child<P: Platform>() -> TestResult<()> {
     assert_eq!(mid.real_parent_task_cookie, init.task_cookie);
 
     actor.send(b"continue\n")?;
-    let child_pid = actor.wait_pid(&env.work().join("namespace-exec-ready"), "child process")?;
+    let child_ns = actor.wait_pid(
+        &env.work().join("namespace-exec-ready"),
+        "child namespace PID",
+    )?;
+    let child_pid = actor.wait_child(mid_pid, "child host PID")?;
+    assert_eq!(ProcessFixture::namespace_pid(child_pid)?, child_ns);
     actor.track(child_pid)?;
     actor.wait_stop(child_pid, "child process stop")?;
     let before = env.task(child_pid, "child identity")?;
