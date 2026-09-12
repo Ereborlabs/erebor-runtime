@@ -3,7 +3,7 @@ use erebor_interceptor_abi::{
     ExecGuardStateV1, ProcessExecutionStateV1, ProcessStateVectorStateV1, TaskCoordinateStateV1,
 };
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 fn failed_exec_restores<P: Platform>() -> TestResult<()> {
     let active = |task: &Task| {
         assert_eq!(
