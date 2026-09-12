@@ -445,6 +445,9 @@ Single-node and guest cases:
   - [x] Require lightweight and Kubernetes cleanup to prove that Node removed
     both runtime sockets. The Kubernetes `preStop` hook must close admission
     and seccomp endpoints before the termination deadline.
+  - [x] Remove the Node selector and runtime integration before Helm removes
+    the Control volume. Wait for the retained K3s API, and require no test
+    namespace, volume, helper Pod, or runtime hook after teardown.
 - [ ] CRI effect recovery: start the Pod before Node, require conservative
   initial identity, recover the running binding, and check direct-CRI and
   Kubernetes exec identities and effects.
@@ -765,6 +768,14 @@ command passes.
 - [ ] Orphan transition: use `native_orphan.py` through `ProcessFixture` in
   one production-backed `#[test]`. Preserve the parent, role, and execution
   assertions. Remove the actor-only test.
+  - [ ] Add one `Platform::add_actor` operation. Host starts the actor directly.
+    Direct-`runc` and Kubernetes start the same actor in a running container.
+  - [ ] Add the small generated test with the shared actor and explicit result
+    assertions.
+  - [ ] Pass the Host generated case in the retained privileged VM.
+  - [ ] Pass the direct-`runc` generated case with the same actor and checks.
+  - [ ] Pass the Kubernetes generated case with the same actor and checks.
+  - [ ] Remove the matching old monolithic case and compatibility fields.
 - [ ] Subreaper transition: use `native_subreaper.py` through
   `ProcessFixture` in one production-backed `#[test]`. Preserve the
   intermediate-parent, adopted-child, role, and execution assertions. Remove
