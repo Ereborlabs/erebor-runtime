@@ -716,6 +716,23 @@ command passes.
 
 ### Native identity
 
+The 2026-09-12 fidelity audit compares each generated test with commit
+`95775f48` and the matching physical shell assertions. A passing generated
+test does not close a row when its physical condition or an assertion changed.
+
+| Generated test | Audit result | Required correction |
+| --- | --- | --- |
+| PID reuse | Accepted | The namespace PID, host PID, task cookie, process state, execution, creator, namespace inode, and start-time checks remain. |
+| TID reuse | Accepted | The namespace TID, host TID, task cookie, process owner, creator edge, namespace inode, start-time, exit, and tombstone checks remain. |
+| Native child exec | Reopened | Use the non-PID1 `add_actor` path for the original external-root condition. Restore the post-exec image-candidate check. |
+| Non-leader exec | Reopened | Use the non-PID1 `add_actor` path. The current initial-container root does not replace the original external-root transition. |
+| Pre-PONR failure | Reopened | Use `add_actor`. Restore the child root-class and installed-role absence checks before failure and after success. |
+| Post-PONR failure | Reopened | Use `add_actor` and restore the original root classification check. Keep all terminal pending-exec, process, execution, coordinate, and tombstone checks. |
+| Moved-task exec | Reopened | Use `add_actor` and restore the original root classification and installed-role checks. |
+| Leader-first lifetime | Reopened | Use `add_actor`. Restore the runnable worker-coordinate and child-edge checks. |
+| Workload-first recovery | Open | The Control, actor, policy, Node order is correct. Restore the nonzero recovery-attempt check. Do not remove the larger recovered-entry cases. |
+| Namespace init | Reopened | PID 1 is the correct cross-platform actor. Restore intermediate and child host-parent fields, root and role absence, runnable state, and post-exec root and role absence. |
+
 - [ ] Probe resources and production owners: own the pin root, lease, cgroup,
   fixture files, and cleanup. Keep `KernelHostOwner`, binding publication,
   native identity activation, recovery, and shutdown visible in the scenario.
@@ -734,7 +751,9 @@ command passes.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [x] Remove the matching old monolithic case and compatibility fields.
-- [x] Non-leader thread exec: replace `ExecCase::non_leader` with one small
+  - [ ] Restore the baseline fidelity gaps recorded above and rerun all three
+    generated cases.
+- [ ] Non-leader thread exec: replace `ExecCase::non_leader` with one small
   generated test. Use `ProcessFixture` and the shared Python file directly.
   Keep exact TID allocation and post-exec assertions visible.
   - [x] Add the small generated test and use the shared actor and assertions.
@@ -742,7 +761,9 @@ command passes.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [x] Remove the matching old monolithic case and compatibility fields.
-- [x] Pre-PONR failure: use fixture-owned process readiness and keep the
+  - [ ] Restore the baseline physical condition recorded above and rerun all
+    three generated cases.
+- [ ] Pre-PONR failure: use fixture-owned process readiness and keep the
   pending-exec, rollback, and recovery assertions visible.
   - [x] Add the small generated test with the shared Python actor and result
     assertions.
@@ -750,7 +771,9 @@ command passes.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [x] Remove the matching old monolithic case and compatibility fields.
-- [x] Post-PONR failure: use fixture-owned process readiness and keep the
+  - [ ] Restore the baseline fidelity gaps recorded above and rerun all three
+    generated cases.
+- [ ] Post-PONR failure: use fixture-owned process readiness and keep the
   fatal-state assertions visible.
   - [x] Put the architecture-aware malformed executable in `ProcessFixture`
     and preserve its focused termination check.
@@ -760,7 +783,9 @@ command passes.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [x] Remove the matching old monolithic case and compatibility fields.
-- [x] Moved-task exec: keep the physical cgroup move, denied exec, production
+  - [ ] Restore the baseline physical condition recorded above and rerun all
+    three generated cases.
+- [ ] Moved-task exec: keep the physical cgroup move, denied exec, production
   health checks, and placement-mismatch assertions visible.
   - [x] The small generated test uses one shared Python actor and the public
     runtime admission and identity inspection APIs.
@@ -768,6 +793,8 @@ command passes.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [x] Remove the matching old monolithic case and compatibility field.
+  - [ ] Restore the baseline fidelity gaps recorded above and rerun all three
+    generated cases.
 - [ ] Orphan transition: use `native_orphan.py` through `ProcessFixture` in
   one production-backed `#[test]`. Preserve the parent, role, and execution
   assertions. Remove the actor-only test.
@@ -783,7 +810,7 @@ command passes.
   `ProcessFixture` in one production-backed `#[test]`. Preserve the
   intermediate-parent, adopted-child, role, and execution assertions. Remove
   the actor-only test.
-- [x] Namespace-init transition: use `native_namespace_init.py` through
+- [ ] Namespace-init transition: use `native_namespace_init.py` through
   `ProcessFixture` in one production-backed `#[test]`. Preserve the namespace
   PID, parent, role, execution, and tombstone assertions. Remove the actor-only
   test.
@@ -796,6 +823,8 @@ command passes.
   - [x] Pass the Kubernetes generated case with the deployed Control, Node,
     OCI hook, and the same actor and checks.
   - [x] Remove the matching legacy probe method, result fields, and call site.
+  - [ ] Restore the baseline identity assertions recorded above and rerun all
+    three generated cases.
 - [ ] Double-fork transition: use `native_double_fork.py` through
   `ProcessFixture` in one production-backed `#[test]`. Preserve the parent,
   role, execution, and tombstone assertions. Remove the actor-only test.
@@ -806,6 +835,8 @@ command passes.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [x] Remove the matching old probe code and compatibility bundle fields.
+  - [ ] Restore the baseline fidelity gaps recorded above and rerun all three
+    generated cases.
 - [x] Node-first PID reuse: keep one small parameterized Rust test in
   `pid_reuse.rs`, one shared Python actor, one shared result assertion, and
   thin VM and Kubernetes launchers. Use
@@ -880,6 +911,8 @@ command passes.
   - [ ] Remove only the matching workload-first assertions from the old
     monolithic probes after all three generated cases pass. Preserve their
     other recovered-entry and concurrency assertions for later migrations.
+  - [ ] Restore the nonzero recovery-attempt assertion and rerun all three
+    generated cases before the old workload-first assertions are removed.
 - [ ] Retained-host restart: keep host shutdown, retained map validation,
   production recovery, stable map IDs, and ownership rejection visible.
 - [ ] Cgroup lifetime reuse: recreate the cgroup path after recovery. Keep the
