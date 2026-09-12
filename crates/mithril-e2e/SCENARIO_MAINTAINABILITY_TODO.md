@@ -802,6 +802,16 @@ test does not close a row when its physical condition or an assertion changed.
     Direct-`runc` and Kubernetes start the same actor in a running container.
   - [ ] Add the small generated test with the shared actor and explicit result
     assertions.
+  - [x] Reproduce the Host failure after the orphan child is reparented and
+    execs. Prove that the same actor survives when Mithril is absent.
+  - [x] Trace the failure to external-entry complete-argv verification being
+    applied to a native descendant that inherited the external role. Keep the
+    proposed root discriminator at `lineage_depth == 0`.
+  - [x] Run the pre-change direct-`runc` entry-role probe. Require incomplete
+    declared-entry argv to fail with empty output and exact
+    `UNSUPPORTED_OBJECT` execute evidence.
+  - [ ] After the production correction, rerun that direct-`runc` security
+    probe and require the external-entry denial to remain unchanged.
   - [ ] Pass the Host generated case in the retained privileged VM.
   - [ ] Pass the direct-`runc` generated case with the same actor and checks.
   - [ ] Pass the Kubernetes generated case with the same actor and checks.
