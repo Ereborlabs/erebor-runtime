@@ -551,7 +551,7 @@ count as maintainability migrations.
   path, operation name, and caller-supplied last-state diagnostic.
 - [x] Make `ProcessFixture` own spawn readiness, stdin actions, bounded exit
   diagnostics, explicit stop, and idempotent drop cleanup.
-- [ ] Remove `NativeProcessFixture`. Move only generic Linux process mechanics
+- [x] Remove `NativeProcessFixture`. Move only generic Linux process mechanics
   to `ProcessFixture`; keep identity assertions and production calls in the
   identity scenario.
 - [x] Make `RuncContainer` and `ContainerdServer` delegate process lifecycle
@@ -687,7 +687,7 @@ starting the complete privileged scenarios.
 
 - [ ] Replace duplicated native child exit and exec readiness loops with the
   shared wait. Preserve child status and snapshot diagnostics.
-- [ ] Delete `NativeProcessFixture` after its generic lifecycle and readiness
+- [x] Delete `NativeProcessFixture` after its generic lifecycle and readiness
   behavior moves to `ProcessFixture`.
 - [ ] Replace native child, failed-exec, post-PONR, subreaper, namespace-init,
   orphan, double-fork, leader-first, non-leader, and concurrent-thread shell

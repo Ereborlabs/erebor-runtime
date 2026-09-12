@@ -1,14 +1,11 @@
 #[cfg(test)]
 mod authorization_tests;
 mod clone3;
-mod native_process;
 mod pid_reuse;
 mod scenarios;
 mod tid_reuse;
 #[cfg(test)]
 mod verification_tests;
-
-use self::native_process::NativeProcessFixture;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -520,8 +517,9 @@ impl IdentityTestRunner {
                 reason: "a distinct Interceptor owner acquired the host lease",
             }
         );
-        let mut binding_gap_fixture = NativeProcessFixture::start()?;
-        fs::write(&procs_path, binding_gap_fixture.outer_pid().to_string())
+        let mut binding_gap_fixture =
+            ProcessFixture::python(&self.repo_root, "ready.py", std::iter::empty::<&str>())?;
+        fs::write(&procs_path, binding_gap_fixture.id().to_string())
             .context(IoSnafu { path: &procs_path })?;
         let binding = test_binding(&cgroup_path);
         let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
@@ -534,7 +532,7 @@ impl IdentityTestRunner {
         let binding_gap_reconciled_root =
             self.wait_for("binding-gap reconciled root identity", &procs_path, || {
                 inspector
-                    .snapshot(binding_gap_fixture.outer_pid())
+                    .snapshot(binding_gap_fixture.id())
                     .context(NodeSnafu)
             })?;
         ensure!(
@@ -590,24 +588,20 @@ impl IdentityTestRunner {
             .context(NodeSnafu)?;
         binding_gap_fixture.stop()?;
 
-        let mut external_ambiguity_first = NativeProcessFixture::start()?;
-        let mut external_ambiguity_second = NativeProcessFixture::start()?;
-        fs::write(
-            &procs_path,
-            external_ambiguity_first.outer_pid().to_string(),
-        )
-        .context(IoSnafu { path: &procs_path })?;
-        fs::write(
-            &procs_path,
-            external_ambiguity_second.outer_pid().to_string(),
-        )
-        .context(IoSnafu { path: &procs_path })?;
+        let mut external_ambiguity_first =
+            ProcessFixture::python(&self.repo_root, "ready.py", std::iter::empty::<&str>())?;
+        let mut external_ambiguity_second =
+            ProcessFixture::python(&self.repo_root, "ready.py", std::iter::empty::<&str>())?;
+        fs::write(&procs_path, external_ambiguity_first.id().to_string())
+            .context(IoSnafu { path: &procs_path })?;
+        fs::write(&procs_path, external_ambiguity_second.id().to_string())
+            .context(IoSnafu { path: &procs_path })?;
         let external_ambiguity_first_root = self.wait_for(
             "first concurrent external-root identity",
             &procs_path,
             || {
                 inspector
-                    .snapshot(external_ambiguity_first.outer_pid())
+                    .snapshot(external_ambiguity_first.id())
                     .context(NodeSnafu)
             },
         )?;
@@ -616,7 +610,7 @@ impl IdentityTestRunner {
             &procs_path,
             || {
                 inspector
-                    .snapshot(external_ambiguity_second.outer_pid())
+                    .snapshot(external_ambiguity_second.id())
                     .context(NodeSnafu)
             },
         )?;
@@ -1110,8 +1104,9 @@ impl IdentityTestRunner {
         );
         let reused_cgroup_cleanup = ProbeCgroup::create(&cgroup_path)?;
         let reused_procs_path = reused_cgroup_cleanup.path().join("cgroup.procs");
-        let mut reused_fixture = NativeProcessFixture::start()?;
-        fs::write(&reused_procs_path, reused_fixture.outer_pid().to_string()).context(IoSnafu {
+        let mut reused_fixture =
+            ProcessFixture::python(&self.repo_root, "ready.py", std::iter::empty::<&str>())?;
+        fs::write(&reused_procs_path, reused_fixture.id().to_string()).context(IoSnafu {
             path: &reused_procs_path,
         })?;
         let mut reused_binding = test_binding(reused_cgroup_cleanup.path());
@@ -1130,9 +1125,7 @@ impl IdentityTestRunner {
             .context(NodeSnafu)?;
         let cgroup_reuse_second_root =
             self.wait_for("recreated cgroup root identity", &reused_procs_path, || {
-                inspector
-                    .snapshot(reused_fixture.outer_pid())
-                    .context(NodeSnafu)
+                inspector.snapshot(reused_fixture.id()).context(NodeSnafu)
             })?;
         let cgroup_reuse_second_root_id = fs::metadata(reused_cgroup_cleanup.path())
             .context(IoSnafu {
