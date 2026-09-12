@@ -37,6 +37,10 @@ fn namespace_init_reparents_child<P: Platform>() -> TestResult<()> {
     let mid = &middle.snapshot;
     assert_eq!(mid.creator_task_cookie, Some(init.task_cookie));
     assert_eq!(mid.real_parent_task_cookie, init.task_cookie);
+    assert_eq!(mid.real_parent_host_tid, init.host_tid);
+    assert_eq!(mid.real_parent_host_tgid, init.host_tgid);
+    assert!(mid.root_class.is_none());
+    assert!(mid.installed_role_class.is_none());
 
     actor.send(b"continue\n")?;
     let child_ns = actor.wait_pid(
@@ -51,7 +55,12 @@ fn namespace_init_reparents_child<P: Platform>() -> TestResult<()> {
     let pre = &before.snapshot;
     assert_eq!(pre.creator_task_cookie, Some(mid.task_cookie));
     assert_eq!(pre.real_parent_task_cookie, mid.task_cookie);
+    assert_eq!(pre.real_parent_host_tid, mid.host_tid);
+    assert_eq!(pre.real_parent_host_tgid, mid.host_tgid);
+    assert!(pre.root_class.is_none());
+    assert!(pre.installed_role_class.is_none());
     assert_eq!(pre.active_role_id, init.active_role_id);
+    assert_eq!(before.coordinate.state, TaskCoordinateStateV1::Runnable);
 
     actor.send(b"reparent\n")?;
     actor.wait_gone(mid_pid, "middle process exit")?;
@@ -68,7 +77,10 @@ fn namespace_init_reparents_child<P: Platform>() -> TestResult<()> {
     assert_eq!(post.real_parent_task_cookie, 0);
     assert_eq!(post.real_parent_host_tid, init.host_tid);
     assert_eq!(post.real_parent_host_tgid, init.host_tgid);
+    assert!(post.real_parent_interval_sequence > pre.real_parent_interval_sequence);
     assert_ne!(post.active_execution_id, pre.active_execution_id);
+    assert!(post.root_class.is_none());
+    assert!(post.installed_role_class.is_none());
     assert_eq!(post.active_role_id, init.active_role_id);
     assert_eq!(after.coordinate.state, TaskCoordinateStateV1::Runnable);
     assert_eq!(

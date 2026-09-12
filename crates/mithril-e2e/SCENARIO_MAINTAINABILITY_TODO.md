@@ -731,7 +731,7 @@ test does not close a row when its physical condition or an assertion changed.
 | Moved-task exec | Reopened | Use `add_actor` and restore the original root classification and installed-role checks. |
 | Leader-first lifetime | Reopened | Use `add_actor`. Restore the runnable worker-coordinate and child-edge checks. |
 | Workload-first recovery | Open | The Control, actor, policy, Node order is correct. Restore the nonzero recovery-attempt check. Do not remove the larger recovered-entry cases. |
-| Namespace init | Reopened | PID 1 is the correct cross-platform actor. Restore intermediate and child host-parent fields, root and role absence, runnable state, and post-exec root and role absence. |
+| Namespace init | Accepted | PID 1 is the correct cross-platform actor. Intermediate and child host-parent fields, root and role absence, runnable state, and post-exec identity changes remain. |
 
 - [ ] Probe resources and production owners: own the pin root, lease, cgroup,
   fixture files, and cleanup. Keep `KernelHostOwner`, binding publication,
@@ -810,7 +810,7 @@ test does not close a row when its physical condition or an assertion changed.
   `ProcessFixture` in one production-backed `#[test]`. Preserve the
   intermediate-parent, adopted-child, role, and execution assertions. Remove
   the actor-only test.
-- [ ] Namespace-init transition: use `native_namespace_init.py` through
+- [x] Namespace-init transition: use `native_namespace_init.py` through
   `ProcessFixture` in one production-backed `#[test]`. Preserve the namespace
   PID, parent, role, execution, and tombstone assertions. Remove the actor-only
   test.
@@ -823,7 +823,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the Kubernetes generated case with the deployed Control, Node,
     OCI hook, and the same actor and checks.
   - [x] Remove the matching legacy probe method, result fields, and call site.
-  - [ ] Restore the baseline identity assertions recorded above and rerun all
+  - [x] Restore the baseline identity assertions recorded above and rerun all
     three generated cases.
 - [ ] Double-fork transition: use `native_double_fork.py` through
   `ProcessFixture` in one production-backed `#[test]`. Preserve the parent,
