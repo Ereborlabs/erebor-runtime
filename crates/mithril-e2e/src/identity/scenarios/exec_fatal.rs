@@ -8,7 +8,7 @@ use erebor_interceptor_abi::{
 use crate::platform::{platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 fn fatal_exec_is_terminal<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("fatal-exec")?;
     let target = env.work().join("post-ponr-execfail");
@@ -39,8 +39,8 @@ fn fatal_exec_is_terminal<P: Platform>() -> TestResult<()> {
     assert!(!env.pending(pre.task_cookie)?);
 
     actor.send(b"continue\n")?;
-    let status = actor.wait_exit("fatal exec", Duration::from_secs(30))?;
-    assert!(!status.success(), "fatal exec actor returned {status}");
+    let code = env.actor_code(&mut actor, "fatal exec", Duration::from_secs(30))?;
+    assert_ne!(code, 0, "fatal exec actor returned {code}");
     actor.wait_gone(pid, "fatal exec task removal")?;
     let coord = env.task_exit(pre.task_cookie, "fatal exec exit")?;
     let tomb = env.task_release(pre.task_cookie, "fatal exec release")?;
