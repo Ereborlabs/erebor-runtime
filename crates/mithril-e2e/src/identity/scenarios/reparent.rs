@@ -218,8 +218,15 @@ impl<'a> ReparentCase<'a> {
 
     pub(in crate::identity) fn namespace(&self, ready: [&Path; 3]) -> Result<NamespaceState> {
         let [init_path, mid_path, child_path] = ready;
+        let work = init_path.parent().ok_or_else(|| {
+            InvalidInputSnafu {
+                path: init_path,
+                reason: "the namespace init path has no parent directory".to_owned(),
+            }
+            .build()
+        })?;
         let mut actor =
-            ProcessFixture::unshare(&self.runner.repo_root, "native_namespace_init.py", ready)?;
+            ProcessFixture::unshare(&self.runner.repo_root, "native_namespace_init.py", [work])?;
         let init = actor.wait_pid(init_path, "namespace init")?;
         actor.track(init)?;
         let nspid = ProcessFixture::namespace_pid(init)?;
@@ -242,7 +249,7 @@ impl<'a> ReparentCase<'a> {
             .wait_for("namespace middle identity", self.procs, || {
                 self.inspector.snapshot(mid).context(NodeSnafu)
             })?;
-        actor.signal(mid, Signal::CONT)?;
+        actor.send(b"continue\n")?;
         let pid = actor.wait_pid(child_path, "namespace child")?;
         actor.track(pid)?;
         actor.wait_stop(pid, "namespace child stop")?;
@@ -271,9 +278,8 @@ impl<'a> ReparentCase<'a> {
             }
         );
 
-        actor.signal(mid, Signal::TERM)?;
+        actor.send(b"reparent\n")?;
         actor.wait_gone(mid, "namespace middle exit")?;
-        actor.signal(pid, Signal::CONT)?;
         let after = self
             .runner
             .wait_for("namespace child exec", self.procs, || {

@@ -787,6 +787,13 @@ command passes.
   `ProcessFixture` in one production-backed `#[test]`. Preserve the namespace
   PID, parent, role, execution, and tombstone assertions. Remove the actor-only
   test.
+  - [x] Make PID 1 own descendant continuation and reparenting in the shared
+    actor. The external test process does not bypass production signal policy.
+  - [x] Add the 77-line generated test and pass its Host case in the retained
+    privileged VM.
+  - [ ] Pass the direct-`runc` generated case with the same actor and checks.
+  - [ ] Pass the Kubernetes generated case with the same actor and checks.
+  - [ ] Remove the matching legacy probe method, result fields, and call site.
 - [ ] Double-fork transition: use `native_double_fork.py` through
   `ProcessFixture` in one production-backed `#[test]`. Preserve the parent,
   role, execution, and tombstone assertions. Remove the actor-only test.

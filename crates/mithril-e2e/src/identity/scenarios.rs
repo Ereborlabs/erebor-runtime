@@ -12,6 +12,8 @@ mod lifetime_test;
 #[cfg(test)]
 mod moved_exec;
 #[cfg(test)]
+mod namespace_init;
+#[cfg(test)]
 mod non_leader_exec;
 mod reparent;
 #[cfg(test)]
