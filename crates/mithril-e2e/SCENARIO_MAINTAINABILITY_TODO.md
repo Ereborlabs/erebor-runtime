@@ -1017,6 +1017,23 @@ test does not close a row when its physical condition or an assertion changed.
     recovery test does not replace these behaviors.
   - [x] Restore the nonzero recovery-attempt assertion and rerun all three
     generated cases before the old workload-first assertions are removed.
+- [ ] Four-task workload-first recovery: add one small parameterized Rust
+  test. Start one application root and its child. Add one external root and
+  its child before policy and Node start. Recover the same four tasks on Host,
+  direct `runc`, and Kubernetes.
+  - [ ] Use one shared Python actor for both two-task trees. Keep the test file
+    below 100 lines.
+  - [ ] Preserve the complete recovery phase, nonzero attempt ID, one
+    application entry instance, two application tasks, two external tasks,
+    four expected tasks, and zero invalid tasks.
+  - [ ] Preserve the recovered application root and initial role. Preserve the
+    distinct restored external root, zero admitted entry rule, external role,
+    and distinct entry instance.
+  - [ ] Pass Host, then direct `runc`, then Kubernetes.
+  - [ ] Remove only the matching four-task count and root assertions from the
+    old Rust and shell probes after all three cases pass. Keep task-change
+    retry, ptrace bootstrap, internal exec, probe isolation, denial evidence,
+    post-cutover activation, and cleanup for separate migrations.
 - [ ] Retained-host restart: keep host shutdown, retained map validation,
   production recovery, stable map IDs, and ownership rejection visible.
 - [ ] Cgroup lifetime reuse: recreate the cgroup path after recovery. Keep the
