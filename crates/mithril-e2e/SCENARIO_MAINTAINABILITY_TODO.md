@@ -829,6 +829,9 @@ test does not close a row when its physical condition or an assertion changed.
     physical case reached `move_task` and failed because the launcher did not
     supply a Host-only path. Derive a unique move cgroup from the test token,
     own it with `ProbeCgroup`, and keep its cleanup in the platform.
+  - [ ] Use `ProcessFixture` exit status for a Kubernetes `add_actor` process.
+    The cgroup correction reached the denied exec, but `actor_code` waited for
+    PID 1 to exit. Keep Pod termination observation only for an external PID 1.
   - [ ] Restore the baseline fidelity gaps recorded above and rerun all three
     generated cases.
 - [x] Orphan transition: use `native_orphan.py` through `ProcessFixture` in
