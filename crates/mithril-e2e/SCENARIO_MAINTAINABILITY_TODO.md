@@ -780,13 +780,16 @@ test does not close a row when its physical condition or an assertion changed.
   pending-exec, rollback, and recovery assertions visible.
   - [x] Add the small generated test with the shared Python actor and result
     assertions.
-  - [x] Pass the Host generated case in the retained privileged VM.
-  - [x] Pass the direct-`runc` generated case with the same actor and checks.
-  - [x] Pass the Kubernetes generated case with the same actor and checks.
+  - [x] Pass the initial Host generated case in the retained privileged VM.
+  - [x] Pass the initial direct-`runc` generated case.
+  - [x] Pass the initial Kubernetes generated case.
   - [x] Remove the matching old monolithic case and compatibility fields.
-  - [ ] Start `ready.py` as PID 1 and use `add_actor` for the failed-exec
+  - [x] Start `ready.py` as PID 1 and use `add_actor` for the failed-exec
     actor. Restore the external root and child root and role absence checks.
-    Let the signed sleep action exit in-band, then rerun all three platforms.
+    Let the signed sleep action exit in-band.
+  - [x] Pass the corrected Host case and the complete Host platform set.
+  - [x] Pass the corrected direct-`runc` case and platform set.
+  - [ ] Pass the corrected Kubernetes case.
   - [ ] Restore the baseline fidelity gaps recorded above and rerun all three
     generated cases.
 - [ ] Post-PONR failure: use fixture-owned process readiness and keep the
