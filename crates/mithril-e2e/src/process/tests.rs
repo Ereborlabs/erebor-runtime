@@ -10,6 +10,16 @@ use super::ProcessFixture;
 use crate::error::{InvalidInputSnafu, IoSnafu};
 
 #[test]
+fn gone_accepts_esrch() {
+    assert!(super::process_gone(&std::io::Error::from_raw_os_error(
+        libc::ESRCH
+    )));
+    assert!(!super::process_gone(&std::io::Error::from_raw_os_error(
+        libc::EACCES
+    )));
+}
+
+#[test]
 fn python_start_stop() -> crate::Result<()> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut actor = ProcessFixture::python(&root, "ready.py", std::iter::empty::<&str>())?;

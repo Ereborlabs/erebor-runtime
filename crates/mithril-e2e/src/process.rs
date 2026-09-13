@@ -41,6 +41,11 @@ const READY: &[u8] = b"native-fixture-ready\n";
 const START_LIMIT: Duration = Duration::from_secs(30);
 const STOP_GRACE: Duration = Duration::from_secs(1);
 
+#[cfg(test)]
+fn process_gone(source: &std::io::Error) -> bool {
+    source.kind() == ErrorKind::NotFound || source.raw_os_error() == Some(libc::ESRCH)
+}
+
 pub(crate) struct ProcessFixture {
     child: Option<Child>,
     raw_pid: Option<u32>,
@@ -781,7 +786,7 @@ impl ProcessFixture {
                             .to_owned();
                         Ok(None)
                     }
-                    Err(source) if source.kind() == ErrorKind::NotFound => Ok(Some(())),
+                    Err(source) if process_gone(&source) => Ok(Some(())),
                     Err(source) => Err(source).context(IoSnafu { path: &path }),
                 }
             },

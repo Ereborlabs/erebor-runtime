@@ -183,6 +183,8 @@ reimplement a production owner operation.
   idempotent fallback.
 - Bound every readiness wait. Report the operation, resource path, last state,
   process exit status, and captured stderr when applicable.
+- Treat `ENOENT` and `ESRCH` as process absence only in a wait for process
+  removal. Keep all other `/proc` errors visible.
 - Keep setup, stop, restart, and teardown simple in every scenario.
 
 ### Structure and readability
@@ -916,6 +918,10 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the Host generated case.
   - [x] Pass the direct-`runc` generated case.
   - [x] Pass the Kubernetes generated case.
+  - [x] Reproduce the Kubernetes `/proc/<pid>/status` `ESRCH` exit race in a
+    lightweight `ProcessFixture` test. Accept it as process absence in
+    `wait_gone`; keep unrelated errors fatal. Rerun Host, direct-`runc`, and
+    Kubernetes subreaper cases.
   - [x] Remove the matching `ReparentCase::subreaper` block and compatibility
     fields only after all three generated cases pass.
 - [x] Namespace-init transition: use `native_namespace_init.py` through
