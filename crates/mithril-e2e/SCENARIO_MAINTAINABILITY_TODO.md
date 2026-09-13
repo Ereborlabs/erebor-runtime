@@ -581,6 +581,9 @@ count as maintainability migrations.
 - [ ] Execute the same Python process file from production-backed host,
   direct-`runc`, and Kubernetes tests when the behavior applies. Do not count
   an actor-only test as coverage.
+- [x] Expose the owned actor cgroup path for a Python actor that performs
+  `clone3(CLONE_INTO_CGROUP)`. Do not add a scenario-specific actor start
+  method or hide the clone action in a platform implementation.
 - [x] Build the standard Rust libtest executable and copy it into each fresh
   single-node VM. Scenario migrations must invoke each privileged test by its
   exact test name.

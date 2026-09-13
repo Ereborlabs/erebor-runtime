@@ -299,6 +299,9 @@ pub(crate) trait Platform: Sized {
     fn work(&self) -> &Path {
         Path::new(".")
     }
+    fn actor_group(&self) -> TestResult<&Path> {
+        pending("read actor cgroup")
+    }
     fn output(&self) -> &Path {
         Path::new(".")
     }

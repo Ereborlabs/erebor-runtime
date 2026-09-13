@@ -1054,6 +1054,10 @@ impl Platform for Host {
         &self.work_path
     }
 
+    fn actor_group(&self) -> TestResult<&Path> {
+        Ok(&self.cgroup_path)
+    }
+
     fn output(&self) -> &Path {
         &self.out
     }
