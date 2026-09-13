@@ -68,6 +68,13 @@
             "action": "Allow"
           },
           {
+            "name": "cat",
+            "path": "/usr/bin/cat",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          },
+          {
             "name": "fatal-exec",
             "path": "/work/post-ponr-execfail",
             "recursive": false,
