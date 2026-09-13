@@ -854,6 +854,10 @@ impl Kubernetes {
 }
 
 impl Platform for Kubernetes {
+    fn source(&self) -> &Path {
+        &self.root
+    }
+
     fn setup(name: &str) -> TestResult<Self> {
         erebor_telemetry::init_test_logging();
         let root = fs::canonicalize(Self::path("MITHRIL_TEST_ROOT", ".")?)?;
@@ -1263,6 +1267,8 @@ impl Platform for Kubernetes {
             .actor_cgroup
             .as_ref()
             .ok_or("the Kubernetes actor has no recorded cgroup")?;
+        let procs = expected.join("cgroup.procs");
+        fs::write(&procs, pid.to_string()).context(IoSnafu { path: &procs })?;
         let actual = Self::cgroup(pid)?;
         if &actual != expected {
             return Err(format!(

@@ -394,6 +394,10 @@ impl Host {
 }
 
 impl Platform for Host {
+    fn source(&self) -> &Path {
+        &self.root
+    }
+
     fn setup(_name: &str) -> TestResult<Self> {
         erebor_telemetry::init_test_logging();
         let root = Self::path("MITHRIL_TEST_ROOT")?;

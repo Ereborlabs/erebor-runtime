@@ -23,6 +23,8 @@ mod orphan;
 #[cfg(test)]
 mod recovery_tasks;
 #[cfg(test)]
+mod restricted_roots;
+#[cfg(test)]
 mod subreaper;
 #[cfg(test)]
 mod workload_recovery;

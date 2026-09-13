@@ -119,6 +119,10 @@ impl Runc {
 }
 
 impl Platform for Runc {
+    fn source(&self) -> &Path {
+        self.host.source()
+    }
+
     fn setup(name: &str) -> TestResult<Self> {
         let mut host = Host::setup(name)?;
         let runc_path = env::var_os("MITHRIL_TEST_RUNC")
@@ -309,6 +313,7 @@ impl Platform for Runc {
     }
 
     fn place(&mut self, pid: u32) -> TestResult<()> {
+        self.host.place(pid)?;
         let path = PathBuf::from(format!("/proc/{pid}/cgroup"));
         let state = fs::read_to_string(&path)?;
         let actual = state

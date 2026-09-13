@@ -55,6 +55,7 @@ fn policy_entry(policy: &WorkloadProtectionPolicy, name: &str) -> TestResult<Pat
 }
 
 pub(crate) trait Platform: Sized {
+    fn source(&self) -> &Path;
     fn setup(_name: &str) -> TestResult<Self> {
         pending("setup")
     }

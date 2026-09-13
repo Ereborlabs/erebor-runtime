@@ -782,6 +782,14 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the Kubernetes generated case through real `kubectl exec`.
   - [x] Pass the complete Kubernetes platform set after the copied
     interpreter dependency correction.
+  - [x] Make `Platform::place` perform and verify the real cgroup attach on
+    Host, direct `runc`, and Kubernetes. Expose only the checked fixture source
+    path so the scenario can start one ordinary `ProcessFixture` outside the
+    protected cgroup. The existing PID-reuse case passes on all three
+    platforms after this tooling change.
+  - [x] Add the 60-line restricted-root scenario and pass its Host case.
+  - [ ] Pass the direct-`runc` restricted-root case.
+  - [ ] Pass the Kubernetes restricted-root case.
   - [ ] Keep the old restricted-placement block until a separate small test
     reproduces its creator-free `runtime_external_restricted` roots through a
     supported production cgroup-attach operation. The declared runtime-exec
