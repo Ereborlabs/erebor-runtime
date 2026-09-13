@@ -18,6 +18,8 @@ mod non_leader_exec;
 mod orphan;
 mod reparent;
 #[cfg(test)]
+mod subreaper;
+#[cfg(test)]
 mod workload_recovery;
 
 pub(super) use reparent::ReparentCase;
