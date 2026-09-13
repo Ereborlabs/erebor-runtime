@@ -825,6 +825,10 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the corrected Host case and the complete Host platform set.
   - [x] Pass the corrected direct-`runc` case and platform set.
   - [ ] Pass the corrected Kubernetes case.
+  - [ ] Remove the Kubernetes `MITHRIL_TEST_CGROUP` dependency. The corrected
+    physical case reached `move_task` and failed because the launcher did not
+    supply a Host-only path. Derive a unique move cgroup from the test token,
+    own it with `ProbeCgroup`, and keep its cleanup in the platform.
   - [ ] Restore the baseline fidelity gaps recorded above and rerun all three
     generated cases.
 - [x] Orphan transition: use `native_orphan.py` through `ProcessFixture` in
