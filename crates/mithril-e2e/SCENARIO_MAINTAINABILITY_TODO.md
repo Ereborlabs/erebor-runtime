@@ -744,8 +744,11 @@ test does not close a row when its physical condition or an assertion changed.
   production health reads, fork action, and mismatch assertions visible.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
   first-effect action, and exact identity assertions visible.
-- [ ] Native child exec: keep the fork and exec actions, production identity
-  snapshots, and allocation diagnostics visible.
+- [ ] Native child exec: start the admitted environment with `ready.py`, then
+  use `add_actor` for the child-exec program. Keep the fork and exec actions,
+  production identity snapshots, and allocation diagnostics visible. Assert
+  the external-runtime root and installed role before the fork. Require an
+  image candidate before and after exec.
   - [x] Add the small shared actor, result assertions, and generated test.
   - [x] Pass the Host generated case in the retained privileged VM.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
