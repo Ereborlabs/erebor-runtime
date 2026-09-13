@@ -19,6 +19,8 @@ mod non_leader_exec;
 #[cfg(test)]
 mod orphan;
 #[cfg(test)]
+mod recovery_tasks;
+#[cfg(test)]
 mod subreaper;
 #[cfg(test)]
 mod workload_recovery;

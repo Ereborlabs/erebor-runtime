@@ -1021,15 +1021,17 @@ test does not close a row when its physical condition or an assertion changed.
   test. Start one application root and its child. Add one external root and
   its child before policy and Node start. Recover the same four tasks on Host,
   direct `runc`, and Kubernetes.
-  - [ ] Use one shared Python actor for both two-task trees. Keep the test file
+  - [x] Use one shared Python actor for both two-task trees. Keep the test file
     below 100 lines.
-  - [ ] Preserve the complete recovery phase, nonzero attempt ID, one
+  - [x] Preserve the complete recovery phase, nonzero attempt ID, one
     application entry instance, two application tasks, two external tasks,
     four expected tasks, and zero invalid tasks.
-  - [ ] Preserve the recovered application root and initial role. Preserve the
+  - [x] Preserve the recovered application root and initial role. Preserve the
     distinct restored external root, zero admitted entry rule, external role,
     and distinct entry instance.
-  - [ ] Pass Host, then direct `runc`, then Kubernetes.
+  - [x] Pass the Host case and the complete Host platform set.
+  - [ ] Pass the direct-`runc` case and the complete direct-`runc` platform set.
+  - [ ] Pass the Kubernetes case.
   - [ ] Remove only the matching four-task count and root assertions from the
     old Rust and shell probes after all three cases pass. Keep task-change
     retry, ptrace bootstrap, internal exec, probe isolation, denial evidence,
