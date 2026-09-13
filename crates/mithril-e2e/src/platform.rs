@@ -75,6 +75,13 @@ pub(crate) trait Platform: Sized {
     ) -> TestResult<crate::process::ProcessFixture> {
         self.start_actor(name, args)
     }
+    fn add_external(
+        &mut self,
+        _name: &str,
+        _args: &[&str],
+    ) -> TestResult<crate::process::ProcessFixture> {
+        pending("start external actor")
+    }
     fn place(&mut self, _pid: u32) -> TestResult<()> {
         pending("place actor")
     }

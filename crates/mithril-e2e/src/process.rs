@@ -220,21 +220,6 @@ impl ProcessFixture {
     }
 
     #[cfg(test)]
-    pub(crate) fn pidns<I, S>(root: &Path, name: &str, args: I) -> Result<Self>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        let script = Self::script(root, name)?;
-        let mut command = Command::new("/usr/bin/unshare");
-        command
-            .args(["--pid", "--fork", "--mount-proc", "/usr/bin/python3"])
-            .arg(&script)
-            .args(args);
-        Self::start(&mut command, &script)
-    }
-
-    #[cfg(test)]
     pub(crate) fn held_pidns<I, S>(
         root: &Path,
         name: &str,
@@ -311,14 +296,14 @@ impl ProcessFixture {
                 .context(IoSnafu { path: &script })
         };
         let (child_in, input) = pipe()?;
-        let work = rootfs.join("work");
-        let output_file =
-            tempfile::NamedTempFile::new_in(&work).context(IoSnafu { path: &work })?;
-        let error_file = tempfile::NamedTempFile::new_in(&work).context(IoSnafu { path: &work })?;
-        let output = File::open(output_file.path()).context(IoSnafu { path: &work })?;
-        let errors = File::open(error_file.path()).context(IoSnafu { path: &work })?;
-        let child_out = output_file.into_file();
-        let child_err = error_file.into_file();
+        let log = || {
+            let write = tempfile::tempfile().context(IoSnafu { path: &script })?;
+            let path = PathBuf::from(format!("/proc/self/fd/{}", write.as_raw_fd()));
+            let read = File::open(&path).context(IoSnafu { path })?;
+            Ok::<_, crate::Error>((write, read))
+        };
+        let (child_out, output) = log()?;
+        let (child_err, errors) = log()?;
         let (gate, child_gate) = UnixStream::pair().context(IoSnafu { path: &script })?;
         let clone = clone_args {
             flags,

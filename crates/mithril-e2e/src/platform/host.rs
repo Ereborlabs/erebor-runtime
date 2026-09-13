@@ -201,6 +201,9 @@ impl Host {
     fn actor_root(&mut self, name: &str) -> TestResult<PathBuf> {
         let bundle_path = self.out.join("bundle");
         let rootfs = bundle_path.join("rootfs");
+        if self.bundle.is_some() {
+            return Ok(rootfs);
+        }
         let bundle = ProbeDirectory::create(&bundle_path)?;
         fs::create_dir_all(rootfs.join("bundle"))?;
         self.bind(&rootfs, &rootfs)?;
@@ -239,6 +242,53 @@ impl Host {
             }
         );
         Ok(())
+    }
+
+    fn entry_installed(&self, entry: &Path) -> TestResult<bool> {
+        let request = DeclaredEntryRequestV1::from_path(entry.as_os_str().as_encoded_bytes())
+            .ok_or("the actor entry path is invalid")?;
+        Ok(self
+            .reader
+            .lookup("declared_entry_requests", request.as_bytes())
+            .context(InterceptorSnafu)?
+            .as_deref()
+            == Some([1].as_slice()))
+    }
+
+    fn start_entry(
+        &mut self,
+        name: &str,
+        extra: &[&str],
+        entry: &Path,
+    ) -> TestResult<ProcessFixture> {
+        let init = self.init_pid.ok_or("the initial actor is not running")?;
+        let maps_path = PathBuf::from(format!("/proc/{init}/maps"));
+        let maps = fs::read(&maps_path).context(IoSnafu { path: &maps_path })?;
+        ensure!(
+            !maps.is_empty(),
+            InvalidInputSnafu {
+                path: &maps_path,
+                reason: "the runtime read an empty initial actor map",
+            }
+        );
+        let rootfs = self.actor_root(name)?;
+        let mut args = vec![OsString::from("/work")];
+        args.extend(extra.iter().map(OsString::from));
+        let mut actor =
+            ProcessFixture::held_cgroup(&self.root, name, args, &self.cgroup_path, &rootfs, entry)?;
+        let placement = self.task(actor.id(), "added actor placement")?;
+        actor.release()?;
+        if let Err(source) = actor.ready() {
+            return Err(format!(
+                "{source}; pre-exec PID: {}; snapshot: {:?}; coordinate: {:?}; identity health: {:?}",
+                placement.pid,
+                placement.snapshot,
+                placement.coordinate,
+                self.health()?
+            )
+            .into());
+        }
+        Ok(actor)
     }
 
     fn close(&mut self) -> TestResult<()> {
@@ -764,37 +814,33 @@ impl Platform for Host {
                 reason: "the initial actor is already running",
             }
         );
-        if self.node_task.is_some() && self.binding.is_some() {
-            let rootfs = self.actor_root(name)?;
-            let mut args = vec![OsString::from("/work")];
-            args.extend(extra.iter().map(OsString::from));
-            let mut actor =
-                ProcessFixture::held_pidns(&self.root, name, args, &self.cgroup_path, &rootfs)?;
-            let pid = actor.id();
-            self.init_pid = Some(pid);
+        let protected = self.node_task.is_some() && self.binding.is_some();
+        let rootfs = self.actor_root(name)?;
+        let mut args = vec![OsString::from("/work")];
+        args.extend(extra.iter().map(OsString::from));
+        let mut actor =
+            ProcessFixture::held_pidns(&self.root, name, args, &self.cgroup_path, &rootfs)?;
+        let pid = actor.id();
+        self.init_pid = Some(pid);
+        if protected {
             self.stage()?;
             self.admit(pid)?;
             self.stage_entries(&rootfs)?;
-            actor.release()?;
-            if let Err(source) = actor.ready() {
+        }
+        actor.release()?;
+        if let Err(source) = actor.ready() {
+            if protected {
                 return Err(format!("{source}; identity health: {:?}", self.health()?).into());
             }
-            self.running(pid)?;
-            return Ok(actor);
+            return Err(source.into());
         }
-        let mut args = vec![self.work_path.clone().into_os_string()];
-        args.extend(extra.iter().map(OsString::from));
-        let mut actor = ProcessFixture::pidns(&self.root, name, args)?;
-        let parent = actor.id();
-        let pid = actor.wait_child(parent, "PID namespace root")?;
-        self.move_out(parent)?;
-        actor.set_init(pid)?;
-        self.init_pid = Some(pid);
+        if protected {
+            self.running(pid)?;
+        }
         Ok(actor)
     }
 
     fn add_actor(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
-        let init = self.init_pid.ok_or("the initial actor is not running")?;
         if self.node_task.is_none() {
             let mut args = vec![self.work_path.clone().into_os_string()];
             args.extend(extra.iter().map(OsString::from));
@@ -802,53 +848,30 @@ impl Platform for Host {
             self.place(actor.id())?;
             return Ok(actor);
         }
-        let maps_path = PathBuf::from(format!("/proc/{init}/maps"));
-        let maps = fs::read(&maps_path).context(IoSnafu { path: &maps_path })?;
-        ensure!(
-            !maps.is_empty(),
-            InvalidInputSnafu {
-                path: &maps_path,
-                reason: "the runtime read an empty initial actor map",
-            }
-        );
-        let rootfs = self.out.join("bundle/rootfs");
         let entry = "/usr/bin/python3.12";
-        let request = DeclaredEntryRequestV1::from_path(entry.as_bytes())
-            .ok_or("the actor entry path is invalid")?;
         ensure!(
-            self.reader
-                .lookup("declared_entry_requests", request.as_bytes())
-                .context(InterceptorSnafu)?
-                .as_deref()
-                == Some([1].as_slice()),
+            self.entry_installed(Path::new(entry))?,
             InvalidInputSnafu {
-                path: &rootfs,
+                path: &self.pin_path,
                 reason: format!("the signed actor entry is not installed: {entry}"),
             }
         );
-        let mut args = vec![OsString::from("/work")];
-        args.extend(extra.iter().map(OsString::from));
-        let mut actor = ProcessFixture::held_cgroup(
-            &self.root,
-            name,
-            args,
-            &self.cgroup_path,
-            &rootfs,
-            Path::new(entry),
-        )?;
-        let placement = self.task(actor.id(), "added actor placement")?;
-        actor.release()?;
-        if let Err(source) = actor.ready() {
-            return Err(format!(
-                "{source}; pre-exec PID: {}; snapshot: {:?}; coordinate: {:?}; identity health: {:?}",
-                placement.pid,
-                placement.snapshot,
-                placement.coordinate,
-                self.health()?
-            )
-            .into());
-        }
-        Ok(actor)
+        self.start_entry(name, extra, Path::new(entry))
+    }
+
+    fn add_external(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
+        let entry = Path::new("/work/python-external");
+        ensure!(
+            self.entry_installed(entry)?,
+            InvalidInputSnafu {
+                path: &self.pin_path,
+                reason: format!(
+                    "the signed external entry is not installed: {}",
+                    entry.display()
+                ),
+            }
+        );
+        self.start_entry(name, extra, entry)
     }
 
     fn place(&mut self, pid: u32) -> TestResult<()> {
