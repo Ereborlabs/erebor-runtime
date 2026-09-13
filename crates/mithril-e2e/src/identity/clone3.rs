@@ -7,10 +7,12 @@ use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 use std::time::Duration;
 
 use linux_raw_sys::general::clone_args;
+use memmap2::{MmapMut, MmapOptions};
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
 use snafu::{ensure, ResultExt as _};
 
@@ -20,6 +22,7 @@ use crate::Result;
 pub(super) struct CloneIntoCgroupFixture {
     root_pid: u32,
     root_pidfd: OwnedFd,
+    root_gate: Option<MmapMut>,
     child_pidfd: Option<OwnedFd>,
     namespace_target: Option<Child>,
     namespace_target_pipe: Option<File>,
@@ -60,6 +63,18 @@ impl CloneIntoCgroupFixture {
                 return Err(error);
             }
         };
+        let gate_fd =
+            unsafe { libc::memfd_create(c"mithril-clone-gate".as_ptr(), libc::MFD_CLOEXEC) };
+        if gate_fd < 0 {
+            return Err(std::io::Error::last_os_error()).context(IoSnafu { path: cgroup_path });
+        }
+        let gate_file = unsafe { File::from_raw_fd(gate_fd) };
+        gate_file
+            .set_len(size_of::<u32>() as u64)
+            .context(IoSnafu { path: cgroup_path })?;
+        let root_gate = unsafe { MmapOptions::new().len(size_of::<u32>()).map_mut(&gate_file) }
+            .context(IoSnafu { path: cgroup_path })?;
+        gate(&root_gate).store(0, Ordering::Release);
         let (namespace_target_read, namespace_target_pipe) = if namespace_target.is_some() {
             match namespace_target_pipe() {
                 Ok((read, write)) => (Some(read), Some(write)),
@@ -100,6 +115,7 @@ impl CloneIntoCgroupFixture {
             unsafe { libc::syscall(libc::SYS_clone3, &raw const args, size_of::<clone_args>()) };
         if result == 0 {
             run_child(
+                root_gate.as_ptr().cast::<AtomicU32>(),
                 namespace_target_read.as_ref().map(|file| file.as_raw_fd()),
                 first_effect_path,
                 native_child_first_effect_path,
@@ -130,40 +146,77 @@ impl CloneIntoCgroupFixture {
                 return Err(error);
             }
         };
-        Ok(Self {
+        let mut fixture = Self {
             root_pid,
             root_pidfd,
+            root_gate: Some(root_gate),
             child_pidfd: None,
             namespace_target,
             namespace_target_pipe,
             native_child_effect_status,
-        })
+        };
+        fixture.wait_root()?;
+        Ok(fixture)
     }
 
     pub(super) const fn root_pid(&self) -> u32 {
         self.root_pid
     }
 
-    pub(super) fn release_root(&self) -> Result<()> {
-        let path = PathBuf::from(format!("/proc/{}/status", self.root_pid));
-        let mut stopped = false;
-        for _attempt in 0..500 {
-            let status = std::fs::read_to_string(&path).context(IoSnafu { path: &path })?;
-            if status.lines().any(|line| line.starts_with("State:\tT")) {
-                stopped = true;
-                break;
+    fn wait_root(&mut self) -> Result<()> {
+        let pid = self.root_pid;
+        let map = self
+            .root_gate
+            .as_ref()
+            .ok_or_else(|| invalid_state("CLONE_INTO_CGROUP root has no readiness gate"))?;
+        for _ in 0..500 {
+            let state = self.root_state();
+            if state == 1 {
+                return Ok(());
+            }
+            let mut status = 0;
+            let waited =
+                unsafe { libc::waitpid(pid as libc::pid_t, &raw mut status, libc::WNOHANG) };
+            if waited == pid as libc::pid_t {
+                let reason = if libc::WIFEXITED(status) {
+                    format!("exit status {}", libc::WEXITSTATUS(status))
+                } else if libc::WIFSIGNALED(status) {
+                    format!("signal {}", libc::WTERMSIG(status))
+                } else {
+                    format!("wait status {status}")
+                };
+                return Err(invalid_state(format!(
+                    "root exited before readiness: {reason}; last gate state {state}"
+                )));
             }
             thread::sleep(Duration::from_millis(10));
         }
+        Err(invalid_state(format!(
+            "root readiness timed out; PID {pid}; last gate state {}",
+            gate(map).load(Ordering::Acquire)
+        )))
+    }
+
+    pub(super) fn release_root(&mut self) -> Result<()> {
+        let map = self
+            .root_gate
+            .as_ref()
+            .ok_or_else(|| invalid_state("CLONE_INTO_CGROUP root is not held"))?;
         ensure!(
-            stopped,
+            gate(map).load(Ordering::Acquire) == 1,
             InvalidInputSnafu {
-                path: &path,
-                reason: "CLONE_INTO_CGROUP root did not reach its stop barrier",
+                path: Path::new("CLONE_INTO_CGROUP root gate"),
+                reason: "the root is not ready for release",
             }
         );
-        pidfd_send_signal(&self.root_pidfd, Signal::CONT)
-            .map_err(|error| invalid_state(format!("release CLONE_INTO_CGROUP root: {error}")))
+        gate(map).store(2, Ordering::Release);
+        Ok(())
+    }
+
+    fn root_state(&self) -> u32 {
+        self.root_gate
+            .as_ref()
+            .map_or(0, |map| gate(map).load(Ordering::Acquire))
     }
 
     pub(super) fn child_pid(&mut self) -> Result<Option<u32>> {
@@ -439,6 +492,11 @@ fn invalid_state(reason: impl Into<String>) -> crate::Error {
     .build()
 }
 
+fn gate(map: &MmapMut) -> &AtomicU32 {
+    // SAFETY: the mapping is page-aligned, shared, and one AtomicU32 long.
+    unsafe { &*map.as_ptr().cast::<AtomicU32>() }
+}
+
 fn namespace_target_pipe() -> Result<(File, File)> {
     let mut descriptors = [-1; 2];
     let result = unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC) };
@@ -508,13 +566,16 @@ fn stop_namespace_target(target: &mut Option<Child>) {
 }
 
 fn run_child(
+    root_gate: *const AtomicU32,
     namespace_target_fd: Option<i32>,
     first_effect_path: Option<&Path>,
     native_child_first_effect_path: Option<&Path>,
     native_child_effect_status_fd: Option<i32>,
 ) -> ! {
-    unsafe {
-        libc::raise(libc::SIGSTOP);
+    let root_gate = unsafe { &*root_gate };
+    root_gate.store(1, Ordering::Release);
+    while root_gate.load(Ordering::Acquire) != 2 {
+        unsafe { libc::sched_yield() };
     }
     if let Some(path) = first_effect_path {
         direct_open_exit(path);
@@ -636,6 +697,7 @@ mod tests {
         let mut fixture = CloneIntoCgroupFixture {
             root_pid,
             root_pidfd: open_pidfd(root_pid)?,
+            root_gate: None,
             child_pidfd: None,
             namespace_target: None,
             namespace_target_pipe: None,
