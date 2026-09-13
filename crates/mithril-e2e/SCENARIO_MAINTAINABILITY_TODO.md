@@ -551,7 +551,7 @@ count as maintainability migrations.
   path, operation name, and caller-supplied last-state diagnostic.
 - [x] Make `ProcessFixture` own spawn readiness, stdin actions, bounded exit
   diagnostics, explicit stop, and idempotent drop cleanup.
-- [ ] Keep post-exec actor cleanup in-band. Reuse the signed `/usr/bin/sleep`
+- [x] Keep post-exec actor cleanup in-band. Reuse the signed `/usr/bin/sleep`
   image with a bounded duration. Do not add an execution rule only for test
   cleanup. Do not depend on an external signal that Mithril can deny.
 - [x] Remove `NativeProcessFixture`. Move only generic Linux process mechanics
@@ -728,7 +728,7 @@ test does not close a row when its physical condition or an assertion changed.
 | PID reuse | Accepted | The namespace PID, host PID, task cookie, process state, execution, creator, namespace inode, and start-time checks remain. |
 | TID reuse | Accepted | The namespace TID, host TID, task cookie, process owner, creator edge, namespace inode, start-time, exit, and tombstone checks remain. |
 | Native child exec | Accepted | The non-PID1 `add_actor` path restores the external-root condition. The post-exec image-candidate check remains. |
-| Non-leader exec | Reopened | Use the non-PID1 `add_actor` path. The current initial-container root does not replace the original external-root transition. |
+| Non-leader exec | Accepted | The non-PID1 `add_actor` path restores the external-runtime root. Exact TID allocation, exec promotion, lineage, role, image, active-state, and in-band exit checks remain. |
 | Pre-PONR failure | Reopened | Use `add_actor`. Restore the child root-class and installed-role absence checks before failure and after success. |
 | Post-PONR failure | Reopened | Use `add_actor` and restore the original root classification check. Keep all terminal pending-exec, process, execution, coordinate, and tombstone checks. |
 | Moved-task exec | Reopened | Use `add_actor` and restore the original root classification and installed-role checks. |
@@ -759,20 +759,20 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Remove the matching old monolithic case and compatibility fields.
   - [x] Restore the baseline fidelity gaps recorded above and rerun all three
     generated cases.
-- [ ] Non-leader thread exec: start the admitted environment with `ready.py`,
+- [x] Non-leader thread exec: start the admitted environment with `ready.py`,
   then use `add_actor` for the thread program. Assert its external-runtime
   root and nonzero installed role. Keep exact TID allocation, thread identity,
   exec promotion, lineage, role, image, and active-state assertions visible.
   - [x] Add the small generated test and use the shared actor and assertions.
   - [x] Pass the corrected Host case in the retained privileged VM.
   - [x] Pass the corrected direct-`runc` case with the same actor and checks.
-  - [ ] Pass the corrected Kubernetes case with the same actor and checks.
-  - [ ] Remove the added `/usr/bin/cat` rule. The first Kubernetes run with
+  - [x] Pass the corrected Kubernetes case with the same actor and checks.
+  - [x] Remove the added `/usr/bin/cat` rule. The first Kubernetes run with
     six worker execution rules admitted the container, but its Python PID 1
     exited with status 1 before readiness. Reuse the existing signed sleep
     rule, then rerun Host and direct `runc` before Kubernetes.
   - [x] Remove the matching old monolithic case and compatibility fields.
-  - [ ] Restore the baseline physical condition recorded above and rerun all
+  - [x] Restore the baseline physical condition recorded above and rerun all
     three generated cases.
 - [ ] Pre-PONR failure: use fixture-owned process readiness and keep the
   pending-exec, rollback, and recovery assertions visible.
