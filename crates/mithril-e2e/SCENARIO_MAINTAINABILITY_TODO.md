@@ -821,6 +821,10 @@ test does not close a row when its physical condition or an assertion changed.
     from `IdentityTestRunner::physical_probe` after the replacement passes.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
   first-effect action, and exact identity assertions visible.
+  - [x] Pass the small Host native-child first-open test. Keep root and child
+    identity, lineage, active state, and the physical allowed open explicit.
+  - [ ] Remove only the matching native-child first-effect block and fields
+    from `IdentityTestRunner::physical_probe` after the replacement passes.
 - [x] Native child exec: start the admitted environment with `ready.py`, then
   use `add_actor` for the child-exec program. Keep the fork and exec actions,
   production identity snapshots, and allocation diagnostics visible. Assert

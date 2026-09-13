@@ -1,7 +1,9 @@
 use std::path::Path;
 use std::time::Duration;
 
-use erebor_interceptor_abi::TaskCoordinateStateV1;
+use erebor_interceptor_abi::{
+    ProcessExecutionStateV1, ProcessStateVectorStateV1, TaskCoordinateStateV1,
+};
 
 use crate::identity::clone3::CloneIntoCgroupFixture;
 use crate::physical::wait_for;
@@ -40,6 +42,76 @@ fn unmoved_first_open_allowed<P: Platform>() -> TestResult<()> {
         Duration::from_secs(5),
         || actor.root_first_effect_allowed(),
         || format!("clone root PID {pid} is still running"),
+    )?;
+
+    actor.stop()?;
+    init.stop()?;
+    env.stop()
+}
+
+#[platform_test(host)]
+fn child_first_open_allowed<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("cgroup-child-open")?;
+    let path = Path::new("/etc/hostname");
+    env.start_control()?;
+    env.start_node()?;
+    env.install_policy()?;
+    env.node_ready()?;
+    let mut init = env.start_actor("ready.py", &[])?;
+    let group = env.actor_group()?.to_owned();
+    let mut actor = CloneIntoCgroupFixture::start_with_native_child_first_effect(&group, path)?;
+    let root_pid = actor.root_pid();
+
+    let root = env.task(root_pid, "first-effect root")?;
+    assert_eq!(root.snapshot.creator_task_cookie, None);
+    assert_eq!(
+        root.snapshot.root_class.as_deref(),
+        Some("external_runtime_root")
+    );
+    assert_eq!(
+        root.snapshot.installed_role_class.as_deref(),
+        Some("runtime_external_restricted")
+    );
+    assert_ne!(root.snapshot.active_role_id, 0);
+    assert_eq!(root.coordinate.state, TaskCoordinateStateV1::Runnable);
+
+    actor.release_root()?;
+    let pid = wait_for(
+        &group,
+        "native child creation",
+        Duration::from_secs(5),
+        || actor.child_pid(),
+        || format!("clone root PID {root_pid} has no child"),
+    )?;
+    let child = env.task(pid, "first-effect child")?;
+    assert_eq!(
+        child.snapshot.creator_task_cookie,
+        Some(root.snapshot.task_cookie)
+    );
+    assert_eq!(
+        child.snapshot.real_parent_task_cookie,
+        root.snapshot.task_cookie
+    );
+    assert_eq!(child.snapshot.root_class, None);
+    assert_eq!(child.snapshot.installed_role_class, None);
+    assert_eq!(child.snapshot.active_role_id, root.snapshot.active_role_id);
+    assert_eq!(child.coordinate.state, TaskCoordinateStateV1::Runnable);
+    assert_eq!(
+        child.snapshot.process_execution_state,
+        ProcessExecutionStateV1::Active as u8
+    );
+    assert_eq!(
+        child.snapshot.process_state_vector_state,
+        ProcessStateVectorStateV1::Active as u8
+    );
+
+    actor.release_child_first_effect()?;
+    wait_for(
+        path,
+        "native child first open",
+        Duration::from_secs(5),
+        || actor.native_child_first_effect_allowed(),
+        || format!("native child PID {pid} did not report its first open"),
     )?;
 
     actor.stop()?;
