@@ -27,22 +27,18 @@ fn child_exec_keeps_identity<P: Platform>() -> TestResult<()> {
     env.start_node()?;
     env.install_policy()?;
     env.node_ready()?;
-    let mut actor = env.start_actor("native_child_exec.py", &[])?;
+    let mut init = env.start_actor("ready.py", &[])?;
+    let mut actor = env.add_actor("native_child_exec.py", &[])?;
 
     let root_pid = actor.id();
-    env.place(root_pid)?;
-    env.stage()?;
-    env.admit(root_pid)?;
+    assert_ne!(root_pid, init.id());
     let root = env.task(root_pid, "application parent identity")?;
     let initial = &root.snapshot;
     assert_eq!(initial.creator_task_cookie, None);
-    assert_eq!(
-        initial.root_class.as_deref(),
-        Some("initial_container_root")
-    );
+    assert_eq!(initial.root_class.as_deref(), Some("external_runtime_root"));
     assert_eq!(
         initial.installed_role_class.as_deref(),
-        Some("initial_role")
+        Some("qualified_registered_role")
     );
     assert!(initial.active_role_id > 0);
     active(&root);
@@ -84,9 +80,11 @@ fn child_exec_keeps_identity<P: Platform>() -> TestResult<()> {
     assert_eq!(post.real_parent_task_cookie, pre.real_parent_task_cookie);
     assert_ne!(post.active_execution_id, pre.active_execution_id);
     assert_ne!(post.image_provenance_id, pre.image_provenance_id);
+    assert!(post.image_candidate_count > 0);
     assert_eq!(post.active_role_id, pre.active_role_id);
     active(&after);
 
     actor.stop()?;
+    init.stop()?;
     env.stop()
 }
