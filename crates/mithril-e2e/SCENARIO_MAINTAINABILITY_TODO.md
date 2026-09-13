@@ -815,13 +815,16 @@ test does not close a row when its physical condition or an assertion changed.
   health checks, and placement-mismatch assertions visible.
   - [x] The small generated test uses one shared Python actor and the public
     runtime admission and identity inspection APIs.
-  - [x] The Host generated case passes in the retained privileged VM.
-  - [x] Pass the direct-`runc` generated case with the same actor and checks.
-  - [x] Pass the Kubernetes generated case with the same actor and checks.
+  - [x] The initial Host generated case passes in the retained privileged VM.
+  - [x] Pass the initial direct-`runc` generated case.
+  - [x] Pass the initial Kubernetes generated case.
   - [x] Remove the matching old monolithic case and compatibility field.
-  - [ ] Start `ready.py` as PID 1 and use `add_actor` for the moved-task
+  - [x] Start `ready.py` as PID 1 and use `add_actor` for the moved-task
     actor. Restore its external root and installed role checks, then rerun all
     three platforms.
+  - [x] Pass the corrected Host case and the complete Host platform set.
+  - [x] Pass the corrected direct-`runc` case and platform set.
+  - [ ] Pass the corrected Kubernetes case.
   - [ ] Restore the baseline fidelity gaps recorded above and rerun all three
     generated cases.
 - [x] Orphan transition: use `native_orphan.py` through `ProcessFixture` in
