@@ -33,6 +33,12 @@
             "kind": "PostStart",
             "executionRule": "python-actor",
             "role": "worker"
+          },
+          {
+            "name": "python-external",
+            "kind": "PostStart",
+            "executionRule": "python-external",
+            "role": "external"
           }
         ],
         "administrativeEntry": {
@@ -103,7 +109,15 @@
       {
         "name": "external",
         "files": [],
-        "execution": [],
+        "execution": [
+          {
+            "name": "python-external",
+            "path": "/work/python-external",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
         "network": {
           "socketControls": [],
           "destinations": []

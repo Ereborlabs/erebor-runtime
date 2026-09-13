@@ -744,27 +744,38 @@ test does not close a row when its physical condition or an assertion changed.
 - [ ] Binding-gap recovery: keep the terminal binding mutation and both public
   recovery calls explicit. Preserve the fail-closed root assertions.
 - [ ] Concurrent external roots: keep one small parameterized Rust test in
-  `identity/scenarios/external_roots.rs`. Start Control, Node, policy, and one
-  admitted `external_roots.py` environment actor. Let that actor copy its own
-  interpreter to the shared work directory. Start two more instances through
-  one generic `add_external` platform operation and keep both alive while
-  their production identities are read.
-  - [ ] Use the same Python actor on all platforms. Host must execute its
-    unregistered interpreter in the owned cgroup. Direct `runc` and Kubernetes
+  `identity/scenarios/external_roots.rs`. Start Control and one
+  `external_roots.py` environment actor. Let that actor copy its own
+  interpreter to the shared work directory. Install policy, start Node, and
+  recover the actor. Start two more instances through one generic
+  `add_external` platform operation and keep both alive while their production
+  identities are read.
+  - [x] Use the same Python actor on all platforms. Host must execute its
+    signed external entry in the owned cgroup. Direct `runc` and Kubernetes
     must use stock runtime exec. Do not inject a task through namespaces or a
     test-only identity operation.
-  - [ ] Keep registered `add_actor` and unregistered `add_external` as distinct
-    production operations. Share their process-start mechanics inside each
-    platform implementation. Do not select behavior from the scenario name.
-  - [ ] Assert that both actors are creator-free external runtime roots with
-    the runtime-external restricted role and runnable coordinates.
-  - [ ] Assert distinct task cookies and process-state IDs. Assert the same
+  - [x] Keep the normal post-start entry and the external post-start entry as
+    distinct production operations. Share their process-start mechanics inside
+    each platform implementation. Do not select behavior from the scenario
+    name.
+  - [x] Declare the copied interpreter as a signed additional entry that
+    targets the external role. Keep it separate from the application entry and
+    the normal post-start entry. Require a nonzero admitted rule ID and the
+    qualified registered role class.
+  - [x] Assert that both actors are creator-free external runtime roots with
+    the same non-application role and runnable coordinates.
+  - [x] Assert distinct task cookies and process-state IDs. Assert the same
     nonzero external role and a role different from the admitted actor.
-  - [ ] Pass the Host generated case.
+  - [x] Pass the Host generated case and the complete Host platform set.
   - [ ] Pass the direct-`runc` generated case through stock `runc exec`.
   - [ ] Pass the Kubernetes generated case through real `kubectl exec`.
-  - [ ] Remove the matching old probe block and compatibility result fields
-    only after all three generated cases pass.
+  - [ ] Keep the old restricted-placement block until a separate small test
+    reproduces its creator-free `runtime_external_restricted` roots through a
+    supported production cgroup-attach operation. The declared runtime-exec
+    case does not replace that security assertion.
+  - [ ] Remove only the matching old concurrency and role assertions after the
+    declared runtime-exec case passes on all three platforms. Remove the
+    restricted-placement fields only after its separate replacement passes.
 - [ ] Cgroup escape and moved-parent fork: keep the physical cgroup move,
   production health reads, fork action, and mismatch assertions visible.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
