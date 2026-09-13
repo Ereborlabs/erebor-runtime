@@ -761,7 +761,7 @@ test does not close a row when its physical condition or an assertion changed.
   root and nonzero installed role. Keep exact TID allocation, thread identity,
   exec promotion, lineage, role, image, and active-state assertions visible.
   - [x] Add the small generated test and use the shared actor and assertions.
-  - [ ] Pass the corrected Host case in the retained privileged VM.
+  - [x] Pass the corrected Host case in the retained privileged VM.
   - [ ] Pass the corrected direct-`runc` case with the same actor and checks.
   - [ ] Pass the corrected Kubernetes case with the same actor and checks.
   - [x] Remove the matching old monolithic case and compatibility fields.

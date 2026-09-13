@@ -27,23 +27,20 @@ fn non_leader_exec<P: Platform>() -> TestResult<()> {
     env.start_node()?;
     env.install_policy()?;
     env.node_ready()?;
-    let mut actor = env.start_actor("native_non_leader_exec.py", &[])?;
+    let mut init = env.start_actor("ready.py", &[])?;
+    let mut actor = env.add_actor("native_non_leader_exec.py", &[])?;
 
     let root_pid = actor.id();
-    env.place(root_pid)?;
-    env.stage()?;
-    env.admit(root_pid)?;
+    assert_ne!(root_pid, init.id());
     let root = env.task(root_pid, "thread-group root identity")?;
     let initial = &root.snapshot;
     assert_eq!(initial.creator_task_cookie, None);
-    assert_eq!(
-        initial.root_class.as_deref(),
-        Some("initial_container_root")
-    );
+    assert_eq!(initial.root_class.as_deref(), Some("external_runtime_root"));
     assert_eq!(
         initial.installed_role_class.as_deref(),
-        Some("initial_role")
+        Some("qualified_registered_role")
     );
+    assert!(initial.active_role_id > 0);
     active(&root);
 
     let next = env.next_id()?;
@@ -87,5 +84,6 @@ fn non_leader_exec<P: Platform>() -> TestResult<()> {
     active(&after);
 
     actor.stop()?;
+    init.stop()?;
     env.stop()
 }
