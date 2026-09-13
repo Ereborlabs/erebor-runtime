@@ -806,9 +806,10 @@ test does not close a row when its physical condition or an assertion changed.
     receives the real fork denial.
   - [x] Pass the same case on direct `runc`.
   - [x] Pass the same case on Kubernetes.
-  - [ ] Remove the matching monolithic fork block only after all three cases
+  - [x] Remove the matching monolithic fork block only after all three cases
     pass. Keep the separate `CLONE_INTO_CGROUP` coverage until its own small
-    replacement passes.
+    replacement passes. The remaining identity physical probe passes after
+    the removal.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
   first-effect action, and exact identity assertions visible.
 - [x] Native child exec: start the admitted environment with `ready.py`, then
