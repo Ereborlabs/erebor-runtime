@@ -801,15 +801,11 @@ test does not close a row when its physical condition or an assertion changed.
     restricted-placement fields only after its separate replacement passes.
 - [ ] Cgroup escape and moved-parent fork: keep the physical cgroup move,
   production health reads, fork action, and mismatch assertions visible.
-  - [x] Pass the small Host moved-parent fork case. The actor starts after
-    Node and policy readiness, enters the protected cgroup, moves out, and
-    receives the real fork denial.
-  - [x] Pass the same case on direct `runc`.
-  - [x] Pass the same case on Kubernetes.
-  - [x] Remove the matching monolithic fork block only after all three cases
-    pass. Keep the separate `CLONE_INTO_CGROUP` coverage until its own small
-    replacement passes. The remaining identity physical probe passes after
-    the removal.
+  - [ ] Preserve the node-first `CLONE_INTO_CGROUP` root. A process that
+    executes before a later cgroup attach is a different fail-closed case and
+    cannot replace this test.
+  - [ ] Keep an unmoved first-effect control. Require it to succeed before the
+    moved-root denial can qualify the replacement.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
   first-effect action, and exact identity assertions visible.
 - [x] Native child exec: start the admitted environment with `ready.py`, then
