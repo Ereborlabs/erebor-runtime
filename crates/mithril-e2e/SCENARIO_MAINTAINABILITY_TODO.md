@@ -745,11 +745,19 @@ test does not close a row when its physical condition or an assertion changed.
   recovery calls explicit. Preserve the fail-closed root assertions.
 - [ ] Concurrent external roots: keep one small parameterized Rust test in
   `identity/scenarios/external_roots.rs`. Start Control, Node, policy, and one
-  admitted `ready.py` environment actor. Start two more `ready.py` actors
-  with `add_actor` and keep both alive while their production identities are
-  read. Do not add a platform operation for this scenario.
+  admitted `external_roots.py` environment actor. Let that actor copy its own
+  interpreter to the shared work directory. Start two more instances through
+  one generic `add_external` platform operation and keep both alive while
+  their production identities are read.
+  - [ ] Use the same Python actor on all platforms. Host must execute its
+    unregistered interpreter in the owned cgroup. Direct `runc` and Kubernetes
+    must use stock runtime exec. Do not inject a task through namespaces or a
+    test-only identity operation.
+  - [ ] Keep registered `add_actor` and unregistered `add_external` as distinct
+    production operations. Share their process-start mechanics inside each
+    platform implementation. Do not select behavior from the scenario name.
   - [ ] Assert that both actors are creator-free external runtime roots with
-    the registered restricted role and runnable coordinates.
+    the runtime-external restricted role and runnable coordinates.
   - [ ] Assert distinct task cookies and process-state IDs. Assert the same
     nonzero external role and a role different from the admitted actor.
   - [ ] Pass the Host generated case.
