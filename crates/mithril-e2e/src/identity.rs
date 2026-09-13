@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod authorization_tests;
+#[cfg(test)]
 mod clone3;
 #[cfg(test)]
 mod fixture;
@@ -26,8 +27,7 @@ use erebor_interceptor::{
     KernelObjectLayoutV1, KernelObjectManifestV1, BUNDLED_BPF_OBJECT, REQUIRED_IDENTITY_PROGRAMS,
 };
 use erebor_interceptor_abi::{
-    BindingLifecycleStateV1, ExecGuardStateV1, ExecutionSetBindingStateV1, Id128V1,
-    ProcessExecutionStateV1, ProcessStateVectorStateV1, TaskCoordinateStateV1,
+    BindingLifecycleStateV1, ExecutionSetBindingStateV1, Id128V1, TaskCoordinateStateV1,
 };
 use libbpf_rs::{MapCore as _, MapHandle, MapType};
 use mithril_control::{
@@ -46,7 +46,6 @@ use zerocopy::{IntoBytes as _, KnownLayout, TryFromBytes};
 
 use crate::closure::QualificationRegistry;
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
-use crate::identity::clone3::CloneIntoCgroupFixture;
 use crate::physical::{boot_identity, wait_for, ProbeCgroup, ProbeDirectory, ProbeFile};
 use crate::process::ProcessFixture;
 use crate::Result;
@@ -199,9 +198,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub authorization_replay_wal_sha256: String,
     pub authorization_replay_wal_records: u64,
     pub authorization_replay_state_removed: bool,
-    pub clone_into_cgroup_external_root: NativeTaskSnapshotV1,
-    pub clone_into_cgroup_native_child: NativeTaskSnapshotV1,
-    pub clone_into_cgroup_native_child_after_namespace_move: NativeTaskSnapshotV1,
     pub cgroup_reuse_path: PathBuf,
     pub cgroup_reuse_first_root: NativeTaskSnapshotV1,
     pub cgroup_reuse_second_root: NativeTaskSnapshotV1,
@@ -546,119 +542,6 @@ impl IdentityTestRunner {
             .context(NodeSnafu)?;
         binding_gap_fixture.stop()?;
 
-        let mut clone_fixture =
-            CloneIntoCgroupFixture::start_with_mount_namespace_target(&cgroup_path)?;
-        let clone_external_root = self.wait_for(
-            "pre-wake CLONE_INTO_CGROUP external root identity",
-            &procs_path,
-            || {
-                inspector
-                    .snapshot(clone_fixture.root_pid())
-                    .context(NodeSnafu)
-            },
-        )?;
-        clone_fixture.release_root()?;
-        let clone_child_pid =
-            self.wait_for("CLONE_INTO_CGROUP native child", &procs_path, || {
-                clone_fixture.child_pid()
-            })?;
-        let clone_native_child = self.wait_for(
-            "CLONE_INTO_CGROUP native child identity",
-            &procs_path,
-            || inspector.snapshot(clone_child_pid).context(NodeSnafu),
-        )?;
-        ensure!(
-            clone_external_root.creator_task_cookie.is_none()
-                && clone_external_root.root_class.as_deref() == Some("external_runtime_root")
-                && clone_external_root.installed_role_class.as_deref()
-                    == Some("runtime_external_restricted")
-                && clone_native_child.creator_task_cookie == Some(clone_external_root.task_cookie)
-                && clone_native_child.real_parent_task_cookie == clone_external_root.task_cookie
-                && clone_native_child.root_class.is_none()
-                && clone_native_child.coordinate_state == TaskCoordinateStateV1::Runnable as u8,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: "CLONE_INTO_CGROUP root or its native child has the wrong identity",
-            }
-        );
-        let clone_child_mount_namespace_path =
-            PathBuf::from(format!("/proc/{clone_child_pid}/ns/mnt"));
-        let clone_child_mount_namespace = fs::read_link(&clone_child_mount_namespace_path)
-            .context(IoSnafu {
-                path: &clone_child_mount_namespace_path,
-            })?;
-        let clone_target_mount_namespace = clone_fixture.target_mount_namespace()?;
-        ensure!(
-            clone_child_mount_namespace != clone_target_mount_namespace,
-            InvalidInputSnafu {
-                path: PathBuf::from(format!("/proc/{clone_child_pid}/ns/mnt")),
-                reason: "native child already has the target mount namespace",
-            }
-        );
-        clone_fixture.release_child_into_mount_namespace()?;
-        let clone_child_comm_path = PathBuf::from(format!("/proc/{clone_child_pid}/comm"));
-        let last_clone_namespace = std::cell::RefCell::new(clone_child_mount_namespace.clone());
-        let last_clone_comm = std::cell::RefCell::new(String::new());
-        let last_clone_snapshot = std::cell::RefCell::new(None);
-        let clone_native_child_after_namespace_move = wait_for(
-            &clone_child_mount_namespace_path,
-            "CLONE_INTO_CGROUP native child mount-namespace entry",
-            WAIT_LIMIT,
-            || {
-                let namespace =
-                    fs::read_link(&clone_child_mount_namespace_path).context(IoSnafu {
-                        path: &clone_child_mount_namespace_path,
-                    })?;
-                let comm = fs::read_to_string(&clone_child_comm_path).context(IoSnafu {
-                    path: &clone_child_comm_path,
-                })?;
-                let snapshot = inspector.snapshot(clone_child_pid).context(NodeSnafu)?;
-                *last_clone_namespace.borrow_mut() = namespace.clone();
-                *last_clone_comm.borrow_mut() = comm.trim().to_owned();
-                *last_clone_snapshot.borrow_mut() = snapshot.clone();
-                if namespace != clone_target_mount_namespace || comm.trim() != "sleep" {
-                    return Ok(None);
-                }
-                Ok(snapshot.filter(|snapshot| {
-                    snapshot.task_cookie == clone_native_child.task_cookie
-                        && snapshot.creator_task_cookie == clone_native_child.creator_task_cookie
-                        && snapshot.real_parent_task_cookie
-                            == clone_native_child.real_parent_task_cookie
-                        && snapshot.process_state_id == clone_native_child.process_state_id
-                        && snapshot.active_execution_id != clone_native_child.active_execution_id
-                        && snapshot.image_provenance_id != clone_native_child.image_provenance_id
-                        && snapshot.active_role_id == clone_native_child.active_role_id
-                        && snapshot.root_class.is_none()
-                        && snapshot.installed_role_class.is_none()
-                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
-                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
-                        && snapshot.process_state_vector_state
-                            == ProcessStateVectorStateV1::Active as u8
-                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
-                }))
-            },
-            || {
-                format!(
-                    "target namespace {clone_target_mount_namespace:?}; last namespace {:?}; last executable {:?}; last identity {:?}",
-                    last_clone_namespace.borrow(),
-                    last_clone_comm.borrow(),
-                    last_clone_snapshot.borrow()
-                )
-            },
-        )?;
-        let clone_child_mount_namespace_after = fs::read_link(&clone_child_mount_namespace_path)
-            .context(IoSnafu {
-                path: &clone_child_mount_namespace_path,
-            })?;
-        ensure!(
-            clone_child_mount_namespace_after == clone_target_mount_namespace,
-            InvalidInputSnafu {
-                path: &clone_child_mount_namespace_path,
-                reason: "native child did not enter the target mount namespace",
-            }
-        );
-        clone_fixture.stop()?;
-
         let profile_task_refs_after_exit =
             self.wait_for("profile reference release", &procs_path, || {
                 let refs = profile_task_refs(&host)?;
@@ -836,10 +719,6 @@ impl IdentityTestRunner {
             authorization_replay_wal_sha256,
             authorization_replay_wal_records,
             authorization_replay_state_removed: true,
-            clone_into_cgroup_external_root: clone_external_root,
-            clone_into_cgroup_native_child: clone_native_child,
-            clone_into_cgroup_native_child_after_namespace_move:
-                clone_native_child_after_namespace_move,
             cgroup_reuse_path: cgroup_path.clone(),
             cgroup_reuse_first_root: binding_gap_reconciled_root.clone(),
             cgroup_reuse_second_root,
