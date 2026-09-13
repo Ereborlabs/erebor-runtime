@@ -880,7 +880,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the Kubernetes generated case.
   - [x] Remove the matching `ReparentCase::double_fork` block, result fields,
     and old actor only after all three generated cases pass.
-- [ ] Leader-first thread exit and reference lifetime: keep the process and
+- [x] Leader-first thread exit and reference lifetime: keep the process and
   entry reference counts, tombstones, release action, and reclamation checks.
   - [x] Use `ready.py` as the environment PID 1 and use `add_actor` for
     `native_leader_first.py` on all three platforms.
@@ -895,7 +895,7 @@ test does not close a row when its physical condition or an assertion changed.
     teardown indefinitely.
   - [x] Pass the Host generated case.
   - [x] Pass the direct-`runc` generated case.
-  - [ ] Pass the Kubernetes generated case.
+  - [x] Pass the Kubernetes generated case.
   - [x] Remove the matching old probe code and compatibility bundle fields.
 - [x] Node-first PID reuse: keep one small parameterized Rust test in
   `pid_reuse.rs`, one shared Python actor, one shared result assertion, and
