@@ -21,7 +21,7 @@ if pid == 0:
         with failed.open("x", encoding="ascii") as output:
             output.write(f"{os.getpid()}\n")
     os.kill(os.getpid(), signal.SIGSTOP)
-    os.execv("/usr/bin/sleep", ["/usr/bin/sleep", "300"])
+    os.execv("/usr/bin/sleep", ["/usr/bin/sleep", "5"])
 
 for _ in range(2):
     if sys.stdin.readline().strip() != "continue":
