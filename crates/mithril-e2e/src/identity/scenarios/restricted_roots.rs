@@ -5,7 +5,7 @@ use erebor_interceptor_abi::TaskCoordinateStateV1;
 use crate::platform::{platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 fn attached_roots_are_restricted<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("restricted-roots")?;
     env.start_control()?;
