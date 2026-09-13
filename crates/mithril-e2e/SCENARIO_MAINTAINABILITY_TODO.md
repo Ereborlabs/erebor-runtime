@@ -732,7 +732,7 @@ test does not close a row when its physical condition or an assertion changed.
 | Native child exec | Accepted | The non-PID1 `add_actor` path restores the external-root condition. The post-exec image-candidate check remains. |
 | Non-leader exec | Accepted | The non-PID1 `add_actor` path restores the external-runtime root. Exact TID allocation, exec promotion, lineage, role, image, active-state, and in-band exit checks remain. |
 | Pre-PONR failure | Accepted | The non-PID1 `add_actor` path restores the external root. Child root and role absence, pending-exec rollback, stable failed-exec identity, changed successful execution and image, and active-state checks remain. |
-| Post-PONR failure | Reopened | Use `add_actor` and restore the original root classification check. Keep all terminal pending-exec, process, execution, coordinate, and tombstone checks. |
+| Post-PONR failure | Accepted | The non-PID1 `add_actor` path restores the external root and installed role. Fatal status, pending exec, process, execution, coordinate, tombstone, lineage, and active-role checks remain. |
 | Moved-task exec | Reopened | Use `add_actor` and restore the original root classification and installed-role checks. |
 | Leader-first lifetime | Accepted | The `add_actor` path, runnable worker coordinate, child edge, reference counts, and reclamation checks remain. |
 | Workload-first recovery | Accepted | The Control, actor, policy, Node order and nonzero recovery-attempt check remain. Keep the larger recovered-entry cases. |
@@ -792,7 +792,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the corrected Kubernetes case.
   - [x] Restore the baseline fidelity gaps recorded above and rerun all three
     generated cases.
-- [ ] Post-PONR failure: use fixture-owned process readiness and keep the
+- [x] Post-PONR failure: use fixture-owned process readiness and keep the
   fatal-state assertions visible.
   - [x] Put the architecture-aware malformed executable in `ProcessFixture`
     and preserve its focused termination check.
@@ -808,8 +808,8 @@ test does not close a row when its physical condition or an assertion changed.
     require a numeric exit code after the actor mirrors the child signal.
   - [x] Pass the corrected Host case and the complete Host platform set.
   - [x] Pass the corrected direct-`runc` case and platform set.
-  - [ ] Pass the corrected Kubernetes case.
-  - [ ] Restore the baseline physical condition recorded above and rerun all
+  - [x] Pass the corrected Kubernetes case.
+  - [x] Restore the baseline physical condition recorded above and rerun all
     three generated cases.
 - [ ] Moved-task exec: keep the physical cgroup move, denied exec, production
   health checks, and placement-mismatch assertions visible.
