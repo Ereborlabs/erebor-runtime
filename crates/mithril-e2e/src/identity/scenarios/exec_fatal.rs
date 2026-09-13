@@ -17,13 +17,20 @@ fn fatal_exec_is_terminal<P: Platform>() -> TestResult<()> {
     env.start_node()?;
     env.install_policy()?;
     env.node_ready()?;
-    let mut actor = env.start_actor("native_fatal_exec.py", &["/work/post-ponr-execfail"])?;
+    let mut init = env.start_actor("ready.py", &[])?;
+    let mut actor = env.add_actor("native_fatal_exec.py", &["/work/post-ponr-execfail"])?;
 
     let root_pid = actor.id();
-    env.place(root_pid)?;
-    env.stage()?;
-    env.admit(root_pid)?;
     let root = env.task(root_pid, "fatal exec root")?;
+    assert_eq!(root.snapshot.creator_task_cookie, None);
+    assert_eq!(
+        root.snapshot.root_class.as_deref(),
+        Some("external_runtime_root")
+    );
+    assert_eq!(
+        root.snapshot.installed_role_class.as_deref(),
+        Some("qualified_registered_role")
+    );
     actor.send(b"root\n")?;
 
     let ns_pid = actor.wait_pid(&env.work().join("fatal-child"), "fatal exec child")?;
@@ -39,8 +46,8 @@ fn fatal_exec_is_terminal<P: Platform>() -> TestResult<()> {
     assert!(!env.pending(pre.task_cookie)?);
 
     actor.send(b"continue\n")?;
-    let code = env.actor_code(&mut actor, "fatal exec", Duration::from_secs(30))?;
-    assert_ne!(code, 0, "fatal exec actor returned {code}");
+    let status = actor.wait_exit("fatal exec", Duration::from_secs(30))?;
+    assert!(!status.success(), "fatal exec actor returned {status}");
     actor.wait_gone(pid, "fatal exec task removal")?;
     let coord = env.task_exit(pre.task_cookie, "fatal exec exit")?;
     let tomb = env.task_release(pre.task_cookie, "fatal exec release")?;
@@ -76,5 +83,6 @@ fn fatal_exec_is_terminal<P: Platform>() -> TestResult<()> {
     );
 
     actor.stop()?;
+    init.stop()?;
     env.stop()
 }
