@@ -212,9 +212,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub clone_into_cgroup_first_effect_root: NativeTaskSnapshotV1,
     pub clone_into_cgroup_first_effect_child: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child_first_effect_allowed: bool,
-    pub orphaned_native_parent: NativeTaskSnapshotV1,
-    pub orphaned_native_child_before_parent_exit: NativeTaskSnapshotV1,
-    pub orphaned_native_child_after_parent_exit: NativeTaskSnapshotV1,
     pub subreaper_native_parent: NativeTaskSnapshotV1,
     pub subreaper_intermediate_before_exit: NativeTaskSnapshotV1,
     pub subreaper_native_child_before_parent_exit: NativeTaskSnapshotV1,
@@ -810,12 +807,7 @@ impl IdentityTestRunner {
         );
         clone_fixture.stop();
 
-        let exec_case = scenarios::ExecCase::new(self, &inspector, &binding, &procs_path);
         let reparent_case = scenarios::ReparentCase::new(self, &inspector, &procs_path);
-
-        let orphan_ready_cleanup = ProbeFile::new(&child_ready_path);
-        let (orphan_root, orphan_before, orphan_after) = exec_case.orphan(&child_ready_path)?;
-        orphan_ready_cleanup.cleanup()?;
 
         let sub_cleanup = ProbeFile::new(&child_ready_path);
         let (sub_root, sub_mid, sub_before, sub_after) =
@@ -1196,9 +1188,6 @@ impl IdentityTestRunner {
             clone_into_cgroup_first_effect_root,
             clone_into_cgroup_first_effect_child,
             clone_into_cgroup_native_child_first_effect_allowed: true,
-            orphaned_native_parent: orphan_root,
-            orphaned_native_child_before_parent_exit: orphan_before,
-            orphaned_native_child_after_parent_exit: orphan_after,
             subreaper_native_parent: sub_root,
             subreaper_intermediate_before_exit: sub_mid,
             subreaper_native_child_before_parent_exit: sub_before,

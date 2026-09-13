@@ -315,7 +315,7 @@ These Rust files exceed 2,000 lines:
 | Source | Current lines |
 | --- | ---: |
 | `effect/runc.rs` | 8,343 |
-| `identity.rs` | 8,056 |
+| `identity.rs` | 7,688 |
 | `effect.rs` | 5,118 |
 | `effect/child.rs` | 4,472 |
 | `control_tls.rs` | 2,734 |
@@ -795,7 +795,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Remove the matching old monolithic case and compatibility field.
   - [ ] Restore the baseline fidelity gaps recorded above and rerun all three
     generated cases.
-- [ ] Orphan transition: use `native_orphan.py` through `ProcessFixture` in
+- [x] Orphan transition: use `native_orphan.py` through `ProcessFixture` in
   one production-backed `#[test]`. Preserve the parent, role, and execution
   assertions. Remove the actor-only test.
   - [x] Add `Host::add_actor`. It performs the real read-only runtime access,
@@ -831,7 +831,7 @@ test does not close a row when its physical condition or an assertion changed.
     finds the one added task in the real container cgroup and reports all
     observed cgroup PIDs on timeout.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
-  - [ ] Remove the matching old monolithic case and compatibility fields.
+  - [x] Remove the matching old monolithic case and compatibility fields.
 - [ ] Subreaper transition: use `native_subreaper.py` through
   `ProcessFixture` in one production-backed `#[test]`. Preserve the
   intermediate-parent, adopted-child, role, and execution assertions. Remove

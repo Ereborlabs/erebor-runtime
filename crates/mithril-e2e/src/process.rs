@@ -623,6 +623,7 @@ impl ProcessFixture {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn wait_pid(&mut self, path: &Path, operation: &str) -> Result<u32> {
         let last = RefCell::new(String::from("<absent>"));
         self.wait_path(

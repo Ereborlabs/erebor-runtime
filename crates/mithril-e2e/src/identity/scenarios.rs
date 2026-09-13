@@ -1,6 +1,5 @@
 #[cfg(test)]
 mod child_exec;
-mod exec;
 #[cfg(test)]
 mod exec_fatal;
 #[cfg(test)]
@@ -21,5 +20,4 @@ mod reparent;
 #[cfg(test)]
 mod workload_recovery;
 
-pub(super) use exec::ExecCase;
 pub(super) use reparent::ReparentCase;
