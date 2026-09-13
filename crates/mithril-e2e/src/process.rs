@@ -7,8 +7,6 @@ use std::cell::RefCell;
 #[cfg(test)]
 use std::ffi::CString;
 use std::ffi::OsStr;
-#[cfg(test)]
-use std::fs::OpenOptions;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read as _, Write};
 #[cfg(test)]
@@ -313,27 +311,14 @@ impl ProcessFixture {
                 .context(IoSnafu { path: &script })
         };
         let (child_in, input) = pipe()?;
-        let stem = script
-            .file_stem()
-            .and_then(OsStr::to_str)
-            .context(InvalidInputSnafu {
-                path: &script,
-                reason: "the actor fixture has no UTF-8 file stem",
-            })?;
-        let output_path = rootfs.join(format!("work/{stem}.stdout"));
-        let error_path = rootfs.join(format!("work/{stem}.stderr"));
-        let child_out = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&output_path)
-            .context(IoSnafu { path: &output_path })?;
-        let child_err = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&error_path)
-            .context(IoSnafu { path: &error_path })?;
-        let output = File::open(&output_path).context(IoSnafu { path: &output_path })?;
-        let errors = File::open(&error_path).context(IoSnafu { path: &error_path })?;
+        let work = rootfs.join("work");
+        let output_file =
+            tempfile::NamedTempFile::new_in(&work).context(IoSnafu { path: &work })?;
+        let error_file = tempfile::NamedTempFile::new_in(&work).context(IoSnafu { path: &work })?;
+        let output = File::open(output_file.path()).context(IoSnafu { path: &work })?;
+        let errors = File::open(error_file.path()).context(IoSnafu { path: &work })?;
+        let child_out = output_file.into_file();
+        let child_err = error_file.into_file();
         let (gate, child_gate) = UnixStream::pair().context(IoSnafu { path: &script })?;
         let clone = clone_args {
             flags,
