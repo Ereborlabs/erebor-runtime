@@ -802,6 +802,9 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [x] Remove the matching old monolithic case and compatibility fields.
+  - [ ] Start `ready.py` as PID 1 and use `add_actor` for the fatal actor.
+    Restore the external root and installed role checks before fatal exec.
+    Rerun the corrected test on all three platforms.
   - [ ] Restore the baseline physical condition recorded above and rerun all
     three generated cases.
 - [ ] Moved-task exec: keep the physical cgroup move, denied exec, production
