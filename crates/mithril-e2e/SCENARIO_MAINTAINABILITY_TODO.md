@@ -1017,7 +1017,7 @@ test does not close a row when its physical condition or an assertion changed.
     recovery test does not replace these behaviors.
   - [x] Restore the nonzero recovery-attempt assertion and rerun all three
     generated cases before the old workload-first assertions are removed.
-- [ ] Four-task workload-first recovery: add one small parameterized Rust
+- [x] Four-task workload-first recovery: add one small parameterized Rust
   test. Start one application root and its child. Add one external root and
   its child before policy and Node start. Recover the same four tasks on Host,
   direct `runc`, and Kubernetes.
@@ -1057,7 +1057,7 @@ test does not close a row when its physical condition or an assertion changed.
     tracked host PID disappears. Do not use transport status as actor status.
     The corrected case passes on Host in 23.40 seconds, direct `runc` in 24.15
     seconds, and the retained Kubernetes cluster in 104.47 seconds.
-  - [ ] Remove only the matching four-task count and root assertions from the
+  - [x] Remove only the matching four-task count and root assertions from the
     old Rust and shell probes after all three cases pass. Keep task-change
     retry, ptrace bootstrap, internal exec, probe isolation, denial evidence,
     post-cutover activation, and cleanup for separate migrations.

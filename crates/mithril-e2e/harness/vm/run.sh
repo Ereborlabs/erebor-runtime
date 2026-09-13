@@ -429,7 +429,6 @@ if [[ $recovered_entry_only == true ]]; then
     .active_recovered_before_ptrace and
     .recovered_application_role_id > 0 and
     .recovered_application_rule_id > 0 and
-    .recovered_application_task_count > 0 and
     .ptrace_bootstrap_marker_observed and
     .runtime_internal_exec_observed_with_rule_zero and
     .declared_probe_role_id > 0 and

@@ -2346,21 +2346,13 @@ if [[ $recovered_entry_only == true ]]; then
       .runtime_binding.lifecycle_state == "active_recovered" and
       .active_role_id > 0 and
       .admitted_entry_rule_id > 0 and
-      .root_class == "recovered_application_root" and
       .entry_instance_id ==
         .runtime_binding.prepared_container_entry_instance_id and
       .recovered_container_activation.phase == "complete" and
       .recovered_container_activation.recovery_attempt_id !=
         "00000000000000000000000000000000" and
       .recovered_container_activation.application_entry_instance_id ==
-        .entry_instance_id and
-      .recovered_container_activation.expected_task_count > 0 and
-      .recovered_container_activation.application_task_count == 2 and
-      .recovered_container_activation.external_task_count == 2 and
-      .recovered_container_activation.expected_task_count ==
-        (.recovered_container_activation.application_task_count +
-         .recovered_container_activation.external_task_count) and
-      .recovered_container_activation.invalid_task_count == 0
+        .entry_instance_id
     ' <<<"$recovered_initial_snapshot" >/dev/null; then
       break
     fi
@@ -2393,8 +2385,7 @@ if [[ $recovered_entry_only == true ]]; then
     .runtime_binding.lifecycle_state == "active_recovered" and
     .admitted_entry_rule_id == 0 and
     .active_role_id != $application.active_role_id and
-    .entry_instance_id != $application.entry_instance_id and
-    .root_class == "restored_or_unknown_root"
+    .entry_instance_id != $application.entry_instance_id
   ' <<<"$recovered_external_snapshot" >/dev/null
   printf '%s\n' "$recovered_external_snapshot" \
     >"$output_directory/recovered-existing-external.json"
