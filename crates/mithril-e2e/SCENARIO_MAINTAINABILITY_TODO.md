@@ -894,7 +894,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Bound the actor's release wait so failed assertions cannot block
     teardown indefinitely.
   - [x] Pass the Host generated case.
-  - [ ] Pass the direct-`runc` generated case.
+  - [x] Pass the direct-`runc` generated case.
   - [ ] Pass the Kubernetes generated case.
   - [x] Remove the matching old probe code and compatibility bundle fields.
 - [x] Node-first PID reuse: keep one small parameterized Rust test in
