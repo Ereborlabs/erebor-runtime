@@ -29,19 +29,29 @@ pub(crate) struct LifetimeState {
 }
 
 impl LifetimeState {
-    pub(crate) fn wait_live<P: Platform>(env: &P, root: &Task, worker: &Thread) -> Result<Self> {
+    pub(crate) fn wait_live<P: Platform>(
+        env: &P,
+        root: &Task,
+        worker: &Thread,
+        profile: u64,
+    ) -> Result<Self> {
         Self::wait(env, root, worker, "leader exit", |state| {
             state.root.state == TaskCoordinateStateV1::Exited
                 && state.process.state == ProcessSecurityStateKindV1::Active
                 && state.process.live_thread_refs == 1
                 && state.entry.live_task_refs == 1
-                && state.profile == 1
+                && state.profile == profile
                 && state.root_ref.state == ReferenceTombstoneStateV1::Released
                 && state.worker_ref.state == ReferenceTombstoneStateV1::Owned
         })
     }
 
-    pub(crate) fn wait_dead<P: Platform>(env: &P, root: &Task, worker: &Thread) -> Result<Self> {
+    pub(crate) fn wait_dead<P: Platform>(
+        env: &P,
+        root: &Task,
+        worker: &Thread,
+        profile: u64,
+    ) -> Result<Self> {
         Self::wait(env, root, worker, "worker exit", |state| {
             state.worker.state == TaskCoordinateStateV1::Exited
                 && state.process.state == ProcessSecurityStateKindV1::Reclaimable
@@ -50,7 +60,7 @@ impl LifetimeState {
                 && state.execution.state == ProcessExecutionStateV1::Complete
                 && state.entry.live_task_refs == 0
                 && state.entry.lifetime_state == EntryLifetimeStateV1::Draining
-                && state.profile == 0
+                && state.profile == profile
                 && state.worker_ref.state == ReferenceTombstoneStateV1::Released
         })
     }
@@ -66,6 +76,19 @@ impl LifetimeState {
     pub(crate) fn assert_dead(&self) {
         assert_eq!(self.worker_ref.task_free_observed, 1);
         assert_eq!(self.worker_ref.released_bits, TASK_REFERENCE_ALL_V1);
+    }
+
+    pub(crate) fn profile_refs<P: Platform>(env: &P, root: &Task) -> Result<u64> {
+        let id = root.snapshot.profile_generation_ref_id;
+        Self::map::<P, u64>(env, "profile_generation_task_refs", &id.to_ne_bytes())?.ok_or_else(
+            || {
+                InvalidInputSnafu {
+                    path: env.maps().0,
+                    reason: "profile reference count is missing",
+                }
+                .build()
+            },
+        )
     }
 
     fn wait<P: Platform>(
@@ -131,23 +154,7 @@ impl LifetimeState {
         let Some(worker_ref) = env.tombstone(worker.coordinate.task_cookie)? else {
             return Ok(None);
         };
-        let (_, reader) = env.maps();
-        let Some(bytes) = reader
-            .lookup(
-                "profile_generation_task_refs",
-                &root.snapshot.profile_generation_ref_id.to_ne_bytes(),
-            )
-            .context(InterceptorSnafu)?
-        else {
-            return Ok(None);
-        };
-        let profile = u64::from_ne_bytes(bytes.as_slice().try_into().map_err(|_| {
-            InvalidInputSnafu {
-                path: env.maps().0,
-                reason: "profile reference count is invalid",
-            }
-            .build()
-        })?);
+        let profile = Self::profile_refs(env, root)?;
         Ok(Some(Self {
             root: root_coord,
             worker: worker_coord,

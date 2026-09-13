@@ -882,11 +882,18 @@ test does not close a row when its physical condition or an assertion changed.
     and old actor only after all three generated cases pass.
 - [ ] Leader-first thread exit and reference lifetime: keep the process and
   entry reference counts, tombstones, release action, and reclamation checks.
-  - [ ] Use `ready.py` as the environment PID 1 and use `add_actor` for
+  - [x] Use `ready.py` as the environment PID 1 and use `add_actor` for
     `native_leader_first.py` on all three platforms.
-  - [ ] Restore the runnable worker-coordinate assertion and the exact
+  - [x] Assert the added actor's external root class and installed role.
+  - [x] Restore the runnable worker-coordinate assertion and the exact
     creator-edge child-cookie assertion from `95775f48`.
-  - [ ] Pass the Host generated case.
+  - [x] Keep an exited group leader `Exited` when task iteration sees its
+    kernel zombie. Do not accept a live task with an exited coordinate.
+  - [x] Use the exact profile reference baseline owned by the environment PID
+    1 and the added actor. Preserve one reference after the worker exits.
+  - [x] Bound the actor's release wait so failed assertions cannot block
+    teardown indefinitely.
+  - [x] Pass the Host generated case.
   - [ ] Pass the direct-`runc` generated case.
   - [ ] Pass the Kubernetes generated case.
   - [x] Remove the matching old probe code and compatibility bundle fields.

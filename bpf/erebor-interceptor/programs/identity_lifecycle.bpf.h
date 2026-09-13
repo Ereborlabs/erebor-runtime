@@ -239,6 +239,9 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
     if (label) {
         coordinate = bpf_map_lookup_elem(&task_coordinates,
                                          &label->task_cookie);
+        if (coordinate && BPF_CORE_READ(task, exit_state) &&
+            coordinate->state == task_coordinate_state_v1_exited)
+            return 0;
         parent_interval = NULL;
         if (coordinate) {
             parent_key.child_task_cookie = label->task_cookie;

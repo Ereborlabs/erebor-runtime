@@ -4,6 +4,15 @@ import sys
 import threading
 import time
 
+
+def wait(path):
+    limit = time.monotonic() + 30
+    while not os.path.exists(path):
+        if time.monotonic() >= limit:
+            raise RuntimeError(f"timed out waiting for {path}")
+        time.sleep(0.01)
+
+
 work = sys.argv[1]
 ready = os.path.join(work, "leader-first-ready")
 release = os.path.join(work, "leader-first-release")
@@ -15,13 +24,11 @@ def worker():
     with open(temporary, "x", encoding="ascii") as output:
         output.write(f"{threading.get_native_id()}\n")
     os.replace(temporary, ready)
-    while not os.path.exists(release):
-        time.sleep(0.01)
+    wait(release)
 
 thread = threading.Thread(target=worker)
 thread.start()
-while not os.path.exists(ready):
-    time.sleep(0.01)
+wait(ready)
 libc = ctypes.CDLL(None, use_errno=True)
 libc.pthread_exit.argtypes = [ctypes.c_void_p]
 libc.pthread_exit.restype = None
