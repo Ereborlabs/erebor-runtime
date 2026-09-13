@@ -1,6 +1,6 @@
-use std::fs;
+use std::fs::{self, File};
 use std::os::unix::process::ExitStatusExt as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -105,4 +105,43 @@ fn exit_reports_stderr() -> crate::Result<()> {
     assert!(message.contains("exit status: 17"), "{message}");
     assert!(message.contains("actor failed"), "{message}");
     Ok(())
+}
+
+#[test]
+fn external_wait_has_no_exit_status() -> crate::Result<()> {
+    let path = Path::new("/dev/null");
+    let input = File::options()
+        .write(true)
+        .open(path)
+        .context(IoSnafu { path })?;
+    let mut actor = ProcessFixture::from_pid(std::process::id(), input, Path::new("/proc/self"));
+    let mut polled = false;
+
+    actor.wait_path(
+        Path::new("/proc/self"),
+        "external process state",
+        Duration::from_secs(1),
+        || Ok(std::mem::replace(&mut polled, true).then_some(())),
+        || "state is not ready".to_owned(),
+    )
+}
+
+#[test]
+fn actor_survives_input_loss() -> crate::Result<()> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let dir = tempfile::tempdir().context(IoSnafu {
+        path: "temporary directory",
+    })?;
+    let mut actor = ProcessFixture::python(&root, "recovery_tree.py", [dir.path()])?;
+    actor.send(b"fork\n")?;
+    let child = actor.wait_child(actor.id(), "recovery actor child")?;
+    actor.track(child)?;
+
+    actor.close();
+    std::thread::sleep(Duration::from_millis(50));
+    actor.ensure_running("detached recovery actor")?;
+    let stop = dir.path().join("recovery-stop");
+    fs::write(&stop, b"stop\n").context(IoSnafu { path: &stop })?;
+    actor.wait_gone(actor.id(), "detached actor exit")?;
+    actor.stop()
 }

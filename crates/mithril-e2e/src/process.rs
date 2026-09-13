@@ -559,7 +559,6 @@ impl ProcessFixture {
             .context(IoSnafu { path: &self.path })
     }
 
-    #[cfg(test)]
     pub(crate) fn owns_status(&self) -> bool {
         self.child.is_some() || self.raw_pid.is_some()
     }
@@ -782,24 +781,43 @@ impl ProcessFixture {
     pub(crate) fn wait_gone(&mut self, id: u32, operation: &str) -> Result<()> {
         let path = PathBuf::from(format!("/proc/{id}/status"));
         let last = RefCell::new(String::from("State: <absent>"));
-        self.wait_path(
+        wait_for(
             &path,
             operation,
             START_LIMIT,
-            || match fs::read_to_string(&path) {
-                Ok(text) => {
-                    *last.borrow_mut() = text
-                        .lines()
-                        .find(|line| line.starts_with("State:"))
-                        .unwrap_or("State: <missing>")
-                        .to_owned();
-                    Ok(None)
+            || {
+                if !self.stopped && self.owns_status() {
+                    if let Some(status) = self.try_wait()? {
+                        if id != self.actor_pid {
+                            return InvalidInputSnafu {
+                                path: &path,
+                                reason: format!(
+                                    "the process exited with {status} before {operation}; process {id}; last {}; stderr: {:?}",
+                                    last.borrow(),
+                                    self.stderr()?
+                                ),
+                            }
+                            .fail();
+                        }
+                        *last.borrow_mut() = format!("actor wrapper status: {status}");
+                    }
                 }
-                Err(source) if source.kind() == ErrorKind::NotFound => Ok(Some(())),
-                Err(source) => Err(source).context(IoSnafu { path: &path }),
+                match fs::read_to_string(&path) {
+                    Ok(text) => {
+                        *last.borrow_mut() = text
+                            .lines()
+                            .find(|line| line.starts_with("State:"))
+                            .unwrap_or("State: <missing>")
+                            .to_owned();
+                        Ok(None)
+                    }
+                    Err(source) if source.kind() == ErrorKind::NotFound => Ok(Some(())),
+                    Err(source) => Err(source).context(IoSnafu { path: &path }),
+                }
             },
             || format!("process {id}; last {}", last.borrow()),
-        )
+        )?;
+        Ok(())
     }
 
     pub(crate) fn wait_path<T>(
@@ -819,7 +837,7 @@ impl ProcessFixture {
                 if let Some(value) = inspect()? {
                     return Ok(Some(value));
                 }
-                if !self.stopped {
+                if !self.stopped && self.owns_status() {
                     if let Some(status) = self.try_wait()? {
                         return InvalidInputSnafu {
                             path,

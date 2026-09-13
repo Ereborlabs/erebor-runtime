@@ -1,4 +1,5 @@
 use crate::platform::{platform_test, Platform, TestResult};
+use std::fs;
 
 #[platform_test(host, runc, kubernetes)]
 fn four_tasks_recover<P: Platform>() -> TestResult<()> {
@@ -66,7 +67,6 @@ fn four_tasks_recover<P: Platform>() -> TestResult<()> {
         (recovery.external_task_count, recovery.invalid_task_count),
         (2, 0)
     );
-
     let outside = env.task(ext.id(), "recovered external root")?;
     assert_eq!(
         outside
@@ -89,9 +89,9 @@ fn four_tasks_recover<P: Platform>() -> TestResult<()> {
         outside.snapshot.root_class.as_deref(),
         Some("restored_or_unknown_root")
     );
-
-    app.send(b"stop\n")?;
-    ext.send(b"stop\n")?;
+    fs::write(env.work().join("recovery-stop"), b"stop\n")?;
+    app.wait_gone(app.id(), "application actor exit")?;
+    ext.wait_gone(ext.id(), "external actor exit")?;
     app.stop()?;
     ext.stop()?;
     env.stop()

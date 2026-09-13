@@ -1036,7 +1036,27 @@ test does not close a row when its physical condition or an assertion changed.
     client out as the existing container-start path does. The corrected exact
     case passes. The first complete run had two transient setns start failures.
     Both exact reruns and the second complete 14-test run pass.
-  - [ ] Pass the Kubernetes case.
+  - [x] Pass the Kubernetes case.
+    The first exact run reached the first child wait and failed because the
+    externally owned Pod PID 1 has no local child exit status. Reproduce the
+    same failure in a lightweight `ProcessFixture` wait test. Poll exit status
+    only for a fixture-owned child or waitable PID, then rerun lightweight
+    before Kubernetes.
+    The second run completed all recovery assertions, then a custom actor stop
+    command failed because runtime restart had closed the exec input stream.
+    Reproduce that input loss in the lightweight fixture test. Keep both
+    actor trees alive without input after the fork. Use `ProcessFixture::stop`
+    as the only teardown action.
+    The next Host run confirmed that out-of-band kill remains denied. Release
+    both trees through one shared work-directory file, wait for normal exit,
+    and then reap them with `ProcessFixture::stop`.
+    The first in-band Host run reached normal exit, but `wait_gone` treated its
+    unreaped zombie as an actor failure. The next Kubernetes run recovered and
+    released all tasks, but its disconnected `kubectl exec` client exited with
+    code 1. Make `wait_gone` reap an owned wrapper and continue until the
+    tracked host PID disappears. Do not use transport status as actor status.
+    The corrected case passes on Host in 23.40 seconds, direct `runc` in 24.15
+    seconds, and the retained Kubernetes cluster in 104.47 seconds.
   - [ ] Remove only the matching four-task count and root assertions from the
     old Rust and shell probes after all three cases pass. Keep task-change
     retry, ptrace bootstrap, internal exec, probe isolation, denial evidence,
