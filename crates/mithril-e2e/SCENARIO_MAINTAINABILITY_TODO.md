@@ -551,10 +551,9 @@ count as maintainability migrations.
   path, operation name, and caller-supplied last-state diagnostic.
 - [x] Make `ProcessFixture` own spawn readiness, stdin actions, bounded exit
   diagnostics, explicit stop, and idempotent drop cleanup.
-- [ ] Keep post-exec actor cleanup in-band. The non-leader actor must exec the
-  signed `/usr/bin/cat` image and exit when `ProcessFixture` closes stdin on
-  the host, in direct `runc`, and in Kubernetes. Do not depend on an external
-  signal that Mithril can deny.
+- [ ] Keep post-exec actor cleanup in-band. Reuse the signed `/usr/bin/sleep`
+  image with a bounded duration. Do not add an execution rule only for test
+  cleanup. Do not depend on an external signal that Mithril can deny.
 - [x] Remove `NativeProcessFixture`. Move only generic Linux process mechanics
   to `ProcessFixture`; keep identity assertions and production calls in the
   identity scenario.
@@ -768,6 +767,10 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the corrected Host case in the retained privileged VM.
   - [x] Pass the corrected direct-`runc` case with the same actor and checks.
   - [ ] Pass the corrected Kubernetes case with the same actor and checks.
+  - [ ] Remove the added `/usr/bin/cat` rule. The first Kubernetes run with
+    six worker execution rules admitted the container, but its Python PID 1
+    exited with status 1 before readiness. Reuse the existing signed sleep
+    rule, then rerun Host and direct `runc` before Kubernetes.
   - [x] Remove the matching old monolithic case and compatibility fields.
   - [ ] Restore the baseline physical condition recorded above and rerun all
     three generated cases.
