@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use erebor_interceptor_abi::TaskCoordinateStateV1;
@@ -5,6 +6,46 @@ use erebor_interceptor_abi::TaskCoordinateStateV1;
 use crate::identity::clone3::CloneIntoCgroupFixture;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
+
+#[platform_test(host)]
+fn unmoved_first_open_allowed<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("cgroup-open-control")?;
+    let path = Path::new("/etc/hostname");
+    env.start_control()?;
+    env.start_node()?;
+    env.install_policy()?;
+    env.node_ready()?;
+    let mut init = env.start_actor("ready.py", &[])?;
+    let group = env.actor_group()?.to_owned();
+    let mut actor = CloneIntoCgroupFixture::start_with_root_first_effect(&group, path)?;
+    let pid = actor.root_pid();
+    let task = env.task(pid, "unmoved root identity")?;
+
+    assert_eq!(task.snapshot.creator_task_cookie, None);
+    assert_eq!(
+        task.snapshot.root_class.as_deref(),
+        Some("external_runtime_root")
+    );
+    assert_eq!(
+        task.snapshot.installed_role_class.as_deref(),
+        Some("runtime_external_restricted")
+    );
+    assert_ne!(task.snapshot.active_role_id, 0);
+    assert_eq!(task.coordinate.state, TaskCoordinateStateV1::Runnable);
+
+    actor.release_root()?;
+    wait_for(
+        path,
+        "unmoved first open",
+        Duration::from_secs(5),
+        || actor.root_first_effect_allowed(),
+        || format!("clone root PID {pid} is still running"),
+    )?;
+
+    actor.stop();
+    init.stop()?;
+    env.stop()
+}
 
 #[platform_test(host)]
 fn moved_parent_fork_denied<P: Platform>() -> TestResult<()> {

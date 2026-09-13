@@ -814,7 +814,9 @@ test does not close a row when its physical condition or an assertion changed.
     first effect.
   - [x] Remove only the matching moved-parent block and compatibility field
     from `IdentityTestRunner::physical_probe`.
-  - [ ] Keep an unmoved first-effect control. Require it to succeed before the
+  - [x] Pass the small Host unmoved first-open control with the same native
+    clone fixture and restricted external identity assertions.
+  - [x] Keep an unmoved first-effect control. Require it to succeed before the
     moved-root denial can qualify the replacement.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
   first-effect action, and exact identity assertions visible.

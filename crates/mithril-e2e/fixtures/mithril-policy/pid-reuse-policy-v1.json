@@ -108,7 +108,15 @@
       },
       {
         "name": "external",
-        "files": [],
+        "files": [
+          {
+            "name": "allow-identity-control",
+            "path": "/etc/hostname",
+            "recursive": false,
+            "operations": ["OpenRead"],
+            "action": "Allow"
+          }
+        ],
         "execution": [
           {
             "name": "python-external",
