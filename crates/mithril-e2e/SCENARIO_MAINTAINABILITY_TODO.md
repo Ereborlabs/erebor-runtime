@@ -844,7 +844,7 @@ test does not close a row when its physical condition or an assertion changed.
     execution, role, root, coordinate, and process-state assertions.
   - [x] Pass the Host generated case.
   - [x] Pass the direct-`runc` generated case.
-  - [ ] Pass the Kubernetes generated case.
+  - [x] Pass the Kubernetes generated case.
   - [ ] Remove the matching `ReparentCase::subreaper` block and compatibility
     fields only after all three generated cases pass.
 - [x] Namespace-init transition: use `native_namespace_init.py` through
