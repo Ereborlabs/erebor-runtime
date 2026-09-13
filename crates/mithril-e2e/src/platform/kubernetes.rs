@@ -1099,7 +1099,7 @@ impl Platform for Kubernetes {
         let last = RefCell::new(String::from("<absent>"));
         wait_for(
             &script,
-            "Kubernetes PID-reuse actor readiness",
+            "Kubernetes actor readiness",
             READY_LIMIT,
             || match self.logs(&self.namespace, &format!("pod/{ACTOR}")) {
                 Ok(logs) => {

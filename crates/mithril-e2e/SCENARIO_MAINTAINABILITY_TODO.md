@@ -545,7 +545,7 @@ count as maintainability migrations.
   physical setup owners. Keep VM and Kubernetes shell or Python launchers
   limited to provisioning and exact test invocation. Use the same actor file
   in all three placements.
-- [ ] Remove the PID-reuse name from shared Kubernetes actor readiness. Use a
+- [x] Remove the PID-reuse name from shared Kubernetes actor readiness. Use a
   scenario-neutral operation name in the common platform owner.
 - [x] Put the existing Control TLS lifecycle owner in one small shared module.
   Reuse it for production Control and Node connections.
