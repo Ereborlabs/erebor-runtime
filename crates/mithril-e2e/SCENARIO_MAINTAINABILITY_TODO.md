@@ -798,21 +798,27 @@ test does not close a row when its physical condition or an assertion changed.
 - [ ] Orphan transition: use `native_orphan.py` through `ProcessFixture` in
   one production-backed `#[test]`. Preserve the parent, role, and execution
   assertions. Remove the actor-only test.
-  - [ ] Add one `Platform::add_actor` operation. Host starts the actor directly.
-    Direct-`runc` and Kubernetes start the same actor in a running container.
-  - [ ] Add the small generated test with the shared actor and explicit result
+  - [x] Add `Host::add_actor`. It performs the real read-only runtime access,
+    then starts the actor with its declared executable and complete argv.
+  - [ ] Add the direct-`runc` and Kubernetes `add_actor` implementations. Each
+    implementation must run the same actor in the running container.
+  - [x] Add the small generated test with the shared actor and explicit result
     assertions.
-  - [x] Reproduce the Host failure after the orphan child is reparented and
-    execs. Prove that the same actor survives when Mithril is absent.
-  - [x] Trace the failure to external-entry complete-argv verification being
-    applied to a native descendant that inherited the external role. Keep the
-    proposed root discriminator at `lineage_depth == 0`.
+  - [x] Reproduce the Host failure before the added actor starts. Confirm that
+    the signed request and the restricted external-root identity are ready.
+  - [x] Trace the failure to the missing runtime-entry bootstrap operation in
+    the Host physical setup. Do not change the production security gate.
+  - [x] Reject the proposed `lineage_depth == 0` exception. It does not model a
+    runtime entry and it weakens descendant checks.
+  - [x] Keep the direct interpreter as the declared executable and pass the
+    Python file in argv. A shebang changes the committed argv and must fail
+    closed.
   - [x] Run the pre-change direct-`runc` entry-role probe. Require incomplete
     declared-entry argv to fail with empty output and exact
     `UNSUPPORTED_OBJECT` execute evidence.
-  - [ ] After the production correction, rerun that direct-`runc` security
-    probe and require the external-entry denial to remain unchanged.
-  - [ ] Pass the Host generated case in the retained privileged VM.
+  - [ ] Rerun that direct-`runc` security probe after the fixture correction.
+    Require the external-entry denial to remain unchanged.
+  - [x] Pass the Host generated case in the retained privileged VM.
   - [ ] Pass the direct-`runc` generated case with the same actor and checks.
   - [ ] Pass the Kubernetes generated case with the same actor and checks.
   - [ ] Remove the matching old monolithic case and compatibility fields.

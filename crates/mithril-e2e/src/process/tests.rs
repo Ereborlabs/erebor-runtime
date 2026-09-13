@@ -1,3 +1,4 @@
+use std::fs;
 use std::os::unix::process::ExitStatusExt as _;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -36,16 +37,17 @@ fn stop_kills_child_after_exit() -> crate::Result<()> {
     let dir = tempfile::tempdir().context(IoSnafu {
         path: "temporary directory",
     })?;
-    let ready = dir.path().join("orphan.pid");
-    let mut actor = ProcessFixture::python(&root, "native_orphan.py", [&ready])?;
+    let work = dir.path();
+    let mut actor = ProcessFixture::python(&root, "native_orphan.py", [work])?;
     actor.set_group(&dir.path().join("removed-cgroup"));
     let root_pid = actor.id();
     actor.track(root_pid)?;
-    actor.send(b"fork\n")?;
-    let child_pid = actor.wait_pid(&ready, "actor child")?;
+    let fork = work.join("orphan-fork");
+    fs::write(&fork, b"fork\n").context(IoSnafu { path: &fork })?;
+    let child_pid = actor.wait_child(root_pid, "actor child")?;
     actor.track(child_pid)?;
-    actor.wait_stop(child_pid, "actor child stop")?;
-    actor.send(b"exit\n")?;
+    let release = work.join("orphan-exit");
+    fs::write(&release, b"exit\n").context(IoSnafu { path: &release })?;
     assert!(actor
         .wait_exit("parent exit", Duration::from_secs(5))?
         .success());

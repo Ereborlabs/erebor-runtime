@@ -68,7 +68,6 @@ pub(crate) trait Platform: Sized {
     ) -> TestResult<crate::process::ProcessFixture> {
         pending("start actor")
     }
-    #[expect(dead_code, reason = "the next scenario migration uses this operation")]
     fn add_actor(
         &mut self,
         name: &str,

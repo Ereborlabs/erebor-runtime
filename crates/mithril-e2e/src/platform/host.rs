@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use erebor_interceptor::KernelStateReader;
-use erebor_interceptor_abi::{TaskCoordinateStateV1, TaskCoordinateV1};
+use erebor_interceptor_abi::{DeclaredEntryRequestV1, TaskCoordinateStateV1, TaskCoordinateV1};
 use k8s_cri::v1::ContainerState;
 use mithril_control::{
     lower_kubernetes_policy, workload_target_fact_digest, AllowedNodeIdentity,
@@ -30,7 +30,7 @@ use mithril_node::{
 };
 use snafu::{ensure, ResultExt as _};
 use tokio::sync::watch;
-use zerocopy::TryFromBytes as _;
+use zerocopy::{IntoBytes as _, TryFromBytes as _};
 
 use super::{CriFixture, Platform, Task, TestResult};
 use crate::control_fixture::{ControlServerFixture, MtlsFixture};
@@ -793,6 +793,57 @@ impl Platform for Host {
         Ok(actor)
     }
 
+    fn add_actor(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
+        let init = self.init_pid.ok_or("the initial actor is not running")?;
+        let maps_path = PathBuf::from(format!("/proc/{init}/maps"));
+        let maps = fs::read(&maps_path).context(IoSnafu { path: &maps_path })?;
+        ensure!(
+            !maps.is_empty(),
+            InvalidInputSnafu {
+                path: &maps_path,
+                reason: "the runtime read an empty initial actor map",
+            }
+        );
+        let rootfs = self.out.join("bundle/rootfs");
+        let entry = "/usr/bin/python3.12";
+        let request = DeclaredEntryRequestV1::from_path(entry.as_bytes())
+            .ok_or("the actor entry path is invalid")?;
+        ensure!(
+            self.reader
+                .lookup("declared_entry_requests", request.as_bytes())
+                .context(InterceptorSnafu)?
+                .as_deref()
+                == Some([1].as_slice()),
+            InvalidInputSnafu {
+                path: &rootfs,
+                reason: format!("the signed actor entry is not installed: {entry}"),
+            }
+        );
+        let mut args = vec![OsString::from("/work")];
+        args.extend(extra.iter().map(OsString::from));
+        let mut actor = ProcessFixture::held_cgroup(
+            &self.root,
+            name,
+            args,
+            &self.cgroup_path,
+            &rootfs,
+            Path::new(entry),
+        )?;
+        let placement = self.task(actor.id(), "added actor placement")?;
+        actor.release()?;
+        if let Err(source) = actor.ready() {
+            return Err(format!(
+                "{source}; pre-exec PID: {}; snapshot: {:?}; coordinate: {:?}; identity health: {:?}",
+                placement.pid,
+                placement.snapshot,
+                placement.coordinate,
+                self.health()?
+            )
+            .into());
+        }
+        Ok(actor)
+    }
+
     fn place(&mut self, pid: u32) -> TestResult<()> {
         let path = self.cgroup_path.join("cgroup.procs");
         fs::write(&path, pid.to_string()).context(IoSnafu { path: &path })?;
@@ -892,7 +943,7 @@ impl Platform for Host {
         name: &str,
     ) -> TestResult<Task> {
         let last = RefCell::new(String::from("<absent>"));
-        let snapshot = actor.wait_path(
+        let snapshot = match actor.wait_path(
             &self.pin_path,
             name,
             READY_LIMIT,
@@ -913,7 +964,12 @@ impl Platform for Host {
                 }))
             },
             || format!("PID {pid}; last identity: {}", last.borrow()),
-        )?;
+        ) {
+            Ok(value) => value,
+            Err(source) => {
+                return Err(format!("{source}; actor stderr: {:?}", actor.stderr()?).into());
+            }
+        };
         self.task_from(pid, snapshot)
     }
 

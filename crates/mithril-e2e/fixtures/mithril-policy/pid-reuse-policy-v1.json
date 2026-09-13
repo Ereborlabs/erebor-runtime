@@ -27,7 +27,14 @@
           "executionRule": "python",
           "role": "worker"
         },
-        "additionalEntries": [],
+        "additionalEntries": [
+          {
+            "name": "python-actor",
+            "kind": "PostStart",
+            "executionRule": "python-actor",
+            "role": "worker"
+          }
+        ],
         "administrativeEntry": {
           "role": "administrator"
         },
@@ -42,6 +49,13 @@
           {
             "name": "python",
             "path": "/usr/bin/python3",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          },
+          {
+            "name": "python-actor",
+            "path": "/usr/bin/python3.12",
             "recursive": false,
             "operations": ["Execute"],
             "action": "Allow"

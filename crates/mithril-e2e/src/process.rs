@@ -246,11 +246,56 @@ impl ProcessFixture {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        Self::held(
+            root,
+            name,
+            args,
+            cgroup,
+            rootfs,
+            Path::new("/usr/bin/python3"),
+            linux_raw_sys::general::CLONE_INTO_CGROUP
+                | u64::from(linux_raw_sys::general::CLONE_NEWPID),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn held_cgroup<I, S>(
+        root: &Path,
+        name: &str,
+        args: I,
+        cgroup: &Path,
+        rootfs: &Path,
+        executable: &Path,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let actor = Self::held(root, name, args, cgroup, rootfs, executable, 0)?;
+        let path = cgroup.join("cgroup.procs");
+        fs::write(&path, actor.id().to_string()).context(IoSnafu { path: &path })?;
+        Ok(actor)
+    }
+
+    #[cfg(test)]
+    fn held<I, S>(
+        root: &Path,
+        name: &str,
+        args: I,
+        cgroup: &Path,
+        rootfs: &Path,
+        executable: &Path,
+        flags: u64,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         let script = Self::script(root, name)?;
-        let python = c"/usr/bin/python3".to_owned();
+        let executable = cstring(executable)?;
         let actor = cstring(&Path::new("/fixtures").join(name))?;
         let root_c = cstring(rootfs)?;
-        let mut values = vec![python.clone(), actor];
+        let mut values = vec![executable.clone(), actor];
         for arg in args {
             values.push(cstring(Path::new(arg.as_ref()))?);
         }
@@ -266,8 +311,15 @@ impl ProcessFixture {
                 .context(IoSnafu { path: &script })
         };
         let (child_in, input) = pipe()?;
-        let output_path = rootfs.join("work/actor.stdout");
-        let error_path = rootfs.join("work/actor.stderr");
+        let stem = script
+            .file_stem()
+            .and_then(OsStr::to_str)
+            .context(InvalidInputSnafu {
+                path: &script,
+                reason: "the actor fixture has no UTF-8 file stem",
+            })?;
+        let output_path = rootfs.join(format!("work/{stem}.stdout"));
+        let error_path = rootfs.join(format!("work/{stem}.stderr"));
         let child_out = OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -282,8 +334,7 @@ impl ProcessFixture {
         let errors = File::open(&error_path).context(IoSnafu { path: &error_path })?;
         let (gate, child_gate) = UnixStream::pair().context(IoSnafu { path: &script })?;
         let clone = clone_args {
-            flags: linux_raw_sys::general::CLONE_INTO_CGROUP
-                | u64::from(linux_raw_sys::general::CLONE_NEWPID),
+            flags,
             pidfd: 0,
             child_tid: 0,
             parent_tid: 0,
@@ -293,13 +344,17 @@ impl ProcessFixture {
             tls: 0,
             set_tid: 0,
             set_tid_size: 0,
-            cgroup: group.as_raw_fd() as u64,
+            cgroup: if flags & linux_raw_sys::general::CLONE_INTO_CGROUP != 0 {
+                group.as_raw_fd() as u64
+            } else {
+                0
+            },
         };
         let result =
             unsafe { libc::syscall(libc::SYS_clone3, &raw const clone, size_of::<clone_args>()) };
         if result == 0 {
             run_held(
-                &python,
+                &executable,
                 &argv,
                 &child_in,
                 &child_out,
@@ -339,7 +394,11 @@ impl ProcessFixture {
             tasks: Vec::new(),
             stopped: false,
         };
-        fixture.set_init(pid)?;
+        if flags & u64::from(linux_raw_sys::general::CLONE_NEWPID) != 0 {
+            fixture.set_init(pid)?;
+        } else {
+            fixture.set_actor(pid)?;
+        }
         fixture.wait_held()?;
         Ok(fixture)
     }
@@ -436,7 +495,7 @@ impl ProcessFixture {
     }
 
     #[cfg(test)]
-    fn set_actor(&mut self, pid: u32) -> Result<()> {
+    pub(crate) fn set_actor(&mut self, pid: u32) -> Result<()> {
         self.track(pid)?;
         self.actor_pid = pid;
         Ok(())
@@ -1063,7 +1122,7 @@ fn cstring(path: &Path) -> Result<CString> {
 
 #[cfg(test)]
 fn run_held(
-    python: &CString,
+    executable: &CString,
     argv: &[*const libc::c_char],
     input: &OwnedFd,
     output: &File,
@@ -1088,8 +1147,13 @@ fn run_held(
         if libc::read(gate.as_raw_fd(), (&raw mut release).cast(), 1) != 1 {
             libc::_exit(126);
         }
-        libc::execv(python.as_ptr(), argv.as_ptr());
-        libc::_exit(127);
+        libc::execv(executable.as_ptr(), argv.as_ptr());
+        let errno = *libc::__errno_location();
+        libc::_exit(if (1..127).contains(&errno) {
+            errno
+        } else {
+            127
+        });
     }
 }
 

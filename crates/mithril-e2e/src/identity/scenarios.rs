@@ -15,6 +15,8 @@ mod moved_exec;
 mod namespace_init;
 #[cfg(test)]
 mod non_leader_exec;
+#[cfg(test)]
+mod orphan;
 mod reparent;
 #[cfg(test)]
 mod workload_recovery;
