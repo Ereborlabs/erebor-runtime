@@ -733,7 +733,7 @@ test does not close a row when its physical condition or an assertion changed.
 | Non-leader exec | Accepted | The non-PID1 `add_actor` path restores the external-runtime root. Exact TID allocation, exec promotion, lineage, role, image, active-state, and in-band exit checks remain. |
 | Pre-PONR failure | Accepted | The non-PID1 `add_actor` path restores the external root. Child root and role absence, pending-exec rollback, stable failed-exec identity, changed successful execution and image, and active-state checks remain. |
 | Post-PONR failure | Accepted | The non-PID1 `add_actor` path restores the external root and installed role. Fatal status, pending exec, process, execution, coordinate, tombstone, lineage, and active-role checks remain. |
-| Moved-task exec | Reopened | Use `add_actor` and restore the original root classification and installed-role checks. |
+| Moved-task exec | Accepted | The non-PID1 `add_actor` path restores the external root and installed role. The physical move, lineage, fail-closed coordinate, declassification, health increments, and denied-exec errno checks remain. |
 | Leader-first lifetime | Accepted | The `add_actor` path, runnable worker coordinate, child edge, reference counts, and reclamation checks remain. |
 | Workload-first recovery | Accepted | The Control, actor, policy, Node order and nonzero recovery-attempt check remain. Keep the larger recovered-entry cases. |
 | Namespace init | Accepted | PID 1 is the correct cross-platform actor. Intermediate and child host-parent fields, root and role absence, runnable state, and post-exec identity changes remain. |
@@ -811,7 +811,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the corrected Kubernetes case.
   - [x] Restore the baseline physical condition recorded above and rerun all
     three generated cases.
-- [ ] Moved-task exec: keep the physical cgroup move, denied exec, production
+- [x] Moved-task exec: keep the physical cgroup move, denied exec, production
   health checks, and placement-mismatch assertions visible.
   - [x] The small generated test uses one shared Python actor and the public
     runtime admission and identity inspection APIs.
@@ -824,7 +824,7 @@ test does not close a row when its physical condition or an assertion changed.
     three platforms.
   - [x] Pass the corrected Host case and the complete Host platform set.
   - [x] Pass the corrected direct-`runc` case and platform set.
-  - [ ] Pass the corrected Kubernetes case.
+  - [x] Pass the corrected Kubernetes case.
   - [x] Remove the Kubernetes `MITHRIL_TEST_CGROUP` dependency. The corrected
     physical case reached `move_task` and failed because the launcher did not
     supply a Host-only path. Derive a unique move cgroup from the test token,
@@ -832,7 +832,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Use `ProcessFixture` exit status for a Kubernetes `add_actor` process.
     The cgroup correction reached the denied exec, but `actor_code` waited for
     PID 1 to exit. Keep Pod termination observation only for an external PID 1.
-  - [ ] Restore the baseline fidelity gaps recorded above and rerun all three
+  - [x] Restore the baseline fidelity gaps recorded above and rerun all three
     generated cases.
 - [x] Orphan transition: use `native_orphan.py` through `ProcessFixture` in
   one production-backed `#[test]`. Preserve the parent, role, and execution
