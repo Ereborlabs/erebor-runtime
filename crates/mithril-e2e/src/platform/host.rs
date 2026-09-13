@@ -795,6 +795,13 @@ impl Platform for Host {
 
     fn add_actor(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
         let init = self.init_pid.ok_or("the initial actor is not running")?;
+        if self.node_task.is_none() {
+            let mut args = vec![self.work_path.clone().into_os_string()];
+            args.extend(extra.iter().map(OsString::from));
+            let actor = ProcessFixture::python(&self.root, name, args)?;
+            self.place(actor.id())?;
+            return Ok(actor);
+        }
         let maps_path = PathBuf::from(format!("/proc/{init}/maps"));
         let maps = fs::read(&maps_path).context(IoSnafu { path: &maps_path })?;
         ensure!(
