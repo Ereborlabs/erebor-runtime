@@ -1,4 +1,6 @@
 #[cfg(test)]
+mod cgroup_fork;
+#[cfg(test)]
 mod child_exec;
 #[cfg(test)]
 mod double_fork;

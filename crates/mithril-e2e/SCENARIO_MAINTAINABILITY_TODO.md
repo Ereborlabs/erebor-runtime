@@ -55,6 +55,8 @@ These rules control every checkmark and commit in this file.
   already-running namespace or container. Host, direct-`runc`, and Kubernetes
   implementations must use their real process-entry mechanism. Keep this
   behavior in a separate test from initial actor startup.
+- Keep the public test operation name `add_actor`. Do not rename it to
+  `exec_actor`. A runtime can use exec as its physical process-entry mechanism.
 - Give `add_actor` an optional signed entry name. Use no entry only when the
   process starts before policy installation for a recovery test. Resolve a
   named entry from the installed policy. Do not add role-specific process
@@ -799,6 +801,14 @@ test does not close a row when its physical condition or an assertion changed.
     restricted-placement fields only after its separate replacement passes.
 - [ ] Cgroup escape and moved-parent fork: keep the physical cgroup move,
   production health reads, fork action, and mismatch assertions visible.
+  - [x] Pass the small Host moved-parent fork case. The actor starts after
+    Node and policy readiness, enters the protected cgroup, moves out, and
+    receives the real fork denial.
+  - [ ] Pass the same case on direct `runc`.
+  - [ ] Pass the same case on Kubernetes.
+  - [ ] Remove the matching monolithic fork block only after all three cases
+    pass. Keep the separate `CLONE_INTO_CGROUP` coverage until its own small
+    replacement passes.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
   first-effect action, and exact identity assertions visible.
 - [x] Native child exec: start the admitted environment with `ready.py`, then
