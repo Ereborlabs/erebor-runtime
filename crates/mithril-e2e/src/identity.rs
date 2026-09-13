@@ -212,10 +212,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub clone_into_cgroup_first_effect_root: NativeTaskSnapshotV1,
     pub clone_into_cgroup_first_effect_child: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child_first_effect_allowed: bool,
-    pub double_fork_outer_parent: NativeTaskSnapshotV1,
-    pub double_fork_intermediate_before_exit: NativeTaskSnapshotV1,
-    pub double_fork_native_child_before_intermediate_exit: NativeTaskSnapshotV1,
-    pub double_fork_native_child_after_intermediate_exit: NativeTaskSnapshotV1,
     pub cgroup_reuse_path: PathBuf,
     pub cgroup_reuse_first_root: NativeTaskSnapshotV1,
     pub cgroup_reuse_second_root: NativeTaskSnapshotV1,
@@ -429,13 +425,10 @@ impl IdentityTestRunner {
         let procs_path = cgroup_path.join("cgroup.procs");
 
         self.materialize_object(output_directory)?;
-        let child_ready_path = output_directory.join("native-child-ready");
         let cgroup_escape_sentinel_path = output_directory.join("cgroup-escape-sentinel");
         let authorization_state_directory = output_directory.join("authorization-replay");
         ensure!(
-            !child_ready_path.exists()
-                && !cgroup_escape_sentinel_path.exists()
-                && !authorization_state_directory.exists(),
+            !cgroup_escape_sentinel_path.exists() && !authorization_state_directory.exists(),
             InvalidInputSnafu {
                 path: output_directory,
                 reason: "identity exec probe files must not already exist",
@@ -802,13 +795,6 @@ impl IdentityTestRunner {
             }
         );
         clone_fixture.stop();
-
-        let reparent_case = scenarios::ReparentCase::new(self, &inspector, &procs_path);
-
-        let double_cleanup = ProbeFile::new(&child_ready_path);
-        let (double_root, double_mid, double_before, double_after) =
-            reparent_case.double_fork(&child_ready_path)?;
-        double_cleanup.cleanup()?;
 
         let mut cgroup_escape_control = CloneIntoCgroupFixture::start_with_root_first_effect(
             &cgroup_path,
@@ -1179,10 +1165,6 @@ impl IdentityTestRunner {
             clone_into_cgroup_first_effect_root,
             clone_into_cgroup_first_effect_child,
             clone_into_cgroup_native_child_first_effect_allowed: true,
-            double_fork_outer_parent: double_root,
-            double_fork_intermediate_before_exit: double_mid,
-            double_fork_native_child_before_intermediate_exit: double_before,
-            double_fork_native_child_after_intermediate_exit: double_after,
             cgroup_reuse_path: cgroup_path.clone(),
             cgroup_reuse_first_root: binding_gap_reconciled_root.clone(),
             cgroup_reuse_second_root,

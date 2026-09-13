@@ -26,7 +26,9 @@ use std::time::Duration;
 
 #[cfg(test)]
 use linux_raw_sys::general::clone_args;
-use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
+#[cfg(test)]
+use rustix::process::{pidfd_open, Pid, PidfdFlags};
+use rustix::process::{pidfd_send_signal, Signal};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
 
 use crate::error::{InvalidInputSnafu, IoSnafu};
@@ -513,6 +515,7 @@ impl ProcessFixture {
         self.set_actor(pid)
     }
 
+    #[cfg(test)]
     pub(crate) fn track(&mut self, id: u32) -> Result<()> {
         if self.tasks.iter().any(|(known, _)| *known == id) {
             return Ok(());
@@ -544,24 +547,7 @@ impl ProcessFixture {
         self.group = Some(path.to_owned());
     }
 
-    pub(crate) fn signal(&self, id: u32, signal: Signal) -> Result<()> {
-        let fd = self
-            .tasks
-            .iter()
-            .find_map(|(known, fd)| (*known == id).then_some(fd))
-            .context(InvalidInputSnafu {
-                path: &self.path,
-                reason: "the process is not tracked",
-            })?;
-        pidfd_send_signal(fd, signal).map_err(|source| {
-            InvalidInputSnafu {
-                path: &self.path,
-                reason: format!("signal tracked process {id}: {source}"),
-            }
-            .build()
-        })
-    }
-
+    #[cfg(test)]
     pub(crate) fn send(&mut self, bytes: &[u8]) -> Result<()> {
         self.stdin
             .as_mut()
@@ -649,47 +635,6 @@ impl ProcessFixture {
                 })
             },
             || format!("last PID value: {:?}", last.borrow()),
-        )
-    }
-
-    pub(crate) fn wait_pair(&mut self, path: &Path, operation: &str) -> Result<[u32; 2]> {
-        let last = RefCell::new(String::from("<absent>"));
-        self.wait_path(
-            path,
-            operation,
-            START_LIMIT,
-            || {
-                let text = match fs::read_to_string(path) {
-                    Ok(text) => text,
-                    Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
-                    Err(source) => return Err(source).context(IoSnafu { path }),
-                };
-                *last.borrow_mut() = text.trim().to_owned();
-                let ids = text
-                    .split_ascii_whitespace()
-                    .map(|value| {
-                        value.parse::<u32>().map_err(|source| {
-                            InvalidInputSnafu {
-                                path,
-                                reason: format!("the actor wrote an invalid PID: {source}"),
-                            }
-                            .build()
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                if ids.len() < 2 {
-                    return Ok(None);
-                }
-                ensure!(
-                    ids.len() == 2 && ids[0] != ids[1],
-                    InvalidInputSnafu {
-                        path,
-                        reason: "the actor must report two distinct PIDs",
-                    }
-                );
-                Ok(Some([ids[0], ids[1]]))
-            },
-            || format!("last PID values: {:?}", last.borrow()),
         )
     }
 
@@ -800,6 +745,7 @@ impl ProcessFixture {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn wait_stop(&mut self, id: u32, operation: &str) -> Result<()> {
         let path = PathBuf::from(format!("/proc/{id}/status"));
         let last = RefCell::new(String::from("State: <absent>"));
@@ -827,6 +773,7 @@ impl ProcessFixture {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn wait_gone(&mut self, id: u32, operation: &str) -> Result<()> {
         let path = PathBuf::from(format!("/proc/{id}/status"));
         let last = RefCell::new(String::from("State: <absent>"));

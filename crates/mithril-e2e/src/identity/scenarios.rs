@@ -18,10 +18,7 @@ mod namespace_init;
 mod non_leader_exec;
 #[cfg(test)]
 mod orphan;
-mod reparent;
 #[cfg(test)]
 mod subreaper;
 #[cfg(test)]
 mod workload_recovery;
-
-pub(super) use reparent::ReparentCase;

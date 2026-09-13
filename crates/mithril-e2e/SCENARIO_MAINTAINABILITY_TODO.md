@@ -862,7 +862,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Remove the matching legacy probe method, result fields, and call site.
   - [x] Restore the baseline identity assertions recorded above and rerun all
     three generated cases.
-- [ ] Double-fork transition: use `double_fork.py` through `ProcessFixture` in
+- [x] Double-fork transition: use `double_fork.py` through `ProcessFixture` in
   one production-backed `#[test]`. The baseline has no double-fork tombstone
   assertion. Do not invent one.
   - [x] Use `start_actor` for the environment PID 1 and `add_actor` for the
@@ -878,7 +878,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the Host generated case.
   - [x] Pass the direct-`runc` generated case.
   - [x] Pass the Kubernetes generated case.
-  - [ ] Remove the matching `ReparentCase::double_fork` block, result fields,
+  - [x] Remove the matching `ReparentCase::double_fork` block, result fields,
     and old actor only after all three generated cases pass.
 - [ ] Leader-first thread exit and reference lifetime: keep the process and
   entry reference counts, tombstones, release action, and reclamation checks.
