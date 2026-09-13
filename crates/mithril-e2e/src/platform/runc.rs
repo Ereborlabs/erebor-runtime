@@ -287,7 +287,9 @@ impl Platform for Runc {
             .arg("/work")
             .args(extra);
         let mut actor = ProcessFixture::start(&mut command, &script)?;
+        let parent = actor.id();
         let pid = actor.wait_pid(&pid_path, "runc exec host PID")?;
+        self.host.move_out(parent)?;
         actor.set_actor(pid)?;
         Ok(actor)
     }

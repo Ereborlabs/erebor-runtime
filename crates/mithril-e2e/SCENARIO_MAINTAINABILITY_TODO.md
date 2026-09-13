@@ -1030,7 +1030,12 @@ test does not close a row when its physical condition or an assertion changed.
     distinct restored external root, zero admitted entry rule, external role,
     and distinct entry instance.
   - [x] Pass the Host case and the complete Host platform set.
-  - [ ] Pass the direct-`runc` case and the complete direct-`runc` platform set.
+  - [x] Pass the direct-`runc` case and the complete direct-`runc` platform set.
+    The first exact run reached Node start and failed because the long-lived
+    `runc exec` client remained in the effect-controller cgroup. Move that
+    client out as the existing container-start path does. The corrected exact
+    case passes. The first complete run had two transient setns start failures.
+    Both exact reruns and the second complete 14-test run pass.
   - [ ] Pass the Kubernetes case.
   - [ ] Remove only the matching four-task count and root assertions from the
     old Rust and shell probes after all three cases pass. Keep task-change
