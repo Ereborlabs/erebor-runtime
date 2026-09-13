@@ -12,7 +12,7 @@ def execute():
     with open(ready, "x", encoding="ascii") as output:
         output.write(f"{threading.get_native_id()}\n")
     release.wait()
-    os.execv("/usr/bin/cat", ["/usr/bin/cat"])
+    os.execv("/usr/bin/sleep", ["/usr/bin/sleep", "5"])
 
 thread = threading.Thread(target=execute)
 thread.start()
