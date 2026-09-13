@@ -882,13 +882,14 @@ test does not close a row when its physical condition or an assertion changed.
     and old actor only after all three generated cases pass.
 - [ ] Leader-first thread exit and reference lifetime: keep the process and
   entry reference counts, tombstones, release action, and reclamation checks.
-  - [x] The small Host generated case uses the shared actor and production
-    runtime admission path.
-  - [x] Pass the direct-`runc` generated case with the same actor and checks.
-  - [x] Pass the Kubernetes generated case with the same actor and checks.
+  - [ ] Use `ready.py` as the environment PID 1 and use `add_actor` for
+    `native_leader_first.py` on all three platforms.
+  - [ ] Restore the runnable worker-coordinate assertion and the exact
+    creator-edge child-cookie assertion from `95775f48`.
+  - [ ] Pass the Host generated case.
+  - [ ] Pass the direct-`runc` generated case.
+  - [ ] Pass the Kubernetes generated case.
   - [x] Remove the matching old probe code and compatibility bundle fields.
-  - [ ] Restore the baseline fidelity gaps recorded above and rerun all three
-    generated cases.
 - [x] Node-first PID reuse: keep one small parameterized Rust test in
   `pid_reuse.rs`, one shared Python actor, one shared result assertion, and
   thin VM and Kubernetes launchers. Use
