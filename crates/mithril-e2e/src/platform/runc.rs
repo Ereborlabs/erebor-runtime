@@ -13,6 +13,7 @@ use crate::physical::ProbeDirectory;
 use crate::process::ProcessFixture;
 
 const ACTOR_ENTRY: &str = "/usr/bin/python3.12";
+const EXTERNAL_ENTRY: &str = "/work/python-external";
 
 pub(crate) struct Runc {
     host: Host,
@@ -67,6 +68,38 @@ impl Runc {
             &mut command,
             &self.runc_path,
         )?)?)
+    }
+
+    fn exec_actor(
+        &mut self,
+        entry: &str,
+        name: &str,
+        extra: &[&str],
+    ) -> TestResult<ProcessFixture> {
+        let id = self
+            .container_id
+            .as_deref()
+            .ok_or("the runc actor is not started")?;
+        let script = ProcessFixture::script(self.host.source(), name)?;
+        let pid_path = self.host.work().join("exec.pid");
+        let mut command = Command::new(&self.runc_path);
+        command
+            .arg("--root")
+            .arg(&self.state_path)
+            .args(["exec", "--cwd", "/work", "--pid-file"])
+            .arg(&pid_path)
+            .arg(id)
+            .arg(entry)
+            .arg(format!("/fixtures/{name}"))
+            .arg("/work")
+            .args(extra);
+        let mut actor = ProcessFixture::start(&mut command, &script)?;
+        let parent = actor.id();
+        let pid = actor.wait_pid(&pid_path, "runc exec host PID")?;
+        fs::remove_file(&pid_path)?;
+        self.host.move_out(parent)?;
+        actor.set_actor(pid)?;
+        Ok(actor)
     }
 
     fn close(&mut self) -> TestResult<()> {
@@ -269,29 +302,11 @@ impl Platform for Runc {
     }
 
     fn add_actor(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
-        let id = self
-            .container_id
-            .as_deref()
-            .ok_or("the runc actor is not started")?;
-        let script = ProcessFixture::script(self.host.source(), name)?;
-        let pid_path = self.host.work().join("exec.pid");
-        let mut command = Command::new(&self.runc_path);
-        command
-            .arg("--root")
-            .arg(&self.state_path)
-            .args(["exec", "--cwd", "/work", "--pid-file"])
-            .arg(&pid_path)
-            .arg(id)
-            .arg(ACTOR_ENTRY)
-            .arg(format!("/fixtures/{name}"))
-            .arg("/work")
-            .args(extra);
-        let mut actor = ProcessFixture::start(&mut command, &script)?;
-        let parent = actor.id();
-        let pid = actor.wait_pid(&pid_path, "runc exec host PID")?;
-        self.host.move_out(parent)?;
-        actor.set_actor(pid)?;
-        Ok(actor)
+        self.exec_actor(ACTOR_ENTRY, name, extra)
+    }
+
+    fn add_external(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
+        self.exec_actor(EXTERNAL_ENTRY, name, extra)
     }
 
     fn place(&mut self, pid: u32) -> TestResult<()> {

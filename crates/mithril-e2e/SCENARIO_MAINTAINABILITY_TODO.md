@@ -767,7 +767,8 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Assert distinct task cookies and process-state IDs. Assert the same
     nonzero external role and a role different from the admitted actor.
   - [x] Pass the Host generated case and the complete Host platform set.
-  - [ ] Pass the direct-`runc` generated case through stock `runc exec`.
+  - [x] Pass the direct-`runc` generated case and the complete direct-`runc`
+    platform set through stock `runc exec`.
   - [ ] Pass the Kubernetes generated case through real `kubectl exec`.
   - [ ] Keep the old restricted-placement block until a separate small test
     reproduces its creator-free `runtime_external_restricted` roots through a
