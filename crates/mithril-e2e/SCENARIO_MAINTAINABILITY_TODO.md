@@ -551,9 +551,10 @@ count as maintainability migrations.
   path, operation name, and caller-supplied last-state diagnostic.
 - [x] Make `ProcessFixture` own spawn readiness, stdin actions, bounded exit
   diagnostics, explicit stop, and idempotent drop cleanup.
-- [ ] After `ProcessFixture` signals a tracked actor, give its command
-  supervisor one bounded interval to reap that actor before forceful cleanup.
-  Prove this with the corrected direct-`runc` non-leader exec case.
+- [ ] Refresh the `ProcessFixture` pidfd when exec promotes a different task
+  into the same numeric PID. After signaling that task, give its command
+  supervisor one bounded interval to reap it before forceful cleanup. Prove
+  this with the corrected direct-`runc` non-leader exec case.
 - [x] Remove `NativeProcessFixture`. Move only generic Linux process mechanics
   to `ProcessFixture`; keep identity assertions and production calls in the
   identity scenario.
