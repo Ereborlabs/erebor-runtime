@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod authorization_tests;
 mod clone3;
+#[cfg(test)]
+mod fixture;
 mod pid_reuse;
 mod scenarios;
 mod tid_reuse;
