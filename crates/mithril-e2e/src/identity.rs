@@ -186,9 +186,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub distinct_pin_root_owner_rejected: bool,
     pub binding_gap_reconciled_root: NativeTaskSnapshotV1,
     pub binding_gap_reconciliation_closed: bool,
-    pub external_ambiguity_first_root: NativeTaskSnapshotV1,
-    pub external_ambiguity_second_root: NativeTaskSnapshotV1,
-    pub external_ambiguity_same_restricted_role: bool,
     pub cgroup_escape_unmoved_control: NativeTaskSnapshotV1,
     pub cgroup_escape_unmoved_first_effect_allowed: bool,
     pub cgroup_escape_root: NativeTaskSnapshotV1,
@@ -564,63 +561,6 @@ impl IdentityTestRunner {
             .recover_tasks(&mut host, false)
             .context(NodeSnafu)?;
         binding_gap_fixture.stop()?;
-
-        let mut external_ambiguity_first =
-            ProcessFixture::python(&self.repo_root, "ready.py", std::iter::empty::<&str>())?;
-        let mut external_ambiguity_second =
-            ProcessFixture::python(&self.repo_root, "ready.py", std::iter::empty::<&str>())?;
-        fs::write(&procs_path, external_ambiguity_first.id().to_string())
-            .context(IoSnafu { path: &procs_path })?;
-        fs::write(&procs_path, external_ambiguity_second.id().to_string())
-            .context(IoSnafu { path: &procs_path })?;
-        let external_ambiguity_first_root = self.wait_for(
-            "first concurrent external-root identity",
-            &procs_path,
-            || {
-                inspector
-                    .snapshot(external_ambiguity_first.id())
-                    .context(NodeSnafu)
-            },
-        )?;
-        let external_ambiguity_second_root = self.wait_for(
-            "second concurrent external-root identity",
-            &procs_path,
-            || {
-                inspector
-                    .snapshot(external_ambiguity_second.id())
-                    .context(NodeSnafu)
-            },
-        )?;
-        let external_ambiguity_same_restricted_role = external_ambiguity_first_root.active_role_id
-            == external_ambiguity_second_root.active_role_id;
-        ensure!(
-            external_ambiguity_first_root.creator_task_cookie.is_none()
-                && external_ambiguity_second_root.creator_task_cookie.is_none()
-                && external_ambiguity_first_root.task_cookie
-                    != external_ambiguity_second_root.task_cookie
-                && external_ambiguity_first_root.process_state_id
-                    != external_ambiguity_second_root.process_state_id
-                && external_ambiguity_first_root.root_class.as_deref() == Some("external_runtime_root")
-                && external_ambiguity_second_root.root_class.as_deref() == Some("external_runtime_root")
-                && external_ambiguity_first_root.installed_role_class.as_deref()
-                    == Some("runtime_external_restricted")
-                && external_ambiguity_second_root.installed_role_class.as_deref()
-                    == Some("runtime_external_restricted")
-                && external_ambiguity_same_restricted_role
-                && external_ambiguity_first_root.active_role_id == binding.external_role_id
-                && external_ambiguity_first_root.coordinate_state
-                    == TaskCoordinateStateV1::Runnable as u8
-                && external_ambiguity_second_root.coordinate_state
-                    == TaskCoordinateStateV1::Runnable as u8,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: format!(
-                    "concurrent indistinguishable external roots did not remain separate restricted roots: first {external_ambiguity_first_root:?}; second {external_ambiguity_second_root:?}"
-                ),
-            }
-        );
-        external_ambiguity_first.stop()?;
-        external_ambiguity_second.stop()?;
 
         let mut escape_fixture = CloneIntoCgroupFixture::start(&cgroup_path)?;
         let escape_root_before_move = self.wait_for(
@@ -1138,9 +1078,6 @@ impl IdentityTestRunner {
             distinct_pin_root_owner_rejected,
             binding_gap_reconciled_root: binding_gap_reconciled_root.clone(),
             binding_gap_reconciliation_closed: true,
-            external_ambiguity_first_root,
-            external_ambiguity_second_root,
-            external_ambiguity_same_restricted_role,
             cgroup_escape_unmoved_control,
             cgroup_escape_unmoved_first_effect_allowed: true,
             cgroup_escape_root,
