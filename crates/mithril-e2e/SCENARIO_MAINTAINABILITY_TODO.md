@@ -724,12 +724,12 @@ test does not close a row when its physical condition or an assertion changed.
 | --- | --- | --- |
 | PID reuse | Accepted | The namespace PID, host PID, task cookie, process state, execution, creator, namespace inode, and start-time checks remain. |
 | TID reuse | Accepted | The namespace TID, host TID, task cookie, process owner, creator edge, namespace inode, start-time, exit, and tombstone checks remain. |
-| Native child exec | Reopened | Use the non-PID1 `add_actor` path for the original external-root condition. Restore the post-exec image-candidate check. |
+| Native child exec | Accepted | The non-PID1 `add_actor` path restores the external-root condition. The post-exec image-candidate check remains. |
 | Non-leader exec | Reopened | Use the non-PID1 `add_actor` path. The current initial-container root does not replace the original external-root transition. |
 | Pre-PONR failure | Reopened | Use `add_actor`. Restore the child root-class and installed-role absence checks before failure and after success. |
 | Post-PONR failure | Reopened | Use `add_actor` and restore the original root classification check. Keep all terminal pending-exec, process, execution, coordinate, and tombstone checks. |
 | Moved-task exec | Reopened | Use `add_actor` and restore the original root classification and installed-role checks. |
-| Leader-first lifetime | Reopened | Use `add_actor`. Restore the runnable worker-coordinate and child-edge checks. |
+| Leader-first lifetime | Accepted | The `add_actor` path, runnable worker coordinate, child edge, reference counts, and reclamation checks remain. |
 | Workload-first recovery | Accepted | The Control, actor, policy, Node order and nonzero recovery-attempt check remain. Keep the larger recovered-entry cases. |
 | Namespace init | Accepted | PID 1 is the correct cross-platform actor. Intermediate and child host-parent fields, root and role absence, runnable state, and post-exec identity changes remain. |
 
@@ -744,7 +744,7 @@ test does not close a row when its physical condition or an assertion changed.
   production health reads, fork action, and mismatch assertions visible.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
   first-effect action, and exact identity assertions visible.
-- [ ] Native child exec: start the admitted environment with `ready.py`, then
+- [x] Native child exec: start the admitted environment with `ready.py`, then
   use `add_actor` for the child-exec program. Keep the fork and exec actions,
   production identity snapshots, and allocation diagnostics visible. Assert
   the external-runtime root and installed role before the fork. Require an
@@ -752,9 +752,9 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Add the small shared actor, result assertions, and generated test.
   - [x] Pass the corrected Host case in the retained privileged VM.
   - [x] Pass the corrected direct-`runc` case with the same actor and checks.
-  - [ ] Pass the corrected Kubernetes case with the same actor and checks.
+  - [x] Pass the corrected Kubernetes case with the same actor and checks.
   - [x] Remove the matching old monolithic case and compatibility fields.
-  - [ ] Restore the baseline fidelity gaps recorded above and rerun all three
+  - [x] Restore the baseline fidelity gaps recorded above and rerun all three
     generated cases.
 - [ ] Non-leader thread exec: replace `ExecCase::non_leader` with one small
   generated test. Use `ProcessFixture` and the shared Python file directly.
