@@ -802,8 +802,9 @@ test does not close a row when its physical condition or an assertion changed.
     then starts the actor with its declared executable and complete argv.
   - [x] Add the direct-`runc` `add_actor` implementation. It uses stock
     `runc exec` with the declared interpreter and complete actor argv.
-  - [ ] Add the Kubernetes `add_actor` implementation. It must run the same
-    actor in the running Pod.
+  - [x] Add the Kubernetes `add_actor` implementation. It mounts and runs the
+    same actor through real `kubectl exec` with the declared interpreter and
+    complete argv.
   - [x] Add the small generated test with the shared actor and explicit result
     assertions.
   - [x] Reproduce the Host failure before the added actor starts. Confirm that
@@ -825,7 +826,11 @@ test does not close a row when its physical condition or an assertion changed.
     Stop container PID 1 before the added actor. PID-namespace teardown then
     removes the orphan without bypassing Mithril's signal policy. An external
     `SIGKILL` remains denied.
-  - [ ] Pass the Kubernetes generated case with the same actor and checks.
+  - [x] Replace the invalid host-parent lookup exposed by Kubernetes. A CRI
+    exec process is not a host child of container PID 1. `ProcessFixture`
+    finds the one added task in the real container cgroup and reports all
+    observed cgroup PIDs on timeout.
+  - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [ ] Remove the matching old monolithic case and compatibility fields.
 - [ ] Subreaper transition: use `native_subreaper.py` through
   `ProcessFixture` in one production-backed `#[test]`. Preserve the

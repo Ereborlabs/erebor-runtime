@@ -62,6 +62,7 @@ pub(crate) struct Kubernetes {
     control_image: String,
     actor_image: String,
     actor_python: String,
+    actor_entry: String,
     system: String,
     namespace: String,
     token: String,
@@ -871,6 +872,8 @@ impl Platform for Kubernetes {
         let actor_image = Self::required("MITHRIL_TEST_ACTOR_IMAGE")?;
         let actor_python = env::var("MITHRIL_TEST_ACTOR_PYTHON")
             .unwrap_or_else(|_| "/usr/local/bin/python3".to_owned());
+        let actor_entry = env::var("MITHRIL_TEST_ACTOR_ENTRY")
+            .unwrap_or_else(|_| "/usr/local/bin/python3.13".to_owned());
         let digest = actor_image
             .rsplit_once("@sha256:")
             .map(|(_, digest)| digest)
@@ -938,6 +941,7 @@ impl Platform for Kubernetes {
             control_image,
             actor_image,
             actor_python,
+            actor_entry,
             system,
             namespace,
             token,
@@ -1023,12 +1027,17 @@ impl Platform for Kubernetes {
             .iter_mut()
             .find(|role| role.name == "worker")
             .ok_or("the PID-reuse policy has no worker role")?;
-        let execution = role
-            .execution
-            .iter_mut()
-            .find(|rule| rule.name == "python")
-            .ok_or("the PID-reuse policy has no Python rule")?;
-        execution.path.clone_from(&self.actor_python);
+        for (name, path) in [
+            ("python", &self.actor_python),
+            ("python-actor", &self.actor_entry),
+        ] {
+            let rule = role
+                .execution
+                .iter_mut()
+                .find(|rule| rule.name == name)
+                .ok_or_else(|| format!("the PID-reuse policy has no {name} rule"))?;
+            rule.path.clone_from(path);
+        }
         let policies =
             Api::<WorkloadProtectionPolicy>::namespaced(self.client.clone(), &self.namespace);
         self.runtime
@@ -1175,13 +1184,47 @@ impl Platform for Kubernetes {
         Ok(actor)
     }
 
+    fn add_actor(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
+        let init = self
+            .actor_pid
+            .ok_or("the Kubernetes actor is not running")?;
+        let group = self
+            .actor_cgroup
+            .as_ref()
+            .ok_or("the Kubernetes actor has no recorded cgroup")?;
+        let script = ProcessFixture::script(&self.root, name)?;
+        let mut command = Command::new(&self.k3s_path);
+        command
+            .arg("kubectl")
+            .arg("--kubeconfig")
+            .arg(&self.kube_path)
+            .args([
+                "-n",
+                &self.namespace,
+                "exec",
+                "-i",
+                ACTOR,
+                "-c",
+                CONTAINER,
+                "--",
+            ])
+            .arg(&self.actor_entry)
+            .arg(format!("/fixtures/{name}"))
+            .arg("/work")
+            .args(extra);
+        let mut actor = ProcessFixture::start(&mut command, &script)?;
+        let pid = actor.wait_group_task(group, init, "Kubernetes exec host PID")?;
+        actor.set_actor(pid)?;
+        Ok(actor)
+    }
+
     fn place(&mut self, pid: u32) -> TestResult<()> {
         let expected = self
             .actor_cgroup
             .as_ref()
             .ok_or("the Kubernetes actor has no recorded cgroup")?;
         let actual = Self::cgroup(pid)?;
-        if self.actor_pid != Some(pid) || &actual != expected {
+        if &actual != expected {
             return Err(format!(
                 "the Kubernetes actor is in {}; expected {}",
                 actual.display(),
@@ -1293,7 +1336,7 @@ impl Platform for Kubernetes {
         name: &str,
     ) -> TestResult<Task> {
         let last = RefCell::new(String::from("<absent>"));
-        let snapshot = actor.wait_path(
+        let snapshot = match actor.wait_path(
             &self.pin_path,
             name,
             READY_LIMIT,
@@ -1314,7 +1357,12 @@ impl Platform for Kubernetes {
                 }))
             },
             || format!("PID {pid}; last identity: {}", last.borrow()),
-        )?;
+        ) {
+            Ok(value) => value,
+            Err(source) => {
+                return Err(format!("{source}; actor stderr: {:?}", actor.stderr()?).into());
+            }
+        };
         self.task_from(pid, snapshot)
     }
 

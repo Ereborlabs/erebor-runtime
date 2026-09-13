@@ -725,6 +725,44 @@ impl ProcessFixture {
     }
 
     #[cfg(test)]
+    pub(crate) fn wait_group_task(
+        &mut self,
+        group: &Path,
+        init: u32,
+        operation: &str,
+    ) -> Result<u32> {
+        let path = group.join("cgroup.procs");
+        let last = RefCell::new(String::from("<absent>"));
+        self.wait_path(
+            &path,
+            operation,
+            START_LIMIT,
+            || {
+                let text = match fs::read_to_string(&path) {
+                    Ok(text) => text,
+                    Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
+                    Err(source) => return Err(source).context(IoSnafu { path: &path }),
+                };
+                *last.borrow_mut() = text.split_ascii_whitespace().collect::<Vec<_>>().join(" ");
+                let mut ids = text
+                    .split_ascii_whitespace()
+                    .filter_map(|value| value.parse::<u32>().ok())
+                    .filter(|pid| *pid != init);
+                let pid = ids.next();
+                Ok((pid.is_some() && ids.next().is_none())
+                    .then_some(pid)
+                    .flatten())
+            },
+            || {
+                format!(
+                    "container init PID {init}; last cgroup PIDs: {:?}",
+                    last.borrow()
+                )
+            },
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn wait_thread(&mut self, ns_tid: u32, operation: &str) -> Result<u32> {
         let pid = self.actor_pid;
         let path = PathBuf::from(format!("/proc/{pid}/task"));
