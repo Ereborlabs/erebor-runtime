@@ -805,6 +805,8 @@ test does not close a row when its physical condition or an assertion changed.
   - [ ] Start `ready.py` as PID 1 and use `add_actor` for the fatal actor.
     Restore the external root and installed role checks before fatal exec.
     Rerun the corrected test on all three platforms.
+  - [ ] Accept a fatal actor signal as a non-success exit status. Do not
+    require a numeric exit code after the actor mirrors the child signal.
   - [ ] Restore the baseline physical condition recorded above and rerun all
     three generated cases.
 - [ ] Moved-task exec: keep the physical cgroup move, denied exec, production
