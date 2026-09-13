@@ -819,6 +819,9 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [x] Remove the matching old monolithic case and compatibility field.
+  - [ ] Start `ready.py` as PID 1 and use `add_actor` for the moved-task
+    actor. Restore its external root and installed role checks, then rerun all
+    three platforms.
   - [ ] Restore the baseline fidelity gaps recorded above and rerun all three
     generated cases.
 - [x] Orphan transition: use `native_orphan.py` through `ProcessFixture` in
