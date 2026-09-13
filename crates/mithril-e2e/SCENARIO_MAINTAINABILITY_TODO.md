@@ -789,7 +789,7 @@ test does not close a row when its physical condition or an assertion changed.
     platforms after this tooling change.
   - [x] Add the 60-line restricted-root scenario and pass its Host case.
   - [x] Pass the direct-`runc` restricted-root case.
-  - [ ] Pass the Kubernetes restricted-root case.
+  - [x] Pass the Kubernetes restricted-root case.
   - [ ] Keep the old restricted-placement block until a separate small test
     reproduces its creator-free `runtime_external_restricted` roots through a
     supported production cgroup-attach operation. The declared runtime-exec
