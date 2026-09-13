@@ -545,6 +545,8 @@ count as maintainability migrations.
   physical setup owners. Keep VM and Kubernetes shell or Python launchers
   limited to provisioning and exact test invocation. Use the same actor file
   in all three placements.
+- [ ] Remove the PID-reuse name from shared Kubernetes actor readiness. Use a
+  scenario-neutral operation name in the common platform owner.
 - [x] Put the existing Control TLS lifecycle owner in one small shared module.
   Reuse it for production Control and Node connections.
 - [x] Keep one synchronous readiness function with an exact timeout, resource
@@ -782,6 +784,9 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the direct-`runc` generated case with the same actor and checks.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [x] Remove the matching old monolithic case and compatibility fields.
+  - [ ] Start `ready.py` as PID 1 and use `add_actor` for the failed-exec
+    actor. Restore the external root and child root and role absence checks.
+    Let the signed sleep action exit in-band, then rerun all three platforms.
   - [ ] Restore the baseline fidelity gaps recorded above and rerun all three
     generated cases.
 - [ ] Post-PONR failure: use fixture-owned process readiness and keep the
