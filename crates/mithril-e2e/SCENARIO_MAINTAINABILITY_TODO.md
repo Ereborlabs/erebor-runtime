@@ -731,7 +731,7 @@ test does not close a row when its physical condition or an assertion changed.
 | TID reuse | Accepted | The namespace TID, host TID, task cookie, process owner, creator edge, namespace inode, start-time, exit, and tombstone checks remain. |
 | Native child exec | Accepted | The non-PID1 `add_actor` path restores the external-root condition. The post-exec image-candidate check remains. |
 | Non-leader exec | Accepted | The non-PID1 `add_actor` path restores the external-runtime root. Exact TID allocation, exec promotion, lineage, role, image, active-state, and in-band exit checks remain. |
-| Pre-PONR failure | Reopened | Use `add_actor`. Restore the child root-class and installed-role absence checks before failure and after success. |
+| Pre-PONR failure | Accepted | The non-PID1 `add_actor` path restores the external root. Child root and role absence, pending-exec rollback, stable failed-exec identity, changed successful execution and image, and active-state checks remain. |
 | Post-PONR failure | Reopened | Use `add_actor` and restore the original root classification check. Keep all terminal pending-exec, process, execution, coordinate, and tombstone checks. |
 | Moved-task exec | Reopened | Use `add_actor` and restore the original root classification and installed-role checks. |
 | Leader-first lifetime | Accepted | The `add_actor` path, runnable worker coordinate, child edge, reference counts, and reclamation checks remain. |
@@ -776,7 +776,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Remove the matching old monolithic case and compatibility fields.
   - [x] Restore the baseline physical condition recorded above and rerun all
     three generated cases.
-- [ ] Pre-PONR failure: use fixture-owned process readiness and keep the
+- [x] Pre-PONR failure: use fixture-owned process readiness and keep the
   pending-exec, rollback, and recovery assertions visible.
   - [x] Add the small generated test with the shared Python actor and result
     assertions.
@@ -789,8 +789,8 @@ test does not close a row when its physical condition or an assertion changed.
     Let the signed sleep action exit in-band.
   - [x] Pass the corrected Host case and the complete Host platform set.
   - [x] Pass the corrected direct-`runc` case and platform set.
-  - [ ] Pass the corrected Kubernetes case.
-  - [ ] Restore the baseline fidelity gaps recorded above and rerun all three
+  - [x] Pass the corrected Kubernetes case.
+  - [x] Restore the baseline fidelity gaps recorded above and rerun all three
     generated cases.
 - [ ] Post-PONR failure: use fixture-owned process readiness and keep the
   fatal-state assertions visible.
