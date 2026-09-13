@@ -326,7 +326,7 @@ These Rust files exceed 2,000 lines:
 | Source | Current lines |
 | --- | ---: |
 | `effect/runc.rs` | 8,343 |
-| `identity.rs` | 7,688 |
+| `identity.rs` | 7,418 |
 | `effect.rs` | 5,118 |
 | `effect/child.rs` | 4,472 |
 | `control_tls.rs` | 2,734 |
@@ -347,11 +347,6 @@ name components:
 - `clone_child_comm_path`
 - `clone_native_child_after_namespace_move`
 - `clone_child_mount_namespace_after`
-- `cgroup_escape_unmoved_control`
-- `cgroup_escape_unmoved_root`
-- `health_before_cgroup_escape`
-- `health_after_cgroup_escape`
-- `health_after_cgroup_escape_effect`
 - `clone_first_effect_fixture`
 - `clone_into_cgroup_first_effect_root`
 - `clone_into_cgroup_first_effect_child_pid`
@@ -804,7 +799,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Remove only the matching old concurrency and role assertions after the
     declared runtime-exec case passes on all three platforms. Remove the
     restricted-placement fields only after its separate replacement passes.
-- [ ] Cgroup escape and moved-parent fork: keep the physical cgroup move,
+- [x] Cgroup escape and moved-parent fork: keep the physical cgroup move,
   production health reads, fork action, and mismatch assertions visible.
   - [x] Preserve the node-first `CLONE_INTO_CGROUP` root. A process that
     executes before a later cgroup attach is a different fail-closed case and
@@ -822,7 +817,7 @@ test does not close a row when its physical condition or an assertion changed.
     focused Host test and keep the reap bounded with PID and state diagnostics.
   - [x] Pass the small Host moved-root first-open denial. Keep the identity,
     fail-closed coordinate, `EACCES`, and both mismatch increases explicit.
-  - [ ] Remove only the matching cgroup-escape block and compatibility fields
+  - [x] Remove only the matching cgroup-escape block and compatibility fields
     from `IdentityTestRunner::physical_probe` after the replacement passes.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
   first-effect action, and exact identity assertions visible.

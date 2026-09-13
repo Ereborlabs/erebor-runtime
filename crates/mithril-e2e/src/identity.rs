@@ -186,11 +186,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub distinct_pin_root_owner_rejected: bool,
     pub binding_gap_reconciled_root: NativeTaskSnapshotV1,
     pub binding_gap_reconciliation_closed: bool,
-    pub cgroup_escape_unmoved_control: NativeTaskSnapshotV1,
-    pub cgroup_escape_unmoved_first_effect_allowed: bool,
-    pub cgroup_escape_root: NativeTaskSnapshotV1,
-    pub cgroup_escape_placement_mismatch_detected: bool,
-    pub cgroup_escape_first_effect_denied: bool,
     pub authorization_retarget_rejected: bool,
     pub authorization_expired_rejected: bool,
     pub authorization_signature_mismatch_rejected: bool,
@@ -674,113 +669,6 @@ impl IdentityTestRunner {
         );
         clone_fixture.stop()?;
 
-        let parent_cgroup = cgroup_path
-            .parent()
-            .ok_or_else(|| invalid_state("identity-test cgroup has no parent"))?;
-        let parent_procs_path = parent_cgroup.join("cgroup.procs");
-        let mut cgroup_escape_control = CloneIntoCgroupFixture::start_with_root_first_effect(
-            &cgroup_path,
-            &cgroup_escape_sentinel_path,
-        )?;
-        let cgroup_escape_unmoved_control = self.wait_for(
-            "cgroup escape unmoved control identity",
-            &procs_path,
-            || {
-                inspector
-                    .snapshot(cgroup_escape_control.root_pid())
-                    .context(NodeSnafu)
-            },
-        )?;
-        ensure!(
-            cgroup_escape_unmoved_control.creator_task_cookie.is_none()
-                && cgroup_escape_unmoved_control.root_class.as_deref()
-                    == Some("external_runtime_root")
-                && cgroup_escape_unmoved_control.installed_role_class.as_deref()
-                    == Some("runtime_external_restricted")
-                && cgroup_escape_unmoved_control.active_role_id == binding.external_role_id
-                && cgroup_escape_unmoved_control.coordinate_state
-                    == TaskCoordinateStateV1::Runnable as u8,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: "the unmoved cgroup-escape control did not have the restricted external identity",
-            }
-        );
-        cgroup_escape_control.release_root()?;
-        self.wait_for("unmoved-root first-effect success", &procs_path, || {
-            cgroup_escape_control.root_first_effect_allowed()
-        })?;
-        cgroup_escape_control.stop()?;
-
-        let mut cgroup_escape_fixture = CloneIntoCgroupFixture::start_with_root_first_effect(
-            &cgroup_path,
-            &cgroup_escape_sentinel_path,
-        )?;
-        let cgroup_escape_unmoved_root = self.wait_for(
-            "cgroup escape root identity before movement",
-            &procs_path,
-            || {
-                inspector
-                    .snapshot(cgroup_escape_fixture.root_pid())
-                    .context(NodeSnafu)
-            },
-        )?;
-        let health_before_cgroup_escape = identity.health(&host).context(NodeSnafu)?;
-        fs::write(
-            &parent_procs_path,
-            cgroup_escape_fixture.root_pid().to_string(),
-        )
-        .context(IoSnafu {
-            path: &parent_procs_path,
-        })?;
-        let cgroup_escape_root = self.wait_for(
-            "cgroup escape fail-closed identity",
-            &parent_procs_path,
-            || {
-                let snapshot = inspector
-                    .snapshot(cgroup_escape_fixture.root_pid())
-                    .context(NodeSnafu)?;
-                Ok(snapshot.filter(|snapshot| {
-                    snapshot.coordinate_state == TaskCoordinateStateV1::FailClosedUnknown as u8
-                }))
-            },
-        )?;
-        let health_after_cgroup_escape = identity.health(&host).context(NodeSnafu)?;
-        ensure!(
-            cgroup_escape_unmoved_root.creator_task_cookie.is_none()
-                && cgroup_escape_unmoved_root.root_class.as_deref()
-                    == Some("external_runtime_root")
-                && cgroup_escape_unmoved_root.installed_role_class.as_deref()
-                    == Some("runtime_external_restricted")
-                && cgroup_escape_unmoved_root.active_role_id == binding.external_role_id
-                && cgroup_escape_unmoved_root.coordinate_state
-                    == TaskCoordinateStateV1::Runnable as u8
-                && cgroup_escape_root.creator_task_cookie.is_none()
-                && cgroup_escape_root.root_class.as_deref() == Some("external_runtime_root")
-                && cgroup_escape_root.installed_role_class.as_deref()
-                    == Some("runtime_external_restricted")
-                && cgroup_escape_root.active_role_id == binding.external_role_id
-                && health_after_cgroup_escape.placement_mismatches
-                    > health_before_cgroup_escape.placement_mismatches,
-            InvalidInputSnafu {
-                path: &parent_procs_path,
-                reason: "moving a labeled root out of its cgroup did not fail closed",
-            }
-        );
-        cgroup_escape_fixture.release_root()?;
-        self.wait_for("moved-root first-effect denial", &parent_procs_path, || {
-            cgroup_escape_fixture.moved_root_first_effect_denied()
-        })?;
-        let health_after_cgroup_escape_effect = identity.health(&host).context(NodeSnafu)?;
-        ensure!(
-            health_after_cgroup_escape_effect.placement_mismatches
-                > health_after_cgroup_escape.placement_mismatches,
-            InvalidInputSnafu {
-                path: &parent_procs_path,
-                reason: "a moved labeled root did not record its denied first effect",
-            }
-        );
-        cgroup_escape_fixture.stop()?;
-
         let mut clone_first_effect_fixture =
             CloneIntoCgroupFixture::start_with_native_child_first_effect(
                 &cgroup_path,
@@ -1020,11 +908,6 @@ impl IdentityTestRunner {
             distinct_pin_root_owner_rejected,
             binding_gap_reconciled_root: binding_gap_reconciled_root.clone(),
             binding_gap_reconciliation_closed: true,
-            cgroup_escape_unmoved_control,
-            cgroup_escape_unmoved_first_effect_allowed: true,
-            cgroup_escape_root,
-            cgroup_escape_placement_mismatch_detected: true,
-            cgroup_escape_first_effect_denied: true,
             authorization_retarget_rejected: true,
             authorization_expired_rejected: true,
             authorization_signature_mismatch_rejected: true,

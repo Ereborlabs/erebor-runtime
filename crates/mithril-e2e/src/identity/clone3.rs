@@ -38,6 +38,7 @@ impl CloneIntoCgroupFixture {
         Self::start_with_namespace_target(cgroup_path, None, None, None)
     }
 
+    #[cfg(test)]
     pub(super) fn start_with_root_first_effect(cgroup_path: &Path, path: &Path) -> Result<Self> {
         Self::start_with_namespace_target(cgroup_path, None, Some(path), None)
     }
@@ -405,6 +406,7 @@ impl CloneIntoCgroupFixture {
         Ok(None)
     }
 
+    #[cfg(test)]
     pub(super) fn moved_root_first_effect_denied(&mut self) -> Result<Option<()>> {
         let mut status = 0;
         // SAFETY: root_pid is this process's child and status is writable.
@@ -434,6 +436,7 @@ impl CloneIntoCgroupFixture {
         Ok(None)
     }
 
+    #[cfg(test)]
     pub(super) fn root_first_effect_allowed(&mut self) -> Result<Option<()>> {
         let mut status = 0;
         // SAFETY: root_pid is this process's child and status is writable.
