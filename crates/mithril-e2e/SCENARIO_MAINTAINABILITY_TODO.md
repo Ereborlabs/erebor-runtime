@@ -800,8 +800,10 @@ test does not close a row when its physical condition or an assertion changed.
   assertions. Remove the actor-only test.
   - [x] Add `Host::add_actor`. It performs the real read-only runtime access,
     then starts the actor with its declared executable and complete argv.
-  - [ ] Add the direct-`runc` and Kubernetes `add_actor` implementations. Each
-    implementation must run the same actor in the running container.
+  - [x] Add the direct-`runc` `add_actor` implementation. It uses stock
+    `runc exec` with the declared interpreter and complete actor argv.
+  - [ ] Add the Kubernetes `add_actor` implementation. It must run the same
+    actor in the running Pod.
   - [x] Add the small generated test with the shared actor and explicit result
     assertions.
   - [x] Reproduce the Host failure before the added actor starts. Confirm that
@@ -816,10 +818,13 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Run the pre-change direct-`runc` entry-role probe. Require incomplete
     declared-entry argv to fail with empty output and exact
     `UNSUPPORTED_OBJECT` execute evidence.
-  - [ ] Rerun that direct-`runc` security probe after the fixture correction.
+  - [x] Rerun that direct-`runc` security probe after the fixture correction.
     Require the external-entry denial to remain unchanged.
   - [x] Pass the Host generated case in the retained privileged VM.
-  - [ ] Pass the direct-`runc` generated case with the same actor and checks.
+  - [x] Pass the direct-`runc` generated case with the same actor and checks.
+    Stop container PID 1 before the added actor. PID-namespace teardown then
+    removes the orphan without bypassing Mithril's signal policy. An external
+    `SIGKILL` remains denied.
   - [ ] Pass the Kubernetes generated case with the same actor and checks.
   - [ ] Remove the matching old monolithic case and compatibility fields.
 - [ ] Subreaper transition: use `native_subreaper.py` through

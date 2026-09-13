@@ -19,6 +19,7 @@ if pid == 0:
         if time.monotonic() >= deadline:
             raise RuntimeError("parent did not exit")
         time.sleep(0.01)
+    os.closerange(0, 3)
     os.execv("/usr/bin/sleep", ["/usr/bin/sleep", "300"])
 
 while not os.path.exists(exit_ready):

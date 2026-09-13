@@ -89,7 +89,7 @@ fn orphan_keeps_identity<P: Platform>() -> TestResult<()> {
     assert!(post.installed_role_class.is_none());
     active(&after);
 
-    actor.stop()?;
     init.stop()?;
+    actor.stop()?;
     env.stop()
 }

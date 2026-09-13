@@ -12,6 +12,8 @@ use super::{Host, Platform, Task, TestResult};
 use crate::physical::ProbeDirectory;
 use crate::process::ProcessFixture;
 
+const ACTOR_ENTRY: &str = "/usr/bin/python3.12";
+
 pub(crate) struct Runc {
     host: Host,
     runc_path: PathBuf,
@@ -263,6 +265,30 @@ impl Platform for Runc {
         self.host.move_out(parent)?;
         actor.set_init(pid)?;
         actor.set_group(self.host.cgroup());
+        Ok(actor)
+    }
+
+    fn add_actor(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
+        let id = self
+            .container_id
+            .as_deref()
+            .ok_or("the runc actor is not started")?;
+        let script = ProcessFixture::script(self.host.source(), name)?;
+        let pid_path = self.host.work().join("exec.pid");
+        let mut command = Command::new(&self.runc_path);
+        command
+            .arg("--root")
+            .arg(&self.state_path)
+            .args(["exec", "--cwd", "/work", "--pid-file"])
+            .arg(&pid_path)
+            .arg(id)
+            .arg(ACTOR_ENTRY)
+            .arg(format!("/fixtures/{name}"))
+            .arg("/work")
+            .args(extra);
+        let mut actor = ProcessFixture::start(&mut command, &script)?;
+        let pid = actor.wait_pid(&pid_path, "runc exec host PID")?;
+        actor.set_actor(pid)?;
         Ok(actor)
     }
 
