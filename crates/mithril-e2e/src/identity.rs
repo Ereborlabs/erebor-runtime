@@ -212,10 +212,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub clone_into_cgroup_first_effect_root: NativeTaskSnapshotV1,
     pub clone_into_cgroup_first_effect_child: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child_first_effect_allowed: bool,
-    pub subreaper_native_parent: NativeTaskSnapshotV1,
-    pub subreaper_intermediate_before_exit: NativeTaskSnapshotV1,
-    pub subreaper_native_child_before_parent_exit: NativeTaskSnapshotV1,
-    pub subreaper_native_child_after_parent_exit: NativeTaskSnapshotV1,
     pub double_fork_outer_parent: NativeTaskSnapshotV1,
     pub double_fork_intermediate_before_exit: NativeTaskSnapshotV1,
     pub double_fork_native_child_before_intermediate_exit: NativeTaskSnapshotV1,
@@ -809,11 +805,6 @@ impl IdentityTestRunner {
 
         let reparent_case = scenarios::ReparentCase::new(self, &inspector, &procs_path);
 
-        let sub_cleanup = ProbeFile::new(&child_ready_path);
-        let (sub_root, sub_mid, sub_before, sub_after) =
-            reparent_case.subreaper(&child_ready_path)?;
-        sub_cleanup.cleanup()?;
-
         let double_cleanup = ProbeFile::new(&child_ready_path);
         let (double_root, double_mid, double_before, double_after) =
             reparent_case.double_fork(&child_ready_path)?;
@@ -1188,10 +1179,6 @@ impl IdentityTestRunner {
             clone_into_cgroup_first_effect_root,
             clone_into_cgroup_first_effect_child,
             clone_into_cgroup_native_child_first_effect_allowed: true,
-            subreaper_native_parent: sub_root,
-            subreaper_intermediate_before_exit: sub_mid,
-            subreaper_native_child_before_parent_exit: sub_before,
-            subreaper_native_child_after_parent_exit: sub_after,
             double_fork_outer_parent: double_root,
             double_fork_intermediate_before_exit: double_mid,
             double_fork_native_child_before_intermediate_exit: double_before,

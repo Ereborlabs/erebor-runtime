@@ -832,7 +832,7 @@ test does not close a row when its physical condition or an assertion changed.
     observed cgroup PIDs on timeout.
   - [x] Pass the Kubernetes generated case with the same actor and checks.
   - [x] Remove the matching old monolithic case and compatibility fields.
-- [ ] Subreaper transition: use `subreaper.py` through
+- [x] Subreaper transition: use `subreaper.py` through
   `ProcessFixture` in one production-backed `#[test]`. Preserve the
   intermediate-parent, adopted-child, role, and execution assertions. Remove
   the actor-only test.
@@ -845,7 +845,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the Host generated case.
   - [x] Pass the direct-`runc` generated case.
   - [x] Pass the Kubernetes generated case.
-  - [ ] Remove the matching `ReparentCase::subreaper` block and compatibility
+  - [x] Remove the matching `ReparentCase::subreaper` block and compatibility
     fields only after all three generated cases pass.
 - [x] Namespace-init transition: use `native_namespace_init.py` through
   `ProcessFixture` in one production-backed `#[test]`. Preserve the namespace
