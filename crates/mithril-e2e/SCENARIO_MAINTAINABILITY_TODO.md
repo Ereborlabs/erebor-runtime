@@ -326,7 +326,7 @@ These Rust files exceed 2,000 lines:
 | Source | Current lines |
 | --- | ---: |
 | `effect/runc.rs` | 8,343 |
-| `identity.rs` | 7,418 |
+| `identity.rs` | 7,330 |
 | `effect.rs` | 5,118 |
 | `effect/child.rs` | 4,472 |
 | `control_tls.rs` | 2,734 |
@@ -347,10 +347,6 @@ name components:
 - `clone_child_comm_path`
 - `clone_native_child_after_namespace_move`
 - `clone_child_mount_namespace_after`
-- `clone_first_effect_fixture`
-- `clone_into_cgroup_first_effect_root`
-- `clone_into_cgroup_first_effect_child_pid`
-- `clone_into_cgroup_first_effect_child`
 - `profile_task_refs_after_exit`
 - `cgroup_reuse_first_root_id`
 - `cgroup_reuse_first_binding`
@@ -823,7 +819,7 @@ test does not close a row when its physical condition or an assertion changed.
   first-effect action, and exact identity assertions visible.
   - [x] Pass the small Host native-child first-open test. Keep root and child
     identity, lineage, active state, and the physical allowed open explicit.
-  - [ ] Remove only the matching native-child first-effect block and fields
+  - [x] Remove only the matching native-child first-effect block and fields
     from `IdentityTestRunner::physical_probe` after the replacement passes.
 - [x] Native child exec: start the admitted environment with `ready.py`, then
   use `add_actor` for the child-exec program. Keep the fork and exec actions,

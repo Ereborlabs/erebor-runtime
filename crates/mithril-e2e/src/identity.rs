@@ -200,9 +200,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub clone_into_cgroup_external_root: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child_after_namespace_move: NativeTaskSnapshotV1,
-    pub clone_into_cgroup_first_effect_root: NativeTaskSnapshotV1,
-    pub clone_into_cgroup_first_effect_child: NativeTaskSnapshotV1,
-    pub clone_into_cgroup_native_child_first_effect_allowed: bool,
     pub cgroup_reuse_path: PathBuf,
     pub cgroup_reuse_first_root: NativeTaskSnapshotV1,
     pub cgroup_reuse_second_root: NativeTaskSnapshotV1,
@@ -416,24 +413,15 @@ impl IdentityTestRunner {
         let procs_path = cgroup_path.join("cgroup.procs");
 
         self.materialize_object(output_directory)?;
-        let cgroup_escape_sentinel_path = output_directory.join("cgroup-escape-sentinel");
         let authorization_state_directory = output_directory.join("authorization-replay");
         ensure!(
-            !cgroup_escape_sentinel_path.exists() && !authorization_state_directory.exists(),
+            !authorization_state_directory.exists(),
             InvalidInputSnafu {
                 path: output_directory,
-                reason: "identity exec probe files must not already exist",
+                reason: "authorization replay state must not already exist",
             }
         );
-        let cgroup_escape_sentinel_cleanup = ProbeFile::new(&cgroup_escape_sentinel_path);
         let authorization_state_cleanup = ProbeDirectory::new(&authorization_state_directory);
-        fs::write(
-            &cgroup_escape_sentinel_path,
-            b"identity cgroup escape sentinel\n",
-        )
-        .context(IoSnafu {
-            path: &cgroup_escape_sentinel_path,
-        })?;
         let object_sha256 = bundled_bpf_sha256();
         let (boot_id, node_boot_id) = boot_identity()?;
         let (authorization_replay_wal_sha256, authorization_replay_wal_records) =
@@ -669,79 +657,6 @@ impl IdentityTestRunner {
         );
         clone_fixture.stop()?;
 
-        let mut clone_first_effect_fixture =
-            CloneIntoCgroupFixture::start_with_native_child_first_effect(
-                &cgroup_path,
-                &cgroup_escape_sentinel_path,
-            )?;
-        let clone_into_cgroup_first_effect_root = self.wait_for(
-            "CLONE_INTO_CGROUP first-effect root identity",
-            &procs_path,
-            || {
-                inspector
-                    .snapshot(clone_first_effect_fixture.root_pid())
-                    .context(NodeSnafu)
-            },
-        )?;
-        clone_first_effect_fixture.release_root()?;
-        let clone_into_cgroup_first_effect_child_pid = self.wait_for(
-            "CLONE_INTO_CGROUP first-effect native child",
-            &procs_path,
-            || clone_first_effect_fixture.child_pid(),
-        )?;
-        let clone_into_cgroup_first_effect_child = self.wait_for(
-            "CLONE_INTO_CGROUP first-effect native child identity",
-            &procs_path,
-            || {
-                inspector
-                    .snapshot(clone_into_cgroup_first_effect_child_pid)
-                    .context(NodeSnafu)
-            },
-        )?;
-        ensure!(
-            clone_into_cgroup_first_effect_root
-                .creator_task_cookie
-                .is_none()
-                && clone_into_cgroup_first_effect_root.root_class.as_deref()
-                    == Some("external_runtime_root")
-                && clone_into_cgroup_first_effect_root
-                    .installed_role_class
-                    .as_deref()
-                    == Some("runtime_external_restricted")
-                && clone_into_cgroup_first_effect_root.active_role_id == binding.external_role_id
-                && clone_into_cgroup_first_effect_root.coordinate_state
-                    == TaskCoordinateStateV1::Runnable as u8
-                && clone_into_cgroup_first_effect_child.creator_task_cookie
-                    == Some(clone_into_cgroup_first_effect_root.task_cookie)
-                && clone_into_cgroup_first_effect_child.real_parent_task_cookie
-                    == clone_into_cgroup_first_effect_root.task_cookie
-                && clone_into_cgroup_first_effect_child.root_class.is_none()
-                && clone_into_cgroup_first_effect_child
-                    .installed_role_class
-                    .is_none()
-                && clone_into_cgroup_first_effect_child.active_role_id
-                    == clone_into_cgroup_first_effect_root.active_role_id
-                && clone_into_cgroup_first_effect_child.coordinate_state
-                    == TaskCoordinateStateV1::Runnable as u8
-                && clone_into_cgroup_first_effect_child.process_execution_state
-                    == ProcessExecutionStateV1::Active as u8
-                && clone_into_cgroup_first_effect_child.process_state_vector_state
-                    == ProcessStateVectorStateV1::Active as u8,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason:
-                    "CLONE_INTO_CGROUP first-effect root or native child has the wrong identity",
-            }
-        );
-        clone_first_effect_fixture.release_child_first_effect()?;
-        self.wait_for(
-            "CLONE_INTO_CGROUP native-child first-effect success",
-            &procs_path,
-            || clone_first_effect_fixture.native_child_first_effect_allowed(),
-        )?;
-        clone_first_effect_fixture.stop()?;
-        cgroup_escape_sentinel_cleanup.cleanup()?;
-
         let profile_task_refs_after_exit =
             self.wait_for("profile reference release", &procs_path, || {
                 let refs = profile_task_refs(&host)?;
@@ -923,9 +838,6 @@ impl IdentityTestRunner {
             clone_into_cgroup_native_child: clone_native_child,
             clone_into_cgroup_native_child_after_namespace_move:
                 clone_native_child_after_namespace_move,
-            clone_into_cgroup_first_effect_root,
-            clone_into_cgroup_first_effect_child,
-            clone_into_cgroup_native_child_first_effect_allowed: true,
             cgroup_reuse_path: cgroup_path.clone(),
             cgroup_reuse_first_root: binding_gap_reconciled_root.clone(),
             cgroup_reuse_second_root,

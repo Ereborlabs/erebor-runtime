@@ -42,6 +42,7 @@ impl CloneIntoCgroupFixture {
         Self::start_with_namespace_target(cgroup_path, None, Some(path), None)
     }
 
+    #[cfg(test)]
     pub(super) fn start_with_native_child_first_effect(
         cgroup_path: &Path,
         path: &Path,
@@ -305,6 +306,7 @@ impl CloneIntoCgroupFixture {
         self.release_child()
     }
 
+    #[cfg(test)]
     pub(super) fn release_child_first_effect(&self) -> Result<()> {
         self.release_child()
     }
@@ -325,6 +327,7 @@ impl CloneIntoCgroupFixture {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn native_child_first_effect_allowed(&self) -> Result<Option<()>> {
         match self.root_state() {
             0..=4 => Ok(None),
