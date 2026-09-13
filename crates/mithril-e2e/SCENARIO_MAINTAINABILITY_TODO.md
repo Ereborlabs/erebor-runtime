@@ -756,13 +756,14 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Remove the matching old monolithic case and compatibility fields.
   - [x] Restore the baseline fidelity gaps recorded above and rerun all three
     generated cases.
-- [ ] Non-leader thread exec: replace `ExecCase::non_leader` with one small
-  generated test. Use `ProcessFixture` and the shared Python file directly.
-  Keep exact TID allocation and post-exec assertions visible.
+- [ ] Non-leader thread exec: start the admitted environment with `ready.py`,
+  then use `add_actor` for the thread program. Assert its external-runtime
+  root and nonzero installed role. Keep exact TID allocation, thread identity,
+  exec promotion, lineage, role, image, and active-state assertions visible.
   - [x] Add the small generated test and use the shared actor and assertions.
-  - [x] Pass the Host generated case in the retained privileged VM.
-  - [x] Pass the direct-`runc` generated case with the same actor and checks.
-  - [x] Pass the Kubernetes generated case with the same actor and checks.
+  - [ ] Pass the corrected Host case in the retained privileged VM.
+  - [ ] Pass the corrected direct-`runc` case with the same actor and checks.
+  - [ ] Pass the corrected Kubernetes case with the same actor and checks.
   - [x] Remove the matching old monolithic case and compatibility fields.
   - [ ] Restore the baseline physical condition recorded above and rerun all
     three generated cases.
