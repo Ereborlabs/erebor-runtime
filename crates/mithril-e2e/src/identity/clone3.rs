@@ -30,6 +30,7 @@ pub(super) struct CloneIntoCgroupFixture {
 }
 
 impl CloneIntoCgroupFixture {
+    #[cfg(test)]
     pub(super) fn start(cgroup_path: &Path) -> Result<Self> {
         Self::start_with_namespace_target(cgroup_path, None, None, None)
     }
@@ -354,6 +355,7 @@ impl CloneIntoCgroupFixture {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn moved_parent_fork_denied(&mut self) -> Result<Option<()>> {
         let mut status = 0;
         // SAFETY: root_pid is this process's child and status is writable.

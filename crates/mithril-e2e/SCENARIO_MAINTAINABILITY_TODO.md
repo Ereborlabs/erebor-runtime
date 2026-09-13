@@ -812,6 +812,8 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the small Host moved-parent fork test. Use the existing native
     clone fixture so `clone3(CLONE_INTO_CGROUP)` completes before the root's
     first effect.
+  - [x] Remove only the matching moved-parent block and compatibility field
+    from `IdentityTestRunner::physical_probe`.
   - [ ] Keep an unmoved first-effect control. Require it to succeed before the
     moved-root denial can qualify the replacement.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
