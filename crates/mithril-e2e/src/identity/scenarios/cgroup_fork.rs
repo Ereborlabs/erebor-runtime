@@ -7,7 +7,7 @@ use rustix::io::Errno;
 use crate::platform::{platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 fn moved_parent_fork_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("cgroup-fork")?;
     env.start_control()?;

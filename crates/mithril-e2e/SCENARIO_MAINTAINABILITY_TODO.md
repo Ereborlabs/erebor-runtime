@@ -804,7 +804,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the small Host moved-parent fork case. The actor starts after
     Node and policy readiness, enters the protected cgroup, moves out, and
     receives the real fork denial.
-  - [ ] Pass the same case on direct `runc`.
+  - [x] Pass the same case on direct `runc`.
   - [ ] Pass the same case on Kubernetes.
   - [ ] Remove the matching monolithic fork block only after all three cases
     pass. Keep the separate `CLONE_INTO_CGROUP` coverage until its own small
