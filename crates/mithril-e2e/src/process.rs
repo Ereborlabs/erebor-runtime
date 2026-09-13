@@ -559,6 +559,11 @@ impl ProcessFixture {
             .context(IoSnafu { path: &self.path })
     }
 
+    #[cfg(test)]
+    pub(crate) fn owns_status(&self) -> bool {
+        self.child.is_some() || self.raw_pid.is_some()
+    }
+
     pub(crate) fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
         if let Some(child) = self.child.as_mut() {
             return child

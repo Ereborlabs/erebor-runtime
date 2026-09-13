@@ -825,11 +825,11 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the corrected Host case and the complete Host platform set.
   - [x] Pass the corrected direct-`runc` case and platform set.
   - [ ] Pass the corrected Kubernetes case.
-  - [ ] Remove the Kubernetes `MITHRIL_TEST_CGROUP` dependency. The corrected
+  - [x] Remove the Kubernetes `MITHRIL_TEST_CGROUP` dependency. The corrected
     physical case reached `move_task` and failed because the launcher did not
     supply a Host-only path. Derive a unique move cgroup from the test token,
     own it with `ProbeCgroup`, and keep its cleanup in the platform.
-  - [ ] Use `ProcessFixture` exit status for a Kubernetes `add_actor` process.
+  - [x] Use `ProcessFixture` exit status for a Kubernetes `add_actor` process.
     The cgroup correction reached the denied exec, but `actor_code` waited for
     PID 1 to exit. Keep Pod termination observation only for an external PID 1.
   - [ ] Restore the baseline fidelity gaps recorded above and rerun all three

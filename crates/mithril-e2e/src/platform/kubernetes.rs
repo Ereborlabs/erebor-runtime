@@ -1290,10 +1290,7 @@ impl Platform for Kubernetes {
     }
 
     fn move_task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
-        let path = Self::path("MITHRIL_TEST_CGROUP", "")?;
-        if path.as_os_str().is_empty() {
-            return Err("MITHRIL_TEST_CGROUP is not set".into());
-        }
+        let path = PathBuf::from(format!("/sys/fs/cgroup/mithril-move-{}", self.token));
         let group = ProbeCgroup::create(&path)?;
         group.move_in(pid)?;
         self.move_group = Some(group);
@@ -1401,10 +1398,16 @@ impl Platform for Kubernetes {
 
     fn actor_code(
         &mut self,
-        _actor: &mut ProcessFixture,
+        actor: &mut ProcessFixture,
         operation: &str,
         limit: Duration,
     ) -> TestResult<i32> {
+        if actor.owns_status() {
+            return actor
+                .wait_exit(operation, limit)?
+                .code()
+                .ok_or_else(|| "the actor exited without an exit code".into());
+        }
         let pods = Api::<Pod>::namespaced(self.client.clone(), &self.namespace);
         let path = Self::resource(&self.namespace, "pod", ACTOR);
         let last = RefCell::new(String::from("<absent>"));
