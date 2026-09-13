@@ -818,6 +818,8 @@ test does not close a row when its physical condition or an assertion changed.
     clone fixture and restricted external identity assertions.
   - [x] Keep an unmoved first-effect control. Require it to succeed before the
     moved-root denial can qualify the replacement.
+  - [x] Restore a live moved root to its owned cgroup before cleanup. Pass a
+    focused Host test and keep the reap bounded with PID and state diagnostics.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
   first-effect action, and exact identity assertions visible.
 - [x] Native child exec: start the admitted environment with `ready.py`, then

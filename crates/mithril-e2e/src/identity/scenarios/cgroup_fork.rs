@@ -42,7 +42,31 @@ fn unmoved_first_open_allowed<P: Platform>() -> TestResult<()> {
         || format!("clone root PID {pid} is still running"),
     )?;
 
-    actor.stop();
+    actor.stop()?;
+    init.stop()?;
+    env.stop()
+}
+
+#[platform_test(host)]
+fn moved_root_stops<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("cgroup-stop")?;
+    env.start_control()?;
+    env.start_node()?;
+    env.install_policy()?;
+    env.node_ready()?;
+    let mut init = env.start_actor("ready.py", &[])?;
+    let group = env.actor_group()?.to_owned();
+    let mut actor = CloneIntoCgroupFixture::start(&group)?;
+    let pid = actor.root_pid();
+
+    let moved = env.move_task(pid, "moved root cleanup")?;
+    assert_eq!(
+        moved.coordinate.state,
+        TaskCoordinateStateV1::FailClosedUnknown
+    );
+    actor.stop()?;
+    assert!(!Path::new(&format!("/proc/{pid}")).exists());
+
     init.stop()?;
     env.stop()
 }
@@ -97,7 +121,7 @@ fn moved_parent_fork_denied<P: Platform>() -> TestResult<()> {
     )?;
     assert!(env.health()?.placement_mismatches > changed.placement_mismatches);
 
-    actor.stop();
+    actor.stop()?;
     init.stop()?;
     env.stop()
 }

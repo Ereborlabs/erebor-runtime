@@ -1,7 +1,8 @@
 #![allow(unsafe_code)]
 
+use std::cell::RefCell;
 use std::ffi::CString;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{ErrorKind, Read as _, Write as _};
 use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::os::unix::ffi::OsStrExt as _;
@@ -17,9 +18,11 @@ use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
 use snafu::{ensure, ResultExt as _};
 
 use crate::error::{InvalidInputSnafu, IoSnafu};
+use crate::physical::wait_for;
 use crate::Result;
 
 pub(super) struct CloneIntoCgroupFixture {
+    cgroup_path: PathBuf,
     root_pid: u32,
     root_pidfd: OwnedFd,
     root_gate: Option<MmapMut>,
@@ -148,6 +151,7 @@ impl CloneIntoCgroupFixture {
             }
         };
         let mut fixture = Self {
+            cgroup_path: cgroup_path.to_owned(),
             root_pid,
             root_pidfd,
             root_gate: Some(root_gate),
@@ -459,22 +463,90 @@ impl CloneIntoCgroupFixture {
         Ok(None)
     }
 
-    pub(super) fn stop(&mut self) {
-        if let Some(pidfd) = &self.child_pidfd {
-            let _result = pidfd_send_signal(pidfd, Signal::KILL);
-        }
-        let _result = pidfd_send_signal(&self.root_pidfd, Signal::KILL);
-        let mut status = 0;
-        unsafe {
-            libc::waitpid(self.root_pid as libc::pid_t, &raw mut status, 0);
-        }
+    pub(super) fn stop(&mut self) -> Result<()> {
+        let child = self.stop_child();
+        let root = self.stop_root();
         stop_namespace_target(&mut self.namespace_target);
+        child?;
+        root
+    }
+
+    fn restore_root(&self) -> Result<()> {
+        let process = PathBuf::from(format!("/proc/{}", self.root_pid));
+        if !process.exists() {
+            return Ok(());
+        }
+        let path = self.cgroup_path.join("cgroup.procs");
+        match fs::write(&path, self.root_pid.to_string()) {
+            Ok(()) => Ok(()),
+            Err(source) if source.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+            Err(source) => Err(source).context(IoSnafu { path }),
+        }
+    }
+
+    fn stop_child(&self) -> Result<()> {
+        let Some(pidfd) = &self.child_pidfd else {
+            return Ok(());
+        };
+        match pidfd_send_signal(pidfd, Signal::KILL) {
+            Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+            Err(source) => Err(invalid_state(format!(
+                "kill clone child through pidfd {}: {source}",
+                pidfd.as_raw_fd()
+            ))),
+        }
+    }
+
+    fn stop_root(&self) -> Result<()> {
+        match pidfd_send_signal(&self.root_pidfd, Signal::KILL) {
+            Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+            Err(rustix::io::Errno::PERM | rustix::io::Errno::ACCESS) => {
+                self.restore_root()?;
+                let path = self.cgroup_path.join("cgroup.kill");
+                fs::write(&path, "1").context(IoSnafu { path: &path })?;
+            }
+            Err(source) => {
+                return Err(invalid_state(format!(
+                    "kill clone root PID {}: {source}",
+                    self.root_pid
+                )));
+            }
+        }
+        let pid = self.root_pid;
+        let path = PathBuf::from(format!("/proc/{pid}"));
+        let last = RefCell::new(String::from("running"));
+        wait_for(
+            &path,
+            "clone root cleanup",
+            Duration::from_secs(5),
+            || {
+                let mut status = 0;
+                let result =
+                    unsafe { libc::waitpid(pid as libc::pid_t, &raw mut status, libc::WNOHANG) };
+                if result == pid as libc::pid_t {
+                    *last.borrow_mut() = format!("wait status {status}");
+                    return Ok(Some(()));
+                }
+                if result == 0 {
+                    return Ok(None);
+                }
+                let source = std::io::Error::last_os_error();
+                if source.raw_os_error() == Some(libc::ECHILD) {
+                    *last.borrow_mut() = String::from("already reaped");
+                    return Ok(Some(()));
+                }
+                Err(invalid_state(format!(
+                    "wait for clone root PID {pid}: {source}"
+                )))
+            },
+            || format!("PID {pid}; last state: {}", last.borrow()),
+        )
     }
 }
 
 impl Drop for CloneIntoCgroupFixture {
     fn drop(&mut self) {
-        self.stop();
+        let _result = self.stop();
     }
 }
 
@@ -574,6 +646,9 @@ fn run_child(
     native_child_first_effect_path: Option<&Path>,
     native_child_effect_status_fd: Option<i32>,
 ) -> ! {
+    if !close_inherited_fds(namespace_target_fd, native_child_effect_status_fd) {
+        unsafe { libc::_exit(124) }
+    }
     let root_gate = unsafe { &*root_gate };
     root_gate.store(1, Ordering::Release);
     while root_gate.load(Ordering::Acquire) != 2 {
@@ -638,6 +713,23 @@ fn run_child(
     }
 }
 
+fn close_inherited_fds(first: Option<i32>, second: Option<i32>) -> bool {
+    let mut keep = [first.unwrap_or(-1), second.unwrap_or(-1)];
+    keep.sort_unstable();
+    let mut low = 3_u32;
+    for raw in keep {
+        if raw < 3 {
+            continue;
+        }
+        let fd = raw as u32;
+        if low < fd && unsafe { libc::syscall(libc::SYS_close_range, low, fd - 1, 0) } < 0 {
+            return false;
+        }
+        low = fd.saturating_add(1);
+    }
+    unsafe { libc::syscall(libc::SYS_close_range, low, u32::MAX, 0) == 0 }
+}
+
 fn direct_open_exit(path: &Path) -> ! {
     let path =
         CString::new(path.as_os_str().as_bytes()).unwrap_or_else(|_| unsafe { libc::_exit(126) });
@@ -697,6 +789,7 @@ mod tests {
         let root_pid = u32::try_from(raw_pid)
             .map_err(|error| invalid_state(format!("fixture status PID: {error}")))?;
         let mut fixture = CloneIntoCgroupFixture {
+            cgroup_path: std::path::PathBuf::from("/sys/fs/cgroup"),
             root_pid,
             root_pidfd: open_pidfd(root_pid)?,
             root_gate: None,

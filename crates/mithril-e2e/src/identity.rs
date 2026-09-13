@@ -672,7 +672,7 @@ impl IdentityTestRunner {
                 reason: "native child did not enter the target mount namespace",
             }
         );
-        clone_fixture.stop();
+        clone_fixture.stop()?;
 
         let parent_cgroup = cgroup_path
             .parent()
@@ -709,7 +709,7 @@ impl IdentityTestRunner {
         self.wait_for("unmoved-root first-effect success", &procs_path, || {
             cgroup_escape_control.root_first_effect_allowed()
         })?;
-        cgroup_escape_control.stop();
+        cgroup_escape_control.stop()?;
 
         let mut cgroup_escape_fixture = CloneIntoCgroupFixture::start_with_root_first_effect(
             &cgroup_path,
@@ -779,7 +779,7 @@ impl IdentityTestRunner {
                 reason: "a moved labeled root did not record its denied first effect",
             }
         );
-        cgroup_escape_fixture.stop();
+        cgroup_escape_fixture.stop()?;
 
         let mut clone_first_effect_fixture =
             CloneIntoCgroupFixture::start_with_native_child_first_effect(
@@ -851,7 +851,7 @@ impl IdentityTestRunner {
             &procs_path,
             || clone_first_effect_fixture.native_child_first_effect_allowed(),
         )?;
-        clone_first_effect_fixture.stop();
+        clone_first_effect_fixture.stop()?;
         cgroup_escape_sentinel_cleanup.cleanup()?;
 
         let profile_task_refs_after_exit =
