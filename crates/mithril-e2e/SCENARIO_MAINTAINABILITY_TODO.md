@@ -805,7 +805,7 @@ test does not close a row when its physical condition or an assertion changed.
     Node and policy readiness, enters the protected cgroup, moves out, and
     receives the real fork denial.
   - [x] Pass the same case on direct `runc`.
-  - [ ] Pass the same case on Kubernetes.
+  - [x] Pass the same case on Kubernetes.
   - [ ] Remove the matching monolithic fork block only after all three cases
     pass. Keep the separate `CLONE_INTO_CGROUP` coverage until its own small
     replacement passes.
