@@ -862,9 +862,24 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Remove the matching legacy probe method, result fields, and call site.
   - [x] Restore the baseline identity assertions recorded above and rerun all
     three generated cases.
-- [ ] Double-fork transition: use `native_double_fork.py` through
-  `ProcessFixture` in one production-backed `#[test]`. Preserve the parent,
-  role, execution, and tombstone assertions. Remove the actor-only test.
+- [ ] Double-fork transition: use `double_fork.py` through `ProcessFixture` in
+  one production-backed `#[test]`. The baseline has no double-fork tombstone
+  assertion. Do not invent one.
+  - [ ] Use `start_actor` for the environment PID 1 and `add_actor` for the
+    double-fork process on Host, direct `runc`, and Kubernetes.
+  - [ ] Replace external `SIGTERM` and `SIGCONT` control with visible fork,
+    middle-exit, and child-exec barriers in the shared work directory.
+  - [ ] Keep the generated test below 100 lines.
+  - [ ] Before adoption, assert the root class and role, both creator and real
+    parent cookies, both host parent IDs, inherited role, and active state.
+  - [ ] After adoption and exec, assert the stable task and creator cookies,
+    changed real parent, increased parent interval, changed execution ID,
+    inherited role, absent child root classes, and active state.
+  - [ ] Pass the Host generated case.
+  - [ ] Pass the direct-`runc` generated case.
+  - [ ] Pass the Kubernetes generated case.
+  - [ ] Remove the matching `ReparentCase::double_fork` block, result fields,
+    and old actor only after all three generated cases pass.
 - [ ] Leader-first thread exit and reference lifetime: keep the process and
   entry reference counts, tombstones, release action, and reclamation checks.
   - [x] The small Host generated case uses the shared actor and production
