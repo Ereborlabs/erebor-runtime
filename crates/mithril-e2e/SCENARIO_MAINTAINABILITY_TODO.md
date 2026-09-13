@@ -576,14 +576,16 @@ count as maintainability migrations.
 - [ ] Move the remaining direct-runtime exec children to the shared process
   owner through `Platform::add_actor` as each entry-role behavior moves to its
   scenario owner. Keep `Platform::start_actor` for the container PID 1.
+- [x] Make Host `add_actor` call `clone3(CLONE_INTO_CGROUP)` before exec. All
+  17 Host platform tests pass with this process-birth path.
 - [ ] Replace every embedded native process script with an actual Python file
   in `fixtures/process`.
 - [ ] Execute the same Python process file from production-backed host,
   direct-`runc`, and Kubernetes tests when the behavior applies. Do not count
   an actor-only test as coverage.
-- [x] Expose the owned actor cgroup path for a Python actor that performs
-  `clone3(CLONE_INTO_CGROUP)`. Do not add a scenario-specific actor start
-  method or hide the clone action in a platform implementation.
+- [x] Expose the owned actor cgroup path for the Host clone scenario. Do not
+  add a scenario-specific actor start method or hide the clone action in a
+  platform implementation.
 - [x] Build the standard Rust libtest executable and copy it into each fresh
   single-node VM. Scenario migrations must invoke each privileged test by its
   exact test name.
@@ -804,9 +806,12 @@ test does not close a row when its physical condition or an assertion changed.
     restricted-placement fields only after its separate replacement passes.
 - [ ] Cgroup escape and moved-parent fork: keep the physical cgroup move,
   production health reads, fork action, and mismatch assertions visible.
-  - [ ] Preserve the node-first `CLONE_INTO_CGROUP` root. A process that
+  - [x] Preserve the node-first `CLONE_INTO_CGROUP` root. A process that
     executes before a later cgroup attach is a different fail-closed case and
     cannot replace this test.
+  - [x] Pass the small Host moved-parent fork test. Use the existing native
+    clone fixture so `clone3(CLONE_INTO_CGROUP)` completes before the root's
+    first effect.
   - [ ] Keep an unmoved first-effect control. Require it to succeed before the
     moved-root denial can qualify the replacement.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
