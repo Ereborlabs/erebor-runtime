@@ -798,15 +798,17 @@ test does not close a row when its physical condition or an assertion changed.
     and preserve its focused termination check.
   - [x] Add the small generated test with the shared Python actor and result
     assertions.
-  - [x] Pass the Host generated case in the retained privileged VM.
-  - [x] Pass the direct-`runc` generated case with the same actor and checks.
-  - [x] Pass the Kubernetes generated case with the same actor and checks.
+  - [x] Pass the initial Host generated case in the retained privileged VM.
+  - [x] Pass the initial direct-`runc` generated case.
+  - [x] Pass the initial Kubernetes generated case.
   - [x] Remove the matching old monolithic case and compatibility fields.
-  - [ ] Start `ready.py` as PID 1 and use `add_actor` for the fatal actor.
+  - [x] Start `ready.py` as PID 1 and use `add_actor` for the fatal actor.
     Restore the external root and installed role checks before fatal exec.
-    Rerun the corrected test on all three platforms.
-  - [ ] Accept a fatal actor signal as a non-success exit status. Do not
+  - [x] Accept a fatal actor signal as a non-success exit status. Do not
     require a numeric exit code after the actor mirrors the child signal.
+  - [x] Pass the corrected Host case and the complete Host platform set.
+  - [x] Pass the corrected direct-`runc` case and platform set.
+  - [ ] Pass the corrected Kubernetes case.
   - [ ] Restore the baseline physical condition recorded above and rerun all
     three generated cases.
 - [ ] Moved-task exec: keep the physical cgroup move, denied exec, production
