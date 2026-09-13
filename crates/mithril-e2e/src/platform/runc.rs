@@ -12,9 +12,6 @@ use super::{Host, Platform, Task, TestResult};
 use crate::physical::ProbeDirectory;
 use crate::process::ProcessFixture;
 
-const ACTOR_ENTRY: &str = "/usr/bin/python3.12";
-const EXTERNAL_ENTRY: &str = "/work/python-external";
-
 pub(crate) struct Runc {
     host: Host,
     runc_path: PathBuf,
@@ -70,9 +67,9 @@ impl Runc {
         )?)?)
     }
 
-    fn exec_actor(
+    fn start_entry(
         &mut self,
-        entry: &str,
+        entry: &Path,
         name: &str,
         extra: &[&str],
     ) -> TestResult<ProcessFixture> {
@@ -301,12 +298,14 @@ impl Platform for Runc {
         Ok(actor)
     }
 
-    fn add_actor(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
-        self.exec_actor(ACTOR_ENTRY, name, extra)
-    }
-
-    fn add_external(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
-        self.exec_actor(EXTERNAL_ENTRY, name, extra)
+    fn add_actor(
+        &mut self,
+        entry: Option<&str>,
+        name: &str,
+        extra: &[&str],
+    ) -> TestResult<ProcessFixture> {
+        let entry = self.host.entry(entry)?;
+        self.start_entry(&entry, name, extra)
     }
 
     fn place(&mut self, pid: u32) -> TestResult<()> {

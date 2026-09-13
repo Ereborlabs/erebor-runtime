@@ -653,7 +653,7 @@ impl ProcessFixture {
     pub(crate) fn wait_group_task(
         &mut self,
         group: &Path,
-        init: u32,
+        before: &[u32],
         operation: &str,
     ) -> Result<u32> {
         let path = group.join("cgroup.procs");
@@ -672,7 +672,7 @@ impl ProcessFixture {
                 let mut ids = text
                     .split_ascii_whitespace()
                     .filter_map(|value| value.parse::<u32>().ok())
-                    .filter(|pid| *pid != init);
+                    .filter(|pid| !before.contains(pid));
                 let pid = ids.next();
                 Ok((pid.is_some() && ids.next().is_none())
                     .then_some(pid)
@@ -680,7 +680,7 @@ impl ProcessFixture {
             },
             || {
                 format!(
-                    "container init PID {init}; last cgroup PIDs: {:?}",
+                    "previous cgroup PIDs {before:?}; last cgroup PIDs: {:?}",
                     last.borrow()
                 )
             },

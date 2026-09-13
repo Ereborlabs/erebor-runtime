@@ -15,8 +15,8 @@ fn concurrent_roots_stay_distinct<P: Platform>() -> TestResult<()> {
     env.running(init.id())?;
     let app = env.recovered(init.id(), "recovered actor identity")?;
 
-    let mut first = env.add_external("external_roots.py", &["external"])?;
-    let mut second = env.add_external("external_roots.py", &["external"])?;
+    let mut first = env.add_actor(Some("python-external"), "external_roots.py", &["external"])?;
+    let mut second = env.add_actor(Some("python-external"), "external_roots.py", &["external"])?;
     let one = env.task(first.id(), "first external root")?;
     let two = env.task(second.id(), "second external root")?;
 

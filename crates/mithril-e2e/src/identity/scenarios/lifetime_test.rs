@@ -15,7 +15,7 @@ fn leader_exit_keeps_worker<P: Platform>() -> TestResult<()> {
     env.install_policy()?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
-    let mut actor = env.add_actor("native_leader_first.py", &[])?;
+    let mut actor = env.add_actor(Some("python-actor"), "native_leader_first.py", &[])?;
 
     let root_pid = actor.id();
     actor.track(root_pid)?;

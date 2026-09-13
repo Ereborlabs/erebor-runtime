@@ -13,7 +13,11 @@ fn moved_exec_is_denied<P: Platform>() -> TestResult<()> {
     env.install_policy()?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
-    let mut actor = env.add_actor("native_moved_exec.py", &["/usr/bin/true"])?;
+    let mut actor = env.add_actor(
+        Some("python-actor"),
+        "native_moved_exec.py",
+        &["/usr/bin/true"],
+    )?;
 
     let root_pid = actor.id();
     let root = env.task(root_pid, "moved actor root")?;

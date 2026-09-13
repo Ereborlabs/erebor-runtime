@@ -12,6 +12,8 @@ use crate::error::{InvalidInputSnafu, IoSnafu, TimeoutSnafu};
 use crate::Result;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
+#[cfg(test)]
+const STABLE_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) struct ProbeDirectory {
     path: PathBuf,
@@ -75,6 +77,40 @@ pub(crate) fn wait_for<T>(
             .fail();
         }
         thread::sleep(POLL_INTERVAL.min(remaining));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn wait_stable(
+    path: &Path,
+    operation: &str,
+    limit: Duration,
+    samples: usize,
+    mut inspect: impl FnMut() -> Result<bool>,
+    diagnostic: impl FnOnce() -> String,
+) -> Result<()> {
+    let deadline = Instant::now() + limit;
+    let mut stable = 0;
+    loop {
+        if inspect()? {
+            stable += 1;
+            if stable >= samples {
+                return Ok(());
+            }
+        } else {
+            stable = 0;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return TimeoutSnafu {
+                path,
+                operation,
+                limit,
+                diagnostic: diagnostic(),
+            }
+            .fail();
+        }
+        thread::sleep(STABLE_INTERVAL.min(remaining));
     }
 }
 

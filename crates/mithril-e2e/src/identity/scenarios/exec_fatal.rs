@@ -18,7 +18,11 @@ fn fatal_exec_is_terminal<P: Platform>() -> TestResult<()> {
     env.install_policy()?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
-    let mut actor = env.add_actor("native_fatal_exec.py", &["/work/post-ponr-execfail"])?;
+    let mut actor = env.add_actor(
+        Some("python-actor"),
+        "native_fatal_exec.py",
+        &["/work/post-ponr-execfail"],
+    )?;
 
     let root_pid = actor.id();
     let root = env.task(root_pid, "fatal exec root")?;

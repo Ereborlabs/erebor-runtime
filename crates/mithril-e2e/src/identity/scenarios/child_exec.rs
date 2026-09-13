@@ -28,7 +28,7 @@ fn child_exec_keeps_identity<P: Platform>() -> TestResult<()> {
     env.install_policy()?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
-    let mut actor = env.add_actor("native_child_exec.py", &[])?;
+    let mut actor = env.add_actor(Some("python-actor"), "native_child_exec.py", &[])?;
 
     let root_pid = actor.id();
     assert_ne!(root_pid, init.id());

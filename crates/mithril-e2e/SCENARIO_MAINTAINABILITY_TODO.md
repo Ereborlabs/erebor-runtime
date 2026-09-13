@@ -55,6 +55,10 @@ These rules control every checkmark and commit in this file.
   already-running namespace or container. Host, direct-`runc`, and Kubernetes
   implementations must use their real process-entry mechanism. Keep this
   behavior in a separate test from initial actor startup.
+- Give `add_actor` an optional signed entry name. Use no entry only when the
+  process starts before policy installation for a recovery test. Resolve a
+  named entry from the installed policy. Do not add role-specific process
+  methods or hard-code signed entry paths in a platform implementation.
 - Ask the actor to perform one action. Assert the expected production result.
 - Keep component start, stop, outage, and restart order visible in the test.
 - Test each supported component order in a separate function. Do not make a
@@ -70,6 +74,9 @@ These rules control every checkmark and commit in this file.
   the common platform implementations. Do not put scenario actions or
   production operation sequences in those implementations. Keep actor
   behavior and result assertions shared.
+- Review the common platform implementations before each migrated behavior
+  commit. Remove scenario-specific branches and duplicate physical operations
+  when the next test proves that a smaller boundary is sufficient.
 - Do not build or drive an async runtime in a test function. The selected
   physical fixture owns the runtime when its production APIs require async
   work.
@@ -747,11 +754,12 @@ test does not close a row when its physical condition or an assertion changed.
   recovery calls explicit. Preserve the fail-closed root assertions.
 - [ ] Concurrent external roots: keep one small parameterized Rust test in
   `identity/scenarios/external_roots.rs`. Start Control and one
-  `external_roots.py` environment actor. Let that actor copy its own
-  interpreter to the shared work directory. Install policy, start Node, and
-  recover the actor. Start two more instances through one generic
-  `add_external` platform operation and keep both alive while their production
-  identities are read.
+  `external_roots.py` environment actor. Let that actor copy its interpreter
+  and resolved shared-library dependencies to the shared work directory.
+  Verify that the copied interpreter starts before the actor reports ready.
+  Install policy, start Node, and recover the actor. Start two more instances
+  through `add_actor` with the signed external entry and keep both alive while
+  their production identities are read.
   - [x] Use the same Python actor on all platforms. Host must execute its
     signed external entry in the owned cgroup. Direct `runc` and Kubernetes
     must use stock runtime exec. Do not inject a task through namespaces or a
@@ -771,7 +779,9 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the Host generated case and the complete Host platform set.
   - [x] Pass the direct-`runc` generated case and the complete direct-`runc`
     platform set through stock `runc exec`.
-  - [ ] Pass the Kubernetes generated case through real `kubectl exec`.
+  - [x] Pass the Kubernetes generated case through real `kubectl exec`.
+  - [x] Pass the complete Kubernetes platform set after the copied
+    interpreter dependency correction.
   - [ ] Keep the old restricted-placement block until a separate small test
     reproduces its creator-free `runtime_external_restricted` roots through a
     supported production cgroup-attach operation. The declared runtime-exec

@@ -112,7 +112,7 @@
         "execution": [
           {
             "name": "python-external",
-            "path": "/work/python-external",
+            "path": "/work/bin/python-external",
             "recursive": false,
             "operations": ["Execute"],
             "action": "Allow"

@@ -31,7 +31,7 @@ fn orphan_keeps_identity<P: Platform>() -> TestResult<()> {
     env.install_policy()?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
-    let mut actor = env.add_actor("native_orphan.py", &[])?;
+    let mut actor = env.add_actor(Some("python-actor"), "native_orphan.py", &[])?;
 
     let parent_pid = actor.id();
     assert_ne!(parent_pid, init.id());

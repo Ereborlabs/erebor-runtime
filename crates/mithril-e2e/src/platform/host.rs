@@ -32,10 +32,12 @@ use snafu::{ensure, ResultExt as _};
 use tokio::sync::watch;
 use zerocopy::{IntoBytes as _, TryFromBytes as _};
 
-use super::{CriFixture, Platform, Task, TestResult};
+use super::{policy_entry, CriFixture, Platform, Task, TestResult};
 use crate::control_fixture::{ControlServerFixture, MtlsFixture};
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
-use crate::physical::{wait_for, wait_for_async, ProbeCgroup, ProbeDirectory, ProbeFile};
+use crate::physical::{
+    wait_for, wait_for_async, wait_stable, ProbeCgroup, ProbeDirectory, ProbeFile,
+};
 use crate::process::ProcessFixture;
 use crate::runtime_input::runtime_observation;
 
@@ -88,6 +90,18 @@ pub(crate) struct Host {
 }
 
 impl Host {
+    pub(super) fn entry(&self, name: Option<&str>) -> TestResult<PathBuf> {
+        match name {
+            Some(name) => policy_entry(
+                self.resource
+                    .as_ref()
+                    .ok_or("the actor entry requires an installed policy")?,
+                name,
+            ),
+            None => Ok(fs::canonicalize("/usr/bin/python3")?),
+        }
+    }
+
     fn path(name: &'static str) -> TestResult<PathBuf> {
         env::var_os(name)
             .map(PathBuf::from)
@@ -773,10 +787,11 @@ impl Platform for Host {
         let ready = self.ready.as_ref().ok_or("Node is not running")?;
         let task = self.node_task.as_ref().ok_or("Node is not running")?;
         let last = RefCell::new(String::from("<absent>"));
-        wait_for(
+        Ok(wait_stable(
             &self.pin_path,
             "Node readiness",
             READY_LIMIT,
+            7,
             || {
                 let value = *ready.borrow();
                 *last.borrow_mut() = format!("{value:?}");
@@ -787,12 +802,11 @@ impl Platform for Host {
                         reason: "Node exited before readiness",
                     }
                 );
-                Ok((value.kernel_ready
+                Ok(value.kernel_ready
                     && value.identity_ready
                     && value.control_ready
                     && value.admission_ready
                     && value.effect_prevention_claims_enabled)
-                    .then_some(()))
             },
             || {
                 let delivery = mithril_node::policy_delivery_status(&self.state_path)
@@ -802,8 +816,7 @@ impl Platform for Host {
                     last.borrow()
                 )
             },
-        )?;
-        Ok(())
+        )?)
     }
 
     fn start_actor(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
@@ -840,7 +853,12 @@ impl Platform for Host {
         Ok(actor)
     }
 
-    fn add_actor(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
+    fn add_actor(
+        &mut self,
+        entry: Option<&str>,
+        name: &str,
+        extra: &[&str],
+    ) -> TestResult<ProcessFixture> {
         if self.node_task.is_none() {
             let mut args = vec![self.work_path.clone().into_os_string()];
             args.extend(extra.iter().map(OsString::from));
@@ -848,30 +866,18 @@ impl Platform for Host {
             self.place(actor.id())?;
             return Ok(actor);
         }
-        let entry = "/usr/bin/python3.12";
+        let entry = self.entry(entry)?;
         ensure!(
-            self.entry_installed(Path::new(entry))?,
-            InvalidInputSnafu {
-                path: &self.pin_path,
-                reason: format!("the signed actor entry is not installed: {entry}"),
-            }
-        );
-        self.start_entry(name, extra, Path::new(entry))
-    }
-
-    fn add_external(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
-        let entry = Path::new("/work/python-external");
-        ensure!(
-            self.entry_installed(entry)?,
+            self.entry_installed(&entry)?,
             InvalidInputSnafu {
                 path: &self.pin_path,
                 reason: format!(
-                    "the signed external entry is not installed: {}",
+                    "the signed actor entry is not installed: {}",
                     entry.display()
                 ),
             }
         );
-        self.start_entry(name, extra, entry)
+        self.start_entry(name, extra, &entry)
     }
 
     fn place(&mut self, pid: u32) -> TestResult<()> {

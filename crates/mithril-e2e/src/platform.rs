@@ -1,6 +1,7 @@
+use mithril_control::WorkloadProtectionPolicy;
 use mithril_node::{NativeTaskSnapshotV1, ReconciliationReportV1};
 use std::cell::RefCell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use erebor_interceptor::KernelStateReader;
@@ -42,6 +43,17 @@ pub(crate) struct Thread {
     pub(crate) edge: CreatedByEdgeV1,
 }
 
+fn policy_entry(policy: &WorkloadProtectionPolicy, name: &str) -> TestResult<PathBuf> {
+    policy
+        .spec
+        .roles
+        .iter()
+        .flat_map(|role| &role.execution)
+        .find(|rule| rule.name == name)
+        .map(|rule| PathBuf::from(&rule.path))
+        .ok_or_else(|| format!("the policy has no {name} execution entry").into())
+}
+
 pub(crate) trait Platform: Sized {
     fn setup(_name: &str) -> TestResult<Self> {
         pending("setup")
@@ -70,17 +82,11 @@ pub(crate) trait Platform: Sized {
     }
     fn add_actor(
         &mut self,
-        name: &str,
-        args: &[&str],
-    ) -> TestResult<crate::process::ProcessFixture> {
-        self.start_actor(name, args)
-    }
-    fn add_external(
-        &mut self,
+        _entry: Option<&str>,
         _name: &str,
         _args: &[&str],
     ) -> TestResult<crate::process::ProcessFixture> {
-        pending("start external actor")
+        pending("add actor")
     }
     fn place(&mut self, _pid: u32) -> TestResult<()> {
         pending("place actor")
