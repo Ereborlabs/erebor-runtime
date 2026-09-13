@@ -743,8 +743,20 @@ test does not close a row when its physical condition or an assertion changed.
   native identity activation, recovery, and shutdown visible in the scenario.
 - [ ] Binding-gap recovery: keep the terminal binding mutation and both public
   recovery calls explicit. Preserve the fail-closed root assertions.
-- [ ] Concurrent external roots: keep both process starts and both complete
-  restricted-root identity assertions visible.
+- [ ] Concurrent external roots: keep one small parameterized Rust test in
+  `identity/scenarios/external_roots.rs`. Start Control, Node, policy, and one
+  admitted `ready.py` environment actor. Start two more `ready.py` actors
+  with `add_actor` and keep both alive while their production identities are
+  read. Do not add a platform operation for this scenario.
+  - [ ] Assert that both actors are creator-free external runtime roots with
+    the registered restricted role and runnable coordinates.
+  - [ ] Assert distinct task cookies and process-state IDs. Assert the same
+    nonzero external role and a role different from the admitted actor.
+  - [ ] Pass the Host generated case.
+  - [ ] Pass the direct-`runc` generated case through stock `runc exec`.
+  - [ ] Pass the Kubernetes generated case through real `kubectl exec`.
+  - [ ] Remove the matching old probe block and compatibility result fields
+    only after all three generated cases pass.
 - [ ] Cgroup escape and moved-parent fork: keep the physical cgroup move,
   production health reads, fork action, and mismatch assertions visible.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
