@@ -820,6 +820,10 @@ test does not close a row when its physical condition or an assertion changed.
     moved-root denial can qualify the replacement.
   - [x] Restore a live moved root to its owned cgroup before cleanup. Pass a
     focused Host test and keep the reap bounded with PID and state diagnostics.
+  - [x] Pass the small Host moved-root first-open denial. Keep the identity,
+    fail-closed coordinate, `EACCES`, and both mismatch increases explicit.
+  - [ ] Remove only the matching cgroup-escape block and compatibility fields
+    from `IdentityTestRunner::physical_probe` after the replacement passes.
 - [ ] `CLONE_INTO_CGROUP`: keep the clone action, namespace transition, exec,
   first-effect action, and exact identity assertions visible.
 - [x] Native child exec: start the admitted environment with `ready.py`, then

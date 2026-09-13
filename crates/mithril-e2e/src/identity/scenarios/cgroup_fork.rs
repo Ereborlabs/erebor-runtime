@@ -48,6 +48,67 @@ fn unmoved_first_open_allowed<P: Platform>() -> TestResult<()> {
 }
 
 #[platform_test(host)]
+fn moved_first_open_denied<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("cgroup-open-denial")?;
+    let path = Path::new("/etc/hostname");
+    env.start_control()?;
+    env.start_node()?;
+    env.install_policy()?;
+    env.node_ready()?;
+    let mut init = env.start_actor("ready.py", &[])?;
+    let group = env.actor_group()?.to_owned();
+    let mut actor = CloneIntoCgroupFixture::start_with_root_first_effect(&group, path)?;
+    let pid = actor.root_pid();
+
+    let before = env.task(pid, "root before movement")?;
+    assert_eq!(before.snapshot.creator_task_cookie, None);
+    assert_eq!(
+        before.snapshot.root_class.as_deref(),
+        Some("external_runtime_root")
+    );
+    assert_eq!(
+        before.snapshot.installed_role_class.as_deref(),
+        Some("runtime_external_restricted")
+    );
+    assert_ne!(before.snapshot.active_role_id, 0);
+    assert_eq!(before.coordinate.state, TaskCoordinateStateV1::Runnable);
+
+    let old = env.health()?;
+    let moved = env.move_task(pid, "moved root fail closed")?;
+    let changed = env.health()?;
+    assert_eq!(moved.snapshot.task_cookie, before.snapshot.task_cookie);
+    assert_eq!(moved.snapshot.creator_task_cookie, None);
+    assert_eq!(moved.snapshot.root_class, before.snapshot.root_class);
+    assert_eq!(
+        moved.snapshot.installed_role_class,
+        before.snapshot.installed_role_class
+    );
+    assert_eq!(
+        moved.snapshot.active_role_id,
+        before.snapshot.active_role_id
+    );
+    assert_eq!(
+        moved.coordinate.state,
+        TaskCoordinateStateV1::FailClosedUnknown
+    );
+    assert!(changed.placement_mismatches > old.placement_mismatches);
+
+    actor.release_root()?;
+    wait_for(
+        path,
+        "moved first open denial",
+        Duration::from_secs(5),
+        || actor.moved_root_first_effect_denied(),
+        || format!("clone root PID {pid} is still running"),
+    )?;
+    assert!(env.health()?.placement_mismatches > changed.placement_mismatches);
+
+    actor.stop()?;
+    init.stop()?;
+    env.stop()
+}
+
+#[platform_test(host)]
 fn moved_root_stops<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("cgroup-stop")?;
     env.start_control()?;
