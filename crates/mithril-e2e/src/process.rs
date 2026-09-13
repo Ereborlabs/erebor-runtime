@@ -261,10 +261,15 @@ impl ProcessFixture {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let actor = Self::held(root, name, args, cgroup, rootfs, executable, 0)?;
-        let path = cgroup.join("cgroup.procs");
-        fs::write(&path, actor.id().to_string()).context(IoSnafu { path: &path })?;
-        Ok(actor)
+        Self::held(
+            root,
+            name,
+            args,
+            cgroup,
+            rootfs,
+            executable,
+            linux_raw_sys::general::CLONE_INTO_CGROUP,
+        )
     }
 
     #[cfg(test)]
