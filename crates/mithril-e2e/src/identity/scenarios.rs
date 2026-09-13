@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod child_exec;
 #[cfg(test)]
+mod double_fork;
+#[cfg(test)]
 mod exec_fatal;
 #[cfg(test)]
 mod exec_retry;
