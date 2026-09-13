@@ -1,6 +1,7 @@
 use erebor_interceptor_abi::{
     ExecGuardStateV1, ProcessExecutionStateV1, ProcessStateVectorStateV1, TaskCoordinateStateV1,
 };
+use std::time::Duration;
 
 use crate::platform::{platform_test, Platform, Task, TestResult};
 
@@ -83,6 +84,8 @@ fn non_leader_exec<P: Platform>() -> TestResult<()> {
     assert_eq!((post.host_tid, post.host_tgid), (root_pid, root_pid));
     active(&after);
 
+    let status = actor.wait_exit("non-leader actor exit", Duration::from_secs(10))?;
+    assert!(status.success(), "actor exited with {status}");
     actor.stop()?;
     init.stop()?;
     env.stop()
