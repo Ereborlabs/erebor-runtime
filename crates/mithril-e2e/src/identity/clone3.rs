@@ -266,7 +266,54 @@ impl CloneIntoCgroupFixture {
             }
         );
         let path = PathBuf::from(format!("/proc/{}/ns/mnt", target.id()));
+        fs::read_link(&path).context(IoSnafu { path: &path })
+    }
+
+    #[cfg(test)]
+    pub(super) fn child_mount(&self, pid: u32) -> Result<PathBuf> {
+        let path = PathBuf::from(format!("/proc/{pid}/ns/mnt"));
         std::fs::read_link(&path).context(IoSnafu { path: &path })
+    }
+
+    #[cfg(test)]
+    pub(super) fn wait_child_exec(
+        &self,
+        pid: u32,
+        target: &Path,
+        executable: &str,
+    ) -> Result<PathBuf> {
+        let path = PathBuf::from(format!("/proc/{pid}/ns/mnt"));
+        let comm_path = PathBuf::from(format!("/proc/{pid}/comm"));
+        let last = RefCell::new(String::from("<absent>"));
+        wait_for(
+            &path,
+            "native child namespace exec",
+            Duration::from_secs(5),
+            || {
+                let state = self.root_state();
+                if state > 5 {
+                    return Err(invalid_state(format!(
+                        "native child namespace exec failed with errno {}",
+                        state - 5
+                    )));
+                }
+                let namespace = match std::fs::read_link(&path) {
+                    Ok(namespace) => namespace,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                    Err(source) => return Err(source).context(IoSnafu { path: &path }),
+                };
+                let comm =
+                    std::fs::read_to_string(&comm_path).context(IoSnafu { path: &comm_path })?;
+                *last.borrow_mut() = format!("namespace={namespace:?}; comm={:?}", comm.trim());
+                Ok((namespace == target && comm.trim() == executable).then_some(namespace))
+            },
+            || {
+                format!(
+                    "PID {pid}; target namespace {target:?}; executable {executable:?}; last state: {}",
+                    last.borrow()
+                )
+            },
+        )
     }
 
     pub(super) fn release_child_into_mount_namespace(&mut self) -> Result<()> {

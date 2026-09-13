@@ -382,6 +382,16 @@ impl Platform for Runc {
         self.host.wait_exec(actor, pid, cookie, before, name)
     }
 
+    fn wait_pid_exec(
+        &mut self,
+        pid: u32,
+        cookie: u64,
+        before: &Task,
+        name: &str,
+    ) -> TestResult<Task> {
+        self.host.wait_pid_exec(pid, cookie, before, name)
+    }
+
     fn recovered(&mut self, pid: u32, name: &str) -> TestResult<Task> {
         self.host.recovered(pid, name)
     }

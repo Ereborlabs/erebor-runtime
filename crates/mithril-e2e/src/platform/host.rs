@@ -305,6 +305,47 @@ impl Host {
         Ok(actor)
     }
 
+    fn wait_task_exec(
+        &mut self,
+        pid: u32,
+        cookie: u64,
+        before: &Task,
+        name: &str,
+    ) -> TestResult<Task> {
+        let last = RefCell::new(String::from("<absent>"));
+        let snapshot = wait_for(
+            &self.pin_path,
+            name,
+            READY_LIMIT,
+            || Ok(self.exec_snapshot(pid, cookie, before, &last)),
+            || format!("PID {pid}; last identity: {}", last.borrow()),
+        )?;
+        self.task_from(pid, snapshot)
+    }
+
+    fn exec_snapshot(
+        &self,
+        pid: u32,
+        cookie: u64,
+        before: &Task,
+        last: &RefCell<String>,
+    ) -> Option<NativeTaskSnapshotV1> {
+        let snapshot = match self.inspector.snapshot(pid) {
+            Ok(snapshot) => snapshot,
+            Err(source) => {
+                *last.borrow_mut() = source.to_string();
+                return None;
+            }
+        };
+        if let Some(value) = snapshot.as_ref() {
+            *last.borrow_mut() = format!("{value:?}");
+        }
+        snapshot.filter(|value| {
+            value.task_cookie == cookie
+                && value.active_execution_id != before.snapshot.active_execution_id
+        })
+    }
+
     fn close(&mut self) -> TestResult<()> {
         if let Some(stop) = self.node_stop.take() {
             stop.send_replace(true);
@@ -987,22 +1028,7 @@ impl Platform for Host {
             &self.pin_path,
             name,
             READY_LIMIT,
-            || {
-                let snapshot = match self.inspector.snapshot(pid) {
-                    Ok(snapshot) => snapshot,
-                    Err(source) => {
-                        *last.borrow_mut() = source.to_string();
-                        return Ok(None);
-                    }
-                };
-                if let Some(value) = snapshot.as_ref() {
-                    *last.borrow_mut() = format!("{value:?}");
-                }
-                Ok(snapshot.filter(|value| {
-                    value.task_cookie == cookie
-                        && value.active_execution_id != before.snapshot.active_execution_id
-                }))
-            },
+            || Ok(self.exec_snapshot(pid, cookie, before, &last)),
             || format!("PID {pid}; last identity: {}", last.borrow()),
         ) {
             Ok(value) => value,
@@ -1011,6 +1037,16 @@ impl Platform for Host {
             }
         };
         self.task_from(pid, snapshot)
+    }
+
+    fn wait_pid_exec(
+        &mut self,
+        pid: u32,
+        cookie: u64,
+        before: &Task,
+        name: &str,
+    ) -> TestResult<Task> {
+        self.wait_task_exec(pid, cookie, before, name)
     }
 
     fn recovered(&mut self, pid: u32, name: &str) -> TestResult<Task> {
