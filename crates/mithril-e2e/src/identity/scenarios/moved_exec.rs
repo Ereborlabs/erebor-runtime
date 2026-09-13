@@ -12,14 +12,20 @@ fn moved_exec_is_denied<P: Platform>() -> TestResult<()> {
     env.start_node()?;
     env.install_policy()?;
     env.node_ready()?;
-    let mut actor = env.start_actor("native_moved_exec.py", &["/usr/bin/true"])?;
+    let mut init = env.start_actor("ready.py", &[])?;
+    let mut actor = env.add_actor("native_moved_exec.py", &["/usr/bin/true"])?;
 
     let root_pid = actor.id();
-    actor.track(root_pid)?;
-    env.place(root_pid)?;
-    env.stage()?;
-    env.admit(root_pid)?;
     let root = env.task(root_pid, "moved actor root")?;
+    assert_eq!(root.snapshot.creator_task_cookie, None);
+    assert_eq!(
+        root.snapshot.root_class.as_deref(),
+        Some("external_runtime_root")
+    );
+    assert_eq!(
+        root.snapshot.installed_role_class.as_deref(),
+        Some("qualified_registered_role")
+    );
     actor.send(b"start\n")?;
 
     let ns_pid = actor.wait_pid(&env.work().join("moved-child"), "moved child")?;
@@ -63,5 +69,7 @@ fn moved_exec_is_denied<P: Platform>() -> TestResult<()> {
     assert_eq!(code, Errno::ACCESS.raw_os_error());
     let denied = env.health()?;
     assert!(denied.placement_mismatches > move_health.placement_mismatches);
+    actor.stop()?;
+    init.stop()?;
     env.stop()
 }
