@@ -820,7 +820,10 @@ test does not close a row when its physical condition or an assertion changed.
       `execve("/work/bin/python-external", ["python-external", ...])`.
       The complete 25-test Host platform set passed in 904.39 seconds.
       The complete repository Rust CI script passed.
-    - [ ] Direct `runc` passes the exact Rust scenario.
+    - [x] Direct `runc` passes the exact Rust scenario in 35.82 seconds.
+      The complete 16-test direct-`runc` platform set passed in 585.01
+      seconds. The local suite, strict crate Clippy, and the complete
+      repository Rust CI script passed.
     - [ ] Kubernetes passes the exact Rust scenario.
     - The signed policy path and exact executable object remain installed.
       BPF now selects the signed declared entry from the `execve` or `execveat`

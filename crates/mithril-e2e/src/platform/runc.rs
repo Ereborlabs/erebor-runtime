@@ -8,7 +8,7 @@ use erebor_interceptor::KernelStateReader;
 use mithril_node::OciBaseSpecOwner;
 use serde_json::{json, Value};
 
-use super::{actor_command, actor_script, Host, Platform, Task, TestResult};
+use super::{Host, Platform, Task, TestResult, PROCESS_FIXTURES};
 use crate::physical::ProbeDirectory;
 use crate::process::ProcessFixture;
 
@@ -72,14 +72,6 @@ impl Runc {
             .container_id
             .as_deref()
             .ok_or("the runc actor is not started")?;
-        let state = self.state(id)?;
-        let init = state["pid"]
-            .as_u64()
-            .and_then(|pid| u32::try_from(pid).ok())
-            .filter(|pid| *pid > 0)
-            .ok_or("runc state has no actor PID")?;
-        let root = PathBuf::from(format!("/proc/{init}/root"));
-        let program = actor_command(&root, program)?;
         let pid_path = self.host.work().join("exec.pid");
         let mut command = Command::new(&self.runc_path);
         command
@@ -88,9 +80,9 @@ impl Runc {
             .args(["exec", "--cwd", "/work", "--pid-file"])
             .arg(&pid_path)
             .arg(id)
-            .arg(&program)
+            .arg(program)
             .args(args);
-        let mut actor = ProcessFixture::start(&mut command, &program)?;
+        let mut actor = ProcessFixture::start(&mut command, Path::new(program))?;
         let parent = actor.id();
         let pid = actor.wait_pid(&pid_path, "runc exec host PID")?;
         fs::remove_file(&pid_path)?;
@@ -198,10 +190,7 @@ impl Platform for Runc {
         for name in ["usr", "lib", "lib64", "fixtures", "work"] {
             fs::create_dir_all(rootfs.join(name))?;
         }
-        let script = actor_script(self.host.source(), name)?;
-        let fixtures = script
-            .parent()
-            .ok_or("the actor has no fixture directory")?;
+        let fixtures = self.host.source().join(PROCESS_FIXTURES);
 
         let path = self.bundle_path.join("config.json");
         let mut config: Value = serde_json::from_slice(&fs::read(&path)?)?;
@@ -241,7 +230,7 @@ impl Platform for Runc {
                 Self::mount(&mut config, source, path, false)?;
             }
         }
-        Self::mount(&mut config, fixtures, "/fixtures", false)?;
+        Self::mount(&mut config, &fixtures, "/fixtures", false)?;
         Self::mount(&mut config, self.host.work(), "/work", true)?;
         let config = if self.host.has_policy() {
             config["annotations"] = json!(self.host.annotations()?);
@@ -291,7 +280,7 @@ impl Platform for Runc {
             .args(["run", "--bundle"])
             .arg(&self.bundle_path)
             .arg(&id);
-        let mut actor = ProcessFixture::start(&mut command, &script)?;
+        let mut actor = ProcessFixture::start(&mut command, Path::new(name))?;
         let parent = actor.id();
         let state = self.state(&id)?;
         let pid = state["pid"]
