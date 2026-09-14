@@ -1332,7 +1332,30 @@ setup, production actions, assertions, and focused test.
   replay groups one commit at a time. Keep their `KernelHostOwner`,
   `WorkloadBindingOwner`, and `NativeSecurityStateOwner` calls explicit.
 - [ ] `physical_kubernetes_exec_probe`
-- [ ] `physical_kubernetes_lifecycle_sleep_probe`
+- [x] Replace `physical_kubernetes_lifecycle_sleep_probe` with one generated
+  Kubernetes Rust test. This is a Kubernetes-native lifecycle fact, not a
+  Host or direct-`runc` behavior.
+  - [x] Use the shared `ready.py` actor as container PID 1. Start real Control
+    and Node, install the signed policy, and create the real actor Pod. Use its
+    mounted ready file because Kubernetes logs wait for the handler to finish.
+  - [x] Configure the Pod with the native `postStart.sleep` handler through
+    reusable Kubernetes physical setup. Do not run a sleep process or emulate
+    the handler in a test helper.
+  - [x] While the native handler is pending, assert that `cgroup.procs`
+    contains only the actor PID and that the Pod is not Ready.
+  - [x] Wait for the Pod to become Ready, then stop the actor and remove all
+    scenario resources with bounded diagnostics.
+  - [x] Remove only the matching hidden probe call and method from
+    `identity.rs` after the generated test passes. Keep the compatibility
+    result field optional until the legacy bundle schema is removed.
+  - [x] Remove the obsolete lifecycle-sleep fixture copy from `run.sh`. Keep
+    the historical fixture file while implementation records link to it.
+  - Proof: the complete serial lightweight suite passed 89 tests. Strict
+    Clippy passed. The generated Kubernetes test passed in 132.46 seconds.
+    The 18-test Kubernetes run passed 17 tests and exposed a platform lookup
+    regression in namespace-init. After the lookup was isolated to this
+    pre-readiness case, namespace-init passed in 112.56 seconds. The complete
+    Kubernetes rerun is pending the test-runtime review.
 - [ ] `physical_kubernetes_containers_probe`
 - [ ] `physical_kubernetes_ephemeral_probe`
 - [ ] `physical_kubernetes_probe_impersonation`

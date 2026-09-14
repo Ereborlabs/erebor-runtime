@@ -10,7 +10,8 @@ use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{TaskCoordinateStateV1, TaskCoordinateV1};
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment};
 use k8s_openapi::api::core::v1::{
-    Namespace, Node, PersistentVolumeClaim, Pod, Secret, ServiceAccount,
+    Lifecycle, LifecycleHandler, Namespace, Node, PersistentVolumeClaim, Pod, Secret,
+    ServiceAccount, SleepAction,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::api::{DeleteParams, ListParams, Patch, PatchParams, PostParams};
@@ -65,6 +66,7 @@ pub(crate) struct Kubernetes {
     actor_image: String,
     actor_python: String,
     actor_entry: String,
+    post_sleep: Option<i64>,
     system: String,
     namespace: String,
     token: String,
@@ -189,6 +191,26 @@ impl Kubernetes {
             .and_then(|status| status.container_id)
             .and_then(|id| id.strip_prefix("containerd://").map(str::to_owned))
             .ok_or_else(|| "the Kubernetes actor has no containerd ID".into())
+    }
+
+    fn runtime_id(&self) -> TestResult<String> {
+        let mut command = Command::new(&self.k3s_path);
+        command.args([
+            "crictl",
+            "ps",
+            "--quiet",
+            "--no-trunc",
+            "--namespace",
+            &self.namespace,
+            "--name",
+            CONTAINER,
+        ]);
+        let output = Self::run(&mut command, "find the running Kubernetes actor")?;
+        let ids = output.lines().collect::<Vec<_>>();
+        match ids.as_slice() {
+            [id] => Ok((*id).to_owned()),
+            _ => Err(format!("expected one running Kubernetes actor, found {ids:?}").into()),
+        }
     }
 
     fn inspect_pid(&self, id: &str) -> TestResult<u32> {
@@ -991,6 +1013,7 @@ impl Platform for Kubernetes {
             actor_image,
             actor_python,
             actor_entry,
+            post_sleep: None,
             system,
             namespace,
             token,
@@ -1115,6 +1138,10 @@ impl Platform for Kubernetes {
             serde_saphyr::from_slice(&fs::read(self.fixture("pid-reuse-pod-v1.yaml"))?)?;
         pod.metadata.namespace = Some(self.namespace.clone());
         let spec = pod.spec.as_mut().ok_or("the actor Pod has no spec")?;
+        let sleep = self.post_sleep.take();
+        if let Some(seconds) = sleep {
+            spec.termination_grace_period_seconds = Some(seconds + 10);
+        }
         spec.node_selector = Some(BTreeMap::from([(
             "kubernetes.io/hostname".to_owned(),
             self.node_name.clone(),
@@ -1127,6 +1154,15 @@ impl Platform for Kubernetes {
         container.image = Some(self.actor_image.clone());
         container.command = Some(vec![self.actor_python.clone()]);
         container.args = Some(args);
+        if let Some(seconds) = sleep {
+            container.lifecycle = Some(Lifecycle {
+                post_start: Some(LifecycleHandler {
+                    sleep: Some(SleepAction { seconds }),
+                    ..LifecycleHandler::default()
+                }),
+                ..Lifecycle::default()
+            });
+        }
         let volumes = spec
             .volumes
             .as_mut()
@@ -1146,44 +1182,17 @@ impl Platform for Kubernetes {
         self.runtime
             .block_on(pods.create(&PostParams::default(), &pod))?;
 
-        let last = RefCell::new(String::from("<absent>"));
-        wait_for(
-            &script,
-            "Kubernetes actor readiness",
-            READY_LIMIT,
-            || match self.logs(&self.namespace, &format!("pod/{ACTOR}")) {
-                Ok(logs) => {
-                    *last.borrow_mut() = logs.clone();
-                    Ok(logs
-                        .lines()
-                        .any(|line| line == "native-fixture-ready")
-                        .then_some(()))
-                }
-                Err(source) => {
-                    *last.borrow_mut() = source.to_string();
-                    Ok(None)
-                }
-            },
-            || {
-                let pod = self
-                    .pod()
-                    .map(|pod| format!("{:?}", pod.status))
-                    .unwrap_or_else(|source| source.to_string());
-                let node = self
-                    .logs(&self.system, "daemonset/mithril-node")
-                    .unwrap_or_else(|source| source.to_string());
-                format!(
-                    "last Pod state: {pod}; last logs: {:?}; Node logs: {node}",
-                    last.borrow()
-                )
-            },
-        )?;
         let last_id = RefCell::new(String::from("<absent>"));
         let (id, pid, cgroup) = wait_for(
             &script,
             "Kubernetes actor runtime identity",
             READY_LIMIT,
-            || match self.container_id().and_then(|id| {
+            || match (if sleep.is_some() {
+                self.runtime_id()
+            } else {
+                self.container_id()
+            })
+            .and_then(|id| {
                 self.inspect_pid(&id)
                     .and_then(|pid| Self::cgroup(pid).map(|cgroup| (id, pid, cgroup)))
             }) {
@@ -1201,6 +1210,55 @@ impl Platform for Kubernetes {
                 format!("last runtime state: {}; Pod state: {pod}", last_id.borrow())
             },
         )?;
+        if sleep.is_some() {
+            let ready = self.work_path.join("ready");
+            wait_for(
+                &ready,
+                "Kubernetes actor readiness",
+                READY_LIMIT,
+                || Ok(ready.is_file().then_some(())),
+                || {
+                    let pod = self
+                        .pod()
+                        .map(|pod| format!("{:?}", pod.status))
+                        .unwrap_or_else(|source| source.to_string());
+                    format!("ready file exists: {}; Pod state: {pod}", ready.exists())
+                },
+            )?;
+        } else {
+            let last = RefCell::new(String::from("<absent>"));
+            wait_for(
+                &script,
+                "Kubernetes actor readiness",
+                READY_LIMIT,
+                || match self.logs(&self.namespace, &format!("pod/{ACTOR}")) {
+                    Ok(logs) => {
+                        *last.borrow_mut() = logs.clone();
+                        Ok(logs
+                            .lines()
+                            .any(|line| line == "native-fixture-ready")
+                            .then_some(()))
+                    }
+                    Err(source) => {
+                        *last.borrow_mut() = source.to_string();
+                        Ok(None)
+                    }
+                },
+                || {
+                    let pod = self
+                        .pod()
+                        .map(|pod| format!("{:?}", pod.status))
+                        .unwrap_or_else(|source| source.to_string());
+                    let node = self
+                        .logs(&self.system, "daemonset/mithril-node")
+                        .unwrap_or_else(|source| source.to_string());
+                    format!(
+                        "last Pod state: {pod}; last logs: {:?}; Node logs: {node}",
+                        last.borrow()
+                    )
+                },
+            )?;
+        }
 
         let mut actor = if self.hook_up {
             let mut command = Command::new(&self.k3s_path);
@@ -1242,6 +1300,72 @@ impl Platform for Kubernetes {
 
     fn add_actor(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         self.start_entry(command, args)
+    }
+
+    fn post_start_sleep(&mut self, delay: Duration) -> TestResult<()> {
+        let seconds = i64::try_from(delay.as_secs())?;
+        if seconds == 0 || delay.subsec_nanos() != 0 || seconds.checked_add(10).is_none() {
+            return Err("the native post-start sleep must use positive whole seconds".into());
+        }
+        if self.actor_id.is_some() || self.post_sleep.replace(seconds).is_some() {
+            return Err("the native post-start sleep is already configured or running".into());
+        }
+        Ok(())
+    }
+
+    fn actor_tasks(&self) -> TestResult<Vec<u32>> {
+        let group = self
+            .actor_cgroup
+            .as_ref()
+            .ok_or("the Kubernetes actor has no recorded cgroup")?;
+        let path = group.join("cgroup.procs");
+        let mut tasks = fs::read_to_string(&path)
+            .context(IoSnafu { path: &path })?
+            .split_ascii_whitespace()
+            .map(str::parse)
+            .collect::<Result<Vec<u32>, _>>()?;
+        tasks.sort_unstable();
+        Ok(tasks)
+    }
+
+    fn workload_ready(&self) -> TestResult<bool> {
+        Ok(self
+            .pod()?
+            .status
+            .and_then(|status| status.conditions)
+            .is_some_and(|conditions| {
+                conditions
+                    .iter()
+                    .any(|condition| condition.type_ == "Ready" && condition.status == "True")
+            }))
+    }
+
+    fn wait_workload_ready(&self) -> TestResult<()> {
+        let last = RefCell::new(false);
+        let path = Self::resource(&self.namespace, "pod", ACTOR);
+        Ok(wait_for(
+            &path,
+            "actor Pod readiness",
+            READY_LIMIT,
+            || {
+                let ready = self.workload_ready().map_err(|source| {
+                    InvalidInputSnafu {
+                        path: &path,
+                        reason: source.to_string(),
+                    }
+                    .build()
+                })?;
+                *last.borrow_mut() = ready;
+                Ok(ready.then_some(()))
+            },
+            || {
+                format!(
+                    "last readiness: {}; Pod state: {:?}",
+                    last.borrow(),
+                    self.pod().map(|pod| pod.status)
+                )
+            },
+        )?)
     }
 
     fn place(&mut self, pid: u32) -> TestResult<()> {

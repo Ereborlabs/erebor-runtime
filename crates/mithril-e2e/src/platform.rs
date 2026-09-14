@@ -96,6 +96,18 @@ pub(crate) trait Platform: Sized {
     ) -> TestResult<crate::process::ProcessFixture> {
         pending("add actor")
     }
+    fn post_start_sleep(&mut self, _delay: Duration) -> TestResult<()> {
+        pending("configure native post-start sleep")
+    }
+    fn actor_tasks(&self) -> TestResult<Vec<u32>> {
+        pending("read actor cgroup tasks")
+    }
+    fn workload_ready(&self) -> TestResult<bool> {
+        pending("read workload readiness")
+    }
+    fn wait_workload_ready(&self) -> TestResult<()> {
+        pending("wait for workload readiness")
+    }
     fn place(&mut self, _pid: u32) -> TestResult<()> {
         pending("place actor")
     }
