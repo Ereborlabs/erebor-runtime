@@ -61,7 +61,7 @@
           },
           {
             "name": "python-actor",
-            "path": "/usr/bin/python3.12",
+            "path": "/work/bin/python",
             "recursive": false,
             "operations": ["Execute"],
             "action": "Allow"

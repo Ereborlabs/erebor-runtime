@@ -7,7 +7,7 @@ fn four_tasks_recover<P: Platform>() -> TestResult<()> {
     env.start_control()?;
     let mut app = env.start_actor("recovery_tree.py", &[])?;
     env.place(app.id())?;
-    let mut ext = env.add_actor(None, "recovery_tree.py", &[])?;
+    let mut ext = env.add_actor("python", &["/fixtures/recovery_tree.py", "/work"])?;
     env.place(ext.id())?;
     app.send(b"fork\n")?;
     let app_child = app.wait_child(app.id(), "application child")?;

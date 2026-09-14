@@ -8,7 +8,7 @@ work = Path(sys.argv[1])
 if len(sys.argv) == 2:
     exe = Path(sys.executable).resolve()
     target = work / "bin/python-external"
-    (work / "bin").mkdir()
+    (work / "bin").mkdir(exist_ok=True)
     shutil.copy2(exe, target)
     report = subprocess.run(
         ["/lib64/ld-linux-x86-64.so.2", "--list", exe],

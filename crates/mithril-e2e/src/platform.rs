@@ -1,6 +1,7 @@
-use mithril_control::WorkloadProtectionPolicy;
 use mithril_node::{NativeTaskSnapshotV1, ReconciliationReportV1};
 use std::cell::RefCell;
+use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -28,6 +29,27 @@ pub(crate) use self::runc::Runc;
 pub(crate) use mithril_e2e_macros::platform_test;
 pub(crate) type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
 const TASK_LIMIT: Duration = Duration::from_secs(30);
+const ACTOR_PATH: &str = "/work/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+fn actor_command(root: &Path, name: &str) -> TestResult<PathBuf> {
+    if name.is_empty() || name.contains('/') {
+        return Err(format!("actor command must be one PATH name: {name:?}").into());
+    }
+    for directory in ACTOR_PATH.split(':') {
+        let path = Path::new(directory).join(name);
+        let file = root.join(directory.trim_start_matches('/')).join(name);
+        if fs::metadata(&file)
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        {
+            return Ok(path);
+        }
+    }
+    Err(format!(
+        "actor command {name:?} is not executable below {} in PATH {ACTOR_PATH}",
+        root.display()
+    )
+    .into())
+}
 
 pub(crate) struct Task {
     pub(crate) pid: u32,
@@ -41,17 +63,6 @@ pub(crate) struct Thread {
     pub(crate) ns_tid: u32,
     pub(crate) coordinate: TaskCoordinateV1,
     pub(crate) edge: CreatedByEdgeV1,
-}
-
-fn policy_entry(policy: &WorkloadProtectionPolicy, name: &str) -> TestResult<PathBuf> {
-    policy
-        .spec
-        .roles
-        .iter()
-        .flat_map(|role| &role.execution)
-        .find(|rule| rule.name == name)
-        .map(|rule| PathBuf::from(&rule.path))
-        .ok_or_else(|| format!("the policy has no {name} execution entry").into())
 }
 
 pub(crate) trait Platform: Sized {
@@ -83,8 +94,7 @@ pub(crate) trait Platform: Sized {
     }
     fn add_actor(
         &mut self,
-        _entry: Option<&str>,
-        _name: &str,
+        _command: &str,
         _args: &[&str],
     ) -> TestResult<crate::process::ProcessFixture> {
         pending("add actor")

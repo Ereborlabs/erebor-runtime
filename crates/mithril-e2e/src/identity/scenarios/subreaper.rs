@@ -49,7 +49,7 @@ fn subreaper_keeps_identity<P: Platform>() -> TestResult<()> {
     env.install_policy()?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
-    let mut actor = env.add_actor(Some("python-actor"), "subreaper.py", &[])?;
+    let mut actor = env.add_actor("python", &["/fixtures/subreaper.py", "/work"])?;
     let root = env.task(actor.id(), "subreaper root")?;
     assert!(root.snapshot.creator_task_cookie.is_none());
     assert_eq!(

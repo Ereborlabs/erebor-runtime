@@ -29,7 +29,7 @@ fn non_leader_exec<P: Platform>() -> TestResult<()> {
     env.install_policy()?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
-    let mut actor = env.add_actor(Some("python-actor"), "native_non_leader_exec.py", &[])?;
+    let mut actor = env.add_actor("python", &["/fixtures/native_non_leader_exec.py", "/work"])?;
 
     let root_pid = actor.id();
     assert_ne!(root_pid, init.id());

@@ -29,7 +29,7 @@ fn failed_exec_restores<P: Platform>() -> TestResult<()> {
     env.install_policy()?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
-    let mut actor = env.add_actor(Some("python-actor"), "native_exec_retry.py", &[])?;
+    let mut actor = env.add_actor("python", &["/fixtures/native_exec_retry.py", "/work"])?;
 
     let root_pid = actor.id();
     let root = env.task(root_pid, "exec parent identity")?;

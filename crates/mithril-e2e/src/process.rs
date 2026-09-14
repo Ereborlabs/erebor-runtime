@@ -236,61 +236,57 @@ impl ProcessFixture {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        let script = Self::script(root, name)?;
+        let mut values = vec![PathBuf::from(format!("/fixtures/{name}"))];
+        values.extend(args.into_iter().map(|arg| PathBuf::from(arg.as_ref())));
         Self::held(
-            root,
-            name,
-            args,
+            Path::new("/usr/bin/python3"),
+            values,
             cgroup,
             rootfs,
-            Path::new("/usr/bin/python3"),
             linux_raw_sys::general::CLONE_INTO_CGROUP
                 | u64::from(linux_raw_sys::general::CLONE_NEWPID),
+            &script,
         )
     }
 
     #[cfg(test)]
     pub(crate) fn held_cgroup<I, S>(
-        root: &Path,
-        name: &str,
+        command: &Path,
         args: I,
         cgroup: &Path,
         rootfs: &Path,
-        executable: &Path,
     ) -> Result<Self>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
         Self::held(
-            root,
-            name,
+            command,
             args,
             cgroup,
             rootfs,
-            executable,
             linux_raw_sys::general::CLONE_INTO_CGROUP,
+            command,
         )
     }
 
     #[cfg(test)]
     fn held<I, S>(
-        root: &Path,
-        name: &str,
+        command: &Path,
         args: I,
         cgroup: &Path,
         rootfs: &Path,
-        executable: &Path,
         flags: u64,
+        path: &Path,
     ) -> Result<Self>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let script = Self::script(root, name)?;
-        let executable = cstring(executable)?;
-        let actor = cstring(&Path::new("/fixtures").join(name))?;
+        let command = cstring(command)?;
         let root_c = cstring(rootfs)?;
-        let mut values = vec![executable.clone(), actor];
+        let mut values = vec![command.clone()];
         for arg in args {
             values.push(cstring(Path::new(arg.as_ref()))?);
         }
@@ -303,18 +299,18 @@ impl ProcessFixture {
         let pipe = || {
             rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
                 .map_err(std::io::Error::from)
-                .context(IoSnafu { path: &script })
+                .context(IoSnafu { path })
         };
         let (child_in, input) = pipe()?;
         let log = || {
-            let write = tempfile::tempfile().context(IoSnafu { path: &script })?;
+            let write = tempfile::tempfile().context(IoSnafu { path })?;
             let path = PathBuf::from(format!("/proc/self/fd/{}", write.as_raw_fd()));
             let read = File::open(&path).context(IoSnafu { path })?;
             Ok::<_, crate::Error>((write, read))
         };
         let (child_out, output) = log()?;
         let (child_err, errors) = log()?;
-        let (gate, child_gate) = UnixStream::pair().context(IoSnafu { path: &script })?;
+        let (gate, child_gate) = UnixStream::pair().context(IoSnafu { path })?;
         let clone = clone_args {
             flags,
             pidfd: 0,
@@ -336,7 +332,7 @@ impl ProcessFixture {
             unsafe { libc::syscall(libc::SYS_clone3, &raw const clone, size_of::<clone_args>()) };
         if result == 0 {
             run_held(
-                &executable,
+                &command,
                 &argv,
                 &child_in,
                 &child_out,
@@ -348,7 +344,7 @@ impl ProcessFixture {
         ensure!(
             result > 0,
             InvalidInputSnafu {
-                path: &script,
+                path,
                 reason: format!(
                     "clone3 held actor failed: {}",
                     std::io::Error::last_os_error()
@@ -358,7 +354,7 @@ impl ProcessFixture {
         drop((child_in, child_out, child_err, child_gate));
         let pid = u32::try_from(result).map_err(|source| {
             InvalidInputSnafu {
-                path: &script,
+                path,
                 reason: format!("clone3 returned an invalid PID: {source}"),
             }
             .build()
@@ -367,7 +363,7 @@ impl ProcessFixture {
             child: None,
             raw_pid: Some(pid),
             actor_pid: pid,
-            path: script,
+            path: path.to_owned(),
             stdin: Some(Box::new(File::from(input))),
             stdout: Some(output),
             stderr: Some(errors),
@@ -1111,7 +1107,7 @@ fn cstring(path: &Path) -> Result<CString> {
 
 #[cfg(test)]
 fn run_held(
-    executable: &CString,
+    command: &CString,
     argv: &[*const libc::c_char],
     input: &OwnedFd,
     output: &File,
@@ -1136,7 +1132,7 @@ fn run_held(
         if libc::read(gate.as_raw_fd(), (&raw mut release).cast(), 1) != 1 {
             libc::_exit(126);
         }
-        libc::execv(executable.as_ptr(), argv.as_ptr());
+        libc::execv(command.as_ptr(), argv.as_ptr());
         let errno = *libc::__errno_location();
         libc::_exit(if (1..127).contains(&errno) {
             errno

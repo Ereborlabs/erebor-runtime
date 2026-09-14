@@ -1509,8 +1509,8 @@ mod tests {
     use super::{
         list_inventory, mutate_node_quarantine, mutate_protected_pod, pod_admission_facts,
         pod_policy_identity, policy_matches_pod, policy_matching_containers_are_pinned,
-        status_projection_is_current, DaemonSetNodeConstraintsV1, KubernetesAdmissionOwner,
-        KubernetesNodeReadinessOwner, KubernetesWorkloadInventoryOwner,
+        status_projection_is_current, ContainerAdmissionFactV1, DaemonSetNodeConstraintsV1,
+        KubernetesAdmissionOwner, KubernetesNodeReadinessOwner, KubernetesWorkloadInventoryOwner,
         KUBERNETES_LABEL_EPOCH_ANNOTATION, KUBERNETES_NODE_BOOT_ANNOTATION,
         KUBERNETES_NODE_ID_ANNOTATION, KUBERNETES_NODE_UID_ANNOTATION, KUBERNETES_NOT_READY_TAINT,
         KUBERNETES_PROFILE_ANNOTATION, KUBERNETES_READY_LABEL, KUBERNETES_SOURCE_ANNOTATION,
@@ -1633,6 +1633,14 @@ mod tests {
             "77777777-7777-4777-8777-777777777777",
         );
         assert!(policy_matching_containers_are_pinned(&policy, &facts)?);
+        facts.containers.push(ContainerAdmissionFactV1 {
+            name: "setup".to_owned(),
+            kind: ContainerKindV1::Init,
+            image: "registry.example/setup@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .to_owned(),
+        });
+        assert!(!policy_matching_containers_are_pinned(&policy, &facts)?);
+        facts.containers.pop();
         facts.containers[0].image = "registry.example/converter:mutable".to_owned();
         assert!(!policy_matching_containers_are_pinned(&policy, &facts)?);
         facts.containers[0].image = pod()

@@ -57,10 +57,12 @@ These rules control every checkmark and commit in this file.
   behavior in a separate test from initial actor startup.
 - Keep the public test operation name `add_actor`. Do not rename it to
   `exec_actor`. A runtime can use exec as its physical process-entry mechanism.
-- Give `add_actor` an optional signed entry name. Use no entry only when the
-  process starts before policy installation for a recovery test. Resolve a
-  named entry from the installed policy. Do not add role-specific process
-  methods or hard-code signed entry paths in a platform implementation.
+- Give `add_actor` the command and complete argv that a production runtime
+  receives, for example `python` or `cat`. Do not give it a policy rule name
+  or an absolute executable path. It must not inspect the installed policy or
+  reject an undeclared command before production enforcement runs. The scenario
+  installs or omits the applicable rule and asserts the production result. Do
+  not add role-specific process methods.
 - Ask the actor to perform one action. Assert the expected production result.
 - Keep component start, stop, outage, and restart order visible in the test.
 - Test each supported component order in a separate function. Do not make a
@@ -559,7 +561,16 @@ count as maintainability migrations.
   owner through `Platform::add_actor` as each entry-role behavior moves to its
   scenario owner. Keep `Platform::start_actor` for the container PID 1.
 - [x] Make Host `add_actor` call `clone3(CLONE_INTO_CGROUP)` before exec. All
-  17 Host platform tests pass with this process-birth path.
+  23 Host platform tests pass with this process-birth path.
+- [x] Remove policy-entry lookup and preflight checks from `add_actor`. Pass
+  the same command name and complete argv to Host, direct `runc`, and
+  Kubernetes. The physical platform owner resolves the command through the
+  actor environment `PATH`. `ProcessFixture` does not resolve commands.
+  - [x] Pass the complete Host platform set: 23 tests.
+  - [x] Pass the complete direct-`runc` platform set: 16 tests.
+  - [x] Reproduce the unmatched Kubernetes init-container condition in the
+    lightweight Control test before the physical rerun.
+  - [x] Pass the complete Kubernetes platform set: 17 tests.
 - [ ] Replace every embedded native process script with an actual Python file
   in `fixtures/process`.
 - [ ] Execute the same Python process file from production-backed host,

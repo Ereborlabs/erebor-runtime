@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use erebor_interceptor::KernelStateReader;
-use erebor_interceptor_abi::{DeclaredEntryRequestV1, TaskCoordinateStateV1, TaskCoordinateV1};
+use erebor_interceptor_abi::{TaskCoordinateStateV1, TaskCoordinateV1};
 use k8s_cri::v1::ContainerState;
 use mithril_control::{
     lower_kubernetes_policy, workload_target_fact_digest, AllowedNodeIdentity,
@@ -30,9 +30,9 @@ use mithril_node::{
 };
 use snafu::{ensure, ResultExt as _};
 use tokio::sync::watch;
-use zerocopy::{IntoBytes as _, TryFromBytes as _};
+use zerocopy::TryFromBytes as _;
 
-use super::{policy_entry, CriFixture, Platform, Task, TestResult};
+use super::{actor_command, CriFixture, Platform, Task, TestResult};
 use crate::control_fixture::{ControlServerFixture, MtlsFixture};
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
 use crate::physical::{
@@ -90,18 +90,6 @@ pub(crate) struct Host {
 }
 
 impl Host {
-    pub(super) fn entry(&self, name: Option<&str>) -> TestResult<PathBuf> {
-        match name {
-            Some(name) => policy_entry(
-                self.resource
-                    .as_ref()
-                    .ok_or("the actor entry requires an installed policy")?,
-                name,
-            ),
-            None => Ok(fs::canonicalize("/usr/bin/python3")?),
-        }
-    }
-
     fn path(name: &'static str) -> TestResult<PathBuf> {
         env::var_os(name)
             .map(PathBuf::from)
@@ -258,23 +246,7 @@ impl Host {
         Ok(())
     }
 
-    fn entry_installed(&self, entry: &Path) -> TestResult<bool> {
-        let request = DeclaredEntryRequestV1::from_path(entry.as_os_str().as_encoded_bytes())
-            .ok_or("the actor entry path is invalid")?;
-        Ok(self
-            .reader
-            .lookup("declared_entry_requests", request.as_bytes())
-            .context(InterceptorSnafu)?
-            .as_deref()
-            == Some([1].as_slice()))
-    }
-
-    fn start_entry(
-        &mut self,
-        name: &str,
-        extra: &[&str],
-        entry: &Path,
-    ) -> TestResult<ProcessFixture> {
+    fn start_entry(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         let init = self.init_pid.ok_or("the initial actor is not running")?;
         let maps_path = PathBuf::from(format!("/proc/{init}/maps"));
         let maps = fs::read(&maps_path).context(IoSnafu { path: &maps_path })?;
@@ -285,22 +257,27 @@ impl Host {
                 reason: "the runtime read an empty initial actor map",
             }
         );
-        let rootfs = self.actor_root(name)?;
-        let mut args = vec![OsString::from("/work")];
-        args.extend(extra.iter().map(OsString::from));
-        let mut actor =
-            ProcessFixture::held_cgroup(&self.root, name, args, &self.cgroup_path, &rootfs, entry)?;
-        let placement = self.task(actor.id(), "added actor placement")?;
+        let rootfs = self.out.join("bundle/rootfs");
+        let program = actor_command(&rootfs, command)?;
+        let mut actor = ProcessFixture::held_cgroup(&program, args, &self.cgroup_path, &rootfs)?;
+        let placement = self
+            .node_task
+            .is_some()
+            .then(|| self.task(actor.id(), "added actor placement"))
+            .transpose()?;
         actor.release()?;
         if let Err(source) = actor.ready() {
-            return Err(format!(
-                "{source}; pre-exec PID: {}; snapshot: {:?}; coordinate: {:?}; identity health: {:?}",
-                placement.pid,
-                placement.snapshot,
-                placement.coordinate,
-                self.health()?
-            )
-            .into());
+            if let Some(placement) = placement {
+                return Err(format!(
+                    "{source}; pre-exec PID: {}; snapshot: {:?}; coordinate: {:?}; identity health: {:?}",
+                    placement.pid,
+                    placement.snapshot,
+                    placement.coordinate,
+                    self.health()?
+                )
+                .into());
+            }
+            return Err(source.into());
         }
         Ok(actor)
     }
@@ -468,6 +445,9 @@ impl Platform for Host {
         let work_path = out.join("actor");
         let state_path = out.join("node");
         let work = ProbeDirectory::create(&work_path)?;
+        let bin = work_path.join("bin");
+        fs::create_dir(&bin)?;
+        fs::copy(fs::canonicalize("/usr/bin/python3")?, bin.join("python"))?;
         let state = ProbeDirectory::create(&state_path)?;
         let admit = ProbeDirectory::create(&admit_dir)?;
         let cgroup = ProbeCgroup::create(&cgroup_path)?;
@@ -898,31 +878,8 @@ impl Platform for Host {
         Ok(actor)
     }
 
-    fn add_actor(
-        &mut self,
-        entry: Option<&str>,
-        name: &str,
-        extra: &[&str],
-    ) -> TestResult<ProcessFixture> {
-        if self.node_task.is_none() {
-            let mut args = vec![self.work_path.clone().into_os_string()];
-            args.extend(extra.iter().map(OsString::from));
-            let actor = ProcessFixture::python(&self.root, name, args)?;
-            self.place(actor.id())?;
-            return Ok(actor);
-        }
-        let entry = self.entry(entry)?;
-        ensure!(
-            self.entry_installed(&entry)?,
-            InvalidInputSnafu {
-                path: &self.pin_path,
-                reason: format!(
-                    "the signed actor entry is not installed: {}",
-                    entry.display()
-                ),
-            }
-        );
-        self.start_entry(name, extra, &entry)
+    fn add_actor(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
+        self.start_entry(command, args)
     }
 
     fn place(&mut self, pid: u32) -> TestResult<()> {

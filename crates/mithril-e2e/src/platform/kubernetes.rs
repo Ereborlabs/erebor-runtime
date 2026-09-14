@@ -30,7 +30,7 @@ use serde_json::{json, Value};
 use snafu::ResultExt as _;
 use zerocopy::TryFromBytes as _;
 
-use super::{policy_entry, Platform, Task, TestResult};
+use super::{actor_command, Platform, Task, TestResult};
 use crate::control_fixture::MtlsFixture;
 use crate::error::{InvalidInputSnafu, IoSnafu, NodeSnafu};
 use crate::physical::{
@@ -65,7 +65,6 @@ pub(crate) struct Kubernetes {
     actor_image: String,
     actor_python: String,
     actor_entry: String,
-    policy: Option<WorkloadProtectionPolicy>,
     system: String,
     namespace: String,
     token: String,
@@ -714,12 +713,16 @@ impl Kubernetes {
         })
     }
 
-    fn start_entry(&self, entry: &Path, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
+    fn start_entry(&self, program: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         let group = self
             .actor_cgroup
             .as_ref()
             .ok_or("the Kubernetes actor has no recorded cgroup")?;
-        let script = ProcessFixture::script(&self.root, name)?;
+        let init = self
+            .actor_pid
+            .ok_or("the Kubernetes actor has no recorded PID")?;
+        let root = PathBuf::from(format!("/proc/{init}/root"));
+        let program = actor_command(&root, program)?;
         let mut command = Command::new(&self.k3s_path);
         command
             .arg("kubectl")
@@ -735,16 +738,14 @@ impl Kubernetes {
                 CONTAINER,
                 "--",
             ])
-            .arg(entry)
-            .arg(format!("/fixtures/{name}"))
-            .arg("/work")
-            .args(extra);
+            .arg(&program)
+            .args(args);
         let procs = group.join("cgroup.procs");
         let before = fs::read_to_string(&procs)?
             .split_ascii_whitespace()
             .map(str::parse)
             .collect::<Result<Vec<u32>, _>>()?;
-        let mut actor = ProcessFixture::start(&mut command, &script).map_err(|source| {
+        let mut actor = ProcessFixture::start(&mut command, &program).map_err(|source| {
             let logs = self
                 .logs(&self.system, "daemonset/mithril-node")
                 .unwrap_or_else(|error| error.to_string());
@@ -925,7 +926,7 @@ impl Platform for Kubernetes {
         let actor_python = env::var("MITHRIL_TEST_ACTOR_PYTHON")
             .unwrap_or_else(|_| "/usr/local/bin/python3".to_owned());
         let actor_entry = env::var("MITHRIL_TEST_ACTOR_ENTRY")
-            .unwrap_or_else(|_| "/usr/local/bin/python3.13".to_owned());
+            .unwrap_or_else(|_| "/usr/local/bin/python".to_owned());
         let digest = actor_image
             .rsplit_once("@sha256:")
             .map(|(_, digest)| digest)
@@ -994,7 +995,6 @@ impl Platform for Kubernetes {
             actor_image,
             actor_python,
             actor_entry,
-            policy: None,
             system,
             namespace,
             token,
@@ -1095,7 +1095,6 @@ impl Platform for Kubernetes {
             Api::<WorkloadProtectionPolicy>::namespaced(self.client.clone(), &self.namespace);
         self.runtime
             .block_on(policies.create(&PostParams::default(), &policy))?;
-        self.policy = Some(policy);
         self.wait_policy(0)
     }
 
@@ -1244,22 +1243,8 @@ impl Platform for Kubernetes {
         Ok(actor)
     }
 
-    fn add_actor(
-        &mut self,
-        entry: Option<&str>,
-        name: &str,
-        extra: &[&str],
-    ) -> TestResult<ProcessFixture> {
-        let entry = match entry {
-            Some(name) => policy_entry(
-                self.policy
-                    .as_ref()
-                    .ok_or("the actor entry requires an installed policy")?,
-                name,
-            )?,
-            None => PathBuf::from(&self.actor_entry),
-        };
-        self.start_entry(&entry, name, extra)
+    fn add_actor(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
+        self.start_entry(command, args)
     }
 
     fn place(&mut self, pid: u32) -> TestResult<()> {

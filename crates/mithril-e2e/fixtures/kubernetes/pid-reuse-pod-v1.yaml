@@ -17,6 +17,9 @@ spec:
       args:
         - /fixtures/native_pid_reuse.py
         - /work
+      env:
+        - name: PATH
+          value: /work/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       stdin: true
       stdinOnce: true
       securityContext:

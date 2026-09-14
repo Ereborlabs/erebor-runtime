@@ -8,7 +8,7 @@ use erebor_interceptor::KernelStateReader;
 use mithril_node::OciBaseSpecOwner;
 use serde_json::{json, Value};
 
-use super::{Host, Platform, Task, TestResult};
+use super::{actor_command, Host, Platform, Task, TestResult};
 use crate::physical::ProbeDirectory;
 use crate::process::ProcessFixture;
 
@@ -67,17 +67,19 @@ impl Runc {
         )?)?)
     }
 
-    fn start_entry(
-        &mut self,
-        entry: &Path,
-        name: &str,
-        extra: &[&str],
-    ) -> TestResult<ProcessFixture> {
+    fn start_entry(&mut self, program: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         let id = self
             .container_id
             .as_deref()
             .ok_or("the runc actor is not started")?;
-        let script = ProcessFixture::script(self.host.source(), name)?;
+        let state = self.state(id)?;
+        let init = state["pid"]
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+            .ok_or("runc state has no actor PID")?;
+        let root = PathBuf::from(format!("/proc/{init}/root"));
+        let program = actor_command(&root, program)?;
         let pid_path = self.host.work().join("exec.pid");
         let mut command = Command::new(&self.runc_path);
         command
@@ -86,11 +88,9 @@ impl Runc {
             .args(["exec", "--cwd", "/work", "--pid-file"])
             .arg(&pid_path)
             .arg(id)
-            .arg(entry)
-            .arg(format!("/fixtures/{name}"))
-            .arg("/work")
-            .args(extra);
-        let mut actor = ProcessFixture::start(&mut command, &script)?;
+            .arg(&program)
+            .args(args);
+        let mut actor = ProcessFixture::start(&mut command, &program)?;
         let parent = actor.id();
         let pid = actor.wait_pid(&pid_path, "runc exec host PID")?;
         fs::remove_file(&pid_path)?;
@@ -214,7 +214,10 @@ impl Platform for Runc {
         config["process"]["terminal"] = json!(false);
         config["process"]["args"] = json!(args);
         config["process"]["cwd"] = json!("/work");
-        config["process"]["env"] = json!(["PATH=/usr/bin", "PYTHONDONTWRITEBYTECODE=1"]);
+        config["process"]["env"] = json!([
+            "PATH=/work/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PYTHONDONTWRITEBYTECODE=1"
+        ]);
         let caps = json!(["CAP_CHECKPOINT_RESTORE", "CAP_SYS_ADMIN"]);
         config["process"]["capabilities"] = json!({
             "bounding": caps,
@@ -302,14 +305,8 @@ impl Platform for Runc {
         Ok(actor)
     }
 
-    fn add_actor(
-        &mut self,
-        entry: Option<&str>,
-        name: &str,
-        extra: &[&str],
-    ) -> TestResult<ProcessFixture> {
-        let entry = self.host.entry(entry)?;
-        self.start_entry(&entry, name, extra)
+    fn add_actor(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
+        self.start_entry(command, args)
     }
 
     fn place(&mut self, pid: u32) -> TestResult<()> {
