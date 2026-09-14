@@ -5,6 +5,8 @@ mod clone3;
 #[cfg(test)]
 mod fixture;
 mod pid_reuse;
+#[cfg(test)]
+mod retained;
 mod scenarios;
 mod tid_reuse;
 #[cfg(test)]

@@ -1145,6 +1145,13 @@ test does not close a row when its physical condition or an assertion changed.
     post-cutover activation, and cleanup for separate migrations.
 - [ ] Retained-host restart: keep host shutdown, retained map validation,
   production recovery, stable map IDs, and ownership rejection visible.
+  - [x] Add one small Host test and one concrete owner. Keep concurrent lease
+    rejection, retained-link rejection, displaced-map rejection, restart, map
+    identity, and live-manifest failure as explicit actions and assertions.
+  - [x] Pass the Host case in the retained privileged VM.
+  - [ ] Remove only the matching restart assertions and result fields from
+    `IdentityTestRunner::physical_probe`. Keep the restart required by the
+    cgroup-lifetime case until that separate replacement passes.
 - [ ] Cgroup lifetime reuse: recreate the cgroup path after recovery. Keep the
   new cgroup ID, binding nonce, live interval, process identity, and role
   assertions visible.

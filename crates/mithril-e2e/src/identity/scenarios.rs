@@ -29,6 +29,8 @@ mod recovery_tasks;
 #[cfg(test)]
 mod restricted_roots;
 #[cfg(test)]
+mod retained_host;
+#[cfg(test)]
 mod subreaper;
 #[cfg(test)]
 mod workload_recovery;
