@@ -1115,6 +1115,14 @@ fn run_held(
         if libc::chroot(rootfs.as_ptr()) < 0 || libc::chdir(c"/".as_ptr()) < 0 {
             libc::_exit(125);
         }
+        if libc::setenv(
+            c"PATH".as_ptr(),
+            c"/work/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".as_ptr(),
+            1,
+        ) < 0
+        {
+            libc::_exit(126);
+        }
         if libc::dup2(input.as_raw_fd(), libc::STDIN_FILENO) < 0
             || libc::dup2(output.as_raw_fd(), libc::STDOUT_FILENO) < 0
             || libc::dup2(errors.as_raw_fd(), libc::STDERR_FILENO) < 0
@@ -1128,7 +1136,7 @@ fn run_held(
         if libc::read(gate.as_raw_fd(), (&raw mut release).cast(), 1) != 1 {
             libc::_exit(126);
         }
-        libc::execv(command.as_ptr(), argv.as_ptr());
+        libc::execvp(command.as_ptr(), argv.as_ptr());
         let errno = *libc::__errno_location();
         libc::_exit(if (1..127).contains(&errno) {
             errno

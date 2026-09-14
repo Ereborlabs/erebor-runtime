@@ -811,6 +811,23 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the Kubernetes generated case through real `kubectl exec`.
   - [x] Pass the complete Kubernetes platform set after the copied
     interpreter dependency correction.
+  - [ ] Pass the signed external entry by command name. Do not resolve the
+    command in a test helper or platform owner. Host must resolve it with
+    `execvp`. Direct `runc` and Kubernetes must resolve it through their
+    production exec paths.
+    - [x] Host passes the exact Rust scenario. The actor calls
+      `execvp("python-external", ...)`. The resulting syscall is
+      `execve("/work/bin/python-external", ["python-external", ...])`.
+      The complete 25-test Host platform set passed in 904.39 seconds.
+      The complete repository Rust CI script passed.
+    - [ ] Direct `runc` passes the exact Rust scenario.
+    - [ ] Kubernetes passes the exact Rust scenario.
+    - The signed policy path and exact executable object remain installed.
+      BPF now selects the signed declared entry from the `execve` or `execveat`
+      filename. It captures and verifies the complete argv separately.
+    - The old physical Kubernetes commands use absolute executable paths.
+      They do not qualify command-name resolution.
+    - Do not restore test-side resolution.
   - [x] Make `Platform::place` perform and verify the real cgroup attach on
     Host, direct `runc`, and Kubernetes. Expose only the checked fixture source
     path so the scenario can start one ordinary `ProcessFixture` outside the

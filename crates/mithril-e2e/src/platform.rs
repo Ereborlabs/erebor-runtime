@@ -29,7 +29,7 @@ pub(crate) use self::runc::Runc;
 pub(crate) use mithril_e2e_macros::platform_test;
 pub(crate) type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
 const TASK_LIMIT: Duration = Duration::from_secs(30);
-const FIXTURE_DIR: &str = "crates/mithril-e2e/fixtures/process";
+pub(crate) const PROCESS_FIXTURES: &str = "crates/mithril-e2e/fixtures/process";
 const ACTOR_PATH: &str = "/work/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 pub(crate) fn actor_script(root: &Path, name: &str) -> crate::Result<PathBuf> {
@@ -40,7 +40,7 @@ pub(crate) fn actor_script(root: &Path, name: &str) -> crate::Result<PathBuf> {
             reason: format!("actor script must be one file name: {name:?}"),
         }
     );
-    let path = root.join(FIXTURE_DIR).join(name);
+    let path = root.join(PROCESS_FIXTURES).join(name);
     snafu::ensure!(
         path.is_file(),
         InvalidInputSnafu {

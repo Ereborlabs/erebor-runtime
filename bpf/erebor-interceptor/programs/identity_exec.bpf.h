@@ -883,10 +883,6 @@ static long capture_provisional_exec_stream(__u32 step, void *data)
             return 1;
         }
         capture->current_argument = current_argument;
-        if (!argument_index)
-            capture_declared_exec_request(
-                capture->request, capture->scratch,
-                current_argument);
     }
     result = bpf_probe_read_user_str(
         capture->scratch->exec_argument,
@@ -928,10 +924,10 @@ static long capture_provisional_exec_stream(__u32 step, void *data)
 }
 
 static __noinline void capture_provisional_exec_request(
-    identity_runtime_config_v1 *config, struct task_struct *task,
-    const char *const *argv, __u8 syscall_stage,
-    __u32 syscall_flags)
+    identity_runtime_config_v1 *config, const char *filename,
+    const char *const *argv, __u8 syscall_stage, __u32 syscall_flags)
 {
+    struct task_struct *task = bpf_get_current_task_btf();
     struct identity_scratch_v1 *scratch;
     struct provisional_exec_request_v1 *request;
     long steps;
@@ -953,6 +949,7 @@ static __noinline void capture_provisional_exec_request(
     request->syscall_stage = syscall_stage;
     request->syscall_flags = syscall_flags;
     request->transition_version = 1;
+    capture_declared_exec_request(request, scratch, filename);
     if (!argv ||
         allocate_id(config, &request->argv_snapshot.snapshot_id) ||
         clear_execution_argv_chunk(scratch))
@@ -1360,22 +1357,23 @@ static __noinline void emit_execution_approval_prepare_trace(
 }
 
 static __always_inline int prepare_exec_matches(
-    const char *const *argv, __u8 trace_stage, __u32 syscall_flags)
+    const char *filename, const char *const *argv,
+    __u8 trace_stage, __u32 syscall_flags)
 {
     identity_runtime_config_v1 *config = identity_runtime_config();
 
     if (!config || !config->enabled)
         return 0;
     capture_provisional_exec_request(
-        config, bpf_get_current_task_btf(), argv,
-        trace_stage, syscall_flags);
+        config, filename, argv, trace_stage, syscall_flags);
     return 0;
 }
 
 SEC("tracepoint/syscalls/sys_enter_execve")
 int erebor_sys_enter_execve(struct trace_event_raw_sys_enter *context)
 {
-    return prepare_exec_matches((const char *const *)context->args[1],
+    return prepare_exec_matches((const char *)context->args[0],
+                                (const char *const *)context->args[1],
                                 EXECUTION_APPROVAL_TRACE_STAGE_EXECVE_ENTRY_V1,
                                 0);
 }
@@ -1405,6 +1403,7 @@ int erebor_sys_enter_execveat(struct trace_event_raw_sys_enter *context)
         return 0;
     }
     return prepare_exec_matches(
+        (const char *)context->args[1],
         (const char *const *)context->args[2],
         EXECUTION_APPROVAL_TRACE_STAGE_EXECVEAT_ENTRY_V1,
         (__u32)context->args[4]);

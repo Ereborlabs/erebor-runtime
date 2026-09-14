@@ -32,7 +32,7 @@ use snafu::{ensure, ResultExt as _};
 use tokio::sync::watch;
 use zerocopy::TryFromBytes as _;
 
-use super::{actor_command, actor_script, CriFixture, Platform, Task, TestResult};
+use super::{CriFixture, Platform, Task, TestResult, PROCESS_FIXTURES};
 use crate::control_fixture::{ControlServerFixture, MtlsFixture};
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
 use crate::physical::{
@@ -200,7 +200,7 @@ impl Host {
         Ok(())
     }
 
-    fn actor_root(&mut self, script: &Path) -> TestResult<PathBuf> {
+    fn actor_root(&mut self) -> TestResult<PathBuf> {
         let bundle_path = self.out.join("bundle");
         let rootfs = bundle_path.join("rootfs");
         if self.bundle.is_some() {
@@ -215,10 +215,8 @@ impl Host {
                 self.bind(source, &rootfs.join(path.trim_start_matches('/')))?;
             }
         }
-        let fixtures = script
-            .parent()
-            .ok_or("the actor has no fixture directory")?;
-        self.bind(fixtures, &rootfs.join("fixtures"))?;
+        let fixtures = self.root.join(PROCESS_FIXTURES);
+        self.bind(&fixtures, &rootfs.join("fixtures"))?;
         let work = self.work_path.clone();
         self.bind(&work, &rootfs.join("work"))?;
         self.bundle = Some(bundle);
@@ -257,8 +255,8 @@ impl Host {
             }
         );
         let rootfs = self.out.join("bundle/rootfs");
-        let program = actor_command(&rootfs, command)?;
-        let mut actor = ProcessFixture::held_cgroup(&program, args, &self.cgroup_path, &rootfs)?;
+        let program = Path::new(command);
+        let mut actor = ProcessFixture::held_cgroup(program, args, &self.cgroup_path, &rootfs)?;
         let placement = self
             .node_task
             .is_some()
@@ -852,8 +850,7 @@ impl Platform for Host {
             }
         );
         let protected = self.node_task.is_some() && self.binding.is_some();
-        let script = actor_script(&self.root, name)?;
-        let rootfs = self.actor_root(&script)?;
+        let rootfs = self.actor_root()?;
         let mut args = vec![OsString::from("/work")];
         args.extend(extra.iter().map(OsString::from));
         args.insert(0, OsString::from(format!("/fixtures/{name}")));
@@ -862,7 +859,7 @@ impl Platform for Host {
             args,
             &self.cgroup_path,
             &rootfs,
-            &script,
+            Path::new(name),
         )?;
         let pid = actor.id();
         self.init_pid = Some(pid);
