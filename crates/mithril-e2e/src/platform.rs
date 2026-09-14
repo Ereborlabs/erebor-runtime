@@ -20,6 +20,7 @@ mod host;
 mod kubernetes;
 mod runc;
 mod scope;
+mod shared;
 
 pub(crate) use self::cri::CriFixture;
 pub(crate) use self::host::Host;

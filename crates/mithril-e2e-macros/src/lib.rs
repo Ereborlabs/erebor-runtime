@@ -94,7 +94,7 @@ pub fn platform_test(attr: TokenStream, item: TokenStream) -> TokenStream {
             #[test]
             #[ignore = "requires its physical test environment"]
             fn #case() #output {
-                crate::platform::test_scope(#scope, || {
+                crate::platform::test_scope::<crate::platform::#platform, _>(#scope, || {
                     super::#name::<crate::platform::#platform>()
                 })
             }

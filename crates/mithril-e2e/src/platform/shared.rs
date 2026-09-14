@@ -1,0 +1,1032 @@
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::env;
+use std::fs;
+use std::ops::{Deref, DerefMut};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use erebor_interceptor::KernelStateReader;
+use erebor_interceptor_abi::{TaskCoordinateStateV1, TaskCoordinateV1};
+use k8s_cri::v1::ContainerState;
+use mithril_control::{
+    lower_kubernetes_policy, workload_target_fact_digest, AllowedNodeIdentity,
+    ContainerKindV1 as ControlContainerKind, ControlPlane, ControlStore,
+    KubernetesWorkloadIdentityV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
+    PolicySignerConfigV1, PolicySignerTrustV1, PolicySourceRevisionV1, PolicySourceStateV1,
+    TrustGenerationV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
+};
+use mithril_node::{
+    AdministrativeAuthorizationConfig, ContainerKindV1, ContainerRuntimeConfig, EvidenceConfig,
+    EvidenceWalCapacityPolicyV1, InterceptorConfig, NativeIdentityInspector, NativeTaskSnapshotV1,
+    NodeChassis, NodeConfig, NodeReadinessV1, RuntimeAdmissionClient, RuntimeAdmissionConfig,
+    RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1, RuntimeAdmissionResponseV1,
+    ScheduledRuntimeBindingV1, WorkloadBindingConfig, CONTAINER_NAME_ANNOTATION,
+    IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
+    POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
+};
+use snafu::{ensure, ResultExt as _};
+use tokio::sync::watch;
+use zerocopy::TryFromBytes as _;
+
+use super::scope::{current, enter, ScopeGuard};
+use super::{CriFixture, Task, TestResult};
+use crate::control_fixture::{ControlServerFixture, MtlsFixture};
+use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
+use crate::physical::{
+    wait_for, wait_for_async, wait_stable, ProbeCgroup, ProbeDirectory, ProbeFile,
+};
+use crate::process::ProcessFixture;
+use crate::runtime_input::runtime_observation;
+
+const READY_LIMIT: Duration = Duration::from_secs(30);
+const TENANT_ID: &str = "00000000-0000-0001-0000-000000000002";
+const CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
+const NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
+const POD_UID: &str = "99999999-9999-4999-8999-999999999999";
+const NODE_UID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const ACTOR_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+pub(super) struct SharedState {
+    scope_name: &'static str,
+    root: PathBuf,
+    out: PathBuf,
+    work_path: PathBuf,
+    state_path: PathBuf,
+    cgroup_path: PathBuf,
+    node_path: PathBuf,
+    pin_path: PathBuf,
+    lease_path: PathBuf,
+    cri_path: PathBuf,
+    admit_path: PathBuf,
+    work: Option<ProbeDirectory>,
+    state: Option<ProbeDirectory>,
+    admit: Option<ProbeDirectory>,
+    cgroup: Option<ProbeCgroup>,
+    node_cgroup: Option<ProbeCgroup>,
+    pin: Option<ProbeDirectory>,
+    lease: Option<ProbeFile>,
+    tls: MtlsFixture,
+    control: Option<ControlServerFixture>,
+    plane: Option<ControlPlane>,
+    policy: Option<PolicyDesiredStateOwner>,
+    resource: Option<WorkloadProtectionPolicy>,
+    binding: Option<WorkloadBindingConfig>,
+    revision: Option<String>,
+    cri: Option<CriFixture>,
+    node_stop: Option<watch::Sender<bool>>,
+    node_task: Option<thread::JoinHandle<mithril_node::Result<()>>>,
+    ready: Option<watch::Receiver<NodeReadinessV1>>,
+    inspector: NativeIdentityInspector,
+    reader: KernelStateReader,
+    runtime: tokio::runtime::Runtime,
+    hook_path: PathBuf,
+}
+
+pub(super) struct Shared {
+    scope: Option<ScopeGuard<'static, SharedState>>,
+}
+
+impl Deref for Shared {
+    type Target = SharedState;
+
+    fn deref(&self) -> &Self::Target {
+        match self.scope.as_ref().and_then(ScopeGuard::get) {
+            Some(state) => state,
+            None => unreachable!("the shared scope is closed"),
+        }
+    }
+}
+
+impl DerefMut for Shared {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self.scope.as_mut().and_then(ScopeGuard::get_mut) {
+            Some(state) => state,
+            None => unreachable!("the shared scope is closed"),
+        }
+    }
+}
+
+impl SharedState {
+    fn path(name: &'static str) -> TestResult<PathBuf> {
+        env::var_os(name)
+            .map(PathBuf::from)
+            .ok_or_else(|| format!("{name} is not set").into())
+    }
+
+    fn reset(&mut self) -> TestResult<()> {
+        ensure!(
+            self.work.is_none() && self.cgroup.is_none(),
+            InvalidInputSnafu {
+                path: &self.out,
+                reason: "the previous scenario is not clean",
+            }
+        );
+        let work = ProbeDirectory::create(&self.work_path)?;
+        let bin = self.work_path.join("bin");
+        fs::create_dir(&bin)?;
+        fs::copy(fs::canonicalize("/usr/bin/python3")?, bin.join("python"))?;
+        self.work = Some(work);
+        self.cgroup = Some(ProbeCgroup::create(&self.cgroup_path)?);
+        self.resource = None;
+        self.binding = None;
+        self.revision = None;
+        Ok(())
+    }
+
+    fn binding(&self) -> TestResult<&WorkloadBindingConfig> {
+        self.binding
+            .as_ref()
+            .ok_or_else(|| "the policy is not installed".into())
+    }
+
+    pub(super) fn cgroup(&self) -> &Path {
+        &self.cgroup_path
+    }
+
+    pub(super) fn move_out(&self, pid: u32) -> TestResult<()> {
+        self.node_cgroup
+            .as_ref()
+            .ok_or("the Node cgroup is not owned")?
+            .move_out(pid)?;
+        Ok(())
+    }
+
+    pub(super) fn set_hook(&mut self, path: &Path) {
+        self.hook_path = path.to_owned();
+    }
+
+    pub(super) fn admit_path(&self) -> &Path {
+        &self.admit_path
+    }
+
+    pub(super) fn actor_id(&self) -> &str {
+        ACTOR_ID
+    }
+
+    pub(super) fn has_policy(&self) -> bool {
+        self.binding.is_some()
+    }
+
+    pub(super) fn annotations(&self) -> TestResult<BTreeMap<String, String>> {
+        let binding = self.binding()?;
+        let revision = self
+            .revision
+            .as_ref()
+            .ok_or("the policy revision is not installed")?;
+        Ok(BTreeMap::from([
+            (
+                POD_NAMESPACE_ANNOTATION.to_owned(),
+                binding.namespace.clone(),
+            ),
+            (POD_UID_ANNOTATION.to_owned(), binding.pod_uid.clone()),
+            (
+                CONTAINER_NAME_ANNOTATION.to_owned(),
+                binding.container_name.clone(),
+            ),
+            (
+                IMAGE_NAME_ANNOTATION.to_owned(),
+                format!("fixture@{}", binding.image_digest),
+            ),
+            (SANDBOX_ID_ANNOTATION.to_owned(), binding.sandbox_id.clone()),
+            (PROFILE_ID_ANNOTATION.to_owned(), binding.profile_id.clone()),
+            (
+                POLICY_SOURCE_REVISION_ANNOTATION.to_owned(),
+                revision.clone(),
+            ),
+        ]))
+    }
+
+    pub(super) fn observe(&mut self) -> TestResult<()> {
+        self.observe_state(0, ContainerState::ContainerCreated)
+    }
+
+    fn observe_state(&mut self, pid: u32, state: ContainerState) -> TestResult<()> {
+        let value = runtime_observation(self.binding()?, pid, state)?;
+        self.cri.as_ref().ok_or("CRI is not running")?.set(value)?;
+        Ok(())
+    }
+
+    pub(super) fn request(
+        &self,
+        operation: RuntimeAdmissionOperationV1,
+        pid: Option<u32>,
+    ) -> TestResult<RuntimeAdmissionRequestV1> {
+        let binding = self.binding()?;
+        Ok(RuntimeAdmissionRequestV1 {
+            operation,
+            container_id: binding.container_id.clone(),
+            initial_pid: pid,
+            cgroup_path: (operation == RuntimeAdmissionOperationV1::StageRuntimeFacts)
+                .then(|| self.cgroup_path.clone()),
+            oci_bundle: None,
+            oci_root_fd: None,
+            annotations: self.annotations()?,
+        })
+    }
+
+    pub(super) fn submit(
+        &self,
+        request: &RuntimeAdmissionRequestV1,
+    ) -> TestResult<RuntimeAdmissionResponseV1> {
+        let client = RuntimeAdmissionClient::new(self.admit_path.clone(), READY_LIMIT)?;
+        Ok(self.runtime.block_on(client.submit(request))?)
+    }
+
+    pub(super) fn node_running(&self) -> bool {
+        self.node_task.is_some()
+    }
+
+    pub(super) fn protected(&self) -> bool {
+        self.node_running() && self.binding.is_some()
+    }
+
+    fn wait_task_exec(
+        &mut self,
+        pid: u32,
+        cookie: u64,
+        before: &Task,
+        name: &str,
+    ) -> TestResult<Task> {
+        let last = RefCell::new(String::from("<absent>"));
+        let snapshot = wait_for(
+            &self.pin_path,
+            name,
+            READY_LIMIT,
+            || Ok(self.exec_snapshot(pid, cookie, before, &last)),
+            || format!("PID {pid}; last identity: {}", last.borrow()),
+        )?;
+        self.task_from(pid, snapshot)
+    }
+
+    fn exec_snapshot(
+        &self,
+        pid: u32,
+        cookie: u64,
+        before: &Task,
+        last: &RefCell<String>,
+    ) -> Option<NativeTaskSnapshotV1> {
+        let snapshot = match self.inspector.snapshot(pid) {
+            Ok(snapshot) => snapshot,
+            Err(source) => {
+                *last.borrow_mut() = source.to_string();
+                return None;
+            }
+        };
+        if let Some(value) = snapshot.as_ref() {
+            *last.borrow_mut() = format!("{value:?}");
+        }
+        snapshot.filter(|value| {
+            value.task_cookie == cookie
+                && value.active_execution_id != before.snapshot.active_execution_id
+        })
+    }
+
+    fn retire(&mut self) -> TestResult<()> {
+        if let Some(cri) = self.cri.as_ref() {
+            cri.clear()?;
+        }
+        if let (Some(plane), Some(policy), Some(resource)) = (
+            self.plane.as_ref(),
+            self.policy.as_ref(),
+            self.resource.as_ref(),
+        ) {
+            plane.replace_kubernetes_workload_inventory(Vec::new())?;
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
+            policy.reconcile(resource, NAMESPACE_UID, &[], now)?;
+            if self.node_task.is_some() {
+                let last = RefCell::new(String::from("<absent>"));
+                wait_for(
+                    &self.state_path,
+                    "scenario retirement",
+                    READY_LIMIT,
+                    || {
+                        let status = mithril_node::policy_delivery_status(&self.state_path)
+                            .context(NodeSnafu)?;
+                        *last.borrow_mut() = format!("{status:?}");
+                        Ok((status.active_target_count == 0
+                            && status.scheduled_binding_count == 0
+                            && status.runtime_binding_count == 0
+                            && !status.activation_pending)
+                            .then_some(()))
+                    },
+                    || format!("last policy delivery: {}", last.borrow()),
+                )?;
+            }
+        }
+        self.resource = None;
+        self.binding = None;
+        self.revision = None;
+        Ok(())
+    }
+
+    fn clean_test(&mut self) -> TestResult<()> {
+        self.retire()?;
+        if let Some(cgroup) = self.cgroup.take() {
+            cgroup.cleanup()?;
+        }
+        if let Some(work) = self.work.take() {
+            work.cleanup()?;
+        }
+        Ok(())
+    }
+
+    fn stop_node(&mut self) -> TestResult<()> {
+        if let Some(stop) = self.node_stop.take() {
+            stop.send_replace(true);
+        }
+        if let Some(task) = self.node_task.as_ref() {
+            wait_for(
+                &self.pin_path,
+                "Node shutdown",
+                READY_LIMIT,
+                || Ok(task.is_finished().then_some(())),
+                || "the Node thread is still running".to_owned(),
+            )?;
+        }
+        if let Some(task) = self.node_task.take() {
+            task.join()
+                .map_err(|_panic| "Node thread panicked")?
+                .context(NodeSnafu)?;
+        }
+        let seccomp = self.admit_path.with_extension("seccomp.sock");
+        if self.admit_path.exists() || seccomp.exists() {
+            return Err(format!(
+                "Node shutdown left runtime sockets: admission={}, seccomp={}",
+                self.admit_path.exists(),
+                seccomp.exists(),
+            )
+            .into());
+        }
+        self.ready.take();
+        Ok(())
+    }
+
+    fn close_core(&mut self) -> TestResult<()> {
+        self.clean_test()?;
+        self.stop_node()?;
+        if let Some(control) = self.control.take() {
+            self.runtime.block_on(control.shutdown())?;
+        }
+        if let Some(mut cri) = self.cri.take() {
+            cri.stop()?;
+        }
+        self.plane.take();
+        self.policy.take();
+        if let Some(cgroup) = self.node_cgroup.take() {
+            cgroup.cleanup()?;
+        }
+        if let Some(admit) = self.admit.take() {
+            admit.cleanup()?;
+        }
+        if let Some(state) = self.state.take() {
+            state.cleanup()?;
+        }
+        if let Some(pin) = self.pin.take() {
+            pin.cleanup()?;
+        }
+        if let Some(lease) = self.lease.take() {
+            lease.cleanup()?;
+        }
+        Ok(())
+    }
+
+    fn task_from(&self, pid: u32, snapshot: NativeTaskSnapshotV1) -> TestResult<Task> {
+        let bytes = self
+            .reader
+            .lookup("task_coordinates", &snapshot.task_cookie.to_ne_bytes())
+            .context(InterceptorSnafu)?
+            .ok_or("task coordinate is missing")?;
+        let coordinate = TaskCoordinateV1::try_read_from_bytes(&bytes)
+            .map_err(|source| format!("task coordinate is invalid: {source}"))?;
+        Ok(Task {
+            pid,
+            ns_pid: ProcessFixture::namespace_pid(pid)?,
+            snapshot,
+            coordinate,
+        })
+    }
+
+    fn read_task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
+        let snapshot = self.runtime.block_on(wait_for_async(
+            &self.pin_path,
+            name,
+            READY_LIMIT,
+            || self.inspector.snapshot(pid).context(NodeSnafu),
+            || format!("PID {pid} has no published identity"),
+        ))?;
+        self.task_from(pid, snapshot)
+    }
+}
+
+impl Shared {
+    fn close(&mut self) -> TestResult<()> {
+        let Some(mut scope) = self.scope.take() else {
+            return Ok(());
+        };
+        if scope.finish() {
+            return match scope.take() {
+                Some(mut state) => state.close_core(),
+                None => Ok(()),
+            };
+        }
+        match scope.get_mut() {
+            Some(state) => state.clean_test(),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Shared {
+    pub(super) fn source(&self) -> &Path {
+        &self.root
+    }
+
+    pub(super) fn setup(_name: &str) -> TestResult<Self> {
+        erebor_telemetry::init_test_logging();
+        let name = current()?;
+        let mut scope = enter::<SharedState>()?;
+        if scope.get().is_some_and(|state| state.scope_name == name) {
+            let state = scope.get_mut().ok_or("the shared scope is empty")?;
+            state.reset()?;
+            return Ok(Self { scope: Some(scope) });
+        }
+        if let Some(mut state) = scope.take() {
+            state.close_core()?;
+        }
+        let root = SharedState::path("MITHRIL_TEST_ROOT")?;
+        let out = SharedState::path("MITHRIL_TEST_OUTPUT")?;
+        let pin_path = SharedState::path("MITHRIL_TEST_PIN")?;
+        let lease_path = SharedState::path("MITHRIL_TEST_LEASE")?;
+        let cgroup_path = SharedState::path("MITHRIL_TEST_CGROUP")?;
+        let node_name = format!(
+            "{}-node",
+            cgroup_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or("the test cgroup has no file name")?
+        );
+        let node_path = cgroup_path.with_file_name(node_name);
+        let cri_path = out.join("cri.sock");
+        let admit_dir = out.join("admission");
+        let admit_path = admit_dir.join("runtime.sock");
+        ensure!(
+            !out.exists() || out.is_dir(),
+            InvalidInputSnafu {
+                path: &out,
+                reason: "the scenario output path is not a directory",
+            }
+        );
+        fs::create_dir_all(&out).context(IoSnafu { path: &out })?;
+        let work_path = out.join("actor");
+        let state_path = out.join("node");
+        let work = ProbeDirectory::create(&work_path)?;
+        let bin = work_path.join("bin");
+        fs::create_dir(&bin)?;
+        fs::copy(fs::canonicalize("/usr/bin/python3")?, bin.join("python"))?;
+        let state = ProbeDirectory::create(&state_path)?;
+        let admit = ProbeDirectory::create(&admit_dir)?;
+        let cgroup = ProbeCgroup::create(&cgroup_path)?;
+        let mut node_cgroup = ProbeCgroup::create(&node_path)?;
+        node_cgroup.enter()?;
+        let inspector = NativeIdentityInspector::new(&pin_path);
+        let reader = KernelStateReader::new(&pin_path);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        scope.put(SharedState {
+            scope_name: name,
+            root,
+            out,
+            work_path,
+            state_path,
+            cgroup_path,
+            node_path,
+            pin_path: pin_path.clone(),
+            lease_path: lease_path.clone(),
+            cri_path,
+            admit_path,
+            work: Some(work),
+            state: Some(state),
+            admit: Some(admit),
+            cgroup: Some(cgroup),
+            node_cgroup: Some(node_cgroup),
+            pin: Some(ProbeDirectory::new(&pin_path)),
+            lease: Some(ProbeFile::new(&lease_path)),
+            tls: MtlsFixture::new(false)?,
+            control: None,
+            plane: None,
+            policy: None,
+            resource: None,
+            binding: None,
+            revision: None,
+            cri: None,
+            node_stop: None,
+            node_task: None,
+            ready: None,
+            inspector,
+            reader,
+            runtime,
+            hook_path: env::current_exe()?,
+        });
+        Ok(Self { scope: Some(scope) })
+    }
+
+    pub(super) fn start_control(&mut self) -> TestResult<()> {
+        if self.control.is_some() {
+            return Ok(());
+        }
+        let root = self.root.join("crates/mithril-e2e/fixtures/mithril-policy");
+        let store = ControlStore::open(self.tls.path().join("control-store"))?;
+        let policy = PolicyDesiredStateOwner::open(
+            PolicyDesiredStateConfigV1 {
+                tenant_id: TENANT_ID.to_owned(),
+                cluster_uid: CLUSTER_UID.to_owned(),
+                signer: PolicySignerConfigV1 {
+                    signing_key_id: "effect-observation-test-key".to_owned(),
+                    signing_key_path: root.join("test-signing-key.hex"),
+                    seal_request_path: root.join("observe-profile-seal-request.json"),
+                    distribution_sequence_epoch: 1,
+                    candidate_validity_ns: 900_000_000_000,
+                },
+            },
+            store.clone(),
+        )?;
+        let public_key = fs::read_to_string(root.join("test-public-key.hex"))?;
+        let trust = TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: String::new(),
+            policy_issuer_sequence_epoch: 1,
+            policy_signers: vec![PolicySignerTrustV1 {
+                signing_key_id: "effect-observation-test-key".to_owned(),
+                ed25519_public_key_hex: public_key.trim().to_owned(),
+                revoked: false,
+            }],
+        }
+        .with_computed_bundle_digest();
+        let control = ControlPlane::with_control_store(
+            vec![AllowedNodeIdentity {
+                node_id: "node-a".to_owned(),
+                certificate_sha256: self.tls.node_digest(),
+                tenant_id: TENANT_ID.to_owned(),
+            }],
+            trust,
+            store,
+        )?
+        .with_policy_desired_state(policy.clone());
+        self.control = Some(self.runtime.block_on(self.tls.start(control.clone()))?);
+        self.plane = Some(control);
+        self.policy = Some(policy);
+        Ok(())
+    }
+
+    pub(super) fn start_node(&mut self) -> TestResult<()> {
+        if let Some(task) = self.node_task.as_ref() {
+            if self.ready.is_some() && !task.is_finished() {
+                return Ok(());
+            }
+            self.stop_node()?;
+        }
+        let address = self
+            .control
+            .as_ref()
+            .ok_or("Control is not running")?
+            .address();
+        self.cri = Some(CriFixture::start(&self.cri_path)?);
+        let config = NodeConfig {
+            node_id: "node-a".to_owned(),
+            kubernetes_node_name: Some("node-a".to_owned()),
+            state_directory: self.state_path.clone(),
+            interceptor: InterceptorConfig {
+                runtime_btf_path: PathBuf::from("/sys/kernel/btf/vmlinux"),
+                lease_path: self.lease_path.clone(),
+                pin_root: self.pin_path.clone(),
+            },
+            control: self.tls.node_config(address),
+            evidence: Some(EvidenceConfig {
+                tenant_id: TENANT_ID.to_owned(),
+                source_id: "66666666-6666-4666-8666-666666666666".to_owned(),
+                maximum_record_bytes: 128 * 1_024,
+                maximum_retained_bytes: 16 * 1_024 * 1_024,
+                maximum_retained_records: 10_000,
+                maximum_batch_records: 256,
+                maximum_control_delay_ms: 30_000,
+                maximum_reader_queue_records: 262_144,
+                capacity_policy: EvidenceWalCapacityPolicyV1::Block,
+            }),
+            runtime_observation: None,
+            runtime_admission: Some(RuntimeAdmissionConfig {
+                socket_path: self.admit_path.clone(),
+                trusted_start_hook_path: self.hook_path.clone(),
+                maximum_request_bytes: 64 * 1_024,
+                timeout_ms: 5_000,
+            }),
+            container_runtime: Some(ContainerRuntimeConfig {
+                socket_path: self.cri_path.clone(),
+                effect_controller_cgroup_path: self.node_path.clone(),
+                reconciliation_interval_ms: 100,
+            }),
+            workload_bindings: Vec::new(),
+            policy_candidates: Vec::new(),
+            administrative_authorization: Some(AdministrativeAuthorizationConfig {
+                tenant_id: TENANT_ID.to_owned(),
+                cluster_uid: CLUSTER_UID.to_owned(),
+                trust_domain_id: "22222222-2222-4222-8222-222222222222".to_owned(),
+                issuer_id: "88888888-8888-4888-8888-888888888888".to_owned(),
+                key_id: "effect-observation-test-key".to_owned(),
+                public_key_path: self
+                    .root
+                    .join("crates/mithril-e2e/fixtures/mithril-policy/test-public-key.hex"),
+                sequence_epoch: 1,
+                valid_from_utc_ns: 1_767_225_600_000_000_000,
+                valid_until_utc_ns: 1_893_456_000_000_000_000,
+                maximum_clock_skew_ns: 300_000_000_000,
+            }),
+            decommission: None,
+        };
+        let (stop, receiver) = watch::channel(false);
+        let (started, ready) = mpsc::sync_channel(1);
+        let task = thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|source| mithril_node::Error::Io {
+                    path: PathBuf::from("Node fixture runtime"),
+                    source,
+                    location: snafu::Location::default(),
+                })?;
+            runtime.block_on(async move {
+                match NodeChassis::start(config).await {
+                    Ok(node) => {
+                        let _result = started.send(Ok(node.readiness()));
+                        node.run(receiver).await
+                    }
+                    Err(source) => {
+                        let _result = started.send(Err(source.to_string()));
+                        Err(source)
+                    }
+                }
+            })
+        });
+        self.node_stop = Some(stop);
+        self.node_task = Some(task);
+        match ready.recv_timeout(READY_LIMIT) {
+            Ok(Ok(receiver)) => {
+                self.ready = Some(receiver);
+                Ok(())
+            }
+            outcome => {
+                let reason = match outcome {
+                    Ok(Err(source)) => format!("Node start failed: {source}"),
+                    Err(source) => format!("Node start did not report readiness: {source}"),
+                    Ok(Ok(_receiver)) => unreachable!("the ready result was handled"),
+                };
+                match self.stop_node() {
+                    Ok(()) => Err(reason.into()),
+                    Err(source) => Err(format!("{reason}; Node cleanup failed: {source}").into()),
+                }
+            }
+        }
+    }
+
+    pub(super) fn install_policy(&mut self) -> TestResult<()> {
+        if self.resource.is_some() {
+            return Err("the policy is already installed".into());
+        }
+        let path = self
+            .root
+            .join("crates/mithril-e2e/fixtures/mithril-policy/pid-reuse-policy-v1.json");
+        let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
+        let resource: WorkloadProtectionPolicy =
+            serde_json::from_slice(&bytes).context(JsonSnafu { path: &path })?;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
+        let policy = self
+            .policy
+            .as_ref()
+            .ok_or("Control policy is not running")?;
+        let result = policy.reconcile(&resource, NAMESPACE_UID, &[], now)?;
+        ensure!(
+            result.bundles.is_empty(),
+            InvalidInputSnafu {
+                path: &path,
+                reason: "Control produced a policy bundle without a workload target",
+            }
+        );
+        self.revision = Some(result.source_revision.policy_source_revision_id);
+        self.resource = Some(resource);
+        if self.node_task.is_some() {
+            self.sync_policy()?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn sync_policy(&mut self) -> TestResult<()> {
+        let ready = self.ready.as_ref().ok_or("Node is not running")?;
+        let task = self.node_task.as_ref().ok_or("Node is not running")?;
+        let last = RefCell::new(String::from("<absent>"));
+        wait_for(
+            &self.pin_path,
+            "Node Control connection",
+            READY_LIMIT,
+            || {
+                let value = *ready.borrow();
+                *last.borrow_mut() = format!("{value:?}");
+                ensure!(
+                    !task.is_finished(),
+                    InvalidInputSnafu {
+                        path: &self.pin_path,
+                        reason: "Node exited before its Control connection",
+                    }
+                );
+                Ok(value.control_ready.then_some(()))
+            },
+            || format!("last readiness: {}", last.borrow()),
+        )?;
+
+        let plane = self.plane.as_ref().ok_or("Control is not running")?;
+        plane.bind_kubernetes_node_session("node-a", NODE_UID)?;
+        let session = wait_for(
+            &self.pin_path,
+            "ready Kubernetes Node session",
+            READY_LIMIT,
+            || {
+                Ok(plane
+                    .ready_kubernetes_node_sessions(READY_LIMIT)
+                    .into_iter()
+                    .find(|session| session.node_id == "node-a"))
+            },
+            || "Control has no ready Kubernetes Node session".to_owned(),
+        )?;
+
+        let path = self
+            .root
+            .join("crates/mithril-e2e/fixtures/mithril-policy/pid-reuse-policy-v1.json");
+        let resource = self
+            .resource
+            .as_ref()
+            .ok_or("the policy is not installed")?;
+        let document = lower_kubernetes_policy(resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID)?;
+        let source = PolicySourceRevisionV1::from_resource(
+            resource,
+            &document,
+            TENANT_ID,
+            CLUSTER_UID,
+            NAMESPACE_UID,
+            PolicySourceStateV1::Accepted,
+        )?;
+        let profile_id = document.metadata.profile_id.clone();
+        let scope_id = document.protected_universe.protected_scope_ids[0].clone();
+        let selector_id = document.workload_selectors[0].workload_selector_id.clone();
+        let authority = ScheduledRuntimeBindingV1::authority_binding_id(POD_UID, "worker");
+        let mut target = WorkloadTargetFactV1 {
+            node_id: session.node_id.clone(),
+            workload_binding_generation_digest: String::new(),
+            execution_set_id: "44444444-4444-4444-8444-444444444444".to_owned(),
+            cluster_uid: CLUSTER_UID.to_owned(),
+            namespace_uid: NAMESPACE_UID.to_owned(),
+            controller_uid: "77777777-7777-4777-8777-777777777777".to_owned(),
+            service_account_uid: "88888888-8888-4888-8888-888888888888".to_owned(),
+            pod_uid: POD_UID.to_owned(),
+            container_id: format!("scheduled:{}", "a".repeat(64)),
+            container_name: "worker".to_owned(),
+            container_kind: ControlContainerKind::Application,
+            image_digest: format!("sha256:{}", "b".repeat(64)),
+            pod_labels: BTreeMap::from([(
+                "app.kubernetes.io/name".to_owned(),
+                "pid-reuse".to_owned(),
+            )]),
+            kubernetes: Some(KubernetesWorkloadIdentityV1 {
+                namespace_name: "default".to_owned(),
+                pod_name: "pid-reuse".to_owned(),
+                profile_id: profile_id.clone(),
+                policy_source_revision_id: source.policy_source_revision_id.clone(),
+                binding_id: authority.clone(),
+                protected_scope_id: scope_id.clone(),
+                workload_selector_id: selector_id.clone(),
+                kubernetes_node_name: session.kubernetes_node_name,
+                kubernetes_node_uid: session.kubernetes_node_uid,
+                node_boot_id: hex::encode(session.node_boot_id),
+                label_epoch: session.label_epoch,
+            }),
+        };
+        target.workload_binding_generation_digest = workload_target_fact_digest(&target)?;
+        ensure!(
+            plane.replace_kubernetes_workload_inventory(vec![target.clone()])?,
+            InvalidInputSnafu {
+                path: &path,
+                reason: "Control did not accept the PID-reuse workload inventory",
+            }
+        );
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
+        let policy = self
+            .policy
+            .as_ref()
+            .ok_or("Control policy is not running")?;
+        let result = policy.reconcile(resource, NAMESPACE_UID, &[target.clone()], now)?;
+        ensure!(
+            result.bundles.len() == 1,
+            InvalidInputSnafu {
+                path: &path,
+                reason: "Control did not produce one PID-reuse policy bundle",
+            }
+        );
+
+        let container_id = ACTOR_ID.to_owned();
+        self.revision = Some(source.policy_source_revision_id);
+        self.binding = Some(WorkloadBindingConfig {
+            binding_id: ScheduledRuntimeBindingV1::runtime_binding_id(&authority, &container_id),
+            scheduled_binding_authority_id: Some(authority),
+            scheduled_target_digest: Some(target.workload_binding_generation_digest),
+            execution_set_id: target.execution_set_id,
+            protected_scope_id: scope_id,
+            workload_selector_id: selector_id,
+            profile_id,
+            container_id,
+            namespace: "default".to_owned(),
+            cluster_uid: CLUSTER_UID.to_owned(),
+            namespace_uid: NAMESPACE_UID.to_owned(),
+            controller_uid: target.controller_uid,
+            service_account_uid: target.service_account_uid,
+            pod_labels: target.pod_labels,
+            pod_uid: POD_UID.to_owned(),
+            sandbox_id: "d".repeat(64),
+            container_name: "worker".to_owned(),
+            image_digest: target.image_digest,
+            container_kind: ContainerKindV1::Application,
+            container_generation: 1,
+            root_cgroup_path: Some(self.cgroup_path.clone()),
+            lifecycle_generation: 1,
+            active_profile_generation_ref_id: 1,
+            initial_role_id: 1,
+            external_role_id: 2,
+            arm_initial_root: true,
+        });
+        Ok(())
+    }
+
+    pub(super) fn node_ready(&mut self) -> TestResult<()> {
+        let ready = self.ready.as_ref().ok_or("Node is not running")?;
+        let task = self.node_task.as_ref().ok_or("Node is not running")?;
+        let last = RefCell::new(String::from("<absent>"));
+        Ok(wait_stable(
+            &self.pin_path,
+            "Node readiness",
+            READY_LIMIT,
+            7,
+            || {
+                let value = *ready.borrow();
+                *last.borrow_mut() = format!("{value:?}");
+                ensure!(
+                    !task.is_finished(),
+                    InvalidInputSnafu {
+                        path: &self.pin_path,
+                        reason: "Node exited before readiness",
+                    }
+                );
+                Ok(value.kernel_ready
+                    && value.identity_ready
+                    && value.control_ready
+                    && value.admission_ready
+                    && value.effect_prevention_claims_enabled)
+            },
+            || {
+                let delivery = mithril_node::policy_delivery_status(&self.state_path)
+                    .map_or_else(|error| error.to_string(), |status| format!("{status:?}"));
+                format!(
+                    "last readiness: {}; policy delivery: {delivery}",
+                    last.borrow()
+                )
+            },
+        )?)
+    }
+
+    pub(super) fn place(&mut self, pid: u32) -> TestResult<()> {
+        let path = self.cgroup_path.join("cgroup.procs");
+        fs::write(&path, pid.to_string()).context(IoSnafu { path: &path })?;
+        Ok(())
+    }
+
+    pub(super) fn running(&mut self, pid: u32) -> TestResult<()> {
+        self.observe_state(pid, ContainerState::ContainerRunning)
+    }
+
+    pub(super) fn health(&self) -> TestResult<mithril_node::ReconciliationReportV1> {
+        Ok(self.inspector.health()?)
+    }
+
+    pub(super) fn move_task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
+        SharedState::move_out(self, pid)?;
+        let last = RefCell::new(String::from("<absent>"));
+        let snapshot = self.runtime.block_on(wait_for_async(
+            &self.pin_path,
+            name,
+            READY_LIMIT,
+            || {
+                let snapshot = self.inspector.snapshot(pid).context(NodeSnafu)?;
+                if let Some(value) = snapshot.as_ref() {
+                    *last.borrow_mut() = format!("{value:?}");
+                }
+                Ok(snapshot.filter(|value| {
+                    value.coordinate_state == TaskCoordinateStateV1::FailClosedUnknown as u8
+                }))
+            },
+            || format!("PID {pid}; last identity: {}", last.borrow()),
+        ))?;
+        self.task_from(pid, snapshot)
+    }
+
+    pub(super) fn task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
+        self.read_task(pid, name)
+    }
+
+    pub(super) fn wait_exec(
+        &mut self,
+        actor: &mut ProcessFixture,
+        pid: u32,
+        cookie: u64,
+        before: &Task,
+        name: &str,
+    ) -> TestResult<Task> {
+        let last = RefCell::new(String::from("<absent>"));
+        let snapshot = match actor.wait_path(
+            &self.pin_path,
+            name,
+            READY_LIMIT,
+            || Ok(self.exec_snapshot(pid, cookie, before, &last)),
+            || format!("PID {pid}; last identity: {}", last.borrow()),
+        ) {
+            Ok(value) => value,
+            Err(source) => {
+                return Err(format!("{source}; actor stderr: {:?}", actor.stderr()?).into());
+            }
+        };
+        self.task_from(pid, snapshot)
+    }
+
+    pub(super) fn wait_pid_exec(
+        &mut self,
+        pid: u32,
+        cookie: u64,
+        before: &Task,
+        name: &str,
+    ) -> TestResult<Task> {
+        self.wait_task_exec(pid, cookie, before, name)
+    }
+
+    pub(super) fn recovered(&mut self, pid: u32, name: &str) -> TestResult<Task> {
+        let last = RefCell::new(String::from("<absent>"));
+        let snapshot = self.runtime.block_on(wait_for_async(
+            &self.pin_path,
+            name,
+            READY_LIMIT,
+            || {
+                let snapshot = match self.inspector.snapshot(pid) {
+                    Ok(snapshot) => snapshot,
+                    Err(source) => {
+                        *last.borrow_mut() = source.to_string();
+                        return Ok(None);
+                    }
+                };
+                if let Some(value) = snapshot.as_ref() {
+                    *last.borrow_mut() = format!("{value:?}");
+                }
+                Ok(snapshot.filter(|value| {
+                    value
+                        .runtime_binding
+                        .as_ref()
+                        .is_some_and(|binding| binding.lifecycle_state == "active_recovered")
+                        && value
+                            .recovered_container_activation
+                            .as_ref()
+                            .is_some_and(|recovery| recovery.phase == "complete")
+                }))
+            },
+            || format!("PID {pid}; last identity: {}", last.borrow()),
+        ))?;
+        self.task_from(pid, snapshot)
+    }
+
+    pub(super) fn maps(&self) -> (&Path, &KernelStateReader) {
+        (&self.pin_path, &self.reader)
+    }
+
+    pub(super) fn work(&self) -> &Path {
+        &self.work_path
+    }
+
+    pub(super) fn output(&self) -> &Path {
+        &self.out
+    }
+
+    pub(super) fn stop(&mut self) -> TestResult<()> {
+        self.close()
+    }
+}
+
+impl Drop for Shared {
+    fn drop(&mut self) {
+        let _result = self.close();
+    }
+}

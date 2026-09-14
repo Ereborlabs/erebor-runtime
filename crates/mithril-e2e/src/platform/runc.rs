@@ -8,12 +8,13 @@ use erebor_interceptor::KernelStateReader;
 use mithril_node::OciBaseSpecOwner;
 use serde_json::{json, Value};
 
-use super::{Host, Platform, Task, TestResult, PROCESS_FIXTURES};
+use super::shared::Shared;
+use super::{Platform, Task, TestResult, PROCESS_FIXTURES};
 use crate::physical::ProbeDirectory;
 use crate::process::ProcessFixture;
 
-pub(crate) struct Runc<const SHARED: bool = true> {
-    host: Host<SHARED>,
+pub(crate) struct Runc {
+    shared: Shared,
     runc_path: PathBuf,
     state_path: PathBuf,
     bundle_path: PathBuf,
@@ -23,7 +24,7 @@ pub(crate) struct Runc<const SHARED: bool = true> {
     container_id: Option<String>,
 }
 
-impl<const SHARED: bool> Runc<SHARED> {
+impl Runc {
     fn run(command: &mut Command, name: &Path) -> TestResult<Vec<u8>> {
         let output = command.output()?;
         if !output.status.success() {
@@ -72,7 +73,7 @@ impl<const SHARED: bool> Runc<SHARED> {
             .container_id
             .as_deref()
             .ok_or("the runc actor is not started")?;
-        let pid_path = self.host.work().join("exec.pid");
+        let pid_path = self.shared.work().join("exec.pid");
         let mut command = Command::new(&self.runc_path);
         command
             .arg("--root")
@@ -84,9 +85,9 @@ impl<const SHARED: bool> Runc<SHARED> {
             .args(args);
         let mut actor = ProcessFixture::start(&mut command, Path::new(program))?;
         let parent = actor.id();
-        let pid = actor.wait_pid(&pid_path, "runc exec host PID")?;
+        let pid = actor.wait_pid(&pid_path, "runc exec outer PID")?;
         fs::remove_file(&pid_path)?;
-        self.host.move_out(parent)?;
+        self.shared.move_out(parent)?;
         actor.set_actor(pid)?;
         Ok(actor)
     }
@@ -105,25 +106,25 @@ impl<const SHARED: bool> Runc<SHARED> {
         if let Some(cleanup) = self.cleanup.take() {
             cleanup.cleanup()?;
         }
-        self.host.stop()?;
+        self.shared.stop()?;
         deleted
     }
 }
 
-impl<const SHARED: bool> Platform for Runc<SHARED> {
+impl Platform for Runc {
     fn source(&self) -> &Path {
-        self.host.source()
+        self.shared.source()
     }
 
     fn setup(name: &str) -> TestResult<Self> {
-        let mut host = Host::<SHARED>::setup(name)?;
+        let mut shared = Shared::setup(name)?;
         let runc_path = env::var_os("MITHRIL_TEST_RUNC")
             .map(PathBuf::from)
             .ok_or("MITHRIL_TEST_RUNC is not set")?;
         if !runc_path.is_file() {
             return Err(format!("runc is missing: {}", runc_path.display()).into());
         }
-        let dir_path = host.output().join("runc");
+        let dir_path = shared.output().join("runc");
         let cleanup = ProbeDirectory::create(&dir_path)?;
         let state_path = dir_path.join("state");
         let bundle_path = dir_path.join("bundle");
@@ -141,17 +142,17 @@ impl<const SHARED: bool> Platform for Runc<SHARED> {
         let hook_path = hook_dir.join("mithril-oci-hook");
         fs::copy(&hook_src, &hook_path)?;
         fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755))?;
-        let manifest_src = host
+        let manifest_src = shared
             .source()
             .join("crates/mithril-e2e/fixtures/convergence/direct-runc-recovery-v1.json");
         let manifest_path = hook_dir.join("runtime-recovery.json");
         fs::copy(&manifest_src, &manifest_path)?;
-        host.set_hook(&hook_path);
+        shared.set_hook(&hook_path);
         let mut command = Command::new(&runc_path);
         command.arg("spec").arg("--bundle").arg(&bundle_path);
         Self::run(&mut command, &runc_path)?;
         Ok(Self {
-            host,
+            shared,
             runc_path,
             state_path,
             bundle_path,
@@ -163,23 +164,23 @@ impl<const SHARED: bool> Platform for Runc<SHARED> {
     }
 
     fn start_control(&mut self) -> TestResult<()> {
-        self.host.start_control()
+        self.shared.start_control()
     }
 
     fn start_node(&mut self) -> TestResult<()> {
-        self.host.start_node()
+        self.shared.start_node()
     }
 
     fn install_policy(&mut self) -> TestResult<()> {
-        self.host.install_policy()
+        self.shared.install_policy()
     }
 
     fn sync_policy(&mut self) -> TestResult<()> {
-        self.host.sync_policy()
+        self.shared.sync_policy()
     }
 
     fn node_ready(&mut self) -> TestResult<()> {
-        self.host.node_ready()
+        self.shared.node_ready()
     }
 
     fn start_actor(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
@@ -190,7 +191,7 @@ impl<const SHARED: bool> Platform for Runc<SHARED> {
         for name in ["usr", "lib", "lib64", "fixtures", "work"] {
             fs::create_dir_all(rootfs.join(name))?;
         }
-        let fixtures = self.host.source().join(PROCESS_FIXTURES);
+        let fixtures = self.shared.source().join(PROCESS_FIXTURES);
 
         let path = self.bundle_path.join("config.json");
         let mut config: Value = serde_json::from_slice(&fs::read(&path)?)?;
@@ -216,7 +217,7 @@ impl<const SHARED: bool> Platform for Runc<SHARED> {
         config["root"]["path"] = json!("rootfs");
         config["root"]["readonly"] = json!(false);
         let cgroup = self
-            .host
+            .shared
             .cgroup()
             .strip_prefix("/sys/fs/cgroup")?
             .to_string_lossy();
@@ -231,9 +232,9 @@ impl<const SHARED: bool> Platform for Runc<SHARED> {
             }
         }
         Self::mount(&mut config, &fixtures, "/fixtures", false)?;
-        Self::mount(&mut config, self.host.work(), "/work", true)?;
-        let config = if self.host.has_policy() {
-            config["annotations"] = json!(self.host.annotations()?);
+        Self::mount(&mut config, self.shared.work(), "/work", true)?;
+        let config = if self.shared.has_policy() {
+            config["annotations"] = json!(self.shared.annotations()?);
             for (source, writable) in [
                 (
                     self.hook_path
@@ -242,7 +243,7 @@ impl<const SHARED: bool> Platform for Runc<SHARED> {
                     false,
                 ),
                 (
-                    self.host
+                    self.shared
                         .admit_path()
                         .parent()
                         .ok_or("the admission socket has no parent directory")?,
@@ -256,12 +257,12 @@ impl<const SHARED: bool> Platform for Runc<SHARED> {
                     .ok_or("a runc mount path is not valid UTF-8")?;
                 Self::mount(&mut config, source, target, writable)?;
             }
-            self.host.observe()?;
+            self.shared.observe()?;
             OciBaseSpecOwner::build(
                 &serde_json::to_vec(&config)?,
                 &self.hook_path,
                 &self.manifest_path,
-                self.host.admit_path(),
+                self.shared.admit_path(),
                 5_000,
                 6,
                 "info",
@@ -271,7 +272,7 @@ impl<const SHARED: bool> Platform for Runc<SHARED> {
         };
         fs::write(&path, config)?;
 
-        let id = self.host.actor_id().to_owned();
+        let id = self.shared.actor_id().to_owned();
         self.container_id = Some(id.clone());
         let mut command = Command::new(&self.runc_path);
         command
@@ -288,9 +289,9 @@ impl<const SHARED: bool> Platform for Runc<SHARED> {
             .and_then(|pid| u32::try_from(pid).ok())
             .filter(|pid| *pid > 0)
             .ok_or("runc state has no actor PID")?;
-        self.host.move_out(parent)?;
+        self.shared.move_out(parent)?;
         actor.set_init(pid)?;
-        actor.set_group(self.host.cgroup());
+        actor.set_group(self.shared.cgroup());
         Ok(actor)
     }
 
@@ -299,14 +300,14 @@ impl<const SHARED: bool> Platform for Runc<SHARED> {
     }
 
     fn place(&mut self, pid: u32) -> TestResult<()> {
-        self.host.place(pid)?;
+        self.shared.place(pid)?;
         let path = PathBuf::from(format!("/proc/{pid}/cgroup"));
         let state = fs::read_to_string(&path)?;
         let actual = state
             .lines()
             .find_map(|line| line.split_once("::").map(|(_, path)| path))
             .ok_or("the runc actor has no unified cgroup")?;
-        let expected = Path::new("/").join(self.host.cgroup().strip_prefix("/sys/fs/cgroup")?);
+        let expected = Path::new("/").join(self.shared.cgroup().strip_prefix("/sys/fs/cgroup")?);
         if Path::new(actual) != expected {
             return Err(format!(
                 "runc actor cgroup is {actual}; expected {}",
@@ -330,7 +331,7 @@ impl<const SHARED: bool> Platform for Runc<SHARED> {
     }
 
     fn admit(&mut self, pid: u32) -> TestResult<()> {
-        let task = self.host.task(pid, "direct runc admission")?;
+        let task = self.shared.task(pid, "direct runc admission")?;
         let binding = task
             .snapshot
             .runtime_binding
@@ -342,19 +343,19 @@ impl<const SHARED: bool> Platform for Runc<SHARED> {
     }
 
     fn running(&mut self, pid: u32) -> TestResult<()> {
-        self.host.running(pid)
+        self.shared.running(pid)
     }
 
     fn health(&self) -> TestResult<mithril_node::ReconciliationReportV1> {
-        self.host.health()
+        self.shared.health()
     }
 
     fn move_task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
-        self.host.move_task(pid, name)
+        self.shared.move_task(pid, name)
     }
 
     fn task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
-        self.host.task(pid, name)
+        self.shared.task(pid, name)
     }
 
     fn wait_exec(
@@ -365,7 +366,7 @@ impl<const SHARED: bool> Platform for Runc<SHARED> {
         before: &Task,
         name: &str,
     ) -> TestResult<Task> {
-        self.host.wait_exec(actor, pid, cookie, before, name)
+        self.shared.wait_exec(actor, pid, cookie, before, name)
     }
 
     fn wait_pid_exec(
@@ -375,23 +376,23 @@ impl<const SHARED: bool> Platform for Runc<SHARED> {
         before: &Task,
         name: &str,
     ) -> TestResult<Task> {
-        self.host.wait_pid_exec(pid, cookie, before, name)
+        self.shared.wait_pid_exec(pid, cookie, before, name)
     }
 
     fn recovered(&mut self, pid: u32, name: &str) -> TestResult<Task> {
-        self.host.recovered(pid, name)
+        self.shared.recovered(pid, name)
     }
 
     fn maps(&self) -> (&Path, &KernelStateReader) {
-        self.host.maps()
+        self.shared.maps()
     }
 
     fn work(&self) -> &Path {
-        self.host.work()
+        self.shared.work()
     }
 
     fn output(&self) -> &Path {
-        self.host.output()
+        self.shared.output()
     }
 
     fn stop(&mut self) -> TestResult<()> {
@@ -399,7 +400,7 @@ impl<const SHARED: bool> Platform for Runc<SHARED> {
     }
 }
 
-impl<const SHARED: bool> Drop for Runc<SHARED> {
+impl Drop for Runc {
     fn drop(&mut self) {
         let _result = self.close();
     }

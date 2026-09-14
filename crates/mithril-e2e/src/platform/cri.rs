@@ -74,6 +74,15 @@ impl CriFixture {
         Ok(())
     }
 
+    pub(crate) fn clear(&self) -> TestResult<()> {
+        *self
+            .service
+            .value
+            .write()
+            .map_err(|_error| "CRI fixture state is poisoned")? = None;
+        Ok(())
+    }
+
     pub(crate) fn stop(&mut self) -> TestResult<()> {
         if let Some(stop) = self.stop.take() {
             let _result = stop.send(());

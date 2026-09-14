@@ -139,6 +139,14 @@ reimplement a production owner operation.
   its own scope name.
 - Do not infer a shared scope from a scenario name, environment variable, or
   runtime branch. Do not put scope selection in the scenario body.
+- Do not define a named scope in a platform implementation. In particular, do
+  not add Host-, direct-`runc`-, or Kubernetes-specific scope globals. The
+  attribute supplies the scope name. The generated standard test wrapper
+  supplies its concrete platform type to the common scope owner. Common
+  fixture code must not contain Host, direct-`runc`, or Kubernetes flags,
+  branches, or adapter types. Keep Host process operations in `host.rs`,
+  direct-`runc` operations in `runc.rs`, and Kubernetes operations in
+  `kubernetes.rs`.
 - Give each named Host scope one shared Control and one shared Node. Give each
   named direct-`runc` scope one shared Control and one shared Node. Give each
   named Kubernetes scope one shared Control Deployment and one shared Node
