@@ -30,7 +30,7 @@ use serde_json::{json, Value};
 use snafu::ResultExt as _;
 use zerocopy::TryFromBytes as _;
 
-use super::{actor_command, actor_script, Platform, Task, TestResult};
+use super::{Platform, Task, TestResult, PROCESS_FIXTURES};
 use crate::control_fixture::MtlsFixture;
 use crate::error::{InvalidInputSnafu, IoSnafu, NodeSnafu};
 use crate::physical::{
@@ -718,11 +718,6 @@ impl Kubernetes {
             .actor_cgroup
             .as_ref()
             .ok_or("the Kubernetes actor has no recorded cgroup")?;
-        let init = self
-            .actor_pid
-            .ok_or("the Kubernetes actor has no recorded PID")?;
-        let root = PathBuf::from(format!("/proc/{init}/root"));
-        let program = actor_command(&root, program)?;
         let mut command = Command::new(&self.k3s_path);
         command
             .arg("kubectl")
@@ -738,19 +733,20 @@ impl Kubernetes {
                 CONTAINER,
                 "--",
             ])
-            .arg(&program)
+            .arg(program)
             .args(args);
         let procs = group.join("cgroup.procs");
         let before = fs::read_to_string(&procs)?
             .split_ascii_whitespace()
             .map(str::parse)
             .collect::<Result<Vec<u32>, _>>()?;
-        let mut actor = ProcessFixture::start(&mut command, &program).map_err(|source| {
-            let logs = self
-                .logs(&self.system, "daemonset/mithril-node")
-                .unwrap_or_else(|error| error.to_string());
-            format!("{source}; Node logs: {logs}")
-        })?;
+        let mut actor =
+            ProcessFixture::start(&mut command, Path::new(program)).map_err(|source| {
+                let logs = self
+                    .logs(&self.system, "daemonset/mithril-node")
+                    .unwrap_or_else(|error| error.to_string());
+                format!("{source}; Node logs: {logs}")
+            })?;
         let pid = actor.wait_group_task(group, &before, "Kubernetes exec host PID")?;
         actor.set_actor(pid)?;
         Ok(actor)
@@ -1111,10 +1107,8 @@ impl Platform for Kubernetes {
         if self.actor_id.is_some() {
             return Err("the Kubernetes actor is already running".into());
         }
-        let script = actor_script(&self.root, name)?;
-        let fixtures = script
-            .parent()
-            .ok_or("the actor fixture has no parent directory")?;
+        let fixtures = self.root.join(PROCESS_FIXTURES);
+        let script = fixtures.join(name);
         let mut args = vec![format!("/fixtures/{name}"), "/work".to_owned()];
         args.extend(extra.iter().map(|arg| (*arg).to_owned()));
         let mut pod: Pod =
@@ -1137,7 +1131,10 @@ impl Platform for Kubernetes {
             .volumes
             .as_mut()
             .ok_or("the actor Pod has no volumes")?;
-        for (name, path) in [("fixtures", fixtures), ("work", self.work_path.as_path())] {
+        for (name, path) in [
+            ("fixtures", fixtures.as_path()),
+            ("work", self.work_path.as_path()),
+        ] {
             let source = volumes
                 .iter_mut()
                 .find(|volume| volume.name == name)

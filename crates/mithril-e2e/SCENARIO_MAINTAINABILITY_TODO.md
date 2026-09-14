@@ -811,7 +811,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the Kubernetes generated case through real `kubectl exec`.
   - [x] Pass the complete Kubernetes platform set after the copied
     interpreter dependency correction.
-  - [ ] Pass the signed external entry by command name. Do not resolve the
+  - [x] Pass the signed external entry by command name. Do not resolve the
     command in a test helper or platform owner. Host must resolve it with
     `execvp`. Direct `runc` and Kubernetes must resolve it through their
     production exec paths.
@@ -824,7 +824,10 @@ test does not close a row when its physical condition or an assertion changed.
       The complete 16-test direct-`runc` platform set passed in 585.01
       seconds. The local suite, strict crate Clippy, and the complete
       repository Rust CI script passed.
-    - [ ] Kubernetes passes the exact Rust scenario.
+    - [x] Kubernetes passes the exact Rust scenario in 120.35 seconds.
+      The complete 17-test Kubernetes platform set passed in 2064.50 seconds.
+      The local suite, formatting check, strict crate Clippy, and the complete
+      repository Rust CI script passed.
     - The signed policy path and exact executable object remain installed.
       BPF now selects the signed declared entry from the `execve` or `execveat`
       filename. It captures and verifies the complete argv separately.

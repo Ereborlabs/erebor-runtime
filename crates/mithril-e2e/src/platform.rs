@@ -1,7 +1,5 @@
 use mithril_node::{NativeTaskSnapshotV1, ReconciliationReportV1};
 use std::cell::RefCell;
-use std::fs;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -30,7 +28,6 @@ pub(crate) use mithril_e2e_macros::platform_test;
 pub(crate) type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
 const TASK_LIMIT: Duration = Duration::from_secs(30);
 pub(crate) const PROCESS_FIXTURES: &str = "crates/mithril-e2e/fixtures/process";
-const ACTOR_PATH: &str = "/work/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 pub(crate) fn actor_script(root: &Path, name: &str) -> crate::Result<PathBuf> {
     snafu::ensure!(
@@ -49,26 +46,6 @@ pub(crate) fn actor_script(root: &Path, name: &str) -> crate::Result<PathBuf> {
         }
     );
     Ok(path)
-}
-
-fn actor_command(root: &Path, name: &str) -> TestResult<PathBuf> {
-    if name.is_empty() || name.contains('/') {
-        return Err(format!("actor command must be one PATH name: {name:?}").into());
-    }
-    for directory in ACTOR_PATH.split(':') {
-        let path = Path::new(directory).join(name);
-        let file = root.join(directory.trim_start_matches('/')).join(name);
-        if fs::metadata(&file)
-            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-        {
-            return Ok(path);
-        }
-    }
-    Err(format!(
-        "actor command {name:?} is not executable below {} in PATH {ACTOR_PATH}",
-        root.display()
-    )
-    .into())
 }
 
 pub(crate) struct Task {
