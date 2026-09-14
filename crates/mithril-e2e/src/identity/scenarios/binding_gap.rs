@@ -10,7 +10,7 @@ use zerocopy::IntoBytes as _;
 use crate::error::{InterceptorSnafu, NodeSnafu};
 use crate::identity::{profile_task_refs, retained::RetainedHost, test_binding, WAIT_LIMIT};
 use crate::physical::{boot_identity, wait_for};
-use crate::platform::{platform_test, Platform, TestResult};
+use crate::platform::{actor_script, platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
 #[platform_test(host)]
@@ -20,7 +20,8 @@ fn binding_gap_stays_closed<P: Platform>() -> TestResult<()> {
     let group = env.actor_group()?.to_owned();
     let (_, node) = boot_identity()?;
     let mut host = RetainedHost::start(&pin)?;
-    let mut actor = ProcessFixture::python(env.source(), "ready.py", std::iter::empty::<&str>())?;
+    let script = actor_script(env.source(), "ready.py")?;
+    let mut actor = ProcessFixture::python(&script, std::iter::empty::<&str>())?;
     env.place(actor.id())?;
 
     let binding = test_binding(&group);

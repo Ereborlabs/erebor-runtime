@@ -30,6 +30,7 @@ mod tests {
     use super::super::WAIT_LIMIT;
     use super::output;
     use crate::error::{InvalidInputSnafu, IoSnafu};
+    use crate::platform::actor_script;
     use crate::process::ProcessFixture;
 
     #[test]
@@ -41,7 +42,7 @@ mod tests {
         let stderr_path = temporary.path().join("runtime.stderr");
         let stderr = fs::File::create(&stderr_path).context(IoSnafu { path: &stderr_path })?;
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let script = ProcessFixture::script(&repo_root, "process_exit.py")?;
+        let script = actor_script(&repo_root, "process_exit.py")?;
         let child = Command::new("python3")
             .arg(&script)
             .args(["17", "hook failed"])

@@ -32,7 +32,7 @@ use snafu::{ensure, ResultExt as _};
 use tokio::sync::watch;
 use zerocopy::TryFromBytes as _;
 
-use super::{actor_command, CriFixture, Platform, Task, TestResult};
+use super::{actor_command, actor_script, CriFixture, Platform, Task, TestResult};
 use crate::control_fixture::{ControlServerFixture, MtlsFixture};
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
 use crate::physical::{
@@ -200,7 +200,7 @@ impl Host {
         Ok(())
     }
 
-    fn actor_root(&mut self, name: &str) -> TestResult<PathBuf> {
+    fn actor_root(&mut self, script: &Path) -> TestResult<PathBuf> {
         let bundle_path = self.out.join("bundle");
         let rootfs = bundle_path.join("rootfs");
         if self.bundle.is_some() {
@@ -215,7 +215,6 @@ impl Host {
                 self.bind(source, &rootfs.join(path.trim_start_matches('/')))?;
             }
         }
-        let script = ProcessFixture::script(&self.root, name)?;
         let fixtures = script
             .parent()
             .ok_or("the actor has no fixture directory")?;
@@ -853,11 +852,18 @@ impl Platform for Host {
             }
         );
         let protected = self.node_task.is_some() && self.binding.is_some();
-        let rootfs = self.actor_root(name)?;
+        let script = actor_script(&self.root, name)?;
+        let rootfs = self.actor_root(&script)?;
         let mut args = vec![OsString::from("/work")];
         args.extend(extra.iter().map(OsString::from));
-        let mut actor =
-            ProcessFixture::held_pidns(&self.root, name, args, &self.cgroup_path, &rootfs)?;
+        args.insert(0, OsString::from(format!("/fixtures/{name}")));
+        let mut actor = ProcessFixture::held_pidns(
+            Path::new("/usr/bin/python3"),
+            args,
+            &self.cgroup_path,
+            &rootfs,
+            &script,
+        )?;
         let pid = actor.id();
         self.init_pid = Some(pid);
         if protected {

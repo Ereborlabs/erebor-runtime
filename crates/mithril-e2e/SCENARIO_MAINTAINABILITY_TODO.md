@@ -540,6 +540,17 @@ count as maintainability migrations.
   path, operation name, and caller-supplied last-state diagnostic.
 - [x] Make `ProcessFixture` own spawn readiness, stdin actions, bounded exit
   diagnostics, explicit stop, and idempotent drop cleanup.
+- [x] Keep actor selection outside `ProcessFixture`. The platform selects and
+  validates each actor script or command. `ProcessFixture` receives the
+  selected path and argv. It does not search a source root or environment
+  `PATH`.
+  - `ProcessFixture::script` is removed.
+  - The nine generic process lifecycle tests pass.
+  - The same PID-reuse Rust test passes on Host, direct `runc`, and the
+    retained Kubernetes cluster.
+  - The local suite passes with 91 tests and 59 ignored physical tests.
+  - Strict crate Clippy passes.
+  - The complete repository Rust CI script passes.
 - [x] Keep post-exec actor cleanup in-band. Reuse the signed `/usr/bin/sleep`
   image with a bounded duration. Do not add an execution rule only for test
   cleanup. Do not depend on an external signal that Mithril can deny.

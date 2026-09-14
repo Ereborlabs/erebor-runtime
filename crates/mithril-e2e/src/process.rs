@@ -36,8 +36,6 @@ use crate::error::{InvalidInputSnafu, IoSnafu};
 use crate::physical::wait_for;
 use crate::Result;
 
-#[cfg(test)]
-const FIXTURE_DIR: &str = "crates/mithril-e2e/fixtures/process";
 const LOG_LIMIT: usize = 8 * 1024;
 #[cfg(test)]
 const HELD: &[u8] = b"held\n";
@@ -132,19 +130,6 @@ impl ProcessFixture {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn script(root: &Path, name: &str) -> Result<PathBuf> {
-        let path = root.join(FIXTURE_DIR).join(name);
-        ensure!(
-            path.is_file(),
-            InvalidInputSnafu {
-                path: &path,
-                reason: "the process fixture program is missing",
-            }
-        );
-        Ok(path)
-    }
-
     pub(crate) fn fatal_exec(path: &Path) -> Result<()> {
         const PT_LOAD: u32 = 1;
 
@@ -225,40 +210,36 @@ impl ProcessFixture {
     }
 
     #[cfg(test)]
-    pub(crate) fn python<I, S>(root: &Path, name: &str, args: I) -> Result<Self>
+    pub(crate) fn python<I, S>(script: &Path, args: I) -> Result<Self>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let script = Self::script(root, name)?;
-        let mut command = Command::new("python3");
-        command.arg(&script).args(args);
-        Self::start(&mut command, &script)
+        let mut command = Command::new("/usr/bin/python3");
+        command.arg(script).args(args);
+        Self::start(&mut command, script)
     }
 
     #[cfg(test)]
     pub(crate) fn held_pidns<I, S>(
-        root: &Path,
-        name: &str,
+        command: &Path,
         args: I,
         cgroup: &Path,
         rootfs: &Path,
+        path: &Path,
     ) -> Result<Self>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let script = Self::script(root, name)?;
-        let mut values = vec![PathBuf::from(format!("/fixtures/{name}"))];
-        values.extend(args.into_iter().map(|arg| PathBuf::from(arg.as_ref())));
         Self::held(
-            Path::new("/usr/bin/python3"),
-            values,
+            command,
+            args,
             cgroup,
             rootfs,
             linux_raw_sys::general::CLONE_INTO_CGROUP
                 | u64::from(linux_raw_sys::general::CLONE_NEWPID),
-            &script,
+            path,
         )
     }
 

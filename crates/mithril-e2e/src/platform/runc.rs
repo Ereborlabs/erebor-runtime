@@ -8,7 +8,7 @@ use erebor_interceptor::KernelStateReader;
 use mithril_node::OciBaseSpecOwner;
 use serde_json::{json, Value};
 
-use super::{actor_command, Host, Platform, Task, TestResult};
+use super::{actor_command, actor_script, Host, Platform, Task, TestResult};
 use crate::physical::ProbeDirectory;
 use crate::process::ProcessFixture;
 
@@ -198,7 +198,7 @@ impl Platform for Runc {
         for name in ["usr", "lib", "lib64", "fixtures", "work"] {
             fs::create_dir_all(rootfs.join(name))?;
         }
-        let script = ProcessFixture::script(self.host.source(), name)?;
+        let script = actor_script(self.host.source(), name)?;
         let fixtures = script
             .parent()
             .ok_or("the actor has no fixture directory")?;

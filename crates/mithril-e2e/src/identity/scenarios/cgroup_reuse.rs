@@ -1,24 +1,22 @@
-use std::{fs, os::unix::fs::MetadataExt as _};
-
 use erebor_interceptor_abi::ExecutionSetBindingStateV1;
 use mithril_node::{NativeSecurityStateOwner, WorkloadBindingOwner};
 use snafu::ResultExt as _;
+use std::{fs, os::unix::fs::MetadataExt as _};
 
 use crate::error::NodeSnafu;
 use crate::identity::{retained::RetainedHost, test_binding};
 use crate::physical::boot_identity;
-use crate::platform::{platform_test, Platform, TestResult};
+use crate::platform::{actor_script, platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
 fn root_binding<P: Platform>(env: &P, id: u64) -> TestResult<ExecutionSetBindingStateV1> {
-    let value = env.state(
+    env.state(
         "execution_set_bindings",
         &id.to_ne_bytes(),
         "cgroup binding",
-    )?;
-    value.ok_or_else(|| format!("cgroup {id} has no binding").into())
+    )?
+    .ok_or_else(|| format!("cgroup {id} has no binding").into())
 }
-
 #[platform_test(host)]
 fn cgroup_path_gets_fresh_identity<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("cgroup-reuse")?;
@@ -28,7 +26,8 @@ fn cgroup_path_gets_fresh_identity<P: Platform>() -> TestResult<()> {
     let mut host = RetainedHost::start(&pin)?;
     let binding = test_binding(&group);
     let identity = NativeSecurityStateOwner::new(node, 1);
-    let mut first = ProcessFixture::python(env.source(), "ready.py", std::iter::empty::<&str>())?;
+    let script = actor_script(env.source(), "ready.py")?;
+    let mut first = ProcessFixture::python(&script, std::iter::empty::<&str>())?;
     env.place(first.id())?;
     let mut bindings = WorkloadBindingOwner::system(node, 1).context(NodeSnafu)?;
     bindings
@@ -52,7 +51,7 @@ fn cgroup_path_gets_fresh_identity<P: Platform>() -> TestResult<()> {
     fs::remove_dir(&group)?;
     fs::create_dir(&group)?;
 
-    let mut second = ProcessFixture::python(env.source(), "ready.py", std::iter::empty::<&str>())?;
+    let mut second = ProcessFixture::python(&script, std::iter::empty::<&str>())?;
     env.place(second.id())?;
     let mut binding = test_binding(&group);
     binding.container_id = "c".repeat(64);

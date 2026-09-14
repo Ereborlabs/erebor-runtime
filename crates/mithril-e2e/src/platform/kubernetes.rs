@@ -30,7 +30,7 @@ use serde_json::{json, Value};
 use snafu::ResultExt as _;
 use zerocopy::TryFromBytes as _;
 
-use super::{actor_command, Platform, Task, TestResult};
+use super::{actor_command, actor_script, Platform, Task, TestResult};
 use crate::control_fixture::MtlsFixture;
 use crate::error::{InvalidInputSnafu, IoSnafu, NodeSnafu};
 use crate::physical::{
@@ -1111,7 +1111,7 @@ impl Platform for Kubernetes {
         if self.actor_id.is_some() {
             return Err("the Kubernetes actor is already running".into());
         }
-        let script = ProcessFixture::script(&self.root, name)?;
+        let script = actor_script(&self.root, name)?;
         let fixtures = script
             .parent()
             .ok_or("the actor fixture has no parent directory")?;

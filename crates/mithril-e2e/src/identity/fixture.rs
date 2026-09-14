@@ -15,6 +15,7 @@ use snafu::ResultExt as _;
 use super::invalid_state;
 use crate::error::{InterceptorSnafu, IoSnafu, NodeSnafu, PolicySnafu};
 use crate::physical::{boot_identity, ProbeDirectory, ProbeFile};
+use crate::platform::actor_script;
 use crate::process::ProcessFixture;
 use crate::runtime_input::runtime_observation;
 use crate::Result;
@@ -63,7 +64,8 @@ impl IdentityFixture {
         ))
         .start()
         .context(InterceptorSnafu)?;
-        let actor = ProcessFixture::python(&root, "ready.py", std::iter::empty::<&str>())?;
+        let script = actor_script(&root, "ready.py")?;
+        let actor = ProcessFixture::python(&script, std::iter::empty::<&str>())?;
         let actor_pid = actor.id();
         let mut fixture = Self {
             host: Some(host),

@@ -9,6 +9,12 @@ use snafu::ResultExt as _;
 use super::ProcessFixture;
 use crate::error::{InvalidInputSnafu, IoSnafu};
 
+fn fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/process")
+        .join(name)
+}
+
 #[test]
 fn gone_accepts_esrch() {
     assert!(super::process_gone(&std::io::Error::from_raw_os_error(
@@ -21,8 +27,8 @@ fn gone_accepts_esrch() {
 
 #[test]
 fn python_start_stop() -> crate::Result<()> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut actor = ProcessFixture::python(&root, "ready.py", std::iter::empty::<&str>())?;
+    let script = fixture("ready.py");
+    let mut actor = ProcessFixture::python(&script, std::iter::empty::<&str>())?;
 
     actor.send(b"stop\n")?;
     assert!(actor
@@ -34,8 +40,8 @@ fn python_start_stop() -> crate::Result<()> {
 
 #[test]
 fn stop_kills_actor() -> crate::Result<()> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut actor = ProcessFixture::python(&root, "ready.py", std::iter::empty::<&str>())?;
+    let script = fixture("ready.py");
+    let mut actor = ProcessFixture::python(&script, std::iter::empty::<&str>())?;
 
     actor.stop()?;
     actor.stop()
@@ -43,12 +49,12 @@ fn stop_kills_actor() -> crate::Result<()> {
 
 #[test]
 fn stop_kills_child_after_exit() -> crate::Result<()> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let dir = tempfile::tempdir().context(IoSnafu {
         path: "temporary directory",
     })?;
     let work = dir.path();
-    let mut actor = ProcessFixture::python(&root, "native_orphan.py", [work])?;
+    let script = fixture("native_orphan.py");
+    let mut actor = ProcessFixture::python(&script, [work])?;
     actor.set_group(&dir.path().join("removed-cgroup"));
     let root_pid = actor.id();
     actor.track(root_pid)?;
@@ -84,7 +90,7 @@ fn fatal_exec_dies() -> crate::Result<()> {
 #[test]
 fn exit_reports_stderr() -> crate::Result<()> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let script = ProcessFixture::script(&root, "process_exit.py")?;
+    let script = fixture("process_exit.py");
     let child = Command::new("python3")
         .arg(&script)
         .args(["17", "actor failed"])
@@ -138,11 +144,11 @@ fn external_wait_has_no_exit_status() -> crate::Result<()> {
 
 #[test]
 fn actor_survives_input_loss() -> crate::Result<()> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let dir = tempfile::tempdir().context(IoSnafu {
         path: "temporary directory",
     })?;
-    let mut actor = ProcessFixture::python(&root, "recovery_tree.py", [dir.path()])?;
+    let script = fixture("recovery_tree.py");
+    let mut actor = ProcessFixture::python(&script, [dir.path()])?;
     actor.send(b"fork\n")?;
     let child = actor.wait_child(actor.id(), "recovery actor child")?;
     actor.track(child)?;

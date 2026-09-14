@@ -2,7 +2,7 @@ use std::iter;
 
 use erebor_interceptor_abi::TaskCoordinateStateV1;
 
-use crate::platform::{platform_test, Platform, TestResult};
+use crate::platform::{actor_script, platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
 #[platform_test(host, runc, kubernetes)]
@@ -15,8 +15,9 @@ fn attached_roots_are_restricted<P: Platform>() -> TestResult<()> {
     let mut init = env.start_actor("ready.py", &[])?;
     let app = env.task(init.id(), "application root")?;
 
-    let mut one = ProcessFixture::python(env.source(), "ready.py", iter::empty::<&str>())?;
-    let mut two = ProcessFixture::python(env.source(), "ready.py", iter::empty::<&str>())?;
+    let script = actor_script(env.source(), "ready.py")?;
+    let mut one = ProcessFixture::python(&script, iter::empty::<&str>())?;
+    let mut two = ProcessFixture::python(&script, iter::empty::<&str>())?;
     env.place(one.id())?;
     env.place(two.id())?;
     let first = env.task(one.id(), "first restricted root")?;
