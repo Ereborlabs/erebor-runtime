@@ -540,10 +540,11 @@ count as maintainability migrations.
   path, operation name, and caller-supplied last-state diagnostic.
 - [x] Make `ProcessFixture` own spawn readiness, stdin actions, bounded exit
   diagnostics, explicit stop, and idempotent drop cleanup.
-- [x] Keep actor selection outside `ProcessFixture`. The platform selects and
-  validates each actor script or command. `ProcessFixture` receives the
-  selected path and argv. It does not search a source root or environment
-  `PATH`.
+- [x] Keep actor selection outside `ProcessFixture`. The scenario gives
+  `start_actor` one checked Python file name or gives `add_actor` one command
+  name and complete argv. The platform mounts the shared actor directory and
+  passes each command name unchanged. `ProcessFixture` owns the child process.
+  It does not search a source root or environment `PATH`.
   - `ProcessFixture::script` is removed.
   - The nine generic process lifecycle tests pass.
   - The same PID-reuse Rust test passes on Host, direct `runc`, and the
@@ -567,8 +568,9 @@ count as maintainability migrations.
   23 Host platform tests pass with this process-birth path.
 - [x] Remove policy-entry lookup and preflight checks from `add_actor`. Pass
   the same command name and complete argv to Host, direct `runc`, and
-  Kubernetes. The physical platform owner resolves the command through the
-  actor environment `PATH`. `ProcessFixture` does not resolve commands.
+  Kubernetes. The production `execvp`, `runc exec`, or `kubectl exec` path
+  resolves the command inside the actor environment. The platform owner and
+  `ProcessFixture` do not resolve commands.
   - [x] Pass the complete Host platform set: 23 tests.
   - [x] Pass the complete direct-`runc` platform set: 16 tests.
   - [x] Reproduce the unmatched Kubernetes init-container condition in the
