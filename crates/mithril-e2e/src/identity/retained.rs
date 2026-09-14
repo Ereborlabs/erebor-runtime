@@ -51,9 +51,15 @@ impl RetainedHost {
         })
     }
 
-    fn host(&self) -> Result<&KernelHost> {
+    pub(super) fn host(&self) -> Result<&KernelHost> {
         self.host
             .as_ref()
+            .ok_or_else(|| invalid_state("retained host is not running"))
+    }
+
+    pub(super) fn host_mut(&mut self) -> Result<&mut KernelHost> {
+        self.host
+            .as_mut()
             .ok_or_else(|| invalid_state("retained host is not running"))
     }
 

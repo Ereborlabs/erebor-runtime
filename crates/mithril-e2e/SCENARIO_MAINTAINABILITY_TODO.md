@@ -327,7 +327,7 @@ These Rust files exceed 2,000 lines:
 | Source | Current lines |
 | --- | ---: |
 | `effect/runc.rs` | 8,339 |
-| `identity.rs` | 7,008 |
+| `identity.rs` | 6,895 |
 | `effect.rs` | 5,118 |
 | `effect/child.rs` | 4,472 |
 | `control_tls.rs` | 2,734 |
@@ -344,12 +344,6 @@ The same diff adds or relocates these local variables with more than three
 name components:
 
 - `profile_task_refs_after_exit`
-- `cgroup_reuse_first_root_id`
-- `cgroup_reuse_first_binding`
-- `cgroup_reuse_second_root`
-- `cgroup_reuse_second_root_id`
-- `cgroup_reuse_second_binding`
-- `cgroup_reuse_fresh_identity`
 - `allowed_before_target_install`
 - `denied_after_target_install`
 - `allowed_after_target_clear`
@@ -1154,9 +1148,22 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Remove only the matching restart assertions and result fields from
     `IdentityTestRunner::physical_probe`. Keep the restart required by the
     cgroup-lifetime case until that separate replacement passes.
-- [ ] Cgroup lifetime reuse: recreate the cgroup path after recovery. Keep the
+- [x] Cgroup lifetime reuse: recreate the cgroup path after recovery. Keep the
   new cgroup ID, binding nonce, live interval, process identity, and role
   assertions visible.
+  - [x] Reuse `RetainedHost` for kernel-host shutdown and restart. Keep both
+    binding publications and all three identity activations in the test.
+  - [x] Keep the standard Host test at 99 lines. Use `ProcessFixture` for both
+    actor lifetimes and use the platform only for physical cgroup placement.
+  - [x] Compare the cgroup ID, binding nonce, live interval, task cookie,
+    process-state ID, execution ID, root class, and role with commit
+    `95775f48`.
+  - [x] Pass the exact Host test in the retained privileged VM. Remove only
+    the matching cgroup-lifetime block and result fields from
+    `IdentityTestRunner::physical_probe`.
+  - [x] Pass the local crate suite, strict crate Clippy, all 24 Host platform
+    cases, the remaining native identity probe, and the repository Rust CI
+    gate after the deletion.
 
 ### Kernel and host lifecycle
 

@@ -198,16 +198,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub authorization_replay_wal_sha256: String,
     pub authorization_replay_wal_records: u64,
     pub authorization_replay_state_removed: bool,
-    pub cgroup_reuse_path: PathBuf,
-    pub cgroup_reuse_first_root: NativeTaskSnapshotV1,
-    pub cgroup_reuse_second_root: NativeTaskSnapshotV1,
-    pub cgroup_reuse_first_root_id: u64,
-    pub cgroup_reuse_second_root_id: u64,
-    pub cgroup_reuse_first_binding_nonce: String,
-    pub cgroup_reuse_second_binding_nonce: String,
-    pub cgroup_reuse_first_live_interval_id: String,
-    pub cgroup_reuse_second_live_interval_id: String,
-    pub cgroup_reuse_fresh_identity: bool,
     pub profile_task_refs_after_exit: u64,
     pub pin_root_removed: bool,
     pub lease_removed: bool,
@@ -436,7 +426,7 @@ impl IdentityTestRunner {
             boot_id.clone(),
             1,
         );
-        let mut host = KernelHostOwner::new(config.clone())
+        let mut host = KernelHostOwner::new(config)
             .start()
             .context(InterceptorSnafu)?;
         let mut binding_gap_fixture =
@@ -515,99 +505,10 @@ impl IdentityTestRunner {
                 let refs = profile_task_refs(&host)?;
                 Ok((refs == 0).then_some(refs))
             })?;
-        let cgroup_reuse_first_root_id = fs::metadata(&cgroup_path)
-            .context(IoSnafu { path: &cgroup_path })?
-            .ino();
-        let cgroup_reuse_first_binding = required_abi_map::<ExecutionSetBindingStateV1>(
-            &host,
-            "execution_set_bindings",
-            &cgroup_reuse_first_root_id.to_ne_bytes(),
-            "first cgroup lifetime binding",
-        )?;
-
         host.shutdown().context(InterceptorSnafu)?;
-        let mut recovered = KernelHostOwner::new(config)
-            .start()
-            .context(InterceptorSnafu)?;
-        let mut recovered_bindings =
-            WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
-        recovered_bindings
-            .publish_all(&recovered, std::slice::from_ref(&binding))
-            .context(NodeSnafu)?;
-        NativeSecurityStateOwner::new(node_boot_id, 1)
-            .activate(&mut recovered)
-            .context(NodeSnafu)?;
-        cgroup_cleanup.cleanup()?;
-        ensure!(
-            !cgroup_path.exists(),
-            InvalidInputSnafu {
-                path: &cgroup_path,
-                reason: "the first cgroup lifetime survived removal",
-            }
-        );
-        let reused_cgroup_cleanup = ProbeCgroup::create(&cgroup_path)?;
-        let reused_procs_path = reused_cgroup_cleanup.path().join("cgroup.procs");
-        let mut reused_fixture =
-            ProcessFixture::python(&self.repo_root, "ready.py", std::iter::empty::<&str>())?;
-        fs::write(&reused_procs_path, reused_fixture.id().to_string()).context(IoSnafu {
-            path: &reused_procs_path,
-        })?;
-        let mut reused_binding = test_binding(reused_cgroup_cleanup.path());
-        reused_binding.container_id = "c".repeat(64);
-        reused_binding.pod_uid = "identity-pod-uid-reused".to_owned();
-        reused_binding.sandbox_id = "identity-sandbox-reused".to_owned();
-        reused_binding.container_generation = 2;
-
-        let mut reused_bindings =
-            WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
-        reused_bindings
-            .publish_all(&recovered, std::slice::from_ref(&reused_binding))
-            .context(NodeSnafu)?;
-        NativeSecurityStateOwner::new(node_boot_id, 1)
-            .activate(&mut recovered)
-            .context(NodeSnafu)?;
-        let cgroup_reuse_second_root =
-            self.wait_for("recreated cgroup root identity", &reused_procs_path, || {
-                inspector.snapshot(reused_fixture.id()).context(NodeSnafu)
-            })?;
-        let cgroup_reuse_second_root_id = fs::metadata(reused_cgroup_cleanup.path())
-            .context(IoSnafu {
-                path: reused_cgroup_cleanup.path(),
-            })?
-            .ino();
-        let cgroup_reuse_second_binding = required_abi_map::<ExecutionSetBindingStateV1>(
-            &recovered,
-            "execution_set_bindings",
-            &cgroup_reuse_second_root_id.to_ne_bytes(),
-            "second cgroup lifetime binding",
-        )?;
-        let cgroup_reuse_fresh_identity = cgroup_reuse_first_root_id != cgroup_reuse_second_root_id
-            && cgroup_reuse_first_binding.binding_nonce
-                != cgroup_reuse_second_binding.binding_nonce
-            && cgroup_reuse_first_binding.root_cgroup_live_interval_id
-                != cgroup_reuse_second_binding.root_cgroup_live_interval_id
-            && binding_gap_reconciled_root.task_cookie != cgroup_reuse_second_root.task_cookie
-            && binding_gap_reconciled_root.process_state_id
-                != cgroup_reuse_second_root.process_state_id
-            && binding_gap_reconciled_root.active_execution_id
-                != cgroup_reuse_second_root.active_execution_id
-            && cgroup_reuse_second_root.creator_task_cookie.is_none()
-            && cgroup_reuse_second_root.root_class.as_deref() == Some("restored_or_unknown_root")
-            && cgroup_reuse_second_root.installed_role_class.as_deref()
-                == Some("fail_closed_unknown")
-            && cgroup_reuse_second_root.active_role_id == reused_binding.external_role_id;
-        ensure!(
-            cgroup_reuse_fresh_identity,
-            InvalidInputSnafu {
-                path: &cgroup_path,
-                reason: "the recreated cgroup path reused an old lifetime identity",
-            }
-        );
-        reused_fixture.stop()?;
-        recovered.shutdown().context(InterceptorSnafu)?;
         pin_cleanup.cleanup()?;
         lease_cleanup.cleanup()?;
-        reused_cgroup_cleanup.cleanup()?;
+        cgroup_cleanup.cleanup()?;
         ensure!(
             !pin_root.exists() && !lease_path.exists(),
             InvalidInputSnafu {
@@ -638,20 +539,6 @@ impl IdentityTestRunner {
             authorization_replay_wal_sha256,
             authorization_replay_wal_records,
             authorization_replay_state_removed: true,
-            cgroup_reuse_path: cgroup_path.clone(),
-            cgroup_reuse_first_root: binding_gap_reconciled_root.clone(),
-            cgroup_reuse_second_root,
-            cgroup_reuse_first_root_id,
-            cgroup_reuse_second_root_id,
-            cgroup_reuse_first_binding_nonce: id128_hex(cgroup_reuse_first_binding.binding_nonce),
-            cgroup_reuse_second_binding_nonce: id128_hex(cgroup_reuse_second_binding.binding_nonce),
-            cgroup_reuse_first_live_interval_id: id128_hex(
-                cgroup_reuse_first_binding.root_cgroup_live_interval_id,
-            ),
-            cgroup_reuse_second_live_interval_id: id128_hex(
-                cgroup_reuse_second_binding.root_cgroup_live_interval_id,
-            ),
-            cgroup_reuse_fresh_identity,
             profile_task_refs_after_exit,
             pin_root_removed: true,
             lease_removed: true,

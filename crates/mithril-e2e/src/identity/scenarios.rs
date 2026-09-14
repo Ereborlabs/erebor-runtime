@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod cgroup_fork;
 #[cfg(test)]
+mod cgroup_reuse;
+#[cfg(test)]
 mod child_exec;
 #[cfg(test)]
 mod clone_exec;
