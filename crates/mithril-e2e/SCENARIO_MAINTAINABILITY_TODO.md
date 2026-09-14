@@ -327,7 +327,7 @@ These Rust files exceed 2,000 lines:
 | Source | Current lines |
 | --- | ---: |
 | `effect/runc.rs` | 8,339 |
-| `identity.rs` | 6,895 |
+| `identity.rs` | 6,743 |
 | `effect.rs` | 5,118 |
 | `effect/child.rs` | 4,472 |
 | `control_tls.rs` | 2,734 |
@@ -343,7 +343,6 @@ more than five name components:
 The same diff adds or relocates these local variables with more than three
 name components:
 
-- `profile_task_refs_after_exit`
 - `allowed_before_target_install`
 - `denied_after_target_install`
 - `allowed_after_target_clear`
@@ -744,8 +743,19 @@ test does not close a row when its physical condition or an assertion changed.
 - [ ] Probe resources and production owners: own the pin root, lease, cgroup,
   fixture files, and cleanup. Keep `KernelHostOwner`, binding publication,
   native identity activation, recovery, and shutdown visible in the scenario.
-- [ ] Binding-gap recovery: keep the terminal binding mutation and both public
+- [x] Binding-gap recovery: keep the terminal binding mutation and both public
   recovery calls explicit. Preserve the fail-closed root assertions.
+  - The 98-line Host test starts the actor before it publishes the binding.
+  - The test checks the fail-closed root, role, coordinate, and recovery report.
+  - The test changes the binding to `Terminating` and back to `Active`. It calls
+    `NativeSecurityStateOwner::recover_tasks` after each change.
+  - The test waits for the profile task reference count to reach zero after the
+    actor stops.
+  - The focused test passed before and after removal from
+    `IdentityTestRunner::physical_probe`. The final run passed in 21.27 seconds.
+  - The complete 25-test Host platform set passed in 901.22 seconds.
+  - The remaining native physical probe passed with only authorization replay.
+  - The complete repository Rust CI script passed.
 - [ ] Concurrent external roots: keep one small parameterized Rust test in
   `identity/scenarios/external_roots.rs`. Start Control and one
   `external_roots.py` environment actor. Let that actor copy its interpreter
@@ -1263,8 +1273,9 @@ setup, production actions, assertions, and focused test.
 
 ### Native and Kubernetes identity
 
-- [ ] `IdentityTestRunner::physical_probe` setup and teardown: own native
-  child processes, files, cgroups, pin roots, leases, and diagnostic artifacts.
+- [ ] Replace the remaining `IdentityTestRunner::physical_probe` authorization
+  replay with a small standard test. Remove its obsolete native pin, lease, and
+  cgroup arguments after the Kubernetes command no longer uses its bundle.
 - [ ] Migrate native binding-gap, external ambiguity, cgroup escape, fork,
   exec, reparent, PID reuse, owner restart, object upgrade, and authorization
   replay groups one commit at a time. Keep their `KernelHostOwner`,

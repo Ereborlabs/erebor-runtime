@@ -6,6 +6,7 @@ mod tests;
 use std::cell::RefCell;
 #[cfg(test)]
 use std::ffi::CString;
+#[cfg(test)]
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read as _, Write};
@@ -19,7 +20,9 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ExitStatus};
+#[cfg(test)]
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 #[cfg(test)]
@@ -33,10 +36,12 @@ use crate::error::{InvalidInputSnafu, IoSnafu};
 use crate::physical::wait_for;
 use crate::Result;
 
+#[cfg(test)]
 const FIXTURE_DIR: &str = "crates/mithril-e2e/fixtures/process";
 const LOG_LIMIT: usize = 8 * 1024;
 #[cfg(test)]
 const HELD: &[u8] = b"held\n";
+#[cfg(test)]
 const READY: &[u8] = b"native-fixture-ready\n";
 const START_LIMIT: Duration = Duration::from_secs(30);
 const STOP_GRACE: Duration = Duration::from_secs(1);
@@ -49,9 +54,11 @@ fn process_gone(source: &std::io::Error) -> bool {
 pub(crate) struct ProcessFixture {
     child: Option<Child>,
     raw_pid: Option<u32>,
+    #[cfg(test)]
     actor_pid: u32,
     path: PathBuf,
     stdin: Option<Box<dyn Write + Send>>,
+    #[cfg(test)]
     stdout: Option<File>,
     stderr: Option<File>,
     #[cfg(test)]
@@ -78,12 +85,14 @@ impl ProcessFixture {
     }
 
     pub(crate) fn new(mut child: Child, path: &Path) -> Self {
+        #[cfg(test)]
         let actor_pid = child.id();
         Self {
             stdin: child
                 .stdin
                 .take()
                 .map(|input| Box::new(input) as Box<dyn Write + Send>),
+            #[cfg(test)]
             stdout: child
                 .stdout
                 .take()
@@ -98,6 +107,7 @@ impl ProcessFixture {
             tasks: Vec::new(),
             child: Some(child),
             raw_pid: None,
+            #[cfg(test)]
             actor_pid,
             path: path.to_owned(),
             stopped: false,
@@ -122,6 +132,7 @@ impl ProcessFixture {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn script(root: &Path, name: &str) -> Result<PathBuf> {
         let path = root.join(FIXTURE_DIR).join(name);
         ensure!(
@@ -213,6 +224,7 @@ impl ProcessFixture {
         fs::set_permissions(path, mode).context(IoSnafu { path })
     }
 
+    #[cfg(test)]
     pub(crate) fn python<I, S>(root: &Path, name: &str, args: I) -> Result<Self>
     where
         I: IntoIterator<Item = S>,
@@ -456,6 +468,7 @@ impl ProcessFixture {
             .context(IoSnafu { path: &self.path })
     }
 
+    #[cfg(test)]
     pub(crate) fn start(command: &mut Command, path: &Path) -> Result<Self> {
         let child = command
             .stdin(Stdio::piped())
@@ -468,6 +481,7 @@ impl ProcessFixture {
         Ok(fixture)
     }
 
+    #[cfg(test)]
     pub(crate) fn id(&self) -> u32 {
         self.actor_pid
     }
@@ -972,6 +986,7 @@ impl ProcessFixture {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn ready(&mut self) -> Result<()> {
         let mut stdout = self.stdout.take().context(InvalidInputSnafu {
             path: &self.path,

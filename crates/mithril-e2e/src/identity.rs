@@ -28,9 +28,7 @@ use erebor_interceptor::{
     bundled_bpf_sha256, KernelHost, KernelHostConfig, KernelHostOwner, KernelObjectLayoutV1,
     BUNDLED_BPF_OBJECT, REQUIRED_IDENTITY_PROGRAMS,
 };
-use erebor_interceptor_abi::{
-    BindingLifecycleStateV1, ExecutionSetBindingStateV1, Id128V1, TaskCoordinateStateV1,
-};
+use erebor_interceptor_abi::{ExecutionSetBindingStateV1, Id128V1};
 use libbpf_rs::{MapCore as _, MapHandle};
 use mithril_control::{
     encode_administrative_authorization_fixture, AdministrativeExecResolution,
@@ -44,11 +42,11 @@ use mithril_node::{
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
-use zerocopy::{IntoBytes as _, KnownLayout, TryFromBytes};
+use zerocopy::TryFromBytes;
 
 use crate::closure::QualificationRegistry;
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
-use crate::physical::{boot_identity, wait_for, ProbeCgroup, ProbeDirectory, ProbeFile};
+use crate::physical::{boot_identity, wait_for, ProbeDirectory, ProbeFile};
 use crate::process::ProcessFixture;
 use crate::Result;
 
@@ -185,8 +183,6 @@ pub struct IdentityVerificationBundleV1 {
 pub struct IdentityPhysicalProbeBundleV1 {
     pub schema_version: u32,
     pub object_sha256: String,
-    pub binding_gap_reconciled_root: NativeTaskSnapshotV1,
-    pub binding_gap_reconciliation_closed: bool,
     pub authorization_retarget_rejected: bool,
     pub authorization_expired_rejected: bool,
     pub authorization_signature_mismatch_rejected: bool,
@@ -198,10 +194,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub authorization_replay_wal_sha256: String,
     pub authorization_replay_wal_records: u64,
     pub authorization_replay_state_removed: bool,
-    pub profile_task_refs_after_exit: u64,
-    pub pin_root_removed: bool,
-    pub lease_removed: bool,
-    pub cgroup_removed: bool,
     pub kubernetes_initial_root: Option<NativeTaskSnapshotV1>,
     pub kubernetes_direct_cri_exec_root: Option<NativeTaskSnapshotV1>,
     pub kubernetes_kubectl_exec_root: Option<NativeTaskSnapshotV1>,
@@ -380,23 +372,10 @@ impl IdentityTestRunner {
     pub fn physical_probe(
         &self,
         output_directory: &Path,
-        pin_root: &Path,
-        lease_path: &Path,
-        cgroup_path: &Path,
+        _pin_root: &Path,
+        _lease_path: &Path,
+        _cgroup_path: &Path,
     ) -> Result<IdentityPhysicalProbeBundleV1> {
-        ensure!(
-            !pin_root.exists(),
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the dedicated identity-test pin root must not already exist",
-            }
-        );
-        let pin_cleanup = ProbeDirectory::new(pin_root);
-        let lease_cleanup = ProbeFile::new(lease_path);
-        let cgroup_cleanup = ProbeCgroup::create(cgroup_path)?;
-        let cgroup_path = cgroup_cleanup.path().to_path_buf();
-        let procs_path = cgroup_path.join("cgroup.procs");
-
         self.materialize_object(output_directory)?;
         let authorization_state_directory = output_directory.join("authorization-replay");
         ensure!(
@@ -408,7 +387,7 @@ impl IdentityTestRunner {
         );
         let authorization_state_cleanup = ProbeDirectory::new(&authorization_state_directory);
         let object_sha256 = bundled_bpf_sha256();
-        let (boot_id, node_boot_id) = boot_identity()?;
+        let (_, node_boot_id) = boot_identity()?;
         let (authorization_replay_wal_sha256, authorization_replay_wal_records) =
             run_authorization_replay_fixture(&authorization_state_directory, node_boot_id)?;
         authorization_state_cleanup.cleanup()?;
@@ -419,115 +398,9 @@ impl IdentityTestRunner {
                 reason: "authorization replay fixture survived cleanup",
             }
         );
-        let config = KernelHostConfig::identity(
-            "/sys/kernel/btf/vmlinux",
-            lease_path,
-            Some(pin_root.to_path_buf()),
-            boot_id.clone(),
-            1,
-        );
-        let mut host = KernelHostOwner::new(config)
-            .start()
-            .context(InterceptorSnafu)?;
-        let mut binding_gap_fixture =
-            ProcessFixture::python(&self.repo_root, "ready.py", std::iter::empty::<&str>())?;
-        fs::write(&procs_path, binding_gap_fixture.id().to_string())
-            .context(IoSnafu { path: &procs_path })?;
-        let binding = test_binding(&cgroup_path);
-        let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
-        bindings
-            .publish_all(&host, std::slice::from_ref(&binding))
-            .context(NodeSnafu)?;
-        let identity = NativeSecurityStateOwner::new(node_boot_id, 1);
-        let binding_gap_reconciliation = identity.activate(&mut host).context(NodeSnafu)?;
-        let inspector = NativeIdentityInspector::new(pin_root);
-        let binding_gap_reconciled_root =
-            self.wait_for("binding-gap reconciled root identity", &procs_path, || {
-                inspector
-                    .snapshot(binding_gap_fixture.id())
-                    .context(NodeSnafu)
-            })?;
-        ensure!(
-            binding_gap_reconciled_root.creator_task_cookie.is_none()
-                && binding_gap_reconciled_root.root_class.as_deref()
-                    == Some("restored_or_unknown_root")
-                && binding_gap_reconciled_root.installed_role_class.as_deref()
-                    == Some("fail_closed_unknown")
-                && binding_gap_reconciled_root.active_role_id == binding.external_role_id
-                && binding_gap_reconciled_root.coordinate_state
-                    == TaskCoordinateStateV1::Runnable as u8
-                && binding_gap_reconciliation.allocation_failures == 0
-                && binding_gap_reconciliation.coordinate_failures == 0
-                && binding_gap_reconciliation.reconciliation_required == 0,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: "a task present before binding did not reconcile to the fail-closed root",
-            }
-        );
-        let binding_gap_root_id = fs::metadata(&cgroup_path)
-            .context(IoSnafu { path: &cgroup_path })?
-            .ino();
-        let mut terminating_binding = required_abi_map::<ExecutionSetBindingStateV1>(
-            &host,
-            "execution_set_bindings",
-            &binding_gap_root_id.to_ne_bytes(),
-            "binding-gap execution-set binding",
-        )?;
-        terminating_binding.lifecycle_state = BindingLifecycleStateV1::Terminating;
-        terminating_binding.transition_version += 1;
-        host.update_map(
-            "execution_set_bindings",
-            &binding_gap_root_id.to_ne_bytes(),
-            terminating_binding.as_bytes(),
-        )
-        .context(InterceptorSnafu)?;
-        identity
-            .recover_tasks(&mut host, false)
-            .context(NodeSnafu)?;
-
-        // A terminal binding removes effect authority before its task exits.
-        // Reconciliation must retain that coherent graph without reopening it.
-        terminating_binding.lifecycle_state = BindingLifecycleStateV1::Active;
-        terminating_binding.transition_version += 1;
-        host.update_map(
-            "execution_set_bindings",
-            &binding_gap_root_id.to_ne_bytes(),
-            terminating_binding.as_bytes(),
-        )
-        .context(InterceptorSnafu)?;
-        identity
-            .recover_tasks(&mut host, false)
-            .context(NodeSnafu)?;
-        binding_gap_fixture.stop()?;
-
-        let profile_task_refs_after_exit =
-            self.wait_for("profile reference release", &procs_path, || {
-                let refs = profile_task_refs(&host)?;
-                Ok((refs == 0).then_some(refs))
-            })?;
-        host.shutdown().context(InterceptorSnafu)?;
-        pin_cleanup.cleanup()?;
-        lease_cleanup.cleanup()?;
-        cgroup_cleanup.cleanup()?;
-        ensure!(
-            !pin_root.exists() && !lease_path.exists(),
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the identity-test pin root or lease survived cleanup",
-            }
-        );
-        ensure!(
-            !cgroup_path.exists(),
-            InvalidInputSnafu {
-                path: &cgroup_path,
-                reason: "the identity-test cgroup survived cleanup",
-            }
-        );
         Ok(IdentityPhysicalProbeBundleV1 {
             schema_version: 29,
             object_sha256,
-            binding_gap_reconciled_root: binding_gap_reconciled_root.clone(),
-            binding_gap_reconciliation_closed: true,
             authorization_retarget_rejected: true,
             authorization_expired_rejected: true,
             authorization_signature_mismatch_rejected: true,
@@ -539,10 +412,6 @@ impl IdentityTestRunner {
             authorization_replay_wal_sha256,
             authorization_replay_wal_records,
             authorization_replay_state_removed: true,
-            profile_task_refs_after_exit,
-            pin_root_removed: true,
-            lease_removed: true,
-            cgroup_removed: true,
             kubernetes_initial_root: None,
             kubernetes_direct_cri_exec_root: None,
             kubernetes_kubectl_exec_root: None,
@@ -6861,27 +6730,6 @@ fn encode_fixture_signed_authorization(
     )
     .map_err(|error| invalid_state(format!("encode authorization fixture: {error}")))
 }
-fn optional_abi_map<T>(host: &KernelHost, map: &str, key: &[u8], name: &str) -> Result<Option<T>>
-where
-    T: KnownLayout + TryFromBytes,
-{
-    host.lookup_map(map, key)
-        .context(InterceptorSnafu)?
-        .map(|bytes| {
-            T::try_read_from_bytes(&bytes)
-                .map_err(|error| invalid_state(format!("{name} has an invalid value: {error}")))
-        })
-        .transpose()
-}
-
-fn required_abi_map<T>(host: &KernelHost, map: &str, key: &[u8], name: &str) -> Result<T>
-where
-    T: KnownLayout + TryFromBytes,
-{
-    optional_abi_map(host, map, key, name)?
-        .ok_or_else(|| invalid_state(format!("{name} is missing")))
-}
-
 fn id128_hex(value: Id128V1) -> String {
     format!("{:016x}{:016x}", value.high, value.low)
 }

@@ -1,4 +1,7 @@
 #[cfg(test)]
+#[cfg(test)]
+mod binding_gap;
+#[cfg(test)]
 mod cgroup_fork;
 #[cfg(test)]
 mod cgroup_reuse;
