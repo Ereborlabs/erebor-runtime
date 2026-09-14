@@ -17,7 +17,8 @@ fn root_binding<P: Platform>(env: &P, id: u64) -> TestResult<ExecutionSetBinding
     )?
     .ok_or_else(|| format!("cgroup {id} has no binding").into())
 }
-#[platform_test(host, scope = isolated)]
+#[platform_test(host)]
+#[scope = "cgroup-reuse"]
 fn cgroup_path_gets_fresh_identity<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("cgroup-reuse")?;
     let pin = env.maps().0.to_owned();

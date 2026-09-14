@@ -2,53 +2,29 @@ use proc_macro::TokenStream;
 
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
-use syn::{parse_macro_input, GenericParam, Ident, ItemFn, Token};
+use syn::{parse_macro_input, Expr, GenericParam, Ident, ItemFn, Lit, Meta, Token};
 
 struct PlatformArgs {
     cases: Vec<Ident>,
-    shared: bool,
 }
 
 impl Parse for PlatformArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut cases = Vec::new();
-        let mut scope = None;
         while !input.is_empty() {
-            let name = input.parse::<Ident>()?;
-            if input.peek(Token![=]) {
-                input.parse::<Token![=]>()?;
-                let value = input.parse::<Ident>()?;
-                if name != "scope" || scope.is_some() {
-                    return Err(syn::Error::new_spanned(name, "unknown or duplicate option"));
-                }
-                scope = Some(match value.to_string().as_str() {
-                    "shared" => true,
-                    "isolated" => false,
-                    _ => {
-                        return Err(syn::Error::new_spanned(
-                            value,
-                            "scope must be shared or isolated",
-                        ))
-                    }
-                });
-            } else {
-                cases.push(name);
-            }
+            cases.push(input.parse::<Ident>()?);
             if !input.is_empty() {
                 input.parse::<Token![,]>()?;
             }
         }
-        Ok(Self {
-            cases,
-            shared: scope.unwrap_or(true),
-        })
+        Ok(Self { cases })
     }
 }
 
 #[proc_macro_attribute]
 pub fn platform_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as PlatformArgs);
-    let test = parse_macro_input!(item as ItemFn);
+    let mut test = parse_macro_input!(item as ItemFn);
 
     if test.sig.asyncness.is_some() {
         return syn::Error::new_spanned(
@@ -80,7 +56,32 @@ pub fn platform_test(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let name = &test.sig.ident;
     let output = &test.sig.output;
-    let shared = args.shared;
+    let mut scope = None;
+    test.attrs.retain(|attr| {
+        if !attr.path().is_ident("scope") {
+            return true;
+        }
+        if scope.is_some() {
+            scope = Some(Err(syn::Error::new_spanned(attr, "duplicate scope")));
+            return false;
+        }
+        scope = Some(match &attr.meta {
+            Meta::NameValue(value) => match &value.value {
+                Expr::Lit(value) => match &value.lit {
+                    Lit::Str(value) if !value.value().is_empty() => Ok(value.clone()),
+                    _ => Err(syn::Error::new_spanned(attr, "scope must be a string")),
+                },
+                _ => Err(syn::Error::new_spanned(attr, "scope must be a string")),
+            },
+            _ => Err(syn::Error::new_spanned(attr, "scope must be a string")),
+        });
+        false
+    });
+    let scope = match scope {
+        Some(Ok(scope)) => quote!(#scope),
+        Some(Err(error)) => return error.into_compile_error().into(),
+        None => quote!(concat!(module_path!(), "::", stringify!(#name))),
+    };
     let tests = args.cases.iter().map(|case| {
         let value = case.to_string();
         let platform = match value.as_str() {
@@ -93,7 +94,9 @@ pub fn platform_test(attr: TokenStream, item: TokenStream) -> TokenStream {
             #[test]
             #[ignore = "requires its physical test environment"]
             fn #case() #output {
-                super::#name::<crate::platform::#platform<#shared>>()
+                crate::platform::test_scope(#scope, || {
+                    super::#name::<crate::platform::#platform>()
+                })
             }
         }
     });

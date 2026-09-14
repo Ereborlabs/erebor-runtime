@@ -18,6 +18,7 @@ use crate::platform::{platform_test, Platform, TestResult};
 
 #[cfg(test)]
 #[platform_test(host, runc, kubernetes)]
+#[scope = "identity"]
 fn tid_reuse_is_fresh<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("tid-reuse")?;
     env.start_control()?;

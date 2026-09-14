@@ -1,7 +1,8 @@
 use crate::platform::{platform_test, Platform, TestResult};
 use std::fs;
 
-#[platform_test(host, runc, kubernetes, scope = isolated)]
+#[platform_test(host, runc, kubernetes)]
+#[scope = "recovery-tasks"]
 fn four_tasks_recover<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("four-task-recovery")?;
     env.start_control()?;

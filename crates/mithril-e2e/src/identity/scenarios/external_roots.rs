@@ -2,7 +2,8 @@ use erebor_interceptor_abi::TaskCoordinateStateV1;
 
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc, kubernetes, scope = isolated)]
+#[platform_test(host, runc, kubernetes)]
+#[scope = "external-roots"]
 fn concurrent_roots_stay_distinct<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("concurrent-roots")?;
     env.start_control()?;

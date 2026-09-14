@@ -6,6 +6,7 @@ use std::time::Duration;
 use crate::platform::{platform_test, Platform, Task, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
+#[scope = "identity"]
 fn non_leader_exec<P: Platform>() -> TestResult<()> {
     let active = |task: &Task| {
         assert_eq!(

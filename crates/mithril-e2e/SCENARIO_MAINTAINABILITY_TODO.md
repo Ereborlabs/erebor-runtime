@@ -129,27 +129,30 @@ reimplement a production owner operation.
   added. Existing `setup`, `start_control`, `start_node`, readiness, actor,
   action, assertion, and `stop` calls must remain visible and keep their
   current order.
-- Make `platform_test` select a compile-time platform scope for every generated
-  standard Rust test. Use the shared scope by default. Permit an explicit
-  isolated scope only for a test that changes component order or tests outage,
-  restart, replacement, recovery, runtime integration, retained state, or
-  owner cleanup.
-- Do not infer a scope from a scenario name, environment variable, or runtime
-  branch. Do not put scope selection in the scenario body.
-- Give each Host platform lane one shared Control and one shared Node. Give
-  each direct-`runc` platform lane one shared Control and one shared Node.
-  Give each Kubernetes platform lane one shared Control Deployment and one
-  shared Node DaemonSet. Install and remove Kubernetes runtime integration
-  once for that scope.
+- Put `#[scope = "name"]` directly below `#[platform_test(...)]`. Make
+  `platform_test` consume this attribute and enter the named scope before it
+  calls the unchanged scenario function.
+- Give tests in the same named scope the same initialized platform owner. An
+  omitted scope is unique to that scenario and does not share an owner.
+- Give a test that changes component order or tests outage, restart,
+  replacement, recovery, runtime integration, retained state, or owner cleanup
+  its own scope name.
+- Do not infer a shared scope from a scenario name, environment variable, or
+  runtime branch. Do not put scope selection in the scenario body.
+- Give each named Host scope one shared Control and one shared Node. Give each
+  named direct-`runc` scope one shared Control and one shared Node. Give each
+  named Kubernetes scope one shared Control Deployment and one shared Node
+  DaemonSet. Install and remove Kubernetes runtime integration once for that
+  scope.
 - Keep actor processes, workload cgroups or namespaces, policy instances,
   runtime identities, result files, and assertions test-scoped. Use unique
   physical identities so one test cannot read or remove another test's state.
 - Make the first ordered `start_control` or `start_node` call start the shared
   owner when it is absent. A later call in the same scope must verify that the
   same owner is ready. It must not silently replace or restart that owner.
-- Make an isolated test acquire exclusive platform ownership. Stop the shared
-  owner before the isolated body starts. Do not let a shared test overlap an
-  isolated test on the same kernel or Kubernetes node.
+- Make a different named scope acquire exclusive platform ownership. Stop the
+  previous scope owner before the next scope body starts. Do not let different
+  scopes overlap on the same kernel or Kubernetes node.
 - Keep exact single-test invocation valid. It must start the required scope,
   run the unchanged scenario, and perform bounded cleanup.
 - Make scope cleanup reliable and observable. A cleanup failure must fail the
@@ -563,32 +566,33 @@ count as maintainability migrations.
 
 ## Common tooling deliverable
 
-- [ ] Add one common platform-scope owner below `platform_test`. Keep the
-  existing scenario function bodies unchanged. The generated wrapper selects
-  shared or isolated ownership and still registers a standard Rust `#[test]`.
-- [x] Make shared scope the attribute default. Add one explicit isolated-scope
-  attribute form for component-order, outage, restart, replacement, recovery,
-  retained-state, runtime-integration, and owner-cleanup tests. Do not change
-  the generated test names.
-  - The attribute passes a compile-time scope to `Host`, `Runc`, and
-    `Kubernetes`. Scenario bodies do not receive a new argument or branch.
-  - The exact generated test names and count are unchanged. All generated
-    tests compile with the shared default and isolated exception form.
-- [ ] Share one Control and one Node across the serial Host platform lane.
+- [x] Add one common named platform-scope owner below `platform_test`. Keep the
+  existing scenario function bodies unchanged. The generated wrapper enters
+  the named scope and still registers a standard Rust `#[test]`.
+- [x] Make `#[scope = "name"]` the only shared-scope selection. The
+  `platform_test` macro must consume it. An omitted attribute gives the test a
+  unique scope. Do not change generated test names.
+  - The generated wrapper enters the scope before it calls the scenario.
+    `Host`, `Runc`, and `Kubernetes` read that scope in `Platform::setup`.
+    Scenario bodies do not receive an argument or branch.
+  - The exact generated test names and count stay unchanged.
+  - `cargo test -p mithril-e2e --lib --no-run`, test discovery, and strict
+    Clippy passed on 2026-09-14.
+- [ ] Share one Control and one Node across each named Host scope.
   Keep each actor, cgroup, policy instance, runtime identity, output path, and
   assertion test-scoped. Pass every existing Host scenario before commit.
-- [ ] Share one Control and one Node across the serial direct-`runc` platform
-  lane. Reuse the Host shared owner without adding a second native Control or
-  Node wrapper. Keep each container and actor test-scoped. Pass every existing
+- [ ] Share one Control and one Node across each named direct-`runc` scope.
+  Reuse the Host shared owner without adding a second native Control or Node
+  wrapper. Keep each container and actor test-scoped. Pass every existing
   direct-`runc` scenario before commit.
 - [ ] Share one Helm Control Deployment, one Node DaemonSet, and one runtime
   integration installation across the serial Kubernetes platform lane. Keep
   each workload namespace, policy instance, actor Pod, runtime identity,
   output path, and assertion test-scoped. Pass every existing Kubernetes
   scenario before commit.
-- [ ] Run isolated order, recovery, outage, restart, and retained-state cases
-  with exclusive ownership. Prove that the shared owner is absent before each
-  isolated case starts and is ready before a later shared case starts.
+- [ ] Run order, recovery, outage, restart, and retained-state scopes with
+  exclusive ownership. Prove that the previous scope owner is absent before a
+  different scope starts and that the requested scope is ready before use.
 - [ ] Make exact single-test cleanup and complete-lane cleanup bounded and
   diagnostic on all three platforms. Do not depend on process exit, VM
   deletion, or K3s deletion for normal cleanup.
@@ -597,7 +601,7 @@ count as maintainability migrations.
   serial baselines: 25 Host cases in 889.98 seconds, 16 direct-`runc` cases in
   585.01 seconds, and 18 Kubernetes cases in 2,423.25 seconds.
 - [ ] After all three serial shared lanes pass, prove bounded parallel shared
-  execution at two workers. Keep isolated cases serial. Increase the worker
+  execution at two workers. Keep different scopes serial. Increase the worker
   count only after repeated runs show no identity, policy, evidence, BPF,
   runtime-hook, or cleanup overlap.
 
