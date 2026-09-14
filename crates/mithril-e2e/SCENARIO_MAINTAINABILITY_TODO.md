@@ -327,7 +327,7 @@ These Rust files exceed 2,000 lines:
 | Source | Current lines |
 | --- | ---: |
 | `effect/runc.rs` | 8,339 |
-| `identity.rs` | 6,743 |
+| `identity.rs` | 6,394 |
 | `effect.rs` | 5,118 |
 | `effect/child.rs` | 4,472 |
 | `control_tls.rs` | 2,734 |
@@ -336,7 +336,6 @@ These Rust files exceed 2,000 lines:
 The diff from `95775f48` adds or relocates these private test functions with
 more than five name components:
 
-- `authorization_replay_fixture_persists_exact_rejections_and_fresh_control`
 - `production_object_and_identity_fixture_allocation_are_exact`
 - `kubernetes_network_probe_container_no_task`
 
@@ -755,6 +754,21 @@ test does not close a row when its physical condition or an assertion changed.
     `IdentityTestRunner::physical_probe`. The final run passed in 21.27 seconds.
   - The complete 25-test Host platform set passed in 901.22 seconds.
   - The remaining native physical probe passed with only authorization replay.
+  - The complete repository Rust CI script passed.
+- [x] Authorization replay: use two direct production-owner tests in
+  `identity/authorization_tests.rs`.
+  - `invalid_auth_is_rejected` checks retargeting, expiry, signature failure,
+    and the unchanged two-record owner and boot WAL.
+  - `replay_is_durable` checks the exact accepted proof, same-owner replay,
+    owner restart, boot change, fresh authorization, and the five-record WAL.
+  - Each test calls `AuthorizationProofOwner::verify_and_accept` directly.
+    `AuthCase` owns only input data, the state directory, and cleanup.
+  - Both focused tests passed before and after deletion of the 301-line hidden
+    helper from `identity.rs`.
+  - The simplified Kubernetes base-bundle command passed in the retained VM.
+  - The local suite passed with 91 tests and 59 ignored physical tests.
+  - Strict crate Clippy passed.
+  - The complete 25-test Host platform set passed in 889.98 seconds.
   - The complete repository Rust CI script passed.
 - [ ] Concurrent external roots: keep one small parameterized Rust test in
   `identity/scenarios/external_roots.rs`. Start Control and one
@@ -1273,9 +1287,10 @@ setup, production actions, assertions, and focused test.
 
 ### Native and Kubernetes identity
 
-- [ ] Replace the remaining `IdentityTestRunner::physical_probe` authorization
-  replay with a small standard test. Remove its obsolete native pin, lease, and
-  cgroup arguments after the Kubernetes command no longer uses its bundle.
+- [x] Replace the `IdentityTestRunner::physical_probe` authorization replay
+  with small standard tests. Remove its result flags and hidden stateful helper.
+- [ ] Remove the now-empty native base-bundle command and its obsolete pin,
+  lease, and cgroup arguments after the Kubernetes launcher no longer uses it.
 - [ ] Migrate native binding-gap, external ambiguity, cgroup escape, fork,
   exec, reparent, PID reuse, owner restart, object upgrade, and authorization
   replay groups one commit at a time. Keep their `KernelHostOwner`,
@@ -1370,7 +1385,8 @@ keep an actor-only duplicate only to preserve the old name.
 - `golden.rs::cfg_rollback_golden_rejects_replay_and_corruption`
 - `golden.rs::cfg_v1_golden_is_closed_deterministic_and_chassis_only`
 - `golden.rs::decision_set_golden_matches_closed_rust_and_c_layout`
-- `identity.rs::authorization_replay_fixture_persists_exact_rejections_and_fresh_control`
+- `identity/authorization_tests.rs::invalid_auth_is_rejected`
+- `identity/authorization_tests.rs::replay_is_durable`
 - `identity.rs::leader_first_fixture_keeps_the_worker_until_release`
 - `identity.rs::native_process_fixture_executes_after_namespace_init_reparenting`
 - `identity.rs::native_process_fixture_executes_after_subreaper_reparenting`
