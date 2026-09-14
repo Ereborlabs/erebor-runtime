@@ -311,7 +311,6 @@ owners are:
 | --- | ---: | --- |
 | `EffectTestRunner::runc_entry_role_runtime_probe` | 3,992 | `two-node-convergence.sh` protected start, concurrent exec, replacement, administrative entry, and upgrade checks |
 | `EffectTestRunner::physical_probe` | 3,466 | `run.sh` observe and protect effect lanes |
-| `IdentityTestRunner::physical_probe` | 2,294 | `run.sh` native identity lane |
 | `NetworkTestRunner::physical_probe` | 1,237 | `two-node-network.sh` in both node directions |
 | `EffectTestRunner::recovered_container_entry_probe` | 1,028 | `two-node-convergence.sh` recovered-container entry lane |
 | `IdentityTestRunner::physical_kubernetes_probe` and its private cases | 4,900 combined | `run.sh --with-k3s` identity lane |
@@ -325,8 +324,8 @@ These Rust files exceed 2,000 lines:
 
 | Source | Current lines |
 | --- | ---: |
-| `effect/runc.rs` | 8,343 |
-| `identity.rs` | 7,330 |
+| `effect/runc.rs` | 8,339 |
+| `identity.rs` | 7,008 |
 | `effect.rs` | 5,118 |
 | `effect/child.rs` | 4,472 |
 | `control_tls.rs` | 2,734 |
@@ -342,17 +341,9 @@ more than five name components:
 The same diff adds or relocates these local variables with more than three
 name components:
 
-- `clone_child_mount_namespace_path`
-- `clone_child_mount_namespace`
-- `clone_child_comm_path`
-- `clone_native_child_after_namespace_move`
-- `clone_child_mount_namespace_after`
 - `profile_task_refs_after_exit`
 - `cgroup_reuse_first_root_id`
 - `cgroup_reuse_first_binding`
-- `retired_pin_root_owner_rejected`
-- `live_manifest_mismatch_detected`
-- `map_ids_stable_across_restart`
 - `cgroup_reuse_second_root`
 - `cgroup_reuse_second_root_id`
 - `cgroup_reuse_second_binding`
@@ -1143,13 +1134,13 @@ test does not close a row when its physical condition or an assertion changed.
     old Rust and shell probes after all three cases pass. Keep task-change
     retry, ptrace bootstrap, internal exec, probe isolation, denial evidence,
     post-cutover activation, and cleanup for separate migrations.
-- [ ] Retained-host restart: keep host shutdown, retained map validation,
+- [x] Retained-host restart: keep host shutdown, retained map validation,
   production recovery, stable map IDs, and ownership rejection visible.
   - [x] Add one small Host test and one concrete owner. Keep concurrent lease
     rejection, retained-link rejection, displaced-map rejection, restart, map
     identity, and live-manifest failure as explicit actions and assertions.
   - [x] Pass the Host case in the retained privileged VM.
-  - [ ] Remove only the matching restart assertions and result fields from
+  - [x] Remove only the matching restart assertions and result fields from
     `IdentityTestRunner::physical_probe`. Keep the restart required by the
     cgroup-lifetime case until that separate replacement passes.
 - [ ] Cgroup lifetime reuse: recreate the cgroup path after recovery. Keep the

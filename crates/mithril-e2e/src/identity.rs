@@ -25,13 +25,13 @@ use std::time::{Duration, Instant};
 
 use ed25519_dalek::SigningKey;
 use erebor_interceptor::{
-    bundled_bpf_sha256, Error as InterceptorError, KernelHost, KernelHostConfig, KernelHostOwner,
-    KernelObjectLayoutV1, KernelObjectManifestV1, BUNDLED_BPF_OBJECT, REQUIRED_IDENTITY_PROGRAMS,
+    bundled_bpf_sha256, KernelHost, KernelHostConfig, KernelHostOwner, KernelObjectLayoutV1,
+    BUNDLED_BPF_OBJECT, REQUIRED_IDENTITY_PROGRAMS,
 };
 use erebor_interceptor_abi::{
     BindingLifecycleStateV1, ExecutionSetBindingStateV1, Id128V1, TaskCoordinateStateV1,
 };
-use libbpf_rs::{MapCore as _, MapHandle, MapType};
+use libbpf_rs::{MapCore as _, MapHandle};
 use mithril_control::{
     encode_administrative_authorization_fixture, AdministrativeExecResolution,
     AdministrativeFileObject, ResolvedAdministrativeExecutable,
@@ -185,8 +185,6 @@ pub struct IdentityVerificationBundleV1 {
 pub struct IdentityPhysicalProbeBundleV1 {
     pub schema_version: u32,
     pub object_sha256: String,
-    pub first_start: KernelObjectManifestV1,
-    pub distinct_pin_root_owner_rejected: bool,
     pub binding_gap_reconciled_root: NativeTaskSnapshotV1,
     pub binding_gap_reconciliation_closed: bool,
     pub authorization_retarget_rejected: bool,
@@ -211,9 +209,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub cgroup_reuse_second_live_interval_id: String,
     pub cgroup_reuse_fresh_identity: bool,
     pub profile_task_refs_after_exit: u64,
-    pub recovered_start: KernelObjectManifestV1,
-    pub map_ids_stable_across_restart: bool,
-    pub live_manifest_mismatch_detected: bool,
     pub pin_root_removed: bool,
     pub lease_removed: bool,
     pub cgroup_removed: bool,
@@ -444,35 +439,6 @@ impl IdentityTestRunner {
         let mut host = KernelHostOwner::new(config.clone())
             .start()
             .context(InterceptorSnafu)?;
-        let first_start = host.manifest().clone();
-        let alternate_pin_root = pin_root.with_extension("alternate");
-        let alternate_lease_path = lease_path.with_extension("alternate.lock");
-        let distinct_pin_root_owner_rejected =
-            match KernelHostOwner::new(KernelHostConfig::identity(
-                "/sys/kernel/btf/vmlinux",
-                &alternate_lease_path,
-                Some(alternate_pin_root.clone()),
-                boot_id.clone(),
-                1,
-            ))
-            .start()
-            {
-                Err(InterceptorError::LeaseOwned { .. }) => true,
-                Err(source) => return Err(crate::Error::from_interceptor(source)),
-                Ok(alternate) => {
-                    alternate.shutdown().context(InterceptorSnafu)?;
-                    ProbeDirectory::new(&alternate_pin_root).cleanup()?;
-                    ProbeFile::new(&alternate_lease_path).cleanup()?;
-                    false
-                }
-            };
-        ensure!(
-            distinct_pin_root_owner_rejected,
-            InvalidInputSnafu {
-                path: &alternate_pin_root,
-                reason: "a distinct Interceptor owner acquired the host lease",
-            }
-        );
         let mut binding_gap_fixture =
             ProcessFixture::python(&self.repo_root, "ready.py", std::iter::empty::<&str>())?;
         fs::write(&procs_path, binding_gap_fixture.id().to_string())
@@ -559,48 +525,10 @@ impl IdentityTestRunner {
             "first cgroup lifetime binding",
         )?;
 
-        let first_map_ids = map_ids(&first_start);
         host.shutdown().context(InterceptorSnafu)?;
-        let retired_pin_root = pin_root.with_extension("retired");
-        let retired_lease_path = lease_path.with_extension("retired.lock");
-        let retired_pin_root_owner_rejected =
-            match KernelHostOwner::new(KernelHostConfig::identity(
-                "/sys/kernel/btf/vmlinux",
-                &retired_lease_path,
-                Some(retired_pin_root.clone()),
-                boot_id.clone(),
-                1,
-            ))
-            .start()
-            {
-                Err(InterceptorError::RetainedLsmLink { .. }) => true,
-                Err(source) => {
-                    if retired_pin_root.exists() {
-                        ProbeDirectory::new(&retired_pin_root).cleanup()?;
-                    }
-                    ProbeFile::new(&retired_lease_path).cleanup()?;
-                    return Err(crate::Error::from_interceptor(source));
-                }
-                Ok(retired) => {
-                    retired.shutdown().context(InterceptorSnafu)?;
-                    ProbeDirectory::new(&retired_pin_root).cleanup()?;
-                    ProbeFile::new(&retired_lease_path).cleanup()?;
-                    false
-                }
-            };
-        ProbeFile::new(&retired_lease_path).cleanup()?;
-        ensure!(
-            retired_pin_root_owner_rejected && !retired_pin_root.exists(),
-            InvalidInputSnafu {
-                path: &retired_pin_root,
-                reason: "a retained Interceptor owner allowed a distinct pin root",
-            }
-        );
-        verify_recovery_rejects_displaced_map(&config, &first_start)?;
         let mut recovered = KernelHostOwner::new(config)
             .start()
             .context(InterceptorSnafu)?;
-        let recovered_start = recovered.manifest().clone();
         let mut recovered_bindings =
             WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
         recovered_bindings
@@ -609,15 +537,6 @@ impl IdentityTestRunner {
         NativeSecurityStateOwner::new(node_boot_id, 1)
             .activate(&mut recovered)
             .context(NodeSnafu)?;
-        let live_manifest_mismatch_detected = verify_live_manifest_negative_fixture(&recovered)?;
-        let map_ids_stable_across_restart = first_map_ids == map_ids(&recovered_start);
-        ensure!(
-            map_ids_stable_across_restart,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "recovery did not reuse the complete pinned map generation",
-            }
-        );
         cgroup_cleanup.cleanup()?;
         ensure!(
             !cgroup_path.exists(),
@@ -706,8 +625,6 @@ impl IdentityTestRunner {
         Ok(IdentityPhysicalProbeBundleV1 {
             schema_version: 29,
             object_sha256,
-            first_start,
-            distinct_pin_root_owner_rejected,
             binding_gap_reconciled_root: binding_gap_reconciled_root.clone(),
             binding_gap_reconciliation_closed: true,
             authorization_retarget_rejected: true,
@@ -736,9 +653,6 @@ impl IdentityTestRunner {
             ),
             cgroup_reuse_fresh_identity,
             profile_task_refs_after_exit,
-            recovered_start,
-            map_ids_stable_across_restart,
-            live_manifest_mismatch_detected,
             pin_root_removed: true,
             lease_removed: true,
             cgroup_removed: true,
@@ -6749,125 +6663,6 @@ fn profile_task_refs(host: &KernelHost) -> Result<u64> {
         .context(InterceptorSnafu)?
         .ok_or_else(|| invalid_state("profile-generation reference state is missing"))?;
     read_u64(&value, 0, "profile-generation task references")
-}
-
-fn map_ids(manifest: &KernelObjectManifestV1) -> BTreeMap<&str, u32> {
-    manifest
-        .maps
-        .iter()
-        .map(|map| (map.name.as_str(), map.id))
-        .collect()
-}
-
-fn verify_recovery_rejects_displaced_map(
-    config: &KernelHostConfig,
-    manifest: &KernelObjectManifestV1,
-) -> Result<()> {
-    let record = manifest
-        .maps
-        .iter()
-        .find(|map| map.name == "active_profile_generations")
-        .ok_or_else(|| invalid_state("live manifest has no active-profile map"))?;
-    ensure!(
-        record.map_type == "Hash",
-        InvalidInputSnafu {
-            path: Path::new(&record.name),
-            reason: "active-profile map is not a hash map",
-        }
-    );
-    let pin = record
-        .pin_path
-        .as_deref()
-        .ok_or_else(|| invalid_state("active-profile map has no pin path"))?;
-    let displaced = pin
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| invalid_state("active-profile map pin has no pin root"))?
-        .join("recovery-original-active-profile-generations");
-    ensure!(
-        !displaced.exists(),
-        InvalidInputSnafu {
-            path: &displaced,
-            reason: "recovery negative-fixture path already exists",
-        }
-    );
-    fs::rename(pin, &displaced).context(IoSnafu { path: pin })?;
-
-    let attempt = (|| {
-        let options = libbpf_rs::libbpf_sys::bpf_map_create_opts {
-            sz: size_of::<libbpf_rs::libbpf_sys::bpf_map_create_opts>() as _,
-            ..Default::default()
-        };
-        let mut replacement = MapHandle::create(
-            MapType::Hash,
-            Some("recovery_map"),
-            record.key_size,
-            record.value_size,
-            record.max_entries,
-            &options,
-        )
-        .map_err(|error| invalid_state(format!("create same-layout replacement map: {error}")))?;
-        replacement
-            .pin(pin)
-            .map_err(|error| invalid_state(format!("pin same-layout replacement map: {error}")))?;
-        match KernelHostOwner::new(config.clone()).start() {
-            Ok(host) => {
-                host.shutdown().context(InterceptorSnafu)?;
-                Ok(false)
-            }
-            Err(error) => {
-                let message = error.to_string();
-                ensure!(
-                    message.contains("recovered maps")
-                        || message.contains("does not use the recovered map set"),
-                    InvalidInputSnafu {
-                        path: pin,
-                        reason: format!(
-                            "displaced-map recovery failed for an unrelated reason: {message}"
-                        ),
-                    }
-                );
-                Ok(true)
-            }
-        }
-    })();
-    let remove = match fs::remove_file(pin) {
-        Ok(()) => Ok(()),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(source).context(IoSnafu { path: pin }),
-    };
-    let restore = fs::rename(&displaced, pin).context(IoSnafu { path: &displaced });
-    let rejected = attempt?;
-    remove?;
-    restore?;
-    ensure!(
-        rejected,
-        InvalidInputSnafu {
-            path: pin,
-            reason: "recovery accepted retained programs that use a displaced map",
-        }
-    );
-    Ok(())
-}
-
-fn verify_live_manifest_negative_fixture(host: &KernelHost) -> Result<bool> {
-    host.verify_live_manifest().context(InterceptorSnafu)?;
-    let pin = host
-        .manifest()
-        .links
-        .first()
-        .and_then(|link| link.pin_path.as_ref())
-        .ok_or_else(|| invalid_state("live manifest has no pinned link"))?;
-    fs::remove_file(pin).context(IoSnafu { path: pin })?;
-    let mismatch_detected = host.verify_live_manifest().is_err();
-    ensure!(
-        mismatch_detected,
-        InvalidInputSnafu {
-            path: pin,
-            reason: "live manifest accepted a missing pinned link",
-        }
-    );
-    Ok(true)
 }
 
 fn read_u64(bytes: &[u8], offset: usize, name: &str) -> Result<u64> {
