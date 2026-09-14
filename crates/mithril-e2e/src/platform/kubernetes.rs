@@ -45,7 +45,7 @@ const SELECTOR: &str = "mithril.erebor.dev/pid-reuse";
 const ACTOR: &str = "pid-reuse";
 const CONTAINER: &str = "worker";
 
-pub(crate) struct Kubernetes {
+pub(crate) struct Kubernetes<const SHARED: bool = true> {
     root: PathBuf,
     out: PathBuf,
     work_path: PathBuf,
@@ -96,7 +96,7 @@ pub(crate) struct Kubernetes {
     actor_cgroup: Option<PathBuf>,
 }
 
-impl Kubernetes {
+impl<const SHARED: bool> Kubernetes<SHARED> {
     fn fixture(&self, name: &str) -> PathBuf {
         self.root
             .join("crates/mithril-e2e/fixtures/kubernetes")
@@ -872,7 +872,7 @@ impl Kubernetes {
     }
 }
 
-impl Platform for Kubernetes {
+impl<const SHARED: bool> Platform for Kubernetes<SHARED> {
     fn source(&self) -> &Path {
         &self.root
     }
@@ -1606,7 +1606,7 @@ impl Platform for Kubernetes {
     }
 }
 
-impl Drop for Kubernetes {
+impl<const SHARED: bool> Drop for Kubernetes<SHARED> {
     fn drop(&mut self) {
         let _result = self.close();
     }

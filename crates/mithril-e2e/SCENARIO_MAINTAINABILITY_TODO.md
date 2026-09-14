@@ -566,10 +566,14 @@ count as maintainability migrations.
 - [ ] Add one common platform-scope owner below `platform_test`. Keep the
   existing scenario function bodies unchanged. The generated wrapper selects
   shared or isolated ownership and still registers a standard Rust `#[test]`.
-- [ ] Make shared scope the attribute default. Add one explicit isolated-scope
+- [x] Make shared scope the attribute default. Add one explicit isolated-scope
   attribute form for component-order, outage, restart, replacement, recovery,
   retained-state, runtime-integration, and owner-cleanup tests. Do not change
   the generated test names.
+  - The attribute passes a compile-time scope to `Host`, `Runc`, and
+    `Kubernetes`. Scenario bodies do not receive a new argument or branch.
+  - The exact generated test names and count are unchanged. All generated
+    tests compile with the shared default and isolated exception form.
 - [ ] Share one Control and one Node across the serial Host platform lane.
   Keep each actor, cgroup, policy instance, runtime identity, output path, and
   assertion test-scoped. Pass every existing Host scenario before commit.

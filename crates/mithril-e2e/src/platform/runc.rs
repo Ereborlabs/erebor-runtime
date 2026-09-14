@@ -12,8 +12,8 @@ use super::{Host, Platform, Task, TestResult, PROCESS_FIXTURES};
 use crate::physical::ProbeDirectory;
 use crate::process::ProcessFixture;
 
-pub(crate) struct Runc {
-    host: Host,
+pub(crate) struct Runc<const SHARED: bool = true> {
+    host: Host<SHARED>,
     runc_path: PathBuf,
     state_path: PathBuf,
     bundle_path: PathBuf,
@@ -23,7 +23,7 @@ pub(crate) struct Runc {
     container_id: Option<String>,
 }
 
-impl Runc {
+impl<const SHARED: bool> Runc<SHARED> {
     fn run(command: &mut Command, name: &Path) -> TestResult<Vec<u8>> {
         let output = command.output()?;
         if !output.status.success() {
@@ -110,13 +110,13 @@ impl Runc {
     }
 }
 
-impl Platform for Runc {
+impl<const SHARED: bool> Platform for Runc<SHARED> {
     fn source(&self) -> &Path {
         self.host.source()
     }
 
     fn setup(name: &str) -> TestResult<Self> {
-        let mut host = Host::setup(name)?;
+        let mut host = Host::<SHARED>::setup(name)?;
         let runc_path = env::var_os("MITHRIL_TEST_RUNC")
             .map(PathBuf::from)
             .ok_or("MITHRIL_TEST_RUNC is not set")?;
@@ -399,7 +399,7 @@ impl Platform for Runc {
     }
 }
 
-impl Drop for Runc {
+impl<const SHARED: bool> Drop for Runc<SHARED> {
     fn drop(&mut self) {
         let _result = self.close();
     }

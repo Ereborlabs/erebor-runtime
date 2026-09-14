@@ -49,7 +49,7 @@ const POD_UID: &str = "99999999-9999-4999-8999-999999999999";
 const NODE_UID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ACTOR_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-pub(crate) struct Host {
+pub(crate) struct Host<const SHARED: bool = true> {
     root: PathBuf,
     out: PathBuf,
     work_path: PathBuf,
@@ -89,7 +89,7 @@ pub(crate) struct Host {
     hook_path: PathBuf,
 }
 
-impl Host {
+impl<const SHARED: bool> Host<SHARED> {
     fn path(name: &'static str) -> TestResult<PathBuf> {
         env::var_os(name)
             .map(PathBuf::from)
@@ -408,7 +408,7 @@ impl Host {
     }
 }
 
-impl Platform for Host {
+impl<const SHARED: bool> Platform for Host<SHARED> {
     fn source(&self) -> &Path {
         &self.root
     }
@@ -944,7 +944,7 @@ impl Platform for Host {
     }
 
     fn move_task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
-        Host::move_out(self, pid)?;
+        Host::<SHARED>::move_out(self, pid)?;
         let last = RefCell::new(String::from("<absent>"));
         let snapshot = self.runtime.block_on(wait_for_async(
             &self.pin_path,
@@ -1063,7 +1063,7 @@ impl Platform for Host {
     }
 }
 
-impl Drop for Host {
+impl<const SHARED: bool> Drop for Host<SHARED> {
     fn drop(&mut self) {
         let _result = self.close();
     }
