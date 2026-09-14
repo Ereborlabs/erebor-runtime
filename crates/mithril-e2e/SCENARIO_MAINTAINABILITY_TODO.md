@@ -123,6 +123,46 @@ reimplement a production owner operation.
 - A compatibility artifact writer can serialize scenario results. It must not
   execute a hidden scenario or own setup, action, assertion, or teardown.
 
+### Platform suite scope
+
+- Keep scenario function bodies unchanged when shared lifecycle ownership is
+  added. Existing `setup`, `start_control`, `start_node`, readiness, actor,
+  action, assertion, and `stop` calls must remain visible and keep their
+  current order.
+- Make `platform_test` select a compile-time platform scope for every generated
+  standard Rust test. Use the shared scope by default. Permit an explicit
+  isolated scope only for a test that changes component order or tests outage,
+  restart, replacement, recovery, runtime integration, retained state, or
+  owner cleanup.
+- Do not infer a scope from a scenario name, environment variable, or runtime
+  branch. Do not put scope selection in the scenario body.
+- Give each Host platform lane one shared Control and one shared Node. Give
+  each direct-`runc` platform lane one shared Control and one shared Node.
+  Give each Kubernetes platform lane one shared Control Deployment and one
+  shared Node DaemonSet. Install and remove Kubernetes runtime integration
+  once for that scope.
+- Keep actor processes, workload cgroups or namespaces, policy instances,
+  runtime identities, result files, and assertions test-scoped. Use unique
+  physical identities so one test cannot read or remove another test's state.
+- Make the first ordered `start_control` or `start_node` call start the shared
+  owner when it is absent. A later call in the same scope must verify that the
+  same owner is ready. It must not silently replace or restart that owner.
+- Make an isolated test acquire exclusive platform ownership. Stop the shared
+  owner before the isolated body starts. Do not let a shared test overlap an
+  isolated test on the same kernel or Kubernetes node.
+- Keep exact single-test invocation valid. It must start the required scope,
+  run the unchanged scenario, and perform bounded cleanup.
+- Make scope cleanup reliable and observable. A cleanup failure must fail the
+  test invocation and retain component logs, last readiness state, owned paths,
+  and actor diagnostics.
+- Do not add a test registry, custom test language, replacement harness,
+  builder, factory, or scenario-specific scope implementation. The attribute
+  can generate only the standard test wrapper and select the common scope.
+- First verify shared scope with serial tests. Enable bounded parallel tests
+  only after Host, direct-`runc`, and Kubernetes prove unique identity,
+  complete workload cleanup, policy cleanup, evidence isolation, and no BPF or
+  runtime-hook ownership race.
+
 ### Cross-environment test shape
 
 - Keep each migrated behavior as one small attributed Rust function. The
@@ -522,6 +562,40 @@ The baseline reliability records remain as failure evidence. They do not
 count as maintainability migrations.
 
 ## Common tooling deliverable
+
+- [ ] Add one common platform-scope owner below `platform_test`. Keep the
+  existing scenario function bodies unchanged. The generated wrapper selects
+  shared or isolated ownership and still registers a standard Rust `#[test]`.
+- [ ] Make shared scope the attribute default. Add one explicit isolated-scope
+  attribute form for component-order, outage, restart, replacement, recovery,
+  retained-state, runtime-integration, and owner-cleanup tests. Do not change
+  the generated test names.
+- [ ] Share one Control and one Node across the serial Host platform lane.
+  Keep each actor, cgroup, policy instance, runtime identity, output path, and
+  assertion test-scoped. Pass every existing Host scenario before commit.
+- [ ] Share one Control and one Node across the serial direct-`runc` platform
+  lane. Reuse the Host shared owner without adding a second native Control or
+  Node wrapper. Keep each container and actor test-scoped. Pass every existing
+  direct-`runc` scenario before commit.
+- [ ] Share one Helm Control Deployment, one Node DaemonSet, and one runtime
+  integration installation across the serial Kubernetes platform lane. Keep
+  each workload namespace, policy instance, actor Pod, runtime identity,
+  output path, and assertion test-scoped. Pass every existing Kubernetes
+  scenario before commit.
+- [ ] Run isolated order, recovery, outage, restart, and retained-state cases
+  with exclusive ownership. Prove that the shared owner is absent before each
+  isolated case starts and is ready before a later shared case starts.
+- [ ] Make exact single-test cleanup and complete-lane cleanup bounded and
+  diagnostic on all three platforms. Do not depend on process exit, VM
+  deletion, or K3s deletion for normal cleanup.
+- [ ] Record elapsed setup, Control, Node, actor, scenario, and teardown time
+  without adding timing calls to scenario bodies. Compare with the current
+  serial baselines: 25 Host cases in 889.98 seconds, 16 direct-`runc` cases in
+  585.01 seconds, and 18 Kubernetes cases in 2,423.25 seconds.
+- [ ] After all three serial shared lanes pass, prove bounded parallel shared
+  execution at two workers. Keep isolated cases serial. Increase the worker
+  count only after repeated runs show no identity, policy, evidence, BPF,
+  runtime-hook, or cleanup overlap.
 
 - [ ] Add small concrete physical setup owners for Control, Node, and one
   actor. Reuse existing Control, node, path, cgroup, and process owners. Keep
