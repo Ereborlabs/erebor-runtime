@@ -89,13 +89,14 @@ impl Host {
         let rootfs = self.shared.output().join("bundle/rootfs");
         let program = Path::new(command);
         let mut actor = ProcessFixture::held_cgroup(program, args, self.shared.cgroup(), &rootfs)?;
+        let pid = actor.id();
         let placement = self
             .shared
             .node_running()
-            .then(|| self.shared.task(actor.id(), "added actor placement"))
+            .then(|| self.shared.task(pid, "added actor placement"))
             .transpose()?;
         actor.release()?;
-        if let Err(source) = actor.wait_command(command) {
+        if let Err(source) = actor.wait_command(pid, command) {
             if let Some(placement) = placement {
                 return Err(format!(
                     "{source}; pre-exec PID: {}; snapshot: {:?}; coordinate: {:?}; identity health: {:?}",

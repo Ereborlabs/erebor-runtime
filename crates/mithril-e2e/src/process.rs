@@ -468,8 +468,8 @@ impl ProcessFixture {
     }
 
     #[cfg(test)]
-    pub(crate) fn wait_command(&mut self, command: &str) -> Result<()> {
-        let path = PathBuf::from(format!("/proc/{}/cmdline", self.actor_pid));
+    pub(crate) fn wait_command(&mut self, pid: u32, command: &str) -> Result<()> {
+        let path = PathBuf::from(format!("/proc/{pid}/cmdline"));
         let expected = OsStr::new(command).as_bytes();
         let last = RefCell::new(String::from("<absent>"));
         self.wait_path(

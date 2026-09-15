@@ -88,8 +88,8 @@ impl Runc {
         let pid = actor.wait_pid(&pid_path, "runc exec outer PID")?;
         fs::remove_file(&pid_path)?;
         self.shared.move_out(parent)?;
+        actor.wait_command(pid, program)?;
         actor.set_actor(pid)?;
-        actor.wait_command(program)?;
         Ok(actor)
     }
 
