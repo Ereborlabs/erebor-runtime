@@ -1438,7 +1438,49 @@ setup, production actions, assertions, and focused test.
   exec, reparent, PID reuse, owner restart, object upgrade, and authorization
   replay groups one commit at a time. Keep their `KernelHostOwner`,
   `WorkloadBindingOwner`, and `NativeSecurityStateOwner` calls explicit.
-- [ ] `physical_kubernetes_exec_probe`
+- [ ] Dismantle `physical_kubernetes_exec_probe` one behavior at a time. Do
+  not add a Kubernetes-only scenario framework or a special Node startup
+  path. Use the same small Rust-test and `Platform` structure as the other
+  migrated identity scenarios.
+  - [x] Audit the original sequence and all result fields. The Pod starts
+    before identity activation. The old probe then starts an identity-only
+    `KernelHostOwner`, publishes one binding, and activates identity without
+    an effect policy. It does not start Control or Node.
+  - [x] Reject the attempted Protect-mode replacement. A real Node with the
+    current Protect policy changes an unlisted runtime exec into a declared
+    entry authorization request. Its `EACCES` result is correct and does not
+    reproduce the old allowed, restricted external root.
+  - [x] Confirm that Observe mode does not remove this mismatch. Undeclared
+    runtime-entry admission fails through the hard identity gate before the
+    ordinary Observe or Protect policy decision.
+  - [ ] Replace the pre-existing Pod-root case. Preserve its creator-free
+    `restored_or_unknown_root` and `fail_closed_unknown` result. Do not treat
+    `recovery_tasks` as a replacement unless it reproduces this physical
+    condition and result through the standard platform path.
+  - [ ] Replace direct CRI exec. Preserve successful execution, a creator-free
+    `external_runtime_root`, the `runtime_external_restricted` role, and the
+    binding external-role ID.
+  - [ ] Replace ordinary `kubectl exec`. Preserve the same restricted result
+    and a task cookie distinct from the direct CRI exec.
+  - [ ] Replace TTY `kubectl exec`. Preserve the same restricted result and a
+    task cookie distinct from both non-TTY exec roots.
+  - [ ] Replace `kubectl cp`. Preserve the restricted helper identity, a task
+    cookie distinct from all exec roots, and the exact copied bytes.
+  - [ ] Replace the native-child case. Preserve the restricted creator-free
+    parent, the child's creator and real-parent cookies, inherited role, and
+    absent child root and installed-role classifications.
+  - [ ] Keep bounded actor release, process exit, namespace deletion, pin and
+    lease deletion, and work-directory cleanup in each replacement.
+  - [ ] Do not count `restricted_roots` as runtime-exec coverage. It preserves
+    the rule-zero restricted identity after cgroup placement, not after a
+    runtime exec.
+  - [ ] Do not count `external_roots` as restricted-entry coverage. It uses a
+    signed additional entry, a nonzero admission rule, and a qualified role.
+  - [ ] Do not count `child_exec` as the restricted-parent replacement. Its
+    parent is a signed additional entry with a qualified role.
+  - [ ] Remove each matching block and compatibility field only after its
+    small replacement passes the required Host, direct-`runc`, and Kubernetes
+    gates. Remove the legacy function after all seven behaviors are replaced.
 - [x] Replace `physical_kubernetes_lifecycle_sleep_probe` with one generated
   Kubernetes Rust test. This is a Kubernetes-native lifecycle fact, not a
   Host or direct-`runc` behavior.
