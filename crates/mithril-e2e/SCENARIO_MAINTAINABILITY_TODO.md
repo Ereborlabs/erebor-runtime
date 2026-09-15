@@ -1453,6 +1453,14 @@ setup, production actions, assertions, and focused test.
   - [x] Confirm that Observe mode does not remove this mismatch. Undeclared
     runtime-entry admission fails through the hard identity gate before the
     ordinary Observe or Protect policy decision.
+  - [ ] Add `runtime_exec::unlisted_exec_is_denied` as separate fail-closed
+    coverage. Use `add_actor` with one installed but unsigned actor entry.
+    Require the same `EACCES` result on Host, direct `runc`, and Kubernetes.
+    This test does not replace the successful restricted-entry checks below.
+    - [x] Pass Host and commit it. The exact test passed in the retained
+      lightweight VM on 2026-09-15 in 34.49 seconds.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
   - [ ] Replace the pre-existing Pod-root case. Preserve its creator-free
     `restored_or_unknown_root` and `fail_closed_unknown` result. Do not treat
     `recovery_tasks` as a replacement unless it reproduces this physical

@@ -38,6 +38,8 @@ mod restricted_roots;
 #[cfg(test)]
 mod retained_host;
 #[cfg(test)]
+mod runtime_exec;
+#[cfg(test)]
 mod subreaper;
 #[cfg(test)]
 mod workload_recovery;
