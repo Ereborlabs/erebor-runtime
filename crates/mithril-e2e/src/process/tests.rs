@@ -161,3 +161,46 @@ fn actor_survives_input_loss() -> crate::Result<()> {
     actor.wait_gone(actor.id(), "detached actor exit")?;
     actor.stop()
 }
+
+#[test]
+fn group_wait_skips_runtime_helper() -> crate::Result<()> {
+    let dir = tempfile::tempdir().context(IoSnafu {
+        path: "temporary directory",
+    })?;
+    let helper = Command::new("/usr/bin/sleep")
+        .arg("30")
+        .spawn()
+        .context(IoSnafu {
+            path: "/usr/bin/sleep",
+        })?;
+    let actor = Command::new("cat")
+        .stdin(Stdio::piped())
+        .spawn()
+        .context(IoSnafu { path: "cat" })?;
+    let mut helper = ProcessFixture::new(helper, Path::new("sleep"));
+    let actor = ProcessFixture::new(actor, Path::new("cat"));
+    let procs = dir.path().join("cgroup.procs");
+    fs::write(&procs, helper.id().to_string()).context(IoSnafu { path: &procs })?;
+    let helper_id = helper.id();
+    let actor_id = actor.id();
+    let update = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        fs::write(procs, format!("{helper_id}\n{actor_id}\n"))
+    });
+
+    let found = helper.wait_group_task(dir.path(), &[], "cat", "runtime actor PID")?;
+    assert_eq!(found, actor.id());
+    update
+        .join()
+        .map_err(|_| {
+            InvalidInputSnafu {
+                path: "cgroup.procs",
+                reason: "the cgroup update thread panicked",
+            }
+            .build()
+        })?
+        .context(IoSnafu {
+            path: "cgroup.procs",
+        })?;
+    Ok(())
+}

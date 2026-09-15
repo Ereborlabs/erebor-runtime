@@ -95,7 +95,7 @@ impl Host {
             .then(|| self.shared.task(actor.id(), "added actor placement"))
             .transpose()?;
         actor.release()?;
-        if let Err(source) = actor.ready() {
+        if let Err(source) = actor.wait_command(command) {
             if let Some(placement) = placement {
                 return Err(format!(
                     "{source}; pre-exec PID: {}; snapshot: {:?}; coordinate: {:?}; identity health: {:?}",

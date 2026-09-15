@@ -795,13 +795,13 @@ impl KubernetesState {
             .map(str::parse)
             .collect::<Result<Vec<u32>, _>>()?;
         let mut actor =
-            ProcessFixture::start(&mut command, Path::new(program)).map_err(|source| {
+            ProcessFixture::spawn(&mut command, Path::new(program)).map_err(|source| {
                 let logs = self
                     .logs(&self.system, "daemonset/mithril-node")
                     .unwrap_or_else(|error| error.to_string());
                 format!("{source}; Node logs: {logs}")
             })?;
-        let pid = actor.wait_group_task(group, &before, "Kubernetes exec host PID")?;
+        let pid = actor.wait_group_task(group, &before, program, "Kubernetes exec host PID")?;
         actor.set_actor(pid)?;
         Ok(actor)
     }

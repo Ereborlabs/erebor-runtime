@@ -450,16 +450,49 @@ impl ProcessFixture {
     }
 
     #[cfg(test)]
-    pub(crate) fn start(command: &mut Command, path: &Path) -> Result<Self> {
+    pub(crate) fn spawn(command: &mut Command, path: &Path) -> Result<Self> {
         let child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .context(IoSnafu { path })?;
-        let mut fixture = Self::new(child, path);
+        Ok(Self::new(child, path))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start(command: &mut Command, path: &Path) -> Result<Self> {
+        let mut fixture = Self::spawn(command, path)?;
         fixture.ready()?;
         Ok(fixture)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn wait_command(&mut self, command: &str) -> Result<()> {
+        let path = PathBuf::from(format!("/proc/{}/cmdline", self.actor_pid));
+        let expected = OsStr::new(command).as_bytes();
+        let last = RefCell::new(String::from("<absent>"));
+        self.wait_path(
+            &path,
+            "actor command readiness",
+            START_LIMIT,
+            || {
+                let bytes = match fs::read(&path) {
+                    Ok(bytes) => bytes,
+                    Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
+                    Err(source) => return Err(source).context(IoSnafu { path: &path }),
+                };
+                let current = bytes.split(|byte| *byte == 0).next().unwrap_or_default();
+                *last.borrow_mut() = String::from_utf8_lossy(current).into_owned();
+                Ok((current == expected).then_some(()))
+            },
+            || {
+                format!(
+                    "expected command {command:?}; last command: {:?}",
+                    last.borrow()
+                )
+            },
+        )
     }
 
     #[cfg(test)]
@@ -650,10 +683,12 @@ impl ProcessFixture {
         &mut self,
         group: &Path,
         before: &[u32],
+        command: &str,
         operation: &str,
     ) -> Result<u32> {
         let path = group.join("cgroup.procs");
         let last = RefCell::new(String::from("<absent>"));
+        let expected = OsStr::new(command).as_bytes();
         self.wait_path(
             &path,
             operation,
@@ -664,19 +699,31 @@ impl ProcessFixture {
                     Err(source) if source.kind() == ErrorKind::NotFound => return Ok(None),
                     Err(source) => return Err(source).context(IoSnafu { path: &path }),
                 };
-                *last.borrow_mut() = text.split_ascii_whitespace().collect::<Vec<_>>().join(" ");
-                let mut ids = text
+                let mut seen = Vec::new();
+                for pid in text
                     .split_ascii_whitespace()
                     .filter_map(|value| value.parse::<u32>().ok())
-                    .filter(|pid| !before.contains(pid));
-                let pid = ids.next();
-                Ok((pid.is_some() && ids.next().is_none())
-                    .then_some(pid)
-                    .flatten())
+                    .filter(|pid| !before.contains(pid))
+                {
+                    let cmdline = PathBuf::from(format!("/proc/{pid}/cmdline"));
+                    let bytes = match fs::read(&cmdline) {
+                        Ok(bytes) => bytes,
+                        Err(source) if process_gone(&source) => continue,
+                        Err(source) => return Err(source).context(IoSnafu { path: &cmdline }),
+                    };
+                    let current = bytes.split(|byte| *byte == 0).next().unwrap_or_default();
+                    seen.push(format!("{pid}:{:?}", String::from_utf8_lossy(current)));
+                    if current == expected {
+                        *last.borrow_mut() = seen.join(", ");
+                        return Ok(Some(pid));
+                    }
+                }
+                *last.borrow_mut() = seen.join(", ");
+                Ok(None)
             },
             || {
                 format!(
-                    "previous cgroup PIDs {before:?}; last cgroup PIDs: {:?}",
+                    "expected command {command:?}; previous PIDs {before:?}; last new PIDs: {:?}",
                     last.borrow()
                 )
             },
