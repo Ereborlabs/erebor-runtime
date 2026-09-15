@@ -1453,7 +1453,7 @@ setup, production actions, assertions, and focused test.
   - [x] Confirm that Observe mode does not remove this mismatch. Undeclared
     runtime-entry admission fails through the hard identity gate before the
     ordinary Observe or Protect policy decision.
-  - [ ] Add `runtime_exec::unlisted_exec_is_denied` as separate fail-closed
+  - [x] Add `runtime_exec::unlisted_exec_is_denied` as separate fail-closed
     coverage. Use `add_actor` with one installed but unsigned actor entry.
     Require the same `EACCES` result on Host, direct `runc`, and Kubernetes.
     This test does not replace the successful restricted-entry checks below.
@@ -1462,7 +1462,11 @@ setup, production actions, assertions, and focused test.
     - [x] Pass direct `runc` and commit it. The exact test passed in 38.73
       seconds. The complete direct-`runc` lane passed 17 tests in 673.41
       seconds on 2026-09-15.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact test passed in 105.99
+      seconds on 2026-09-15.
+      The first run found that the Kubernetes work mount does not contain a
+      `bin` directory. The same actor failure was reproduced with an empty
+      lightweight work directory before the shared actor setup was corrected.
   - [ ] Replace the pre-existing Pod-root case. Preserve its creator-free
     `restored_or_unknown_root` and `fail_closed_unknown` result. Do not treat
     `recovery_tasks` as a replacement unless it reproduces this physical
