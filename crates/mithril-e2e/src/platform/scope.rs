@@ -1,8 +1,9 @@
+#![allow(unsafe_code)]
+
 use std::any::{Any, TypeId};
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{LazyLock, Mutex, MutexGuard};
+use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock};
 
 use super::TestResult;
 
@@ -10,10 +11,17 @@ thread_local! {
     static CURRENT: Cell<Option<Current>> = const { Cell::new(None) };
 }
 
-type Resource = &'static (dyn Any + Send + Sync);
+type AnyScope = dyn Any + Send + Sync;
+
+#[derive(Clone, Copy)]
+struct Resource {
+    scope: &'static AnyScope,
+    close: fn(&'static AnyScope) -> TestResult<()>,
+}
 
 static RESOURCES: LazyLock<Mutex<HashMap<TypeId, Resource>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static CLEANUP: OnceLock<i32> = OnceLock::new();
 
 #[derive(Clone, Copy)]
 struct Current {
@@ -45,7 +53,10 @@ pub(super) fn current() -> TestResult<&'static str> {
         .ok_or_else(|| "the platform test has no scope".into())
 }
 
-pub(super) fn enter<T: Send + 'static>() -> TestResult<ScopeGuard<'static, T>> {
+pub(super) fn enter<T: Send + 'static>(
+    close: fn(&mut T) -> TestResult<()>,
+) -> TestResult<ScopeGuard<'static, T>> {
+    register_cleanup()?;
     let platform = CURRENT
         .get()
         .map(|scope| scope.platform)
@@ -55,48 +66,56 @@ pub(super) fn enter<T: Send + 'static>() -> TestResult<ScopeGuard<'static, T>> {
             .lock()
             .map_err(|_source| "the named platform scopes are poisoned")?;
         *resources.entry(platform).or_insert_with(|| {
-            Box::leak(Box::new(Scope::<T>::new())) as &'static (dyn Any + Send + Sync)
+            let scope: &'static Scope<T> = Box::leak(Box::new(Scope::new(close)));
+            Resource {
+                scope,
+                close: close_scope::<T>,
+            }
         })
     };
     resource
+        .scope
         .downcast_ref::<Scope<T>>()
         .ok_or("the named platform scope has the wrong resource type")?
         .enter()
 }
 
 struct Scope<T> {
-    users: AtomicUsize,
     state: Mutex<Option<T>>,
+    close: fn(&mut T) -> TestResult<()>,
 }
 
 impl<T> Scope<T> {
-    const fn new() -> Self {
+    const fn new(close: fn(&mut T) -> TestResult<()>) -> Self {
         Self {
-            users: AtomicUsize::new(0),
             state: Mutex::new(None),
+            close,
         }
     }
 
     fn enter(&'static self) -> TestResult<ScopeGuard<'static, T>> {
-        self.users.fetch_add(1, Ordering::SeqCst);
-        match self.state.lock() {
-            Ok(state) => Ok(ScopeGuard {
-                scope: self,
-                state,
-                active: true,
-            }),
-            Err(_source) => {
-                self.users.fetch_sub(1, Ordering::SeqCst);
-                Err("the platform test scope is poisoned".into())
-            }
+        Ok(ScopeGuard {
+            state: self
+                .state
+                .lock()
+                .map_err(|_source| "the platform test scope is poisoned")?,
+        })
+    }
+
+    fn close(&self) -> TestResult<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_source| "the platform test scope is poisoned")?;
+        if let Some(mut state) = state.take() {
+            (self.close)(&mut state)?;
         }
+        Ok(())
     }
 }
 
 pub(super) struct ScopeGuard<'a, T> {
-    scope: &'a Scope<T>,
     state: MutexGuard<'a, Option<T>>,
-    active: bool,
 }
 
 impl<T> ScopeGuard<'_, T> {
@@ -115,20 +134,47 @@ impl<T> ScopeGuard<'_, T> {
     pub(super) fn take(&mut self) -> Option<T> {
         self.state.take()
     }
+}
 
-    pub(super) fn finish(&mut self) -> bool {
-        if !self.active {
-            return false;
-        }
-        self.active = false;
-        self.scope.users.fetch_sub(1, Ordering::SeqCst) == 1
+fn close_scope<T: Send + 'static>(scope: &'static AnyScope) -> TestResult<()> {
+    scope
+        .downcast_ref::<Scope<T>>()
+        .ok_or("the named platform scope has the wrong resource type")?
+        .close()
+}
+
+fn register_cleanup() -> TestResult<()> {
+    let status = *CLEANUP.get_or_init(|| {
+        // SAFETY: `cleanup` has the process lifetime and C ABI required by `atexit`.
+        unsafe { libc::atexit(cleanup) }
+    });
+    match status {
+        0 => Ok(()),
+        _ => Err("failed to register platform scope cleanup".into()),
     }
 }
 
-impl<T> Drop for ScopeGuard<'_, T> {
-    fn drop(&mut self) {
-        if self.active {
-            self.scope.users.fetch_sub(1, Ordering::SeqCst);
+extern "C" fn cleanup() {
+    let result = RESOURCES
+        .lock()
+        .map_err(|_source| "the named platform scopes are poisoned".into())
+        .and_then(|resources| {
+            let mut failure = None;
+            for resource in resources.values() {
+                if let Err(source) = (resource.close)(resource.scope) {
+                    failure = Some(source);
+                }
+            }
+            match failure {
+                Some(source) => Err(source),
+                None => Ok(()),
+            }
+        });
+    if let Err(source) = result {
+        eprintln!("platform scope cleanup failed: {source}");
+        // SAFETY: cleanup has failed and the test command must return failure.
+        unsafe {
+            libc::_exit(1);
         }
     }
 }

@@ -137,6 +137,8 @@ reimplement a production owner operation.
 - Give a test that changes component order or tests outage, restart,
   replacement, recovery, runtime integration, retained state, or owner cleanup
   its own scope name.
+- Give a test that changes or compares cumulative Node health counters its own
+  scope name. Do not let an earlier scenario change its starting counters.
 - Do not infer a shared scope from a scenario name, environment variable, or
   runtime branch. Do not put scope selection in the scenario body.
 - Do not define a named scope in a platform implementation. In particular, do
@@ -163,6 +165,21 @@ reimplement a production owner operation.
   scopes overlap on the same kernel or Kubernetes node.
 - Keep exact single-test invocation valid. It must start the required scope,
   run the unchanged scenario, and perform bounded cleanup.
+- [x] Prove serial named-scope reuse with a focused fixture test. Start real
+  Control and Node, stop one test fixture, enter the same scope again, and
+  require the same Node pin owner. The complete Host lane passed 27 tests in
+  821.56 seconds. The complete direct-`runc` lane passed 18 tests in 473.30
+  seconds. The complete Kubernetes lane passed 20 tests in 1287.89 seconds.
+- [x] Retain a named scope after its last serial test user. Close it when a
+  different scope starts or when the test executable exits. Make exit cleanup
+  failure fail the test command. The Host and direct-`runc` lanes left no pin,
+  lease, or cgroup. The Kubernetes lane left no scope directory, Mithril
+  namespace, or Node selector.
+  `bash .github/scripts/verify-rust-ci.sh` passed formatting, checks, and
+  clippy, then stopped in the unrelated
+  `start_builds_terminal_surface_launch_plan` test. The test received
+  `[BrowserCdp]` and expected `[BrowserCdp, Terminal]`. This change does not
+  modify `erebor-runtime-cli`.
 - Make scope cleanup reliable and observable. A cleanup failure must fail the
   test invocation and retain component logs, last readiness state, owned paths,
   and actor diagnostics.

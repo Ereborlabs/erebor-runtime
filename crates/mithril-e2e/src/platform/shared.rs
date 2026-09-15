@@ -426,12 +426,6 @@ impl Shared {
         let Some(mut scope) = self.scope.take() else {
             return Ok(());
         };
-        if scope.finish() {
-            return match scope.take() {
-                Some(mut state) => state.close_core(),
-                None => Ok(()),
-            };
-        }
         match scope.get_mut() {
             Some(state) => state.clean_test(),
             None => Ok(()),
@@ -447,7 +441,7 @@ impl Shared {
     pub(super) fn setup(_name: &str) -> TestResult<Self> {
         erebor_telemetry::init_test_logging();
         let name = current()?;
-        let mut scope = enter::<SharedState>()?;
+        let mut scope = enter::<SharedState>(SharedState::close_core)?;
         if scope.get().is_some_and(|state| state.scope_name == name) {
             let state = scope.get_mut().ok_or("the shared scope is empty")?;
             state.reset()?;

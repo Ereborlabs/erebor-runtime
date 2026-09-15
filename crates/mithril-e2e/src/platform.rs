@@ -20,6 +20,8 @@ mod host;
 mod kubernetes;
 mod runc;
 mod scope;
+#[cfg(test)]
+mod scope_tests;
 mod shared;
 
 pub(crate) use self::cri::CriFixture;

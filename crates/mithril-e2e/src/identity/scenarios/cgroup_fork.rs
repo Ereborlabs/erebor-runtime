@@ -209,7 +209,7 @@ fn moved_root_stops<P: Platform>() -> TestResult<()> {
 }
 
 #[platform_test(host)]
-#[scope = "identity"]
+#[scope = "cgroup-fork"]
 fn moved_parent_fork_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("cgroup-fork")?;
     env.start_control()?;

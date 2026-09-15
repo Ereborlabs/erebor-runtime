@@ -54,6 +54,7 @@ pub(crate) struct Kubernetes {
 pub(crate) struct KubernetesState {
     scope_name: &'static str,
     root: PathBuf,
+    out: Option<ProbeDirectory>,
     work_path: PathBuf,
     state_path: PathBuf,
     identity_path: PathBuf,
@@ -915,6 +916,9 @@ impl KubernetesState {
         if let Some(seccomp) = self.seccomp.take() {
             Self::retain(&mut failed, seccomp.cleanup().map_err(Into::into));
         }
+        if let Some(out) = self.out.take() {
+            Self::retain(&mut failed, out.cleanup().map_err(Into::into));
+        }
         match failed {
             Some(source) => Err(source),
             None => Ok(()),
@@ -927,12 +931,6 @@ impl Kubernetes {
         let Some(mut scope) = self.scope.take() else {
             return Ok(());
         };
-        if scope.finish() {
-            return match scope.take() {
-                Some(mut state) => state.close_core(),
-                None => Ok(()),
-            };
-        }
         match scope.get_mut() {
             Some(state) => state.clean_test(),
             None => Ok(()),
@@ -948,7 +946,7 @@ impl Platform for Kubernetes {
     fn setup(name: &str) -> TestResult<Self> {
         erebor_telemetry::init_test_logging();
         let scope_name = current()?;
-        let mut scope = enter::<KubernetesState>()?;
+        let mut scope = enter::<KubernetesState>(KubernetesState::close_core)?;
         if scope
             .get()
             .is_some_and(|state| state.scope_name == scope_name)
@@ -974,7 +972,7 @@ impl Platform for Kubernetes {
         if out.exists() {
             return Err(format!("the scenario output path exists: {}", out.display()).into());
         }
-        fs::create_dir(&out)?;
+        let out_dir = ProbeDirectory::create(&out)?;
         let work_path = out.join("actor");
         let state_path = out.join("node");
         let identity_path = out.join("identity");
@@ -1077,6 +1075,7 @@ impl Platform for Kubernetes {
         let mut fixture = KubernetesState {
             scope_name,
             root,
+            out: Some(out_dir),
             work_path,
             state_path,
             identity_path,
