@@ -1,0 +1,192 @@
+{
+  "apiVersion": "mithril.erebor.dev/v1alpha1",
+  "kind": "WorkloadProtectionPolicy",
+  "metadata": {
+    "name": "runtime-entries",
+    "namespace": "default",
+    "uid": "10000000-0000-4000-8000-000000000026",
+    "generation": 1,
+    "resourceVersion": "1"
+  },
+  "spec": {
+    "podSelector": {
+      "matchLabels": {
+        "app.kubernetes.io/name": "pid-reuse"
+      },
+      "matchExpressions": []
+    },
+    "mode": "Protect",
+    "containers": [
+      {
+        "names": ["worker"],
+        "kinds": ["Application"],
+        "images": [
+          "fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ],
+        "applicationEntry": {
+          "executionRule": "main-python",
+          "role": "main"
+        },
+        "additionalEntries": [
+          {
+            "name": "copy",
+            "kind": "PostStart",
+            "executionRule": "copy-entry",
+            "role": "copy"
+          },
+          {
+            "name": "python",
+            "kind": "PreStop",
+            "executionRule": "python-entry",
+            "role": "python"
+          },
+          {
+            "name": "reader",
+            "kind": "StartupProbe",
+            "executionRule": "reader-entry",
+            "role": "reader"
+          },
+          {
+            "name": "shell",
+            "kind": "ReadinessProbe",
+            "executionRule": "shell-entry",
+            "role": "shell"
+          },
+          {
+            "name": "word-count",
+            "kind": "LivenessProbe",
+            "executionRule": "word-count-entry",
+            "role": "word-count"
+          }
+        ],
+        "administrativeEntry": {
+          "role": "administrator"
+        },
+        "externalRole": "restricted"
+      }
+    ],
+    "roles": [
+      {
+        "name": "main",
+        "files": [],
+        "execution": [
+          {
+            "name": "main-python",
+            "path": "/usr/bin/python3",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "network": {"socketControls": [], "destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "copy",
+        "files": [
+          {
+            "name": "copy-work",
+            "path": "/work/runtime_copy.txt",
+            "recursive": false,
+            "operations": ["OpenWrite"],
+            "action": "Allow"
+          }
+        ],
+        "execution": [
+          {
+            "name": "copy-entry",
+            "path": "/usr/bin/cp",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "network": {"socketControls": [], "destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "python",
+        "files": [],
+        "execution": [
+          {
+            "name": "python-entry",
+            "path": "/work/bin/python",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "network": {"socketControls": [], "destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "reader",
+        "files": [],
+        "execution": [
+          {
+            "name": "reader-entry",
+            "path": "/usr/bin/cat",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "network": {"socketControls": [], "destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "shell",
+        "files": [],
+        "execution": [
+          {
+            "name": "shell-entry",
+            "path": "/usr/bin/bash",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "network": {"socketControls": [], "destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "administrator",
+        "files": [],
+        "execution": [],
+        "network": {"socketControls": [], "destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "restricted",
+        "files": [],
+        "execution": [],
+        "network": {"socketControls": [], "destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "word-count",
+        "files": [],
+        "execution": [
+          {
+            "name": "word-count-entry",
+            "path": "/usr/bin/wc",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "network": {"socketControls": [], "destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      }
+    ],
+    "exceptionGrants": []
+  }
+}

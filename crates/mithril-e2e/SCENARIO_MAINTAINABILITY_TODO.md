@@ -63,6 +63,12 @@ These rules control every checkmark and commit in this file.
   reject an undeclared command before production enforcement runs. The scenario
   installs or omits the applicable rule and asserts the production result. Do
   not add role-specific process methods.
+- Treat role names as policy labels. Names such as `external` and `restricted`
+  have no special BPF meaning.
+- Keep entry admission separate from role execution authorization. An
+  execution `Allow` rule does not admit a runtime-created process. Declare each
+  allowed runtime entry in `additionalEntries`. Keep an undeclared entry
+  denied. Do not change BPF behavior to bypass this boundary.
 - Ask the actor to perform one action. Assert the expected production result.
 - Keep scenario policies, Python actors, and other process inputs together in
   `fixtures/process`. Store each distinct input once. Reuse one policy when its
@@ -1472,13 +1478,10 @@ setup, production actions, assertions, and focused test.
     before identity activation. The old probe then starts an identity-only
     `KernelHostOwner`, publishes one binding, and activates identity without
     an effect policy. It does not start Control or Node.
-  - [x] Reject the attempted Protect-mode replacement. A real Node with the
-    current Protect policy changes an unlisted runtime exec into a declared
-    entry authorization request. Its `EACCES` result is correct and does not
-    reproduce the old allowed, restricted external root.
-  - [x] Confirm that Observe mode does not remove this mismatch. Undeclared
-    runtime-entry admission fails through the hard identity gate before the
-    ordinary Observe or Protect policy decision.
+  - [x] Confirm that an execution `Allow` and an entry declaration are
+    independent. A real Node must deny an unlisted runtime entry with `EACCES`
+    in Observe and Protect modes. This result is not a contradiction and does
+    not require a BPF change.
   - [x] Add `runtime_exec::unlisted_exec_is_denied` as separate fail-closed
     coverage. Use `add_actor` with one installed but unsigned actor entry.
     Require the same `EACCES` result on Host, direct `runc`, and Kubernetes.
@@ -1497,24 +1500,24 @@ setup, production actions, assertions, and focused test.
     `restored_or_unknown_root` and `fail_closed_unknown` result. Do not treat
     `recovery_tasks` as a replacement unless it reproduces this physical
     condition and result through the standard platform path.
-  - [ ] Replace direct CRI exec. Preserve successful execution, a creator-free
-    `external_runtime_root`, the `runtime_external_restricted` role, and the
-    binding external-role ID.
-    - [ ] Add one `runtime_exec::external_exec_is_restricted` test for Host,
-      direct `runc`, and Kubernetes. Use `add_actor` and the same Python actor
-      in each environment.
-    - [ ] Run the unchanged Host test first. Use its failure as the required
-      reproduction before an implementation change.
-      The Host test now reaches its production identity assertion. The signed
-      declared `python-external` entry executes, but its installed role is
-      `qualified_registered_role`. The required result is
-      `runtime_external_restricted`. No production change has been made.
-  - [ ] Replace ordinary `kubectl exec`. Preserve the same restricted result
-    and a task cookie distinct from the direct CRI exec.
-  - [ ] Replace TTY `kubectl exec`. Preserve the same restricted result and a
-    task cookie distinct from both non-TTY exec roots.
-  - [ ] Replace `kubectl cp`. Preserve the restricted helper identity, a task
-    cookie distinct from all exec roots, and the exact copied bytes.
+  - [ ] Replace the successful runtime-entry classifications with
+    `runtime_entries::runtime_entries_stay_distinct` on Host, direct `runc`,
+    and Kubernetes. Use only `add_actor` for process entry.
+    - [x] Install one policy that declares Python, Bash, cat, wc, and cp as
+      additional entries with five target roles. Keep the fallback role empty.
+    - [x] Require each added process to be a creator-free
+      `external_runtime_root` with `qualified_registered_role`, its configured
+      numeric role, and a nonzero admission rule.
+    - [x] Require distinct task cookies, process-state IDs, execution IDs,
+      roles, and admission rules. Require cp to copy the exact fixture bytes.
+    - [x] Pass Host, direct `runc`, and Kubernetes in that order. The exact
+      Host case passed in 34.11 seconds, the direct-`runc` case passed in 33.99
+      seconds, and the Kubernetes case passed in 67.15 seconds on 2026-09-15.
+      The first Kubernetes run found a transient `runc` helper in the actor
+      cgroup. `group_wait_skips_runtime_helper` reproduced the condition in the
+      lightweight fixture test before the shared readiness wait was corrected.
+    - [ ] Remove the matching direct-CRI, ordinary exec, TTY exec, and copy
+      classification blocks now that all three cases pass.
   - [ ] Replace the native-child case. Preserve the restricted creator-free
     parent, the child's creator and real-parent cookies, inherited role, and
     absent child root and installed-role classifications.
