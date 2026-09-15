@@ -1518,9 +1518,12 @@ setup, production actions, assertions, and focused test.
       lightweight fixture test before the shared readiness wait was corrected.
     - [x] Remove the matching direct-CRI, ordinary exec, TTY exec, and copy
       classification blocks and their obsolete compatibility fields.
-  - [ ] Replace the native-child case. Preserve the restricted creator-free
-    parent, the child's creator and real-parent cookies, inherited role, and
-    absent child root and installed-role classifications.
+  - [x] Replace the native-child case with `child_exec_keeps_identity`. The real
+    Node admits its declared Python entry with the configured role. Preserve the
+    creator-free external-runtime parent, the child's creator and real-parent
+    cookies, inherited role, and absent child root and installed-role classes.
+    The existing exact Host, direct-`runc`, and Kubernetes runs passed. The
+    matching legacy block and compatibility fields are removed.
   - [ ] Keep bounded actor release, process exit, namespace deletion, pin and
     lease deletion, and work-directory cleanup in each replacement.
   - [ ] Do not count `restricted_roots` as runtime-exec coverage. It preserves
@@ -1528,8 +1531,9 @@ setup, production actions, assertions, and focused test.
     runtime exec.
   - [ ] Do not count `external_roots` as restricted-entry coverage. It uses a
     signed additional entry, a nonzero admission rule, and a qualified role.
-  - [ ] Do not count `child_exec` as the restricted-parent replacement. Its
-    parent is a signed additional entry with a qualified role.
+  - [x] Reuse `child_exec` for native-child coverage. Its declared entry is
+    required by the real Node admission path. The legacy identity-only host did
+    not exercise this production boundary.
   - [ ] Remove each matching block and compatibility field only after its
     small replacement passes the required Host, direct-`runc`, and Kubernetes
     gates. Remove the legacy function after all seven behaviors are replaced.

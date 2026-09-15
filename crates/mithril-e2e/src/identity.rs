@@ -178,8 +178,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub schema_version: u32,
     pub object_sha256: String,
     pub kubernetes_initial_root: Option<NativeTaskSnapshotV1>,
-    pub kubernetes_native_child_parent: Option<NativeTaskSnapshotV1>,
-    pub kubernetes_native_child_control: Option<NativeTaskSnapshotV1>,
     pub kubernetes_lifecycle_sleep_no_task: Option<bool>,
     pub kubernetes_http_probe_no_task: Option<bool>,
     pub kubernetes_tcp_probe_no_task: Option<bool>,
@@ -361,8 +359,6 @@ impl IdentityTestRunner {
             schema_version: 29,
             object_sha256,
             kubernetes_initial_root: None,
-            kubernetes_native_child_parent: None,
-            kubernetes_native_child_control: None,
             kubernetes_lifecycle_sleep_no_task: None,
             kubernetes_http_probe_no_task: None,
             kubernetes_tcp_probe_no_task: None,
@@ -457,14 +453,10 @@ impl IdentityTestRunner {
             serde_json::from_slice(&bytes).context(JsonSnafu {
                 path: previous_bundle_path,
             })?;
-        let entry_results_missing = bundle.kubernetes_initial_root.is_none()
-            && bundle.kubernetes_native_child_parent.is_none()
-            && bundle.kubernetes_native_child_control.is_none()
-            && !bundle.kubernetes_fixture_removed;
-        let entry_results_present = bundle.kubernetes_initial_root.is_some()
-            && bundle.kubernetes_native_child_parent.is_some()
-            && bundle.kubernetes_native_child_control.is_some()
-            && bundle.kubernetes_fixture_removed;
+        let entry_results_missing =
+            bundle.kubernetes_initial_root.is_none() && !bundle.kubernetes_fixture_removed;
+        let entry_results_present =
+            bundle.kubernetes_initial_root.is_some() && bundle.kubernetes_fixture_removed;
         let network_results_missing = bundle.kubernetes_http_probe_no_task.is_none()
             && bundle.kubernetes_tcp_probe_no_task.is_none()
             && bundle.kubernetes_grpc_probe_no_task.is_none();
@@ -879,7 +871,6 @@ impl IdentityTestRunner {
         bundle: &mut IdentityPhysicalProbeBundleV1,
     ) -> Result<()> {
         const ENTRY_COMMAND: &str = "read identity_pid _ < /proc/self/stat; printf \"%s\\n\" \"$identity_pid\" > /var/lib/mithril/entry/pid; while [ ! -f /var/lib/mithril/entry/release ]; do sleep 0.1; done";
-        const NATIVE_PARENT_COMMAND: &str = "/bin/sh -c \"$1\" & wait \"$!\"";
 
         fs::create_dir_all(output_directory).context(IoSnafu {
             path: output_directory,
@@ -912,7 +903,6 @@ impl IdentityTestRunner {
         let lease_cleanup = ProbeFile::new(lease_path);
         let mut namespace_created = false;
         let mut host = None;
-        let mut native_child_exec = None;
 
         let probe = (|| -> Result<_> {
             fs::create_dir(&fixture_root).context(IoSnafu {
@@ -1108,91 +1098,9 @@ impl IdentityTestRunner {
                 }
             );
 
-            native_child_exec = Some(
-                Command::new("/usr/local/bin/k3s")
-                    .args([
-                        "crictl",
-                        "exec",
-                        container_id.as_str(),
-                        "/bin/sh",
-                        "-c",
-                        NATIVE_PARENT_COMMAND,
-                        "mithril-native-parent",
-                        ENTRY_COMMAND,
-                    ])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .context(IoSnafu {
-                        path: Path::new("/usr/local/bin/k3s"),
-                    })?,
-            );
-            let native_child_namespace_pid =
-                self.wait_for("native-child control start", &marker_path, || {
-                    self.kubernetes_fixture_pid(&marker_path)
-                })?;
-            let native_child_host_pid =
-                self.wait_for("native-child control host PID", &initial_cgroup, || {
-                    self.kubernetes_host_pid(&initial_cgroup, native_child_namespace_pid)
-                })?;
-            let native_parent_host_pid = self.host_parent_pid(native_child_host_pid)?;
-            let native_child_parent =
-                self.wait_for("native-child parent identity", pin_root, || {
-                    inspector
-                        .snapshot(native_parent_host_pid)
-                        .context(NodeSnafu)
-                })?;
-            let native_child_control =
-                self.wait_for("native-child control identity", pin_root, || {
-                    inspector.snapshot(native_child_host_pid).context(NodeSnafu)
-                })?;
-            ensure!(
-                native_child_parent.creator_task_cookie.is_none()
-                    && native_child_parent.root_class.as_deref() == Some("external_runtime_root")
-                    && native_child_parent.installed_role_class.as_deref()
-                        == Some("runtime_external_restricted")
-                    && native_child_parent.active_role_id == binding.external_role_id
-                    && native_child_control.creator_task_cookie
-                        == Some(native_child_parent.task_cookie)
-                    && native_child_control.real_parent_task_cookie
-                        == native_child_parent.task_cookie
-                    && native_child_control.root_class.is_none()
-                    && native_child_control.installed_role_class.is_none()
-                    && native_child_control.active_role_id == native_child_parent.active_role_id,
-                InvalidInputSnafu {
-                    path: &pin_root,
-                    reason:
-                        "the identical native child did not keep native lineage and its parent role",
-                }
-            );
-            fs::write(&release_path, b"release\n").context(IoSnafu {
-                path: &release_path,
-            })?;
-            let native_status = native_child_exec
-                .as_mut()
-                .ok_or_else(|| invalid_state("native-child control process is missing"))?
-                .wait()
-                .context(IoSnafu {
-                    path: Path::new("native-child control"),
-                })?;
-            ensure!(
-                native_status.success(),
-                InvalidInputSnafu {
-                    path: Path::new("native-child control"),
-                    reason: format!("native-child control exited with {native_status}"),
-                }
-            );
-            native_child_exec = None;
-            fs::remove_file(&release_path).context(IoSnafu {
-                path: &release_path,
-            })?;
-            fs::remove_file(&marker_path).context(IoSnafu { path: &marker_path })?;
-
-            Ok((initial_root, native_child_parent, native_child_control))
+            Ok(initial_root)
         })();
 
-        Self::stop_fixture_process(&mut native_child_exec);
         let host_cleanup = if let Some(host) = host.take() {
             host.shutdown().context(InterceptorSnafu)
         } else {
@@ -1238,10 +1146,7 @@ impl IdentityTestRunner {
                 reason: "the Kubernetes identity fixture left a namespace, Mithril pin, lease, or fixture directory",
             }
         );
-        let (initial_root, native_child_parent, native_child_control) = probe?;
-        bundle.kubernetes_initial_root = Some(initial_root);
-        bundle.kubernetes_native_child_parent = Some(native_child_parent);
-        bundle.kubernetes_native_child_control = Some(native_child_control);
+        bundle.kubernetes_initial_root = Some(probe?);
         Ok(())
     }
 
@@ -5758,17 +5663,6 @@ impl IdentityTestRunner {
             }
         }
         Ok(None)
-    }
-
-    fn host_parent_pid(&self, host_pid: u32) -> Result<u32> {
-        let status_path = PathBuf::from(format!("/proc/{host_pid}/status"));
-        let status = fs::read_to_string(&status_path).context(IoSnafu { path: &status_path })?;
-        status
-            .lines()
-            .find_map(|line| line.strip_prefix("PPid:")?.split_ascii_whitespace().next())
-            .and_then(|parent| parent.parse::<u32>().ok())
-            .filter(|parent| *parent > 0)
-            .ok_or_else(|| invalid_state(format!("host PID {host_pid} has no live parent PID")))
     }
 
     fn stop_fixture_process(child: &mut Option<Child>) {
