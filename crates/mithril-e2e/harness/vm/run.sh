@@ -324,7 +324,6 @@ fi
 "$provider" put "$vm_name" "$directory/guest.sh" \
   "$remote_root/harness/guest.sh"
 for fixture in \
-  kubernetes-entry-workload-v1.yaml \
   kubernetes-network-probes-workload-v1.yaml \
   kubernetes-containers-workload-v1.yaml \
   kubernetes-ephemeral-workload-v1.yaml \

@@ -1470,7 +1470,7 @@ setup, production actions, assertions, and focused test.
   exec, reparent, PID reuse, owner restart, object upgrade, and authorization
   replay groups one commit at a time. Keep their `KernelHostOwner`,
   `WorkloadBindingOwner`, and `NativeSecurityStateOwner` calls explicit.
-- [ ] Dismantle `physical_kubernetes_exec_probe` one behavior at a time. Do
+- [x] Dismantle `physical_kubernetes_exec_probe` one behavior at a time. Do
   not add a Kubernetes-only scenario framework or a special Node startup
   path. Use the same small Rust-test and `Platform` structure as the other
   migrated identity scenarios.
@@ -1496,10 +1496,13 @@ setup, production actions, assertions, and focused test.
       The first run found that the Kubernetes work mount does not contain a
       `bin` directory. The same actor failure was reproduced with an empty
       lightweight work directory before the shared actor setup was corrected.
-  - [ ] Replace the pre-existing Pod-root case. Preserve its creator-free
-    `restored_or_unknown_root` and `fail_closed_unknown` result. Do not treat
-    `recovery_tasks` as a replacement unless it reproduces this physical
-    condition and result through the standard platform path.
+  - [x] Replace the pre-existing Pod-root case with `four_tasks_recover`. Start
+    the actor and its tasks before policy and Node. Let the real Node recover
+    the running workload through its production loop. Require the
+    `active_recovered` application root and the distinct rule-zero
+    `restored_or_unknown_root`. Do not preserve the old `fail_closed_unknown`
+    application result. It came from direct identity-host activation without
+    Control, Node, an effect policy, or production recovery.
   - [x] Replace the successful runtime-entry classifications with
     `runtime_entries::runtime_entries_stay_distinct` on Host, direct `runc`,
     and Kubernetes. Use only `add_actor` for process entry.
@@ -1524,17 +1527,17 @@ setup, production actions, assertions, and focused test.
     cookies, inherited role, and absent child root and installed-role classes.
     The existing exact Host, direct-`runc`, and Kubernetes runs passed. The
     matching legacy block and compatibility fields are removed.
-  - [ ] Keep bounded actor release, process exit, namespace deletion, pin and
+  - [x] Keep bounded actor release, process exit, namespace deletion, pin and
     lease deletion, and work-directory cleanup in each replacement.
-  - [ ] Do not count `restricted_roots` as runtime-exec coverage. It preserves
+  - [x] Do not count `restricted_roots` as runtime-exec coverage. It preserves
     the rule-zero restricted identity after cgroup placement, not after a
     runtime exec.
-  - [ ] Do not count `external_roots` as restricted-entry coverage. It uses a
+  - [x] Do not count `external_roots` as restricted-entry coverage. It uses a
     signed additional entry, a nonzero admission rule, and a qualified role.
   - [x] Reuse `child_exec` for native-child coverage. Its declared entry is
     required by the real Node admission path. The legacy identity-only host did
     not exercise this production boundary.
-  - [ ] Remove each matching block and compatibility field only after its
+  - [x] Remove each matching block and compatibility field only after its
     small replacement passes the required Host, direct-`runc`, and Kubernetes
     gates. Remove the legacy function after all seven behaviors are replaced.
 - [x] Replace `physical_kubernetes_lifecycle_sleep_probe` with one generated

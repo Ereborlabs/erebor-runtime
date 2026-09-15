@@ -177,7 +177,6 @@ pub struct IdentityVerificationBundleV1 {
 pub struct IdentityPhysicalProbeBundleV1 {
     pub schema_version: u32,
     pub object_sha256: String,
-    pub kubernetes_initial_root: Option<NativeTaskSnapshotV1>,
     pub kubernetes_lifecycle_sleep_no_task: Option<bool>,
     pub kubernetes_http_probe_no_task: Option<bool>,
     pub kubernetes_tcp_probe_no_task: Option<bool>,
@@ -254,7 +253,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub kubernetes_reuse_same_names: Option<bool>,
     pub kubernetes_reuse_fresh_full_identity: Option<bool>,
     pub kubernetes_reuse_fresh_binding_identity: Option<bool>,
-    pub kubernetes_fixture_removed: bool,
 }
 
 pub struct IdentityTestRunner {
@@ -358,7 +356,6 @@ impl IdentityTestRunner {
         Ok(IdentityPhysicalProbeBundleV1 {
             schema_version: 29,
             object_sha256,
-            kubernetes_initial_root: None,
             kubernetes_lifecycle_sleep_no_task: None,
             kubernetes_http_probe_no_task: None,
             kubernetes_tcp_probe_no_task: None,
@@ -435,7 +432,6 @@ impl IdentityTestRunner {
             kubernetes_reuse_same_names: None,
             kubernetes_reuse_fresh_full_identity: None,
             kubernetes_reuse_fresh_binding_identity: None,
-            kubernetes_fixture_removed: false,
         })
     }
 
@@ -453,10 +449,6 @@ impl IdentityTestRunner {
             serde_json::from_slice(&bytes).context(JsonSnafu {
                 path: previous_bundle_path,
             })?;
-        let entry_results_missing =
-            bundle.kubernetes_initial_root.is_none() && !bundle.kubernetes_fixture_removed;
-        let entry_results_present =
-            bundle.kubernetes_initial_root.is_some() && bundle.kubernetes_fixture_removed;
         let network_results_missing = bundle.kubernetes_http_probe_no_task.is_none()
             && bundle.kubernetes_tcp_probe_no_task.is_none()
             && bundle.kubernetes_grpc_probe_no_task.is_none();
@@ -662,7 +654,6 @@ impl IdentityTestRunner {
                 && stock_hook_failure_results_missing);
         ensure!(
             schema_compatible
-                && (entry_results_missing || entry_results_present)
                 && matches!(bundle.kubernetes_lifecycle_sleep_no_task, None | Some(true))
                 && (network_results_missing || network_results_present)
                 && (container_results_missing || container_results_present)
@@ -680,14 +671,6 @@ impl IdentityTestRunner {
             }
         );
         bundle.schema_version = 29;
-        if entry_results_missing {
-            self.physical_kubernetes_exec_probe(
-                output_directory,
-                pin_root,
-                lease_path,
-                &mut bundle,
-            )?;
-        }
         if network_results_missing {
             let (http, tcp, grpc) = self.physical_kubernetes_network_probe(output_directory)?;
             bundle.kubernetes_http_probe_no_task = Some(http);
@@ -745,7 +728,6 @@ impl IdentityTestRunner {
                 &mut bundle,
             )?;
         }
-        bundle.kubernetes_fixture_removed = true;
         Ok(bundle)
     }
 
@@ -861,293 +843,6 @@ impl IdentityTestRunner {
             },
             || "the last readiness inspection returned no value".to_owned(),
         )
-    }
-
-    fn physical_kubernetes_exec_probe(
-        &self,
-        output_directory: &Path,
-        pin_root: &Path,
-        lease_path: &Path,
-        bundle: &mut IdentityPhysicalProbeBundleV1,
-    ) -> Result<()> {
-        const ENTRY_COMMAND: &str = "read identity_pid _ < /proc/self/stat; printf \"%s\\n\" \"$identity_pid\" > /var/lib/mithril/entry/pid; while [ ! -f /var/lib/mithril/entry/release ]; do sleep 0.1; done";
-
-        fs::create_dir_all(output_directory).context(IoSnafu {
-            path: output_directory,
-        })?;
-        let work_directory = output_directory.join("kubernetes-entry");
-        ensure!(
-            !work_directory.exists(),
-            InvalidInputSnafu {
-                path: &work_directory,
-                reason: "the Kubernetes identity fixture directory must not already exist",
-            }
-        );
-        fs::create_dir(&work_directory).context(IoSnafu {
-            path: &work_directory,
-        })?;
-        let work_cleanup = ProbeDirectory::new(&work_directory);
-        let namespace = format!("mithril-identity-{}", std::process::id());
-        let fixture_root = work_directory.join("fixture");
-        let marker_path = fixture_root.join("pid");
-        let release_path = fixture_root.join("release");
-        let manifest_path = work_directory.join("workload.yaml");
-        ensure!(
-            !pin_root.exists() && !lease_path.exists(),
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the Kubernetes identity pin root and lease must not already exist",
-            }
-        );
-        let pin_cleanup = ProbeDirectory::new(pin_root);
-        let lease_cleanup = ProbeFile::new(lease_path);
-        let mut namespace_created = false;
-        let mut host = None;
-
-        let probe = (|| -> Result<_> {
-            fs::create_dir(&fixture_root).context(IoSnafu {
-                path: &fixture_root,
-            })?;
-            let manifest_template_path = self
-                .repo_root
-                .join("crates/mithril-e2e/fixtures/identity/kubernetes-entry-workload-v1.yaml");
-            let manifest = fs::read_to_string(&manifest_template_path)
-                .context(IoSnafu {
-                    path: &manifest_template_path,
-                })?
-                .replace("MITHRIL_IDENTITY_NAMESPACE", &namespace)
-                .replace(
-                    "MITHRIL_IDENTITY_FIXTURE_ROOT",
-                    fixture_root.to_string_lossy().as_ref(),
-                );
-            ensure!(
-                manifest.contains(ENTRY_COMMAND),
-                InvalidInputSnafu {
-                    path: &manifest_template_path,
-                    reason: "the Kubernetes startup command differs from the held entry command",
-                }
-            );
-            fs::write(&manifest_path, manifest).context(IoSnafu {
-                path: &manifest_path,
-            })?;
-
-            self.kubernetes_output(
-                &["kubectl", "create", "namespace", namespace.as_str()],
-                "create Kubernetes fixture namespace",
-            )?;
-            namespace_created = true;
-            self.kubernetes_output(
-                &[
-                    "kubectl",
-                    "apply",
-                    "-f",
-                    manifest_path.to_string_lossy().as_ref(),
-                ],
-                "create Kubernetes identity fixture Pod",
-            )?;
-            let container_ref =
-                self.wait_for("Kubernetes identity fixture root", &manifest_path, || {
-                    let container_ref = self.kubernetes_output(
-                        &[
-                            "kubectl",
-                            "-n",
-                            namespace.as_str(),
-                            "get",
-                            "pod",
-                            "mithril-identity",
-                            "-o",
-                            "jsonpath={.status.containerStatuses[0].containerID}",
-                        ],
-                        "read the Kubernetes fixture container ID",
-                    )?;
-                    Ok((!container_ref.trim().is_empty()).then_some(container_ref))
-                })?;
-            let container_id = container_ref
-                .trim()
-                .strip_prefix("containerd://")
-                .ok_or_else(|| {
-                    invalid_state("Kubernetes did not return a containerd container ID")
-                })?
-                .to_owned();
-            let container_inspect = self.kubernetes_output(
-                &["crictl", "inspect", container_id.as_str()],
-                "inspect the Kubernetes fixture container",
-            )?;
-            let container_inspect: serde_json::Value = serde_json::from_str(&container_inspect)
-                .context(JsonSnafu {
-                    path: &manifest_path,
-                })?;
-            let initial_pid = container_inspect
-                .pointer("/info/pid")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|pid| u32::try_from(pid).ok())
-                .filter(|pid| *pid > 0)
-                .ok_or_else(|| invalid_state("CRI did not return a live fixture root PID"))?;
-            let image_digest = container_inspect
-                .pointer("/status/imageRef")
-                .and_then(serde_json::Value::as_str)
-                .filter(|digest| digest.contains("sha256:"))
-                .ok_or_else(|| invalid_state("CRI did not return the fixture image digest"))?
-                .to_owned();
-            let container_generation = container_inspect
-                .pointer("/status/createdAt")
-                .ok_or_else(|| invalid_state("CRI did not return the fixture container generation"))
-                .and_then(|created_at| self.kubernetes_container_generation(created_at))?;
-            let pod_uid = self.kubernetes_output(
-                &[
-                    "kubectl",
-                    "-n",
-                    namespace.as_str(),
-                    "get",
-                    "pod",
-                    "mithril-identity",
-                    "-o",
-                    "jsonpath={.metadata.uid}",
-                ],
-                "read the Kubernetes fixture Pod UID",
-            )?;
-            let pod_uid = pod_uid.trim().to_owned();
-            ensure!(
-                !pod_uid.is_empty(),
-                InvalidInputSnafu {
-                    path: &manifest_path,
-                    reason: "Kubernetes did not return the fixture Pod UID",
-                }
-            );
-            let sandbox = self.kubernetes_output(
-                &["crictl", "ps", "--id", container_id.as_str(), "-o", "json"],
-                "read the Kubernetes fixture sandbox ID",
-            )?;
-            let sandbox: serde_json::Value = serde_json::from_str(&sandbox).context(JsonSnafu {
-                path: &manifest_path,
-            })?;
-            let sandbox_id = sandbox
-                .pointer("/containers/0/podSandboxId")
-                .and_then(serde_json::Value::as_str)
-                .filter(|id| !id.is_empty())
-                .ok_or_else(|| invalid_state("CRI did not return the fixture sandbox ID"))?
-                .to_owned();
-            let probe_namespace_pid =
-                self.wait_for("Kubernetes startup probe start", &marker_path, || {
-                    self.kubernetes_fixture_pid(&marker_path)
-                })?;
-            let initial_cgroup = self.kubernetes_cgroup_for_pid(initial_pid)?;
-            let probe_host_pid =
-                self.wait_for("Kubernetes startup probe host PID", &initial_cgroup, || {
-                    self.kubernetes_host_pid(&initial_cgroup, probe_namespace_pid)
-                })?;
-            ensure!(
-                probe_host_pid != initial_pid,
-                InvalidInputSnafu {
-                    path: &initial_cgroup,
-                    reason: "the Kubernetes startup probe did not create a separate task",
-                }
-            );
-            fs::write(&release_path, b"release\\n").context(IoSnafu {
-                path: &release_path,
-            })?;
-            self.wait_for("Kubernetes startup probe release", &marker_path, || {
-                Ok(self
-                    .kubernetes_host_pid(&initial_cgroup, probe_namespace_pid)?
-                    .is_none()
-                    .then_some(()))
-            })?;
-            fs::remove_file(&release_path).context(IoSnafu {
-                path: &release_path,
-            })?;
-            fs::remove_file(&marker_path).context(IoSnafu { path: &marker_path })?;
-
-            let (boot_id, node_boot_id) = boot_identity()?;
-            let mut identity_host = KernelHostOwner::new(KernelHostConfig::identity(
-                "/sys/kernel/btf/vmlinux",
-                lease_path,
-                Some(pin_root.to_path_buf()),
-                boot_id,
-                1,
-            ))
-            .start()
-            .context(InterceptorSnafu)?;
-            let mut binding = test_binding(&initial_cgroup);
-            binding.container_id.clone_from(&container_id);
-            binding.namespace.clone_from(&namespace);
-            binding.pod_uid = pod_uid;
-            binding.sandbox_id = sandbox_id;
-            binding.container_name = "runtime".to_owned();
-            binding.image_digest = image_digest;
-            binding.container_generation = container_generation;
-            let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
-            bindings
-                .publish_all(&identity_host, std::slice::from_ref(&binding))
-                .context(NodeSnafu)?;
-            NativeSecurityStateOwner::new(node_boot_id, 1)
-                .activate(&mut identity_host)
-                .context(NodeSnafu)?;
-            host = Some(identity_host);
-            let inspector = NativeIdentityInspector::new(pin_root);
-            let initial_root =
-                self.wait_for("Kubernetes initial-root reconciliation", pin_root, || {
-                    inspector.snapshot(initial_pid).context(NodeSnafu)
-                })?;
-            ensure!(
-                initial_root.creator_task_cookie.is_none()
-                    && initial_root.root_class.as_deref() == Some("restored_or_unknown_root")
-                    && initial_root.installed_role_class.as_deref() == Some("fail_closed_unknown"),
-                InvalidInputSnafu {
-                    path: &pin_root,
-                    reason: "the pre-existing Kubernetes Pod root was not reconciled fail closed",
-                }
-            );
-
-            Ok(initial_root)
-        })();
-
-        let host_cleanup = if let Some(host) = host.take() {
-            host.shutdown().context(InterceptorSnafu)
-        } else {
-            Ok(())
-        };
-        let namespace_cleanup = if namespace_created {
-            self.kubernetes_output(
-                &[
-                    "kubectl",
-                    "delete",
-                    "namespace",
-                    namespace.as_str(),
-                    "--ignore-not-found",
-                    "--wait=true",
-                    "--timeout=120s",
-                ],
-                "remove the Kubernetes identity fixture namespace",
-            )
-            .map(|_| ())
-        } else {
-            Ok(())
-        };
-        let pin_cleanup = pin_cleanup.cleanup();
-        let lease_cleanup = lease_cleanup.cleanup();
-        let cleanup = work_cleanup.cleanup();
-        let cleanup_result = host_cleanup
-            .and(namespace_cleanup)
-            .and(pin_cleanup)
-            .and(lease_cleanup)
-            .and(cleanup);
-        if let Err(source) = probe {
-            cleanup_result?;
-            return Err(source);
-        }
-        cleanup_result?;
-        let namespace_removed =
-            !namespace_created || self.kubernetes_namespace_absent(&namespace)?;
-        let pin_removed = !pin_root.exists() && !lease_path.exists();
-        ensure!(
-            namespace_removed && pin_removed && !work_directory.exists(),
-            InvalidInputSnafu {
-                path: &work_directory,
-                reason: "the Kubernetes identity fixture left a namespace, Mithril pin, lease, or fixture directory",
-            }
-        );
-        bundle.kubernetes_initial_root = Some(probe?);
-        Ok(())
     }
 
     fn physical_kubernetes_containers_probe(
