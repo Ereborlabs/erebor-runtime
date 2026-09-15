@@ -1449,7 +1449,11 @@ setup, production actions, assertions, and focused test.
   policy generation, and admitted entry rule.
   - [x] The exact Host case passed in 41.80 seconds. The complete privileged
     Host lane passed 28 tests in 826.25 seconds on 2026-09-15.
-  - [ ] Pass the exact direct-`runc` case and its complete privileged lane.
+  - [x] Pass the exact direct-`runc` case and its complete privileged lane.
+    The exact case passed in 38.72 seconds. The complete privileged lane
+    passed 19 tests in 578.56 seconds on 2026-09-15. The lane also verified
+    that command readiness precedes pidfd ownership, so a denied runtime exec
+    reports the `runc` `EACCES` result instead of an intermediate `ESRCH`.
   - [ ] Pass the exact Kubernetes case and its complete privileged lane.
   - [ ] Remove the matching legacy invocation only when its compatibility
     command and result field can be removed. Do not hardcode a passing result.
