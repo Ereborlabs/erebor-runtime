@@ -11,7 +11,7 @@ fn moved_exec_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("moved-exec")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("moved_exec/policy.json")?;
+    env.install_policy("actor_policy.json")?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
     let mut actor = env.add_actor(

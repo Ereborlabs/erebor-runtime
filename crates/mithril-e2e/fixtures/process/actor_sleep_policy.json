@@ -2,9 +2,9 @@
   "apiVersion": "mithril.erebor.dev/v1alpha1",
   "kind": "WorkloadProtectionPolicy",
   "metadata": {
-    "name": "orphan",
+    "name": "actor-sleep",
     "namespace": "default",
-    "uid": "10000000-0000-4000-8000-000000000022",
+    "uid": "10000000-0000-4000-8000-000000000017",
     "generation": 1,
     "resourceVersion": "1"
   },

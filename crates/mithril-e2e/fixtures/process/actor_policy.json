@@ -2,9 +2,9 @@
   "apiVersion": "mithril.erebor.dev/v1alpha1",
   "kind": "WorkloadProtectionPolicy",
   "metadata": {
-    "name": "non-leader-exec",
+    "name": "actor",
     "namespace": "default",
-    "uid": "10000000-0000-4000-8000-000000000013",
+    "uid": "10000000-0000-4000-8000-000000000016",
     "generation": 1,
     "resourceVersion": "1"
   },
@@ -62,15 +62,6 @@
           {
             "name": "python-actor",
             "path": "/work/bin/python",
-            "recursive": false,
-            "operations": [
-              "Execute"
-            ],
-            "action": "Allow"
-          },
-          {
-            "name": "sleep",
-            "path": "/usr/bin/sleep",
             "recursive": false,
             "operations": [
               "Execute"

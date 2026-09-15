@@ -33,14 +33,13 @@ pub(crate) use mithril_e2e_macros::platform_test;
 pub(crate) type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
 const TASK_LIMIT: Duration = Duration::from_secs(30);
 pub(crate) const PROCESS_FIXTURES: &str = "crates/mithril-e2e/fixtures/process";
-const POLICY_FIXTURES: &str = "crates/mithril-e2e/fixtures/mithril-policy";
 
-pub(crate) fn actor_script(root: &Path, name: &str) -> crate::Result<PathBuf> {
+fn fixture_path(root: &Path, name: &str, kind: &str) -> crate::Result<PathBuf> {
     snafu::ensure!(
         !name.is_empty() && !name.contains('/'),
         InvalidInputSnafu {
             path: root,
-            reason: format!("actor script must be one file name: {name:?}"),
+            reason: format!("{kind} must be one fixture file name: {name:?}"),
         }
     );
     let path = root.join(PROCESS_FIXTURES).join(name);
@@ -48,33 +47,18 @@ pub(crate) fn actor_script(root: &Path, name: &str) -> crate::Result<PathBuf> {
         path.is_file(),
         InvalidInputSnafu {
             path: &path,
-            reason: "the actor script is missing",
+            reason: format!("the {kind} is missing"),
         }
     );
     Ok(path)
 }
 
+pub(crate) fn actor_script(root: &Path, name: &str) -> crate::Result<PathBuf> {
+    fixture_path(root, name, "actor script")
+}
+
 pub(crate) fn policy_path(root: &Path, name: &str) -> crate::Result<PathBuf> {
-    let relative = Path::new(name);
-    snafu::ensure!(
-        !name.is_empty()
-            && relative
-                .components()
-                .all(|part| matches!(part, std::path::Component::Normal(_))),
-        InvalidInputSnafu {
-            path: root,
-            reason: format!("policy must be a relative fixture path: {name:?}"),
-        }
-    );
-    let path = root.join(POLICY_FIXTURES).join(relative);
-    snafu::ensure!(
-        path.is_file(),
-        InvalidInputSnafu {
-            path: &path,
-            reason: "the policy fixture is missing",
-        }
-    );
-    Ok(path)
+    fixture_path(root, name, "policy fixture")
 }
 
 pub(crate) struct Task {

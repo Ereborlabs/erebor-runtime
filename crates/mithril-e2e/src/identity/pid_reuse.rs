@@ -18,7 +18,7 @@ fn pid_reuse_is_fresh<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("pid-reuse")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("pid_reuse/policy.json")?;
+    env.install_policy("python_policy.json")?;
     env.node_ready()?;
     let mut actor = env.start_actor("native_pid_reuse.py", &[])?;
 

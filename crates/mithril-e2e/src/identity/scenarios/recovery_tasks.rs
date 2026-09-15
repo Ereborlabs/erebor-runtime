@@ -16,7 +16,7 @@ fn four_tasks_recover<P: Platform>() -> TestResult<()> {
     ext.send(b"fork\n")?;
     let ext_child = ext.wait_child(ext.id(), "external child")?;
     ext.track(ext_child)?;
-    env.install_policy("recovery_tasks/policy.json")?;
+    env.install_policy("actor_policy.json")?;
     env.start_node()?;
     env.sync_policy()?;
     env.node_ready()?;

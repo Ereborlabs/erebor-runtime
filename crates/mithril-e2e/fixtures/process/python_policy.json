@@ -2,9 +2,9 @@
   "apiVersion": "mithril.erebor.dev/v1alpha1",
   "kind": "WorkloadProtectionPolicy",
   "metadata": {
-    "name": "restricted-roots",
+    "name": "python",
     "namespace": "default",
-    "uid": "10000000-0000-4000-8000-000000000007",
+    "uid": "10000000-0000-4000-8000-000000000002",
     "generation": 1,
     "resourceVersion": "1"
   },
@@ -73,17 +73,7 @@
       },
       {
         "name": "external",
-        "files": [
-          {
-            "name": "allow-hostname",
-            "path": "/etc/hostname",
-            "recursive": false,
-            "operations": [
-              "OpenRead"
-            ],
-            "action": "Allow"
-          }
-        ],
+        "files": [],
         "execution": [],
         "network": {
           "socketControls": [],

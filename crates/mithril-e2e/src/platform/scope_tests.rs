@@ -8,7 +8,7 @@ fn serial_scope_reuses_node<P: Platform + 'static>() -> TestResult<()> {
     let mut first = P::setup("scope-first")?;
     first.start_control()?;
     first.start_node()?;
-    first.install_policy("scope_reuse/policy.json")?;
+    first.install_policy("python_policy.json")?;
     first.node_ready()?;
     let pin = first.maps().0.to_owned();
     let inode = std::fs::metadata(&pin)?.ino();
@@ -17,7 +17,7 @@ fn serial_scope_reuses_node<P: Platform + 'static>() -> TestResult<()> {
     let mut second = P::setup("scope-second")?;
     second.start_control()?;
     second.start_node()?;
-    second.install_policy("scope_reuse/policy.json")?;
+    second.install_policy("python_policy.json")?;
     second.node_ready()?;
     assert_eq!(std::fs::metadata(&pin)?.ino(), inode);
     second.stop()?;
@@ -26,7 +26,7 @@ fn serial_scope_reuses_node<P: Platform + 'static>() -> TestResult<()> {
         let mut third = P::setup("scope-third")?;
         third.start_control()?;
         third.start_node()?;
-        third.install_policy("scope_reuse/policy.json")?;
+        third.install_policy("python_policy.json")?;
         third.node_ready()?;
         assert_ne!(std::fs::metadata(third.maps().0)?.ino(), inode);
         third.stop()

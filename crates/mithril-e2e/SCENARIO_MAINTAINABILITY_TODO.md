@@ -64,9 +64,11 @@ These rules control every checkmark and commit in this file.
   installs or omits the applicable rule and asserts the production result. Do
   not add role-specific process methods.
 - Ask the actor to perform one action. Assert the expected production result.
-- Give each test a separate fixture directory with its own `policy.json`.
-  Include only the rules required for that behavior. Pass the relative policy
-  path to `install_policy`. A platform must not select a default policy or add
+- Keep scenario policies, Python actors, and other process inputs together in
+  `fixtures/process`. Store each distinct input once. Reuse one policy when its
+  complete production specification is the same for several tests. Do not copy
+  actors or policies for a test or platform. Pass the policy filename to
+  `install_policy`. A platform must not select a default policy or add
   scenario-specific policy rules.
 - Keep component start, stop, outage, and restart order visible in the test.
 - Test each supported component order in a separate function. Do not make a
@@ -261,8 +263,8 @@ reimplement a production owner operation.
   and containerd scenarios.
 - Use the same Python actor file in every applicable host, `runc`, and
   Kubernetes scenario.
-- Put actor programs in `fixtures/process`. Do not embed shell or Python
-  source in Rust.
+- Put actor programs in `fixtures/process`. Do not embed shell or Python source
+  in Rust.
 - Do not keep separate native and `runc` process wrappers.
 - Make one start call return a ready actor.
 - Make one fallible stop call perform normal cleanup. Use `Drop` only as an

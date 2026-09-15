@@ -11,7 +11,7 @@ fn attached_roots_are_restricted<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("restricted-roots")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("restricted_roots/policy.json")?;
+    env.install_policy("external_read_policy.json")?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
     let app = env.task(init.id(), "application root")?;

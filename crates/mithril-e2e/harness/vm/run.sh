@@ -340,7 +340,7 @@ done
 "$provider" put "$vm_name" \
   "$repo_root/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh" \
   "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh"
-for source in "$repo_root/crates/mithril-e2e/fixtures/process/"*.py; do
+for source in "$repo_root/crates/mithril-e2e/fixtures/process/"*; do
   fixture=${source##*/}
   "$provider" put "$vm_name" \
     "$source" \
@@ -349,7 +349,7 @@ done
 "$provider" put "$vm_name" \
   "$repo_root/crates/mithril-e2e/fixtures/convergence/direct-entry-roles-v1.yaml" \
   "$remote_source/crates/mithril-e2e/fixtures/convergence/direct-entry-roles-v1.yaml"
-for fixture in pid-reuse-policy-v1.json observe-profile-seal-request.json test-public-key.hex test-signing-key.hex observe-policy-v1.yaml; do
+for fixture in observe-profile-seal-request.json test-public-key.hex test-signing-key.hex observe-policy-v1.yaml; do
   "$provider" put "$vm_name" \
     "$repo_root/crates/mithril-e2e/fixtures/mithril-policy/$fixture" \
     "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/$fixture"

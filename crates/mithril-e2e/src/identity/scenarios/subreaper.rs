@@ -47,7 +47,7 @@ fn subreaper_keeps_identity<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("subreaper")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("subreaper/policy.json")?;
+    env.install_policy("actor_sleep_policy.json")?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
     let mut actor = env.add_actor("python", &["/fixtures/subreaper.py", "/work"])?;
