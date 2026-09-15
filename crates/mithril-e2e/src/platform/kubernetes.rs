@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, File};
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -31,6 +32,7 @@ use serde_json::{json, Value};
 use snafu::ResultExt as _;
 use zerocopy::TryFromBytes as _;
 
+use super::scope::{current, enter, ScopeGuard};
 use super::{Platform, Task, TestResult, PROCESS_FIXTURES};
 use crate::control_fixture::MtlsFixture;
 use crate::error::{InvalidInputSnafu, IoSnafu, NodeSnafu};
@@ -45,9 +47,13 @@ const SELECTOR: &str = "mithril.erebor.dev/pid-reuse";
 const ACTOR: &str = "pid-reuse";
 const CONTAINER: &str = "worker";
 
-pub(crate) struct Kubernetes<const SHARED: bool = true> {
+pub(crate) struct Kubernetes {
+    scope: Option<ScopeGuard<'static, KubernetesState>>,
+}
+
+pub(crate) struct KubernetesState {
+    scope_name: &'static str,
     root: PathBuf,
-    out: PathBuf,
     work_path: PathBuf,
     state_path: PathBuf,
     identity_path: PathBuf,
@@ -96,7 +102,27 @@ pub(crate) struct Kubernetes<const SHARED: bool = true> {
     actor_cgroup: Option<PathBuf>,
 }
 
-impl<const SHARED: bool> Kubernetes<SHARED> {
+impl Deref for Kubernetes {
+    type Target = KubernetesState;
+
+    fn deref(&self) -> &Self::Target {
+        match self.scope.as_ref().and_then(ScopeGuard::get) {
+            Some(state) => state,
+            None => unreachable!("the Kubernetes scope is closed"),
+        }
+    }
+}
+
+impl DerefMut for Kubernetes {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self.scope.as_mut().and_then(ScopeGuard::get_mut) {
+            Some(state) => state,
+            None => unreachable!("the Kubernetes scope is closed"),
+        }
+    }
+}
+
+impl KubernetesState {
     fn fixture(&self, name: &str) -> PathBuf {
         self.root
             .join("crates/mithril-e2e/fixtures/kubernetes")
@@ -774,12 +800,42 @@ impl<const SHARED: bool> Kubernetes<SHARED> {
         Ok(actor)
     }
 
-    fn close(&mut self) -> TestResult<()> {
+    fn reset(&mut self) -> TestResult<()> {
+        if self.work_up || self.work.is_some() || self.move_group.is_some() {
+            return Err("the previous Kubernetes scenario is not clean".into());
+        }
+        self.work = Some(ProbeDirectory::create(&self.work_path)?);
+        self.post_sleep = None;
+        self.actor_id = None;
+        self.actor_pid = None;
+        self.actor_cgroup = None;
+        self.create_work()
+    }
+
+    fn clean_test(&mut self) -> TestResult<()> {
         let mut failed = None;
         if self.work_up {
             Self::retain(&mut failed, self.delete_ns(&self.namespace));
             self.work_up = false;
         }
+        if let Some(group) = self.move_group.take() {
+            Self::retain(&mut failed, group.cleanup().map_err(Into::into));
+        }
+        if let Some(work) = self.work.take() {
+            Self::retain(&mut failed, work.cleanup().map_err(Into::into));
+        }
+        self.post_sleep = None;
+        self.actor_id = None;
+        self.actor_pid = None;
+        self.actor_cgroup = None;
+        match failed {
+            Some(source) => Err(source),
+            None => Ok(()),
+        }
+    }
+
+    fn close_core(&mut self) -> TestResult<()> {
+        let mut failed = self.clean_test().err();
         if self.system_up {
             let nodes = Api::<Node>::all(self.client.clone());
             let patch = json!({"metadata": {"labels": {(SELECTOR): null}}});
@@ -832,9 +888,6 @@ impl<const SHARED: bool> Kubernetes<SHARED> {
             Self::retain(&mut failed, self.delete_ns(&self.system));
             self.system_up = false;
         }
-        if let Some(work) = self.work.take() {
-            Self::retain(&mut failed, work.cleanup().map_err(Into::into));
-        }
         if let Some(state) = self.state.take() {
             Self::retain(&mut failed, state.cleanup().map_err(Into::into));
         }
@@ -862,9 +915,6 @@ impl<const SHARED: bool> Kubernetes<SHARED> {
         if let Some(seccomp) = self.seccomp.take() {
             Self::retain(&mut failed, seccomp.cleanup().map_err(Into::into));
         }
-        if let Some(group) = self.move_group.take() {
-            Self::retain(&mut failed, group.cleanup().map_err(Into::into));
-        }
         match failed {
             Some(source) => Err(source),
             None => Ok(()),
@@ -872,15 +922,46 @@ impl<const SHARED: bool> Kubernetes<SHARED> {
     }
 }
 
-impl<const SHARED: bool> Platform for Kubernetes<SHARED> {
+impl Kubernetes {
+    fn close(&mut self) -> TestResult<()> {
+        let Some(mut scope) = self.scope.take() else {
+            return Ok(());
+        };
+        if scope.finish() {
+            return match scope.take() {
+                Some(mut state) => state.close_core(),
+                None => Ok(()),
+            };
+        }
+        match scope.get_mut() {
+            Some(state) => state.clean_test(),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Platform for Kubernetes {
     fn source(&self) -> &Path {
         &self.root
     }
 
     fn setup(name: &str) -> TestResult<Self> {
         erebor_telemetry::init_test_logging();
-        let root = fs::canonicalize(Self::path("MITHRIL_TEST_ROOT", ".")?)?;
-        let base = Self::path("MITHRIL_TEST_OUTPUT", "")?;
+        let scope_name = current()?;
+        let mut scope = enter::<KubernetesState>()?;
+        if scope
+            .get()
+            .is_some_and(|state| state.scope_name == scope_name)
+        {
+            let state = scope.get_mut().ok_or("the Kubernetes scope is empty")?;
+            state.reset()?;
+            return Ok(Self { scope: Some(scope) });
+        }
+        if let Some(mut state) = scope.take() {
+            state.close_core()?;
+        }
+        let root = fs::canonicalize(KubernetesState::path("MITHRIL_TEST_ROOT", ".")?)?;
+        let base = KubernetesState::path("MITHRIL_TEST_OUTPUT", "")?;
         if base.as_os_str().is_empty() || !base.is_absolute() || base.is_file() {
             return Err(format!(
                 "MITHRIL_TEST_OUTPUT must name an absolute directory: {}",
@@ -926,9 +1007,10 @@ impl<const SHARED: bool> Platform for Kubernetes<SHARED> {
         let lease = ProbeFile::new(&lease_path);
         let socket = ProbeFile::new(&socket_path);
         let seccomp = ProbeFile::new(&seccomp_path);
-        let kube_path = Self::path("MITHRIL_TEST_KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")?;
-        let helm_path = Self::path("MITHRIL_TEST_HELM", "/usr/local/bin/helm")?;
-        let k3s_path = Self::path("MITHRIL_TEST_K3S", "/usr/local/bin/k3s")?;
+        let kube_path =
+            KubernetesState::path("MITHRIL_TEST_KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")?;
+        let helm_path = KubernetesState::path("MITHRIL_TEST_HELM", "/usr/local/bin/helm")?;
+        let k3s_path = KubernetesState::path("MITHRIL_TEST_K3S", "/usr/local/bin/k3s")?;
         for path in [&kube_path, &helm_path, &k3s_path] {
             if !path.is_file() {
                 return Err(format!(
@@ -938,9 +1020,9 @@ impl<const SHARED: bool> Platform for Kubernetes<SHARED> {
                 .into());
             }
         }
-        let node_image = Self::required("MITHRIL_TEST_NODE_IMAGE")?;
-        let control_image = Self::required("MITHRIL_TEST_CONTROL_IMAGE")?;
-        let actor_image = Self::required("MITHRIL_TEST_ACTOR_IMAGE")?;
+        let node_image = KubernetesState::required("MITHRIL_TEST_NODE_IMAGE")?;
+        let control_image = KubernetesState::required("MITHRIL_TEST_CONTROL_IMAGE")?;
+        let actor_image = KubernetesState::required("MITHRIL_TEST_ACTOR_IMAGE")?;
         let actor_python = env::var("MITHRIL_TEST_ACTOR_PYTHON")
             .unwrap_or_else(|_| "/usr/local/bin/python3".to_owned());
         let actor_entry = env::var("MITHRIL_TEST_ACTOR_ENTRY")
@@ -992,9 +1074,9 @@ impl<const SHARED: bool> Platform for Kubernetes<SHARED> {
         let tls = MtlsFixture::kubernetes(&server_name)?;
         let inspector = NativeIdentityInspector::new(&pin_path);
         let reader = KernelStateReader::new(&pin_path);
-        let mut fixture = Self {
+        let mut fixture = KubernetesState {
+            scope_name,
             root,
-            out,
             work_path,
             state_path,
             identity_path,
@@ -1044,12 +1126,16 @@ impl<const SHARED: bool> Platform for Kubernetes<SHARED> {
         };
         fixture.write_inputs()?;
         fixture.create_work()?;
-        Ok(fixture)
+        scope.put(fixture);
+        Ok(Self { scope: Some(scope) })
     }
 
     fn start_control(&mut self) -> TestResult<()> {
-        Self::require_image(&self.k3s_path, &self.control_image)?;
-        Self::require_image(&self.k3s_path, &self.node_image)?;
+        if self.helm_up {
+            return self.wait_control();
+        }
+        KubernetesState::require_image(&self.k3s_path, &self.control_image)?;
+        KubernetesState::require_image(&self.k3s_path, &self.node_image)?;
         self.create_system()?;
         let chart = self.root.join("packaging/mithril/helm");
         let mut command = Command::new(&self.helm_path);
@@ -1060,12 +1146,15 @@ impl<const SHARED: bool> Platform for Kubernetes<SHARED> {
             .arg(&chart)
             .args(["--namespace", &self.system, "--values"])
             .arg(&self.values_path);
-        Self::run(&mut command, "install Mithril Control")?;
+        KubernetesState::run(&mut command, "install Mithril Control")?;
         self.helm_up = true;
         self.wait_control()
     }
 
     fn start_node(&mut self) -> TestResult<()> {
+        if self.hook_up {
+            return self.wait_node();
+        }
         let nodes = Api::<Node>::all(self.client.clone());
         let patch = json!({"metadata": {"labels": {(SELECTOR): self.token}}});
         self.runtime.block_on(nodes.patch(
@@ -1126,7 +1215,7 @@ impl<const SHARED: bool> Platform for Kubernetes<SHARED> {
     }
 
     fn start_actor(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
-        Self::require_image(&self.k3s_path, &self.actor_image)?;
+        KubernetesState::require_image(&self.k3s_path, &self.actor_image)?;
         if self.actor_id.is_some() {
             return Err("the Kubernetes actor is already running".into());
         }
@@ -1194,7 +1283,7 @@ impl<const SHARED: bool> Platform for Kubernetes<SHARED> {
             })
             .and_then(|id| {
                 self.inspect_pid(&id)
-                    .and_then(|pid| Self::cgroup(pid).map(|cgroup| (id, pid, cgroup)))
+                    .and_then(|pid| KubernetesState::cgroup(pid).map(|group| (id, pid, group)))
             }) {
                 Ok(value) => Ok(Some(value)),
                 Err(source) => {
@@ -1342,7 +1431,7 @@ impl<const SHARED: bool> Platform for Kubernetes<SHARED> {
 
     fn wait_workload_ready(&self) -> TestResult<()> {
         let last = RefCell::new(false);
-        let path = Self::resource(&self.namespace, "pod", ACTOR);
+        let path = KubernetesState::resource(&self.namespace, "pod", ACTOR);
         Ok(wait_for(
             &path,
             "actor Pod readiness",
@@ -1375,7 +1464,7 @@ impl<const SHARED: bool> Platform for Kubernetes<SHARED> {
             .ok_or("the Kubernetes actor has no recorded cgroup")?;
         let procs = expected.join("cgroup.procs");
         fs::write(&procs, pid.to_string()).context(IoSnafu { path: &procs })?;
-        let actual = Self::cgroup(pid)?;
+        let actual = KubernetesState::cgroup(pid)?;
         if &actual != expected {
             return Err(format!(
                 "the Kubernetes actor is in {}; expected {}",
@@ -1561,7 +1650,7 @@ impl<const SHARED: bool> Platform for Kubernetes<SHARED> {
                 .ok_or_else(|| "the actor exited without an exit code".into());
         }
         let pods = Api::<Pod>::namespaced(self.client.clone(), &self.namespace);
-        let path = Self::resource(&self.namespace, "pod", ACTOR);
+        let path = KubernetesState::resource(&self.namespace, "pod", ACTOR);
         let last = RefCell::new(String::from("<absent>"));
         Ok(wait_for(
             &path,
@@ -1597,16 +1686,12 @@ impl<const SHARED: bool> Platform for Kubernetes<SHARED> {
         &self.work_path
     }
 
-    fn output(&self) -> &Path {
-        &self.out
-    }
-
     fn stop(&mut self) -> TestResult<()> {
         self.close()
     }
 }
 
-impl<const SHARED: bool> Drop for Kubernetes<SHARED> {
+impl Drop for Kubernetes {
     fn drop(&mut self) {
         let _result = self.close();
     }

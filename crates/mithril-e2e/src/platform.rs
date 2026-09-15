@@ -333,9 +333,6 @@ pub(crate) trait Platform: Sized {
     fn actor_group(&self) -> TestResult<&Path> {
         pending("read actor cgroup")
     }
-    fn output(&self) -> &Path {
-        Path::new(".")
-    }
     fn stop(&mut self) -> TestResult<()> {
         pending("stop fixture")
     }

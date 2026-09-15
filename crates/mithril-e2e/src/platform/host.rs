@@ -310,10 +310,6 @@ impl Platform for Host {
         Ok(self.shared.cgroup())
     }
 
-    fn output(&self) -> &Path {
-        self.shared.output()
-    }
-
     fn stop(&mut self) -> TestResult<()> {
         self.close()
     }

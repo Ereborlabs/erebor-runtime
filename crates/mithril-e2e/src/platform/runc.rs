@@ -391,10 +391,6 @@ impl Platform for Runc {
         self.shared.work()
     }
 
-    fn output(&self) -> &Path {
-        self.shared.output()
-    }
-
     fn stop(&mut self) -> TestResult<()> {
         self.close()
     }

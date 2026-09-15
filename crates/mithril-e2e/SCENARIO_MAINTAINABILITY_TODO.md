@@ -586,24 +586,33 @@ count as maintainability migrations.
   - The exact generated test names and count stay unchanged.
   - `cargo test -p mithril-e2e --lib --no-run`, test discovery, and strict
     Clippy passed on 2026-09-14.
-- [ ] Share one Control and one Node across each named Host scope.
+- [x] Share one Control and one Node across each named Host scope.
   Keep each actor, cgroup, policy instance, runtime identity, output path, and
   assertion test-scoped. Pass every existing Host scenario before commit.
-- [ ] Share one Control and one Node across each named direct-`runc` scope.
-  Reuse the Host shared owner without adding a second native Control or Node
-  wrapper. Keep each container and actor test-scoped. Pass every existing
-  direct-`runc` scenario before commit.
-- [ ] Share one Helm Control Deployment, one Node DaemonSet, and one runtime
+  - The complete Host lane passed 25 tests in 720.23 seconds on 2026-09-14.
+- [x] Share one Control and one Node across each named direct-`runc` scope.
+  Reuse the common Mithril lifecycle owner. Do not call Host process or actor
+  operations from direct `runc`. Keep each container and actor test-scoped.
+  Pass every existing direct-`runc` scenario before commit.
+  - The complete direct-`runc` lane passed 16 tests in 385.05 seconds on
+    2026-09-14.
+- [x] Share one Helm Control Deployment, one Node DaemonSet, and one runtime
   integration installation across the serial Kubernetes platform lane. Keep
   each workload namespace, policy instance, actor Pod, runtime identity,
   output path, and assertion test-scoped. Pass every existing Kubernetes
   scenario before commit.
-- [ ] Run order, recovery, outage, restart, and retained-state scopes with
+  - The complete Kubernetes lane passed 18 tests in 1,028.03 seconds with two
+    workers on 2026-09-14.
+- [x] Run order, recovery, outage, restart, and retained-state scopes with
   exclusive ownership. Prove that the previous scope owner is absent before a
   different scope starts and that the requested scope is ready before use.
-- [ ] Make exact single-test cleanup and complete-lane cleanup bounded and
+  - Host, direct-`runc`, and Kubernetes recovery scopes passed in their
+    complete platform lanes on 2026-09-14.
+- [x] Make exact single-test cleanup and complete-lane cleanup bounded and
   diagnostic on all three platforms. Do not depend on process exit, VM
   deletion, or K3s deletion for normal cleanup.
+  - The same `child_exec_keeps_identity` test passed by exact name on Host,
+    direct `runc`, and Kubernetes before the complete Kubernetes lane passed.
 - [ ] Record elapsed setup, Control, Node, actor, scenario, and teardown time
   without adding timing calls to scenario bodies. Compare with the current
   serial baselines: 25 Host cases in 889.98 seconds, 16 direct-`runc` cases in
