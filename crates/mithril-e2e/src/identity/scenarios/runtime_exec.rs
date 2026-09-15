@@ -1,6 +1,6 @@
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[scope = "identity"]
 fn unlisted_exec_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("runtime-exec")?;
@@ -22,8 +22,9 @@ fn unlisted_exec_is_denied<P: Platform>() -> TestResult<()> {
             return Err("Mithril allowed an unlisted runtime entry".into());
         }
     };
+    let denial = error.to_string().to_lowercase();
     assert!(
-        error.to_string().contains("exit status: 13"),
+        denial.contains("exit status: 13") || denial.contains("permission denied"),
         "the unlisted runtime entry was not denied with EACCES: {error}"
     );
 

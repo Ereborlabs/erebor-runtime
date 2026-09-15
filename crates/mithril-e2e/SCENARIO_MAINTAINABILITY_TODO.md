@@ -1459,7 +1459,9 @@ setup, production actions, assertions, and focused test.
     This test does not replace the successful restricted-entry checks below.
     - [x] Pass Host and commit it. The exact test passed in the retained
       lightweight VM on 2026-09-15 in 34.49 seconds.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact test passed in 38.73
+      seconds. The complete direct-`runc` lane passed 17 tests in 673.41
+      seconds on 2026-09-15.
     - [ ] Pass Kubernetes and commit it.
   - [ ] Replace the pre-existing Pod-root case. Preserve its creator-free
     `restored_or_unknown_root` and `fail_closed_unknown` result. Do not treat
