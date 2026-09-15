@@ -1454,7 +1454,9 @@ setup, production actions, assertions, and focused test.
     passed 19 tests in 578.56 seconds on 2026-09-15. The lane also verified
     that command readiness precedes pidfd ownership, so a denied runtime exec
     reports the `runc` `EACCES` result instead of an intermediate `ESRCH`.
-  - [ ] Pass the exact Kubernetes case and its complete privileged lane.
+  - [x] Pass the exact Kubernetes case and its complete privileged lane. The
+    exact case passed in 75.65 seconds. The complete privileged lane passed 21
+    tests in 1,451.24 seconds on 2026-09-15 against the retained K3s cluster.
   - [ ] Remove the matching legacy invocation only when its compatibility
     command and result field can be removed. Do not hardcode a passing result.
 - [ ] Declared probe mismatch and runtime infrastructure effects: keep exact
