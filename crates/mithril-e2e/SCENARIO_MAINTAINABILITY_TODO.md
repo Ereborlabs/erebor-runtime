@@ -1213,7 +1213,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Verify that normal Kubernetes shutdown removes both runtime admission
     socket paths before accepting the Kubernetes result.
   - [x] The Kubernetes generated case passes with the same Python actor.
-- [ ] Workload-first recovery: keep one small parameterized Rust test in
+- [x] Workload-first recovery: keep one small parameterized Rust test in
   `identity/scenarios/workload_recovery.rs`. Start Control. Start one ready
   Python actor while its policy and Node are absent. Install the signed policy
   while the actor is running. Start Node and let Control and the real or
@@ -1244,16 +1244,22 @@ test does not close a row when its physical condition or an assertion changed.
     Pod running before its policy and the Helm Node DaemonSet. The platform
     keeps actor input across the required K3s runtime restart. The recovered
     actor then receives the shared action and exits with the denied result.
-  - [ ] Remove only the matching workload-first assertions from the old
+  - [x] Remove only the matching workload-first assertions from the old
     monolithic probes after all three generated cases pass. Preserve their
     other recovered-entry and concurrency assertions for later migrations.
-  - [ ] Do not remove the legacy multi-task case until small tests preserve
+  - [x] Keep the legacy multi-task case until small tests preserve
     its two application and two external tasks, iterator retry, ptrace
     bootstrap, internal exec, declared-probe isolation, unmatched denial,
     post-cutover activation, and cleanup assertions. The focused one-task
     recovery test does not replace these behaviors.
   - [x] Restore the nonzero recovery-attempt assertion and rerun all three
     generated cases before the old workload-first assertions are removed.
+  - [x] After the old assertion removal, rerun the unchanged Host,
+    direct-`runc`, and Kubernetes cases. They passed in 32.21, 41.25, and
+    110.87 seconds.
+  - [x] Rerun the old direct-runtime probe. Its remaining iterator retry,
+    ptrace bootstrap, internal exec, probe isolation, denial, post-cutover,
+    and cleanup checks passed.
 - [x] Four-task workload-first recovery: add one small parameterized Rust
   test. Start one application root and its child. Add one external root and
   its child before policy and Node start. Recover the same four tasks on Host,
@@ -1372,7 +1378,9 @@ test does not close a row when its physical condition or an assertion changed.
   `NodeBindingReconciliation::reconcile` and the public recovered-root
   publication operation visible.
 - [ ] Recovered-container cutover and task-change retry: keep the same
-  production recovery operation and oracles as the Kubernetes lane.
+  production recovery operation and oracles as the Kubernetes lane. Remove
+  the old process-wide iterator pause. A direct `sudo` monitor mirrors its
+  `SIGSTOP` and cannot report completion without an external continue.
 - [ ] Recovered-container application, external, and declared-probe entries:
   keep each stock runtime action and exact role, rule, and denial assertion.
 

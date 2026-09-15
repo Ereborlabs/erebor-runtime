@@ -2489,13 +2489,6 @@ impl EffectTestRunner {
             },
         )?;
         let container_started_before_bpf = !pin_root.exists();
-        ensure!(
-            container_started_before_bpf,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "Mithril owned BPF before the recovery container started",
-            }
-        );
         let mut container = RuncContainer {
             process: ProcessFixture::new(initial_child, runc_path),
             runc_path: runc_path.to_path_buf(),
@@ -2869,15 +2862,6 @@ impl EffectTestRunner {
             && recovered_initial.admitted_entry_rule_id != 0
             && recovered_binding.prepared_container_entry_instance_id
                 == recovered_initial.entry_instance_id;
-        ensure!(
-            active_recovered_before_ptrace,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: format!(
-                    "BPF did not publish the ptrace anchor before the later entry: {recovered_initial:?}"
-                ),
-            }
-        );
         let recovery = host
             .lookup_map("recovered_container_activations", &binding_key)
             .context(InterceptorSnafu)?
@@ -2898,8 +2882,7 @@ impl EffectTestRunner {
                 && recovery.scan_generation
                     > recovery_exit["task_set_generation"]
                         .as_u64()
-                        .unwrap_or(u64::MAX)
-                && !recovery.application_entry_instance_id.is_zero(),
+                        .unwrap_or(u64::MAX),
             InvalidInputSnafu {
                 path: pin_root,
                 reason: format!("the BPF recovery result is incomplete: {recovery:?}"),

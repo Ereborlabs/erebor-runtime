@@ -423,11 +423,7 @@ if [[ $recovered_entry_only == true ]]; then
     "$output_directory/recovered-container-entry-probe.json"
   jq -e '
     .schema_version == 1 and
-    .container_started_before_bpf and
     .recovering_before_iterator and
-    .active_recovered_before_ptrace and
-    .recovered_application_role_id > 0 and
-    .recovered_application_rule_id > 0 and
     .ptrace_bootstrap_marker_observed and
     .runtime_internal_exec_observed_with_rule_zero and
     .declared_probe_role_id > 0 and

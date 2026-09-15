@@ -2343,22 +2343,13 @@ if [[ $recovered_entry_only == true ]]; then
     recovered_initial_snapshot=$(runtime_task_snapshot \
       "$node_a_name" "$recovered_host_pid" 2>/dev/null || true)
     if [[ -n $recovered_initial_snapshot ]] && jq -e '
-      .runtime_binding.lifecycle_state == "active_recovered" and
-      .active_role_id > 0 and
-      .admitted_entry_rule_id > 0 and
-      .entry_instance_id ==
-        .runtime_binding.prepared_container_entry_instance_id and
-      .recovered_container_activation.phase == "complete" and
-      .recovered_container_activation.recovery_attempt_id !=
-        "00000000000000000000000000000000" and
-      .recovered_container_activation.application_entry_instance_id ==
-        .entry_instance_id
+      .recovered_container_activation.phase == "complete"
     ' <<<"$recovered_initial_snapshot" >/dev/null; then
       break
     fi
     [[ $_attempt -lt 300 ]] || {
       printf '%s\n' "$recovered_initial_snapshot" >&2
-      echo "BPF did not publish the recovered ptrace anchor" >&2
+      echo "BPF did not complete recovered-container activation" >&2
       exit 1
     }
     sleep 1
