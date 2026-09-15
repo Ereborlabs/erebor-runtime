@@ -178,10 +178,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub schema_version: u32,
     pub object_sha256: String,
     pub kubernetes_initial_root: Option<NativeTaskSnapshotV1>,
-    pub kubernetes_direct_cri_exec_root: Option<NativeTaskSnapshotV1>,
-    pub kubernetes_kubectl_exec_root: Option<NativeTaskSnapshotV1>,
-    pub kubernetes_kubectl_tty_exec_root: Option<NativeTaskSnapshotV1>,
-    pub kubernetes_kubectl_copy_root: Option<NativeTaskSnapshotV1>,
     pub kubernetes_native_child_parent: Option<NativeTaskSnapshotV1>,
     pub kubernetes_native_child_control: Option<NativeTaskSnapshotV1>,
     pub kubernetes_lifecycle_sleep_no_task: Option<bool>,
@@ -365,10 +361,6 @@ impl IdentityTestRunner {
             schema_version: 29,
             object_sha256,
             kubernetes_initial_root: None,
-            kubernetes_direct_cri_exec_root: None,
-            kubernetes_kubectl_exec_root: None,
-            kubernetes_kubectl_tty_exec_root: None,
-            kubernetes_kubectl_copy_root: None,
             kubernetes_native_child_parent: None,
             kubernetes_native_child_control: None,
             kubernetes_lifecycle_sleep_no_task: None,
@@ -466,18 +458,10 @@ impl IdentityTestRunner {
                 path: previous_bundle_path,
             })?;
         let entry_results_missing = bundle.kubernetes_initial_root.is_none()
-            && bundle.kubernetes_direct_cri_exec_root.is_none()
-            && bundle.kubernetes_kubectl_exec_root.is_none()
-            && bundle.kubernetes_kubectl_tty_exec_root.is_none()
-            && bundle.kubernetes_kubectl_copy_root.is_none()
             && bundle.kubernetes_native_child_parent.is_none()
             && bundle.kubernetes_native_child_control.is_none()
             && !bundle.kubernetes_fixture_removed;
         let entry_results_present = bundle.kubernetes_initial_root.is_some()
-            && bundle.kubernetes_direct_cri_exec_root.is_some()
-            && bundle.kubernetes_kubectl_exec_root.is_some()
-            && bundle.kubernetes_kubectl_tty_exec_root.is_some()
-            && bundle.kubernetes_kubectl_copy_root.is_some()
             && bundle.kubernetes_native_child_parent.is_some()
             && bundle.kubernetes_native_child_control.is_some()
             && bundle.kubernetes_fixture_removed;
@@ -895,8 +879,6 @@ impl IdentityTestRunner {
         bundle: &mut IdentityPhysicalProbeBundleV1,
     ) -> Result<()> {
         const ENTRY_COMMAND: &str = "read identity_pid _ < /proc/self/stat; printf \"%s\\n\" \"$identity_pid\" > /var/lib/mithril/entry/pid; while [ ! -f /var/lib/mithril/entry/release ]; do sleep 0.1; done";
-        const COPY_PAYLOAD: &[u8] = b"mithril kubectl copy fixture\n";
-        const COPY_WRAPPER: &str = "#!/bin/sh\nread identity_pid _ < /proc/self/stat\nprintf '%s\\n' \"$identity_pid\" > /var/lib/mithril/entry/copy-pid\nwhile [ ! -f /var/lib/mithril/entry/copy-release ]; do sleep 0.1; done\nexec /bin/tar \"$@\"\n";
         const NATIVE_PARENT_COMMAND: &str = "/bin/sh -c \"$1\" & wait \"$!\"";
 
         fs::create_dir_all(output_directory).context(IoSnafu {
@@ -918,11 +900,6 @@ impl IdentityTestRunner {
         let fixture_root = work_directory.join("fixture");
         let marker_path = fixture_root.join("pid");
         let release_path = fixture_root.join("release");
-        let copy_marker_path = fixture_root.join("copy-pid");
-        let copy_release_path = fixture_root.join("copy-release");
-        let copy_source_path = fixture_root.join("copy-source");
-        let copy_destination_path = work_directory.join("copy-result");
-        let copy_wrapper_path = fixture_root.join("tar");
         let manifest_path = work_directory.join("workload.yaml");
         ensure!(
             !pin_root.exists() && !lease_path.exists(),
@@ -935,30 +912,11 @@ impl IdentityTestRunner {
         let lease_cleanup = ProbeFile::new(lease_path);
         let mut namespace_created = false;
         let mut host = None;
-        let mut direct_cri_exec = None;
-        let mut kubectl_exec = None;
-        let mut kubectl_tty_exec = None;
-        let mut kubectl_copy = None;
         let mut native_child_exec = None;
 
         let probe = (|| -> Result<_> {
             fs::create_dir(&fixture_root).context(IoSnafu {
                 path: &fixture_root,
-            })?;
-            fs::write(&copy_source_path, COPY_PAYLOAD).context(IoSnafu {
-                path: &copy_source_path,
-            })?;
-            fs::write(&copy_wrapper_path, COPY_WRAPPER).context(IoSnafu {
-                path: &copy_wrapper_path,
-            })?;
-            let mut copy_wrapper_permissions = fs::metadata(&copy_wrapper_path)
-                .context(IoSnafu {
-                    path: &copy_wrapper_path,
-                })?
-                .permissions();
-            copy_wrapper_permissions.set_mode(0o700);
-            fs::set_permissions(&copy_wrapper_path, copy_wrapper_permissions).context(IoSnafu {
-                path: &copy_wrapper_path,
             })?;
             let manifest_template_path = self
                 .repo_root
@@ -976,8 +934,7 @@ impl IdentityTestRunner {
                 manifest.contains(ENTRY_COMMAND),
                 InvalidInputSnafu {
                     path: &manifest_template_path,
-                    reason:
-                        "the Kubernetes startup command differs from the direct CRI fixture command",
+                    reason: "the Kubernetes startup command differs from the held entry command",
                 }
             );
             fs::write(&manifest_path, manifest).context(IoSnafu {
@@ -1151,287 +1108,6 @@ impl IdentityTestRunner {
                 }
             );
 
-            direct_cri_exec = Some(
-                Command::new("/usr/local/bin/k3s")
-                    .args([
-                        "crictl",
-                        "exec",
-                        container_id.as_str(),
-                        "/bin/sh",
-                        "-c",
-                        ENTRY_COMMAND,
-                    ])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .context(IoSnafu {
-                        path: Path::new("/usr/local/bin/k3s"),
-                    })?,
-            );
-            let direct_cri_namespace_pid =
-                self.wait_for("direct CRI exec start", &marker_path, || {
-                    self.kubernetes_fixture_pid(&marker_path)
-                })?;
-            let direct_cri_host_pid =
-                self.wait_for("direct CRI exec host PID", &initial_cgroup, || {
-                    self.kubernetes_host_pid(&initial_cgroup, direct_cri_namespace_pid)
-                })?;
-            let direct_cri_exec_root =
-                self.wait_for("direct CRI exec identity", pin_root, || {
-                    inspector.snapshot(direct_cri_host_pid).context(NodeSnafu)
-                })?;
-            ensure!(
-                direct_cri_exec_root.creator_task_cookie.is_none()
-                    && direct_cri_exec_root.root_class.as_deref() == Some("external_runtime_root")
-                    && direct_cri_exec_root.installed_role_class.as_deref()
-                        == Some("runtime_external_restricted")
-                    && direct_cri_exec_root.active_role_id == binding.external_role_id,
-                InvalidInputSnafu {
-                    path: &pin_root,
-                    reason: "direct CRI exec did not remain a restricted external root",
-                }
-            );
-            fs::write(&release_path, b"release\\n").context(IoSnafu {
-                path: &release_path,
-            })?;
-            let direct_cri_status = direct_cri_exec
-                .as_mut()
-                .ok_or_else(|| invalid_state("direct CRI exec process is missing"))?
-                .wait()
-                .context(IoSnafu {
-                    path: Path::new("direct CRI exec"),
-                })?;
-            ensure!(
-                direct_cri_status.success(),
-                InvalidInputSnafu {
-                    path: Path::new("direct CRI exec"),
-                    reason: format!("direct CRI exec exited with {direct_cri_status}"),
-                }
-            );
-            direct_cri_exec = None;
-            fs::remove_file(&release_path).context(IoSnafu {
-                path: &release_path,
-            })?;
-            fs::remove_file(&marker_path).context(IoSnafu { path: &marker_path })?;
-
-            kubectl_exec = Some(
-                Command::new("/usr/local/bin/k3s")
-                    .args([
-                        "kubectl",
-                        "-n",
-                        namespace.as_str(),
-                        "exec",
-                        "mithril-identity",
-                        "-c",
-                        "runtime",
-                        "--",
-                        "/bin/sh",
-                        "-c",
-                        ENTRY_COMMAND,
-                    ])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .context(IoSnafu {
-                        path: Path::new("/usr/local/bin/k3s"),
-                    })?,
-            );
-            let kubectl_namespace_pid =
-                self.wait_for("kubectl exec start", &marker_path, || {
-                    self.kubernetes_fixture_pid(&marker_path)
-                })?;
-            let kubectl_host_pid =
-                self.wait_for("kubectl exec host PID", &initial_cgroup, || {
-                    self.kubernetes_host_pid(&initial_cgroup, kubectl_namespace_pid)
-                })?;
-            let kubectl_exec_root = self.wait_for("kubectl exec identity", pin_root, || {
-                inspector.snapshot(kubectl_host_pid).context(NodeSnafu)
-            })?;
-            ensure!(
-                kubectl_exec_root.creator_task_cookie.is_none()
-                    && kubectl_exec_root.root_class.as_deref() == Some("external_runtime_root")
-                    && kubectl_exec_root.installed_role_class.as_deref()
-                        == Some("runtime_external_restricted")
-                    && kubectl_exec_root.active_role_id == binding.external_role_id
-                    && kubectl_exec_root.task_cookie != direct_cri_exec_root.task_cookie,
-                InvalidInputSnafu {
-                    path: &pin_root,
-                    reason: "kubectl exec did not remain a separate restricted external root",
-                }
-            );
-            fs::write(&release_path, b"release\\n").context(IoSnafu {
-                path: &release_path,
-            })?;
-            let kubectl_status = kubectl_exec
-                .as_mut()
-                .ok_or_else(|| invalid_state("kubectl exec process is missing"))?
-                .wait()
-                .context(IoSnafu {
-                    path: Path::new("kubectl exec"),
-                })?;
-            ensure!(
-                kubectl_status.success(),
-                InvalidInputSnafu {
-                    path: Path::new("kubectl exec"),
-                    reason: format!("kubectl exec exited with {kubectl_status}"),
-                }
-            );
-            kubectl_exec = None;
-            fs::remove_file(&release_path).context(IoSnafu {
-                path: &release_path,
-            })?;
-            fs::remove_file(&marker_path).context(IoSnafu { path: &marker_path })?;
-
-            let tty_command = format!(
-                "/usr/local/bin/k3s kubectl -n {namespace} exec -i -t mithril-identity -c runtime -- /bin/sh -c '{ENTRY_COMMAND}'"
-            );
-            kubectl_tty_exec = Some(
-                Command::new("/usr/bin/script")
-                    .args(["-qfec", tty_command.as_str(), "/dev/null"])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .context(IoSnafu {
-                        path: Path::new("/usr/bin/script"),
-                    })?,
-            );
-            let tty_namespace_pid =
-                self.wait_for("TTY kubectl exec start", &marker_path, || {
-                    self.kubernetes_fixture_pid(&marker_path)
-                })?;
-            let tty_host_pid =
-                self.wait_for("TTY kubectl exec host PID", &initial_cgroup, || {
-                    self.kubernetes_host_pid(&initial_cgroup, tty_namespace_pid)
-                })?;
-            let kubectl_tty_exec_root =
-                self.wait_for("TTY kubectl exec identity", pin_root, || {
-                    inspector.snapshot(tty_host_pid).context(NodeSnafu)
-                })?;
-            ensure!(
-                kubectl_tty_exec_root.creator_task_cookie.is_none()
-                    && kubectl_tty_exec_root.root_class.as_deref() == Some("external_runtime_root")
-                    && kubectl_tty_exec_root.installed_role_class.as_deref()
-                        == Some("runtime_external_restricted")
-                    && kubectl_tty_exec_root.active_role_id == binding.external_role_id
-                    && kubectl_tty_exec_root.task_cookie != direct_cri_exec_root.task_cookie
-                    && kubectl_tty_exec_root.task_cookie != kubectl_exec_root.task_cookie,
-                InvalidInputSnafu {
-                    path: &pin_root,
-                    reason: "TTY kubectl exec did not remain a separate restricted external root",
-                }
-            );
-            fs::write(&release_path, b"release\n").context(IoSnafu {
-                path: &release_path,
-            })?;
-            let tty_status = kubectl_tty_exec
-                .as_mut()
-                .ok_or_else(|| invalid_state("TTY kubectl exec process is missing"))?
-                .wait()
-                .context(IoSnafu {
-                    path: Path::new("TTY kubectl exec"),
-                })?;
-            ensure!(
-                tty_status.success(),
-                InvalidInputSnafu {
-                    path: Path::new("TTY kubectl exec"),
-                    reason: format!("TTY kubectl exec exited with {tty_status}"),
-                }
-            );
-            kubectl_tty_exec = None;
-            fs::remove_file(&release_path).context(IoSnafu {
-                path: &release_path,
-            })?;
-            fs::remove_file(&marker_path).context(IoSnafu { path: &marker_path })?;
-
-            let copy_source = format!(
-                "mithril-identity:/var/lib/mithril/entry/{}",
-                copy_source_path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .ok_or_else(|| invalid_state("kubectl copy source name is invalid"))?
-            );
-            kubectl_copy = Some(
-                Command::new("/usr/local/bin/k3s")
-                    .args([
-                        "kubectl",
-                        "-n",
-                        namespace.as_str(),
-                        "cp",
-                        copy_source.as_str(),
-                        copy_destination_path.to_string_lossy().as_ref(),
-                        "-c",
-                        "runtime",
-                    ])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .context(IoSnafu {
-                        path: Path::new("/usr/local/bin/k3s"),
-                    })?,
-            );
-            let copy_namespace_pid =
-                self.wait_for("kubectl cp start", &copy_marker_path, || {
-                    self.kubernetes_fixture_pid(&copy_marker_path)
-                })?;
-            let copy_host_pid = self.wait_for("kubectl cp host PID", &initial_cgroup, || {
-                self.kubernetes_host_pid(&initial_cgroup, copy_namespace_pid)
-            })?;
-            let kubectl_copy_root = self.wait_for("kubectl cp identity", pin_root, || {
-                inspector.snapshot(copy_host_pid).context(NodeSnafu)
-            })?;
-            ensure!(
-                kubectl_copy_root.creator_task_cookie.is_none()
-                    && kubectl_copy_root.root_class.as_deref() == Some("external_runtime_root")
-                    && kubectl_copy_root.installed_role_class.as_deref()
-                        == Some("runtime_external_restricted")
-                    && kubectl_copy_root.active_role_id == binding.external_role_id
-                    && kubectl_copy_root.task_cookie != direct_cri_exec_root.task_cookie
-                    && kubectl_copy_root.task_cookie != kubectl_exec_root.task_cookie
-                    && kubectl_copy_root.task_cookie != kubectl_tty_exec_root.task_cookie,
-                InvalidInputSnafu {
-                    path: &pin_root,
-                    reason: "kubectl cp did not remain a separate restricted external root",
-                }
-            );
-            fs::write(&copy_release_path, b"release\n").context(IoSnafu {
-                path: &copy_release_path,
-            })?;
-            let copy_status = kubectl_copy
-                .as_mut()
-                .ok_or_else(|| invalid_state("kubectl cp process is missing"))?
-                .wait()
-                .context(IoSnafu {
-                    path: Path::new("kubectl cp"),
-                })?;
-            ensure!(
-                copy_status.success(),
-                InvalidInputSnafu {
-                    path: Path::new("kubectl cp"),
-                    reason: format!("kubectl cp exited with {copy_status}"),
-                }
-            );
-            kubectl_copy = None;
-            let copied = fs::read(&copy_destination_path).context(IoSnafu {
-                path: &copy_destination_path,
-            })?;
-            ensure!(
-                copied == COPY_PAYLOAD,
-                InvalidInputSnafu {
-                    path: &copy_destination_path,
-                    reason: "kubectl cp did not copy the exact fixture bytes",
-                }
-            );
-            fs::remove_file(&copy_release_path).context(IoSnafu {
-                path: &copy_release_path,
-            })?;
-            fs::remove_file(&copy_marker_path).context(IoSnafu {
-                path: &copy_marker_path,
-            })?;
-
             native_child_exec = Some(
                 Command::new("/usr/local/bin/k3s")
                     .args([
@@ -1513,21 +1189,9 @@ impl IdentityTestRunner {
             })?;
             fs::remove_file(&marker_path).context(IoSnafu { path: &marker_path })?;
 
-            Ok((
-                initial_root,
-                direct_cri_exec_root,
-                kubectl_exec_root,
-                kubectl_tty_exec_root,
-                kubectl_copy_root,
-                native_child_parent,
-                native_child_control,
-            ))
+            Ok((initial_root, native_child_parent, native_child_control))
         })();
 
-        Self::stop_fixture_process(&mut direct_cri_exec);
-        Self::stop_fixture_process(&mut kubectl_exec);
-        Self::stop_fixture_process(&mut kubectl_tty_exec);
-        Self::stop_fixture_process(&mut kubectl_copy);
         Self::stop_fixture_process(&mut native_child_exec);
         let host_cleanup = if let Some(host) = host.take() {
             host.shutdown().context(InterceptorSnafu)
@@ -1574,20 +1238,8 @@ impl IdentityTestRunner {
                 reason: "the Kubernetes identity fixture left a namespace, Mithril pin, lease, or fixture directory",
             }
         );
-        let (
-            initial_root,
-            direct_cri_exec_root,
-            kubectl_exec_root,
-            kubectl_tty_exec_root,
-            kubectl_copy_root,
-            native_child_parent,
-            native_child_control,
-        ) = probe?;
+        let (initial_root, native_child_parent, native_child_control) = probe?;
         bundle.kubernetes_initial_root = Some(initial_root);
-        bundle.kubernetes_direct_cri_exec_root = Some(direct_cri_exec_root);
-        bundle.kubernetes_kubectl_exec_root = Some(kubectl_exec_root);
-        bundle.kubernetes_kubectl_tty_exec_root = Some(kubectl_tty_exec_root);
-        bundle.kubernetes_kubectl_copy_root = Some(kubectl_copy_root);
         bundle.kubernetes_native_child_parent = Some(native_child_parent);
         bundle.kubernetes_native_child_control = Some(native_child_control);
         Ok(())

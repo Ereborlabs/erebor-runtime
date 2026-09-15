@@ -1500,7 +1500,7 @@ setup, production actions, assertions, and focused test.
     `restored_or_unknown_root` and `fail_closed_unknown` result. Do not treat
     `recovery_tasks` as a replacement unless it reproduces this physical
     condition and result through the standard platform path.
-  - [ ] Replace the successful runtime-entry classifications with
+  - [x] Replace the successful runtime-entry classifications with
     `runtime_entries::runtime_entries_stay_distinct` on Host, direct `runc`,
     and Kubernetes. Use only `add_actor` for process entry.
     - [x] Install one policy that declares Python, Bash, cat, wc, and cp as
@@ -1516,8 +1516,8 @@ setup, production actions, assertions, and focused test.
       The first Kubernetes run found a transient `runc` helper in the actor
       cgroup. `group_wait_skips_runtime_helper` reproduced the condition in the
       lightweight fixture test before the shared readiness wait was corrected.
-    - [ ] Remove the matching direct-CRI, ordinary exec, TTY exec, and copy
-      classification blocks now that all three cases pass.
+    - [x] Remove the matching direct-CRI, ordinary exec, TTY exec, and copy
+      classification blocks and their obsolete compatibility fields.
   - [ ] Replace the native-child case. Preserve the restricted creator-free
     parent, the child's creator and real-parent cookies, inherited role, and
     absent child root and installed-role classifications.
