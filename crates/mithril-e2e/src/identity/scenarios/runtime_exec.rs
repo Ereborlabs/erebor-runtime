@@ -6,7 +6,7 @@ fn unlisted_exec_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("runtime-exec")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy()?;
+    env.install_policy("runtime_exec_denied/policy.json")?;
     env.node_ready()?;
     let mut init = env.start_actor("runtime_exec.py", &[])?;
 

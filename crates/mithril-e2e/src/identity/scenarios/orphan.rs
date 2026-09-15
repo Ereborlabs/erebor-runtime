@@ -29,7 +29,7 @@ fn orphan_keeps_identity<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("orphan")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy()?;
+    env.install_policy("orphan/policy.json")?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
     let mut actor = env.add_actor("python", &["/fixtures/native_orphan.py", "/work"])?;

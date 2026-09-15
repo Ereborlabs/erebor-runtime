@@ -8,7 +8,7 @@ fn concurrent_roots_stay_distinct<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("concurrent-roots")?;
     env.start_control()?;
     let mut init = env.start_actor("external_roots.py", &[])?;
-    env.install_policy()?;
+    env.install_policy("external_roots/policy.json")?;
     env.start_node()?;
     env.sync_policy()?;
     env.node_ready()?;

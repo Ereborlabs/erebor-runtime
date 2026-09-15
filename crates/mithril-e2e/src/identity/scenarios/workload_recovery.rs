@@ -14,7 +14,7 @@ fn workload_recovers<P: Platform>() -> TestResult<()> {
     let pid = actor.id();
     env.place(pid)?;
 
-    env.install_policy()?;
+    env.install_policy("workload_recovery/policy.json")?;
     env.start_node()?;
     env.sync_policy()?;
     env.node_ready()?;

@@ -33,7 +33,7 @@ use snafu::ResultExt as _;
 use zerocopy::TryFromBytes as _;
 
 use super::scope::{current, enter, ScopeGuard};
-use super::{Platform, Task, TestResult, PROCESS_FIXTURES};
+use super::{policy_path, Platform, Task, TestResult, PROCESS_FIXTURES};
 use crate::control_fixture::MtlsFixture;
 use crate::error::{InvalidInputSnafu, IoSnafu, NodeSnafu};
 use crate::physical::{
@@ -101,6 +101,7 @@ pub(crate) struct KubernetesState {
     actor_id: Option<String>,
     actor_pid: Option<u32>,
     actor_cgroup: Option<PathBuf>,
+    policy_name: Option<String>,
 }
 
 impl Deref for Kubernetes {
@@ -621,15 +622,19 @@ impl KubernetesState {
     }
 
     fn wait_policy(&self, active: u32) -> TestResult<()> {
+        let name = self
+            .policy_name
+            .as_deref()
+            .ok_or("the policy is not installed")?;
         let policies =
             Api::<WorkloadProtectionPolicy>::namespaced(self.client.clone(), &self.namespace);
         let last = RefCell::new(String::from("<absent>"));
-        let path = Self::resource(&self.namespace, "workloadprotectionpolicy", "pid-reuse");
+        let path = Self::resource(&self.namespace, "workloadprotectionpolicy", name);
         Ok(wait_for(
             &path,
-            "PID-reuse policy readiness",
+            "policy readiness",
             READY_LIMIT,
-            || match self.runtime.block_on(policies.get("pid-reuse")) {
+            || match self.runtime.block_on(policies.get(name)) {
                 Ok(policy) => {
                     *last.borrow_mut() = format!("{:?}", policy.status);
                     let generation = policy.metadata.generation.unwrap_or_default() as u64;
@@ -810,6 +815,7 @@ impl KubernetesState {
         self.actor_id = None;
         self.actor_pid = None;
         self.actor_cgroup = None;
+        self.policy_name = None;
         self.create_work()
     }
 
@@ -829,6 +835,7 @@ impl KubernetesState {
         self.actor_id = None;
         self.actor_pid = None;
         self.actor_cgroup = None;
+        self.policy_name = None;
         match failed {
             Some(source) => Err(source),
             None => Ok(()),
@@ -1122,6 +1129,7 @@ impl Platform for Kubernetes {
             actor_id: None,
             actor_pid: None,
             actor_cgroup: None,
+            policy_name: None,
         };
         fixture.write_inputs()?;
         fixture.create_work()?;
@@ -1165,13 +1173,16 @@ impl Platform for Kubernetes {
         self.wait_node()
     }
 
-    fn install_policy(&mut self) -> TestResult<()> {
-        let path = self
-            .root
-            .join("crates/mithril-e2e/fixtures/mithril-policy/pid-reuse-policy-v1.json");
+    fn install_policy(&mut self, fixture: &str) -> TestResult<()> {
+        let path = policy_path(&self.root, fixture)?;
         let mut policy: WorkloadProtectionPolicy = serde_json::from_slice(&fs::read(&path)?)?;
+        let name = policy
+            .metadata
+            .name
+            .clone()
+            .ok_or("the policy fixture has no metadata.name")?;
         policy.metadata = ObjectMeta {
-            name: Some("pid-reuse".to_owned()),
+            name: Some(name.clone()),
             namespace: Some(self.namespace.clone()),
             ..ObjectMeta::default()
         };
@@ -1179,29 +1190,25 @@ impl Platform for Kubernetes {
             .spec
             .containers
             .first_mut()
-            .ok_or("the PID-reuse policy has no container")?;
+            .ok_or("the policy has no container")?;
         container.images = vec![self.actor_image.clone()];
-        let role = policy
+        for rule in policy
             .spec
             .roles
             .iter_mut()
-            .find(|role| role.name == "worker")
-            .ok_or("the PID-reuse policy has no worker role")?;
-        for (name, path) in [
-            ("python", &self.actor_python),
-            ("python-actor", &self.actor_entry),
-        ] {
-            let rule = role
-                .execution
-                .iter_mut()
-                .find(|rule| rule.name == name)
-                .ok_or_else(|| format!("the PID-reuse policy has no {name} rule"))?;
-            rule.path.clone_from(path);
+            .flat_map(|role| &mut role.execution)
+        {
+            match rule.path.as_str() {
+                "/usr/bin/python3" => rule.path.clone_from(&self.actor_python),
+                "/work/bin/python" => rule.path.clone_from(&self.actor_entry),
+                _ => {}
+            }
         }
         let policies =
             Api::<WorkloadProtectionPolicy>::namespaced(self.client.clone(), &self.namespace);
         self.runtime
             .block_on(policies.create(&PostParams::default(), &policy))?;
+        self.policy_name = Some(name);
         self.wait_policy(0)
     }
 

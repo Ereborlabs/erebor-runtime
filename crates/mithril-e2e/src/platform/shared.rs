@@ -32,7 +32,7 @@ use tokio::sync::watch;
 use zerocopy::TryFromBytes as _;
 
 use super::scope::{current, enter, ScopeGuard};
-use super::{CriFixture, Task, TestResult};
+use super::{policy_path, CriFixture, Task, TestResult};
 use crate::control_fixture::{ControlServerFixture, MtlsFixture};
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
 use crate::physical::{
@@ -47,6 +47,7 @@ const CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
 const NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
 const POD_UID: &str = "99999999-9999-4999-8999-999999999999";
 const NODE_UID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const POLICY_UID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const ACTOR_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 pub(super) struct SharedState {
@@ -73,7 +74,9 @@ pub(super) struct SharedState {
     control: Option<ControlServerFixture>,
     plane: Option<ControlPlane>,
     policy: Option<PolicyDesiredStateOwner>,
+    policy_generation: i64,
     resource: Option<WorkloadProtectionPolicy>,
+    policy_path: Option<PathBuf>,
     binding: Option<WorkloadBindingConfig>,
     revision: Option<String>,
     cri: Option<CriFixture>,
@@ -132,6 +135,7 @@ impl SharedState {
         self.work = Some(work);
         self.cgroup = Some(ProbeCgroup::create(&self.cgroup_path)?);
         self.resource = None;
+        self.policy_path = None;
         self.binding = None;
         self.revision = None;
         Ok(())
@@ -511,7 +515,9 @@ impl Shared {
             control: None,
             plane: None,
             policy: None,
+            policy_generation: 0,
             resource: None,
+            policy_path: None,
             binding: None,
             revision: None,
             cri: None,
@@ -683,16 +689,23 @@ impl Shared {
         }
     }
 
-    pub(super) fn install_policy(&mut self) -> TestResult<()> {
+    pub(super) fn install_policy(&mut self, name: &str) -> TestResult<()> {
         if self.resource.is_some() {
             return Err("the policy is already installed".into());
         }
-        let path = self
-            .root
-            .join("crates/mithril-e2e/fixtures/mithril-policy/pid-reuse-policy-v1.json");
+        let path = policy_path(&self.root, name)?;
         let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
-        let resource: WorkloadProtectionPolicy =
+        let mut resource: WorkloadProtectionPolicy =
             serde_json::from_slice(&bytes).context(JsonSnafu { path: &path })?;
+        self.policy_generation = self
+            .policy_generation
+            .checked_add(1)
+            .ok_or("the test policy generation overflowed")?;
+        resource.metadata.name = Some("scenario".to_owned());
+        resource.metadata.namespace = Some("default".to_owned());
+        resource.metadata.uid = Some(POLICY_UID.to_owned());
+        resource.metadata.generation = Some(self.policy_generation);
+        resource.metadata.resource_version = Some(self.policy_generation.to_string());
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
         let policy = self
             .policy
@@ -708,6 +721,7 @@ impl Shared {
         );
         self.revision = Some(result.source_revision.policy_source_revision_id);
         self.resource = Some(resource);
+        self.policy_path = Some(path);
         if self.node_task.is_some() {
             self.sync_policy()?;
         }
@@ -753,8 +767,9 @@ impl Shared {
         )?;
 
         let path = self
-            .root
-            .join("crates/mithril-e2e/fixtures/mithril-policy/pid-reuse-policy-v1.json");
+            .policy_path
+            .as_ref()
+            .ok_or("the policy is not installed")?;
         let resource = self
             .resource
             .as_ref()
@@ -826,11 +841,13 @@ impl Shared {
         );
 
         let container_id = ACTOR_ID.to_owned();
-        self.revision = Some(source.policy_source_revision_id);
+        let revision = source.policy_source_revision_id;
+        let digest = target.workload_binding_generation_digest.clone();
+        self.revision = Some(revision.clone());
         self.binding = Some(WorkloadBindingConfig {
             binding_id: ScheduledRuntimeBindingV1::runtime_binding_id(&authority, &container_id),
             scheduled_binding_authority_id: Some(authority),
-            scheduled_target_digest: Some(target.workload_binding_generation_digest),
+            scheduled_target_digest: Some(digest.clone()),
             execution_set_id: target.execution_set_id,
             protected_scope_id: scope_id,
             workload_selector_id: selector_id,
@@ -855,7 +872,39 @@ impl Shared {
             external_role_id: 2,
             arm_initial_root: true,
         });
-        Ok(())
+        self.wait_policy(&revision, &digest)
+    }
+
+    fn wait_policy(&self, revision: &str, digest: &str) -> TestResult<()> {
+        let last = RefCell::new(String::from("<absent>"));
+        Ok(wait_for(
+            &self.state_path,
+            "test policy readiness",
+            READY_LIMIT,
+            || {
+                let status =
+                    mithril_node::policy_delivery_status(&self.state_path).context(NodeSnafu)?;
+                let active = status.active_targets.iter().any(|target| {
+                    target.policy_source_revision_id == revision
+                        && target.workload_binding_generation_digest == digest
+                });
+                let ready = active
+                    && status.active_target_count == 1
+                    && !status.active_targets_truncated
+                    && status.scheduled_binding_count == 1
+                    && status.runtime_binding_count == 0
+                    && !status.activation_pending
+                    && status.control_acknowledged;
+                *last.borrow_mut() = format!("{status:?}");
+                Ok(ready.then_some(()))
+            },
+            || {
+                format!(
+                    "expected revision {revision} and target {digest}; last delivery: {}",
+                    last.borrow()
+                )
+            },
+        )?)
     }
 
     pub(super) fn node_ready(&mut self) -> TestResult<()> {

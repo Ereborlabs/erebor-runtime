@@ -33,6 +33,7 @@ pub(crate) use mithril_e2e_macros::platform_test;
 pub(crate) type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
 const TASK_LIMIT: Duration = Duration::from_secs(30);
 pub(crate) const PROCESS_FIXTURES: &str = "crates/mithril-e2e/fixtures/process";
+const POLICY_FIXTURES: &str = "crates/mithril-e2e/fixtures/mithril-policy";
 
 pub(crate) fn actor_script(root: &Path, name: &str) -> crate::Result<PathBuf> {
     snafu::ensure!(
@@ -48,6 +49,29 @@ pub(crate) fn actor_script(root: &Path, name: &str) -> crate::Result<PathBuf> {
         InvalidInputSnafu {
             path: &path,
             reason: "the actor script is missing",
+        }
+    );
+    Ok(path)
+}
+
+pub(crate) fn policy_path(root: &Path, name: &str) -> crate::Result<PathBuf> {
+    let relative = Path::new(name);
+    snafu::ensure!(
+        !name.is_empty()
+            && relative
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_))),
+        InvalidInputSnafu {
+            path: root,
+            reason: format!("policy must be a relative fixture path: {name:?}"),
+        }
+    );
+    let path = root.join(POLICY_FIXTURES).join(relative);
+    snafu::ensure!(
+        path.is_file(),
+        InvalidInputSnafu {
+            path: &path,
+            reason: "the policy fixture is missing",
         }
     );
     Ok(path)
@@ -78,7 +102,7 @@ pub(crate) trait Platform: Sized {
     fn start_node(&mut self) -> TestResult<()> {
         pending("start Node")
     }
-    fn install_policy(&mut self) -> TestResult<()> {
+    fn install_policy(&mut self, _name: &str) -> TestResult<()> {
         pending("install policy")
     }
     fn sync_policy(&mut self) -> TestResult<()> {

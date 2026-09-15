@@ -16,7 +16,7 @@ fn unmoved_first_open_allowed<P: Platform>() -> TestResult<()> {
     let path = Path::new("/etc/hostname");
     env.start_control()?;
     env.start_node()?;
-    env.install_policy()?;
+    env.install_policy("cgroup_open_control/policy.json")?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
     let group = env.actor_group()?.to_owned();
@@ -57,7 +57,7 @@ fn child_first_open_allowed<P: Platform>() -> TestResult<()> {
     let path = Path::new("/etc/hostname");
     env.start_control()?;
     env.start_node()?;
-    env.install_policy()?;
+    env.install_policy("cgroup_child_open/policy.json")?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
     let group = env.actor_group()?.to_owned();
@@ -128,7 +128,7 @@ fn moved_first_open_denied<P: Platform>() -> TestResult<()> {
     let path = Path::new("/etc/hostname");
     env.start_control()?;
     env.start_node()?;
-    env.install_policy()?;
+    env.install_policy("cgroup_moved_open/policy.json")?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
     let group = env.actor_group()?.to_owned();
@@ -189,7 +189,7 @@ fn moved_root_stops<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("cgroup-stop")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy()?;
+    env.install_policy("cgroup_moved_stop/policy.json")?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
     let group = env.actor_group()?.to_owned();
@@ -214,7 +214,7 @@ fn moved_parent_fork_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("cgroup-fork")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy()?;
+    env.install_policy("cgroup_parent_fork/policy.json")?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
     let group = env.actor_group()?.to_owned();

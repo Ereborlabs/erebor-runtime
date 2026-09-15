@@ -64,6 +64,10 @@ These rules control every checkmark and commit in this file.
   installs or omits the applicable rule and asserts the production result. Do
   not add role-specific process methods.
 - Ask the actor to perform one action. Assert the expected production result.
+- Give each test a separate fixture directory with its own `policy.json`.
+  Include only the rules required for that behavior. Pass the relative policy
+  path to `install_policy`. A platform must not select a default policy or add
+  scenario-specific policy rules.
 - Keep component start, stop, outage, and restart order visible in the test.
 - Test each supported component order in a separate function. Do not make a
   Node-first admission test pass by starting its actor before Node. Do not

@@ -171,8 +171,8 @@ impl Platform for Runc {
         self.shared.start_node()
     }
 
-    fn install_policy(&mut self) -> TestResult<()> {
-        self.shared.install_policy()
+    fn install_policy(&mut self, name: &str) -> TestResult<()> {
+        self.shared.install_policy(name)
     }
 
     fn sync_policy(&mut self) -> TestResult<()> {
