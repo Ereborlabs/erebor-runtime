@@ -98,7 +98,7 @@ impl<T> Scope<T> {
             state: self
                 .state
                 .lock()
-                .map_err(|_source| "the platform test scope is poisoned")?,
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
         })
     }
 
@@ -106,7 +106,7 @@ impl<T> Scope<T> {
         let mut state = self
             .state
             .lock()
-            .map_err(|_source| "the platform test scope is poisoned")?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(mut state) = state.take() {
             (self.close)(&mut state)?;
         }
@@ -176,5 +176,39 @@ extern "C" fn cleanup() {
         unsafe {
             libc::_exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::*;
+
+    static CLOSED: AtomicBool = AtomicBool::new(false);
+
+    fn close_flag(value: &mut bool) -> TestResult<()> {
+        CLOSED.store(*value, Ordering::SeqCst);
+        Ok(())
+    }
+
+    #[test]
+    #[allow(clippy::panic)]
+    fn poisoned_scope_still_closes() -> TestResult<()> {
+        CLOSED.store(false, Ordering::SeqCst);
+        let scope = Box::leak(Box::new(Scope::new(close_flag)));
+        let panic = catch_unwind(AssertUnwindSafe(|| {
+            let Ok(mut guard) = scope.enter() else {
+                return;
+            };
+            guard.put(true);
+            panic!("test assertion");
+        }));
+
+        assert!(panic.is_err());
+        scope.close()?;
+        assert!(CLOSED.load(Ordering::SeqCst));
+        Ok(())
     }
 }

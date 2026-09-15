@@ -53,6 +53,7 @@ pub(super) struct SharedState {
     scope_name: &'static str,
     root: PathBuf,
     out: PathBuf,
+    out_dir: Option<ProbeDirectory>,
     work_path: PathBuf,
     state_path: PathBuf,
     cgroup_path: PathBuf,
@@ -390,6 +391,9 @@ impl SharedState {
         if let Some(lease) = self.lease.take() {
             lease.cleanup()?;
         }
+        if let Some(out) = self.out_dir.take() {
+            out.cleanup()?;
+        }
         Ok(())
     }
 
@@ -466,14 +470,7 @@ impl Shared {
         let cri_path = out.join("cri.sock");
         let admit_dir = out.join("admission");
         let admit_path = admit_dir.join("runtime.sock");
-        ensure!(
-            !out.exists() || out.is_dir(),
-            InvalidInputSnafu {
-                path: &out,
-                reason: "the scenario output path is not a directory",
-            }
-        );
-        fs::create_dir_all(&out).context(IoSnafu { path: &out })?;
+        let out_dir = ProbeDirectory::create(&out)?;
         let work_path = out.join("actor");
         let state_path = out.join("node");
         let work = ProbeDirectory::create(&work_path)?;
@@ -494,6 +491,7 @@ impl Shared {
             scope_name: name,
             root,
             out,
+            out_dir: Some(out_dir),
             work_path,
             state_path,
             cgroup_path,

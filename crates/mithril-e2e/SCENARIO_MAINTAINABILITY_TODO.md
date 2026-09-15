@@ -183,6 +183,9 @@ reimplement a production owner operation.
 - Make scope cleanup reliable and observable. A cleanup failure must fail the
   test invocation and retain component logs, last readiness state, owned paths,
   and actor diagnostics.
+- [x] Recover a named scope after a scenario assertion panics. The focused
+  mutex-poison regression passed. A failing Host runtime-entry assertion then
+  removed its output directory, pin, lease, actor cgroup, and Node cgroup.
 - Do not add a test registry, custom test language, replacement harness,
   builder, factory, or scenario-specific scope implementation. The attribute
   can generate only the standard test wrapper and select the common scope.
@@ -1491,6 +1494,15 @@ setup, production actions, assertions, and focused test.
   - [ ] Replace direct CRI exec. Preserve successful execution, a creator-free
     `external_runtime_root`, the `runtime_external_restricted` role, and the
     binding external-role ID.
+    - [ ] Add one `runtime_exec::external_exec_is_restricted` test for Host,
+      direct `runc`, and Kubernetes. Use `add_actor` and the same Python actor
+      in each environment.
+    - [ ] Run the unchanged Host test first. Use its failure as the required
+      reproduction before an implementation change.
+      The Host test now reaches its production identity assertion. The signed
+      declared `python-external` entry executes, but its installed role is
+      `qualified_registered_role`. The required result is
+      `runtime_external_restricted`. No production change has been made.
   - [ ] Replace ordinary `kubectl exec`. Preserve the same restricted result
     and a task cookie distinct from the direct CRI exec.
   - [ ] Replace TTY `kubectl exec`. Preserve the same restricted result and a
