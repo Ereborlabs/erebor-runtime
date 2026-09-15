@@ -177,6 +177,10 @@ reimplement a production owner operation.
   scopes overlap on the same kernel or Kubernetes node.
 - Keep exact single-test invocation valid. It must start the required scope,
   run the unchanged scenario, and perform bounded cleanup.
+- [ ] Keep tests in one named scope contiguous in the standard Rust harness.
+  Put fresh-Node recovery modules after the shared `identity` group. Do not
+  change scenario bodies or use a custom runner. The 2026-09-15 Kubernetes
+  baseline reopened the `identity` scope four times and took 1,451.24 seconds.
 - [x] Prove serial named-scope reuse with a focused fixture test. Start real
   Control and Node, stop one test fixture, enter the same scope again, and
   require the same Node pin owner. The complete Host lane passed 27 tests in
