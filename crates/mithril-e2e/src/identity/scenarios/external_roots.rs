@@ -25,8 +25,21 @@ fn concurrent_roots_stay_distinct<P: Platform>() -> TestResult<()> {
     assert_eq!(two.snapshot.creator_task_cookie, None);
     assert!(one.snapshot.admitted_entry_rule_id > 0);
     assert!(two.snapshot.admitted_entry_rule_id > 0);
+    assert_ne!(one.pid, two.pid);
     assert_ne!(one.snapshot.task_cookie, two.snapshot.task_cookie);
     assert_ne!(one.snapshot.process_state_id, two.snapshot.process_state_id);
+    assert_ne!(
+        one.snapshot.active_execution_id,
+        two.snapshot.active_execution_id
+    );
+    assert_eq!(
+        one.snapshot.profile_generation_ref_id,
+        two.snapshot.profile_generation_ref_id
+    );
+    assert_eq!(
+        one.snapshot.admitted_entry_rule_id,
+        two.snapshot.admitted_entry_rule_id
+    );
     assert_eq!(
         one.snapshot.root_class.as_deref(),
         Some("external_runtime_root")

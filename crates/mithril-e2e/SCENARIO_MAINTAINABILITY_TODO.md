@@ -1440,8 +1440,19 @@ setup, production actions, assertions, and focused test.
   as `two-node-convergence.sh`.
 - [ ] Stale cache repair and unreachable-row retirement: keep the production
   node reconciliation calls and exact map absence checks visible.
-- [ ] Independent additional entries and reusable PostStart entry: keep each
-  declaration, stock exec, role, rule, process state, and isolation assertion.
+- [ ] Independent additional entries: keep each declaration, stock exec,
+  role, rule, process state, and isolation assertion.
+- [ ] Reusable PostStart entry: use the existing
+  `external_roots::concurrent_roots_stay_distinct` standard test. Start the
+  same signed PostStart entry twice. Require different host PIDs, task
+  cookies, process-state IDs, and execution IDs. Require the same active role,
+  policy generation, and admitted entry rule.
+  - [x] The exact Host case passed in 41.80 seconds. The complete privileged
+    Host lane passed 28 tests in 826.25 seconds on 2026-09-15.
+  - [ ] Pass the exact direct-`runc` case and its complete privileged lane.
+  - [ ] Pass the exact Kubernetes case and its complete privileged lane.
+  - [ ] Remove the matching legacy invocation only when its compatibility
+    command and result field can be removed. Do not hardcode a passing result.
 - [ ] Declared probe mismatch and runtime infrastructure effects: keep exact
   argv, role-zero, and denial evidence checks.
 - [ ] Live policy replacement: keep delivery, acknowledgement, guarded process
