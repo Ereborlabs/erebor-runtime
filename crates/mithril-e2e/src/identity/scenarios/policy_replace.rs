@@ -1,6 +1,4 @@
-use std::cell::RefCell;
-use std::collections::BTreeSet;
-use std::time::Duration;
+use std::{cell::Cell, collections::BTreeSet, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
 
@@ -17,45 +15,37 @@ fn running_task_uses_new_policy<P: Platform>() -> TestResult<()> {
     env.start_node()?;
     env.install_policy("actor_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("native_recovery.py", &[])?;
+    let mut actor = env.start_actor("policy_replace.py", &[])?;
     let root = env.task(actor.id(), "initial policy identity")?;
-    let old = root.snapshot.profile_generation_ref_id;
+    let snap = &root.snapshot;
+    let old = snap.profile_generation_ref_id;
     let refs = LifetimeState::profile_refs(&env, &root)?;
+
+    env.install_policy("policy_replace_policy.json")?;
+    env.node_ready()?;
+    let held = env.task(actor.id(), "retained policy identity")?.snapshot;
+    assert_eq!(held.task_cookie, snap.task_cookie);
+    assert_eq!(held.active_role_id, snap.active_role_id);
+    assert_eq!(held.admitted_entry_rule_id, snap.admitted_entry_rule_id);
+    assert_eq!(held.profile_generation_ref_id, old);
+    assert_eq!(LifetimeState::profile_refs(&env, &root)?, refs);
+
+    let mut entry = env.add_actor("python", &["/fixtures/ready.py"])?;
+    let next = env.task(entry.id(), "replacement policy entry")?.snapshot;
+    assert!(next.profile_generation_ref_id > old);
+    assert_eq!(next.active_role_id, snap.active_role_id);
+    assert_ne!(next.admitted_entry_rule_id, 0);
     let seen = env
         .snapshot()?
         .recent_effects
         .into_iter()
         .map(|event| (event.source_cpu_id, event.source_sequence))
         .collect::<BTreeSet<_>>();
-
-    env.install_policy("actor_sleep_policy.json")?;
-    env.node_ready()?;
-    let held = env.task(actor.id(), "retained policy identity")?;
-    assert_eq!(held.snapshot.task_cookie, root.snapshot.task_cookie);
-    assert_eq!(held.snapshot.active_role_id, root.snapshot.active_role_id);
-    assert_eq!(
-        held.snapshot.admitted_entry_rule_id,
-        root.snapshot.admitted_entry_rule_id
-    );
-    assert_eq!(held.snapshot.profile_generation_ref_id, old);
-    assert_eq!(LifetimeState::profile_refs(&env, &root)?, refs);
-
-    let mut entry = env.add_actor("python", &["/fixtures/ready.py"])?;
-    let next = env.task(entry.id(), "replacement policy entry")?;
-    assert!(next.snapshot.profile_generation_ref_id > old);
-    assert_eq!(next.snapshot.active_role_id, root.snapshot.active_role_id);
-    assert_ne!(next.snapshot.admitted_entry_rule_id, 0);
     actor.send(b"effect\n")?;
-    assert_eq!(
-        env.actor_code(&mut actor, "replacement effect", Duration::from_secs(5))?,
-        1
-    );
 
-    let exec = u32::from(KernelEffectFamilyV1::Exec as u16);
-    let op = u32::from(KernelEffectOperationV1::Execute as u16);
     let path = env.maps().0.to_owned();
-    let last = RefCell::new(String::from("<none>"));
-    let event = wait_for(
+    let state = Cell::new((false, false));
+    wait_for(
         &path,
         "replacement effect evidence",
         Duration::from_secs(30),
@@ -70,24 +60,36 @@ fn running_task_uses_new_policy<P: Platform>() -> TestResult<()> {
                     .build()
                 })?
                 .recent_effects;
-            *last.borrow_mut() = format!("{:?}", events.iter().rev().take(16).collect::<Vec<_>>());
-            Ok(events.into_iter().find(|event| {
-                !seen.contains(&(event.source_cpu_id, event.source_sequence))
-                    && event.reason == "APPLICATION_DEFAULT_ALLOW"
-                    && event.effect_family == exec
-                    && event.operation == op
-                    && event.profile_generation_ref_id > old
-                    && event.task_cookie != root.snapshot.task_cookie
-                    && event.active_role_id == root.snapshot.active_role_id
-                    && event.admitted_entry_rule_id == root.snapshot.admitted_entry_rule_id
-            }))
+            let events = events
+                .into_iter()
+                .filter(|event| !seen.contains(&(event.source_cpu_id, event.source_sequence)))
+                .collect::<Vec<_>>();
+            let denied = events.iter().any(|event| {
+                event.reason == "EXACT_POLICY_DENY"
+                    && event.effect_family == u32::from(KernelEffectFamilyV1::File as u16)
+                    && event.operation == u32::from(KernelEffectOperationV1::OpenRead as u16)
+                    && event.kernel_result == -libc::EACCES
+                    && event.profile_generation_ref_id == next.profile_generation_ref_id
+                    && event.task_cookie == snap.task_cookie
+                    && event.active_role_id == snap.active_role_id
+                    && event.admitted_entry_rule_id == snap.admitted_entry_rule_id
+            });
+            let child = events.iter().any(|event| {
+                event.reason == "APPLICATION_DEFAULT_ALLOW"
+                    && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
+                    && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
+                    && event.profile_generation_ref_id == next.profile_generation_ref_id
+                    && event.task_cookie != snap.task_cookie
+                    && event.active_role_id == snap.active_role_id
+                    && event.admitted_entry_rule_id == snap.admitted_entry_rule_id
+            });
+            actor.ensure_running("replacement effect")?;
+            state.set((denied, child));
+            Ok((denied && child).then_some(()))
         },
-        || format!("last effects: {}", last.borrow()),
+        || format!("denied={}, child={}", state.get().0, state.get().1),
     )?;
-    assert_eq!(
-        event.profile_generation_ref_id,
-        next.snapshot.profile_generation_ref_id
-    );
+    actor.ensure_running("replacement denial and child exec")?;
 
     entry.stop()?;
     actor.stop()?;

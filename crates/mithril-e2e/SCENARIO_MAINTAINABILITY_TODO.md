@@ -1504,13 +1504,17 @@ setup, production actions, assertions, and focused test.
     Kubernetes case until its complete scenario has a verified replacement.
 - [ ] Live policy replacement: keep delivery, acknowledgement, guarded process
   migration, later exec, and old-generation holder checks explicit.
-  - [x] Add one 95-line standard platform test. Reuse the policy and actor
-    fixtures. Use the existing `install_policy` operation for the update.
+  - [x] Add one 97-line standard platform test. Use one shared actor and the
+    existing `install_policy` operation for the update.
+  - [x] Read `/fixtures/policy_replace.py` before actor readiness under the
+    first policy. Deny the same read in the second policy. Require `EACCES`,
+    the replacement generation, the retained task identity, and a descendant
+    exec in the replacement generation.
   - [x] Reproduce the Kubernetes no-op update in lightweight. An identical
     policy specification must not create a new policy generation. Use the
     existing actor and actor-sleep policies as a real specification update.
   - [x] Pass Host and its complete lifecycle. The exact Host case passed in
-    40.95 seconds. The complete Host lifecycle passed 23 tests in 280.83
+    43.77 seconds. The complete Host lifecycle passed 23 tests in 275.40
     seconds on 2026-09-16.
   - [ ] Pass direct `runc` and its complete lifecycle with the corrected policy
     update.
