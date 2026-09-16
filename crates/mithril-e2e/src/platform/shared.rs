@@ -701,6 +701,13 @@ impl Shared {
         let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
         let mut resource: WorkloadProtectionPolicy =
             serde_json::from_slice(&bytes).context(JsonSnafu { path: &path })?;
+        if self
+            .resource
+            .as_ref()
+            .is_some_and(|current| current.spec == resource.spec)
+        {
+            return Ok(());
+        }
         self.policy_generation = self
             .policy_generation
             .checked_add(1)

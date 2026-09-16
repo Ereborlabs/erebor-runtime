@@ -9,13 +9,13 @@ use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host)]
 #[lifecycle = identity]
 fn running_task_uses_new_policy<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("policy-replace")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("runtime_entries_policy.json")?;
+    env.install_policy("actor_policy.json")?;
     env.node_ready()?;
     let mut actor = env.start_actor("native_recovery.py", &[])?;
     let root = env.task(actor.id(), "initial policy identity")?;
@@ -28,7 +28,7 @@ fn running_task_uses_new_policy<P: Platform>() -> TestResult<()> {
         .map(|event| (event.source_cpu_id, event.source_sequence))
         .collect::<BTreeSet<_>>();
 
-    env.install_policy("runtime_entries_policy.json")?;
+    env.install_policy("actor_sleep_policy.json")?;
     env.node_ready()?;
     let held = env.task(actor.id(), "retained policy identity")?;
     assert_eq!(held.snapshot.task_cookie, root.snapshot.task_cookie);
@@ -40,9 +40,11 @@ fn running_task_uses_new_policy<P: Platform>() -> TestResult<()> {
     assert_eq!(held.snapshot.profile_generation_ref_id, old);
     assert_eq!(LifetimeState::profile_refs(&env, &root)?, refs);
 
-    let mut entry = env.add_actor("cat", &[])?;
+    let mut entry = env.add_actor("python", &["/fixtures/ready.py"])?;
     let next = env.task(entry.id(), "replacement policy entry")?;
     assert!(next.snapshot.profile_generation_ref_id > old);
+    assert_eq!(next.snapshot.active_role_id, root.snapshot.active_role_id);
+    assert_ne!(next.snapshot.admitted_entry_rule_id, 0);
     actor.send(b"effect\n")?;
     assert_eq!(
         env.actor_code(&mut actor, "replacement effect", Duration::from_secs(5))?,

@@ -1504,14 +1504,16 @@ setup, production actions, assertions, and focused test.
     Kubernetes case until its complete scenario has a verified replacement.
 - [ ] Live policy replacement: keep delivery, acknowledgement, guarded process
   migration, later exec, and old-generation holder checks explicit.
-  - [x] Add one 93-line standard platform test. Reuse the policy and actor
+  - [x] Add one 95-line standard platform test. Reuse the policy and actor
     fixtures. Use the existing `install_policy` operation for the update.
+  - [x] Reproduce the Kubernetes no-op update in lightweight. An identical
+    policy specification must not create a new policy generation. Use the
+    existing actor and actor-sleep policies as a real specification update.
   - [x] Pass Host and its complete lifecycle. The exact Host case passed in
-    39.08 seconds. The complete Host lifecycle passed 23 tests in 254.58
+    40.95 seconds. The complete Host lifecycle passed 23 tests in 280.83
     seconds on 2026-09-16.
-  - [x] Pass direct `runc` and its complete lifecycle. The exact `runc` case
-    passed in 46.81 seconds. The complete `runc` lifecycle passed 18 tests in
-    228.04 seconds on 2026-09-16.
+  - [ ] Pass direct `runc` and its complete lifecycle with the corrected policy
+    update.
   - [ ] Pass Kubernetes and its complete lifecycle.
   - [ ] Remove the matching legacy block and compatibility fields only after
     all three platform cases pass.
