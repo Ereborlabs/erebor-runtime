@@ -165,9 +165,7 @@ pub(crate) trait Platform: Sized {
     fn recovered(&mut self, _pid: u32, _name: &str) -> TestResult<Task> {
         pending("wait for recovered task")
     }
-    fn snapshot(&self) -> TestResult<MithrilObservationSnapshot> {
-        pending("read observation snapshot")
-    }
+    fn snapshot(&self) -> TestResult<MithrilObservationSnapshot>;
     fn actor_code(
         &mut self,
         actor: &mut crate::process::ProcessFixture,

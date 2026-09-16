@@ -27,6 +27,11 @@
     "maximum_reader_queue_records": 262144,
     "capacity_policy": "BLOCK"
   },
+  "runtime_observation": {
+    "socket_path": "MITHRIL_TEST_OBSERVATION_PATH",
+    "allowed_uid": 0,
+    "cgroup_scope": "/"
+  },
   "runtime_admission": {
     "socket_path": "MITHRIL_TEST_SOCKET_PATH",
     "trusted_start_hook_path": "/host-hook-bin/mithril-oci-hook",

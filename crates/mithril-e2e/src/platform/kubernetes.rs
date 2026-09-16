@@ -9,6 +9,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{TaskCoordinateStateV1, TaskCoordinateV1};
+use erebor_runtime_client::MithrilObservationClient;
+use erebor_runtime_ipc::v1::MithrilObservationSnapshot;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment};
 use k8s_openapi::api::core::v1::{
     Lifecycle, LifecycleHandler, Namespace, Node, PersistentVolumeClaim, Pod, Secret,
@@ -63,6 +65,7 @@ pub(crate) struct KubernetesState {
     pin_path: PathBuf,
     lease_path: PathBuf,
     socket_path: PathBuf,
+    observation_path: PathBuf,
     seccomp_path: PathBuf,
     kube_path: PathBuf,
     helm_path: PathBuf,
@@ -91,6 +94,7 @@ pub(crate) struct KubernetesState {
     pin: Option<ProbeDirectory>,
     lease: Option<ProbeFile>,
     socket: Option<ProbeFile>,
+    observation: Option<ProbeFile>,
     seccomp: Option<ProbeFile>,
     move_group: Option<ProbeCgroup>,
     system_up: bool,
@@ -437,6 +441,10 @@ impl KubernetesState {
             (
                 "/runtime_admission/socket_path",
                 Value::String(self.socket_path.display().to_string()),
+            ),
+            (
+                "/runtime_observation/socket_path",
+                Value::String(self.observation_path.display().to_string()),
             ),
         ] {
             Self::set(&mut node, path, value)?;
@@ -805,10 +813,11 @@ impl KubernetesState {
         Ok(actor)
     }
 
-    fn reset(&mut self) -> TestResult<()> {
+    fn reset(&mut self, name: &str) -> TestResult<()> {
         if self.work_up || self.work.is_some() || self.move_group.is_some() {
             return Err("the previous Kubernetes scenario is not clean".into());
         }
+        self.namespace = format!("mithril-work-{name}-{}", self.token);
         self.work = Some(ProbeDirectory::create(&self.work_path)?);
         self.post_sleep = None;
         self.actor_id = None;
@@ -822,6 +831,29 @@ impl KubernetesState {
         let mut failed = None;
         if self.work_up {
             Self::retain(&mut failed, self.delete_ns(&self.namespace));
+            if self.hook_up {
+                let last = RefCell::new(String::from("<absent>"));
+                Self::retain(
+                    &mut failed,
+                    wait_for(
+                        &self.state_path,
+                        "scenario retirement",
+                        READY_LIMIT,
+                        || {
+                            let status = mithril_node::policy_delivery_status(&self.state_path)
+                                .context(NodeSnafu)?;
+                            *last.borrow_mut() = format!("{status:?}");
+                            Ok((status.active_target_count == 0
+                                && status.scheduled_binding_count == 0
+                                && status.runtime_binding_count == 0
+                                && !status.activation_pending)
+                                .then_some(()))
+                        },
+                        || format!("last policy delivery: {}", last.borrow()),
+                    )
+                    .map_err(Into::into),
+                );
+            }
             self.work_up = false;
         }
         if let Some(group) = self.move_group.take() {
@@ -919,6 +951,9 @@ impl KubernetesState {
         if let Some(socket) = self.socket.take() {
             Self::retain(&mut failed, socket.cleanup().map_err(Into::into));
         }
+        if let Some(observation) = self.observation.take() {
+            Self::retain(&mut failed, observation.cleanup().map_err(Into::into));
+        }
         if let Some(seccomp) = self.seccomp.take() {
             Self::retain(&mut failed, seccomp.cleanup().map_err(Into::into));
         }
@@ -956,7 +991,7 @@ impl Platform for Kubernetes {
             let state = lifecycle
                 .get_mut()
                 .ok_or("the Kubernetes lifecycle is empty")?;
-            state.reset()?;
+            state.reset(name)?;
             return Ok(Self {
                 lifecycle: Some(lifecycle),
             });
@@ -992,12 +1027,19 @@ impl Platform for Kubernetes {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.subsec_nanos();
         let token = format!("{}-{stamp}", std::process::id());
         let system = format!("mithril-pid-{token}");
-        let namespace = format!("mithril-work-{token}");
+        let namespace = format!("mithril-work-{name}-{token}");
         let pin_path = PathBuf::from(format!("/sys/fs/bpf/mithril-pid-{token}"));
         let lease_path = PathBuf::from(format!("/run/erebor-interceptor/mithril-pid-{token}.lock"));
         let socket_path = PathBuf::from(format!("/run/mithril/mithril-pid-{token}.sock"));
+        let observation_path = socket_path.with_extension("observation.sock");
         let seccomp_path = socket_path.with_extension("seccomp.sock");
-        for path in [&pin_path, &lease_path, &socket_path, &seccomp_path] {
+        for path in [
+            &pin_path,
+            &lease_path,
+            &socket_path,
+            &observation_path,
+            &seccomp_path,
+        ] {
             if path.exists() {
                 return Err(
                     format!("the Kubernetes fixture path exists: {}", path.display()).into(),
@@ -1007,6 +1049,7 @@ impl Platform for Kubernetes {
         let pin = ProbeDirectory::new(&pin_path);
         let lease = ProbeFile::new(&lease_path);
         let socket = ProbeFile::new(&socket_path);
+        let observation = ProbeFile::new(&observation_path);
         let seccomp = ProbeFile::new(&seccomp_path);
         let kube_path =
             KubernetesState::path("MITHRIL_TEST_KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")?;
@@ -1087,6 +1130,7 @@ impl Platform for Kubernetes {
             pin_path,
             lease_path,
             socket_path,
+            observation_path,
             seccomp_path,
             kube_path,
             helm_path,
@@ -1115,6 +1159,7 @@ impl Platform for Kubernetes {
             pin: Some(pin),
             lease: Some(lease),
             socket: Some(socket),
+            observation: Some(observation),
             seccomp: Some(seccomp),
             move_group: None,
             system_up: false,
@@ -1638,6 +1683,14 @@ impl Platform for Kubernetes {
             || format!("PID {pid}; last identity: {}", last.borrow()),
         ))?;
         self.task_from(pid, snapshot)
+    }
+
+    fn snapshot(&self) -> TestResult<MithrilObservationSnapshot> {
+        let client = MithrilObservationClient::new(self.observation_path.clone(), "/".to_owned());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        Ok(runtime.block_on(client.snapshot())?)
     }
 
     fn actor_code(

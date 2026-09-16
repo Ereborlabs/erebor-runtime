@@ -183,16 +183,15 @@ reimplement a production owner operation.
   found 69 physical cases with suffixes such as `identity_host`,
   `identity_runc`, and `identity_kubernetes` on 2026-09-15.
 - [x] Prove one filtered Host lifecycle. The `identity_host` process passed
-  21 tests in 218.09 seconds and initialized Node once on 2026-09-16.
+  22 tests in 235.08 seconds and initialized Node once on 2026-09-16.
   A control that used a new process for each exact test passed the first test
   in 37.17 seconds. Its second Node start timed out after 31.17 seconds. The
   grouped run removes this repeated and unreliable Node startup.
 - [x] Prove the filtered direct-`runc` lifecycle. The `identity_runc` process
-  passed 16 tests in 343.52 seconds on 2026-09-16.
-- [ ] Prove the filtered Kubernetes lifecycle. The current
-  `identity_kubernetes` process passed 7 of 17 tests in 469.71 seconds. Ten
-  `add_actor` allow-path tests failed with `EACCES`. Keep this gate open until
-  the shared production operation passes without platform path resolution.
+  passed 17 tests in 222.98 seconds on 2026-09-16.
+- [x] Prove the filtered Kubernetes lifecycle. The `identity_kubernetes`
+  process passed 18 tests in 455.40 seconds on 2026-09-16. It retained one
+  Control Deployment and one Node DaemonSet.
 - [x] Prove serial same-lifecycle reuse with a focused physical test. Start
   real Control and Node, stop one test fixture, enter the lifecycle again, and
   require the same Node pin owner.
@@ -632,13 +631,17 @@ count as maintainability migrations.
   - The complete Host lane passed 25 tests in 720.23 seconds on 2026-09-14.
   - The filtered `identity_host` lifecycle passed 21 tests in 218.09 seconds
     with one Node initialization on 2026-09-16.
+  - The current filtered lifecycle passed 22 tests in 235.08 seconds on
+    2026-09-16.
 - [x] Share one Control and one Node across each named direct-`runc` lifecycle.
   Reuse the common Mithril lifecycle owner. Do not call Host process or actor
   operations from direct `runc`. Keep each container and actor test-scoped.
   Pass every existing direct-`runc` scenario before commit.
   - The filtered `identity_runc` lifecycle passed 16 tests in 343.52 seconds
     on 2026-09-16.
-- [ ] Share one Helm Control Deployment, one Node DaemonSet, and one runtime
+  - The current filtered lifecycle passed 17 tests in 222.98 seconds on
+    2026-09-16.
+- [x] Share one Helm Control Deployment, one Node DaemonSet, and one runtime
   integration installation across the serial Kubernetes platform lane. Keep
   each workload namespace, policy instance, actor Pod, runtime identity,
   output path, and assertion test-scoped. Pass every existing Kubernetes
@@ -650,6 +653,9 @@ count as maintainability migrations.
   - The focused same-lifecycle Kubernetes reuse test passed in 86.91 seconds
     on 2026-09-16. This result qualifies lifecycle reuse only. It does not
     close the complete Kubernetes gate.
+  - The current filtered lifecycle passed all 18 tests in 455.40 seconds on
+    2026-09-16. Cleanup waits for production policy delivery retirement. Each
+    scenario uses a distinct workload namespace.
 - [ ] Run order, recovery, outage, restart, and retained-state lifecycles in
   separate filtered processes. Prove that each requested owner is ready before
   use.
@@ -1490,7 +1496,9 @@ setup, production actions, assertions, and focused test.
   - [x] Pass direct `runc` and its complete lifecycle. The exact `runc` case
     passed in 39.12 seconds. The complete `runc` lifecycle passed 17 tests in
     220.99 seconds on 2026-09-16.
-  - [ ] Pass Kubernetes and its complete lifecycle.
+  - [x] Pass Kubernetes and its complete lifecycle. The exact case passed in
+    73.74 seconds. The complete lifecycle passed 18 tests in 455.40 seconds on
+    2026-09-16.
   - [ ] Remove the matching legacy block and compatibility fields only after
     all three platform cases pass.
 - [ ] Live policy replacement: keep delivery, acknowledgement, guarded process
