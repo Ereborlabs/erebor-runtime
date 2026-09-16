@@ -10,6 +10,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{TaskCoordinateStateV1, TaskCoordinateV1};
+use erebor_runtime_client::MithrilObservationClient;
+use erebor_runtime_ipc::v1::MithrilObservationSnapshot;
 use k8s_cri::v1::ContainerState;
 use mithril_control::{
     lower_kubernetes_policy, workload_target_fact_digest, AllowedNodeIdentity,
@@ -23,8 +25,8 @@ use mithril_node::{
     EvidenceWalCapacityPolicyV1, InterceptorConfig, NativeIdentityInspector, NativeTaskSnapshotV1,
     NodeChassis, NodeConfig, NodeReadinessV1, RuntimeAdmissionClient, RuntimeAdmissionConfig,
     RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1, RuntimeAdmissionResponseV1,
-    ScheduledRuntimeBindingV1, WorkloadBindingConfig, CONTAINER_NAME_ANNOTATION,
-    IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
+    RuntimeObservationConfig, ScheduledRuntimeBindingV1, WorkloadBindingConfig,
+    CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
     POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
 };
 use snafu::{ensure, ResultExt as _};
@@ -62,6 +64,7 @@ pub(super) struct SharedState {
     lease_path: PathBuf,
     cri_path: PathBuf,
     admit_path: PathBuf,
+    observation_path: PathBuf,
     work: Option<ProbeDirectory>,
     state: Option<ProbeDirectory>,
     admit: Option<ProbeDirectory>,
@@ -471,6 +474,7 @@ impl Shared {
         let cri_path = out.join("cri.sock");
         let admit_dir = out.join("admission");
         let admit_path = admit_dir.join("runtime.sock");
+        let observation_path = out.join("observation.sock");
         let out_dir = ProbeDirectory::create(&out)?;
         let work_path = out.join("actor");
         let state_path = out.join("node");
@@ -500,6 +504,7 @@ impl Shared {
             lease_path: lease_path.clone(),
             cri_path,
             admit_path,
+            observation_path,
             work: Some(work),
             state: Some(state),
             admit: Some(admit),
@@ -612,7 +617,11 @@ impl Shared {
                 maximum_reader_queue_records: 262_144,
                 capacity_policy: EvidenceWalCapacityPolicyV1::Block,
             }),
-            runtime_observation: None,
+            runtime_observation: Some(RuntimeObservationConfig {
+                socket_path: self.observation_path.clone(),
+                allowed_uid: 0,
+                cgroup_scope: "/".to_owned(),
+            }),
             runtime_admission: Some(RuntimeAdmissionConfig {
                 socket_path: self.admit_path.clone(),
                 trusted_start_hook_path: self.hook_path.clone(),
@@ -1045,6 +1054,14 @@ impl Shared {
             || format!("PID {pid}; last identity: {}", last.borrow()),
         ))?;
         self.task_from(pid, snapshot)
+    }
+
+    pub(super) fn snapshot(&self) -> TestResult<MithrilObservationSnapshot> {
+        let client = MithrilObservationClient::new(self.observation_path.clone(), "/".to_owned());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        Ok(runtime.block_on(client.snapshot())?)
     }
 
     pub(super) fn maps(&self) -> (&Path, &KernelStateReader) {

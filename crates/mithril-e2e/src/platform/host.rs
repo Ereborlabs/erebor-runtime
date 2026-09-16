@@ -4,6 +4,7 @@ use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
 
 use erebor_interceptor::KernelStateReader;
+use erebor_runtime_ipc::v1::MithrilObservationSnapshot;
 use mithril_node::RuntimeAdmissionOperationV1;
 use snafu::{ensure, ResultExt as _};
 
@@ -297,6 +298,10 @@ impl Platform for Host {
 
     fn recovered(&mut self, pid: u32, name: &str) -> TestResult<Task> {
         self.shared.recovered(pid, name)
+    }
+
+    fn snapshot(&self) -> TestResult<MithrilObservationSnapshot> {
+        self.shared.snapshot()
     }
 
     fn maps(&self) -> (&Path, &KernelStateReader) {

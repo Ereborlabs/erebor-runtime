@@ -44,6 +44,7 @@ zerocopy.workspace = true
 [dev-dependencies]
 axum.workspace = true
 crc32c.workspace = true
+erebor-runtime-client = { path = "../erebor-runtime-client" }
 erebor-telemetry = { path = "../erebor-telemetry" }
 k8s-openapi.workspace = true
 kube.workspace = true

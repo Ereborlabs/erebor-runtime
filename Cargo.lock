@@ -3229,6 +3229,7 @@ dependencies = [
  "ed25519-dalek 3.0.0",
  "erebor-interceptor",
  "erebor-interceptor-abi",
+ "erebor-runtime-client",
  "erebor-runtime-error",
  "erebor-runtime-ipc",
  "erebor-telemetry",

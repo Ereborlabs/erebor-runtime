@@ -1482,6 +1482,15 @@ setup, production actions, assertions, and focused test.
     command and result field can be removed. Do not hardcode a passing result.
 - [ ] Declared probe mismatch and runtime infrastructure effects: keep exact
   argv, role-zero, and denial evidence checks.
+  - [x] Add one 94-line standard platform test. Use the production observation
+    snapshot. Do not add a test effect result or invoke `mithril-inspect`.
+  - [x] Pass Host and its complete lifecycle. The exact Host case passed in
+    32.49 seconds. The complete Host lifecycle passed 22 tests in 231.30
+    seconds on 2026-09-16.
+  - [ ] Pass direct `runc` and its complete lifecycle.
+  - [ ] Pass Kubernetes and its complete lifecycle.
+  - [ ] Remove the matching legacy block and compatibility fields only after
+    all three platform cases pass.
 - [ ] Live policy replacement: keep delivery, acknowledgement, guarded process
   migration, later exec, and old-generation holder checks explicit.
 - [ ] Administrative exec: keep Control authorization, node slot arm, stock

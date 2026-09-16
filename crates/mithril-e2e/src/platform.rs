@@ -1,4 +1,3 @@
-use mithril_node::{NativeTaskSnapshotV1, ReconciliationReportV1};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -9,6 +8,8 @@ use erebor_interceptor_abi::{
     ProcessSecurityStateV1, ReferenceTombstoneStateV1, TaskCoordinateStateV1, TaskCoordinateV1,
     TaskReferenceTombstoneV1, TASK_REFERENCE_ALL_V1,
 };
+use erebor_runtime_ipc::v1::MithrilObservationSnapshot;
+use mithril_node::{NativeTaskSnapshotV1, ReconciliationReportV1};
 use snafu::ResultExt as _;
 use zerocopy::{IntoBytes as _, KnownLayout, TryFromBytes};
 
@@ -163,6 +164,9 @@ pub(crate) trait Platform: Sized {
     }
     fn recovered(&mut self, _pid: u32, _name: &str) -> TestResult<Task> {
         pending("wait for recovered task")
+    }
+    fn snapshot(&self) -> TestResult<MithrilObservationSnapshot> {
+        pending("read observation snapshot")
     }
     fn actor_code(
         &mut self,
