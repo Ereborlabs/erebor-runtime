@@ -252,8 +252,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub independent_entries: Vec<RuncEntryRoleProbeV1>,
     pub independent_entry_roles_are_distinct: bool,
     pub reusable_entry_reinvocation_isolated: bool,
-    pub declared_probe_incomplete_argv_denied: bool,
-    pub runtime_entry_infrastructure_observed: bool,
     pub live_replacement_migrated_running_application: bool,
     pub replacement_generation_descendant_default_exec_allowed: bool,
     pub live_replacement_entries_use_new_generation: bool,
@@ -6042,67 +6040,6 @@ impl EffectTestRunner {
                 reason: "the application path-tree denial affected the startup role",
             }
         );
-        let incomplete_probe_marker = observations.cursor();
-        let incomplete_probe_pid_path = fixture_root.join("probe-incomplete-argv.pid");
-        let incomplete_probe_stdout = output_directory.join("probe-incomplete-argv.stdout");
-        let incomplete_probe_stderr = output_directory.join("probe-incomplete-argv.stderr");
-        let incomplete_probe_arguments =
-            vec!["/var/lib/mithril-convergence/protected.lifecycle-ready"; 3_000];
-        let mut incomplete_probe = container.spawn_exec(
-            "/bin/cat",
-            &incomplete_probe_arguments,
-            &incomplete_probe_pid_path,
-            &incomplete_probe_stdout,
-            &incomplete_probe_stderr,
-        )?;
-        let incomplete_probe_snapshot =
-            wait_for_pid_file(&incomplete_probe_pid_path, &mut incomplete_probe)?
-                .and_then(|pid| inspector.snapshot(pid).ok().flatten());
-        let incomplete_probe_status = wait_for_child(&mut incomplete_probe)?;
-        reader
-            .poll(Duration::from_millis(100))
-            .context(InterceptorSnafu)?;
-        wait_for_reason(
-            &reader,
-            &observations,
-            incomplete_probe_marker,
-            "UNSUPPORTED_OBJECT",
-        )?;
-        let declared_probe_incomplete_argv_denied =
-            incomplete_probe_snapshot.as_ref().is_none_or(|snapshot| {
-                snapshot.admitted_entry_rule_id == 0
-                    && snapshot.active_role_id == replacement_binding.external_role_id
-                    && snapshot.installed_role_class.as_deref()
-                        == Some("runtime_external_restricted")
-            }) && !incomplete_probe_status.success()
-                && fs::read(&incomplete_probe_stdout)
-                    .context(IoSnafu {
-                        path: &incomplete_probe_stdout,
-                    })?
-                    .is_empty()
-                && observations
-                    .recent_since(incomplete_probe_marker)
-                    .iter()
-                    .any(|event| {
-                        event.reason == "UNSUPPORTED_OBJECT"
-                            && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
-                            && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
-                            && event.active_role_id == replacement_binding.external_role_id
-                            && event.admitted_entry_rule_id == 0
-                            && event.kernel_result == -13
-                    });
-        ensure!(
-            declared_probe_incomplete_argv_denied,
-            InvalidInputSnafu {
-                path: &incomplete_probe_stderr,
-                reason: format!(
-                    "a declared probe entered without a complete argv capture: status={incomplete_probe_status}, snapshot={incomplete_probe_snapshot:?}, stderr={}",
-                    fs::read_to_string(&incomplete_probe_stderr)
-                        .unwrap_or_default()
-                        .trim()
-                ),
-            }
-        );
         let role_ids = independent_entries
             .iter()
             .map(|entry| entry.active_role_id)
@@ -6145,18 +6082,6 @@ impl EffectTestRunner {
                 reason: "a reusable declared entry did not create an independent invocation",
             }
         );
-        let runtime_entry_infrastructure_observed = observations
-            .recent_since(marker)
-            .iter()
-            .any(|event| event.reason == "RUNTIME_ENTRY_INFRASTRUCTURE");
-        ensure!(
-            runtime_entry_infrastructure_observed,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "declared entries did not record runtime entry infrastructure",
-            }
-        );
-
         let mut administrative_runtime =
             container
                 .containerd
@@ -7185,7 +7110,7 @@ impl EffectTestRunner {
         fixture_cleanup.cleanup()?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 38,
+            schema_version: 39,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec: lifecycle_state_before_exec,
@@ -7222,8 +7147,6 @@ impl EffectTestRunner {
             independent_entries,
             independent_entry_roles_are_distinct,
             reusable_entry_reinvocation_isolated,
-            declared_probe_incomplete_argv_denied,
-            runtime_entry_infrastructure_observed,
             live_replacement_migrated_running_application,
             replacement_generation_descendant_default_exec_allowed,
             live_replacement_entries_use_new_generation,

@@ -1486,7 +1486,7 @@ setup, production actions, assertions, and focused test.
     tests in 1,451.24 seconds on 2026-09-15 against the retained K3s cluster.
   - [ ] Remove the matching legacy invocation only when its compatibility
     command and result field can be removed. Do not hardcode a passing result.
-- [ ] Declared probe mismatch and runtime infrastructure effects: keep exact
+- [x] Declared probe mismatch and runtime infrastructure effects: keep exact
   argv, role-zero, and denial evidence checks.
   - [x] Add one 94-line standard platform test. Use the production observation
     snapshot. Do not add a test effect result or invoke `mithril-inspect`.
@@ -1499,8 +1499,9 @@ setup, production actions, assertions, and focused test.
   - [x] Pass Kubernetes and its complete lifecycle. The exact case passed in
     73.74 seconds. The complete lifecycle passed 18 tests in 455.40 seconds on
     2026-09-16.
-  - [ ] Remove the matching legacy block and compatibility fields only after
-    all three platform cases pass.
+  - [x] Remove the matching direct-`runc` block and its two compatibility
+    fields after all three platform cases pass. Keep the separate two-node
+    Kubernetes case until its complete scenario has a verified replacement.
 - [ ] Live policy replacement: keep delivery, acknowledgement, guarded process
   migration, later exec, and old-generation holder checks explicit.
 - [ ] Administrative exec: keep Control authorization, node slot arm, stock

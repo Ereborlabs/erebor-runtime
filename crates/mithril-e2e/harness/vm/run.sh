@@ -451,7 +451,7 @@ entry_role_output=$remote_root/runc-entry-roles
 
 if [[ $entry_role_runtime_only == true ]]; then
   jq -e '
-    .schema_version == 38 and
+    .schema_version == 39 and
     .prepared_state_before_exec == "prepared" and
     .prepared_state_after_exec == "active" and
     .prepared_runtime_effect_observed and
@@ -493,8 +493,6 @@ if [[ $entry_role_runtime_only == true ]]; then
     )) and
     .independent_entry_roles_are_distinct and
     .reusable_entry_reinvocation_isolated and
-    .declared_probe_incomplete_argv_denied and
-    .runtime_entry_infrastructure_observed and
     .live_replacement_migrated_running_application and
     .replacement_generation_descendant_default_exec_allowed and
     .live_replacement_entries_use_new_generation and
