@@ -18,17 +18,17 @@ use crate::physical::wait_for;
 mod cri;
 mod host;
 mod kubernetes;
-mod runc;
-mod scope;
+mod lifecycle;
 #[cfg(test)]
-mod scope_tests;
+mod lifecycle_tests;
+mod runc;
 mod shared;
 
 pub(crate) use self::cri::CriFixture;
 pub(crate) use self::host::Host;
 pub(crate) use self::kubernetes::Kubernetes;
+pub(crate) use self::lifecycle::test_lifecycle;
 pub(crate) use self::runc::Runc;
-pub(crate) use self::scope::test_scope;
 pub(crate) use mithril_e2e_macros::platform_test;
 pub(crate) type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
 const TASK_LIMIT: Duration = Duration::from_secs(30);

@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
-use syn::{parse_macro_input, Expr, GenericParam, Ident, ItemFn, Lit, Meta, Token};
+use syn::{parse_macro_input, Expr, GenericParam, Ident, ItemFn, Meta, Token};
 
 struct PlatformArgs {
     cases: Vec<Ident>,
@@ -56,34 +56,42 @@ pub fn platform_test(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let name = &test.sig.ident;
     let output = &test.sig.output;
-    let mut scope = None;
+    let mut lifecycle = None;
     test.attrs.retain(|attr| {
-        if !attr.path().is_ident("scope") {
+        if !attr.path().is_ident("lifecycle") {
             return true;
         }
-        if scope.is_some() {
-            scope = Some(Err(syn::Error::new_spanned(attr, "duplicate scope")));
+        if lifecycle.is_some() {
+            lifecycle = Some(Err(syn::Error::new_spanned(attr, "duplicate lifecycle")));
             return false;
         }
-        scope = Some(match &attr.meta {
+        lifecycle = Some(match &attr.meta {
             Meta::NameValue(value) => match &value.value {
-                Expr::Lit(value) => match &value.lit {
-                    Lit::Str(value) if !value.value().is_empty() => Ok(value.clone()),
-                    _ => Err(syn::Error::new_spanned(attr, "scope must be a string")),
-                },
-                _ => Err(syn::Error::new_spanned(attr, "scope must be a string")),
+                Expr::Path(value) => value
+                    .path
+                    .get_ident()
+                    .cloned()
+                    .ok_or_else(|| syn::Error::new_spanned(attr, "lifecycle must be one name")),
+                _ => Err(syn::Error::new_spanned(attr, "lifecycle must be one name")),
             },
-            _ => Err(syn::Error::new_spanned(attr, "scope must be a string")),
+            _ => Err(syn::Error::new_spanned(attr, "lifecycle must be one name")),
         });
         false
     });
-    let scope = match scope {
-        Some(Ok(scope)) => quote!(#scope),
+    let (lifecycle, lifecycle_name) = match lifecycle {
+        Some(Ok(lifecycle)) => (quote!(stringify!(#lifecycle)), Some(lifecycle)),
         Some(Err(error)) => return error.into_compile_error().into(),
-        None => quote!(concat!(module_path!(), "::", stringify!(#name))),
+        None => (
+            quote!(concat!(module_path!(), "::", stringify!(#name))),
+            None,
+        ),
     };
     let tests = args.cases.iter().map(|case| {
         let value = case.to_string();
+        let case_name = match &lifecycle_name {
+            Some(lifecycle) => format_ident!("{lifecycle}_{case}"),
+            None => format_ident!("{name}_{case}"),
+        };
         let platform = match value.as_str() {
             "host" => format_ident!("Host"),
             "runc" => format_ident!("Runc"),
@@ -93,8 +101,8 @@ pub fn platform_test(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {
             #[test]
             #[ignore = "requires its physical test environment"]
-            fn #case() #output {
-                crate::platform::test_scope::<crate::platform::#platform, _>(#scope, || {
+            fn #case_name() #output {
+                crate::platform::test_lifecycle::<crate::platform::#platform, _>(#lifecycle, || {
                     super::#name::<crate::platform::#platform>()
                 })
             }

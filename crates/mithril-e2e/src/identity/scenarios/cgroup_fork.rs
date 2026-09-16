@@ -10,7 +10,7 @@ use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host)]
-#[scope = "identity"]
+#[lifecycle = identity]
 fn unmoved_first_open_allowed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("cgroup-open-control")?;
     let path = Path::new("/etc/hostname");
@@ -51,7 +51,7 @@ fn unmoved_first_open_allowed<P: Platform>() -> TestResult<()> {
 }
 
 #[platform_test(host)]
-#[scope = "identity"]
+#[lifecycle = identity]
 fn child_first_open_allowed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("cgroup-child-open")?;
     let path = Path::new("/etc/hostname");
@@ -122,7 +122,7 @@ fn child_first_open_allowed<P: Platform>() -> TestResult<()> {
 }
 
 #[platform_test(host)]
-#[scope = "identity"]
+#[lifecycle = identity]
 fn moved_first_open_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("cgroup-open-denial")?;
     let path = Path::new("/etc/hostname");
@@ -184,7 +184,7 @@ fn moved_first_open_denied<P: Platform>() -> TestResult<()> {
 }
 
 #[platform_test(host)]
-#[scope = "identity"]
+#[lifecycle = identity]
 fn moved_root_stops<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("cgroup-stop")?;
     env.start_control()?;
@@ -209,7 +209,7 @@ fn moved_root_stops<P: Platform>() -> TestResult<()> {
 }
 
 #[platform_test(host)]
-#[scope = "cgroup-fork"]
+#[lifecycle = identity]
 fn moved_parent_fork_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("cgroup-fork")?;
     env.start_control()?;

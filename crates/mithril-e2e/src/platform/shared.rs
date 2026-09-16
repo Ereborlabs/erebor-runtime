@@ -31,7 +31,7 @@ use snafu::{ensure, ResultExt as _};
 use tokio::sync::watch;
 use zerocopy::TryFromBytes as _;
 
-use super::scope::{current, enter, ScopeGuard};
+use super::lifecycle::{enter, LifecycleGuard};
 use super::{policy_path, CriFixture, Task, TestResult};
 use crate::control_fixture::{ControlServerFixture, MtlsFixture};
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
@@ -51,7 +51,6 @@ const POLICY_UID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const ACTOR_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 pub(super) struct SharedState {
-    scope_name: &'static str,
     root: PathBuf,
     out: PathBuf,
     out_dir: Option<ProbeDirectory>,
@@ -90,25 +89,25 @@ pub(super) struct SharedState {
 }
 
 pub(super) struct Shared {
-    scope: Option<ScopeGuard<'static, SharedState>>,
+    lifecycle: Option<LifecycleGuard<'static, SharedState>>,
 }
 
 impl Deref for Shared {
     type Target = SharedState;
 
     fn deref(&self) -> &Self::Target {
-        match self.scope.as_ref().and_then(ScopeGuard::get) {
+        match self.lifecycle.as_ref().and_then(LifecycleGuard::get) {
             Some(state) => state,
-            None => unreachable!("the shared scope is closed"),
+            None => unreachable!("the shared lifecycle is closed"),
         }
     }
 }
 
 impl DerefMut for Shared {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        match self.scope.as_mut().and_then(ScopeGuard::get_mut) {
+        match self.lifecycle.as_mut().and_then(LifecycleGuard::get_mut) {
             Some(state) => state,
-            None => unreachable!("the shared scope is closed"),
+            None => unreachable!("the shared lifecycle is closed"),
         }
     }
 }
@@ -369,7 +368,7 @@ impl SharedState {
         Ok(())
     }
 
-    fn close_core(&mut self) -> TestResult<()> {
+    fn tear_down(&mut self) -> TestResult<()> {
         self.clean_test()?;
         self.stop_node()?;
         if let Some(control) = self.control.take() {
@@ -431,10 +430,10 @@ impl SharedState {
 
 impl Shared {
     fn close(&mut self) -> TestResult<()> {
-        let Some(mut scope) = self.scope.take() else {
+        let Some(mut lifecycle) = self.lifecycle.take() else {
             return Ok(());
         };
-        match scope.get_mut() {
+        match lifecycle.get_mut() {
             Some(state) => state.clean_test(),
             None => Ok(()),
         }
@@ -448,15 +447,13 @@ impl Shared {
 
     pub(super) fn setup(_name: &str) -> TestResult<Self> {
         erebor_telemetry::init_test_logging();
-        let name = current()?;
-        let mut scope = enter::<SharedState>(SharedState::close_core)?;
-        if scope.get().is_some_and(|state| state.scope_name == name) {
-            let state = scope.get_mut().ok_or("the shared scope is empty")?;
+        let mut lifecycle = enter::<SharedState>(SharedState::tear_down)?;
+        if lifecycle.get().is_some() {
+            let state = lifecycle.get_mut().ok_or("the shared lifecycle is empty")?;
             state.reset()?;
-            return Ok(Self { scope: Some(scope) });
-        }
-        if let Some(mut state) = scope.take() {
-            state.close_core()?;
+            return Ok(Self {
+                lifecycle: Some(lifecycle),
+            });
         }
         let root = SharedState::path("MITHRIL_TEST_ROOT")?;
         let out = SharedState::path("MITHRIL_TEST_OUTPUT")?;
@@ -491,8 +488,7 @@ impl Shared {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        scope.put(SharedState {
-            scope_name: name,
+        lifecycle.put(SharedState {
             root,
             out,
             out_dir: Some(out_dir),
@@ -529,7 +525,9 @@ impl Shared {
             runtime,
             hook_path: env::current_exe()?,
         });
-        Ok(Self { scope: Some(scope) })
+        Ok(Self {
+            lifecycle: Some(lifecycle),
+        })
     }
 
     pub(super) fn start_control(&mut self) -> TestResult<()> {

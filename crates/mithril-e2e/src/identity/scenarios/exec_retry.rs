@@ -6,7 +6,7 @@ use erebor_interceptor_abi::{
 };
 
 #[platform_test(host, runc, kubernetes)]
-#[scope = "identity"]
+#[lifecycle = identity]
 fn failed_exec_restores<P: Platform>() -> TestResult<()> {
     let active = |task: &Task| {
         assert_eq!(

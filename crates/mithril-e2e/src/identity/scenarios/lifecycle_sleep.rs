@@ -3,7 +3,7 @@ use std::time::Duration;
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(kubernetes)]
-#[scope = "identity"]
+#[lifecycle = identity]
 fn native_sleep_adds_no_task<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("lifecycle-sleep")?;
     env.start_control()?;

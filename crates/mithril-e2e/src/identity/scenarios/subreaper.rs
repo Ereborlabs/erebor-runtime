@@ -4,7 +4,7 @@ use erebor_interceptor_abi::{
 };
 use std::fs;
 #[platform_test(host, runc, kubernetes)]
-#[scope = "identity"]
+#[lifecycle = identity]
 fn subreaper_keeps_identity<P: Platform>() -> TestResult<()> {
     let active = |task: &Task| {
         let got = &task.snapshot;

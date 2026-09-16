@@ -3,7 +3,7 @@ use std::{fs, time::Duration};
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
-#[scope = "identity"]
+#[lifecycle = identity]
 fn runtime_entries_stay_distinct<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("runtime-entries")?;
     env.start_control()?;

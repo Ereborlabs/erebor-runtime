@@ -11,12 +11,13 @@ thread_local! {
     static CURRENT: Cell<Option<Current>> = const { Cell::new(None) };
 }
 
-type AnyScope = dyn Any + Send + Sync;
+type AnyLifecycle = dyn Any + Send + Sync;
 
 #[derive(Clone, Copy)]
 struct Resource {
-    scope: &'static AnyScope,
-    close: fn(&'static AnyScope) -> TestResult<()>,
+    name: &'static str,
+    lifecycle: &'static AnyLifecycle,
+    tear_down: fn(&'static AnyLifecycle) -> TestResult<()>,
 }
 
 static RESOURCES: LazyLock<Mutex<HashMap<TypeId, Resource>>> =
@@ -37,7 +38,7 @@ impl Drop for Reset {
     }
 }
 
-pub(crate) fn test_scope<P: 'static, T>(name: &'static str, test: impl FnOnce() -> T) -> T {
+pub(crate) fn test_lifecycle<P: 'static, T>(name: &'static str, test: impl FnOnce() -> T) -> T {
     let previous = CURRENT.replace(Some(Current {
         name,
         platform: TypeId::of::<P>(),
@@ -46,55 +47,57 @@ pub(crate) fn test_scope<P: 'static, T>(name: &'static str, test: impl FnOnce() 
     test()
 }
 
-pub(super) fn current() -> TestResult<&'static str> {
-    CURRENT
-        .get()
-        .map(|scope| scope.name)
-        .ok_or_else(|| "the platform test has no scope".into())
-}
-
 pub(super) fn enter<T: Send + 'static>(
-    close: fn(&mut T) -> TestResult<()>,
-) -> TestResult<ScopeGuard<'static, T>> {
+    finish: fn(&mut T) -> TestResult<()>,
+) -> TestResult<LifecycleGuard<'static, T>> {
     register_cleanup()?;
-    let platform = CURRENT
-        .get()
-        .map(|scope| scope.platform)
-        .ok_or("the platform test has no scope")?;
+    let current = CURRENT.get().ok_or("the platform test has no lifecycle")?;
     let resource = {
         let mut resources = RESOURCES
             .lock()
-            .map_err(|_source| "the named platform scopes are poisoned")?;
-        *resources.entry(platform).or_insert_with(|| {
-            let scope: &'static Scope<T> = Box::leak(Box::new(Scope::new(close)));
-            Resource {
-                scope,
-                close: close_scope::<T>,
+            .map_err(|_source| "the platform lifecycles are poisoned")?;
+        if let Some(resource) = resources.get(&current.platform) {
+            if resource.name != current.name {
+                return Err(format!(
+                    "platform lifecycle `{}` is active; run `{}` in a separate test process",
+                    resource.name, current.name
+                )
+                .into());
             }
-        })
+            *resource
+        } else {
+            let lifecycle: &'static Lifecycle<T> = Box::leak(Box::new(Lifecycle::new(finish)));
+            let resource = Resource {
+                name: current.name,
+                lifecycle,
+                tear_down: tear_down::<T>,
+            };
+            resources.insert(current.platform, resource);
+            resource
+        }
     };
     resource
-        .scope
-        .downcast_ref::<Scope<T>>()
-        .ok_or("the named platform scope has the wrong resource type")?
+        .lifecycle
+        .downcast_ref::<Lifecycle<T>>()
+        .ok_or("the platform lifecycle has the wrong resource type")?
         .enter()
 }
 
-struct Scope<T> {
+struct Lifecycle<T> {
     state: Mutex<Option<T>>,
-    close: fn(&mut T) -> TestResult<()>,
+    tear_down: fn(&mut T) -> TestResult<()>,
 }
 
-impl<T> Scope<T> {
-    const fn new(close: fn(&mut T) -> TestResult<()>) -> Self {
+impl<T> Lifecycle<T> {
+    const fn new(tear_down: fn(&mut T) -> TestResult<()>) -> Self {
         Self {
             state: Mutex::new(None),
-            close,
+            tear_down,
         }
     }
 
-    fn enter(&'static self) -> TestResult<ScopeGuard<'static, T>> {
-        Ok(ScopeGuard {
+    fn enter(&'static self) -> TestResult<LifecycleGuard<'static, T>> {
+        Ok(LifecycleGuard {
             state: self
                 .state
                 .lock()
@@ -102,23 +105,23 @@ impl<T> Scope<T> {
         })
     }
 
-    fn close(&self) -> TestResult<()> {
+    fn tear_down(&self) -> TestResult<()> {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(mut state) = state.take() {
-            (self.close)(&mut state)?;
+            (self.tear_down)(&mut state)?;
         }
         Ok(())
     }
 }
 
-pub(super) struct ScopeGuard<'a, T> {
+pub(super) struct LifecycleGuard<'a, T> {
     state: MutexGuard<'a, Option<T>>,
 }
 
-impl<T> ScopeGuard<'_, T> {
+impl<T> LifecycleGuard<'_, T> {
     pub(super) fn get(&self) -> Option<&T> {
         self.state.as_ref()
     }
@@ -130,17 +133,13 @@ impl<T> ScopeGuard<'_, T> {
     pub(super) fn put(&mut self, value: T) {
         *self.state = Some(value);
     }
-
-    pub(super) fn take(&mut self) -> Option<T> {
-        self.state.take()
-    }
 }
 
-fn close_scope<T: Send + 'static>(scope: &'static AnyScope) -> TestResult<()> {
-    scope
-        .downcast_ref::<Scope<T>>()
-        .ok_or("the named platform scope has the wrong resource type")?
-        .close()
+fn tear_down<T: Send + 'static>(lifecycle: &'static AnyLifecycle) -> TestResult<()> {
+    lifecycle
+        .downcast_ref::<Lifecycle<T>>()
+        .ok_or("the platform lifecycle has the wrong resource type")?
+        .tear_down()
 }
 
 fn register_cleanup() -> TestResult<()> {
@@ -150,18 +149,18 @@ fn register_cleanup() -> TestResult<()> {
     });
     match status {
         0 => Ok(()),
-        _ => Err("failed to register platform scope cleanup".into()),
+        _ => Err("failed to register platform lifecycle teardown".into()),
     }
 }
 
 extern "C" fn cleanup() {
     let result = RESOURCES
         .lock()
-        .map_err(|_source| "the named platform scopes are poisoned".into())
+        .map_err(|_source| "the platform lifecycles are poisoned".into())
         .and_then(|resources| {
             let mut failure = None;
             for resource in resources.values() {
-                if let Err(source) = (resource.close)(resource.scope) {
+                if let Err(source) = (resource.tear_down)(resource.lifecycle) {
                     failure = Some(source);
                 }
             }
@@ -171,7 +170,7 @@ extern "C" fn cleanup() {
             }
         });
     if let Err(source) = result {
-        eprintln!("platform scope cleanup failed: {source}");
+        eprintln!("platform lifecycle teardown failed: {source}");
         // SAFETY: cleanup has failed and the test command must return failure.
         unsafe {
             libc::_exit(1);
@@ -188,6 +187,8 @@ mod tests {
 
     static CLOSED: AtomicBool = AtomicBool::new(false);
 
+    struct TestPlatform;
+
     fn close_flag(value: &mut bool) -> TestResult<()> {
         CLOSED.store(*value, Ordering::SeqCst);
         Ok(())
@@ -195,11 +196,11 @@ mod tests {
 
     #[test]
     #[allow(clippy::panic)]
-    fn poisoned_scope_still_closes() -> TestResult<()> {
+    fn poisoned_lifecycle_tears_down() -> TestResult<()> {
         CLOSED.store(false, Ordering::SeqCst);
-        let scope = Box::leak(Box::new(Scope::new(close_flag)));
+        let lifecycle = Box::leak(Box::new(Lifecycle::new(close_flag)));
         let panic = catch_unwind(AssertUnwindSafe(|| {
-            let Ok(mut guard) = scope.enter() else {
+            let Ok(mut guard) = lifecycle.enter() else {
                 return;
             };
             guard.put(true);
@@ -207,8 +208,23 @@ mod tests {
         }));
 
         assert!(panic.is_err());
-        scope.close()?;
+        lifecycle.tear_down()?;
         assert!(CLOSED.load(Ordering::SeqCst));
         Ok(())
+    }
+
+    #[test]
+    fn mixed_lifecycle_is_rejected() -> TestResult<()> {
+        test_lifecycle::<TestPlatform, _>("first", || {
+            drop(enter::<bool>(close_flag)?);
+            test_lifecycle::<TestPlatform, _>("second", || {
+                let error = match enter::<bool>(close_flag) {
+                    Ok(_) => return Err("the second lifecycle was accepted".into()),
+                    Err(error) => error,
+                };
+                assert!(error.to_string().contains("separate test process"));
+                Ok(())
+            })
+        })
     }
 }

@@ -8,7 +8,7 @@ use super::lifetime_result::LifetimeState;
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
-#[scope = "identity"]
+#[lifecycle = identity]
 fn leader_exit_keeps_worker<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("leader-lifetime")?;
     env.start_control()?;

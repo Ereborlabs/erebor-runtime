@@ -10,7 +10,7 @@ use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host)]
-#[scope = "clone-exec"]
+#[lifecycle = identity_physical]
 fn child_enters_mount_ns<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("clone-mount-exec")?;
     let group = env.actor_group()?.to_owned();

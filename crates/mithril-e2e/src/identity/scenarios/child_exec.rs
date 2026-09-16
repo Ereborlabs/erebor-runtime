@@ -4,7 +4,7 @@ use erebor_interceptor_abi::{
 };
 
 #[platform_test(host, runc, kubernetes)]
-#[scope = "identity"]
+#[lifecycle = identity]
 fn child_exec_keeps_identity<P: Platform>() -> TestResult<()> {
     let active = |task: &Task| {
         let state = &task.snapshot;

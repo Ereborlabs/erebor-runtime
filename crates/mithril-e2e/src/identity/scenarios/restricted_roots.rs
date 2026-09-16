@@ -6,7 +6,7 @@ use crate::platform::{actor_script, platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
 #[platform_test(host, runc, kubernetes)]
-#[scope = "identity"]
+#[lifecycle = identity]
 fn attached_roots_are_restricted<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("restricted-roots")?;
     env.start_control()?;

@@ -13,7 +13,7 @@ use crate::platform::{platform_test, Platform, TestResult};
 
 #[cfg(test)]
 #[platform_test(host, runc, kubernetes)]
-#[scope = "identity"]
+#[lifecycle = identity]
 fn pid_reuse_is_fresh<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("pid-reuse")?;
     env.start_control()?;

@@ -32,7 +32,7 @@ use serde_json::{json, Value};
 use snafu::ResultExt as _;
 use zerocopy::TryFromBytes as _;
 
-use super::scope::{current, enter, ScopeGuard};
+use super::lifecycle::{enter, LifecycleGuard};
 use super::{policy_path, Platform, Task, TestResult, PROCESS_FIXTURES};
 use crate::control_fixture::MtlsFixture;
 use crate::error::{InvalidInputSnafu, IoSnafu, NodeSnafu};
@@ -48,11 +48,10 @@ const ACTOR: &str = "pid-reuse";
 const CONTAINER: &str = "worker";
 
 pub(crate) struct Kubernetes {
-    scope: Option<ScopeGuard<'static, KubernetesState>>,
+    lifecycle: Option<LifecycleGuard<'static, KubernetesState>>,
 }
 
 pub(crate) struct KubernetesState {
-    scope_name: &'static str,
     root: PathBuf,
     out: Option<ProbeDirectory>,
     work_path: PathBuf,
@@ -108,18 +107,18 @@ impl Deref for Kubernetes {
     type Target = KubernetesState;
 
     fn deref(&self) -> &Self::Target {
-        match self.scope.as_ref().and_then(ScopeGuard::get) {
+        match self.lifecycle.as_ref().and_then(LifecycleGuard::get) {
             Some(state) => state,
-            None => unreachable!("the Kubernetes scope is closed"),
+            None => unreachable!("the Kubernetes lifecycle is closed"),
         }
     }
 }
 
 impl DerefMut for Kubernetes {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        match self.scope.as_mut().and_then(ScopeGuard::get_mut) {
+        match self.lifecycle.as_mut().and_then(LifecycleGuard::get_mut) {
             Some(state) => state,
-            None => unreachable!("the Kubernetes scope is closed"),
+            None => unreachable!("the Kubernetes lifecycle is closed"),
         }
     }
 }
@@ -842,7 +841,7 @@ impl KubernetesState {
         }
     }
 
-    fn close_core(&mut self) -> TestResult<()> {
+    fn tear_down(&mut self) -> TestResult<()> {
         let mut failed = self.clean_test().err();
         if self.system_up {
             let nodes = Api::<Node>::all(self.client.clone());
@@ -935,10 +934,10 @@ impl KubernetesState {
 
 impl Kubernetes {
     fn close(&mut self) -> TestResult<()> {
-        let Some(mut scope) = self.scope.take() else {
+        let Some(mut lifecycle) = self.lifecycle.take() else {
             return Ok(());
         };
-        match scope.get_mut() {
+        match lifecycle.get_mut() {
             Some(state) => state.clean_test(),
             None => Ok(()),
         }
@@ -952,18 +951,15 @@ impl Platform for Kubernetes {
 
     fn setup(name: &str) -> TestResult<Self> {
         erebor_telemetry::init_test_logging();
-        let scope_name = current()?;
-        let mut scope = enter::<KubernetesState>(KubernetesState::close_core)?;
-        if scope
-            .get()
-            .is_some_and(|state| state.scope_name == scope_name)
-        {
-            let state = scope.get_mut().ok_or("the Kubernetes scope is empty")?;
+        let mut lifecycle = enter::<KubernetesState>(KubernetesState::tear_down)?;
+        if lifecycle.get().is_some() {
+            let state = lifecycle
+                .get_mut()
+                .ok_or("the Kubernetes lifecycle is empty")?;
             state.reset()?;
-            return Ok(Self { scope: Some(scope) });
-        }
-        if let Some(mut state) = scope.take() {
-            state.close_core()?;
+            return Ok(Self {
+                lifecycle: Some(lifecycle),
+            });
         }
         let root = fs::canonicalize(KubernetesState::path("MITHRIL_TEST_ROOT", ".")?)?;
         let base = KubernetesState::path("MITHRIL_TEST_OUTPUT", "")?;
@@ -1080,7 +1076,6 @@ impl Platform for Kubernetes {
         let inspector = NativeIdentityInspector::new(&pin_path);
         let reader = KernelStateReader::new(&pin_path);
         let mut fixture = KubernetesState {
-            scope_name,
             root,
             out: Some(out_dir),
             work_path,
@@ -1133,8 +1128,10 @@ impl Platform for Kubernetes {
         };
         fixture.write_inputs()?;
         fixture.create_work()?;
-        scope.put(fixture);
-        Ok(Self { scope: Some(scope) })
+        lifecycle.put(fixture);
+        Ok(Self {
+            lifecycle: Some(lifecycle),
+        })
     }
 
     fn start_control(&mut self) -> TestResult<()> {

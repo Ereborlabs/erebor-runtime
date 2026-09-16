@@ -5,7 +5,7 @@ use erebor_interceptor_abi::{
 };
 
 #[platform_test(host, runc, kubernetes)]
-#[scope = "identity"]
+#[lifecycle = identity]
 fn namespace_init_reparents_child<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("namespace-init")?;
     env.start_control()?;

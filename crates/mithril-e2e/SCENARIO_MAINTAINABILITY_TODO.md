@@ -120,7 +120,8 @@ reimplement a production owner operation.
 - Use the standard Rust test harness. `cargo test --no-run` must compile the
   scenario functions into a test executable.
 - Keep the attributed function in the behavior module. The launcher invokes
-  its exact generated case, such as `secret_read_is_denied::kubernetes`.
+  its exact generated case, such as
+  `secret_read_is_denied::identity_kubernetes`.
 - Mark tests that need root, BPF LSM, `runc`, containerd, or Kubernetes with a
   precise `#[ignore = "..."]` reason when the normal host cannot run them.
 - Make the VM harness copy the compiled test executable and run each
@@ -135,80 +136,77 @@ reimplement a production owner operation.
 - A compatibility artifact writer can serialize scenario results. It must not
   execute a hidden scenario or own setup, action, assertion, or teardown.
 
-### Platform suite scope
+### Platform test lifecycle
 
-- Keep scenario function bodies unchanged when shared lifecycle ownership is
-  added. Existing `setup`, `start_control`, `start_node`, readiness, actor,
-  action, assertion, and `stop` calls must remain visible and keep their
-  current order.
-- Put `#[scope = "name"]` directly below `#[platform_test(...)]`. Make
-  `platform_test` consume this attribute and enter the named scope before it
-  calls the unchanged scenario function.
-- Give tests in the same named scope the same initialized platform owner. An
-  omitted scope is unique to that scenario and does not share an owner.
-- Give a test that changes component order or tests outage, restart,
-  replacement, recovery, runtime integration, retained state, or owner cleanup
-  its own scope name.
-- Give a test that changes or compares cumulative Node health counters its own
-  scope name. Do not let an earlier scenario change its starting counters.
-- Do not infer a shared scope from a scenario name, environment variable, or
-  runtime branch. Do not put scope selection in the scenario body.
-- Do not define a named scope in a platform implementation. In particular, do
-  not add Host-, direct-`runc`-, or Kubernetes-specific scope globals. The
-  attribute supplies the scope name. The generated standard test wrapper
-  supplies its concrete platform type to the common scope owner. Common
-  fixture code must not contain Host, direct-`runc`, or Kubernetes flags,
-  branches, or adapter types. Keep Host process operations in `host.rs`,
-  direct-`runc` operations in `runc.rs`, and Kubernetes operations in
-  `kubernetes.rs`.
-- Give each named Host scope one shared Control and one shared Node. Give each
-  named direct-`runc` scope one shared Control and one shared Node. Give each
-  named Kubernetes scope one shared Control Deployment and one shared Node
-  DaemonSet. Install and remove Kubernetes runtime integration once for that
-  scope.
-- Keep actor processes, workload cgroups or namespaces, policy instances,
-  runtime identities, result files, and assertions test-scoped. Use unique
-  physical identities so one test cannot read or remove another test's state.
+- Put `#[lifecycle = identity]` directly below `#[platform_test(...)]`.
+  `platform_test` consumes the lifecycle attribute and keeps each generated
+  platform case as a standard Rust `#[test]`.
+- Run one lifecycle and one platform in each test process. Production uses one
+  global Interceptor lease per host, so two lifecycle Nodes must not overlap.
+- Do not rename tests, add `z` prefixes, move modules, or depend on libtest
+  discovery order to make lifecycle users contiguous.
+- Put the lifecycle and platform in each generated leaf test name, such as
+  `identity_host`. A launcher selects this suffix to run one lifecycle and one
+  platform in a process. Parent module names do not control lifecycle order.
+- Give an omitted lifecycle a unique name for that scenario. Give recovery,
+  outage, restart, replacement, runtime integration, retained-state, owner
+  cleanup, and cumulative-health tests a dedicated lifecycle.
+- Do not infer a lifecycle from a scenario name, environment variable, module
+  position, or runtime branch. Do not select a lifecycle in a scenario body.
+- Do not define platform-specific lifecycle globals. The attribute supplies
+  the name. The generated wrapper supplies the concrete platform type to the
+  common lifecycle owner.
+- Give each Host lifecycle process one Control and one Node. Give each direct
+  `runc` lifecycle process one Control and one Node. Give each Kubernetes
+  lifecycle process one Control Deployment, one Node DaemonSet, and one
+  runtime integration installation.
+- Keep actors, workload cgroups or namespaces, policy instances, results, and
+  assertions test-scoped. The scenario keeps `Platform::setup` and final
+  per-test cleanup visible. The lifecycle retains only Control, Node, and the
+  platform integration between tests.
+- Keep `start_control`, `start_node`, readiness, actor start, component stop,
+  action, and assertion calls visible in the scenario. Keep their production
+  order. Do not hide recovery or outage order in the lifecycle owner.
 - Make the first ordered `start_control` or `start_node` call start the shared
-  owner when it is absent. A later call in the same scope must verify that the
-  same owner is ready. It must not silently replace or restart that owner.
-- Make a different named scope acquire exclusive platform ownership. Stop the
-  previous scope owner before the next scope body starts. Do not let different
-  scopes overlap on the same kernel or Kubernetes node.
-- Keep exact single-test invocation valid. It must start the required scope,
-  run the unchanged scenario, and perform bounded cleanup.
-- [ ] Keep tests in one named scope contiguous in the standard Rust harness.
-  Put fresh-Node recovery modules after the shared `identity` group. Do not
-  change scenario bodies or use a custom runner. The 2026-09-15 Kubernetes
-  baseline reopened the `identity` scope four times and took 1,451.24 seconds.
-- [x] Prove serial named-scope reuse with a focused fixture test. Start real
-  Control and Node, stop one test fixture, enter the same scope again, and
-  require the same Node pin owner. The complete Host lane passed 27 tests in
-  821.56 seconds. The complete direct-`runc` lane passed 18 tests in 473.30
-  seconds. The complete Kubernetes lane passed 20 tests in 1287.89 seconds.
-- [x] Retain a named scope after its last serial test user. Close it when a
-  different scope starts or when the test executable exits. Make exit cleanup
-  failure fail the test command. The Host and direct-`runc` lanes left no pin,
-  lease, or cgroup. The Kubernetes lane left no scope directory, Mithril
-  namespace, or Node selector.
-  `bash .github/scripts/verify-rust-ci.sh` passed formatting, checks, and
-  clippy, then stopped in the unrelated
-  `start_builds_terminal_surface_launch_plan` test. The test received
-  `[BrowserCdp]` and expected `[BrowserCdp, Terminal]`. This change does not
-  modify `erebor-runtime-cli`.
-- Make scope cleanup reliable and observable. A cleanup failure must fail the
-  test invocation and retain component logs, last readiness state, owned paths,
-  and actor diagnostics.
-- [x] Recover a named scope after a scenario assertion panics. The focused
+  owner when it is absent. A later call in the same process must verify that
+  the same owner is ready. It must not replace or restart that owner.
+- Tear down each retained owner once. Process-exit teardown must be bounded.
+  A failure must fail the test command and keep component logs, readiness
+  state, owned paths, and actor diagnostics.
+- Keep exact single-test invocation valid. It must initialize its lifecycle,
+  run one scenario, perform per-test cleanup, and tear down retained resources.
+- [x] Reject concurrent lifecycle Nodes on one host. A physical interleave
+  probe started lifecycle A and then lifecycle B. Production rejected B
+  because `/run/erebor-interceptor/owner.lock` was owned. This is the required
+  `KernelHostLease` behavior. Do not weaken it for tests.
+- [x] Generate a lifecycle-platform leaf name for each test. Test discovery
+  found 69 physical cases with suffixes such as `identity_host`,
+  `identity_runc`, and `identity_kubernetes` on 2026-09-15.
+- [x] Prove one filtered Host lifecycle. The `identity_host` process passed
+  21 tests in 218.09 seconds and initialized Node once on 2026-09-16.
+  A control that used a new process for each exact test passed the first test
+  in 37.17 seconds. Its second Node start timed out after 31.17 seconds. The
+  grouped run removes this repeated and unreliable Node startup.
+- [x] Prove the filtered direct-`runc` lifecycle. The `identity_runc` process
+  passed 16 tests in 343.52 seconds on 2026-09-16.
+- [ ] Prove the filtered Kubernetes lifecycle. The current
+  `identity_kubernetes` process passed 7 of 17 tests in 469.71 seconds. Ten
+  `add_actor` allow-path tests failed with `EACCES`. Keep this gate open until
+  the shared production operation passes without platform path resolution.
+- [x] Prove serial same-lifecycle reuse with a focused physical test. Start
+  real Control and Node, stop one test fixture, enter the lifecycle again, and
+  require the same Node pin owner.
+- [x] Reject a second lifecycle for the same platform in one process. The
+  focused owner test passed. It requires the launcher to start a separate test
+  process instead of restarting Node.
+- [x] Recover a lifecycle after a scenario assertion panics. The focused
   mutex-poison regression passed. A failing Host runtime-entry assertion then
   removed its output directory, pin, lease, actor cgroup, and Node cgroup.
 - Do not add a test registry, custom test language, replacement harness,
-  builder, factory, or scenario-specific scope implementation. The attribute
-  can generate only the standard test wrapper and select the common scope.
-- First verify shared scope with serial tests. Enable bounded parallel tests
-  only after Host, direct-`runc`, and Kubernetes prove unique identity,
-  complete workload cleanup, policy cleanup, evidence isolation, and no BPF or
-  runtime-hook ownership race.
+  builder, factory, or scenario-specific lifecycle implementation.
+- Verify serial lifecycle tests first. Enable bounded parallel tests only
+  after Host, direct `runc`, and Kubernetes prove unique identity, complete
+  cleanup, policy and evidence isolation, and no BPF or runtime-hook race.
 
 ### Cross-environment test shape
 
@@ -610,40 +608,59 @@ count as maintainability migrations.
 
 ## Common tooling deliverable
 
-- [x] Add one common named platform-scope owner below `platform_test`. Keep the
-  existing scenario function bodies unchanged. The generated wrapper enters
-  the named scope and still registers a standard Rust `#[test]`.
-- [x] Make `#[scope = "name"]` the only shared-scope selection. The
-  `platform_test` macro must consume it. An omitted attribute gives the test a
-  unique scope. Do not change generated test names.
-  - The generated wrapper enters the scope before it calls the scenario.
-    `Host`, `Runc`, and `Kubernetes` read that scope in `Platform::setup`.
-    Scenario bodies do not receive an argument or branch.
-  - The exact generated test names and count stay unchanged.
-  - `cargo test -p mithril-e2e --lib --no-run`, test discovery, and strict
-    Clippy passed on 2026-09-14.
-- [x] Share one Control and one Node across each named Host scope.
+- [x] Add one common named platform lifecycle owner below `platform_test`.
+  The generated wrapper enters the lifecycle and still registers a standard
+  Rust `#[test]`.
+- [x] Make `#[lifecycle = name]` the only shared lifecycle selection. The
+  `platform_test` macro consumes it. An omitted attribute gives the test a
+  unique lifecycle.
+  - The generated wrapper enters the lifecycle before it calls the scenario.
+    `Host`, `Runc`, and `Kubernetes` use the selected lifecycle.
+  - The generated leaf name contains the lifecycle and platform. This lets a
+    launcher select one lifecycle process without a scenario registry.
+  - `cargo test -p mithril-e2e --lib --no-run` and test discovery passed on
+    2026-09-15.
+- [ ] Change each platform launcher to invoke one lifecycle-platform suffix
+  per process with `--test-threads=1`. Do not list scenarios in the launcher.
+  - [x] The Host VM launcher invokes `identity_host` once. It does not list PID
+    reuse and TID reuse as separate processes.
+  - [ ] Apply the same suffix invocation to the direct-`runc` and Kubernetes
+    launchers after their current platform gates pass.
+- [x] Share one Control and one Node across each named Host lifecycle.
   Keep each actor, cgroup, policy instance, runtime identity, output path, and
   assertion test-scoped. Pass every existing Host scenario before commit.
   - The complete Host lane passed 25 tests in 720.23 seconds on 2026-09-14.
-- [x] Share one Control and one Node across each named direct-`runc` scope.
+  - The filtered `identity_host` lifecycle passed 21 tests in 218.09 seconds
+    with one Node initialization on 2026-09-16.
+- [x] Share one Control and one Node across each named direct-`runc` lifecycle.
   Reuse the common Mithril lifecycle owner. Do not call Host process or actor
   operations from direct `runc`. Keep each container and actor test-scoped.
   Pass every existing direct-`runc` scenario before commit.
-  - The complete direct-`runc` lane passed 16 tests in 385.05 seconds on
-    2026-09-14.
-- [x] Share one Helm Control Deployment, one Node DaemonSet, and one runtime
+  - The filtered `identity_runc` lifecycle passed 16 tests in 343.52 seconds
+    on 2026-09-16.
+- [ ] Share one Helm Control Deployment, one Node DaemonSet, and one runtime
   integration installation across the serial Kubernetes platform lane. Keep
   each workload namespace, policy instance, actor Pod, runtime identity,
   output path, and assertion test-scoped. Pass every existing Kubernetes
   scenario before commit.
-  - The complete Kubernetes lane passed 18 tests in 1,028.03 seconds with two
-    workers on 2026-09-14.
-- [x] Run order, recovery, outage, restart, and retained-state scopes with
-  exclusive ownership. Prove that the previous scope owner is absent before a
-  different scope starts and that the requested scope is ready before use.
-  - Host, direct-`runc`, and Kubernetes recovery scopes passed in their
+  - An earlier source state passed 18 tests in 1,028.03 seconds with two
+    workers on 2026-09-14. The current source passed 7 of 17 tests in 469.71
+    seconds on 2026-09-15. The ten `add_actor` allow-path failures return
+    `EACCES`; this earlier result does not qualify the current source.
+  - The focused same-lifecycle Kubernetes reuse test passed in 86.91 seconds
+    on 2026-09-16. This result qualifies lifecycle reuse only. It does not
+    close the complete Kubernetes gate.
+- [ ] Run order, recovery, outage, restart, and retained-state lifecycles in
+  separate filtered processes. Prove that each requested owner is ready before
+  use.
+  - Host, direct-`runc`, and Kubernetes recovery lifecycles passed in their
     complete platform lanes on 2026-09-14.
+  - Four compatible Host physical tests now use `identity_physical`. They own
+    and stop their temporary physical host and can share the outer platform
+    lifecycle. The group passed four tests in 137.49 seconds on 2026-09-16.
+  - Keep `workload_recovery`, `recovery_tasks`, and `external_roots` separate.
+    Each starts its actor before Node and must not inherit an already-running
+    identity Node.
 - [x] Make exact single-test cleanup and complete-lane cleanup bounded and
   diagnostic on all three platforms. Do not depend on process exit, VM
   deletion, or K3s deletion for normal cleanup.
@@ -654,7 +671,7 @@ count as maintainability migrations.
   serial baselines: 25 Host cases in 889.98 seconds, 16 direct-`runc` cases in
   585.01 seconds, and 18 Kubernetes cases in 2,423.25 seconds.
 - [ ] After all three serial shared lanes pass, prove bounded parallel shared
-  execution at two workers. Keep different scopes serial. Increase the worker
+  execution at two workers. Keep different lifecycles serial. Increase the worker
   count only after repeated runs show no identity, policy, evidence, BPF,
   runtime-hook, or cleanup overlap.
 

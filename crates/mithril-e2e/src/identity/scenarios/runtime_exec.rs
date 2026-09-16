@@ -1,7 +1,7 @@
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
-#[scope = "identity"]
+#[lifecycle = identity]
 fn unlisted_exec_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("runtime-exec")?;
     env.start_control()?;

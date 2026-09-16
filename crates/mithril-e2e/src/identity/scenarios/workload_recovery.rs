@@ -5,7 +5,7 @@ use rustix::io::Errno;
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
-#[scope = "workload-recovery"]
+#[lifecycle = workload_recovery]
 fn workload_recovers<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("workload-recovery")?;
     env.start_control()?;

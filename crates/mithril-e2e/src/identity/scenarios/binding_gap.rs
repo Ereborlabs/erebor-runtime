@@ -14,7 +14,7 @@ use crate::platform::{actor_script, platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
 #[platform_test(host)]
-#[scope = "binding-gap"]
+#[lifecycle = identity_physical]
 fn binding_gap_stays_closed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("binding-gap")?;
     let pin = env.maps().0.to_owned();

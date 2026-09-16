@@ -7,7 +7,7 @@ use erebor_interceptor_abi::{
 use crate::platform::{platform_test, Platform, Task, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
-#[scope = "identity"]
+#[lifecycle = identity]
 fn orphan_keeps_identity<P: Platform>() -> TestResult<()> {
     let active = |task: &Task| {
         let got = &task.snapshot;

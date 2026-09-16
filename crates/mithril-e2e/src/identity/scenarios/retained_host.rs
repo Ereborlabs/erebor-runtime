@@ -2,7 +2,7 @@ use crate::identity::retained::RetainedHost;
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host)]
-#[scope = "retained-host"]
+#[lifecycle = identity_physical]
 fn retained_maps_recover<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("retained-host")?;
     let pin = env.maps().0.to_owned();
