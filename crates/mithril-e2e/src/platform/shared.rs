@@ -697,9 +697,6 @@ impl Shared {
     }
 
     pub(super) fn install_policy(&mut self, name: &str) -> TestResult<()> {
-        if self.resource.is_some() {
-            return Err("the policy is already installed".into());
-        }
         let path = policy_path(&self.root, name)?;
         let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
         let mut resource: WorkloadProtectionPolicy =
@@ -714,23 +711,32 @@ impl Shared {
         resource.metadata.generation = Some(self.policy_generation);
         resource.metadata.resource_version = Some(self.policy_generation.to_string());
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
-        let policy = self
-            .policy
-            .as_ref()
-            .ok_or("Control policy is not running")?;
-        let result = policy.reconcile(&resource, NAMESPACE_UID, &[], now)?;
-        ensure!(
-            result.bundles.is_empty(),
-            InvalidInputSnafu {
-                path: &path,
-                reason: "Control produced a policy bundle without a workload target",
-            }
-        );
-        self.revision = Some(result.source_revision.policy_source_revision_id);
         self.resource = Some(resource);
         self.policy_path = Some(path);
         if self.node_task.is_some() {
             self.sync_policy()?;
+        } else {
+            let policy = self
+                .policy
+                .as_ref()
+                .ok_or("Control policy is not running")?;
+            let resource = self
+                .resource
+                .as_ref()
+                .ok_or("the policy is not installed")?;
+            let path = self
+                .policy_path
+                .as_ref()
+                .ok_or("the policy path is not installed")?;
+            let result = policy.reconcile(resource, NAMESPACE_UID, &[], now)?;
+            ensure!(
+                result.bundles.is_empty(),
+                InvalidInputSnafu {
+                    path,
+                    reason: "Control produced a policy bundle without a workload target",
+                }
+            );
+            self.revision = Some(result.source_revision.policy_source_revision_id);
         }
         Ok(())
     }
@@ -898,8 +904,7 @@ impl Shared {
                 let ready = active
                     && status.active_target_count == 1
                     && !status.active_targets_truncated
-                    && status.scheduled_binding_count == 1
-                    && status.runtime_binding_count == 0
+                    && status.scheduled_binding_count + status.runtime_binding_count == 1
                     && !status.activation_pending
                     && status.control_acknowledged;
                 *last.borrow_mut() = format!("{status:?}");

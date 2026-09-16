@@ -31,6 +31,8 @@ mod non_leader_exec;
 #[cfg(test)]
 mod orphan;
 #[cfg(test)]
+mod policy_replace;
+#[cfg(test)]
 mod recovery_tasks;
 #[cfg(test)]
 mod restricted_roots;
