@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use erebor_interceptor::KernelStateReader;
+use erebor_runtime_ipc::v1::MithrilObservationSnapshot;
 use mithril_node::OciBaseSpecOwner;
 use serde_json::{json, Value};
 
@@ -382,6 +383,10 @@ impl Platform for Runc {
 
     fn recovered(&mut self, pid: u32, name: &str) -> TestResult<Task> {
         self.shared.recovered(pid, name)
+    }
+
+    fn snapshot(&self) -> TestResult<MithrilObservationSnapshot> {
+        self.shared.snapshot()
     }
 
     fn maps(&self) -> (&Path, &KernelStateReader) {

@@ -1487,7 +1487,9 @@ setup, production actions, assertions, and focused test.
   - [x] Pass Host and its complete lifecycle. The exact Host case passed in
     32.49 seconds. The complete Host lifecycle passed 22 tests in 231.30
     seconds on 2026-09-16.
-  - [ ] Pass direct `runc` and its complete lifecycle.
+  - [x] Pass direct `runc` and its complete lifecycle. The exact `runc` case
+    passed in 39.12 seconds. The complete `runc` lifecycle passed 17 tests in
+    220.99 seconds on 2026-09-16.
   - [ ] Pass Kubernetes and its complete lifecycle.
   - [ ] Remove the matching legacy block and compatibility fields only after
     all three platform cases pass.
