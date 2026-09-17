@@ -27,7 +27,7 @@ use erebor_interceptor::{
     bundled_bpf_sha256, KernelHost, KernelHostConfig, KernelHostOwner, KernelObjectLayoutV1,
     BUNDLED_BPF_OBJECT, REQUIRED_IDENTITY_PROGRAMS,
 };
-use erebor_interceptor_abi::{ExecutionSetBindingStateV1, Id128V1};
+use erebor_interceptor_abi::ExecutionSetBindingStateV1;
 use libbpf_rs::{MapCore as _, MapHandle};
 use mithril_node::{
     NativeIdentityInspector, NativeSecurityStateOwner, NativeTaskSnapshotV1, WorkloadBindingConfig,

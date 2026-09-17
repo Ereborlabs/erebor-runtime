@@ -294,6 +294,7 @@ impl Platform for Runc {
         self.shared.move_out(parent)?;
         actor.set_init(pid)?;
         actor.set_group(self.shared.cgroup());
+        self.shared.running(pid)?;
         Ok(actor)
     }
 

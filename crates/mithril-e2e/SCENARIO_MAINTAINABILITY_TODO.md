@@ -329,8 +329,13 @@ reimplement a production owner operation.
 - Keep this TODO inventory complete and current.
 - Implement and verify shared tooling before a dependent scenario.
 - Migrate one behavior at a time. Do not move all scenarios in one commit.
-- Run the smallest exact test first. Then run related tests, harness checks,
-  formatting, clippy, and the complete lightweight suite.
+- Run the smallest exact test first. Pass its Host, direct-`runc`, and
+  Kubernetes cases before the next behavior when all three platforms apply.
+- Run related tests, harness checks, formatting, and clippy for each migrated
+  behavior.
+- Run the complete Host, direct-`runc`, and Kubernetes suites after every
+  third fully migrated behavior. Do not run all complete suites after each
+  behavior.
 - Commit each verified behavior separately.
 - Do not stage `.agents/planning.md` or unrelated files.
 
@@ -1545,8 +1550,10 @@ setup, production actions, assertions, and focused test.
     trace, administrative role 3, one-use consumption, slot reconciliation,
     and replay denial. The complete 24-test lifecycle passed in 230.74 seconds
     on 2026-09-17.
-  - [ ] Pass direct `runc` and its complete lifecycle.
-  - [ ] Pass Kubernetes and its complete lifecycle.
+  - [x] Pass the exact direct-`runc` case. The runc platform now publishes the
+    CRI Running observation after PID 1 starts. The exact case passed in 42.49
+    seconds on 2026-09-17.
+  - [ ] Pass the exact Kubernetes case.
   - [ ] Remove the matching legacy Rust and shell assertions after all three
     platform cases pass.
 - [ ] Node restart and PreStop retention: keep the public restart, inventory,
