@@ -603,7 +603,9 @@ impl Shared {
             .as_ref()
             .ok_or("Control is not running")?
             .address();
-        self.cri = Some(CriFixture::start(&self.cri_path)?);
+        if self.cri.is_none() {
+            self.cri = Some(CriFixture::start(&self.cri_path)?);
+        }
         let config = NodeConfig {
             node_id: NODE_ID.to_owned(),
             kubernetes_node_name: Some("node-a".to_owned()),
@@ -754,6 +756,11 @@ impl Shared {
             self.revision = Some(result.source_revision.policy_source_revision_id);
         }
         Ok(())
+    }
+
+    pub(super) fn restart_node(&mut self) -> TestResult<()> {
+        self.stop_node()?;
+        self.start_node()
     }
 
     pub(super) fn sync_policy(&mut self) -> TestResult<()> {

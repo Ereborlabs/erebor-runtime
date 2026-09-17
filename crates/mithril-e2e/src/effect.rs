@@ -4,6 +4,8 @@ mod child;
 mod fixture_syscalls;
 mod mailbox;
 mod network;
+#[cfg(test)]
+mod node_restart;
 mod runc;
 mod support;
 

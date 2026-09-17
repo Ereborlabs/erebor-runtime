@@ -89,6 +89,9 @@ pub(crate) trait Platform: Sized {
     fn start_node(&mut self) -> TestResult<()> {
         pending("start Node")
     }
+    fn restart_node(&mut self) -> TestResult<()> {
+        pending("restart Node")
+    }
     fn install_policy(&mut self, _name: &str) -> TestResult<()> {
         pending("install policy")
     }

@@ -1604,6 +1604,14 @@ setup, production actions, assertions, and focused test.
     private inputs, and the obsolete skip option.
 - [ ] Node restart and PreStop retention: keep the public restart, inventory,
   binding, and lifecycle operations explicit.
+  - [x] Add `node_restart_keeps_actor` for Host. The 22-line platform test
+    starts Control, Node, policy, and one actor. It restarts the real Node and
+    requires the complete task snapshot and coordinate to stay unchanged. The
+    exact privileged test passed in 53.87 seconds on 2026-09-17.
+  - [ ] Pass the same test on direct `runc`.
+  - [ ] Pass the same test on Kubernetes.
+  - [ ] Remove the matching legacy restart result and orchestration after all
+    three platform cases pass.
 - [ ] Kernel object upgrade: keep the second production object, manifest, map
   ID, link pin, program tag, and running-identity checks explicit.
 - [ ] Post-point-of-no-return evidence and generation retirement: keep the
