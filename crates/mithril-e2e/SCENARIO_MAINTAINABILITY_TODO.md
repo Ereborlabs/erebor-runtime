@@ -1608,7 +1608,8 @@ setup, production actions, assertions, and focused test.
     starts Control, Node, policy, and one actor. It restarts the real Node and
     requires the complete task snapshot and coordinate to stay unchanged. The
     exact privileged test passed in 53.87 seconds on 2026-09-17.
-  - [ ] Pass the same test on direct `runc`.
+  - [x] Pass the same test on direct `runc`. The exact privileged test passed
+    in 64.03 seconds on 2026-09-17.
   - [ ] Pass the same test on Kubernetes.
   - [ ] Remove the matching legacy restart result and orchestration after all
     three platform cases pass.

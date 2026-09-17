@@ -173,6 +173,10 @@ impl Platform for Runc {
         self.shared.start_node()
     }
 
+    fn restart_node(&mut self) -> TestResult<()> {
+        self.shared.restart_node()
+    }
+
     fn install_policy(&mut self, name: &str) -> TestResult<()> {
         self.shared.install_policy(name)
     }
