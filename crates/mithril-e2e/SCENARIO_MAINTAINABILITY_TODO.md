@@ -1700,7 +1700,8 @@ setup, production actions, assertions, and focused test.
     execution IDs.
     - [x] Pass Host and commit it. The exact privileged case passed in 38.39
       seconds on 2026-09-17.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact privileged case passed
+      in 40.87 seconds on 2026-09-17.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove the matching legacy result only after all three cases pass.
   - [x] Replace the native-child case with `child_exec_keeps_identity`. The real
