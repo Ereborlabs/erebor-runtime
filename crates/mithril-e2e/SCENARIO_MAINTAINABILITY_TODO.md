@@ -1702,7 +1702,8 @@ setup, production actions, assertions, and focused test.
       seconds on 2026-09-17.
     - [x] Pass direct `runc` and commit it. The exact privileged case passed
       in 40.87 seconds on 2026-09-17.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact physical case passed in
+      72.75 seconds on 2026-09-17.
     - [ ] Remove the matching legacy result only after all three cases pass.
   - [x] Replace the native-child case with `child_exec_keeps_identity`. The real
     Node admits its declared Python entry with the configured role. Preserve the

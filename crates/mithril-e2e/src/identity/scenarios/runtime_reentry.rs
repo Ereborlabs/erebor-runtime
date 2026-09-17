@@ -1,6 +1,6 @@
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn repeated_entry_is_fresh<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("runtime-reentry")?;
