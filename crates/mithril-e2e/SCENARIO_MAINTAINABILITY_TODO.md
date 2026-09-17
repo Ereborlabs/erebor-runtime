@@ -1498,7 +1498,7 @@ setup, production actions, assertions, and focused test.
   node reconciliation calls and exact map absence checks visible.
 - [ ] Independent additional entries: keep each declaration, stock exec,
   role, rule, process state, and isolation assertion.
-- [ ] Reusable PostStart entry: use the existing
+- [x] Reusable PostStart entry: use the existing
   `external_roots::concurrent_roots_stay_distinct` standard test. Start the
   same signed PostStart entry twice. Require different host PIDs, task
   cookies, process-state IDs, and execution IDs. Require the same active role,
@@ -1513,8 +1513,8 @@ setup, production actions, assertions, and focused test.
   - [x] Pass the exact Kubernetes case and its complete privileged lane. The
     exact case passed in 75.65 seconds. The complete privileged lane passed 21
     tests in 1,451.24 seconds on 2026-09-15 against the retained K3s cluster.
-  - [ ] Remove the matching legacy invocation only when its compatibility
-    command and result field can be removed. Do not hardcode a passing result.
+  - [x] Remove the matching legacy invocation, compatibility result, and shell
+    gate. Keep the existing standard test as the only replacement.
 - [x] Declared probe mismatch and runtime infrastructure effects: keep exact
   argv, role-zero, and denial evidence checks.
   - [x] Add one 94-line standard platform test. Use the production observation
@@ -1696,20 +1696,6 @@ setup, production actions, assertions, and focused test.
     - [x] Remove the legacy distinct-role calculation, compatibility field,
       and shell gate. The shared test asserts all six role and admission-rule
       identities directly.
-  - [x] Replace the reusable-entry reinvocation check with
-    `runtime_reentry::repeated_entry_is_fresh`. Invoke the same declared
-    Python entry twice. Require the same role, admission rule, and policy
-    generation, but distinct host PIDs, task cookies, process-state IDs, and
-    execution IDs.
-    - [x] Pass Host and commit it. The exact privileged case passed in 38.39
-      seconds on 2026-09-17.
-    - [x] Pass direct `runc` and commit it. The exact privileged case passed
-      in 40.87 seconds on 2026-09-17.
-    - [x] Pass Kubernetes and commit it. The exact physical case passed in
-      72.75 seconds on 2026-09-17.
-    - [x] Remove the repeated PostStart action, compatibility result, and shell
-      gate after all three cases passed. Keep the five unrelated entry-policy
-      checks until their own replacements pass.
   - [x] Replace the native-child case with `child_exec_keeps_identity`. The real
     Node admits its declared Python entry with the configured role. Preserve the
     creator-free external-runtime parent, the child's creator and real-parent
