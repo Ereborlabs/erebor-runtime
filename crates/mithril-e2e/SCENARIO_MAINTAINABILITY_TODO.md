@@ -1693,6 +1693,16 @@ setup, production actions, assertions, and focused test.
       lightweight fixture test before the shared readiness wait was corrected.
     - [x] Remove the matching direct-CRI, ordinary exec, TTY exec, and copy
       classification blocks and their obsolete compatibility fields.
+  - [ ] Replace the reusable-entry reinvocation check with
+    `runtime_reentry::repeated_entry_is_fresh`. Invoke the same declared
+    Python entry twice. Require the same role, admission rule, and policy
+    generation, but distinct host PIDs, task cookies, process-state IDs, and
+    execution IDs.
+    - [x] Pass Host and commit it. The exact privileged case passed in 38.39
+      seconds on 2026-09-17.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove the matching legacy result only after all three cases pass.
   - [x] Replace the native-child case with `child_exec_keeps_identity`. The real
     Node admits its declared Python entry with the configured role. Preserve the
     creator-free external-runtime parent, the child's creator and real-parent

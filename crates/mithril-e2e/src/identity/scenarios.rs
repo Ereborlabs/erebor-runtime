@@ -45,6 +45,8 @@ mod runtime_entries;
 #[cfg(test)]
 mod runtime_exec;
 #[cfg(test)]
+mod runtime_reentry;
+#[cfg(test)]
 mod subreaper;
 #[cfg(test)]
 mod workload_recovery;
