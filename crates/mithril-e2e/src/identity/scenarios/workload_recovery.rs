@@ -62,7 +62,11 @@ fn workload_recovers<P: Platform>() -> TestResult<()> {
     assert_eq!(recovery.invalid_task_count, 0);
 
     actor.send(b"effect\n")?;
-    let code = env.actor_code(&mut actor, "denied executable", Duration::from_secs(5))?;
+    actor.close();
+    let code = actor
+        .wait_exit("denied executable", Duration::from_secs(5))?
+        .code()
+        .ok_or("the actor exited without an exit code")?;
     assert_eq!(code, Errno::ACCESS.raw_os_error());
     env.stop()
 }

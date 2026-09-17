@@ -76,13 +76,12 @@ fn approved_exec_consumes_once<P: Platform>() -> TestResult<()> {
         task.snapshot
     );
 
+    actor.close();
     assert_eq!(
-        env.actor_code(
-            &mut actor,
-            "approved administrative actor",
-            Duration::from_secs(30),
-        )?,
-        0
+        actor
+            .wait_exit("approved administrative actor", Duration::from_secs(30))?
+            .code(),
+        Some(0)
     );
     env.wait_slot(&root)?;
     for chunk_index in 0..consumed.expected_argv.chunk_count {
@@ -116,13 +115,12 @@ fn consumed_exec_is_restricted<P: Platform>() -> TestResult<()> {
     let root = env.task(init.id(), "administrative target")?;
     env.approve("sleep", &["0.5"])?;
     let mut actor = env.add_actor("sleep", &["0.5"])?;
+    actor.close();
     assert_eq!(
-        env.actor_code(
-            &mut actor,
-            "approved administrative actor",
-            Duration::from_secs(30),
-        )?,
-        0
+        actor
+            .wait_exit("approved administrative actor", Duration::from_secs(30))?
+            .code(),
+        Some(0)
     );
     env.wait_slot(&root)?;
     let since = env

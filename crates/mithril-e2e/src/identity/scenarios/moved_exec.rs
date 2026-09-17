@@ -69,7 +69,11 @@ fn moved_exec_is_denied<P: Platform>() -> TestResult<()> {
     assert!(move_health.placement_mismatches > old.placement_mismatches);
 
     actor.send(b"exec\n")?;
-    let code = env.actor_code(&mut actor, "moved exec denial", Duration::from_secs(5))?;
+    actor.close();
+    let code = actor
+        .wait_exit("moved exec denial", Duration::from_secs(5))?
+        .code()
+        .ok_or("the actor exited without an exit code")?;
     assert_eq!(code, Errno::ACCESS.raw_os_error());
     let denied = env.health()?;
     assert!(denied.placement_mismatches > move_health.placement_mismatches);

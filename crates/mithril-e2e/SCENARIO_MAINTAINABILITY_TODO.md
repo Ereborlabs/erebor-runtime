@@ -1132,7 +1132,9 @@ test does not close a row when its physical condition or an assertion changed.
     own it with `ProbeCgroup`, and keep its cleanup in the platform.
   - [x] Use `ProcessFixture` exit status for a Kubernetes `add_actor` process.
     The cgroup correction reached the denied exec, but `actor_code` waited for
-    PID 1 to exit. Keep Pod termination observation only for an external PID 1.
+    PID 1 to exit. `ProcessFixture` now owns external PID 1 termination
+    observation. Remove `actor_code` from `Platform` and keep exit assertions
+    in each scenario.
   - [x] Restore the baseline fidelity gaps recorded above and rerun all three
     generated cases.
 - [x] Orphan transition: use `native_orphan.py` through `ProcessFixture` in
@@ -1602,15 +1604,20 @@ setup, production actions, assertions, and focused test.
     and Kubernetes. The launcher now invokes the standard Rust lifecycle and
     recovery tests. This removes the 628-line guest scenario, its 301 lines of
     private inputs, and the obsolete skip option.
-- [ ] Node restart and PreStop retention: keep the public restart, inventory,
+- [ ] Node restart and PreStop retention: keep the public stop, start, inventory,
   binding, and lifecycle operations explicit.
-  - [x] Add `node_restart_keeps_actor` for Host. The 22-line platform test
-    starts Control, Node, policy, and one actor. It restarts the real Node and
+  - [x] Remove the scenario-specific `restart_node` operation. Add the generic
+    `stop_node` operation and keep `stop_node`, `start_node`, and `node_ready`
+    visible in the 23-line scenario. Remove the `actor_code` and redundant
+    `pending` platform operations without removing their assertions.
+  - [x] Add `node_restart_keeps_actor` for Host. The platform test starts
+    Control, Node, policy, and one actor. It stops and starts the real Node and
     requires the complete task snapshot and coordinate to stay unchanged. The
-    exact privileged test passed in 53.87 seconds on 2026-09-17.
+    corrected exact test passed in 60.27 seconds on 2026-09-17.
   - [x] Pass the same test on direct `runc`. The exact privileged test passed
-    in 64.03 seconds on 2026-09-17.
-  - [ ] Pass the same test on Kubernetes.
+    in 63.08 seconds on 2026-09-17.
+  - [x] Pass the same test on Kubernetes. The exact physical test passed in
+    107.89 seconds on 2026-09-17.
   - [ ] Remove the matching legacy restart result and orchestration after all
     three platform cases pass.
 - [ ] Kernel object upgrade: keep the second production object, manifest, map

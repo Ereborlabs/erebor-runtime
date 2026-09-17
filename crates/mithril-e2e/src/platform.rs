@@ -89,8 +89,8 @@ pub(crate) trait Platform: Sized {
     fn start_node(&mut self) -> TestResult<()> {
         pending("start Node")
     }
-    fn restart_node(&mut self) -> TestResult<()> {
-        pending("restart Node")
+    fn stop_node(&mut self) -> TestResult<()> {
+        pending("stop Node")
     }
     fn install_policy(&mut self, _name: &str) -> TestResult<()> {
         pending("install policy")
@@ -174,18 +174,6 @@ pub(crate) trait Platform: Sized {
         pending("wait for recovered task")
     }
     fn snapshot(&self) -> TestResult<MithrilObservationSnapshot>;
-    fn actor_code(
-        &mut self,
-        actor: &mut crate::process::ProcessFixture,
-        operation: &str,
-        limit: Duration,
-    ) -> TestResult<i32> {
-        actor.close();
-        actor
-            .wait_exit(operation, limit)?
-            .code()
-            .ok_or_else(|| "the actor exited without an exit code".into())
-    }
     fn maps(&self) -> (&Path, &KernelStateReader);
     fn state<T>(&self, map: &str, key: &[u8], name: &str) -> TestResult<Option<T>>
     where
@@ -327,13 +315,6 @@ pub(crate) trait Platform: Sized {
         Ok(IdentityRuntimeConfigV1::try_read_from_bytes(&bytes)
             .map_err(|source| format!("identity runtime configuration is invalid: {source}"))?
             .next_id)
-    }
-    fn pending(&self, task: u64) -> TestResult<bool> {
-        let (_, reader) = self.maps();
-        Ok(reader
-            .lookup("pending_execs", &task.to_ne_bytes())
-            .context(InterceptorSnafu)?
-            .is_some())
     }
     fn thread(&mut self, pid: u32, ns_tid: u32, task: u64, name: &str) -> TestResult<Thread> {
         let pin = self.maps().0;

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, File};
 use std::ops::{Deref, DerefMut};
+use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -1288,6 +1289,43 @@ impl Platform for Kubernetes {
         self.wait_node()
     }
 
+    fn stop_node(&mut self) -> TestResult<()> {
+        if !self.hook_up {
+            return Ok(());
+        }
+        let nodes = Api::<Node>::all(self.client.clone());
+        let patch = json!({"metadata": {"labels": {(SELECTOR): null}}});
+        self.runtime.block_on(nodes.patch(
+            &self.node_name,
+            &PatchParams::default(),
+            &Patch::Merge(&patch),
+        ))?;
+        let sets = Api::<DaemonSet>::namespaced(self.client.clone(), &self.system);
+        let last = RefCell::new(String::from("<absent>"));
+        let path = KubernetesState::resource(&self.system, "daemonset", "mithril-node");
+        wait_for(
+            &path,
+            "Node DaemonSet stop",
+            STOP_LIMIT,
+            || match self.runtime.block_on(sets.get("mithril-node")) {
+                Ok(set) => {
+                    *last.borrow_mut() = format!("{:?}", set.status);
+                    Ok(set
+                        .status
+                        .is_some_and(|status| status.desired_number_scheduled == 0)
+                        .then_some(()))
+                }
+                Err(source) => {
+                    *last.borrow_mut() = source.to_string();
+                    Ok(None)
+                }
+            },
+            || format!("last DaemonSet state: {}", last.borrow()),
+        )?;
+        self.hook_up = false;
+        Ok(())
+    }
+
     fn install_policy(&mut self, fixture: &str) -> TestResult<()> {
         let path = policy_path(&self.root, fixture)?;
         let mut policy: WorkloadProtectionPolicy = serde_json::from_slice(&fs::read(&path)?)?;
@@ -1525,7 +1563,30 @@ impl Platform for Kubernetes {
                 .write(true)
                 .open(&input_path)
                 .context(IoSnafu { path: &input_path })?;
-            ProcessFixture::from_pid(pid, input, &script)
+            let mut actor = ProcessFixture::from_pid(pid, input, &script);
+            let k3s = self.k3s_path.clone();
+            let kube = self.kube_path.clone();
+            let namespace = self.namespace.clone();
+            actor.set_exit_probe(move || {
+                let output = Command::new(&k3s)
+                    .arg("kubectl")
+                    .args(["--kubeconfig"])
+                    .arg(&kube)
+                    .args(["-n", &namespace, "get", "pod", ACTOR, "-o"])
+                    .arg("jsonpath={.status.containerStatuses[0].state.terminated.exitCode}")
+                    .output()?;
+                if !output.status.success() {
+                    return Ok(None);
+                }
+                let value = String::from_utf8_lossy(&output.stdout);
+                let value = value.trim();
+                if value.is_empty() {
+                    return Ok(None);
+                }
+                let code = value.parse::<i32>().map_err(std::io::Error::other)?;
+                Ok(Some(std::process::ExitStatus::from_raw(code << 8)))
+            });
+            actor
         };
         actor.set_init(pid)?;
         actor.set_group(&cgroup);
@@ -1795,48 +1856,6 @@ impl Platform for Kubernetes {
             .enable_all()
             .build()?;
         Ok(runtime.block_on(client.snapshot())?)
-    }
-
-    fn actor_code(
-        &mut self,
-        actor: &mut ProcessFixture,
-        operation: &str,
-        limit: Duration,
-    ) -> TestResult<i32> {
-        actor.close();
-        if actor.owns_status() {
-            return actor
-                .wait_exit(operation, limit)?
-                .code()
-                .ok_or_else(|| "the actor exited without an exit code".into());
-        }
-        let pods = Api::<Pod>::namespaced(self.client.clone(), &self.namespace);
-        let path = KubernetesState::resource(&self.namespace, "pod", ACTOR);
-        let last = RefCell::new(String::from("<absent>"));
-        Ok(wait_for(
-            &path,
-            operation,
-            limit,
-            || match self.runtime.block_on(pods.get(ACTOR)) {
-                Ok(pod) => {
-                    *last.borrow_mut() = format!("{:?}", pod.status);
-                    Ok(pod
-                        .status
-                        .and_then(|status| status.container_statuses)
-                        .and_then(|statuses| {
-                            statuses.into_iter().find(|status| status.name == CONTAINER)
-                        })
-                        .and_then(|status| status.state)
-                        .and_then(|state| state.terminated)
-                        .map(|state| state.exit_code))
-                }
-                Err(source) => {
-                    *last.borrow_mut() = source.to_string();
-                    Ok(None)
-                }
-            },
-            || format!("last Pod state: {}", last.borrow()),
-        )?)
     }
 
     fn maps(&self) -> (&Path, &KernelStateReader) {

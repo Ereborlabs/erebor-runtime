@@ -1,6 +1,6 @@
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = node_restart]
 fn node_restart_keeps_actor<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("node-restart")?;
@@ -11,7 +11,8 @@ fn node_restart_keeps_actor<P: Platform>() -> TestResult<()> {
     let mut actor = env.start_actor("ready.py", &[])?;
     let before = env.task(actor.id(), "actor before Node restart")?;
 
-    env.restart_node()?;
+    env.stop_node()?;
+    env.start_node()?;
     env.node_ready()?;
     let after = env.task(actor.id(), "actor after Node restart")?;
 

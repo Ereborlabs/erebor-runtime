@@ -348,7 +348,7 @@ impl SharedState {
         Ok(())
     }
 
-    fn stop_node(&mut self) -> TestResult<()> {
+    pub(super) fn stop_node(&mut self) -> TestResult<()> {
         if let Some(stop) = self.node_stop.take() {
             stop.send_replace(true);
         }
@@ -756,11 +756,6 @@ impl Shared {
             self.revision = Some(result.source_revision.policy_source_revision_id);
         }
         Ok(())
-    }
-
-    pub(super) fn restart_node(&mut self) -> TestResult<()> {
-        self.stop_node()?;
-        self.start_node()
     }
 
     pub(super) fn sync_policy(&mut self) -> TestResult<()> {

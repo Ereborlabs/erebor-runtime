@@ -52,6 +52,7 @@ fn process_gone(source: &std::io::Error) -> bool {
 pub(crate) struct ProcessFixture {
     child: Option<Child>,
     raw_pid: Option<u32>,
+    exit_probe: Option<Box<dyn FnMut() -> std::io::Result<Option<ExitStatus>> + Send>>,
     #[cfg(test)]
     actor_pid: u32,
     path: PathBuf,
@@ -105,6 +106,7 @@ impl ProcessFixture {
             tasks: Vec::new(),
             child: Some(child),
             raw_pid: None,
+            exit_probe: None,
             #[cfg(test)]
             actor_pid,
             path: path.to_owned(),
@@ -117,6 +119,7 @@ impl ProcessFixture {
         Self {
             child: None,
             raw_pid: None,
+            exit_probe: None,
             actor_pid: pid,
             path: path.to_owned(),
             stdin: Some(Box::new(input)),
@@ -355,6 +358,7 @@ impl ProcessFixture {
         let mut fixture = Self {
             child: None,
             raw_pid: Some(pid),
+            exit_probe: None,
             actor_pid: pid,
             path: path.to_owned(),
             stdin: Some(Box::new(File::from(input))),
@@ -565,13 +569,26 @@ impl ProcessFixture {
     }
 
     pub(crate) fn owns_status(&self) -> bool {
-        self.child.is_some() || self.raw_pid.is_some()
+        self.child.is_some() || self.raw_pid.is_some() || self.exit_probe.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_exit_probe<F>(&mut self, probe: F)
+    where
+        F: FnMut() -> std::io::Result<Option<ExitStatus>> + Send + 'static,
+    {
+        self.exit_probe = Some(Box::new(probe));
     }
 
     pub(crate) fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
         if let Some(child) = self.child.as_mut() {
             return child
                 .try_wait()
+                .context(IoSnafu { path: &self.path })
+                .inspect(|status| self.stopped |= status.is_some());
+        }
+        if let Some(probe) = self.exit_probe.as_mut() {
+            return probe()
                 .context(IoSnafu { path: &self.path })
                 .inspect(|status| self.stopped |= status.is_some());
         }

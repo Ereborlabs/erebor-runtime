@@ -51,7 +51,7 @@ fn fatal_exec_is_terminal<P: Platform>() -> TestResult<()> {
     assert_eq!(pre.creator_task_cookie, Some(root.snapshot.task_cookie));
     assert_eq!(pre.active_role_id, root.snapshot.active_role_id);
     assert_eq!(pre.exec_guard_state, ExecGuardStateV1::None as u8);
-    assert!(!env.pending(pre.task_cookie)?);
+    assert!(env.pending_exec(pre.task_cookie)?.is_none());
 
     actor.send(b"continue\n")?;
     let status = actor.wait_exit("fatal exec", Duration::from_secs(30))?;

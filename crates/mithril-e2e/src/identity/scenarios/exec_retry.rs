@@ -57,7 +57,7 @@ fn failed_exec_restores<P: Platform>() -> TestResult<()> {
     assert_eq!(pre.real_parent_task_cookie, root.snapshot.task_cookie);
     assert_eq!(pre.active_role_id, root.snapshot.active_role_id);
     assert!(pre.root_class.is_none() && pre.installed_role_class.is_none());
-    assert!(!env.pending(pre.task_cookie)?);
+    assert!(env.pending_exec(pre.task_cookie)?.is_none());
     active(&before);
 
     actor.send(b"continue\n")?;
@@ -72,7 +72,7 @@ fn failed_exec_restores<P: Platform>() -> TestResult<()> {
     assert_eq!(same.image_provenance_id, pre.image_provenance_id);
     assert_eq!(same.active_role_id, pre.active_role_id);
     assert!(same.root_class.is_none() && same.installed_role_class.is_none());
-    assert!(!env.pending(same.task_cookie)?);
+    assert!(env.pending_exec(same.task_cookie)?.is_none());
     active(&restored);
 
     actor.wait_stop(pid, "retry exec stop")?;
@@ -86,7 +86,7 @@ fn failed_exec_restores<P: Platform>() -> TestResult<()> {
     assert_ne!(post.image_provenance_id, same.image_provenance_id);
     assert_eq!(post.active_role_id, same.active_role_id);
     assert!(post.root_class.is_none() && post.installed_role_class.is_none());
-    assert!(!env.pending(post.task_cookie)?);
+    assert!(env.pending_exec(post.task_cookie)?.is_none());
     active(&after);
 
     let status = actor.wait_exit("failed-exec actor exit", Duration::from_secs(10))?;
