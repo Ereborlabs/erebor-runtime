@@ -7,7 +7,7 @@ use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn running_task_uses_new_policy<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("policy-replace")?;

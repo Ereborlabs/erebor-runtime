@@ -190,8 +190,9 @@ reimplement a production owner operation.
 - [x] Prove the filtered direct-`runc` lifecycle. The `identity_runc` process
   passed 17 tests in 222.98 seconds on 2026-09-16.
 - [x] Prove the filtered Kubernetes lifecycle. The `identity_kubernetes`
-  process passed 18 tests in 455.40 seconds on 2026-09-16. It retained one
-  Control Deployment and one Node DaemonSet.
+  process passed 19 tests in 541.91 seconds on 2026-09-16. It retained one
+  Control Deployment and one Node DaemonSet. Actor setup waits for the
+  container ID, attaches standard input, and then records the live host PID.
 - [x] Prove serial same-lifecycle reuse with a focused physical test. Start
   real Control and Node, stop one test fixture, enter the lifecycle again, and
   require the same Node pin owner.
@@ -1519,7 +1520,9 @@ setup, production actions, assertions, and focused test.
   - [x] Pass direct `runc` and its complete lifecycle with the corrected
     policy update. The exact case passed in 50.32 seconds. The complete
     lifecycle passed 18 tests in 246.86 seconds on 2026-09-16.
-  - [ ] Pass Kubernetes and its complete lifecycle.
+  - [x] Pass Kubernetes and its complete lifecycle. The exact case passed in
+    79.26 seconds. The complete 19-test lifecycle passed in 541.91 seconds on
+    2026-09-16.
   - [ ] Remove the matching legacy block and compatibility fields only after
     all three platform cases pass.
 - [ ] Administrative exec: keep Control authorization, node slot arm, stock
