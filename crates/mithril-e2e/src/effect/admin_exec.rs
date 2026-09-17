@@ -1,8 +1,13 @@
 use std::{cell::RefCell, time::Duration};
 
 use erebor_interceptor_abi::{
-    ExecutionApprovalSlotStateV1, EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ARGV_V1,
+    ExecutionApprovalSlotStateV1, ExecutionArgvChunkKeyV1, ExecutionArgvChunkV1,
+    KernelEffectFamilyV1, KernelEffectOperationV1,
+    EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ARGV_V1,
+    EXECUTION_APPROVAL_TRACE_STAGE_EXECVEAT_ENTRY_V1,
+    EXECUTION_APPROVAL_TRACE_STAGE_EXECVE_ENTRY_V1,
 };
+use zerocopy::IntoBytes as _;
 
 use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
@@ -26,10 +31,9 @@ fn approved_exec_consumes_once<P: Platform>() -> TestResult<()> {
     let denied = unapproved.to_string().to_lowercase();
     assert!(
         denied.contains("status: 13")
-            || denied.contains("denied")
-            || denied.contains("400 bad request")
-            || denied.contains("403 forbidden"),
-        "{denied}"
+            || denied.contains("exit code 13")
+            || denied.contains("permission denied"),
+        "unapproved actor did not reach runtime enforcement: {denied}"
     );
 
     env.approve("sleep", &["0.5"])?;
@@ -62,14 +66,39 @@ fn approved_exec_consumes_once<P: Platform>() -> TestResult<()> {
     assert_ne!(task.snapshot.admitted_entry_rule_id, 0);
     assert_eq!(task.snapshot.active_role_id, 3);
     assert_eq!(
+        task.snapshot.profile_generation_ref_id,
+        root.snapshot.profile_generation_ref_id
+    );
+    assert_eq!(
         consumed.state,
         ExecutionApprovalSlotStateV1::Consumed,
         "task: {:?}",
         task.snapshot
     );
 
-    actor.stop()?;
+    assert_eq!(
+        env.actor_code(
+            &mut actor,
+            "approved administrative actor",
+            Duration::from_secs(30),
+        )?,
+        0
+    );
     env.wait_slot(&root)?;
+    for chunk_index in 0..consumed.expected_argv.chunk_count {
+        let key = ExecutionArgvChunkKeyV1 {
+            snapshot_id: consumed.expected_argv.snapshot_id,
+            chunk_index,
+            reserved: 0,
+        };
+        assert!(env
+            .state::<ExecutionArgvChunkV1>(
+                "execution_argv_expected_chunks",
+                key.as_bytes(),
+                "expected argv chunk",
+            )?
+            .is_none());
+    }
     assert!(env.add_actor("sleep", &["0.5"]).is_err());
     init.stop()?;
     env.stop()
@@ -85,25 +114,32 @@ fn approval_argv_mismatch_traced<P: Platform>() -> TestResult<()> {
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
     let root = env.task(init.id(), "administrative target")?;
-
     env.approve("sleep", &["0.5"])?;
     let armed = env.approval(&root)?.ok_or("approval slot is missing")?;
     assert_eq!(armed.state, ExecutionApprovalSlotStateV1::Armed);
-    let mismatch = match env.add_actor("sleep", &["1"]) {
-        Err(error) => error,
-        Ok(_) => return Err("argv-mismatched administrative exec succeeded".into()),
+    assert!(armed.expected_argv.is_valid() && armed.expected_argv.chunk_count == 1);
+    let chunk = ExecutionArgvChunkKeyV1 {
+        snapshot_id: armed.expected_argv.snapshot_id,
+        chunk_index: 0,
+        reserved: 0,
     };
-    let denied = mismatch.to_string().to_lowercase();
-    assert!(
-        denied.contains("status: 13") || denied.contains("denied"),
-        "{denied}"
-    );
+    let chunk_exists = |env: &P| {
+        env.state::<ExecutionArgvChunkV1>(
+            "execution_argv_expected_chunks",
+            chunk.as_bytes(),
+            "expected argv chunk",
+        )
+        .map(|chunk| chunk.is_some())
+    };
+    assert!(chunk_exists(&env)?);
+    if env.add_actor("sleep", &["1"]).is_ok() {
+        return Err("argv-mismatched administrative exec succeeded".into());
+    }
     let armed = env.approval(&root)?.ok_or("approval slot disappeared")?;
     assert_eq!(armed.state, ExecutionApprovalSlotStateV1::Armed);
-
     let path = env.maps().0.to_owned();
     let last = RefCell::new(String::from("<none>"));
-    let trace = wait_for(
+    let (trace, denied) = wait_for(
         &path,
         "administrative argv mismatch trace",
         Duration::from_secs(30),
@@ -119,16 +155,52 @@ fn approval_argv_mismatch_traced<P: Platform>() -> TestResult<()> {
                 })?
                 .recent_effects;
             *last.borrow_mut() = format!("{:?}", events.iter().rev().take(16).collect::<Vec<_>>());
-            Ok(events.into_iter().find(|event| {
+            let trace = events.iter().find(|event| {
                 event.execution_approval_failed_checks
                     == EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ARGV_V1
                     && event.execution_approval_slot_state
                         == ExecutionApprovalSlotStateV1::Armed as u32
-            }))
+            });
+            let denied = trace.and_then(|trace| {
+                events.iter().find(|event| {
+                    event.task_cookie == trace.task_cookie
+                        && event.reason == "UNSUPPORTED_OBJECT"
+                        && event.effect_family == KernelEffectFamilyV1::Exec as u32
+                        && event.operation == KernelEffectOperationV1::Execute as u32
+                })
+            });
+            Ok(trace.cloned().zip(denied.cloned()))
         },
         || format!("last effects: {}", last.borrow()),
     )?;
     assert!(trace.execution_approval_exec_attempt_sequence > 0);
+    assert!(
+        trace.execution_approval_trace_stage
+            == u32::from(EXECUTION_APPROVAL_TRACE_STAGE_EXECVE_ENTRY_V1)
+            || trace.execution_approval_trace_stage
+                == u32::from(EXECUTION_APPROVAL_TRACE_STAGE_EXECVEAT_ENTRY_V1)
+    );
+    let expected = (
+        trace.execution_approval_expected_mount_namespace_inode,
+        trace.execution_approval_expected_mount_id,
+        trace.execution_approval_expected_filesystem_device,
+        trace.execution_approval_expected_inode,
+        trace.execution_approval_expected_inode_generation,
+    );
+    let observed = (
+        trace.execution_approval_observed_mount_namespace_inode,
+        trace.execution_approval_observed_mount_id,
+        trace.execution_approval_observed_filesystem_device,
+        trace.execution_approval_observed_inode,
+        trace.execution_approval_observed_inode_generation,
+    );
+    assert!(expected.0 > 0);
+    assert_eq!(expected, observed);
+    assert_eq!(denied.active_role_id, 2);
+    assert_eq!(denied.admitted_entry_rule_id, 0);
+    assert_eq!(denied.kernel_result, -libc::EACCES);
+    assert!(env.pending_exec(trace.task_cookie)?.is_none());
+    assert!(chunk_exists(&env)?);
     init.stop()?;
     env.stop()
 }

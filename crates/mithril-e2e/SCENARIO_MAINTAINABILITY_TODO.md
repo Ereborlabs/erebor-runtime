@@ -416,7 +416,7 @@ These Rust files exceed 2,000 lines:
 
 | Source | Current lines |
 | --- | ---: |
-| `effect/runc.rs` | 8,339 |
+| `effect/runc.rs` | 7,518 |
 | `identity.rs` | 6,394 |
 | `effect.rs` | 5,118 |
 | `effect/child.rs` | 4,472 |
@@ -449,7 +449,7 @@ scenario at a time.
 
 | Source | Lines | Current responsibility | Required end state |
 | --- | ---: | --- | --- |
-| `harness/vm/run.sh` | 732 | Builds one VM, runs native, direct-`runc`, and Kubernetes probes, checks JSON, and checks cleanup | Provision the VM, copy inputs, invoke exact Rust tests, collect diagnostics, and remove resources only |
+| `harness/vm/run.sh` | 703 | Builds one VM, runs native, direct-`runc`, and Kubernetes probes, checks JSON, and checks cleanup | Provision the VM, copy inputs, invoke exact Rust tests, collect diagnostics, and remove resources only |
 | `harness/vm/test.sh` | 791 | Tests shell text, fake Kubernetes oracles, cleanup, and provider wiring | Test only launcher argument, provider, and cleanup behavior that must remain in shell |
 | `harness/vm/guest.sh` | 1,764 | Installs K3s and its hook, then owns K3s qualification, CRI effect, and administrative-exec scenarios | Install or remove K3s and the runtime hook, then invoke exact Rust tests |
 | `harness/vm/two-node-convergence.sh` | 4,371 | Provisions two nodes and owns policy, runtime, effect, exception, restart, upgrade, and cleanup assertions | Provision or reuse two nodes, deploy Mithril, invoke exact Rust tests, collect diagnostics, and clean up only |
@@ -1142,9 +1142,9 @@ test does not close a row when its physical condition or an assertion changed.
     then starts the actor with its declared executable and complete argv.
   - [x] Add the direct-`runc` `add_actor` implementation. It uses stock
     `runc exec` with the declared interpreter and complete actor argv.
-  - [x] Add the Kubernetes `add_actor` implementation. It mounts and runs the
-    same actor through real `kubectl exec` with the declared interpreter and
-    complete argv.
+  - [x] Add the Kubernetes `add_actor` implementation. It runs the same actor
+    through real `kubectl exec` with the declared interpreter and complete
+    argv.
   - [x] Add the small generated test with the shared actor and explicit result
     assertions.
   - [x] Reproduce the Host failure before the added actor starts. Confirm that
@@ -1331,6 +1331,12 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] After the old assertion removal, rerun the unchanged Host,
     direct-`runc`, and Kubernetes cases. They passed in 32.21, 41.25, and
     110.87 seconds.
+  - [x] Restore actor-first behavior after administrative-exec work. Direct
+    `runc` now reserves the next policy container ID and does not publish a
+    Running observation before policy exists. Kubernetes accepts zero active
+    targets before Node starts and keeps the actor stdin across the K3s
+    runtime restart. The unchanged direct-`runc` case passed. The unchanged
+    Kubernetes case passed in 70.05 seconds on 2026-09-17.
   - [x] Rerun the old direct-runtime probe. Its remaining iterator retry,
     ptrace bootstrap, internal exec, probe isolation, denial, post-cutover,
     and cleanup checks passed.
@@ -1560,6 +1566,29 @@ setup, production actions, assertions, and focused test.
     not require `get` on Pods. Rebuilt Node and Control images from the current
     source before the final run. The exact case passed in 67.98 seconds on
     2026-09-17.
+  - [x] Preserve the legacy process-success, policy-generation, expected-argv,
+    mount-object trace, denied-role, errno, and pending-exec cleanup checks in
+    the small tests. The 90-line success case passed on Host in 29.32 seconds,
+    direct `runc` in 30.81 seconds, and Kubernetes in 72.56 seconds. The
+    95-line trace case passed on Host and direct `runc`.
+  - [ ] Keep ordinary Kubernetes `pods/exec` tasks in the restricted external
+    role. Invoke the Control admission webhook only for the trusted Mithril
+    approval group. A matching armed slot can then select the approved role.
+  - [x] Remove the matching direct-`runc` approval sequence, result fields,
+    shell result checks, and dead waits. Keep the separate recovered-container
+    binding assertion for its own migration. This removes 478 net lines from
+    `effect/runc.rs` and nine lines from `run.sh`. The remaining direct-`runc`
+    probe passed. Its result omits the migrated fields and retains recovery,
+    restart, upgrade, terminal-evidence, external-entry, and cleanup results.
+  - [x] Recheck the complete platform lifecycles after the assertion and
+    cleanup changes. Host passed 25 tests in 239.49 seconds. Direct `runc`
+    passed 20 tests in 222.46 seconds. Kubernetes passed 20 tests in 517.59
+    seconds after approval rechecked stable Node readiness at its operation
+    boundary. The unchanged Kubernetes moved-exec test also passed.
+  - [ ] Replace the Kubernetes post-consumption direct CRI exec assertion.
+    It must remain a restricted external root with role 2 after the approved
+    slot is consumed. Do not remove the old shell lane until a small Rust test
+    executes this exact CRI operation.
   - [ ] Remove the matching legacy Rust and shell assertions after all three
     platform cases pass.
 - [ ] Node restart and PreStop retention: keep the public restart, inventory,

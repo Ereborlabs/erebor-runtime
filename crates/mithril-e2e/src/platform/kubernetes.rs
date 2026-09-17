@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::env;
-use std::fs;
+use std::fs::{self, File};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -141,6 +141,7 @@ impl KubernetesState {
     }
 
     fn approve_entry(&mut self, command: &str, args: &[&str]) -> TestResult<()> {
+        self.ready_node()?;
         self.start_forward()?;
         self.approval.approve(
             &self.runtime,
@@ -815,19 +816,37 @@ impl KubernetesState {
             .actor_cgroup
             .as_ref()
             .ok_or("the Kubernetes actor has no recorded cgroup")?;
-        let mut command = Command::new(&self.exec_path);
-        let kube = self.approval.kubeconfig().unwrap_or(&self.kube_path);
-        command
-            .arg("--kubeconfig")
-            .arg(kube)
-            .arg("--namespace")
-            .arg(&self.namespace)
-            .arg("--pod")
-            .arg(ACTOR)
-            .arg("--container")
-            .arg(CONTAINER)
-            .arg(program)
-            .args(args);
+        let mut command = if let Some(kube) = self.approval.kubeconfig() {
+            let mut command = Command::new(&self.exec_path);
+            command
+                .arg("--kubeconfig")
+                .arg(kube)
+                .arg("--namespace")
+                .arg(&self.namespace)
+                .arg("--pod")
+                .arg(ACTOR)
+                .arg("--container")
+                .arg(CONTAINER);
+            command
+        } else {
+            let mut command = Command::new(&self.k3s_path);
+            command
+                .arg("kubectl")
+                .arg("--kubeconfig")
+                .arg(&self.kube_path)
+                .args([
+                    "-n",
+                    &self.namespace,
+                    "exec",
+                    "-i",
+                    ACTOR,
+                    "-c",
+                    CONTAINER,
+                    "--",
+                ]);
+            command
+        };
+        command.arg(program).args(args);
         let procs = group.join("cgroup.procs");
         let before = fs::read_to_string(&procs)?
             .split_ascii_whitespace()
@@ -1313,7 +1332,7 @@ impl Platform for Kubernetes {
                 .block_on(policies.create(&PostParams::default(), &policy))?;
         }
         self.policy_name = Some(name);
-        self.wait_policy(u32::from(self.actor_id.is_some()))
+        self.wait_policy(u32::from(self.hook_up && self.actor_id.is_some()))
     }
 
     fn sync_policy(&mut self) -> TestResult<()> {
@@ -1405,23 +1424,8 @@ impl Platform for Kubernetes {
                 format!("last runtime state: {}; Pod state: {pod}", last_id.borrow())
             },
         )?;
-        let mut command = Command::new(&self.k3s_path);
-        command
-            .arg("kubectl")
-            .args(["--kubeconfig"])
-            .arg(&self.kube_path)
-            .args([
-                "-n",
-                &self.namespace,
-                "attach",
-                "-i",
-                ACTOR,
-                "-c",
-                CONTAINER,
-            ]);
-        let mut actor = ProcessFixture::spawn(&mut command, &script)?;
         let last_pid = RefCell::new(String::from("<absent>"));
-        let (pid, cgroup) = actor.wait_path(
+        let (pid, cgroup) = wait_for(
             &script,
             "Kubernetes actor runtime identity",
             READY_LIMIT,
@@ -1496,7 +1500,32 @@ impl Platform for Kubernetes {
             )?;
         }
 
-        actor.ensure_running("Kubernetes actor attach")?;
+        let mut actor = if self.hook_up {
+            let mut command = Command::new(&self.k3s_path);
+            command
+                .arg("kubectl")
+                .args(["--kubeconfig"])
+                .arg(&self.kube_path)
+                .args([
+                    "-n",
+                    &self.namespace,
+                    "attach",
+                    "-i",
+                    ACTOR,
+                    "-c",
+                    CONTAINER,
+                ]);
+            let mut actor = ProcessFixture::spawn(&mut command, &script)?;
+            actor.ensure_running("Kubernetes actor attach")?;
+            actor
+        } else {
+            let input_path = PathBuf::from(format!("/proc/{pid}/fd/0"));
+            let input = File::options()
+                .write(true)
+                .open(&input_path)
+                .context(IoSnafu { path: &input_path })?;
+            ProcessFixture::from_pid(pid, input, &script)
+        };
         actor.set_init(pid)?;
         actor.set_group(&cgroup);
         self.actor_id = Some(id);
@@ -1773,6 +1802,7 @@ impl Platform for Kubernetes {
         operation: &str,
         limit: Duration,
     ) -> TestResult<i32> {
+        actor.close();
         if actor.owns_status() {
             return actor
                 .wait_exit(operation, limit)?

@@ -63,6 +63,9 @@ webhooks:
         port: {{ .Values.control.administrativeExec.port }}
         path: /kubernetes/{{ $token }}/admit
       caBundle: {{ $ca | quote }}
+    matchConditions:
+      - name: approved-mithril-exec
+        expression: "'mithril:administrative-exec' in request.userInfo.groups"
     rules:
       - operations: ["CONNECT"]
         apiGroups: [""]

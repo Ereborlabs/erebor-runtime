@@ -500,16 +500,7 @@ if [[ $entry_role_runtime_only == true ]]; then
     )) and
     .independent_entry_roles_are_distinct and
     .reusable_entry_reinvocation_isolated and
-    .administrative_unapproved_exec_denied and
     .administrative_recovered_runtime_binding and
-    .execution_approval_trace_observed and
-    (.execution_approval_prepare_trace_stage == 2 or
-      .execution_approval_prepare_trace_stage == 3) and
-    .execution_approval_prepare_trace_failed_checks == 268435456 and
-    .administrative_approval_consumed_once and
-    .administrative_role_installed and
-    .administrative_replay_exec_denied and
-    .execution_approval_slot_reconciled and
     .node_owner_restart_preserved_running_application and
     .prestop_retained_during_runtime_inventory_omission and
     .kernel_upgrade_preserved_map_ids and

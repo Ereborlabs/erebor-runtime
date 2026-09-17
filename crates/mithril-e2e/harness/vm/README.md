@@ -165,9 +165,9 @@ starts the real Control and node services. It uses a disposable HTTPS OIDC provi
 authorization-code PKCE and explicit self-approval. `kubectl-mithril` obtains
 one memory-only credential. The stock Kubernetes TokenReview and CONNECT
 admission paths must arm one exact node slot. The matching runtime root must
-receive the approved administrative role. Ordinary `kubectl exec` must fail
-admission. A later direct-runtime task with the same executable must stay
-restricted after slot consumption. This is the single-node physical
+receive the approved administrative role. Ordinary `kubectl exec` must enter
+with the restricted external role. A later direct-runtime task with the same
+executable must stay restricted after slot consumption. This is the single-node physical
 `ADMIN-EXEC-APPROVAL-001` path. Source and unit tests own its malformed,
 replay, expiry, disconnect, and contention cases.
 

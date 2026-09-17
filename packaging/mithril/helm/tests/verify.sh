@@ -48,6 +48,8 @@ administrative_rbac=$(helm template mithril "$chart_directory" \
 ! grep -Fq "kind: ServiceAccount" <<<"$administrative_rbac"
 grep -Fq 'resources: ["pods/exec"]' <<<"$administrative_rbac"
 grep -Fq 'verbs: ["get", "create"]' <<<"$administrative_rbac"
+grep -Fq "'mithril:administrative-exec' in request.userInfo.groups" \
+  <<<"$administrative_rbac"
 
 node_logs=$(helm template mithril "$chart_directory" \
   --namespace mithril-system \

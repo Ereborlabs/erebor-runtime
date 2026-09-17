@@ -170,8 +170,15 @@ impl SharedState {
         &self.admit_path
     }
 
-    pub(super) fn actor_id(&self) -> TestResult<&str> {
-        Ok(&self.binding()?.container_id)
+    pub(super) fn actor_id(&self) -> TestResult<String> {
+        if let Some(binding) = &self.binding {
+            return Ok(binding.container_id.clone());
+        }
+        let generation = self
+            .policy_generation
+            .checked_add(1)
+            .ok_or("the test policy generation overflowed")?;
+        Ok(format!("{generation:064x}"))
     }
 
     pub(super) fn has_policy(&self) -> bool {

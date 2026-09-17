@@ -945,6 +945,7 @@ impl ProcessFixture {
             for (id, fd) in &self.tasks {
                 match pidfd_send_signal(fd, Signal::KILL) {
                     Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+                    Err(rustix::io::Errno::PERM | rustix::io::Errno::ACCESS) => {}
                     Err(source) => {
                         failed = Some(format!("kill tracked process {id}: {source}"));
                     }

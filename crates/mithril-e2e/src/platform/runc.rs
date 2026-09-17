@@ -274,7 +274,7 @@ impl Platform for Runc {
         };
         fs::write(&path, config)?;
 
-        let id = self.shared.actor_id()?.to_owned();
+        let id = self.shared.actor_id()?;
         self.container_id = Some(id.clone());
         let mut command = Command::new(&self.runc_path);
         command
@@ -294,7 +294,9 @@ impl Platform for Runc {
         self.shared.move_out(parent)?;
         actor.set_init(pid)?;
         actor.set_group(self.shared.cgroup());
-        self.shared.running(pid)?;
+        if self.shared.has_policy() {
+            self.shared.running(pid)?;
+        }
         Ok(actor)
     }
 

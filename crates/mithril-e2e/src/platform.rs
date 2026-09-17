@@ -177,6 +177,7 @@ pub(crate) trait Platform: Sized {
         operation: &str,
         limit: Duration,
     ) -> TestResult<i32> {
+        actor.close();
         actor
             .wait_exit(operation, limit)?
             .code()

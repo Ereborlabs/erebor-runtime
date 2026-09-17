@@ -18,30 +18,26 @@ use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner, KernelSt
 use erebor_interceptor_abi::{
     BindingLifecycleStateV1, CanonicalMountRootKeyV1, CanonicalMountRootV1,
     EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExactFileObjectKeyV1, ExecGuardStateV1,
-    ExecutionApprovalSlotStateV1, ExecutionApprovalSlotV1, ExecutionSetBindingStateV1, Id128V1,
-    KernelEffectFamilyV1, KernelEffectOperationV1, PendingExecStateV1, PendingExecV1,
-    ProcessSecurityStateV1, RecoveredContainerActivationPhaseV1, RecoveredContainerActivationV1,
-    TaskCoordinateStateV1, EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ARGV_V1,
-    EXECUTION_APPROVAL_TRACE_STAGE_EXECVEAT_ENTRY_V1,
-    EXECUTION_APPROVAL_TRACE_STAGE_EXECVE_ENTRY_V1,
+    ExecutionSetBindingStateV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
+    PendingExecStateV1, PendingExecV1, ProcessSecurityStateV1, RecoveredContainerActivationPhaseV1,
+    RecoveredContainerActivationV1, TaskCoordinateStateV1,
 };
 use erebor_runtime_ipc::v1::MithrilEffectObservation;
 use k8s_cri::v1::ContainerState;
 use mithril_control::{
-    encode_administrative_authorization_fixture, lower_kubernetes_policy, policy_custom_resource,
-    CapabilityRecord, KubernetesWorkloadIdentityV1, PolicyBundleV1, PolicyDeliveryCandidateV1,
+    lower_kubernetes_policy, policy_custom_resource, CapabilityRecord,
+    KubernetesWorkloadIdentityV1, PolicyBundleV1, PolicyDeliveryCandidateV1,
     PolicyDeliveryOperationV1, PolicySignerTrust, PolicySignerTrustV1, PolicyTargetSnapshotV1,
-    PolicyTargetV1, ProfileCandidateArtifactV1, ResolveAdministrativeExec, TrustGenerationV1,
-    WorkloadProtectionPolicySpec, WorkloadTargetFactV1,
+    PolicyTargetV1, ProfileCandidateArtifactV1, TrustGenerationV1, WorkloadProtectionPolicySpec,
+    WorkloadTargetFactV1,
 };
 use mithril_node::{
-    AdministrativeAuthorizationConfig, AdministrativeExecTestOwner, EffectObservationStore,
-    EvidenceWalCapacityPolicyV1, EvidenceWalLimits, NativeIdentityInspector,
-    NativeSecurityStateOwner, NativeTaskSnapshotV1, NodeBindingReconciliation,
-    NodePolicyDeliveryOwner, NodePolicyGenerationOwner, ObservationCanonicalizer,
-    RuntimeSeccompTestNotification, RuntimeSeccompTestServer, ScheduledRuntimeBindingV1,
-    TrustCache, WorkloadBindingConfig, WorkloadBindingOwner, CONTAINER_NAME_ANNOTATION,
-    IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
+    AdministrativeAuthorizationConfig, EffectObservationStore, EvidenceWalCapacityPolicyV1,
+    EvidenceWalLimits, NativeIdentityInspector, NativeSecurityStateOwner, NativeTaskSnapshotV1,
+    NodeBindingReconciliation, NodePolicyDeliveryOwner, NodePolicyGenerationOwner,
+    ObservationCanonicalizer, RuntimeSeccompTestNotification, RuntimeSeccompTestServer,
+    ScheduledRuntimeBindingV1, TrustCache, WorkloadBindingConfig, WorkloadBindingOwner,
+    CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
     POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
 };
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
@@ -252,16 +248,7 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub independent_entries: Vec<RuncEntryRoleProbeV1>,
     pub independent_entry_roles_are_distinct: bool,
     pub reusable_entry_reinvocation_isolated: bool,
-    pub administrative_unapproved_exec_denied: bool,
     pub administrative_recovered_runtime_binding: bool,
-    pub execution_approval_trace_observed: bool,
-    pub execution_approval_prepare_trace_stage: u32,
-    pub execution_approval_prepare_trace_failed_checks: u64,
-    pub execution_approval_prepare_trace_syscall_flags: u32,
-    pub administrative_approval_consumed_once: bool,
-    pub administrative_role_installed: bool,
-    pub administrative_replay_exec_denied: bool,
-    pub execution_approval_slot_reconciled: bool,
     pub node_owner_restart_preserved_running_application: bool,
     pub prestop_retained_during_runtime_inventory_omission: bool,
     pub retained_mount_views_survived_source_exit: bool,
@@ -6007,69 +5994,9 @@ impl EffectTestRunner {
         administrative_binding.container_generation = 2;
         administrative_binding.root_cgroup_path = Some(administrative_cgroup_path.clone());
         administrative_binding.arm_initial_root = false;
-        let tenant_id = Id128V1::new(0xaaaa_aaaa_aaaa_4aaa, 0x8aaa_aaaa_aaaa_aaaa);
-        let cluster_uid = Id128V1::new(0x1000_0000_0000_4000, 0x8000_0000_0000_0002);
-        let trust_domain_id = Id128V1::new(0x2222_2222_2222_4222, 0x8222_2222_2222_2222);
-        let issuer_id = Id128V1::new(0xbbbb_bbbb_bbbb_4bbb, 0x8bbb_bbbb_bbbb_bbbb);
-        let node_id = Id128V1::new(0xcccc_cccc_cccc_4ccc, 0x8ccc_cccc_cccc_cccc);
-        let id_string = |id: Id128V1| {
-            uuid::Uuid::from_bytes(id.to_be_bytes())
-                .hyphenated()
-                .to_string()
-        };
-        ensure!(
-            administrative_binding.cluster_uid == id_string(cluster_uid),
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the administrative fixture cluster differs from the live binding",
-            }
-        );
-        let now_utc_ns = i64::try_from(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|error| {
-                    InvalidInputSnafu {
-                        path: pin_root,
-                        reason: format!("the administrative fixture clock is invalid: {error}"),
-                    }
-                    .build()
-                })?
-                .as_nanos(),
-        )
-        .map_err(|error| {
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: format!("the administrative fixture clock exceeds i64: {error}"),
-            }
-            .build()
-        })?;
-        let administrative_signing_key = SigningKey::from_bytes(&[0x5a; 32]);
-        let administrative_key_path = fixture_root.join("administrative-public-key.hex");
-        fs::write(
-            &administrative_key_path,
-            hex::encode(administrative_signing_key.verifying_key().to_bytes()),
-        )
-        .context(IoSnafu {
-            path: &administrative_key_path,
-        })?;
-        let administrative_key_id = "direct-runc-administrative-key";
-        let administrative_config = AdministrativeAuthorizationConfig {
-            tenant_id: id_string(tenant_id),
-            cluster_uid: id_string(cluster_uid),
-            trust_domain_id: id_string(trust_domain_id),
-            issuer_id: id_string(issuer_id),
-            key_id: administrative_key_id.to_owned(),
-            public_key_path: administrative_key_path,
-            sequence_epoch: 1,
-            valid_from_utc_ns: now_utc_ns.saturating_sub(60_000_000_000),
-            valid_until_utc_ns: now_utc_ns.saturating_add(300_000_000_000),
-            maximum_clock_skew_ns: 1_000_000_000,
-        };
         let mut administrative_node_config = replacement_config.clone();
         administrative_node_config.policy_candidates.clear();
         administrative_node_config.kubernetes_node_name = Some("recovered-entry-node".to_owned());
-        administrative_node_config.administrative_authorization =
-            Some(administrative_config.clone());
         administrative_node_config.runtime_admission = Some(mithril_node::RuntimeAdmissionConfig {
             socket_path: fixture_root.join("runtime-admission.sock"),
             trusted_start_hook_path: oci_stage_hook.clone(),
@@ -6081,7 +6008,6 @@ impl EffectTestRunner {
             effect_controller_cgroup_path: current_unified_cgroup()?,
             reconciliation_interval_ms: 2_000,
         });
-        let base_config = administrative_node_config.clone();
         let (delivered_bundle, trust_generation) = RuncPolicyFixture::scheduled_delivery(
             &administrative_node_config,
             &[&replacement_binding, &administrative_binding],
@@ -6089,6 +6015,24 @@ impl EffectTestRunner {
             &policy.replacement_artifact_path,
             &policy_fixture.join("test-signing-key.hex"),
         )?;
+        administrative_node_config.administrative_authorization =
+            Some(AdministrativeAuthorizationConfig {
+                tenant_id: delivered_bundle.candidate.tenant_id.clone(),
+                cluster_uid: administrative_binding.cluster_uid.clone(),
+                trust_domain_id: delivered_bundle
+                    .profile_artifact
+                    .header
+                    .trust_domain_id
+                    .clone(),
+                issuer_id: delivered_bundle.profile_artifact.header.issuer_id.clone(),
+                key_id: delivered_bundle.candidate.signing_key_id.clone(),
+                public_key_path: policy_fixture.join("test-public-key.hex"),
+                sequence_epoch: 1,
+                valid_from_utc_ns: delivered_bundle.candidate.issued_utc_ns,
+                valid_until_utc_ns: delivered_bundle.candidate.expires_utc_ns,
+                maximum_clock_skew_ns: 1_000_000_000,
+            });
+        let base_config = administrative_node_config.clone();
         let mut trust = TrustCache::load(&fixture_root).context(NodeSnafu)?;
         trust
             .install_with_policy(
@@ -6202,359 +6146,6 @@ impl EffectTestRunner {
                 ),
             }
         );
-        let administrative_executable = "/bin/busybox";
-        let administrative_arguments = ["sleep", "20"];
-        let verify_unapproved_administrative_exec = |name: &str| -> Result<bool> {
-            let marker = observations.cursor();
-            let pid_path = fixture_root.join(format!("{name}.pid"));
-            let stdout = output_directory.join(format!("{name}.stdout"));
-            let stderr = output_directory.join(format!("{name}.stderr"));
-            let mut child = administrative_container.spawn_exec_with_process_spec(
-                administrative_executable,
-                &administrative_arguments,
-                &pid_path,
-                &stdout,
-                &stderr,
-            )?;
-            let snapshot = wait_for_pid_file(&pid_path, &mut child)?
-                .and_then(|pid| inspector.snapshot(pid).ok().flatten());
-            let status = wait_for_child(&mut child)?;
-            reader
-                .poll(Duration::from_millis(100))
-                .context(InterceptorSnafu)?;
-            wait_for_reason(&reader, &observations, marker, "UNSUPPORTED_OBJECT")?;
-            let denied = snapshot.is_none()
-                && observations.recent_since(marker).iter().any(|event| {
-                    event.reason == "UNSUPPORTED_OBJECT"
-                        && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
-                        && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
-                        && event.active_role_id == administrative_binding.external_role_id
-                        && event.admitted_entry_rule_id == 0
-                        && event.kernel_result == -13
-                });
-            ensure!(
-                denied,
-                InvalidInputSnafu {
-                    path: &stderr,
-                    reason: format!(
-                        "an unapproved administrative exec entered the protected container: status={status}, snapshot={snapshot:?}, stderr={}, effects={:?}",
-                        fs::read_to_string(&stderr).unwrap_or_default().trim(),
-                        recent_effect_summary(&observations, marker)
-                    ),
-                }
-            );
-            Ok(true)
-        };
-        let administrative_unapproved_exec_denied =
-            verify_unapproved_administrative_exec("administrative-unapproved")?;
-
-        let mut administrative_owner = AdministrativeExecTestOwner::load(
-            &administrative_config,
-            &fixture_root.join("administrative-authorization"),
-            node_id,
-            node_boot_id,
-        )
-        .context(NodeSnafu)?;
-        let administrative_request_id = Id128V1::new(0xd111_1111_1111_4111, 0x8111_1111_1111_1111);
-        let administrative_resolution = administrative_owner
-            .resolve(
-                &host,
-                &restarted_bindings,
-                &restarted_policy_owner,
-                ResolveAdministrativeExec {
-                    request_id: administrative_request_id.to_be_bytes().to_vec(),
-                    namespace: administrative_binding.namespace.as_bytes().to_vec(),
-                    pod_uid: administrative_binding.pod_uid.as_bytes().to_vec(),
-                    container_name: administrative_binding.container_name.as_bytes().to_vec(),
-                    full_container_id: administrative_binding.container_id.as_bytes().to_vec(),
-                    container_generation: administrative_binding.container_generation,
-                    argv: vec![
-                        administrative_executable.as_bytes().to_vec(),
-                        b"sleep".to_vec(),
-                        b"20".to_vec(),
-                    ],
-                    stream_flags: 0,
-                    approved_role_id: "administrator".to_owned(),
-                },
-            )
-            .context(NodeSnafu)?;
-        let expires_at_utc_ns = now_utc_ns.saturating_add(120_000_000_000);
-        let (administrative_envelope, administrative_body_sha256) =
-            encode_administrative_authorization_fixture(
-                &administrative_signing_key,
-                administrative_key_id.as_bytes(),
-                tenant_id,
-                cluster_uid,
-                trust_domain_id,
-                issuer_id,
-                1,
-                1,
-                Id128V1::new(0xd222_2222_2222_4222, 0x8222_2222_2222_2222),
-                Id128V1::new(0xd333_3333_3333_4333, 0x8333_3333_3333_3333),
-                now_utc_ns,
-                expires_at_utc_ns,
-                Id128V1::new(0xd444_4444_4444_4444, 0x8444_4444_4444_4444),
-                Id128V1::new(0xd444_4444_4444_4444, 0x8444_4444_4444_4444),
-                &administrative_resolution,
-            )
-            .context(PolicySnafu)?;
-        administrative_owner
-            .verify_and_arm(
-                &host,
-                &restarted_bindings,
-                &restarted_policy_owner,
-                &administrative_envelope,
-                administrative_body_sha256,
-            )
-            .context(NodeSnafu)?;
-        let armed_slots = host
-            .map_keys("execution_approval_slots")
-            .context(InterceptorSnafu)?;
-        ensure!(
-            armed_slots.len() == 1
-                && host
-                    .lookup_map("execution_approval_slots", &armed_slots[0])
-                    .context(InterceptorSnafu)?
-                    .and_then(|value| ExecutionApprovalSlotV1::try_read_from_bytes(&value).ok())
-                    .is_some_and(|slot| slot.state == ExecutionApprovalSlotStateV1::Armed),
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the signed administrative approval did not arm one kernel slot",
-            }
-        );
-        ensure!(
-            host.map_keys("execution_argv_expected_chunks")
-                .context(InterceptorSnafu)?
-                .len()
-                == 1,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason:
-                    "the signed administrative approval did not publish its immutable argv chunk",
-            }
-        );
-
-        let mismatch_marker = observations.cursor();
-        let mismatch_pid_path = fixture_root.join("administrative-argv-mismatch.pid");
-        let mismatch_stdout = output_directory.join("administrative-argv-mismatch.stdout");
-        let mismatch_stderr = output_directory.join("administrative-argv-mismatch.stderr");
-        let mut mismatch_child = administrative_container.spawn_exec_with_process_spec(
-            administrative_executable,
-            &["sleep", "19"],
-            &mismatch_pid_path,
-            &mismatch_stdout,
-            &mismatch_stderr,
-        )?;
-        let mismatch_snapshot = wait_for_pid_file(&mismatch_pid_path, &mut mismatch_child)?
-            .and_then(|pid| inspector.snapshot(pid).ok().flatten());
-        let mismatch_status = wait_for_child(&mut mismatch_child)?;
-        reader
-            .poll(Duration::from_millis(100))
-            .context(InterceptorSnafu)?;
-        wait_for_reason(
-            &reader,
-            &observations,
-            mismatch_marker,
-            "UNSUPPORTED_OBJECT",
-        )?;
-        let mismatch_denied = observations
-            .recent_since(mismatch_marker)
-            .iter()
-            .any(|event| {
-                event.reason == "UNSUPPORTED_OBJECT"
-                    && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
-                    && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
-                    && event.active_role_id == administrative_binding.external_role_id
-                    && event.admitted_entry_rule_id == 0
-                    && event.kernel_result == -13
-            });
-        let execution_approval_prepare_trace = observations
-            .recent_since(mismatch_marker)
-            .iter()
-            .find(|event| {
-                (event.execution_approval_trace_stage
-                    == u32::from(EXECUTION_APPROVAL_TRACE_STAGE_EXECVE_ENTRY_V1)
-                    || event.execution_approval_trace_stage
-                        == u32::from(EXECUTION_APPROVAL_TRACE_STAGE_EXECVEAT_ENTRY_V1))
-                    && event.execution_approval_failed_checks
-                        == EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ARGV_V1
-                    && event.execution_approval_slot_state
-                        == ExecutionApprovalSlotStateV1::Armed as u32
-                    && event.execution_approval_exec_attempt_sequence > 0
-                    && event.execution_approval_expected_mount_namespace_inode > 0
-            })
-            .cloned();
-        let execution_approval_trace_observed = execution_approval_prepare_trace
-            .as_ref()
-            .is_some_and(|event| {
-                event.execution_approval_expected_mount_namespace_inode
-                    == event.execution_approval_observed_mount_namespace_inode
-                    && event.execution_approval_expected_mount_id
-                        == event.execution_approval_observed_mount_id
-                    && event.execution_approval_expected_filesystem_device
-                        == event.execution_approval_observed_filesystem_device
-                    && event.execution_approval_expected_inode
-                        == event.execution_approval_observed_inode
-                    && event.execution_approval_expected_inode_generation
-                        == event.execution_approval_observed_inode_generation
-            });
-        let slot_remained_armed = host
-            .lookup_map("execution_approval_slots", &armed_slots[0])
-            .context(InterceptorSnafu)?
-            .and_then(|value| ExecutionApprovalSlotV1::try_read_from_bytes(&value).ok())
-            .is_some_and(|slot| slot.state == ExecutionApprovalSlotStateV1::Armed);
-        let mismatch_capture_removed = host
-            .map_keys("execution_argv_provisional_chunks")
-            .context(InterceptorSnafu)?
-            .is_empty();
-        let mismatch_never_entered_approved_role = mismatch_snapshot.as_ref().is_none_or(|task| {
-            task.active_role_id == administrative_binding.external_role_id
-                && task.admitted_entry_rule_id == 0
-                && task.profile_generation_ref_id == administrative_generation
-        });
-        ensure!(
-            mismatch_never_entered_approved_role
-                && mismatch_denied
-                && execution_approval_trace_observed
-                && execution_approval_prepare_trace.is_some()
-                && slot_remained_armed
-                && mismatch_capture_removed,
-            InvalidInputSnafu {
-                path: &mismatch_stderr,
-                reason: format!(
-                    "the argv mismatch did not preserve an armed slot and emit its BPF identity trace: status={mismatch_status}, snapshot={mismatch_snapshot:?}, stderr={}, effects={:?}",
-                    fs::read_to_string(&mismatch_stderr)
-                        .unwrap_or_default()
-                        .trim(),
-                    recent_effect_summary(&observations, mismatch_marker),
-                ),
-            }
-        );
-
-        let administrative_marker = observations.cursor();
-        let administrative_pid_path = fixture_root.join("administrative-approved.pid");
-        let administrative_stdout = output_directory.join("administrative-approved.stdout");
-        let administrative_stderr = output_directory.join("administrative-approved.stderr");
-        let mut administrative_child = administrative_container.spawn_exec_with_process_spec(
-            administrative_executable,
-            &administrative_arguments,
-            &administrative_pid_path,
-            &administrative_stdout,
-            &administrative_stderr,
-        )?;
-        let administrative_pid = match wait_for_detached_pid_file(&administrative_pid_path) {
-            Ok(pid) => pid,
-            Err(error) => {
-                reader
-                    .poll(Duration::from_millis(100))
-                    .context(InterceptorSnafu)?;
-                let slot = host
-                    .lookup_map("execution_approval_slots", &armed_slots[0])
-                    .ok()
-                    .flatten()
-                    .and_then(|value| ExecutionApprovalSlotV1::try_read_from_bytes(&value).ok());
-                return InvalidInputSnafu {
-                    path: &administrative_stderr,
-                    reason: format!(
-                        "{error}; execution approval slot after exec: {slot:?}; stderr={}; effects={:?}",
-                        fs::read_to_string(&administrative_stderr)
-                            .unwrap_or_default()
-                            .trim(),
-                        recent_effect_summary(&observations, administrative_marker),
-                    ),
-                }
-                .fail();
-            }
-        };
-        let administrative_snapshot = wait_for_detached_task_snapshot(
-            &inspector,
-            administrative_pid,
-            &reader,
-            &observations,
-            administrative_marker,
-            &administrative_stderr,
-        )
-        .map_err(|error| {
-            let slot = host
-                .lookup_map("execution_approval_slots", &armed_slots[0])
-                .ok()
-                .flatten()
-                .and_then(|value| ExecutionApprovalSlotV1::try_read_from_bytes(&value).ok());
-            InvalidInputSnafu {
-                path: &administrative_stderr,
-                reason: format!("{error}; execution approval slot after exec: {slot:?}"),
-            }
-            .build()
-        })?;
-        let administrative_status = wait_for_child(&mut administrative_child)?;
-        eprintln!(
-            "administrative effect trace: {:?}",
-            observations
-                .recent_since(administrative_marker)
-                .iter()
-                .filter(|event| event.task_cookie == administrative_snapshot.task_cookie)
-                .map(|event| (
-                    event.reason.as_str(),
-                    event.effect_family,
-                    event.operation,
-                    event.active_role_id,
-                    event.admitted_entry_rule_id,
-                    event.kernel_result,
-                    event.execution_approval_trace_stage,
-                    event.execution_approval_failed_checks,
-                ))
-                .collect::<Vec<_>>()
-        );
-        let administrative_role_installed = administrative_status.success()
-            && administrative_snapshot.active_role_id == policy.role_ids["administrator"]
-            && administrative_snapshot.profile_generation_ref_id == administrative_generation
-            && administrative_snapshot.admitted_entry_rule_id > 0;
-        ensure!(
-            administrative_role_installed,
-            InvalidInputSnafu {
-                path: &administrative_stderr,
-                reason: format!(
-                    "the approved administrative exec did not install its role: status={administrative_status}, snapshot={administrative_snapshot:?}, stderr={}",
-                    fs::read_to_string(&administrative_stderr)
-                        .unwrap_or_default()
-                        .trim()
-                ),
-            }
-        );
-        let administrative_approval_consumed_once = host
-            .lookup_map("execution_approval_slots", &armed_slots[0])
-            .context(InterceptorSnafu)?
-            .and_then(|value| ExecutionApprovalSlotV1::try_read_from_bytes(&value).ok())
-            .is_some_and(|slot| slot.state == ExecutionApprovalSlotStateV1::Consumed);
-        ensure!(
-            administrative_approval_consumed_once,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the approved administrative exec did not consume its kernel slot",
-            }
-        );
-        administrative_owner.reconcile(&host).context(NodeSnafu)?;
-        let execution_approval_slot_reconciled = host
-            .map_keys("execution_approval_slots")
-            .context(InterceptorSnafu)?
-            .is_empty()
-            && host
-                .map_keys("execution_argv_expected_chunks")
-                .context(InterceptorSnafu)?
-                .is_empty()
-            && host
-                .map_keys("execution_argv_provisional_chunks")
-                .context(InterceptorSnafu)?
-                .is_empty();
-        ensure!(
-            execution_approval_slot_reconciled,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the node owner did not reconcile the consumed execution approval slot",
-            }
-        );
-        let administrative_replay_exec_denied =
-            verify_unapproved_administrative_exec("administrative-replay")?;
         administrative_container.cleanup()?;
         restarted_bindings
             .retire_binding_id_for_test(&host, &administrative_binding.binding_id)
@@ -6916,22 +6507,7 @@ impl EffectTestRunner {
             independent_entries,
             independent_entry_roles_are_distinct,
             reusable_entry_reinvocation_isolated,
-            administrative_unapproved_exec_denied,
             administrative_recovered_runtime_binding,
-            execution_approval_trace_observed,
-            execution_approval_prepare_trace_stage: execution_approval_prepare_trace
-                .as_ref()
-                .map_or(0, |event| event.execution_approval_trace_stage),
-            execution_approval_prepare_trace_failed_checks: execution_approval_prepare_trace
-                .as_ref()
-                .map_or(0, |event| event.execution_approval_failed_checks),
-            execution_approval_prepare_trace_syscall_flags: execution_approval_prepare_trace
-                .as_ref()
-                .map_or(0, |event| event.execution_approval_syscall_flags),
-            administrative_approval_consumed_once,
-            administrative_role_installed,
-            administrative_replay_exec_denied,
-            execution_approval_slot_reconciled,
             node_owner_restart_preserved_running_application,
             prestop_retained_during_runtime_inventory_omission,
             retained_mount_views_survived_source_exit,
@@ -7663,60 +7239,6 @@ fn wait_for_pid_file(path: &Path, child: &mut Child) -> Result<Option<u32>> {
             InvalidInputSnafu {
                 path,
                 reason: "timed out waiting for an entry host PID",
-            }
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn wait_for_detached_pid_file(path: &Path) -> Result<u32> {
-    let deadline = Instant::now() + WAIT_LIMIT;
-    loop {
-        if let Ok(value) = fs::read_to_string(path) {
-            if let Ok(pid) = value.trim().parse::<u32>() {
-                if pid > 0 {
-                    return Ok(pid);
-                }
-            }
-        }
-        ensure!(
-            Instant::now() < deadline,
-            InvalidInputSnafu {
-                path,
-                reason: "timed out waiting for a detached entry host PID",
-            }
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn wait_for_detached_task_snapshot(
-    inspector: &NativeIdentityInspector,
-    host_pid: u32,
-    reader: &erebor_interceptor::EffectObservationReader,
-    observations: &EffectObservationStore,
-    marker: u64,
-    stderr: &Path,
-) -> Result<NativeTaskSnapshotV1> {
-    let deadline = Instant::now() + WAIT_LIMIT;
-    loop {
-        reader
-            .poll(Duration::from_millis(25))
-            .context(InterceptorSnafu)?;
-        if let Some(snapshot) = inspector.snapshot(host_pid).context(NodeSnafu)? {
-            if snapshot.admitted_entry_rule_id > 0 {
-                return Ok(snapshot);
-            }
-        }
-        ensure!(
-            Instant::now() < deadline,
-            InvalidInputSnafu {
-                path: stderr,
-                reason: format!(
-                    "detached entry PID {host_pid} did not publish its admitted snapshot: stderr={}, effects={:?}",
-                    fs::read_to_string(stderr).unwrap_or_default().trim(),
-                    recent_effect_summary(observations, marker)
-                ),
             }
         );
         thread::sleep(Duration::from_millis(10));
