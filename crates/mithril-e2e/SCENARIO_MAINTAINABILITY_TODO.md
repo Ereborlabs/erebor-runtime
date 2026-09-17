@@ -1503,7 +1503,7 @@ setup, production actions, assertions, and focused test.
   - [x] Remove the matching direct-`runc` block and its two compatibility
     fields after all three platform cases pass. Keep the separate two-node
     Kubernetes case until its complete scenario has a verified replacement.
-- [ ] Live policy replacement: keep delivery, acknowledgement, guarded process
+- [x] Live policy replacement: keep delivery, acknowledgement, guarded process
   migration, later exec, and old-generation holder checks explicit.
   - [x] Add one 97-line standard platform test. Use one shared actor and the
     existing `install_policy` operation for the update.
@@ -1523,8 +1523,11 @@ setup, production actions, assertions, and focused test.
   - [x] Pass Kubernetes and its complete lifecycle. The exact case passed in
     79.26 seconds. The complete 19-test lifecycle passed in 541.91 seconds on
     2026-09-16.
-  - [ ] Remove the matching legacy block and compatibility fields only after
-    all three platform cases pass.
+  - [x] Remove the matching legacy actor protocol, assertions, and three
+    compatibility fields after all three platform cases pass. Keep the policy
+    update that later restart and entry cases still consume. Schema 40 and the
+    remaining privileged direct-`runc` probe passed. This reduced
+    `effect/runc.rs` by 235 lines.
 - [ ] Administrative exec: keep Control authorization, node slot arm, stock
   runtime exec, one-use consumption, replay denial, trace, and reconciliation
   operations explicit.

@@ -252,9 +252,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub independent_entries: Vec<RuncEntryRoleProbeV1>,
     pub independent_entry_roles_are_distinct: bool,
     pub reusable_entry_reinvocation_isolated: bool,
-    pub live_replacement_migrated_running_application: bool,
-    pub replacement_generation_descendant_default_exec_allowed: bool,
-    pub live_replacement_entries_use_new_generation: bool,
     pub administrative_unapproved_exec_denied: bool,
     pub administrative_recovered_runtime_binding: bool,
     pub execution_approval_trace_observed: bool,
@@ -3459,18 +3456,6 @@ impl EffectTestRunner {
                 "read -r reader_queue_burst_start </var/lib/mithril-convergence/reader-queue-burst-start.fifo; reader_queue_burst_count=0; while [ \"$reader_queue_burst_count\" -lt 70000 ]; do command : </srv/team/blue/secrets/models/secret || true; reader_queue_burst_count=$((reader_queue_burst_count + 1)); done 2>/dev/null; ",
                 "echo READER_QUEUE_BURST_COMPLETE >/var/lib/mithril-convergence/reader-queue-burst.result; read -r reader_queue_post_drain_start </var/lib/mithril-convergence/reader-queue-post-drain-start.fifo; ",
                 "if ( /bin/sleep 0 ); then echo READER_QUEUE_POST_DRAIN_ALLOWED >/var/lib/mithril-convergence/reader-queue-post-drain.result; else echo READER_QUEUE_POST_DRAIN_DENIED >/var/lib/mithril-convergence/reader-queue-post-drain.result; fi; ",
-                "read -r replacement_exec_request </var/lib/mithril-convergence/replacement-exec-request; ",
-                "if [ \"$replacement_exec_request\" = EXEC ]; then if ( /bin/sleep 0 ); then echo REPLACEMENT_EXEC_ALLOWED >/var/lib/mithril-convergence/replacement-exec-result; else echo REPLACEMENT_EXEC_DENIED >/var/lib/mithril-convergence/replacement-exec-result; fi; fi; ",
-                "exec 3<>/var/lib/mithril-convergence/mount-reconciliation.fifo; ",
-                "if /bin/mount --bind /home/secret /home/attack 2>/var/lib/mithril-convergence/replacement-container-bind-mount.stderr; then replacement_mount_result=MOUNT_READY; else replacement_mount_result=MOUNT_FAILED; fi; ",
-                "read -r replacement_mount_reconciled <&3; exec 3>&-; ",
-                "echo \"$replacement_mount_result\" >/var/lib/mithril-convergence/replacement-container-bind-mount.result; ",
-                "if /bin/cat /home/kubelet-attack/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/var/lib/mithril-convergence/replacement-kubernetes-subpath.result; else echo PATH_TREE_DENIED >/var/lib/mithril-convergence/replacement-kubernetes-subpath.result; fi; ",
-                "if /bin/cat /home/kubelet-attack-newer/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/var/lib/mithril-convergence/replacement-kubernetes-subpath-newer.result; else echo PATH_TREE_DENIED >/var/lib/mithril-convergence/replacement-kubernetes-subpath-newer.result; fi; ",
-                "if /bin/cat /home/attack/models/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/var/lib/mithril-convergence/replacement-container-bind.result; else echo PATH_TREE_DENIED >/var/lib/mithril-convergence/replacement-container-bind.result; fi; ",
-                "if /bin/cat /home/alice/secrets/models/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/var/lib/mithril-convergence/replacement-single-wildcard.result; else echo PATH_TREE_DENIED >/var/lib/mithril-convergence/replacement-single-wildcard.result; fi; ",
-                "if /bin/cat /srv/team/blue/secrets/models/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/var/lib/mithril-convergence/replacement-recursive-wildcard.result; else echo PATH_TREE_DENIED >/var/lib/mithril-convergence/replacement-recursive-wildcard.result; fi; ",
-                "if /bin/cat /var/lib/mithril-convergence/protected.lifecycle-ready >/dev/null 2>&1; then echo CONTROL_ALLOWED >/var/lib/mithril-convergence/replacement-path-tree-control.result; else echo CONTROL_DENIED >/var/lib/mithril-convergence/replacement-path-tree-control.result; fi; ",
                 "startup_result=/var/lib/mithril-convergence/startup-bootstrap.result; startup_stderr=/var/lib/mithril-convergence/startup-bootstrap.stderr; : >\"$startup_stderr\"; echo BUSYBOX_CHECK >\"$startup_result\"; ",
                 "if [ -r /bin/busybox ]; then echo MKDIR_BEGIN >\"$startup_result\"; if mkdir -p /var/lib/mithril 2>>\"$startup_stderr\"; then echo MKDIR_READY >\"$startup_result\"; else startup_status=$?; echo \"MKDIR_FAILED:$startup_status\" >\"$startup_result\"; exit 91; fi; ",
                 "echo TMPFS_MOUNT_BEGIN >\"$startup_result\"; exec 3<>/var/lib/mithril-convergence/mount-reconciliation.fifo; startup_mount_status=0; mount -t tmpfs -o mode=0755 tmpfs /var/lib/mithril 2>>\"$startup_stderr\" || startup_mount_status=$?; read -r startup_mount_reconciled <&3; exec 3>&-; if [ \"$startup_mount_status\" -eq 0 ]; then echo TMPFS_MOUNT_READY >\"$startup_result\"; else echo \"TMPFS_MOUNT_FAILED:$startup_mount_status\" >\"$startup_result\"; exit 92; fi; ",
@@ -5162,6 +5147,7 @@ impl EffectTestRunner {
             thread::sleep(Duration::from_millis(25));
         }
         let reader_queue_post_drain_marker = observations.cursor();
+        let mount_seq = observations.mount_change_sequence();
         fs::write(
             role_directory.join("reader-queue-post-drain-start.fifo"),
             b"start\n",
@@ -5420,257 +5406,16 @@ impl EffectTestRunner {
         policy_owner
             .reconcile_cri_exact_bindings(&replacement_config, &mut host, &bindings)
             .context(NodeSnafu)?;
-        let active_before_replacement_effect = inspector
-            .snapshot(initial_pid)
-            .context(NodeSnafu)?
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: pin_root,
-                    reason: "the running application lost identity during policy replacement",
-                }
-                .build()
-            })?;
-        let migration_deferred_until_protected_effect =
-            active_before_replacement_effect.profile_generation_ref_id == PROFILE_GENERATION_REF_ID
-                && active_before_replacement_effect.task_cookie == active.task_cookie
-                && active_before_replacement_effect.active_role_id == active.active_role_id
-                && active_before_replacement_effect.admitted_entry_rule_id
-                    == active.admitted_entry_rule_id;
-        ensure!(
-            migration_deferred_until_protected_effect,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "policy replacement migrated the running application before its next protected effect",
-            }
-        );
-        let replacement_exec_marker = observations.cursor();
-        let replacement_mount_change_sequence = observations.mount_change_sequence();
-        fs::write(role_directory.join("replacement-exec-request"), b"EXEC\n").context(IoSnafu {
-            path: role_directory.join("replacement-exec-request"),
-        })?;
-        let replacement_exec_result = role_directory.join("replacement-exec-result");
-        let replacement_result_deadline = Instant::now() + WAIT_LIMIT;
-        while fs::metadata(&replacement_exec_result)
-            .map(|metadata| metadata.len() == 0)
-            .unwrap_or(true)
-        {
-            reader
-                .poll(Duration::from_millis(25))
-                .context(InterceptorSnafu)?;
-            if let Some(status) = container.process.try_wait()? {
-                let diagnostic = format!(
-                    "the running application exited before its replacement-generation exec result: status={status}, stderr={}, effects={:?}",
-                    fs::read_to_string(&stderr_path).unwrap_or_default().trim(),
-                    recent_effect_summary(&observations, replacement_exec_marker),
-                );
-                fs::write(
-                    output_directory.join("replacement-exec-diagnostic.txt"),
-                    &diagnostic,
-                )
-                .context(IoSnafu {
-                    path: output_directory,
-                })?;
-                ensure!(
-                    false,
-                    InvalidInputSnafu {
-                        path: &replacement_exec_result,
-                        reason: diagnostic,
-                    }
-                );
-            }
-            if Instant::now() >= replacement_result_deadline {
-                let diagnostic = format!(
-                    "timed out waiting for the replacement-generation application exec result: stderr={}, effects={:?}",
-                    fs::read_to_string(&stderr_path).unwrap_or_default().trim(),
-                    recent_effect_summary(&observations, replacement_exec_marker),
-                );
-                fs::write(
-                    output_directory.join("replacement-exec-diagnostic.txt"),
-                    &diagnostic,
-                )
-                .context(IoSnafu {
-                    path: output_directory,
-                })?;
-                ensure!(
-                    false,
-                    InvalidInputSnafu {
-                        path: &replacement_exec_result,
-                        reason: diagnostic,
-                    }
-                );
-            }
-        }
-        let replacement_exec_result_text =
-            fs::read_to_string(&replacement_exec_result).context(IoSnafu {
-                path: &replacement_exec_result,
-            })?;
-        let replacement_mount_event_deadline = Instant::now() + WAIT_LIMIT;
-        while observations.mount_change_sequence() <= replacement_mount_change_sequence
-            && Instant::now() < replacement_mount_event_deadline
-        {
-            reader
-                .poll(Duration::from_millis(10))
-                .context(InterceptorSnafu)?;
-        }
-        ensure!(
-            observations.mount_change_sequence() > replacement_mount_change_sequence,
-            InvalidInputSnafu {
-                path: &rootfs,
-                reason: "the replacement-generation bind mount did not publish a mount event",
-            }
-        );
-        ensure!(
-            global_mount_view_is_dirty(&host)?,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason:
-                    "the replacement-generation bind mount did not invalidate its security view",
-            }
-        );
-        let startup_mount_change_sequence = observations.mount_change_sequence();
-        fs::write(
-            role_directory.join("mount-reconciliation.fifo"),
-            b"reconciled\n",
-        )
-        .context(IoSnafu {
-            path: &role_directory,
-        })?;
-        let startup_mount_event_deadline = Instant::now() + WAIT_LIMIT;
-        while observations.mount_change_sequence() <= startup_mount_change_sequence
-            && Instant::now() < startup_mount_event_deadline
-        {
-            reader
-                .poll(Duration::from_millis(10))
-                .context(InterceptorSnafu)?;
-        }
-        ensure!(
-            observations.mount_change_sequence() > startup_mount_change_sequence,
-            InvalidInputSnafu {
-                path: &rootfs,
-                reason: "the startup tmpfs mount did not publish a mount event",
-            }
-        );
-        ensure!(
-            global_mount_view_is_dirty(&host)?,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the startup tmpfs mount did not invalidate its security view",
-            }
-        );
-        fs::write(
-            role_directory.join("mount-reconciliation.fifo"),
-            b"reconciled\n",
-        )
-        .context(IoSnafu {
-            path: &role_directory,
-        })?;
-        let replacement_path_results = [
-            ("replacement-container-bind-mount.result", "MOUNT_READY"),
-            ("replacement-kubernetes-subpath.result", "PATH_TREE_DENIED"),
-            (
-                "replacement-kubernetes-subpath-newer.result",
-                "PATH_TREE_DENIED",
-            ),
-            ("replacement-container-bind.result", "PATH_TREE_DENIED"),
-            ("replacement-single-wildcard.result", "PATH_TREE_DENIED"),
-            ("replacement-recursive-wildcard.result", "PATH_TREE_DENIED"),
-            ("replacement-path-tree-control.result", "CONTROL_ALLOWED"),
-        ];
-        for (name, expected) in replacement_path_results {
-            let result_path = role_directory.join(name);
-            wait_for_path(
-                &result_path,
-                true,
-                "the replacement-generation path-tree result",
-            )?;
-            let observed =
-                fs::read_to_string(&result_path).context(IoSnafu { path: &result_path })?;
-            ensure!(
-                observed.trim() == expected,
-                InvalidInputSnafu {
-                    path: &result_path,
-                    reason: format!(
-                        "the replacement-generation path-tree result was {observed:?}, expected {expected}: effects={:?}",
-                        recent_effect_summary(&observations, replacement_exec_marker),
-                    ),
-                }
-            );
-        }
-        let replacement_exec_deadline = Instant::now() + WAIT_LIMIT;
-        let replacement_generation_descendant_default_exec_allowed = loop {
-            reader
-                .poll(Duration::from_millis(25))
-                .context(InterceptorSnafu)?;
-            if observations
-                .recent_since(replacement_exec_marker)
-                .iter()
-                .any(|event| {
-                    event.reason == "APPLICATION_DEFAULT_ALLOW"
-                        && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
-                        && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
-                        && event.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
-                        && event.task_cookie != active.task_cookie
-                        && event.active_role_id == active.active_role_id
-                        && event.admitted_entry_rule_id == active.admitted_entry_rule_id
-                })
-            {
-                break true;
-            }
-            if Instant::now() >= replacement_exec_deadline {
-                break false;
-            }
-        };
         let active_after_replacement = inspector
             .snapshot(initial_pid)
             .context(NodeSnafu)?
             .ok_or_else(|| {
                 InvalidInputSnafu {
                     path: pin_root,
-                    reason: "the running application lost identity during its generation migration",
+                    reason: "the running application lost identity after the policy update",
                 }
                 .build()
             })?;
-        let running_application_used_replacement_generation = observations
-            .recent_since(replacement_exec_marker)
-            .iter()
-            .any(|event| {
-                event.reason == "APPLICATION_DEFAULT_ALLOW"
-                    && event.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
-                    && event.task_cookie == active.task_cookie
-                    && event.active_role_id == active.active_role_id
-                    && event.admitted_entry_rule_id == active.admitted_entry_rule_id
-            });
-        let live_replacement_migrated_running_application =
-            active_after_replacement.profile_generation_ref_id == PROFILE_GENERATION_REF_ID
-                && active_after_replacement.task_cookie == active.task_cookie
-                && active_after_replacement.active_role_id == active.active_role_id
-                && active_after_replacement.admitted_entry_rule_id == active.admitted_entry_rule_id
-                && running_application_used_replacement_generation;
-        ensure!(
-            replacement_exec_result_text.trim() == "REPLACEMENT_EXEC_ALLOWED"
-                && replacement_generation_descendant_default_exec_allowed
-                && live_replacement_migrated_running_application,
-            InvalidInputSnafu {
-                path: &replacement_exec_result,
-                reason: format!(
-                    "the replacement-generation application exec failed: result={replacement_exec_result_text:?}, process={active_after_replacement:?}, effects={:?}",
-                    observations
-                        .recent_since(replacement_exec_marker)
-                        .iter()
-                        .map(|event| (
-                            event.reason.as_str(),
-                            event.profile_generation_ref_id,
-                            event.task_cookie,
-                            event.active_role_id,
-                            event.admitted_entry_rule_id,
-                            event.effect_family,
-                            event.operation,
-                            event.kernel_result,
-                        ))
-                        .collect::<Vec<_>>()
-                ),
-            }
-        );
         let replacement_entry_rules = host
             .map_keys("entry_admission_rules")
             .context(InterceptorSnafu)?
@@ -5730,6 +5475,33 @@ impl EffectTestRunner {
                 reason: "policy replacement did not install seven signed declared entries",
             }
         );
+        let deadline = Instant::now() + WAIT_LIMIT;
+        while observations.mount_change_sequence() <= mount_seq && Instant::now() < deadline {
+            reader
+                .poll(Duration::from_millis(10))
+                .context(InterceptorSnafu)?;
+        }
+        ensure!(
+            observations.mount_change_sequence() > mount_seq,
+            InvalidInputSnafu {
+                path: &rootfs,
+                reason: "the startup tmpfs mount did not publish a mount event",
+            }
+        );
+        ensure!(
+            global_mount_view_is_dirty(&host)?,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the startup tmpfs mount did not invalidate its security view",
+            }
+        );
+        fs::write(
+            role_directory.join("mount-reconciliation.fifo"),
+            b"reconciled\n",
+        )
+        .context(IoSnafu {
+            path: &role_directory,
+        })?;
         wait_for_path(
             &role_directory.join("execution-approval-fixture-ready"),
             true,
@@ -6062,9 +5834,6 @@ impl EffectTestRunner {
             && independent_entries
                 .iter()
                 .all(|entry| entry.literal_path_admission_enforced);
-        let live_replacement_entries_use_new_generation = independent_entries
-            .iter()
-            .all(|entry| entry.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID);
         let poststart = &independent_entries[0];
         let repeated_poststart = &independent_entries[1];
         let reusable_entry_reinvocation_isolated = poststart.declaration_name
@@ -7110,7 +6879,7 @@ impl EffectTestRunner {
         fixture_cleanup.cleanup()?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 39,
+            schema_version: 40,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec: lifecycle_state_before_exec,
@@ -7147,9 +6916,6 @@ impl EffectTestRunner {
             independent_entries,
             independent_entry_roles_are_distinct,
             reusable_entry_reinvocation_isolated,
-            live_replacement_migrated_running_application,
-            replacement_generation_descendant_default_exec_allowed,
-            live_replacement_entries_use_new_generation,
             administrative_unapproved_exec_denied,
             administrative_recovered_runtime_binding,
             execution_approval_trace_observed,
@@ -7341,7 +7107,6 @@ fn prepare_entry_role_root(
         "stable-recursive-start.fifo",
         "reader-queue-burst-start.fifo",
         "reader-queue-post-drain-start.fifo",
-        "replacement-exec-request",
     ] {
         let path = role_directory.join(name);
         run_checked(
