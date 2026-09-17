@@ -99,9 +99,51 @@ fn approved_exec_consumes_once<P: Platform>() -> TestResult<()> {
             )?
             .is_none());
     }
+    let since = env
+        .snapshot()?
+        .recent_effects
+        .iter()
+        .map(|event| event.observed_boottime_ns)
+        .max()
+        .unwrap_or_default();
     assert!(env.add_actor("sleep", &["0.5"]).is_err());
+    assert_restricted(&env, since)?;
     init.stop()?;
     env.stop()
+}
+
+fn assert_restricted<P: Platform>(env: &P, since: u64) -> TestResult<()> {
+    let path = env.maps().0.to_owned();
+    let last = RefCell::new(String::from("<none>"));
+    wait_for(
+        &path,
+        "restricted administrative replay",
+        Duration::from_secs(30),
+        || {
+            let events = env
+                .snapshot()
+                .map_err(|source| {
+                    InvalidInputSnafu {
+                        path: &path,
+                        reason: source.to_string(),
+                    }
+                    .build()
+                })?
+                .recent_effects;
+            *last.borrow_mut() = format!("{:?}", events.iter().rev().take(16).collect::<Vec<_>>());
+            Ok(events.into_iter().find(|event| {
+                event.observed_boottime_ns > since
+                    && event.reason == "UNSUPPORTED_OBJECT"
+                    && event.effect_family == KernelEffectFamilyV1::Exec as u32
+                    && event.operation == KernelEffectOperationV1::Execute as u32
+                    && event.active_role_id == 2
+                    && event.admitted_entry_rule_id == 0
+                    && event.kernel_result == -libc::EACCES
+            }))
+        },
+        || format!("last effects: {}", last.borrow()),
+    )?;
+    Ok(())
 }
 
 #[platform_test(host, runc)]

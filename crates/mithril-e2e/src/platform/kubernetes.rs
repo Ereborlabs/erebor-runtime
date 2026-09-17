@@ -861,6 +861,7 @@ impl KubernetesState {
             })?;
         let pid = actor.wait_group_task(group, &before, program, "Kubernetes exec host PID")?;
         actor.set_actor(pid)?;
+        self.approval.clear();
         Ok(actor)
     }
 
