@@ -534,7 +534,7 @@ if [[ $entry_role_runtime_only == true ]]; then
     .other_role_path_tree_allowed and
     .path_tree_control_allowed and
     .application_admitted_entry_rule_id > 0 and
-    (.independent_entries | length) == 6 and
+    (.independent_entries | length) == 5 and
     (.independent_entries | all(
       .active_role_id > 0 and
       .profile_generation_ref_id == 2 and
@@ -544,7 +544,6 @@ if [[ $entry_role_runtime_only == true ]]; then
       .application_policy_not_inherited
     )) and
     .independent_entry_roles_are_distinct and
-    .reusable_entry_reinvocation_isolated and
     .administrative_recovered_runtime_binding and
     .prestop_retained_during_runtime_inventory_omission and
     .kernel_upgrade_preserved_map_ids and

@@ -247,7 +247,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub application_admitted_entry_rule_id: u32,
     pub independent_entries: Vec<RuncEntryRoleProbeV1>,
     pub independent_entry_roles_are_distinct: bool,
-    pub reusable_entry_reinvocation_isolated: bool,
     pub administrative_recovered_runtime_binding: bool,
     pub prestop_retained_during_runtime_inventory_omission: bool,
     pub retained_mount_views_survived_source_exit: bool,
@@ -5593,7 +5592,6 @@ impl EffectTestRunner {
         let application_control_host = role_directory.join("application.denied");
         for (name, declaration_name, executable) in [
             ("poststart", "poststart", "/bin/cp"),
-            ("poststart-repeat", "poststart", "/bin/cp"),
             ("prestop", "prestop", "/bin/dd"),
             ("startup", "startup", "/bin/cat"),
             ("readiness", "readiness", "/bin/grep"),
@@ -5801,23 +5799,6 @@ impl EffectTestRunner {
             && independent_entries
                 .iter()
                 .all(|entry| entry.literal_path_admission_enforced);
-        let poststart = &independent_entries[0];
-        let repeated_poststart = &independent_entries[1];
-        let reusable_entry_reinvocation_isolated = poststart.declaration_name
-            == repeated_poststart.declaration_name
-            && poststart.active_role_id == repeated_poststart.active_role_id
-            && poststart.admitted_entry_rule_id == repeated_poststart.admitted_entry_rule_id
-            && poststart.host_pid != repeated_poststart.host_pid
-            && poststart.task_cookie != repeated_poststart.task_cookie
-            && poststart.process_state_id != repeated_poststart.process_state_id
-            && poststart.active_execution_id != repeated_poststart.active_execution_id;
-        ensure!(
-            reusable_entry_reinvocation_isolated,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "a reusable declared entry did not create an independent invocation",
-            }
-        );
         let mut administrative_runtime =
             container
                 .containerd
@@ -6486,7 +6467,6 @@ impl EffectTestRunner {
             application_admitted_entry_rule_id: active.admitted_entry_rule_id,
             independent_entries,
             independent_entry_roles_are_distinct,
-            reusable_entry_reinvocation_isolated,
             administrative_recovered_runtime_binding,
             prestop_retained_during_runtime_inventory_omission,
             retained_mount_views_survived_source_exit,
