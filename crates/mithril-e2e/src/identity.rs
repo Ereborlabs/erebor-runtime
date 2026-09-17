@@ -4210,13 +4210,16 @@ impl IdentityTestRunner {
         bundle.kubernetes_reuse_first_root_cgroup_id = Some(reuse_first_binding.root_cgroup_id);
         bundle.kubernetes_reuse_second_root_cgroup_id = Some(reuse_second_binding.root_cgroup_id);
         bundle.kubernetes_reuse_first_binding_nonce =
-            Some(id128_hex(reuse_first_binding.binding_nonce));
+            Some(reuse_first_binding.binding_nonce.to_string());
         bundle.kubernetes_reuse_second_binding_nonce =
-            Some(id128_hex(reuse_second_binding.binding_nonce));
+            Some(reuse_second_binding.binding_nonce.to_string());
         bundle.kubernetes_reuse_first_live_interval_id =
-            Some(id128_hex(reuse_first_binding.root_cgroup_live_interval_id));
-        bundle.kubernetes_reuse_second_live_interval_id =
-            Some(id128_hex(reuse_second_binding.root_cgroup_live_interval_id));
+            Some(reuse_first_binding.root_cgroup_live_interval_id.to_string());
+        bundle.kubernetes_reuse_second_live_interval_id = Some(
+            reuse_second_binding
+                .root_cgroup_live_interval_id
+                .to_string(),
+        );
         bundle.kubernetes_reuse_same_names = Some(reuse_same_names);
         bundle.kubernetes_reuse_fresh_full_identity = Some(reuse_fresh_full_identity);
         bundle.kubernetes_reuse_fresh_binding_identity = Some(reuse_fresh_binding_identity);
@@ -5416,10 +5419,6 @@ fn read_u64(bytes: &[u8], offset: usize, name: &str) -> Result<u64> {
         .and_then(|value| value.try_into().ok())
         .ok_or_else(|| invalid_state(format!("{name} is truncated")))?;
     Ok(u64::from_ne_bytes(value))
-}
-
-fn id128_hex(value: Id128V1) -> String {
-    format!("{:016x}{:016x}", value.high, value.low)
 }
 
 fn invalid_state(reason: impl Into<String>) -> crate::Error {

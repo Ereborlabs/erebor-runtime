@@ -1,7 +1,4 @@
 #[cfg(test)]
-mod result;
-
-#[cfg(test)]
 use std::fs;
 #[cfg(test)]
 use std::time::Duration;
@@ -11,8 +8,6 @@ use erebor_interceptor_abi::{
     ReferenceTombstoneStateV1, TaskCoordinateStateV1, TASK_REFERENCE_ALL_V1,
 };
 
-#[cfg(test)]
-use self::result::ReuseResult;
 #[cfg(test)]
 use crate::platform::{platform_test, Platform, TestResult};
 
@@ -60,7 +55,40 @@ fn tid_reuse_is_fresh<P: Platform>() -> TestResult<()> {
     assert_eq!(released.released_bits, TASK_REFERENCE_ALL_V1);
     assert_eq!(released.state, ReferenceTombstoneStateV1::Released);
 
-    let result = ReuseResult::new(first_ns, second_ns, root, first, second);
-    result.assert_fresh();
+    assert_eq!(
+        root.snapshot.root_class.as_deref(),
+        Some("initial_container_root")
+    );
+    assert_eq!(
+        root.snapshot.installed_role_class.as_deref(),
+        Some("initial_role")
+    );
+    assert_eq!(root.snapshot.creator_task_cookie, None);
+    assert!(first_ns > 1);
+    assert_eq!(second_ns, first_ns);
+    assert_eq!(first.ns_tid, first_ns);
+    assert_eq!(second.ns_tid, first_ns);
+    assert_ne!(first.pid, second.pid);
+    assert_ne!(first.coordinate.task_cookie, second.coordinate.task_cookie);
+    assert_eq!(
+        first.coordinate.process_state_id.to_string(),
+        root.snapshot.process_state_id
+    );
+    assert_eq!(
+        second.coordinate.process_state_id.to_string(),
+        root.snapshot.process_state_id
+    );
+    assert_eq!(first.edge.creator_task_cookie, root.snapshot.task_cookie);
+    assert_eq!(second.edge.creator_task_cookie, root.snapshot.task_cookie);
+    assert_eq!(first.coordinate.host_tgid, root.snapshot.host_tgid);
+    assert_eq!(second.coordinate.host_tgid, root.snapshot.host_tgid);
+    assert_eq!(
+        first.coordinate.pid_namespace_inode,
+        second.coordinate.pid_namespace_inode
+    );
+    assert_ne!(
+        first.coordinate.task_start_boottime_ns,
+        second.coordinate.task_start_boottime_ns
+    );
     env.stop()
 }

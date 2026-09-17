@@ -1,13 +1,8 @@
 #[cfg(test)]
-mod result;
-
-#[cfg(test)]
 use std::fs;
 #[cfg(test)]
 use std::time::Duration;
 
-#[cfg(test)]
-use self::result::ReuseResult;
 #[cfg(test)]
 use crate::platform::{platform_test, Platform, TestResult};
 
@@ -49,7 +44,44 @@ fn pid_reuse_is_fresh<P: Platform>() -> TestResult<()> {
     let status = actor.wait_exit("PID-reuse actor exit", Duration::from_secs(5))?;
     assert!(status.success(), "actor exited with {status}");
 
-    let result = ReuseResult::new(first_ns, second_ns, root, first, second);
-    result.assert_fresh();
+    assert_eq!(
+        root.snapshot.root_class.as_deref(),
+        Some("initial_container_root")
+    );
+    assert_eq!(
+        root.snapshot.installed_role_class.as_deref(),
+        Some("initial_role")
+    );
+    assert_eq!(root.snapshot.creator_task_cookie, None);
+    assert!(first_ns > 1);
+    assert_eq!(second_ns, first_ns);
+    assert_eq!(first.ns_pid, first_ns);
+    assert_eq!(second.ns_pid, first_ns);
+    assert_ne!(first.pid, second.pid);
+    assert_ne!(first.snapshot.task_cookie, second.snapshot.task_cookie);
+    assert_ne!(
+        first.snapshot.process_state_id,
+        second.snapshot.process_state_id
+    );
+    assert_ne!(
+        first.snapshot.active_execution_id,
+        second.snapshot.active_execution_id
+    );
+    assert_eq!(
+        first.snapshot.creator_task_cookie,
+        Some(root.snapshot.task_cookie)
+    );
+    assert_eq!(
+        second.snapshot.creator_task_cookie,
+        Some(root.snapshot.task_cookie)
+    );
+    assert_eq!(
+        first.coordinate.pid_namespace_inode,
+        second.coordinate.pid_namespace_inode
+    );
+    assert_ne!(
+        first.coordinate.task_start_boottime_ns,
+        second.coordinate.task_start_boottime_ns
+    );
     env.stop()
 }

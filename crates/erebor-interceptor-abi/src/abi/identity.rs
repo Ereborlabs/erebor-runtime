@@ -90,6 +90,12 @@ impl Id128V1 {
     }
 }
 
+impl std::fmt::Display for Id128V1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{:016x}{:016x}", self.high, self.low)
+    }
+}
+
 impl From<u128> for Id128V1 {
     fn from(value: u128) -> Self {
         Self::new((value >> 64) as u64, value as u64)
@@ -1090,6 +1096,14 @@ mod tests {
 
     use super::*;
     use crate::BindingLifecycleStateV1;
+
+    #[test]
+    fn id128_display_is_fixed_width_hex() {
+        assert_eq!(
+            Id128V1::new(1, 2).to_string(),
+            "00000000000000010000000000000002"
+        );
+    }
 
     #[test]
     fn binding_generation_uses_the_packed_lifecycle_word() {

@@ -1237,7 +1237,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the Kubernetes generated case.
   - [x] Remove the matching old probe code and compatibility bundle fields.
 - [x] Node-first PID reuse: keep one small parameterized Rust test in
-  `pid_reuse.rs`, one shared Python actor, one shared result assertion, and
+  `pid_reuse.rs`, one shared Python actor, one explicit assertion block, and
   thin VM and Kubernetes launchers. Use
   `#[platform_test(host, runc, kubernetes)]` on that one function. Each
   generated case selects its custom physical platform implementation. Start
@@ -1262,6 +1262,9 @@ test does not close a row when its physical condition or an assertion changed.
     its PID-reuse action before the test releases it on any platform.
   - [x] Replace the old PID-reuse shell and CLI path with a thin exact-test
     launcher before this behavior is complete.
+  - [x] Remove the `ReuseResult` bridge. Keep all result assertions in the
+    87-line scenario. The exact Host, direct-`runc`, and Kubernetes cases
+    passed on 2026-09-17.
 - [x] TID reuse: use one Python actor through `ProcessFixture`. Keep the two
   namespace-TID actions, exact thread coordinates, and tombstone checks
   visible in a separate small scenario file.
@@ -1270,6 +1273,9 @@ test does not close a row when its physical condition or an assertion changed.
     `IdentityTestRunner::physical_probe`.
   - [x] The direct-`runc` generated case passes with the same Python actor and
     the production OCI hooks.
+  - [x] Remove the `ReuseResult` bridge. Keep all result assertions in the
+    94-line scenario. The exact Host, direct-`runc`, and Kubernetes cases
+    passed on 2026-09-17.
   - [x] Reproduce the Kubernetes `SIGTERM` cleanup condition in a lightweight
     Node entry-point test. Before the fix, the exact test exited with signal
     15. It now proves that `SIGTERM` starts normal Node shutdown.
