@@ -246,7 +246,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub path_tree_control_allowed: bool,
     pub application_admitted_entry_rule_id: u32,
     pub independent_entries: Vec<RuncEntryRoleProbeV1>,
-    pub independent_entry_roles_are_distinct: bool,
     pub administrative_recovered_runtime_binding: bool,
     pub prestop_retained_during_runtime_inventory_omission: bool,
     pub retained_mount_views_survived_source_exit: bool,
@@ -5777,24 +5776,6 @@ impl EffectTestRunner {
                 reason: "the application path-tree denial affected the startup role",
             }
         );
-        let role_ids = independent_entries
-            .iter()
-            .map(|entry| entry.active_role_id)
-            .chain(std::iter::once(active.active_role_id))
-            .collect::<BTreeSet<_>>();
-        let admitted_ids = independent_entries
-            .iter()
-            .map(|entry| entry.admitted_entry_rule_id)
-            .chain(std::iter::once(active.admitted_entry_rule_id))
-            .collect::<BTreeSet<_>>();
-        let independent_entry_roles_are_distinct = role_ids.len() == 6 && admitted_ids.len() == 6;
-        ensure!(
-            independent_entry_roles_are_distinct,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "application and additional entries did not install six distinct roles and admission IDs",
-            }
-        );
         let entry_literal_paths_enforced = application_literal_path_admission_enforced
             && independent_entries
                 .iter()
@@ -6466,7 +6447,6 @@ impl EffectTestRunner {
             path_tree_control_allowed: true,
             application_admitted_entry_rule_id: active.admitted_entry_rule_id,
             independent_entries,
-            independent_entry_roles_are_distinct,
             administrative_recovered_runtime_binding,
             prestop_retained_during_runtime_inventory_omission,
             retained_mount_views_survived_source_exit,

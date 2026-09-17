@@ -1693,6 +1693,9 @@ setup, production actions, assertions, and focused test.
       lightweight fixture test before the shared readiness wait was corrected.
     - [x] Remove the matching direct-CRI, ordinary exec, TTY exec, and copy
       classification blocks and their obsolete compatibility fields.
+    - [x] Remove the legacy distinct-role calculation, compatibility field,
+      and shell gate. The shared test asserts all six role and admission-rule
+      identities directly.
   - [x] Replace the reusable-entry reinvocation check with
     `runtime_reentry::repeated_entry_is_fresh`. Invoke the same declared
     Python entry twice. Require the same role, admission rule, and policy
