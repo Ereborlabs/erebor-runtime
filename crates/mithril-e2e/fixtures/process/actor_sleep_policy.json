@@ -29,25 +29,25 @@
         ],
         "applicationEntry": {
           "executionRule": "python",
-          "role": "worker"
+          "role": "converter"
         },
         "additionalEntries": [
           {
             "name": "python-actor",
             "kind": "PostStart",
             "executionRule": "python-actor",
-            "role": "worker"
+            "role": "converter"
           }
         ],
         "administrativeEntry": {
-          "role": "administrator"
+          "role": "runtime-external-administrative"
         },
-        "externalRole": "external"
+        "externalRole": "runtime-external"
       }
     ],
     "roles": [
       {
-        "name": "worker",
+        "name": "converter",
         "files": [],
         "execution": [
           {
@@ -86,7 +86,7 @@
         "unixStreams": []
       },
       {
-        "name": "administrator",
+        "name": "runtime-external-administrative",
         "files": [],
         "execution": [],
         "network": {
@@ -97,7 +97,7 @@
         "unixStreams": []
       },
       {
-        "name": "external",
+        "name": "runtime-external",
         "files": [],
         "execution": [],
         "network": {

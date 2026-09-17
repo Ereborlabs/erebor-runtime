@@ -22,8 +22,8 @@ if middle == 0:
     child = os.fork()
     if child == 0:
         wait(exec_ready)
-        os.execv("/usr/bin/sleep", ["/usr/bin/sleep", "300"])
+        os.execv("/usr/bin/sleep", ["/usr/bin/sleep", "5"])
     wait(exit_ready)
     os._exit(0)
 os.waitpid(middle, 0)
-time.sleep(300)
+sys.stdin.buffer.read()

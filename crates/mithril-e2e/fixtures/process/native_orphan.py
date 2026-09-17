@@ -20,7 +20,7 @@ if pid == 0:
             raise RuntimeError("parent did not exit")
         time.sleep(0.01)
     os.closerange(0, 3)
-    os.execv("/usr/bin/sleep", ["/usr/bin/sleep", "300"])
+    os.execv("/usr/bin/sleep", ["/usr/bin/sleep", "5"])
 
 while not os.path.exists(exit_ready):
     ended, status = os.waitpid(pid, os.WNOHANG)

@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::Duration;
@@ -18,7 +19,9 @@ const WAIT_LIMIT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Default)]
 struct CriService {
-    value: Arc<RwLock<Option<CriRuntimeContainerObservationV1>>>,
+    value: Arc<RwLock<Option<(u64, CriRuntimeContainerObservationV1)>>>,
+    next: Arc<AtomicU64>,
+    seen: Arc<AtomicU64>,
 }
 
 pub(crate) struct CriFixture {
@@ -65,13 +68,29 @@ impl CriFixture {
         })
     }
 
-    pub(crate) fn set(&self, value: CriRuntimeContainerObservationV1) -> TestResult<()> {
+    pub(crate) fn set(&self, value: CriRuntimeContainerObservationV1) -> TestResult<u64> {
+        let revision = self.service.next.fetch_add(1, Ordering::Relaxed) + 1;
         *self
             .service
             .value
             .write()
-            .map_err(|_error| "CRI fixture state is poisoned")? = Some(value);
-        Ok(())
+            .map_err(|_error| "CRI fixture state is poisoned")? = Some((revision, value));
+        Ok(revision)
+    }
+
+    pub(crate) fn wait_seen(&self, revision: u64) -> TestResult<()> {
+        Ok(wait_for(
+            &self.path,
+            "CRI observation",
+            WAIT_LIMIT,
+            || Ok((self.service.seen.load(Ordering::Acquire) >= revision).then_some(())),
+            || {
+                format!(
+                    "revision {revision} is not observed; last observed revision is {}",
+                    self.service.seen.load(Ordering::Relaxed)
+                )
+            },
+        )?)
     }
 
     pub(crate) fn clear(&self) -> TestResult<()> {
@@ -141,7 +160,10 @@ impl cri::runtime_service_server::RuntimeService for CriService {
             .read()
             .map_err(|_error| Status::internal("CRI fixture state is poisoned"))?;
         Ok(Response::new(cri::ListContainersResponse {
-            containers: value.iter().map(|value| value.listed.clone()).collect(),
+            containers: value
+                .iter()
+                .map(|(_revision, value)| value.listed.clone())
+                .collect(),
         }))
     }
 
@@ -154,11 +176,13 @@ impl cri::runtime_service_server::RuntimeService for CriService {
             .value
             .read()
             .map_err(|_error| Status::internal("CRI fixture state is poisoned"))?;
-        let value = value
+        let (revision, value) = value
             .as_ref()
-            .filter(|value| value.listed.id == id)
+            .filter(|(_revision, value)| value.listed.id == id)
             .ok_or_else(|| Status::not_found("container is absent"))?;
-        Ok(Response::new(value.status.clone()))
+        let response = value.status.clone();
+        self.seen.store(*revision, Ordering::Release);
+        Ok(Response::new(response))
     }
 
     async fn run_pod_sandbox(

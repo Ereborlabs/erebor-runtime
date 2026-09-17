@@ -673,7 +673,7 @@ fn run_child(
     if let Some(path) = first_effect_path {
         direct_open_exit(path);
     }
-    let native_child = unsafe { libc::fork() };
+    let native_child = unsafe { libc::syscall(libc::SYS_fork) };
     if native_child == 0 {
         root_gate.store(3, Ordering::Release);
         while root_gate.load(Ordering::Acquire) != 4 {

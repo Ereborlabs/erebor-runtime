@@ -361,7 +361,8 @@ impl ProcessFixture {
             stdout: Some(output),
             stderr: Some(errors),
             gate: Some(gate),
-            group: Some(cgroup.to_owned()),
+            group: (flags & u64::from(linux_raw_sys::general::CLONE_NEWPID) != 0)
+                .then(|| cgroup.to_owned()),
             tasks: Vec::new(),
             stopped: false,
         };
@@ -922,21 +923,25 @@ impl ProcessFixture {
 
     pub(crate) fn stop(&mut self) -> Result<()> {
         self.close();
-        let _ = self.wait_exit("graceful process cleanup", STOP_GRACE);
+        let graceful = self.stopped
+            || self
+                .wait_exit("graceful process cleanup", STOP_GRACE)
+                .is_ok();
         let mut failed = None;
         let ids = self.tasks.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-        let killed = self.group.as_ref().is_some_and(|group| {
-            let path = group.join("cgroup.kill");
-            match fs::write(&path, "1") {
-                Ok(()) => true,
-                Err(source) if source.kind() == ErrorKind::NotFound => false,
-                Err(source) => {
-                    failed = Some(format!("kill actor cgroup {}: {source}", group.display()));
-                    false
+        let killed = !graceful
+            && self.group.as_ref().is_some_and(|group| {
+                let path = group.join("cgroup.kill");
+                match fs::write(&path, "1") {
+                    Ok(()) => true,
+                    Err(source) if source.kind() == ErrorKind::NotFound => false,
+                    Err(source) => {
+                        failed = Some(format!("kill actor cgroup {}: {source}", group.display()));
+                        false
+                    }
                 }
-            }
-        });
-        if !killed {
+            });
+        if !graceful && !killed {
             for (id, fd) in &self.tasks {
                 match pidfd_send_signal(fd, Signal::KILL) {
                     Ok(()) | Err(rustix::io::Errno::SRCH) => {}

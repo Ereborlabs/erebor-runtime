@@ -14,7 +14,8 @@ use erebor_runtime_client::MithrilObservationClient;
 use erebor_runtime_ipc::v1::MithrilObservationSnapshot;
 use k8s_cri::v1::ContainerState;
 use mithril_control::{
-    lower_kubernetes_policy, workload_target_fact_digest, AllowedNodeIdentity,
+    lower_kubernetes_policy, workload_target_fact_digest, AdministrativeApprovalConfigV1,
+    AdministrativeApprovalOwner, AdministrativeExecRequestV1, AllowedNodeIdentity,
     ContainerKindV1 as ControlContainerKind, ControlPlane, ControlStore,
     KubernetesWorkloadIdentityV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
     PolicySignerConfigV1, PolicySignerTrustV1, PolicySourceRevisionV1, PolicySourceStateV1,
@@ -49,8 +50,8 @@ const CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
 const NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
 const POD_UID: &str = "99999999-9999-4999-8999-999999999999";
 const NODE_UID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const NODE_ID: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const POLICY_UID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-const ACTOR_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 pub(super) struct SharedState {
     root: PathBuf,
@@ -169,8 +170,8 @@ impl SharedState {
         &self.admit_path
     }
 
-    pub(super) fn actor_id(&self) -> &str {
-        ACTOR_ID
+    pub(super) fn actor_id(&self) -> TestResult<&str> {
+        Ok(&self.binding()?.container_id)
     }
 
     pub(super) fn has_policy(&self) -> bool {
@@ -208,12 +209,12 @@ impl SharedState {
 
     pub(super) fn observe(&mut self) -> TestResult<()> {
         self.observe_state(0, ContainerState::ContainerCreated)
+            .map(|_revision| ())
     }
 
-    fn observe_state(&mut self, pid: u32, state: ContainerState) -> TestResult<()> {
+    fn observe_state(&mut self, pid: u32, state: ContainerState) -> TestResult<u64> {
         let value = runtime_observation(self.binding()?, pid, state)?;
-        self.cri.as_ref().ok_or("CRI is not running")?.set(value)?;
-        Ok(())
+        self.cri.as_ref().ok_or("CRI is not running")?.set(value)
     }
 
     pub(super) fn request(
@@ -569,7 +570,7 @@ impl Shared {
         .with_computed_bundle_digest();
         let control = ControlPlane::with_control_store(
             vec![AllowedNodeIdentity {
-                node_id: "node-a".to_owned(),
+                node_id: NODE_ID.to_owned(),
                 certificate_sha256: self.tls.node_digest(),
                 tenant_id: TENANT_ID.to_owned(),
             }],
@@ -597,7 +598,7 @@ impl Shared {
             .address();
         self.cri = Some(CriFixture::start(&self.cri_path)?);
         let config = NodeConfig {
-            node_id: "node-a".to_owned(),
+            node_id: NODE_ID.to_owned(),
             kubernetes_node_name: Some("node-a".to_owned()),
             state_directory: self.state_path.clone(),
             interceptor: InterceptorConfig {
@@ -631,7 +632,7 @@ impl Shared {
             container_runtime: Some(ContainerRuntimeConfig {
                 socket_path: self.cri_path.clone(),
                 effect_controller_cgroup_path: self.node_path.clone(),
-                reconciliation_interval_ms: 100,
+                reconciliation_interval_ms: 10,
             }),
             workload_bindings: Vec::new(),
             policy_candidates: Vec::new(),
@@ -781,7 +782,7 @@ impl Shared {
                 Ok(plane
                     .ready_kubernetes_node_sessions(READY_LIMIT)
                     .into_iter()
-                    .find(|session| session.node_id == "node-a"))
+                    .find(|session| session.node_id == NODE_ID))
             },
             || "Control has no ready Kubernetes Node session".to_owned(),
         )?;
@@ -850,7 +851,8 @@ impl Shared {
         let policy = self
             .policy
             .as_ref()
-            .ok_or("Control policy is not running")?;
+            .ok_or("Control policy is not running")?
+            .clone();
         let result = policy.reconcile(resource, NAMESPACE_UID, &[target.clone()], now)?;
         ensure!(
             result.bundles.len() == 1,
@@ -860,9 +862,18 @@ impl Shared {
             }
         );
 
-        let container_id = ACTOR_ID.to_owned();
+        let generation = u64::try_from(self.policy_generation)?;
+        let container_id = format!("{generation:064x}");
         let revision = source.policy_source_revision_id;
         let digest = target.workload_binding_generation_digest.clone();
+        self.wait_policy(&revision, &digest)?;
+        let (_, ack) = policy
+            .store()
+            .active_policy_for_workload(&revision, &digest)?
+            .ok_or("Control has no active policy for the test workload")?;
+        let profile_generation = ack
+            .profile_generation_ref_id
+            .ok_or("the active policy has no profile generation reference")?;
         self.revision = Some(revision.clone());
         self.binding = Some(WorkloadBindingConfig {
             binding_id: ScheduledRuntimeBindingV1::runtime_binding_id(&authority, &container_id),
@@ -884,15 +895,15 @@ impl Shared {
             container_name: "worker".to_owned(),
             image_digest: target.image_digest,
             container_kind: ContainerKindV1::Application,
-            container_generation: 1,
+            container_generation: generation,
             root_cgroup_path: Some(self.cgroup_path.clone()),
-            lifecycle_generation: 1,
-            active_profile_generation_ref_id: 1,
+            lifecycle_generation: generation,
+            active_profile_generation_ref_id: profile_generation,
             initial_role_id: 1,
             external_role_id: 2,
             arm_initial_root: true,
         });
-        self.wait_policy(&revision, &digest)
+        Ok(())
     }
 
     fn wait_policy(&self, revision: &str, digest: &str) -> TestResult<()> {
@@ -962,6 +973,93 @@ impl Shared {
         )?)
     }
 
+    pub(super) fn approve(&self, command: &str, args: &[&str]) -> TestResult<()> {
+        let plane = self.plane.clone().ok_or("Control is not running")?;
+        let binding = self.binding()?.clone();
+        let role = self
+            .resource
+            .as_ref()
+            .and_then(|policy| {
+                policy
+                    .spec
+                    .containers
+                    .iter()
+                    .find(|container| container.names.contains(&binding.container_name))
+            })
+            .map(|container| container.administrative_entry.role.clone())
+            .ok_or("installed policy has no administrative role for the target container")?;
+        let key = self
+            .root
+            .join("crates/mithril-e2e/fixtures/mithril-policy/test-signing-key.hex");
+        let config = AdministrativeApprovalConfigV1 {
+            state_directory: self.state_path.join("administrative-approval"),
+            tenant_id: TENANT_ID.to_owned(),
+            cluster_uid: CLUSTER_UID.to_owned(),
+            trust_domain_id: "22222222-2222-4222-8222-222222222222".to_owned(),
+            issuer_id: "88888888-8888-4888-8888-888888888888".to_owned(),
+            key_id: "effect-observation-test-key".to_owned(),
+            private_key_path: key,
+            sequence_epoch: 1,
+            authorization_lifetime_seconds: 120,
+        };
+        let argv = std::iter::once(command)
+            .chain(args.iter().copied())
+            .map(|arg| arg.as_bytes().to_vec())
+            .collect::<Vec<_>>();
+        let request = AdministrativeExecRequestV1 {
+            node_id: NODE_ID.to_owned(),
+            namespace: binding.namespace.as_bytes().to_vec(),
+            pod_uid: binding.pod_uid.as_bytes().to_vec(),
+            container_name: binding.container_name.as_bytes().to_vec(),
+            full_container_id: binding.container_id.as_bytes().to_vec(),
+            container_generation: binding.container_generation,
+            argv: argv.clone(),
+            stream_flags: 0,
+            approved_role_id: role,
+        };
+        let owner = AdministrativeApprovalOwner::load(&config, plane)?;
+        let principal = erebor_interceptor_abi::Id128V1::new(1, 1);
+        let last = RefCell::new(String::from("<absent>"));
+        let resolution = wait_for(
+            &self.pin_path,
+            "administrative target resolution",
+            READY_LIMIT,
+            || match self.runtime.block_on(owner.resolve(&request)) {
+                Ok(resolution) => Ok(Some(resolution)),
+                Err(source) => {
+                    *last.borrow_mut() = source.to_string();
+                    Ok(None)
+                }
+            },
+            || format!("last resolution: {}", last.borrow()),
+        )?;
+        let pending = owner.request_resolved(principal, request, resolution)?;
+        let credential = owner.approve(pending.request_id, principal)?;
+        let authenticated = owner.authenticate_credential(&credential.credential)?;
+        let target = owner.admission_target(
+            credential.approval_id,
+            authenticated.principal_id,
+            pending.request_id.to_be_bytes().to_vec(),
+            binding.namespace.into_bytes(),
+            binding.pod_uid.into_bytes(),
+            binding.container_name.into_bytes(),
+            binding.container_id.into_bytes(),
+            argv,
+            0,
+        )?;
+        let result = self
+            .runtime
+            .block_on(owner.admit(credential.approval_id, target))?;
+        ensure!(
+            result.armed,
+            InvalidInputSnafu {
+                path: &self.pin_path,
+                reason: "Node did not arm the administrative execution slot",
+            }
+        );
+        Ok(())
+    }
+
     pub(super) fn place(&mut self, pid: u32) -> TestResult<()> {
         let path = self.cgroup_path.join("cgroup.procs");
         fs::write(&path, pid.to_string()).context(IoSnafu { path: &path })?;
@@ -969,7 +1067,11 @@ impl Shared {
     }
 
     pub(super) fn running(&mut self, pid: u32) -> TestResult<()> {
-        self.observe_state(pid, ContainerState::ContainerRunning)
+        let revision = self.observe_state(pid, ContainerState::ContainerRunning)?;
+        self.cri
+            .as_ref()
+            .ok_or("CRI is not running")?
+            .wait_seen(revision)
     }
 
     pub(super) fn health(&self) -> TestResult<mithril_node::ReconciliationReportV1> {

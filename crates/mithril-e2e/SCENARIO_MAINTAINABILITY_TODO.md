@@ -634,6 +634,9 @@ count as maintainability migrations.
     with one Node initialization on 2026-09-16.
   - The current filtered lifecycle passed 22 tests in 235.08 seconds on
     2026-09-16.
+  - The lifecycle passed 24 tests in 230.74 seconds on 2026-09-17. The
+    `CLONE_INTO_CGROUP` child fixture now uses the direct Linux `fork`
+    syscall, so it does not inherit glibc thread locks from the shared Node.
 - [x] Share one Control and one Node across each named direct-`runc` lifecycle.
   Reuse the common Mithril lifecycle owner. Do not call Host process or actor
   operations from direct `runc`. Keep each container and actor test-scoped.
@@ -1531,6 +1534,15 @@ setup, production actions, assertions, and focused test.
 - [ ] Administrative exec: keep Control authorization, node slot arm, stock
   runtime exec, one-use consumption, replay denial, trace, and reconciliation
   operations explicit.
+  - [x] Pass Host and its complete lifecycle. The test requires unapproved and
+    mismatched exec denial, the armed and consumed slot states, the mismatch
+    trace, administrative role 3, one-use consumption, slot reconciliation,
+    and replay denial. The complete 24-test lifecycle passed in 230.74 seconds
+    on 2026-09-17.
+  - [ ] Pass direct `runc` and its complete lifecycle.
+  - [ ] Pass Kubernetes and its complete lifecycle.
+  - [ ] Remove the matching legacy Rust and shell assertions after all three
+    platform cases pass.
 - [ ] Node restart and PreStop retention: keep the public restart, inventory,
   binding, and lifecycle operations explicit.
 - [ ] Kernel object upgrade: keep the second production object, manifest, map

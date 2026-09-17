@@ -185,6 +185,8 @@ static __noinline int commit_entry_admission_metadata(
     if (execution_approval) {
         classification->purpose =
             entry_purpose_v1_approved_administrative_next_match;
+        classification->installed_role_class =
+            installed_role_class_v1_approved_administrative_role;
         classification->installed_role_numeric_id =
             execution_approval->target_role_numeric_id;
         classification->administrative_approval_proof_id =

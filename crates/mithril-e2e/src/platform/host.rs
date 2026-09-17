@@ -209,6 +209,10 @@ impl Platform for Host {
         self.start_entry(command, args)
     }
 
+    fn approve(&mut self, command: &str, args: &[&str]) -> TestResult<()> {
+        self.shared.approve(command, args)
+    }
+
     fn place(&mut self, pid: u32) -> TestResult<()> {
         self.shared.place(pid)
     }

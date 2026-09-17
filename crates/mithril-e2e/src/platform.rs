@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{
-    CreatedByEdgeV1, Id128V1, IdentityRuntimeConfigV1, PendingExecV1, ProcessExecutionInstanceV1,
-    ProcessSecurityStateV1, ReferenceTombstoneStateV1, TaskCoordinateStateV1, TaskCoordinateV1,
-    TaskReferenceTombstoneV1, TASK_REFERENCE_ALL_V1,
+    CreatedByEdgeV1, ExecutionApprovalSlotKeyV1, ExecutionApprovalSlotV1, Id128V1,
+    IdentityRuntimeConfigV1, PendingExecV1, ProcessExecutionInstanceV1, ProcessSecurityStateV1,
+    ReferenceTombstoneStateV1, TaskCoordinateStateV1, TaskCoordinateV1, TaskReferenceTombstoneV1,
+    TASK_REFERENCE_ALL_V1,
 };
 use erebor_runtime_ipc::v1::MithrilObservationSnapshot;
 use mithril_node::{NativeTaskSnapshotV1, ReconciliationReportV1};
@@ -110,6 +111,9 @@ pub(crate) trait Platform: Sized {
     ) -> TestResult<crate::process::ProcessFixture> {
         pending("add actor")
     }
+    fn approve(&mut self, _command: &str, _args: &[&str]) -> TestResult<()> {
+        pending("approve administrative actor")
+    }
     fn post_start_sleep(&mut self, _delay: Duration) -> TestResult<()> {
         pending("configure native post-start sleep")
     }
@@ -192,6 +196,51 @@ pub(crate) trait Platform: Sized {
     }
     fn pending_exec(&self, task: u64) -> TestResult<Option<PendingExecV1>> {
         self.state("pending_execs", &task.to_ne_bytes(), "pending exec")
+    }
+    fn approval(&self, task: &Task) -> TestResult<Option<ExecutionApprovalSlotV1>> {
+        let binding = task
+            .snapshot
+            .runtime_binding
+            .as_ref()
+            .ok_or("the task has no runtime binding")?;
+        let value = u128::from_str_radix(&binding.binding_id, 16)?;
+        let config = self
+            .state::<IdentityRuntimeConfigV1>(
+                "identity_config",
+                &0_u32.to_ne_bytes(),
+                "identity runtime configuration",
+            )?
+            .ok_or("identity runtime configuration is missing")?;
+        let key = ExecutionApprovalSlotKeyV1 {
+            node_boot_id: config.node_boot_id,
+            cgroup_binding_id: value.into(),
+        };
+        self.state(
+            "execution_approval_slots",
+            key.as_bytes(),
+            "execution approval slot",
+        )
+    }
+    fn wait_slot(&self, task: &Task) -> TestResult<()> {
+        let path = self.maps().0;
+        let last = RefCell::new(String::from("<absent>"));
+        Ok(wait_for(
+            path,
+            "execution approval reconciliation",
+            TASK_LIMIT,
+            || {
+                let slot = self.approval(task).map_err(|source| {
+                    InvalidInputSnafu {
+                        path,
+                        reason: source.to_string(),
+                    }
+                    .build()
+                })?;
+                *last.borrow_mut() = format!("{slot:?}");
+                Ok(slot.is_none().then_some(()))
+            },
+            || format!("last slot: {}", last.borrow()),
+        )?)
     }
     fn process(&self, value: &str) -> TestResult<ProcessSecurityStateV1> {
         if value.len() != 32 {

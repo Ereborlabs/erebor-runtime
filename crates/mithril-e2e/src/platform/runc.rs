@@ -274,7 +274,7 @@ impl Platform for Runc {
         };
         fs::write(&path, config)?;
 
-        let id = self.shared.actor_id().to_owned();
+        let id = self.shared.actor_id()?.to_owned();
         self.container_id = Some(id.clone());
         let mut command = Command::new(&self.runc_path);
         command
@@ -299,6 +299,10 @@ impl Platform for Runc {
 
     fn add_actor(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         self.start_entry(command, args)
+    }
+
+    fn approve(&mut self, command: &str, args: &[&str]) -> TestResult<()> {
+        self.shared.approve(command, args)
     }
 
     fn place(&mut self, pid: u32) -> TestResult<()> {

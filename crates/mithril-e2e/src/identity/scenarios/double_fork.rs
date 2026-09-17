@@ -90,7 +90,7 @@ fn double_fork_keeps_identity<P: Platform>() -> TestResult<()> {
     assert_eq!(got.active_role_id, root.snapshot.active_role_id);
     assert!(got.root_class.is_none() && got.installed_role_class.is_none());
     active(&after);
-    init.stop()?;
     actor.stop()?;
+    init.stop()?;
     env.stop()
 }
