@@ -99,6 +99,32 @@ fn approved_exec_consumes_once<P: Platform>() -> TestResult<()> {
             )?
             .is_none());
     }
+    assert!(env.add_actor("sleep", &["0.5"]).is_err());
+    init.stop()?;
+    env.stop()
+}
+
+#[platform_test(host, runc, kubernetes)]
+#[lifecycle = identity]
+fn consumed_exec_is_restricted<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("admin-replay")?;
+    env.start_control()?;
+    env.start_node()?;
+    env.install_policy("actor_sleep_policy.json")?;
+    env.node_ready()?;
+    let mut init = env.start_actor("ready.py", &[])?;
+    let root = env.task(init.id(), "administrative target")?;
+    env.approve("sleep", &["0.5"])?;
+    let mut actor = env.add_actor("sleep", &["0.5"])?;
+    assert_eq!(
+        env.actor_code(
+            &mut actor,
+            "approved administrative actor",
+            Duration::from_secs(30),
+        )?,
+        0
+    );
+    env.wait_slot(&root)?;
     let since = env
         .snapshot()?
         .recent_effects
@@ -107,15 +133,10 @@ fn approved_exec_consumes_once<P: Platform>() -> TestResult<()> {
         .max()
         .unwrap_or_default();
     assert!(env.add_actor("sleep", &["0.5"]).is_err());
-    assert_restricted(&env, since)?;
-    init.stop()?;
-    env.stop()
-}
 
-fn assert_restricted<P: Platform>(env: &P, since: u64) -> TestResult<()> {
     let path = env.maps().0.to_owned();
     let last = RefCell::new(String::from("<none>"));
-    wait_for(
+    let effect = wait_for(
         &path,
         "restricted administrative replay",
         Duration::from_secs(30),
@@ -136,14 +157,19 @@ fn assert_restricted<P: Platform>(env: &P, since: u64) -> TestResult<()> {
                     && event.reason == "UNSUPPORTED_OBJECT"
                     && event.effect_family == KernelEffectFamilyV1::Exec as u32
                     && event.operation == KernelEffectOperationV1::Execute as u32
-                    && event.active_role_id == 2
-                    && event.admitted_entry_rule_id == 0
                     && event.kernel_result == -libc::EACCES
             }))
         },
         || format!("last effects: {}", last.borrow()),
     )?;
-    Ok(())
+    assert_eq!(effect.reason, "UNSUPPORTED_OBJECT");
+    assert_eq!(effect.effect_family, KernelEffectFamilyV1::Exec as u32);
+    assert_eq!(effect.operation, KernelEffectOperationV1::Execute as u32);
+    assert_eq!(effect.active_role_id, 2);
+    assert_eq!(effect.admitted_entry_rule_id, 0);
+    assert_eq!(effect.kernel_result, -libc::EACCES);
+    init.stop()?;
+    env.stop()
 }
 
 #[platform_test(host, runc)]

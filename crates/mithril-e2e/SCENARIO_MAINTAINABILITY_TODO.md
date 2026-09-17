@@ -1568,10 +1568,9 @@ setup, production actions, assertions, and focused test.
     2026-09-17.
   - [x] Preserve the legacy process-success, policy-generation, expected-argv,
     mount-object trace, denied-role, errno, and pending-exec cleanup checks in
-    the small tests. The 90-line success case passed on Host in 29.32 seconds,
-    direct `runc` in 30.81 seconds, and Kubernetes in 72.56 seconds. The
-    95-line trace case passed on Host and direct `runc`.
-  - [ ] Keep ordinary Kubernetes `pods/exec` tasks in the restricted external
+    the small tests. The success case is 88 lines, or 90 lines with its two
+    attributes. The trace case is 98 lines, or 100 lines with its attributes.
+  - [x] Keep ordinary Kubernetes `pods/exec` tasks in the restricted external
     role. Invoke the Control admission webhook only for the trusted Mithril
     approval group. A matching armed slot can then select the approved role.
   - [x] Remove the matching direct-`runc` approval sequence, result fields,
@@ -1585,10 +1584,13 @@ setup, production actions, assertions, and focused test.
     passed 20 tests in 222.46 seconds. Kubernetes passed 20 tests in 517.59
     seconds after approval rechecked stable Node readiness at its operation
     boundary. The unchanged Kubernetes moved-exec test also passed.
-  - [ ] Replace the Kubernetes post-consumption direct CRI exec assertion.
-    It must remain a restricted external root with role 2 after the approved
-    slot is consumed. Do not remove the old shell lane until a small Rust test
-    executes this exact CRI operation.
+  - [x] Replace the Kubernetes post-consumption assertion with the separate
+    `consumed_exec_is_restricted` Rust test. It uses `Platform::add_actor` on
+    Host, direct `runc`, and stock Kubernetes `pods/exec`. It explicitly
+    requires role 2, rule 0, `UNSUPPORTED_OBJECT`, and `EACCES` after the
+    approved slot is consumed. The test is 65 lines, or 67 lines with its
+    attributes. Host passed in 34.92 seconds, direct `runc` passed in 37.99
+    seconds, and Kubernetes passed in 86.01 seconds on 2026-09-17.
   - [ ] Remove the matching legacy Rust and shell assertions after all three
     platform cases pass.
 - [ ] Node restart and PreStop retention: keep the public restart, inventory,
