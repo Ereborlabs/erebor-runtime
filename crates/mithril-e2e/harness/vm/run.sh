@@ -8,14 +8,16 @@ provider=$directory/providers/libvirt.sh
 output_directory=
 with_k3s=false
 keep_vm=false
-skip_administrative_exec=false
 manual_vm=false
 entry_role_runtime_only=false
 recovered_entry_only=false
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
 source_mount=${MITHRIL_VM_SOURCE_MOUNT:-}
+actor_image=docker.io/library/python@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285
+control_image=mithril-control:platform-test
+node_image=mithril-node:platform-test
 usage() {
-  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--skip-administrative-exec] [--entry-role-runtime-only] [--recovered-entry-only] [--keep-vm] [--manual]" >&2
+  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--entry-role-runtime-only] [--recovered-entry-only] [--keep-vm] [--manual]" >&2
 }
 
 while (($#)); do
@@ -34,10 +36,6 @@ while (($#)); do
       with_k3s=true
       shift
       ;;
-    --skip-administrative-exec)
-      skip_administrative_exec=true
-      shift
-      ;;
     --entry-role-runtime-only)
       entry_role_runtime_only=true
       shift
@@ -54,7 +52,6 @@ while (($#)); do
       manual_vm=true
       with_k3s=true
       keep_vm=true
-      skip_administrative_exec=true
       shift
       ;;
     --help|-h)
@@ -68,10 +65,6 @@ while (($#)); do
   esac
 done
 
-[[ $skip_administrative_exec == false || $with_k3s == true ]] || {
-  echo "--skip-administrative-exec requires --with-k3s" >&2
-  exit 2
-}
 [[ $entry_role_runtime_only == false || $manual_vm == false ]] || {
   echo "--entry-role-runtime-only cannot run with --manual" >&2
   exit 2
@@ -193,25 +186,9 @@ else
     --bin mithril-network-test --bin mithril-kube-exec \
     --bin mithril-kernel-qualification \
     -p mithril-node --bin mithril-node --bin mithril-inspect \
-    -p mithril-control --bin mithril-control --bin mithril-policy \
-    --bin kubectl-mithril && \
+    -p mithril-control --bin mithril-control --bin mithril-policy && \
     cargo rustc --locked -p mithril-node --bin mithril-oci-hook -- \
       -C target-feature=+crt-static)
-
-  test_json=$(cd -- "$repo_root" && cargo test --locked -p mithril-e2e \
-    --lib --no-run --message-format=json)
-  test_bin=$(jq -r '
-    select(
-      .reason == "compiler-artifact" and
-      .profile.test == true and
-      .target.name == "mithril_e2e" and
-      .executable != null
-    ) | .executable
-  ' <<<"$test_json")
-  [[ -x $test_bin ]] || {
-    echo "the Mithril Rust test executable was not built: $test_bin" >&2
-    exit 1
-  }
 
   open_probe_target=$work_directory/open-probe-build
   mkdir -p -- "$open_probe_target"
@@ -228,6 +205,46 @@ else
     --output-directory "$retained_identity_build"
 fi
 
+test_json=$(cd -- "$repo_root" && cargo test --locked -p mithril-e2e \
+  --lib --no-run --message-format=json)
+test_bin=$(jq -r '
+  select(
+    .reason == "compiler-artifact" and
+    .profile.test == true and
+    .target.name == "mithril_e2e" and
+    .executable != null
+  ) | .executable
+' <<<"$test_json")
+[[ -x $test_bin ]] || {
+  echo "the Mithril Rust test executable was not built: $test_bin" >&2
+  exit 1
+}
+
+if [[ $with_k3s == true ]]; then
+  helm_path=$(command -v helm) || {
+    echo "Helm is required for Kubernetes platform tests" >&2
+    exit 2
+  }
+  command -v docker >/dev/null || {
+    echo "Docker is required to prepare Kubernetes platform images" >&2
+    exit 2
+  }
+  echo "Building the Kubernetes platform images"
+  (cd -- "$repo_root" && docker build --file packaging/mithril/Dockerfile \
+    --target node --tag "$node_image" .)
+  (cd -- "$repo_root" && docker build --file packaging/mithril/Dockerfile \
+    --target control --tag "$control_image" .)
+  docker image inspect "$actor_image" >/dev/null 2>&1 || docker pull "$actor_image"
+  k3s_image_archive=$work_directory/k3s-platform-images.tar
+  docker save --output "$k3s_image_archive" \
+    "$node_image" "$control_image" "$actor_image"
+  k3s_source_archive=$work_directory/k3s-platform-source.tar
+  tar -C "$repo_root" -cf "$k3s_source_archive" \
+    packaging/mithril/helm \
+    crates/mithril-e2e/fixtures/kubernetes \
+    crates/mithril-e2e/harness/vm/oidc-fixture.py
+fi
+
 "$provider" create "$vm_name" "$work_directory" "$ssh_public_key"
 created=true
 "$provider" wait "$vm_name"
@@ -235,8 +252,22 @@ created=true
 remote_root=/var/tmp/$vm_name
 remote_source=$remote_root/source
 remote_bin=$remote_root/bin
+"$provider" run "$vm_name" mkdir -p "$remote_bin" "$remote_root/harness"
+"$provider" put "$vm_name" "$test_bin" "$remote_bin/mithril-e2e-tests"
+"$provider" put "$vm_name" "$repo_root/target/debug/mithril-kube-exec" \
+  "$remote_bin/mithril-kube-exec"
+if [[ $with_k3s == true ]]; then
+  "$provider" put "$vm_name" "$helm_path" "$remote_bin/helm"
+  "$provider" put "$vm_name" "$directory/k3s-images.sh" \
+    "$remote_root/harness/k3s-images.sh"
+  "$provider" put "$vm_name" "$k3s_image_archive" \
+    "$remote_root/k3s-platform-images.tar"
+  if [[ $manual_vm == false ]]; then
+    "$provider" put "$vm_name" "$k3s_source_archive" \
+      "$remote_root/k3s-platform-source.tar"
+  fi
+fi
 if [[ $manual_vm == true ]]; then
-  "$provider" run "$vm_name" mkdir -p "$remote_root"
   "$provider" run "$vm_name" test -x \
     /mnt/mithril-source/target/debug/mithril-node
   "$provider" run "$vm_name" sudo bash \
@@ -250,6 +281,10 @@ if [[ $manual_vm == true ]]; then
     k3s-runtime-hook \
     /mnt/mithril-source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh \
     "$remote_root"
+  "$provider" run "$vm_name" sudo bash "$remote_root/harness/k3s-images.sh" \
+    /usr/local/bin/k3s platform "$remote_root/k3s-platform-images.tar" \
+    "$node_image" "$control_image" "$actor_image"
+  "$provider" run "$vm_name" rm -f -- "$remote_root/k3s-platform-images.tar"
   "$provider" run "$vm_name" \
     'sudo apt-get update && sudo apt-get install -y --no-install-recommends iproute2 net-tools nftables'
   "$provider" run "$vm_name" "set -e; cd '$remote_root'; \
@@ -271,7 +306,17 @@ if [[ $manual_vm == true ]]; then
     sudo ln -sfn /usr/local/bin/k3s /usr/local/bin/crictl && \
     sudo ln -sfn /usr/local/bin/k3s /usr/local/bin/kubectl && \
     printf '%s\\n' 'export MITHRIL_MANUAL_SOURCE=/mnt/mithril-source' \
-      'export MITHRIL_BIN_DIRECTORY=/mnt/mithril-source/target/debug' | \
+      'export MITHRIL_BIN_DIRECTORY=/mnt/mithril-source/target/debug' \
+      'export MITHRIL_TEST_ROOT=/mnt/mithril-source' \
+      'export MITHRIL_TEST_OUTPUT=$remote_root/platform-tests' \
+      'export MITHRIL_TEST_KUBECONFIG=/etc/rancher/k3s/k3s.yaml' \
+      'export MITHRIL_TEST_HELM=$remote_bin/helm' \
+      'export MITHRIL_TEST_K3S=/usr/local/bin/k3s' \
+      'export MITHRIL_TEST_KUBE_EXEC=$remote_bin/mithril-kube-exec' \
+      'export MITHRIL_TEST_NODE_IMAGE=$node_image' \
+      'export MITHRIL_TEST_CONTROL_IMAGE=$control_image' \
+      'export MITHRIL_TEST_ACTOR_IMAGE=$actor_image' \
+      'export MITHRIL_TEST_BIN=$remote_bin/mithril-e2e-tests' | \
       sudo tee /var/tmp/mithril-manual.env >/dev/null && \
     sudo chmod 0644 /var/tmp/mithril-manual.env"
   echo "Manual VM ready. SSH, then run: sudo -i; . /var/tmp/mithril-manual.env"
@@ -291,10 +336,14 @@ fi
   "$remote_source/crates/mithril-e2e/fixtures/mithril-policy" \
   "$remote_source/crates/mithril-e2e/harness/vm" \
   "$remote_root/harness" "$remote_bin"
+if [[ $with_k3s == true ]]; then
+  "$provider" run "$vm_name" tar -xf "$remote_root/k3s-platform-source.tar" \
+    -C "$remote_source"
+  "$provider" run "$vm_name" rm -f -- "$remote_root/k3s-platform-source.tar"
+fi
 
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-identity-test" \
   "$remote_bin/mithril-identity-test"
-"$provider" put "$vm_name" "$test_bin" "$remote_bin/mithril-e2e-tests"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-effect-test" \
   "$remote_bin/mithril-effect-test"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-network-test" \
@@ -307,10 +356,6 @@ fi
   "$remote_bin/mithril-policy"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-control" \
   "$remote_bin/mithril-control"
-"$provider" put "$vm_name" "$repo_root/target/debug/kubectl-mithril" \
-  "$remote_bin/kubectl-mithril"
-"$provider" put "$vm_name" "$repo_root/target/debug/mithril-kube-exec" \
-  "$remote_bin/mithril-kube-exec"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-kernel-qualification" \
   "$remote_bin/mithril-kernel-qualification"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-oci-hook" \
@@ -569,12 +614,6 @@ if [[ $with_k3s == true ]]; then
     "$remote_root/harness/k3s-workload-v1.yaml"
   "$provider" put "$vm_name" "$directory/k3s-cri-effect-node-v1.json" \
     "$remote_source/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json"
-  "$provider" put "$vm_name" "$directory/k3s-administrative-node-v1.json" \
-    "$remote_root/harness/k3s-administrative-node-v1.json"
-  "$provider" put "$vm_name" "$directory/k3s-administrative-policy-v1.yaml" \
-    "$remote_root/harness/k3s-administrative-policy-v1.yaml"
-  "$provider" put "$vm_name" "$directory/oidc-fixture.py" \
-    "$remote_root/harness/oidc-fixture.py"
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
     k3s-install "$k3s_version" "$remote_root/harness/k3s-config-v1.yaml" \
     "$remote_root/harness/k3s-auth-webhook-v1.yaml" \
@@ -583,6 +622,10 @@ if [[ $with_k3s == true ]]; then
     k3s-runtime-hook \
     "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh" \
     "$remote_root"
+  "$provider" run "$vm_name" sudo bash "$remote_root/harness/k3s-images.sh" \
+    /usr/local/bin/k3s platform "$remote_root/k3s-platform-images.tar" \
+    "$node_image" "$control_image" "$actor_image"
+  "$provider" run "$vm_name" rm -f -- "$remote_root/k3s-platform-images.tar"
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
     k3s-qualify "$remote_root/harness/k3s-workload-v1.yaml" "$remote_root" \
     >"$output_directory/k3s.txt"
@@ -592,27 +635,39 @@ if [[ $with_k3s == true ]]; then
   k3s_cri_effect_partial=$output_directory/k3s-cri-effect.txt.partial
   run_k3s_cri_effect PROTECT >"$k3s_cri_effect_partial"
   mv -- "$k3s_cri_effect_partial" "$output_directory/k3s-cri-effect.txt"
-  if [[ $skip_administrative_exec == false ]]; then
-    k3s_administrative_partial=$output_directory/k3s-administrative-exec.txt.partial
-    administrative_command=(sudo)
-    if [[ $keep_vm == true ]]; then
-      administrative_command=(sudo env MITHRIL_VM_KEEP_FAILURE_STATE=true)
-    fi
-    "$provider" run "$vm_name" "${administrative_command[@]}" bash "$remote_root/harness/guest.sh" \
-      k3s-administrative-exec "$remote_bin/mithril-control" \
-      "$remote_bin/mithril-node" "$remote_bin/mithril-inspect" \
-      "$remote_bin/mithril-policy" "$remote_bin/kubectl-mithril" \
-      "$remote_root/harness/oidc-fixture.py" \
-      "$remote_root/harness/k3s-administrative-node-v1.json" \
-      "$remote_root/harness/k3s-administrative-policy-v1.yaml" \
-      "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/observe-profile-seal-request.json" \
-      "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/test-signing-key.hex" \
-      "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/test-public-key.hex" \
-      "$remote_root/harness/k3s-workload-v1.yaml" "$remote_root" \
-      >"$k3s_administrative_partial"
-    mv -- "$k3s_administrative_partial" \
-      "$output_directory/k3s-administrative-exec.txt"
-  fi
+  k3s_rust_partial=$output_directory/k3s-platform-tests.txt.partial
+  "$provider" run "$vm_name" sudo env \
+    "MITHRIL_TEST_ROOT=$remote_source" \
+    "MITHRIL_TEST_OUTPUT=$remote_root/platform-tests" \
+    "MITHRIL_TEST_KUBECONFIG=/etc/rancher/k3s/k3s.yaml" \
+    "MITHRIL_TEST_HELM=$remote_bin/helm" \
+    "MITHRIL_TEST_K3S=/usr/local/bin/k3s" \
+    "MITHRIL_TEST_KUBE_EXEC=$remote_bin/mithril-kube-exec" \
+    "MITHRIL_TEST_NODE_IMAGE=$node_image" \
+    "MITHRIL_TEST_CONTROL_IMAGE=$control_image" \
+    "MITHRIL_TEST_ACTOR_IMAGE=$actor_image" \
+    "$remote_bin/mithril-e2e-tests" \
+    identity_kubernetes --ignored --nocapture --test-threads=1 \
+    >"$k3s_rust_partial"
+  mv -- "$k3s_rust_partial" "$output_directory/k3s-platform-tests.txt"
+
+  k3s_recovery_partial=$output_directory/k3s-workload-recovery.txt.partial
+  "$provider" run "$vm_name" sudo env \
+    "MITHRIL_TEST_ROOT=$remote_source" \
+    "MITHRIL_TEST_OUTPUT=$remote_root/platform-tests" \
+    "MITHRIL_TEST_KUBECONFIG=/etc/rancher/k3s/k3s.yaml" \
+    "MITHRIL_TEST_HELM=$remote_bin/helm" \
+    "MITHRIL_TEST_K3S=/usr/local/bin/k3s" \
+    "MITHRIL_TEST_KUBE_EXEC=$remote_bin/mithril-kube-exec" \
+    "MITHRIL_TEST_NODE_IMAGE=$node_image" \
+    "MITHRIL_TEST_CONTROL_IMAGE=$control_image" \
+    "MITHRIL_TEST_ACTOR_IMAGE=$actor_image" \
+    "$remote_bin/mithril-e2e-tests" \
+    identity::scenarios::workload_recovery::workload_recovers::workload_recovery_kubernetes \
+    --exact --ignored --nocapture --test-threads=1 \
+    >"$k3s_recovery_partial"
+  mv -- "$k3s_recovery_partial" \
+    "$output_directory/k3s-workload-recovery.txt"
 fi
 
 qualification_output=$remote_root/kernel-qualification

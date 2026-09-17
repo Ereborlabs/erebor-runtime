@@ -23,13 +23,12 @@ fi
 
 help=$("$directory/run.sh" --help 2>&1)
 [[ $help == *--with-k3s* ]]
-[[ $help == *--skip-administrative-exec* ]]
 [[ $help == *--keep-vm* ]]
 [[ $help == *--manual* ]]
 "$directory/guest.sh" --help >/dev/null 2>&1
 [[ $(grep -Fc \
   'install -m 0555 "$work_directory/bin/mithril-open-probe" "$fixture_root/open-probe"' \
-  "$directory/guest.sh") -eq 2 ]]
+  "$directory/guest.sh") -eq 1 ]]
 two_node_help=$("$directory/two-node-network.sh" --help 2>&1)
 [[ $two_node_help == *--keep-vms* ]]
 convergence_help=$("$directory/two-node-convergence.sh" --help 2>&1)
@@ -80,6 +79,19 @@ grep -Fq '.target.name == "mithril_e2e"' "$directory/run.sh"
 grep -Fq '"$test_bin" "$remote_bin/mithril-e2e-tests"' "$directory/run.sh"
 grep -Fq 'fixtures/process/$fixture' "$directory/run.sh"
 grep -Fq 'fixtures/process/"*; do' "$directory/run.sh"
+grep -Fq 'identity_kubernetes --ignored --nocapture --test-threads=1' \
+  "$directory/run.sh"
+grep -Fq \
+  'identity::scenarios::workload_recovery::workload_recovers::workload_recovery_kubernetes' \
+  "$directory/run.sh"
+grep -Fq 'k3s-images.sh' "$directory/run.sh"
+if grep -Fq 'k3s-administrative-exec' \
+    "$directory/run.sh" "$directory/guest.sh"; then
+  echo "the legacy administrative shell scenario is still installed" >&2
+  exit 1
+fi
+[[ ! -e $directory/k3s-administrative-node-v1.json ]]
+[[ ! -e $directory/k3s-administrative-policy-v1.yaml ]]
 if grep -Fq -- '--start-hook-path' "$directory/run.sh"; then
   echo "the direct runtime probe still uses the rejected start hook" >&2
   exit 1
@@ -245,12 +257,6 @@ invalid=$("$directory/guest.sh" k3s-install latest /dev/null /dev/null /tmp 2>&1
 status=$?
 set -e
 [[ $status -eq 2 && $invalid == "invalid k3s version: latest" ]]
-
-set +e
-skip_without_k3s=$("$directory/run.sh" --skip-administrative-exec 2>&1)
-status=$?
-set -e
-[[ $status -eq 2 && $skip_without_k3s == "--skip-administrative-exec requires --with-k3s" ]]
 
 cleanup_bin=$test_root/cleanup-bin
 mkdir "$cleanup_bin"

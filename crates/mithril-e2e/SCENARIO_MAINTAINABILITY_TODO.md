@@ -449,9 +449,9 @@ scenario at a time.
 
 | Source | Lines | Current responsibility | Required end state |
 | --- | ---: | --- | --- |
-| `harness/vm/run.sh` | 703 | Builds one VM, runs native, direct-`runc`, and Kubernetes probes, checks JSON, and checks cleanup | Provision the VM, copy inputs, invoke exact Rust tests, collect diagnostics, and remove resources only |
-| `harness/vm/test.sh` | 791 | Tests shell text, fake Kubernetes oracles, cleanup, and provider wiring | Test only launcher argument, provider, and cleanup behavior that must remain in shell |
-| `harness/vm/guest.sh` | 1,764 | Installs K3s and its hook, then owns K3s qualification, CRI effect, and administrative-exec scenarios | Install or remove K3s and the runtime hook, then invoke exact Rust tests |
+| `harness/vm/run.sh` | 758 | Builds one VM, runs native, direct-`runc`, and Kubernetes probes, checks JSON, and checks cleanup | Provision the VM, copy inputs, invoke exact Rust tests, collect diagnostics, and remove resources only |
+| `harness/vm/test.sh` | 797 | Tests shell text, fake Kubernetes oracles, cleanup, and provider wiring | Test only launcher argument, provider, and cleanup behavior that must remain in shell |
+| `harness/vm/guest.sh` | 1,138 | Installs K3s and its hook, then owns K3s qualification and CRI effect scenarios | Install or remove K3s and the runtime hook, then invoke exact Rust tests |
 | `harness/vm/two-node-convergence.sh` | 4,371 | Provisions two nodes and owns policy, runtime, effect, exception, restart, upgrade, and cleanup assertions | Provision or reuse two nodes, deploy Mithril, invoke exact Rust tests, collect diagnostics, and clean up only |
 | `harness/vm/two-node-outage-recovery.sh` | 1,115 | Owns Control, storage, network, API, watch, WAL, replay, and recovery scenarios | Apply the requested outage, invoke its exact Rust test, restore the environment, and collect diagnostics only |
 | `harness/vm/two-node-network.sh` | 342 | Provisions two nodes and owns both network directions and result assertions | Provision the nodes and invoke one exact Rust test for each direction |
@@ -515,7 +515,7 @@ Single-node and guest cases:
     helper to install the Control, Node, and actor archives in the persistent
     K3s image store. The Rust platform only verifies each required image
     before use. Both actor-first and Node-first order pass.
-  - [ ] Make the thin retained-VM launcher call the image helper once before
+  - [x] Make the thin retained-VM launcher call the image helper once before
     its first exact Rust test when an image is absent. Keep K3s, its OCI hook,
     and its prepared images between test runs. Do not uninstall K3s or import
     unchanged archives between exact tests.
@@ -528,7 +528,7 @@ Single-node and guest cases:
 - [ ] CRI effect recovery: start the Pod before Node, require conservative
   initial identity, recover the running binding, and check direct-CRI and
   Kubernetes exec identities and effects.
-- [ ] Administrative exec: use real Control, Node, OIDC, TokenReview,
+- [x] Administrative exec: use real Control, Node, OIDC, TokenReview,
   admission, approval, one-use slot consumption, replay denial, and restricted
   direct-runtime fallback.
 - [ ] Replace native, direct-`runc`, kernel, local-effect, and local-network CLI
@@ -1432,6 +1432,12 @@ test does not close a row when its physical condition or an assertion changed.
   denial, allow control, loss counter, and evidence assertion.
 - [ ] `EffectTestRunner::physical_probe` mount mutation cases: keep each
   production reconciliation call and mount syscall action visible.
+  - [ ] Replace the pre-policy `mount_global_mutation_epoch` read. The
+    production policy owner creates this hash-map row during policy
+    installation. The old probe reads it before policy installation. The full
+    VM run passed 26 Host tests and the direct-`runc` entry-role probe, then
+    stopped at this stale assertion on 2026-09-17. Do not initialize the row
+    in a test helper or change BPF behavior.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
@@ -1548,7 +1554,7 @@ setup, production actions, assertions, and focused test.
     update that later restart and entry cases still consume. Schema 40 and the
     remaining privileged direct-`runc` probe passed. This reduced
     `effect/runc.rs` by 235 lines.
-- [ ] Administrative exec: keep Control authorization, node slot arm, stock
+- [x] Administrative exec: keep Control authorization, node slot arm, stock
   runtime exec, one-use consumption, replay denial, trace, and reconciliation
   operations explicit.
   - [x] Pass Host and its complete lifecycle. The test requires unapproved and
@@ -1591,8 +1597,11 @@ setup, production actions, assertions, and focused test.
     approved slot is consumed. The test is 65 lines, or 67 lines with its
     attributes. Host passed in 34.92 seconds, direct `runc` passed in 37.99
     seconds, and Kubernetes passed in 86.01 seconds on 2026-09-17.
-  - [ ] Remove the matching legacy Rust and shell assertions after all three
-    platform cases pass.
+  - [x] Remove the matching legacy Rust and shell assertions after all three
+    platform cases pass. The Rust replacements passed on Host, direct `runc`,
+    and Kubernetes. The launcher now invokes the standard Rust lifecycle and
+    recovery tests. This removes the 628-line guest scenario, its 301 lines of
+    private inputs, and the obsolete skip option.
 - [ ] Node restart and PreStop retention: keep the public restart, inventory,
   binding, and lifecycle operations explicit.
 - [ ] Kernel object upgrade: keep the second production object, manifest, map

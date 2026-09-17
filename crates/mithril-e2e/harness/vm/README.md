@@ -125,7 +125,6 @@ distribution:
 
 ```bash
 crates/mithril-e2e/harness/vm/run.sh --with-k3s \
-  --skip-administrative-exec \
   --output-directory /tmp/mithril-k3s-vm-test-evidence
 ```
 
@@ -160,20 +159,13 @@ The CRI guest lane accepts only `MITHRIL_VM_CRI_EFFECT_MODE=OBSERVE|PROTECT`.
 It uses `PROTECT` by default. The harness sets each mode explicitly and writes
 the observe result before the protect result.
 
-By default, the option also runs the administrative-exec product path. It
-starts the real Control and node services. It uses a disposable HTTPS OIDC provider to test
-authorization-code PKCE and explicit self-approval. `kubectl-mithril` obtains
-one memory-only credential. The stock Kubernetes TokenReview and CONNECT
-admission paths must arm one exact node slot. The matching runtime root must
-receive the approved administrative role. Ordinary `kubectl exec` must enter
-with the restricted external role. A later direct-runtime task with the same
-executable must stay restricted after slot consumption. This is the single-node physical
-`ADMIN-EXEC-APPROVAL-001` path. Source and unit tests own its malformed,
-replay, expiry, disconnect, and contention cases.
-
-Use `--skip-administrative-exec` with `--with-k3s` to run the CRI checks
-without the administrative path. The flag does not skip the runtime probes or
-kernel qualification.
+The option prepares the production Node and Control images, the pinned Python
+actor image, Helm, and the standard Rust test executable. It runs the complete
+`identity_kubernetes` lifecycle and the separate workload-recovery test. The
+administrative tests use a disposable HTTPS OIDC provider, Kubernetes
+TokenReview, CONNECT admission, and a real `pods/exec` request. They require
+the approved role for one matching request and the restricted role after the
+slot is consumed.
 
 Run the network-only two-node K3s companion with:
 
@@ -195,7 +187,7 @@ This lane proves the tested K3s Flannel route. It does not prove Pod-origin
 enforcement, another CNI, a service mesh, distributed causality, or the full
 later-phase two-node lifecycle.
 
-The administrative lane sets the k3s API audience to
+The administrative test sets the K3s API audience to
 `mithril-administrative-exec`. Control verifies the same audience in each
 TokenReview. Kubernetes can repeat TokenReview while it completes one CONNECT.
 The credential remains valid through its expiry, but Control accepts only the
@@ -238,15 +230,14 @@ decisions, external-entry denial, runtime version, and owned-resource cleanup.
 The network result records the
 single-host actor, destination, response-fence, and socket-lifetime oracles.
 With `--with-k3s`, the directory also keeps `k3s.txt`, `k3s-cri-observe.txt`,
-and `k3s-cri-effect.txt`. These files record the Pod
+`k3s-cri-effect.txt`, `k3s-platform-tests.txt`, and
+`k3s-workload-recovery.txt`. These files record the Pod
 initial-root classification, the direct CRI and `kubectl exec` external-root
 classifications, each matching exact-secret effect, and the observe and protect
-file-open results. Unless
-`--skip-administrative-exec` is set, it also keeps
-`k3s-administrative-exec.txt`. That file records the product path, approved
-role, admission denial, restricted non-winner, and measured pre-binding start
-gap. A failed lane retains only a `.partial` host record. Guest destruction
-remains the outer cleanup boundary.
+file-open results. The Rust test records contain the platform lifecycle,
+administrative approval, restricted replay, and workload-recovery results. A
+failed test retains its `.partial` host record. Guest destruction remains the
+outer cleanup boundary.
 
 `--keep-vm` retains a failed or diagnostic qualification guest. Use
 `manual.sh` for manual work. It owns the VM name and the provider record.
@@ -262,9 +253,9 @@ crates/mithril-e2e/harness/vm/manual.sh ssh
 ```
 
 `start` creates one Kubernetes VM through the K3s distribution, mounts the
-current repository read-only at `/mnt/mithril-source`, and builds
-`mithril-node`, `mithril-inspect`, and `mithril-policy`. Do not start a second
-Mithril owner in this VM.
+current repository read-only at `/mnt/mithril-source`, and prepares the
+production Mithril and actor images. It also installs Helm and the standard
+Rust test executable. Do not start a second Mithril owner in this VM.
 
 In the guest:
 
@@ -274,24 +265,28 @@ sudo -i
 cd "$MITHRIL_MANUAL_SOURCE"
 ```
 
-`MITHRIL_BIN_DIRECTORY` names the mounted binaries. `kubectl`, `crictl`,
+`MITHRIL_BIN_DIRECTORY` names the mounted binaries. `MITHRIL_TEST_BIN` names
+the standard Rust test executable. `kubectl`, `crictl`,
 `netstat`, and `k9s` are on `PATH`. K3s configuration is in
 `/home/ubuntu/.kube/config` and `/root/.kube/config`. K9s uses the same
 configuration. Do not set `KUBECONFIG`. Run `crictl` as `root` because the
 containerd socket is root-owned.
-Manual scripts start `mithril-node` on the guest host. Mithril is not a
-Kubernetes Deployment.
+Each Kubernetes Rust test installs the production Control Deployment and Node
+DaemonSet through the Helm chart. The test removes its resources when it ends.
 
 ```bash
 kubectl get nodes -o name
 crictl info
 netstat -lnt
 k9s version
+"$MITHRIL_TEST_BIN" \
+  effect::admin_exec::approved_exec_consumes_once::identity_kubernetes \
+  --exact --ignored --nocapture --test-threads=1
 ```
 
-The harness does not run manual cases. Run the command in the required example
-README from this root guest shell. Each self-contained case creates and removes
-its own Pod, live CRI binding, and fixture directory.
+Run any generated Kubernetes test by its exact name. Run one lifecycle and one
+platform in each process. The prepared K3s cluster and images remain available
+for the next command.
 
 On the host, remove the VM after the manual checks:
 
