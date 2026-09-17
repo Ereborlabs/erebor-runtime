@@ -249,7 +249,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub independent_entry_roles_are_distinct: bool,
     pub reusable_entry_reinvocation_isolated: bool,
     pub administrative_recovered_runtime_binding: bool,
-    pub node_owner_restart_preserved_running_application: bool,
     pub prestop_retained_during_runtime_inventory_omission: bool,
     pub retained_mount_views_survived_source_exit: bool,
     pub kernel_upgrade_preserved_map_ids: bool,
@@ -5393,16 +5392,16 @@ impl EffectTestRunner {
         policy_owner
             .reconcile_cri_exact_bindings(&replacement_config, &mut host, &bindings)
             .context(NodeSnafu)?;
-        let active_after_replacement = inspector
-            .snapshot(initial_pid)
-            .context(NodeSnafu)?
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: pin_root,
-                    reason: "the running application lost identity after the policy update",
-                }
-                .build()
-            })?;
+        ensure!(
+            inspector
+                .snapshot(initial_pid)
+                .context(NodeSnafu)?
+                .is_some(),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the running application lost identity after the policy update",
+            }
+        );
         let replacement_entry_rules = host
             .map_keys("entry_admission_rules")
             .context(InterceptorSnafu)?
@@ -5586,25 +5585,6 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: pin_root,
                 reason: "node-owner restart did not reconcile policy lifecycle state",
-            }
-        );
-        let active_after_node_owner_restart = inspector
-            .snapshot(initial_pid)
-            .context(NodeSnafu)?
-            .ok_or_else(|| {
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "node-owner restart lost the running application identity",
-            }
-            .build()
-        })?;
-        let node_owner_restart_preserved_running_application =
-            active_after_node_owner_restart == active_after_replacement;
-        ensure!(
-            node_owner_restart_preserved_running_application,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "node-owner restart changed the running application identity",
             }
         );
         let mut independent_entries = Vec::new();
@@ -6508,7 +6488,6 @@ impl EffectTestRunner {
             independent_entry_roles_are_distinct,
             reusable_entry_reinvocation_isolated,
             administrative_recovered_runtime_binding,
-            node_owner_restart_preserved_running_application,
             prestop_retained_during_runtime_inventory_omission,
             retained_mount_views_survived_source_exit,
             kernel_upgrade_preserved_map_ids,

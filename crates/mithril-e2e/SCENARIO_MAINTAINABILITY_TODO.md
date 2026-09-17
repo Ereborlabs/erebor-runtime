@@ -1618,8 +1618,11 @@ setup, production actions, assertions, and focused test.
     in 63.08 seconds on 2026-09-17.
   - [x] Pass the same test on Kubernetes. The exact physical test passed in
     107.89 seconds on 2026-09-17.
-  - [ ] Remove the matching legacy restart result and orchestration after all
-    three platform cases pass.
+  - [x] Remove the matching legacy restart snapshot, result field, and shell
+    assertion after all three platform cases pass.
+  - [ ] Remove the reconstructed binding, policy, and identity owners after
+    their remaining PreStop, administrative recovery, mount retention, and
+    generation retirement consumers move to small tests.
 - [ ] Kernel object upgrade: keep the second production object, manifest, map
   ID, link pin, program tag, and running-identity checks explicit.
 - [ ] Post-point-of-no-return evidence and generation retirement: keep the

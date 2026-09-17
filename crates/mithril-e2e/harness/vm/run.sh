@@ -546,7 +546,6 @@ if [[ $entry_role_runtime_only == true ]]; then
     .independent_entry_roles_are_distinct and
     .reusable_entry_reinvocation_isolated and
     .administrative_recovered_runtime_binding and
-    .node_owner_restart_preserved_running_application and
     .prestop_retained_during_runtime_inventory_omission and
     .kernel_upgrade_preserved_map_ids and
     .kernel_upgrade_preserved_link_pins and
