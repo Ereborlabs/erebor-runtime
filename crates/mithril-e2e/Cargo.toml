@@ -15,7 +15,9 @@ erebor-interceptor = { path = "../erebor-interceptor" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 hex.workspace = true
+k8s-openapi.workspace = true
 k8s-cri.workspace = true
+kube.workspace = true
 libbpf-rs.workspace = true
 libc = "0.2.186"
 linux-raw-sys = { version = "0.12.1", features = ["general"] }
@@ -46,8 +48,6 @@ axum.workspace = true
 crc32c.workspace = true
 erebor-runtime-client = { path = "../erebor-runtime-client" }
 erebor-telemetry = { path = "../erebor-telemetry" }
-k8s-openapi.workspace = true
-kube.workspace = true
 mithril-e2e-macros = { path = "../mithril-e2e-macros" }
 prost.workspace = true
 rcgen = "0.13.2"
@@ -85,6 +85,10 @@ path = "src/bin/mithril_network_test.rs"
 [[bin]]
 name = "mithril-open-probe"
 path = "src/bin/mithril_open_probe.rs"
+
+[[bin]]
+name = "mithril-kube-exec"
+path = "src/bin/mithril_kube_exec.rs"
 
 [lints]
 workspace = true

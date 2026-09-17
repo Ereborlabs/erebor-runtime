@@ -135,17 +135,19 @@ def main():
     parser.add_argument("--listen", default="127.0.0.1:9444")
     parser.add_argument("--certificate", required=True)
     parser.add_argument("--private-key", required=True)
+    parser.add_argument("--signing-key")
     parser.add_argument("--issuer", required=True)
     args = parser.parse_args()
     host, port = args.listen.rsplit(":", 1)
+    signing_key = args.signing_key or args.private_key
     modulus = subprocess.run(
-        ["openssl", "rsa", "-in", args.private_key, "-noout", "-modulus"],
+        ["openssl", "rsa", "-in", signing_key, "-noout", "-modulus"],
         check=True,
         text=True,
         stdout=subprocess.PIPE,
     ).stdout.strip().split("=", 1)[1]
     Provider.issuer = args.issuer
-    Provider.private_key = args.private_key
+    Provider.private_key = signing_key
     Provider.modulus = base64url(bytes.fromhex(modulus))
     server = http.server.ThreadingHTTPServer((host, int(port)), Provider)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

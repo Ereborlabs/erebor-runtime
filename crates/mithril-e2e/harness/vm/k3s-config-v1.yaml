@@ -3,3 +3,8 @@ disable-cloud-controller: true
 disable:
   - servicelb
   - traefik
+kube-apiserver-arg:
+  - api-audiences=https://kubernetes.default.svc.cluster.local,mithril-administrative-exec
+  - authentication-token-webhook-config-file=/etc/rancher/k3s/mithril-auth-webhook.yaml
+  - authentication-token-webhook-version=v1
+  - authentication-token-webhook-cache-ttl=0s

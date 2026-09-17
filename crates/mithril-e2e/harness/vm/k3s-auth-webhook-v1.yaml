@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Config
+clusters:
+  - name: mithril
+    cluster:
+      certificate-authority: /var/lib/rancher/k3s/server/tls/server-ca.crt
+      server: https://localhost:19444/kubernetes/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/authenticate
+contexts:
+  - name: mithril
+    context:
+      cluster: mithril
+      user: kube-apiserver
+current-context: mithril
+users:
+  - name: kube-apiserver
+    user: {}

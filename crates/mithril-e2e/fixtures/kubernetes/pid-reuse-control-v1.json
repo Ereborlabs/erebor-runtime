@@ -7,7 +7,7 @@
   },
   "allowed_nodes": [
     {
-      "node_id": "node-a",
+      "node_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
       "certificate_sha256": "",
       "tenant_id": "00000000-0000-0001-0000-000000000002"
     }
@@ -25,6 +25,31 @@
     "capacity_policy": "RETAIN"
   },
   "control_store_directory": "/var/lib/mithril-control/store",
+  "administrative_exec": {
+    "listen": "0.0.0.0:9444",
+    "public_base_url": "https://localhost:19444",
+    "tls_certificate_path": "/etc/mithril/administrative.crt",
+    "tls_private_key_path": "/etc/mithril/administrative.key",
+    "oidc_issuer_url": "MITHRIL_TEST_OIDC_ISSUER",
+    "oidc_client_id": "mithril-vm",
+    "oidc_client_secret_path": null,
+    "oidc_ca_path": "/etc/mithril/k3s-ca.crt",
+    "kubernetes_audience": "mithril-administrative-exec",
+    "kubernetes_webhook_token_path": "/etc/mithril/administrative-webhook-token",
+    "node_ids_by_kubernetes_name": {},
+    "request_lifetime_seconds": 120,
+    "approval": {
+      "state_directory": "/var/lib/mithril-control/administrative-approval",
+      "tenant_id": "00000000-0000-0001-0000-000000000002",
+      "cluster_uid": "55555555-5555-4555-8555-555555555555",
+      "trust_domain_id": "22222222-2222-4222-8222-222222222222",
+      "issuer_id": "88888888-8888-4888-8888-888888888888",
+      "key_id": "effect-observation-test-key",
+      "private_key_path": "/etc/mithril/policy-signing-key",
+      "sequence_epoch": 1,
+      "authorization_lifetime_seconds": 120
+    }
+  },
   "kubernetes_policy": {
     "tenant_id": "00000000-0000-0001-0000-000000000002",
     "cluster_uid": "55555555-5555-4555-8555-555555555555",

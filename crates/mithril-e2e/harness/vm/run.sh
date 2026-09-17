@@ -183,13 +183,14 @@ ssh_public_key=${MITHRIL_VM_SSH_PUBLIC_KEY:-$HOME/.ssh/id_rsa.pub}
 if [[ $manual_vm == true ]]; then
   echo "Building the Mithril binaries for the manual VM"
   (cd -- "$repo_root" && cargo build --locked \
+    -p mithril-e2e --bin mithril-kube-exec \
     -p mithril-node --bin mithril-node --bin mithril-inspect \
     -p mithril-control --bin mithril-policy)
 else
   echo "Building the repository-owned physical probes and platform inspector"
   (cd -- "$repo_root" && cargo build --locked -p mithril-e2e \
     --bin mithril-identity-test --bin mithril-effect-test \
-    --bin mithril-network-test \
+    --bin mithril-network-test --bin mithril-kube-exec \
     --bin mithril-kernel-qualification \
     -p mithril-node --bin mithril-node --bin mithril-inspect \
     -p mithril-control --bin mithril-control --bin mithril-policy \
@@ -242,6 +243,7 @@ if [[ $manual_vm == true ]]; then
     /mnt/mithril-source/crates/mithril-e2e/harness/vm/guest.sh \
     k3s-install "$k3s_version" \
     /mnt/mithril-source/crates/mithril-e2e/harness/vm/k3s-config-v1.yaml \
+    /mnt/mithril-source/crates/mithril-e2e/harness/vm/k3s-auth-webhook-v1.yaml \
     "$remote_root"
   "$provider" run "$vm_name" sudo bash \
     /mnt/mithril-source/crates/mithril-e2e/harness/vm/guest.sh \
@@ -307,6 +309,8 @@ fi
   "$remote_bin/mithril-control"
 "$provider" put "$vm_name" "$repo_root/target/debug/kubectl-mithril" \
   "$remote_bin/kubectl-mithril"
+"$provider" put "$vm_name" "$repo_root/target/debug/mithril-kube-exec" \
+  "$remote_bin/mithril-kube-exec"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-kernel-qualification" \
   "$remote_bin/mithril-kernel-qualification"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-oci-hook" \
@@ -372,8 +376,11 @@ if [[ ( $entry_role_runtime_only == true || $recovered_entry_only == true ) &&
       $with_k3s == true ]]; then
   "$provider" put "$vm_name" "$directory/k3s-config-v1.yaml" \
     "$remote_root/harness/k3s-config-v1.yaml"
+  "$provider" put "$vm_name" "$directory/k3s-auth-webhook-v1.yaml" \
+    "$remote_root/harness/k3s-auth-webhook-v1.yaml"
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
     k3s-install "$k3s_version" "$remote_root/harness/k3s-config-v1.yaml" \
+    "$remote_root/harness/k3s-auth-webhook-v1.yaml" \
     "$remote_root"
   entry_runc_path=/var/lib/rancher/k3s/data/current/bin/runc
   entry_containerd_path=/var/lib/rancher/k3s/data/current/bin/containerd
@@ -565,6 +572,8 @@ if [[ $with_k3s == true ]]; then
   }
   "$provider" put "$vm_name" "$directory/k3s-config-v1.yaml" \
     "$remote_root/harness/k3s-config-v1.yaml"
+  "$provider" put "$vm_name" "$directory/k3s-auth-webhook-v1.yaml" \
+    "$remote_root/harness/k3s-auth-webhook-v1.yaml"
   "$provider" put "$vm_name" "$directory/k3s-workload-v1.yaml" \
     "$remote_root/harness/k3s-workload-v1.yaml"
   "$provider" put "$vm_name" "$directory/k3s-cri-effect-node-v1.json" \
@@ -577,6 +586,7 @@ if [[ $with_k3s == true ]]; then
     "$remote_root/harness/oidc-fixture.py"
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
     k3s-install "$k3s_version" "$remote_root/harness/k3s-config-v1.yaml" \
+    "$remote_root/harness/k3s-auth-webhook-v1.yaml" \
     "$remote_root"
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
     k3s-runtime-hook \

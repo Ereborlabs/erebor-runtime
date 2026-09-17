@@ -20,6 +20,7 @@ use crate::physical::wait_for;
 mod cri;
 mod host;
 mod kubernetes;
+mod kubernetes_approval;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;

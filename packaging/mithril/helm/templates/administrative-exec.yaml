@@ -1,11 +1,6 @@
 {{- if and .Values.control.enabled .Values.control.administrativeExec.enabled }}
 {{- $token := required "control.administrativeExec.webhookToken is required" .Values.control.administrativeExec.webhookToken }}
 {{- $ca := required "control.administrativeExec.webhookCABundle is required" .Values.control.administrativeExec.webhookCABundle }}
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: mithril-control
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -35,7 +30,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
-    verbs: ["create"]
+    verbs: ["get", "create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

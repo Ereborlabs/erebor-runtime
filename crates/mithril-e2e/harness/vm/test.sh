@@ -241,7 +241,7 @@ set -e
 [[ $status -eq 2 && $invalid_effect_mode == "invalid MITHRIL_VM_CRI_EFFECT_MODE: invalid" ]]
 
 set +e
-invalid=$("$directory/guest.sh" k3s-install latest /dev/null /tmp 2>&1)
+invalid=$("$directory/guest.sh" k3s-install latest /dev/null /dev/null /tmp 2>&1)
 status=$?
 set -e
 [[ $status -eq 2 && $invalid == "invalid k3s version: latest" ]]

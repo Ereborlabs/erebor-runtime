@@ -1,5 +1,5 @@
 {
-  "node_id": "node-a",
+  "node_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
   "state_directory": "/var/lib/mithril",
   "interceptor": {
     "runtime_btf_path": "/sys/kernel/btf/vmlinux",

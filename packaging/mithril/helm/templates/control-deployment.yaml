@@ -45,6 +45,10 @@ spec:
           ports:
             - name: grpc
               containerPort: {{ .Values.control.grpcPort }}
+{{- if .Values.control.administrativeExec.enabled }}
+            - name: administrative
+              containerPort: {{ .Values.control.administrativeExec.port }}
+{{- end }}
 {{- if .Values.control.admission.enabled }}
             - name: admission
               containerPort: {{ .Values.control.admission.port }}
@@ -122,6 +126,11 @@ spec:
     - name: grpc
       port: {{ .Values.control.grpcPort }}
       targetPort: grpc
+{{- if .Values.control.administrativeExec.enabled }}
+    - name: administrative
+      port: {{ .Values.control.administrativeExec.port }}
+      targetPort: administrative
+{{- end }}
 {{- if .Values.control.admission.enabled }}
     - name: admission
       port: {{ .Values.control.admission.port }}

@@ -34,6 +34,7 @@ use serde_json::{json, Value};
 use snafu::ResultExt as _;
 use zerocopy::TryFromBytes as _;
 
+use super::kubernetes_approval::KubernetesApproval;
 use super::lifecycle::{enter, LifecycleGuard};
 use super::{policy_path, Platform, Task, TestResult, PROCESS_FIXTURES};
 use crate::control_fixture::MtlsFixture;
@@ -48,6 +49,7 @@ const STOP_LIMIT: Duration = Duration::from_secs(120);
 const SELECTOR: &str = "mithril.erebor.dev/pid-reuse";
 const ACTOR: &str = "pid-reuse";
 const CONTAINER: &str = "worker";
+const NODE_ID: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
 pub(crate) struct Kubernetes {
     lifecycle: Option<LifecycleGuard<'static, KubernetesState>>,
@@ -70,6 +72,7 @@ pub(crate) struct KubernetesState {
     kube_path: PathBuf,
     helm_path: PathBuf,
     k3s_path: PathBuf,
+    exec_path: PathBuf,
     node_image: String,
     control_image: String,
     actor_image: String,
@@ -85,6 +88,7 @@ pub(crate) struct KubernetesState {
     tls: MtlsFixture,
     inspector: NativeIdentityInspector,
     reader: KernelStateReader,
+    approval: KubernetesApproval,
     work: Option<ProbeDirectory>,
     state: Option<ProbeDirectory>,
     identity: Option<ProbeDirectory>,
@@ -128,6 +132,25 @@ impl DerefMut for Kubernetes {
 }
 
 impl KubernetesState {
+    fn start_oidc(&mut self) -> TestResult<()> {
+        self.approval.start_oidc(&self.runtime)
+    }
+
+    fn start_forward(&mut self) -> TestResult<()> {
+        self.approval.start_forward(&self.runtime, &self.system)
+    }
+
+    fn approve_entry(&mut self, command: &str, args: &[&str]) -> TestResult<()> {
+        self.start_forward()?;
+        self.approval.approve(
+            &self.runtime,
+            &self.work_path,
+            &self.namespace,
+            command,
+            args,
+        )
+    }
+
     fn fixture(&self, name: &str) -> PathBuf {
         self.root
             .join("crates/mithril-e2e/fixtures/kubernetes")
@@ -358,7 +381,7 @@ impl KubernetesState {
                     let ready = labels.get(KUBERNETES_READY_LABEL).map(String::as_str)
                         == Some("true")
                         && notes.get(KUBERNETES_NODE_ID_ANNOTATION).map(String::as_str)
-                            == Some("node-a")
+                            == Some(NODE_ID)
                         && notes.get(KUBERNETES_NODE_UID_ANNOTATION) == node.metadata.uid.as_ref()
                         && boot
                         && epoch
@@ -385,9 +408,9 @@ impl KubernetesState {
         )?)
     }
 
-    fn ca_bundle(&self) -> TestResult<String> {
+    fn ca_bundle(path: &Path) -> TestResult<String> {
         let mut command = Command::new("/usr/bin/base64");
-        command.args(["-w", "0"]).arg(&self.tls.files.ca);
+        command.args(["-w", "0"]).arg(path);
         Ok(Self::run(&mut command, "encode the admission CA")?
             .trim()
             .to_owned())
@@ -467,6 +490,14 @@ impl KubernetesState {
                 "/kubernetes_nodes/daemon_set_namespace",
                 Value::String(self.system.clone()),
             ),
+            (
+                "/administrative_exec/oidc_issuer_url",
+                Value::String(self.approval.issuer()),
+            ),
+            (
+                "/administrative_exec/node_ids_by_kubernetes_name",
+                serde_json::to_value(BTreeMap::from([(self.node_name.clone(), NODE_ID)]))?,
+            ),
         ] {
             Self::set(&mut control, path, value)?;
         }
@@ -504,7 +535,11 @@ impl KubernetesState {
             ),
             (
                 "/control/admission/caBundle",
-                Value::String(self.ca_bundle()?),
+                Value::String(Self::ca_bundle(&self.tls.files.ca)?),
+            ),
+            (
+                "/control/administrativeExec/webhookCABundle",
+                Value::String(Self::ca_bundle(self.approval.ca())?),
             ),
         ] {
             Self::set(&mut values, path, value)?;
@@ -535,7 +570,7 @@ impl KubernetesState {
             fs::read_to_string(self.root.join(
                 "crates/mithril-e2e/fixtures/mithril-policy/observe-profile-seal-request.json",
             ))?;
-        let data = BTreeMap::from([
+        let mut data = BTreeMap::from([
             ("control.json".to_owned(), config),
             ("policy-signing-key".to_owned(), signing),
             ("profile-seal-request.json".to_owned(), seal),
@@ -549,6 +584,7 @@ impl KubernetesState {
                 fs::read_to_string(&self.tls.files.server_key)?,
             ),
         ]);
+        data.extend(self.approval.secrets()?);
         let secrets = Api::<Secret>::namespaced(self.client.clone(), &self.system);
         let secret = Secret {
             metadata: ObjectMeta {
@@ -774,26 +810,22 @@ impl KubernetesState {
         })
     }
 
-    fn start_entry(&self, program: &str, args: &[&str]) -> TestResult<ProcessFixture> {
+    fn start_entry(&mut self, program: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         let group = self
             .actor_cgroup
             .as_ref()
             .ok_or("the Kubernetes actor has no recorded cgroup")?;
-        let mut command = Command::new(&self.k3s_path);
+        let mut command = Command::new(&self.exec_path);
+        let kube = self.approval.kubeconfig().unwrap_or(&self.kube_path);
         command
-            .arg("kubectl")
             .arg("--kubeconfig")
-            .arg(&self.kube_path)
-            .args([
-                "-n",
-                &self.namespace,
-                "exec",
-                "-i",
-                ACTOR,
-                "-c",
-                CONTAINER,
-                "--",
-            ])
+            .arg(kube)
+            .arg("--namespace")
+            .arg(&self.namespace)
+            .arg("--pod")
+            .arg(ACTOR)
+            .arg("--container")
+            .arg(CONTAINER)
             .arg(program)
             .args(args);
         let procs = group.join("cgroup.procs");
@@ -829,6 +861,7 @@ impl KubernetesState {
 
     fn clean_test(&mut self) -> TestResult<()> {
         let mut failed = None;
+        self.approval.clear();
         if self.work_up {
             Self::retain(&mut failed, self.delete_ns(&self.namespace));
             if self.hook_up {
@@ -910,6 +943,7 @@ impl KubernetesState {
             Self::retain(&mut failed, self.wait_api());
             self.hook_up = false;
         }
+        Self::retain(&mut failed, self.approval.stop());
         if self.helm_up {
             let mut command = Command::new(&self.helm_path);
             command
@@ -1055,7 +1089,10 @@ impl Platform for Kubernetes {
             KubernetesState::path("MITHRIL_TEST_KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")?;
         let helm_path = KubernetesState::path("MITHRIL_TEST_HELM", "/usr/local/bin/helm")?;
         let k3s_path = KubernetesState::path("MITHRIL_TEST_K3S", "/usr/local/bin/k3s")?;
-        for path in [&kube_path, &helm_path, &k3s_path] {
+        let exec_path = env::var_os("MITHRIL_TEST_KUBE_EXEC")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join("target/debug/mithril-kube-exec"));
+        for path in [&kube_path, &helm_path, &k3s_path, &exec_path] {
             if !path.is_file() {
                 return Err(format!(
                     "the Kubernetes fixture input is missing: {}",
@@ -1114,7 +1151,20 @@ impl Platform for Kubernetes {
                     .ok_or("the Kubernetes cluster has no Node")?
             }
         };
+        let node = runtime.block_on(nodes.get(&node_name))?;
+        let node_ip = node
+            .status
+            .and_then(|status| status.addresses)
+            .and_then(|addresses| {
+                addresses
+                    .into_iter()
+                    .find(|address| address.type_ == "InternalIP")
+            })
+            .map(|address| address.address)
+            .ok_or("the Kubernetes Node has no InternalIP")?;
         let server_name = format!("mithril-control.{system}.svc");
+        let approval =
+            KubernetesApproval::new(&root, &kube_path, &k3s_path, node_ip, &server_name)?;
         let tls = MtlsFixture::kubernetes(&server_name)?;
         let inspector = NativeIdentityInspector::new(&pin_path);
         let reader = KernelStateReader::new(&pin_path);
@@ -1135,6 +1185,7 @@ impl Platform for Kubernetes {
             kube_path,
             helm_path,
             k3s_path,
+            exec_path,
             node_image,
             control_image,
             actor_image,
@@ -1150,6 +1201,7 @@ impl Platform for Kubernetes {
             tls,
             inspector,
             reader,
+            approval,
             work: Some(work),
             state: Some(state),
             identity: Some(identity),
@@ -1183,6 +1235,7 @@ impl Platform for Kubernetes {
         if self.helm_up {
             return self.wait_control();
         }
+        self.start_oidc()?;
         KubernetesState::require_image(&self.k3s_path, &self.control_image)?;
         KubernetesState::require_image(&self.k3s_path, &self.node_image)?;
         self.create_system()?;
@@ -1454,6 +1507,10 @@ impl Platform for Kubernetes {
 
     fn add_actor(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         self.start_entry(command, args)
+    }
+
+    fn approve(&mut self, command: &str, args: &[&str]) -> TestResult<()> {
+        self.approve_entry(command, args)
     }
 
     fn post_start_sleep(&mut self, delay: Duration) -> TestResult<()> {

@@ -80,10 +80,11 @@ case ${1:-} in
     printf 'exact_object=%s\n' "$(tr -d '\n' <<<"$exact_object")"
     ;;
   k3s-install)
-    (($# == 4)) || { usage; exit 2; }
+    (($# == 5)) || { usage; exit 2; }
     version=$2
     config=$3
-    work_directory=$4
+    authentication=$4
+    work_directory=$5
     [[ $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$ ]] || {
       echo "invalid k3s version: $version" >&2
       exit 2
@@ -92,7 +93,7 @@ case ${1:-} in
     require_command curl
     require_command systemctl
     require_harness_guest "$work_directory"
-    [[ -r $config ]] || {
+    [[ -r $config && -r $authentication ]] || {
       echo "k3s qualification needs its checked config and guest work directory" >&2
       exit 2
     }
@@ -102,6 +103,7 @@ case ${1:-} in
       "https://raw.githubusercontent.com/k3s-io/k3s/$version/install.sh"
     install -d -m 700 /etc/rancher/k3s
     install -m 600 "$config" /etc/rancher/k3s/config.yaml
+    install -m 600 "$authentication" /etc/rancher/k3s/mithril-auth-webhook.yaml
     INSTALL_K3S_VERSION=$version INSTALL_K3S_SYMLINK=skip \
       sh "$installer" server
     rm -f -- "$installer"

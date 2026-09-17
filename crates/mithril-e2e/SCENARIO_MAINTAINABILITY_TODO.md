@@ -1553,7 +1553,13 @@ setup, production actions, assertions, and focused test.
   - [x] Pass the exact direct-`runc` case. The runc platform now publishes the
     CRI Running observation after PID 1 starts. The exact case passed in 42.49
     seconds on 2026-09-17.
-  - [ ] Pass the exact Kubernetes case.
+  - [x] Recheck the shared success and mismatch-trace cases on Host and direct
+    `runc`. All four exact cases passed on 2026-09-17.
+  - [x] Pass the exact Kubernetes case. Keep the Helm permission narrow: the
+    `kube` WebSocket client requires `get` and `create` on `pods/exec`; it does
+    not require `get` on Pods. Rebuilt Node and Control images from the current
+    source before the final run. The exact case passed in 67.98 seconds on
+    2026-09-17.
   - [ ] Remove the matching legacy Rust and shell assertions after all three
     platform cases pass.
 - [ ] Node restart and PreStop retention: keep the public restart, inventory,
