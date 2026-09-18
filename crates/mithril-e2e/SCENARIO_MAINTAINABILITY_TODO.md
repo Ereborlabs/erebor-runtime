@@ -1469,7 +1469,8 @@ test does not close a row when its physical condition or an assertion changed.
     and its `EXACT_POLICY_ALLOW` evidence as the control. Do not add a Platform
     API.
     - [x] Pass Host and commit it. The exact test passed in 29.30 seconds.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact test passed in 36.10
+      seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy recursive-bind actions and result
       fields after all three platforms pass. Keep the move-mount case.
