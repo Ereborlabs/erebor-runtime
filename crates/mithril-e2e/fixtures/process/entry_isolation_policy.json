@@ -33,6 +33,12 @@
             "kind": "StartupProbe",
             "executionRule": "startup-cat",
             "role": "startup"
+          },
+          {
+            "name": "readiness",
+            "kind": "ReadinessProbe",
+            "executionRule": "readiness-grep",
+            "role": "readiness"
           }
         ],
         "administrativeEntry": {
@@ -80,6 +86,30 @@
           {
             "name": "startup-cat",
             "path": "/usr/bin/cat",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "network": {"socketControls": [], "destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "readiness",
+        "files": [
+          {
+            "name": "deny-readiness-file",
+            "path": "/work/readiness.denied",
+            "recursive": false,
+            "operations": ["OpenRead"],
+            "action": "Deny"
+          }
+        ],
+        "execution": [
+          {
+            "name": "readiness-grep",
+            "path": "/usr/bin/grep",
             "recursive": false,
             "operations": ["Execute"],
             "action": "Allow"
