@@ -11,7 +11,7 @@ use crate::physical::wait_for;
 use crate::platform::{actor_script, platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn cgroup_exec_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("external-cgroup")?;
