@@ -1544,7 +1544,8 @@ test does not close a row when its physical condition or an assertion changed.
     concurrent recursive-read and stale-cache cases separate.
     - [x] Pass Host and commit it. The exact test passed in 34.27 seconds. The
       Rust test has 85 lines.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact test passed in 33.19
+      seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy initial wildcard actions and result
       fields after all three platform cases pass.
