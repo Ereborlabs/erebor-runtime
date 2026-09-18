@@ -1673,7 +1673,8 @@ test does not close a row when its physical condition or an assertion changed.
     control. Do not add a Platform API.
     - [x] Pass Host and commit it. The exact case passed in 29.00 seconds.
       The unchanged pre-existing bind case passed in 28.81 seconds.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact case passed in 37.82
+      seconds. The unchanged pre-existing bind case passed in 30.41 seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy future fixture, action, and result
       field after all three platform cases pass. Keep the shared deep path,

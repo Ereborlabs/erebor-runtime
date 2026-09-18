@@ -6,7 +6,7 @@ use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = mount_alias]
 fn future_mount_namespace_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("mount-future")?;
@@ -62,9 +62,9 @@ fn future_mount_namespace_is_denied<P: Platform>() -> TestResult<()> {
                 .collect::<Vec<_>>();
             *last.borrow_mut() = format!("{:?}", fresh.iter().rev().take(8));
             let matches = |reason: &str, result| {
-                fresh.iter().any(|event| {
-                    task.matches_effect(event, reason, F::File, O::OpenRead, result)
-                })
+                fresh
+                    .iter()
+                    .any(|event| task.matches_effect(event, reason, F::File, O::OpenRead, result))
             };
             Ok((matches("PATH_TREE_POLICY_DENY", -libc::EACCES)
                 && matches("EXACT_POLICY_ALLOW", 0))
