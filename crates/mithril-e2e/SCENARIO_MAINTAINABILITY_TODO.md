@@ -1507,7 +1507,8 @@ setup, production actions, assertions, and focused test.
     passed in 28.71 seconds with the expanded shared policy.
   - [x] The exact direct-`runc` case passed in 37.38 seconds. The existing
     startup case passed in 36.80 seconds with the expanded shared policy.
-  - [ ] Pass and commit Kubernetes.
+  - [x] The exact Kubernetes case passed in 72.08 seconds. The existing
+    startup case passed in 71.84 seconds with the expanded shared policy.
   - [ ] Remove only the matching readiness loop action and compatibility gate
     after all three platform cases pass.
 - [x] Startup entry policy isolation: use stock `cat`. Require the startup
