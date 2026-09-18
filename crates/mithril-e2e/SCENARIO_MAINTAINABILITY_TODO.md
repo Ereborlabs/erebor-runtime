@@ -1471,7 +1471,8 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit it. The exact test passed in 29.30 seconds.
     - [x] Pass direct `runc` and commit it. The exact test passed in 36.10
       seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact test passed in 74.17
+      seconds.
     - [ ] Remove only the matching legacy recursive-bind actions and result
       fields after all three platforms pass. Keep the move-mount case.
   - [ ] Replace the pre-policy `mount_global_mutation_epoch` read. The
