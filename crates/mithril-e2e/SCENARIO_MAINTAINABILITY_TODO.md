@@ -1534,6 +1534,19 @@ test does not close a row when its physical condition or an assertion changed.
       after all three platform cases pass. Keep the prepared `MoveMount`
       fail-closed case. The 92 non-privileged library tests, package clippy,
       formatting, and whitespace checks pass.
+  - [ ] Replace the initial single-component and recursive wildcard reads with
+    one actor-driven platform test. Start Control and the actor before policy
+    and Node so production recovery owns the running actor. Use
+    `/work/wildcard/home/*/secrets` and `/work/wildcard/srv/**/secrets` in the
+    signed policy. Require `EACCES` for both matching reads, an allowed sibling
+    read as the control, and task-attributed `PATH_TREE_POLICY_DENY` and
+    `EXACT_POLICY_ALLOW` evidence. Do not add a Platform API. Keep the later
+    concurrent recursive-read and stale-cache cases separate.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy initial wildcard actions and result
+      fields after all three platform cases pass.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
