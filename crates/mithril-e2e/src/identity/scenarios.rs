@@ -11,6 +11,8 @@ mod clone_exec;
 #[cfg(test)]
 mod double_fork;
 #[cfg(test)]
+mod entry_isolation;
+#[cfg(test)]
 mod exec_fatal;
 #[cfg(test)]
 mod exec_retry;
