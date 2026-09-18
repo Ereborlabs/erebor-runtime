@@ -1516,14 +1516,18 @@ test does not close a row when its physical condition or an assertion changed.
     VM run passed 26 Host tests and the direct-`runc` entry-role probe, then
     stopped at this stale assertion on 2026-09-17. Do not initialize the row
     in a test helper or change BPF behavior.
-    - [ ] Make the shared actor pause after it clones both trees with
+    - [x] Make the shared actor pause after it clones both trees with
       `open_tree`. Require the activity sequence to increase and the mutation
       epoch to stay unchanged before `move_mount` attaches either tree.
-    - [ ] Keep the existing attachment, dirty-view, rebuild, protected denial,
+    - [x] Keep the existing attachment, dirty-view, rebuild, protected denial,
       allowed control, and exact evidence assertions in the same platform
-      test. Keep the test file at or below its approved 150-line limit.
-    - [ ] Pass Host, direct `runc`, and Kubernetes. Commit each verified
-      platform separately.
+      test. The test file has 143 lines, which is below its approved 150-line
+      limit.
+    - [x] Pass Host and commit it. The exact test passed in 51.74 seconds. The
+      preexisting-bind, late-bind, and recursive-bind Host regressions passed
+      in 28.66, 27.90, and 28.24 seconds.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
     - [ ] Remove the stale pre-policy counter read and its legacy result field
       only after all three platform cases pass. Keep the prepared `MoveMount`
       fail-closed case.

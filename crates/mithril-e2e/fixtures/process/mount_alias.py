@@ -36,10 +36,14 @@ def check(result):
         raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
 
 
-def move_tree(source, target):
+def open_tree(source):
     tree = libc.open_tree(AT_FDCWD, source.encode(), OPEN_TREE_CLONE | os.O_CLOEXEC)
+    return tree if tree >= 0 else -ctypes.get_errno()
+
+
+def move_tree(tree, target):
     if tree < 0:
-        return ctypes.get_errno()
+        return -tree
     try:
         result = libc.move_mount(tree, b"", AT_FDCWD, target.encode(), MOVE_EMPTY_PATH)
         return ctypes.get_errno() if result else 0
@@ -76,9 +80,24 @@ print("native-fixture-ready", flush=True)
 command = sys.stdin.readline()
 mount_error = 0
 allowed_mount_error = 0
-if mode == "move" and command == "mount\n":
-    mount_error = move_tree(secret, denied_alias)
-    allowed_mount_error = move_tree(allowed, allowed_alias)
+if mode == "move" and command == "open\n":
+    denied_tree = open_tree(secret)
+    allowed_tree = open_tree(allowed)
+    with open(result_path, "r+", encoding="utf-8") as output:
+        json.dump(
+            {
+                "phase": "opened",
+                "open": 0 if denied_tree >= 0 else -denied_tree,
+                "allowed_open": 0 if allowed_tree >= 0 else -allowed_tree,
+            },
+            output,
+        )
+        output.truncate()
+    command = sys.stdin.readline()
+    if command != "mount\n":
+        sys.exit(2)
+    mount_error = move_tree(denied_tree, denied_alias)
+    allowed_mount_error = move_tree(allowed_tree, allowed_alias)
     with open(result_path, "r+", encoding="utf-8") as output:
         json.dump(
             {

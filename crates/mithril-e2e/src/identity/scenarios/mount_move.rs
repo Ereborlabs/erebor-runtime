@@ -55,34 +55,38 @@ fn moved_mount_keeps_policy<P: Platform>() -> TestResult<()> {
     let a = "mount_global_activity_sequence";
     let c = "mount_global_clean_epoch";
     let p = "mount_global_pending_mutations";
-    let before = (count(e)?, count(a)?);
-    actor.send(b"mount\n")?;
     let result_path = env.work().join("mount-result.json");
     let last = RefCell::new(String::from("<none>"));
-    let (moved, state) = wait_for(
-        &result_path,
-        "move mount rebuild",
-        Duration::from_secs(30),
-        || {
-            let text = fs::read_to_string(&result_path).map_err(|error| bad(error.to_string()))?;
-            let value = serde_json::from_str::<serde_json::Value>(&text).ok();
-            let state = (count(e)?, count(a)?, count(c)?, count(p)?);
-            *last.borrow_mut() = format!("result={text:?}; counters={state:?}");
-            let mounted = value.as_ref().is_some_and(|v| v["phase"] == "mounted");
-            Ok(value
-                .filter(|_| {
-                    mounted
-                        && state.0 > before.0
-                        && state.1 > before.1
-                        && (state.0 != state.2 || state.3 != 0)
-                })
-                .map(|value| (value, state)))
-        },
-        || last.borrow().clone(),
-    )?;
+    let phase = |want: &str, name: &str| {
+        wait_for(
+            &result_path,
+            name,
+            Duration::from_secs(30),
+            || {
+                let text =
+                    fs::read_to_string(&result_path).map_err(|error| bad(error.to_string()))?;
+                let value = serde_json::from_str::<serde_json::Value>(&text).ok();
+                let state = (count(e)?, count(a)?, count(c)?, count(p)?);
+                *last.borrow_mut() = format!("result={text:?}; counters={state:?}");
+                Ok(value
+                    .filter(|value| value["phase"] == want)
+                    .map(|value| (value, state)))
+            },
+            || last.borrow().clone(),
+        )
+    };
+    let before = (count(e)?, count(a)?);
+    actor.send(b"open\n")?;
+    let (opened, opened_state) = phase("opened", "detached open_tree activity")?;
+    assert_eq!(opened["open"], 0);
+    assert_eq!(opened["allowed_open"], 0);
+    assert_eq!(opened_state.0, before.0);
+    assert!(opened_state.1 > before.1);
+    actor.send(b"mount\n")?;
+    let (moved, state) = phase("mounted", "move_mount attachment")?;
     assert_eq!(moved["mount"], 0);
     assert_eq!(moved["allowed_mount"], 0);
-    assert!(state.0 > before.0 && state.1 > before.1);
+    assert!(state.0 > opened_state.0 && state.1 > opened_state.1);
     assert!(state.0 != state.2 || state.3 != 0);
     env.stop_node()?;
     env.start_node()?;
