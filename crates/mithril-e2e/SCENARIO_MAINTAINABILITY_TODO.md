@@ -1640,6 +1640,21 @@ test does not close a row when its physical condition or an assertion changed.
       three platform cases pass. Keep the pre-existing, maximum-depth,
       future-namespace, and allowed-control cases. The 92 non-privileged
       library tests and strict crate Clippy pass.
+  - [ ] Replace the maximum-depth pre-existing child block with one
+    actor-driven platform test. Reuse the wildcard actor and signed policy.
+    Make the signed path-tree floor contain 254 normal components. Create its
+    child before policy activation and require the actor path to contain the
+    ABI maximum of 255 normal components. After Node recovers the actor,
+    require `EACCES` and task-attributed `PATH_TREE_POLICY_DENY` evidence for
+    `OpenRead`. Require the existing allowed file read and its
+    `EXACT_POLICY_ALLOW` evidence as the control. Do not add a Platform API.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy open and the pre-existing and
+      maximum-depth result fields after all three platform cases pass. Keep
+      the deep fixture until the future-mount-namespace case has its own
+      verified replacement.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
