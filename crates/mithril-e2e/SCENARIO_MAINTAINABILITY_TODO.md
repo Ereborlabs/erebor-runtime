@@ -1640,7 +1640,7 @@ test does not close a row when its physical condition or an assertion changed.
       three platform cases pass. Keep the pre-existing, maximum-depth,
       future-namespace, and allowed-control cases. The 92 non-privileged
       library tests and strict crate Clippy pass.
-  - [ ] Replace the maximum-depth pre-existing child block with one
+  - [x] Replace the maximum-depth pre-existing child block with one
     actor-driven platform test. Reuse the wildcard actor and signed policy.
     Make the signed path-tree floor contain 254 normal components. Create its
     child before policy activation and require the actor path to contain the
@@ -1657,10 +1657,11 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit it. The exact case passed in 83.44
       seconds. The complete eight-case `mount_late_kubernetes` lifecycle
       passed in 248.38 seconds.
-    - [ ] Remove only the matching legacy open and the pre-existing and
+    - [x] Remove only the matching legacy open and the pre-existing and
       maximum-depth result fields after all three platform cases pass. Keep
       the deep fixture until the future-mount-namespace case has its own
-      verified replacement.
+      verified replacement. The 92 non-privileged library tests and strict
+      crate Clippy pass.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 

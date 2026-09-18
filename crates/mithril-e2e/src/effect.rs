@@ -474,8 +474,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub io_uring_sqpoll_denied_before_ring: bool,
     pub io_uring_lifecycle_released: bool,
     pub bind_alias_canonicalized: bool,
-    pub path_tree_preexisting_child_denied: bool,
-    pub path_tree_meta_depth_denied: bool,
     pub path_tree_future_namespace_denied: bool,
     pub path_tree_outside_control_allowed: bool,
     pub fsconfig_reconfigure_global_invalidation: bool,
@@ -2002,7 +2000,6 @@ impl EffectTestRunner {
         )?;
 
         let mut path_tree_future_namespace_denied = false;
-        let mut path_tree_meta_depth_denied = false;
         if protect {
             let future_fixture_root = fixture_root.join("future-mount-namespace");
             fs::create_dir(&future_fixture_root).context(IoSnafu {
@@ -2058,23 +2055,6 @@ impl EffectTestRunner {
         }
 
         if protect {
-            let marker = observations.cursor();
-            ensure!(
-                fixture.open(&path_tree_preexisting)?.denied(),
-                InvalidInputSnafu {
-                    path: &path_tree_preexisting,
-                    reason: "the pre-existing path-tree child returned a file descriptor",
-                }
-            );
-            wait_for_path_tree_effect(
-                &reader,
-                &observations,
-                marker,
-                &path_tree_preexisting,
-                KernelEffectOperationV1::OpenRead,
-            )?;
-            path_tree_meta_depth_denied = true;
-
             let outside_marker = observations.cursor();
             ensure!(
                 fixture.read(&paths.benign)?.allowed,
@@ -4499,8 +4479,6 @@ impl EffectTestRunner {
             io_uring_sqpoll_denied_before_ring: true,
             io_uring_lifecycle_released,
             bind_alias_canonicalized: true,
-            path_tree_preexisting_child_denied: protect,
-            path_tree_meta_depth_denied,
             path_tree_future_namespace_denied,
             path_tree_outside_control_allowed: protect,
             fsconfig_reconfigure_global_invalidation,
