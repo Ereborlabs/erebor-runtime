@@ -1438,7 +1438,7 @@ test does not close a row when its physical condition or an assertion changed.
   denial, allow control, loss counter, and evidence assertion.
 - [ ] `EffectTestRunner::physical_probe` mount mutation cases: keep each
   production reconciliation call and mount syscall action visible.
-  - [ ] Replace the pre-existing bind-alias block with one actor-driven
+  - [x] Replace the pre-existing bind-alias block with one actor-driven
     platform test. The actor must create the protected and allowed bind mounts
     before Node starts. Require recovered identity, `PATH_TREE_POLICY_DENY`
     with `EACCES`, and `EXACT_POLICY_ALLOW` for the allowed control.
@@ -1447,8 +1447,8 @@ test does not close a row when its physical condition or an assertion changed.
       seconds.
     - [x] Pass Kubernetes and commit it. The exact test passed in 73.88
       seconds.
-    - [ ] Remove the matching legacy actions, result fields, and shell checks
-      only after all three platforms pass.
+    - [x] Remove the matching legacy actions and result fields after all three
+      platforms pass. No shell check consumed these fields.
   - [ ] Replace the pre-policy `mount_global_mutation_epoch` read. The
     production policy owner creates this hash-map row during policy
     installation. The old probe reads it before policy installation. The full

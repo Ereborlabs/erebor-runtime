@@ -482,9 +482,7 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub path_tree_later_child_denied: bool,
     pub path_tree_replacement_child_denied: bool,
     pub path_tree_outside_control_allowed: bool,
-    pub path_tree_preexisting_bind_alias_denied: bool,
     pub path_tree_postactivation_bind_alias_denied: bool,
-    pub allowed_bind_alias_allowed: bool,
     pub path_tree_recursive_bind_alias_denied: bool,
     pub allowed_recursive_bind_alias_allowed: bool,
     pub path_tree_move_mount_alias_denied: bool,
@@ -2051,76 +2049,13 @@ impl EffectTestRunner {
 
         let mut path_tree_future_namespace_denied = false;
         let mut path_tree_meta_depth_denied = false;
-        let mut path_tree_preexisting_bind_alias_denied = false;
         let mut path_tree_postactivation_bind_alias_denied = false;
-        let mut allowed_bind_alias_allowed = false;
         let mut path_tree_recursive_bind_alias_denied = false;
         let mut allowed_recursive_bind_alias_allowed = false;
         let mut path_tree_move_mount_alias_denied = false;
         let mut allowed_move_mount_alias_allowed = false;
         let mut move_mount_attachment_invalidated_security_view = false;
         if protect {
-            let protected_alias_child = path_tree_preexisting_bind_target.join("pre-existing");
-            let protected_alias_marker = observations.cursor();
-            ensure!(
-                fixture.open(&protected_alias_child)?.denied(),
-                InvalidInputSnafu {
-                    path: &protected_alias_child,
-                    reason: "a pre-existing successful bind exposed a protected child",
-                }
-            );
-            wait_for_path_tree_effect(
-                &reader,
-                &observations,
-                protected_alias_marker,
-                &protected_alias_child,
-                KernelEffectOperationV1::OpenRead,
-            )?;
-            path_tree_preexisting_bind_alias_denied = true;
-
-            let allowed_alias_marker = observations.cursor();
-            let allowed_alias = fixture.open(&allowed_bind_alias)?;
-            if !allowed_alias.allowed {
-                reader
-                    .poll(Duration::from_millis(100))
-                    .context(InterceptorSnafu)?;
-            }
-            ensure!(
-                allowed_alias.allowed,
-                InvalidInputSnafu {
-                    path: &allowed_bind_alias,
-                    reason: format!(
-                        "the allowed pre-existing bind alias was denied; observed {:?}",
-                        observations
-                            .recent_since(allowed_alias_marker)
-                            .iter()
-                            .map(|event| (
-                                event.reason.as_str(),
-                                event.active_role_id,
-                                event.admitted_entry_rule_id,
-                                event.exact_object_key_id,
-                                event.composite_atom_id,
-                                event.kernel_result,
-                                event.mount_id_unique,
-                            ))
-                            .collect::<Vec<_>>()
-                    ),
-                }
-            );
-            wait_for_exact_effect(
-                &reader,
-                &observations,
-                allowed_alias_marker,
-                "EXACT_POLICY_ALLOW",
-                (
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::OpenRead,
-                ),
-                PathSelectorV1::kernel_handle_for_id("manual-benign-bind"),
-                None,
-            )?;
-            allowed_bind_alias_allowed = true;
-
             let future_fixture_root = fixture_root.join("future-mount-namespace");
             fs::create_dir(&future_fixture_root).context(IoSnafu {
                 path: &future_fixture_root,
@@ -4855,9 +4790,7 @@ impl EffectTestRunner {
             path_tree_later_child_denied: protect,
             path_tree_replacement_child_denied: protect,
             path_tree_outside_control_allowed: protect,
-            path_tree_preexisting_bind_alias_denied,
             path_tree_postactivation_bind_alias_denied,
-            allowed_bind_alias_allowed,
             path_tree_recursive_bind_alias_denied,
             allowed_recursive_bind_alias_allowed,
             path_tree_move_mount_alias_denied,
