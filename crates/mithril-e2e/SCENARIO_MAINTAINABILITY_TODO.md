@@ -1526,7 +1526,8 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit it. The exact test passed in 51.74 seconds. The
       preexisting-bind, late-bind, and recursive-bind Host regressions passed
       in 28.66, 27.90, and 28.24 seconds.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact test passed in 52.42
+      seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove the stale pre-policy counter read and its legacy result field
       only after all three platform cases pass. Keep the prepared `MoveMount`
