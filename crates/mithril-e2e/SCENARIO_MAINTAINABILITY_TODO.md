@@ -1503,7 +1503,8 @@ test does not close a row when its physical condition or an assertion changed.
       passed in 28.41, 28.37, and 28.17 seconds.
     - [x] Pass direct `runc` and commit it. The exact test passed in 63.05
       seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact test passed in 96.96
+      seconds.
     - [ ] Remove only the matching legacy move-mount actions, helper, and
       result fields after all three platforms pass.
   - [ ] Replace the pre-policy `mount_global_mutation_epoch` read. The
