@@ -761,6 +761,10 @@ count as maintainability migrations.
   idempotent.
 - [x] Add small focused tests for successful start and stop, early exit,
   timeout diagnostics, and repeated cleanup.
+- [x] Fail Kubernetes actor PID readiness when the worker has terminated.
+  Report its exit code, reason, message, and Pod logs. The lightweight
+  early-exit test, exact Kubernetes namespace-init case, and complete 22-case
+  Kubernetes lifecycle passed.
 - [x] Verify with the focused support tests and Mithril e2e clippy before the
   common-tooling commit.
 

@@ -1474,6 +1474,27 @@ impl Platform for Kubernetes {
             {
                 Ok(value) => Ok(Some(value)),
                 Err(source) => {
+                    let exit = self
+                        .pod()
+                        .ok()
+                        .and_then(|pod| pod.status)
+                        .and_then(|status| status.container_statuses)
+                        .and_then(|states| states.into_iter().find(|state| state.name == CONTAINER))
+                        .and_then(|state| state.state)
+                        .and_then(|state| state.terminated);
+                    if let Some(exit) = exit {
+                        let logs = self
+                            .logs(&self.namespace, &format!("pod/{ACTOR}"))
+                            .unwrap_or_else(|error| error.to_string());
+                        return Err(InvalidInputSnafu {
+                            path: &script,
+                            reason: format!(
+                                "Kubernetes actor exited with code {}; reason: {:?}; message: {:?}; logs: {logs:?}",
+                                exit.exit_code, exit.reason, exit.message
+                            ),
+                        }
+                        .build());
+                    }
                     *last_pid.borrow_mut() = source.to_string();
                     Ok(None)
                 }
