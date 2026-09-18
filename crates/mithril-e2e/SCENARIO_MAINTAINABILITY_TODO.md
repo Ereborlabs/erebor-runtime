@@ -1498,11 +1498,19 @@ setup, production actions, assertions, and focused test.
   node reconciliation calls and exact map absence checks visible.
 - [ ] Independent additional entries: keep each declaration, stock exec,
   role, rule, process state, and isolation assertion.
+- [x] Use one entry-isolation platform test for stock `cat`, `grep`, and `wc`.
+  Use one Control, Node, main actor, policy, and FIFO. Keep each command name,
+  arguments, live identity, denial, and kernel evidence assertion explicit.
+  This specific test can contain at most 150 lines. The implementation has 88
+  lines. It passed Host in 30.26 seconds, direct `runc` in 37.06 seconds, and
+  Kubernetes in 78.44 seconds. The complete shared lifecycle passed 27 Host
+  cases in 253.39 seconds, 22 direct-`runc` cases in 386.50 seconds, and 22
+  Kubernetes cases in 563.27 seconds.
 - [x] Readiness entry policy isolation: use stock `grep`. Require the
   readiness role to read the application-denied file, then deny its own exact
   file read with matching role, admission-rule, and kernel evidence.
-  - [x] Keep the 73-line standard test below 100 lines. Reuse the shared actor,
-    entry-isolation policy family, FIFO readiness owner, and result fields.
+  - [x] Use the shared entry-isolation test, actor, policy, FIFO readiness
+    owner, and result assertions.
   - [x] The exact Host case passed in 29.41 seconds. The existing startup case
     passed in 28.71 seconds with the expanded shared policy.
   - [x] The exact direct-`runc` case passed in 37.38 seconds. The existing
@@ -1514,8 +1522,8 @@ setup, production actions, assertions, and focused test.
 - [x] Liveness entry policy isolation: use stock `wc`. Require the liveness
   role to read the application-denied file, then deny its own exact file read
   with matching role, admission-rule, and kernel evidence.
-  - [x] Keep the 72-line standard test below 100 lines. Reuse the shared actor,
-    entry-isolation policy family, FIFO readiness owner, and result fields.
+  - [x] Use the shared entry-isolation test, actor, policy, FIFO readiness
+    owner, and result assertions.
   - [x] The exact Host case passed in 30.79 seconds.
   - [x] The exact direct-`runc` case passed in 38.46 seconds.
   - [x] The exact Kubernetes case passed in 74.60 seconds.
