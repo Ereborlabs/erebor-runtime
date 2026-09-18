@@ -29,6 +29,8 @@ mod lifetime_test;
 #[cfg(test)]
 mod mount_alias;
 #[cfg(test)]
+mod mount_future;
+#[cfg(test)]
 mod mount_late;
 #[cfg(test)]
 mod mount_move;

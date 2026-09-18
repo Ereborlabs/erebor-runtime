@@ -52,7 +52,7 @@ def move_tree(tree, target):
 
 
 args = sys.argv[2:]
-if args not in ([], ["late"], ["recursive"], ["move"]):
+if args not in ([], ["late"], ["recursive"], ["move"], ["future"]):
     sys.exit(2)
 mode = args[0] if args else "early"
 root = os.path.join(sys.argv[1], "mount")
@@ -71,14 +71,19 @@ with open(result_path, "w", encoding="utf-8"):
     pass
 
 check(libc.unshare(CLONE_NEWNS))
-check(libc.mount(None, b"/", None, MS_REC | MS_PRIVATE, None))
+mount_error = 0
+if mode == "future":
+    result = libc.mount(None, b"/", None, MS_REC | MS_PRIVATE, None)
+    mount_error = ctypes.get_errno() if result else 0
+else:
+    check(libc.mount(None, b"/", None, MS_REC | MS_PRIVATE, None))
+mount_namespace = os.stat("/proc/self/ns/mnt").st_ino
 if mode == "early":
     check(libc.mount(secret.encode(), denied_alias.encode(), None, MS_BIND, None))
-if mode != "recursive":
+if mode not in ("recursive", "future"):
     check(libc.mount(allowed.encode(), allowed_alias.encode(), None, MS_BIND, None))
 print("native-fixture-ready", flush=True)
 command = sys.stdin.readline()
-mount_error = 0
 allowed_mount_error = 0
 if mode == "move" and command == "open\n":
     denied_tree = open_tree(secret)
@@ -120,12 +125,14 @@ elif command != "read\n":
     sys.exit(2)
 
 try:
-    with open(os.path.join(denied_alias, "blocked"), encoding="utf-8"):
+    denied_path = secret if mode == "future" else denied_alias
+    with open(os.path.join(denied_path, "blocked"), encoding="utf-8"):
         denied = 0
 except OSError as error:
     denied = error.errno
 try:
-    with open(os.path.join(allowed_alias, "open"), encoding="utf-8") as source:
+    allowed_path = allowed if mode == "future" else allowed_alias
+    with open(os.path.join(allowed_path, "open"), encoding="utf-8") as source:
         value = source.read()
 except OSError as error:
     value = f"errno:{error.errno}"
@@ -133,6 +140,7 @@ with open(result_path, "r+", encoding="utf-8") as output:
     json.dump(
         {
             "phase": "read",
+            "mount_namespace": mount_namespace,
             "mount": mount_error,
             "allowed_mount": allowed_mount_error,
             "denied": denied,

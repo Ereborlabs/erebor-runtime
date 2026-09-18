@@ -1664,13 +1664,15 @@ test does not close a row when its physical condition or an assertion changed.
       and strict crate Clippy pass.
   - [ ] Replace the future-mount-namespace block with one actor-driven
     platform test. Reuse the mount-alias actor and signed policy. Make policy
-    and Node ready before the actor starts. The actor must create its private
-    mount namespace before readiness, then enter the protected workload.
+    and Node ready before the actor starts. The protected actor must create a
+    mount namespace before readiness. Require its first private-propagation
+    mutation to fail closed because the namespace was absent at activation.
     Require its namespace inode to differ from the test process namespace.
-    Require `EACCES` and task-attributed `PATH_TREE_POLICY_DENY` evidence with
-    the actor namespace inode. Require the allowed alias read and its
-    `EXACT_POLICY_ALLOW` evidence as the control. Do not add a Platform API.
-    - [ ] Pass Host and commit it.
+    Require `EACCES` and task-attributed `PATH_TREE_POLICY_DENY` evidence.
+    Require the allowed read and its `EXACT_POLICY_ALLOW` evidence as the
+    control. Do not add a Platform API.
+    - [x] Pass Host and commit it. The exact case passed in 29.00 seconds.
+      The unchanged pre-existing bind case passed in 28.81 seconds.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy future fixture, action, and result
