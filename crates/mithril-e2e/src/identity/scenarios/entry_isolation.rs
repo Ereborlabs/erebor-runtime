@@ -11,7 +11,7 @@ use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
 use rustix::fs::{mkfifoat, Mode, CWD};
 use snafu::ResultExt as _;
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn startup_role_is_isolated<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("entry-isolation")?;

@@ -1503,7 +1503,7 @@ setup, production actions, assertions, and focused test.
   exact file read with matching role, admission-rule, and kernel evidence.
   - [x] The exact Host case passed twice in 29.58 and 29.08 seconds.
   - [x] The exact direct-`runc` case passed in 36.44 seconds.
-  - [ ] Pass Kubernetes and commit it.
+  - [x] The exact Kubernetes case passed in 69.11 seconds.
   - [ ] Remove only the matching startup loop action and compatibility fields
     after all three cases pass.
 - [x] Reusable PostStart entry: use the existing
