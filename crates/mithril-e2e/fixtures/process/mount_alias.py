@@ -12,10 +12,23 @@ libc.mount.argtypes = [
     ctypes.c_ulong,
     ctypes.c_void_p,
 ]
+libc.open_tree.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+libc.open_tree.restype = ctypes.c_int
+libc.move_mount.argtypes = [
+    ctypes.c_int,
+    ctypes.c_char_p,
+    ctypes.c_int,
+    ctypes.c_char_p,
+    ctypes.c_uint,
+]
+libc.move_mount.restype = ctypes.c_int
+AT_FDCWD = -100
 CLONE_NEWNS = 0x00020000
 MS_BIND = 4096
 MS_REC = 16384
 MS_PRIVATE = 1 << 18
+OPEN_TREE_CLONE = 1
+MOVE_EMPTY_PATH = 4
 
 
 def check(result):
@@ -23,8 +36,19 @@ def check(result):
         raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
 
 
+def move_tree(source, target):
+    tree = libc.open_tree(AT_FDCWD, source.encode(), OPEN_TREE_CLONE | os.O_CLOEXEC)
+    if tree < 0:
+        return ctypes.get_errno()
+    try:
+        result = libc.move_mount(tree, b"", AT_FDCWD, target.encode(), MOVE_EMPTY_PATH)
+        return ctypes.get_errno() if result else 0
+    finally:
+        os.close(tree)
+
+
 args = sys.argv[2:]
-if args not in ([], ["late"], ["recursive"]):
+if args not in ([], ["late"], ["recursive"], ["move"]):
     sys.exit(2)
 mode = args[0] if args else "early"
 root = os.path.join(sys.argv[1], "mount")
@@ -52,6 +76,20 @@ print("native-fixture-ready", flush=True)
 command = sys.stdin.readline()
 mount_error = 0
 allowed_mount_error = 0
+if mode == "move" and command == "mount\n":
+    mount_error = move_tree(secret, denied_alias)
+    allowed_mount_error = move_tree(allowed, allowed_alias)
+    with open(result_path, "r+", encoding="utf-8") as output:
+        json.dump(
+            {
+                "phase": "mounted",
+                "mount": mount_error,
+                "allowed_mount": allowed_mount_error,
+            },
+            output,
+        )
+        output.truncate()
+    command = sys.stdin.readline()
 if mode in ("late", "recursive") and command == "mount-read\n":
     flags = MS_BIND | (MS_REC if mode == "recursive" else 0)
     result = libc.mount(secret.encode(), denied_alias.encode(), None, flags, None)
@@ -75,6 +113,7 @@ except OSError as error:
 with open(result_path, "r+", encoding="utf-8") as output:
     json.dump(
         {
+            "phase": "read",
             "mount": mount_error,
             "allowed_mount": allowed_mount_error,
             "denied": denied,

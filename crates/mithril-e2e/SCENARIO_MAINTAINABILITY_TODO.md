@@ -1494,8 +1494,13 @@ test does not close a row when its physical condition or an assertion changed.
     increase, and the global security view to become dirty before production
     rebuilds it. Require `EACCES` and `PATH_TREE_POLICY_DENY` for the protected
     attachment. Require the allowed read and its `EXACT_POLICY_ALLOW` evidence
-    as the control. Do not add a Platform API.
-    - [ ] Pass Host and commit it.
+    as the control. Do not add a Platform API. This specific test can contain
+    at most 150 lines. The implementation has 139 lines. The limit preserves
+    the two-stage actor protocol, dirty-state proof, Node recovery, bounded
+    readiness diagnostics, and explicit effect assertions.
+    - [x] Pass Host and commit it. The exact test passed in 50.04 seconds. The
+      preexisting-bind, late-bind, and recursive-bind Host regression tests
+      passed in 28.41, 28.37, and 28.17 seconds.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy move-mount actions, helper, and
