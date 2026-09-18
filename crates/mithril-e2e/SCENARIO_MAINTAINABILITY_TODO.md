@@ -1674,7 +1674,7 @@ setup, production actions, assertions, and focused test.
   ID, link pin, program tag, and running-identity checks explicit.
 - [ ] Post-point-of-no-return evidence and generation retirement: keep the
   terminal exec, evidence retention, holder release, and absence proof.
-- [ ] External entry and external cgroup entrant: keep both physical execs and
+- [x] External entry and external cgroup entrant: keep both physical execs and
   rule-zero fail-closed evidence assertions.
   - [x] Extend the existing unlisted runtime-exec test with its exact
     `UNSUPPORTED_OBJECT`, exec-family, execute-operation, external-role,
@@ -1689,8 +1689,10 @@ setup, production actions, assertions, and focused test.
       passed in 36.53 seconds.
     - [x] Pass Kubernetes with the same actor and assertions. The exact test
       passed in 74.90 seconds.
-  - [ ] Pass Host, direct `runc`, and Kubernetes before removing the matching
-    legacy actions, result fields, and shell checks.
+  - [x] Remove the matching direct-`runc` actions, result fields, and `run.sh`
+    checks after all three platforms pass. The deletion removed 171 lines. The
+    retained direct-`runc` probe passed. Keep the separate two-node Kubernetes
+    effect-accounting check until its shared replacement passes.
 - [ ] Final container and resource cleanup: require container success and
   absence of the pin root, lease, cgroup, and fixture root.
 

@@ -550,8 +550,6 @@ if [[ $entry_role_runtime_only == true ]]; then
     .post_ponr_terminal_evidence_observed and
     .post_ponr_terminal_evidence_preserved and
     .inactive_generation_retired and
-    .external_entry_denied and
-    .external_cgroup_entering_process_stays_closed and
     .entry_literal_paths_enforced and
     (.dynamic_loader_paths | length) > 0 and
     .dynamic_loader_paths_absent_from_policy and

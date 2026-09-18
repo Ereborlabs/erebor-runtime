@@ -254,8 +254,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub post_ponr_terminal_evidence_observed: bool,
     pub post_ponr_terminal_evidence_preserved: bool,
     pub inactive_generation_retired: bool,
-    pub external_entry_denied: bool,
-    pub external_cgroup_entering_process_stays_closed: bool,
     pub entry_literal_paths_enforced: bool,
     pub dynamic_loader_paths: Vec<String>,
     pub dynamic_loader_paths_absent_from_policy: bool,
@@ -6103,171 +6101,6 @@ impl EffectTestRunner {
             }
         );
 
-        let external_marker = observations.cursor();
-        let external_pid_path = fixture_root.join("external.pid");
-        let external_stdout = output_directory.join("runc-entry-external.stdout");
-        let external_stderr = output_directory.join("runc-entry-external.stderr");
-        let mut external_child = container.spawn_exec(
-            "/bin/sleep",
-            &["5"],
-            &external_pid_path,
-            &external_stdout,
-            &external_stderr,
-        )?;
-        let external_pid = wait_for_pid_file(&external_pid_path, &mut external_child)?;
-        let external_snapshot = external_pid.and_then(|pid| inspector.snapshot(pid).ok().flatten());
-        let external_status = wait_for_child(&mut external_child)?;
-        reader
-            .poll(Duration::from_millis(100))
-            .context(InterceptorSnafu)?;
-        ensure!(
-            !external_status.success(),
-            InvalidInputSnafu {
-                path: runc_path,
-                reason: format!(
-                    "an undeclared external entry entered the protected container: snapshot={external_snapshot:?}, stderr={}, effects={:?}",
-                    fs::read_to_string(&external_stderr).unwrap_or_default().trim(),
-                    recent_effect_summary(&observations, external_marker)
-                ),
-            }
-        );
-        wait_for_reason(
-            &reader,
-            &observations,
-            external_marker,
-            "UNSUPPORTED_OBJECT",
-        )?;
-        let external_entry_denied =
-            observations
-                .recent_since(external_marker)
-                .iter()
-                .any(|event| {
-                    event.reason == "UNSUPPORTED_OBJECT"
-                        && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
-                        && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
-                        && event.active_role_id == binding.external_role_id
-                        && event.admitted_entry_rule_id == 0
-                        && event.kernel_result == -13
-                });
-        ensure!(
-            external_entry_denied,
-            InvalidInputSnafu {
-                path: runc_path,
-                reason: format!(
-                    "the undeclared external entry did not produce a fail-closed effect: {:?}",
-                    observations
-                        .recent_since(external_marker)
-                        .iter()
-                        .filter(|event| event.kernel_result != 0)
-                        .map(|event| (
-                            event.reason.as_str(),
-                            event.effect_family,
-                            event.operation,
-                            event.active_role_id,
-                            event.admitted_entry_rule_id,
-                            event.kernel_result,
-                        ))
-                        .collect::<Vec<_>>()
-                ),
-            }
-        );
-
-        let cgroup_entry_marker = observations.cursor();
-        let live_initial_cgroup = fs::read_to_string(format!("/proc/{initial_pid}/cgroup"))
-            .unwrap_or_else(|error| format!("unavailable: {error}"));
-        ensure!(
-            cgroup_path.exists(),
-            InvalidInputSnafu {
-                path: &cgroup_path,
-                reason: format!(
-                    "the protected cgroup disappeared before the external-entry check: initial_pid={initial_pid}, live_cgroup={:?}",
-                    live_initial_cgroup.trim(),
-                ),
-            }
-        );
-        let cgroup_entry_stderr = output_directory.join("cgroup-entry.stderr");
-        let mut cgroup_entry = Command::new("/bin/sh")
-            .args(["-c", "/bin/sleep 1; exec /bin/true"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::from(
-                fs::File::create(&cgroup_entry_stderr).context(IoSnafu {
-                    path: &cgroup_entry_stderr,
-                })?,
-            ))
-            .spawn()
-            .context(IoSnafu {
-                path: Path::new("/bin/sh"),
-            })?;
-        let cgroup_entry_pid = cgroup_entry.id();
-        fs::write(
-            cgroup_path.join("cgroup.procs"),
-            cgroup_entry_pid.to_string(),
-        )
-        .context(IoSnafu {
-            path: cgroup_path.join("cgroup.procs"),
-        })?;
-        let cgroup_entry_snapshot = inspector
-            .snapshot(cgroup_entry_pid)
-            .context(NodeSnafu)?
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: &cgroup_path,
-                    reason: "the external cgroup entrant has no Mithril identity",
-                }
-                .build()
-            })?;
-        ensure!(
-            cgroup_entry_snapshot.active_role_id == binding.external_role_id
-                && cgroup_entry_snapshot.admitted_entry_rule_id == 0
-                && cgroup_entry_snapshot.installed_role_class.as_deref()
-                    == Some("runtime_external_restricted"),
-            InvalidInputSnafu {
-                path: &cgroup_path,
-                reason: format!(
-                    "the external cgroup entrant received an admitted role: {cgroup_entry_snapshot:?}"
-                ),
-            }
-        );
-        let cgroup_entry_status = wait_for_child(&mut cgroup_entry)?;
-        reader
-            .poll(Duration::from_millis(100))
-            .context(InterceptorSnafu)?;
-        let external_cgroup_entering_process_stays_closed = !cgroup_entry_status.success()
-            && observations
-                .recent_since(cgroup_entry_marker)
-                .iter()
-                .any(|event| {
-                    event.task_cookie == cgroup_entry_snapshot.task_cookie
-                        && event.active_role_id == binding.external_role_id
-                        && event.admitted_entry_rule_id == 0
-                        && event.kernel_result == -13
-                });
-        ensure!(
-            external_cgroup_entering_process_stays_closed,
-            InvalidInputSnafu {
-                path: &cgroup_entry_stderr,
-                reason: format!(
-                    "the external cgroup entrant did not fail closed: status={cgroup_entry_status}, stderr={}, effects={:?}",
-                    fs::read_to_string(&cgroup_entry_stderr)
-                        .unwrap_or_default()
-                        .trim(),
-                    observations
-                        .recent_since(cgroup_entry_marker)
-                        .iter()
-                        .filter(|event| event.task_cookie == cgroup_entry_snapshot.task_cookie)
-                        .map(|event| (
-                            event.reason.as_str(),
-                            event.effect_family,
-                            event.operation,
-                            event.active_role_id,
-                            event.admitted_entry_rule_id,
-                            event.kernel_result,
-                        ))
-                        .collect::<Vec<_>>()
-                ),
-            }
-        );
         fs::write(role_directory.join("release"), b"release\n").context(IoSnafu {
             path: &role_directory,
         })?;
@@ -6436,8 +6269,6 @@ impl EffectTestRunner {
             post_ponr_terminal_evidence_observed,
             post_ponr_terminal_evidence_preserved,
             inactive_generation_retired,
-            external_entry_denied,
-            external_cgroup_entering_process_stays_closed,
             entry_literal_paths_enforced,
             dynamic_loader_paths,
             dynamic_loader_paths_absent_from_policy: true,
