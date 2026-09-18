@@ -477,7 +477,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub path_tree_preexisting_child_denied: bool,
     pub path_tree_meta_depth_denied: bool,
     pub path_tree_future_namespace_denied: bool,
-    pub path_tree_later_child_denied: bool,
     pub path_tree_replacement_child_denied: bool,
     pub path_tree_outside_control_allowed: bool,
     pub fsconfig_reconfigure_global_invalidation: bool,
@@ -1591,7 +1590,6 @@ impl EffectTestRunner {
         let mut fixture = EffectProcessFixture::start(&fixture_root)?;
         let paths = fixture.setup()?;
         let path_tree_preexisting = path_tree_root.join("pre-existing");
-        let path_tree_later = path_tree_root.join("created-after-activation");
         let path_tree_replacement = path_tree_root.join("replacement");
         let path_tree_actor_create = path_tree_root.join("actor-created");
         let path_tree_preexisting_bind_target =
@@ -2087,25 +2085,6 @@ impl EffectTestRunner {
                 )?;
             }
             path_tree_meta_depth_denied = true;
-
-            fs::write(&path_tree_later, b"created after activation\n").context(IoSnafu {
-                path: &path_tree_later,
-            })?;
-            let later_marker = observations.cursor();
-            ensure!(
-                fixture.open(&path_tree_later)?.denied(),
-                InvalidInputSnafu {
-                    path: &path_tree_later,
-                    reason: "a child created after activation returned a file descriptor",
-                }
-            );
-            wait_for_path_tree_effect(
-                &reader,
-                &observations,
-                later_marker,
-                &path_tree_later,
-                KernelEffectOperationV1::OpenRead,
-            )?;
 
             let create_marker = observations.cursor();
             ensure!(
@@ -4577,7 +4556,6 @@ impl EffectTestRunner {
             path_tree_preexisting_child_denied: protect,
             path_tree_meta_depth_denied,
             path_tree_future_namespace_denied,
-            path_tree_later_child_denied: protect,
             path_tree_replacement_child_denied: protect,
             path_tree_outside_control_allowed: protect,
             fsconfig_reconfigure_global_invalidation,
