@@ -1659,9 +1659,23 @@ test does not close a row when its physical condition or an assertion changed.
       passed in 248.38 seconds.
     - [x] Remove only the matching legacy open and the pre-existing and
       maximum-depth result fields after all three platform cases pass. Keep
-      the deep fixture until the future-mount-namespace case has its own
-      verified replacement. The 92 non-privileged library tests and strict
-      crate Clippy pass.
+      the deep fixture because the future-mount-namespace, external-alias,
+      and mount-race cases still use it. The 92 non-privileged library tests
+      and strict crate Clippy pass.
+  - [ ] Replace the future-mount-namespace block with one actor-driven
+    platform test. Reuse the mount-alias actor and signed policy. Make policy
+    and Node ready before the actor starts. The actor must create its private
+    mount namespace before readiness, then enter the protected workload.
+    Require its namespace inode to differ from the test process namespace.
+    Require `EACCES` and task-attributed `PATH_TREE_POLICY_DENY` evidence with
+    the actor namespace inode. Require the allowed alias read and its
+    `EXACT_POLICY_ALLOW` evidence as the control. Do not add a Platform API.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy future fixture, action, and result
+      field after all three platform cases pass. Keep the shared deep path,
+      external-alias, and mount-race setup.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
