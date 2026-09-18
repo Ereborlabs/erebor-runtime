@@ -17,6 +17,8 @@ mod exec_fatal;
 #[cfg(test)]
 mod exec_retry;
 #[cfg(test)]
+mod external_cgroup;
+#[cfg(test)]
 mod external_roots;
 #[cfg(test)]
 mod lifecycle_sleep;

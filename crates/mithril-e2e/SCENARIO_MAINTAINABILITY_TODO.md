@@ -1684,6 +1684,9 @@ setup, production actions, assertions, and focused test.
   - [ ] Add one small platform test for a host process placed in the protected
     actor cgroup. Require its restricted external identity, denied exec, and
     matching task-cookie, role, rule-zero, and `EACCES` evidence.
+    - [x] Pass Host. The 75-line test passed in 31.34 seconds.
+    - [ ] Pass direct `runc` with the same actor and assertions.
+    - [ ] Pass Kubernetes with the same actor and assertions.
   - [ ] Pass Host, direct `runc`, and Kubernetes before removing the matching
     legacy actions, result fields, and shell checks.
 - [ ] Final container and resource cleanup: require container success and
