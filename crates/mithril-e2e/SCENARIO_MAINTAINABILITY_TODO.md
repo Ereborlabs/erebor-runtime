@@ -1663,18 +1663,21 @@ test does not close a row when its physical condition or an assertion changed.
       and mount-race cases still use it. The 92 non-privileged library tests
       and strict crate Clippy pass.
   - [ ] Replace the future-mount-namespace block with one actor-driven
-    platform test. Reuse the mount-alias actor and signed policy. Make policy
-    and Node ready before the actor starts. The protected actor must create a
-    mount namespace before readiness. Require its first private-propagation
+    platform test. Reuse the mount-alias actor and signed policy. Start Control
+    and the actor before the policy so the real Kubernetes policy has a target.
+    Install the policy, start Node, and recover the actor. The protected actor
+    must then create a mount namespace. Require its first private-propagation
     mutation to fail closed because the namespace was absent at activation.
     Require its namespace inode to differ from the test process namespace.
     Require `EACCES` and task-attributed `PATH_TREE_POLICY_DENY` evidence.
     Require the allowed read and its `EXACT_POLICY_ALLOW` evidence as the
     control. Do not add a Platform API.
-    - [x] Pass Host and commit it. The exact case passed in 29.00 seconds.
-      The unchanged pre-existing bind case passed in 28.81 seconds.
-    - [x] Pass direct `runc` and commit it. The exact case passed in 37.82
-      seconds. The unchanged pre-existing bind case passed in 30.41 seconds.
+    - [x] Pass Host and commit it. The corrected recovery-order case passed in
+      31.03 seconds. The unchanged pre-existing bind case passed in 28.81
+      seconds.
+    - [x] Pass direct `runc` and commit it. The corrected recovery-order case
+      passed in 35.82 seconds. The unchanged pre-existing bind case passed in
+      30.41 seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy future fixture, action, and result
       field after all three platform cases pass. Keep the shared deep path,

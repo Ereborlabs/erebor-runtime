@@ -11,15 +11,16 @@ use crate::platform::{platform_test, Platform, TestResult};
 fn future_mount_namespace_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("mount-future")?;
     env.start_control()?;
+    let host_ns = std::fs::metadata("/proc/self/ns/mnt")?.ino();
+    let mut actor = env.start_actor("mount_alias.py", &["future"])?;
+    let pid = actor.id();
+    env.place(pid)?;
     env.install_policy("mount_alias_policy.json")?;
     env.start_node()?;
     env.sync_policy()?;
     env.node_ready()?;
-
-    let host_ns = std::fs::metadata("/proc/self/ns/mnt")?.ino();
-    let mut actor = env.start_actor("mount_alias.py", &["future"])?;
-    let pid = actor.id();
-    let task = env.task(pid, "future namespace actor")?;
+    env.running(pid)?;
+    let task = env.recovered(pid, "future namespace actor")?;
     let seen = env
         .snapshot()?
         .recent_effects

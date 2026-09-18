@@ -70,12 +70,9 @@ result_path = os.path.join(sys.argv[1], "mount-result.json")
 with open(result_path, "w", encoding="utf-8"):
     pass
 
-check(libc.unshare(CLONE_NEWNS))
 mount_error = 0
-if mode == "future":
-    result = libc.mount(None, b"/", None, MS_REC | MS_PRIVATE, None)
-    mount_error = ctypes.get_errno() if result else 0
-else:
+if mode != "future":
+    check(libc.unshare(CLONE_NEWNS))
     check(libc.mount(None, b"/", None, MS_REC | MS_PRIVATE, None))
 mount_namespace = os.stat("/proc/self/ns/mnt").st_ino
 if mode == "early":
@@ -85,7 +82,12 @@ if mode not in ("recursive", "future"):
 print("native-fixture-ready", flush=True)
 command = sys.stdin.readline()
 allowed_mount_error = 0
-if mode == "move" and command == "open\n":
+if mode == "future" and command == "read\n":
+    check(libc.unshare(CLONE_NEWNS))
+    result = libc.mount(None, b"/", None, MS_REC | MS_PRIVATE, None)
+    mount_error = ctypes.get_errno() if result else 0
+    mount_namespace = os.stat("/proc/self/ns/mnt").st_ino
+elif mode == "move" and command == "open\n":
     denied_tree = open_tree(secret)
     allowed_tree = open_tree(allowed)
     with open(result_path, "r+", encoding="utf-8") as output:
