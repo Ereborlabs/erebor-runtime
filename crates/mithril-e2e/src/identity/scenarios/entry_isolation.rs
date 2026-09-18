@@ -158,7 +158,7 @@ fn readiness_role_is_isolated<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn liveness_role_is_isolated<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("liveness-isolation")?;

@@ -1518,7 +1518,7 @@ setup, production actions, assertions, and focused test.
     entry-isolation policy family, FIFO readiness owner, and result fields.
   - [x] The exact Host case passed in 30.79 seconds.
   - [x] The exact direct-`runc` case passed in 38.46 seconds.
-  - [ ] Pass and commit Kubernetes.
+  - [x] The exact Kubernetes case passed in 74.60 seconds.
   - [ ] Remove only the matching liveness loop action and compatibility gate
     after all three platform cases pass.
 - [x] Startup entry policy isolation: use stock `cat`. Require the startup
