@@ -1501,6 +1501,10 @@ setup, production actions, assertions, and focused test.
 - [x] Startup entry policy isolation: use stock `cat`. Require the startup
   role to read a path tree denied to the application role, then deny its own
   exact file read with matching role, admission-rule, and kernel evidence.
+  - [x] Put the bounded FIFO-reader wait in `ProcessFixture`. Report an early
+    actor exit, its status, the FIFO path, the last reader state, and stderr.
+    The unchanged Host, direct-`runc`, and Kubernetes cases passed in 30.88,
+    37.42, and 73.70 seconds after this change.
   - [x] The exact Host case passed twice in 29.58 and 29.08 seconds.
   - [x] The exact direct-`runc` case passed in 36.44 seconds.
   - [x] The exact Kubernetes case passed in 69.11 seconds.

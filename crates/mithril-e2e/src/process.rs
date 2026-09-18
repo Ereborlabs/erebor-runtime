@@ -15,6 +15,8 @@ use std::os::fd::AsRawFd as _;
 use std::os::fd::OwnedFd;
 #[cfg(test)]
 use std::os::unix::ffi::OsStrExt as _;
+#[cfg(test)]
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::os::unix::fs::PermissionsExt as _;
 #[cfg(test)]
 use std::os::unix::net::UnixStream;
@@ -889,6 +891,35 @@ impl ProcessFixture {
                 Ok(None)
             },
             state,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fifo_writer(
+        &mut self,
+        path: &Path,
+        operation: &str,
+        limit: Duration,
+    ) -> Result<File> {
+        self.wait_path(
+            path,
+            operation,
+            limit,
+            || match fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(path)
+            {
+                Ok(file) => Ok(Some(file)),
+                Err(source)
+                    if source.kind() == ErrorKind::NotFound
+                        || source.raw_os_error() == Some(libc::ENXIO) =>
+                {
+                    Ok(None)
+                }
+                Err(source) => Err(source).context(IoSnafu { path }),
+            },
+            || "the FIFO has no reader".to_owned(),
         )
     }
 

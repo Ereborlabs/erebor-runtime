@@ -1,15 +1,13 @@
 use std::cell::RefCell;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Write as _;
-use std::os::unix::fs::OpenOptionsExt as _;
 use std::time::Duration;
 
-use crate::error::{InvalidInputSnafu, IoSnafu};
+use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
 use rustix::fs::{mkfifoat, Mode, CWD};
-use snafu::ResultExt as _;
 
 #[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
@@ -34,21 +32,7 @@ fn startup_role_is_isolated<P: Platform>() -> TestResult<()> {
         "/work/startup.denied",
     ];
     let mut actor = env.add_actor("cat", &args)?;
-    let mut release = wait_for(
-        &gate,
-        "startup entry FIFO",
-        Duration::from_secs(5),
-        || match OpenOptions::new()
-            .write(true)
-            .custom_flags(libc::O_NONBLOCK)
-            .open(&gate)
-        {
-            Ok(file) => Ok(Some(file)),
-            Err(source) if source.raw_os_error() == Some(libc::ENXIO) => Ok(None),
-            Err(source) => Err(source).context(IoSnafu { path: &gate }),
-        },
-        || "the startup entry has no FIFO reader".to_owned(),
-    )?;
+    let mut release = actor.fifo_writer(&gate, "startup entry FIFO", Duration::from_secs(5))?;
     let task = env.task(actor.id(), "startup entry identity")?;
     let snap = &task.snapshot;
     assert_eq!(snap.creator_task_cookie, None);
