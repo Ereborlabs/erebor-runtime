@@ -45,6 +45,8 @@ mod orphan;
 #[cfg(test)]
 mod path_create;
 #[cfg(test)]
+mod path_depth;
+#[cfg(test)]
 mod path_later;
 #[cfg(test)]
 mod path_replace;

@@ -5,7 +5,12 @@ import sys
 
 if len(sys.argv) == 2:
     mode = "wildcards"
-elif len(sys.argv) == 3 and sys.argv[2] in ("late", "replace", "deny-create"):
+elif len(sys.argv) == 3 and sys.argv[2] in (
+    "late",
+    "replace",
+    "deny-create",
+    "max-depth",
+):
     mode = sys.argv[2]
 else:
     sys.exit(2)
@@ -27,9 +32,15 @@ elif mode == "replace":
         "replacement": os.path.join(root, "srv/team/red/secrets/replacement"),
         "allowed": os.path.join(root, "allowed/open"),
     }
-else:
+elif mode == "deny-create":
     paths = {
         "create": os.path.join(root, "create-denied/actor-created"),
+        "allowed": os.path.join(root, "allowed/open"),
+    }
+else:
+    floor = os.path.join(root, *(f"d{index}" for index in range(2, 254)))
+    paths = {
+        "depth": os.path.join(floor, "pre-existing"),
         "allowed": os.path.join(root, "allowed/open"),
     }
 for name, path in paths.items():
@@ -45,6 +56,7 @@ command = {
     "late": "create-read\n",
     "replace": "replace-read\n",
     "deny-create": "create\n",
+    "max-depth": "read\n",
 }[mode]
 if sys.stdin.readline() != command:
     sys.exit(2)
@@ -81,6 +93,11 @@ elif mode == "deny-create":
         result["created"] = True
     except OSError as error:
         result["created"] = error.errno
+elif mode == "max-depth":
+    result["floor_components"] = len([part for part in floor.split(os.sep) if part])
+    result["components"] = len(
+        [part for part in paths["depth"].split(os.sep) if part]
+    )
 for name, path in paths.items():
     if mode == "deny-create" and name == "create":
         continue

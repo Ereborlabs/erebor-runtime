@@ -1648,7 +1648,9 @@ test does not close a row when its physical condition or an assertion changed.
     require `EACCES` and task-attributed `PATH_TREE_POLICY_DENY` evidence for
     `OpenRead`. Require the existing allowed file read and its
     `EXACT_POLICY_ALLOW` evidence as the control. Do not add a Platform API.
-    - [ ] Pass Host and commit it.
+    - [x] Pass Host and commit it. The exact case passed in 33.57 seconds.
+      The complete eight-case `mount_late_host` lifecycle passed in 99.91
+      seconds.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy open and the pre-existing and
