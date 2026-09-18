@@ -31,6 +31,8 @@ mod mount_alias;
 #[cfg(test)]
 mod mount_late;
 #[cfg(test)]
+mod mount_recursive;
+#[cfg(test)]
 mod moved_exec;
 #[cfg(test)]
 mod namespace_init;

@@ -23,9 +23,10 @@ def check(result):
         raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
 
 
-late = sys.argv[2:] == ["late"]
-if sys.argv[2:] not in ([], ["late"]):
+args = sys.argv[2:]
+if args not in ([], ["late"], ["recursive"]):
     sys.exit(2)
+mode = args[0] if args else "early"
 root = os.path.join(sys.argv[1], "mount")
 secret = os.path.join(root, "secret")
 allowed = os.path.join(root, "allowed")
@@ -43,17 +44,21 @@ with open(result_path, "w", encoding="utf-8"):
 
 check(libc.unshare(CLONE_NEWNS))
 check(libc.mount(None, b"/", None, MS_REC | MS_PRIVATE, None))
-if not late:
+if mode == "early":
     check(libc.mount(secret.encode(), denied_alias.encode(), None, MS_BIND, None))
-check(libc.mount(allowed.encode(), allowed_alias.encode(), None, MS_BIND, None))
+if mode != "recursive":
+    check(libc.mount(allowed.encode(), allowed_alias.encode(), None, MS_BIND, None))
 print("native-fixture-ready", flush=True)
 command = sys.stdin.readline()
 mount_error = 0
-if late and command == "mount-read\n":
-    try:
-        check(libc.mount(secret.encode(), denied_alias.encode(), None, MS_BIND, None))
-    except OSError as error:
-        mount_error = error.errno
+allowed_mount_error = 0
+if mode in ("late", "recursive") and command == "mount-read\n":
+    flags = MS_BIND | (MS_REC if mode == "recursive" else 0)
+    result = libc.mount(secret.encode(), denied_alias.encode(), None, flags, None)
+    mount_error = ctypes.get_errno() if result else 0
+    if mode == "recursive":
+        result = libc.mount(allowed.encode(), allowed_alias.encode(), None, flags, None)
+        allowed_mount_error = ctypes.get_errno() if result else 0
 elif command != "read\n":
     sys.exit(2)
 
@@ -68,4 +73,12 @@ try:
 except OSError as error:
     value = f"errno:{error.errno}"
 with open(result_path, "r+", encoding="utf-8") as output:
-    json.dump({"mount": mount_error, "denied": denied, "allowed": value}, output)
+    json.dump(
+        {
+            "mount": mount_error,
+            "allowed_mount": allowed_mount_error,
+            "denied": denied,
+            "allowed": value,
+        },
+        output,
+    )
