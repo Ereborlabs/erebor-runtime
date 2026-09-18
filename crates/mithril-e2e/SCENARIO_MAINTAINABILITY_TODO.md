@@ -1510,7 +1510,7 @@ test does not close a row when its physical condition or an assertion changed.
       fail-closed case and detached `open_tree` activity assertion remain.
       All Mithril E2E targets compile. The 92 non-privileged library tests,
       package clippy, formatting, and whitespace checks pass.
-  - [ ] Replace the pre-policy `mount_global_mutation_epoch` read. The
+  - [x] Replace the pre-policy `mount_global_mutation_epoch` read. The
     production policy owner creates this hash-map row during policy
     installation. The old probe reads it before policy installation. The full
     VM run passed 26 Host tests and the direct-`runc` entry-role probe, then
@@ -1530,9 +1530,10 @@ test does not close a row when its physical condition or an assertion changed.
       seconds.
     - [x] Pass Kubernetes and commit it. The exact test passed in 95.08
       seconds.
-    - [ ] Remove the stale pre-policy counter read and its legacy result field
-      only after all three platform cases pass. Keep the prepared `MoveMount`
-      fail-closed case.
+    - [x] Remove the stale pre-policy counter read and its legacy result field
+      after all three platform cases pass. Keep the prepared `MoveMount`
+      fail-closed case. The 92 non-privileged library tests, package clippy,
+      formatting, and whitespace checks pass.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 

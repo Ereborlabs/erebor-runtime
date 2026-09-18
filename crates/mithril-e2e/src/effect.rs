@@ -480,7 +480,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub path_tree_later_child_denied: bool,
     pub path_tree_replacement_child_denied: bool,
     pub path_tree_outside_control_allowed: bool,
-    pub detached_open_tree_activity_observed: bool,
     pub fsconfig_reconfigure_global_invalidation: bool,
     pub protected_mount_race_denied: bool,
     pub mount_snapshot_rebuilt_after_mutation: bool,
@@ -1648,19 +1647,7 @@ impl EffectTestRunner {
             &paths.mount_target
         };
         fixture.prepare_mount_race(&paths.source, mount_race_target, 8)?;
-        let detached_open_tree_epoch = global_mount_mutation_epoch(&host)?;
-        let detached_open_tree_activity = global_mount_activity_sequence(&host)?;
         fixture.prepare_operations(&paths, &truncate_target)?;
-        let detached_open_tree_activity_observed = global_mount_mutation_epoch(&host)?
-            == detached_open_tree_epoch
-            && global_mount_activity_sequence(&host)? > detached_open_tree_activity;
-        ensure!(
-            detached_open_tree_activity_observed,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "detached open_tree preparation did not remain evidence-only",
-            }
-        );
         let shared_mmap_target_pid = fixture.shared_mmap_target_pid()?;
         let unix_stream_peer_pid = fixture.prepare_unix_stream_target()?;
         if protect {
@@ -4593,7 +4580,6 @@ impl EffectTestRunner {
             path_tree_later_child_denied: protect,
             path_tree_replacement_child_denied: protect,
             path_tree_outside_control_allowed: protect,
-            detached_open_tree_activity_observed,
             fsconfig_reconfigure_global_invalidation,
             protected_mount_race_denied: true,
             mount_snapshot_rebuilt_after_mutation: true,
