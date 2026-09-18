@@ -1662,7 +1662,7 @@ test does not close a row when its physical condition or an assertion changed.
       the deep fixture because the future-mount-namespace, external-alias,
       and mount-race cases still use it. The 92 non-privileged library tests
       and strict crate Clippy pass.
-  - [ ] Replace the future-mount-namespace block with one actor-driven
+  - [x] Replace the future-mount-namespace block with one actor-driven
     platform test. Reuse the mount-alias actor and signed policy. Start Control
     and the actor before the policy so the real Kubernetes policy has a target.
     Install the policy, start Node, and recover the actor. The protected actor
@@ -1680,9 +1680,10 @@ test does not close a row when its physical condition or an assertion changed.
       30.41 seconds.
     - [x] Pass Kubernetes and commit it. The exact case passed in 87.71
       seconds. The unchanged pre-existing bind case passed in 77.40 seconds.
-    - [ ] Remove only the matching legacy future fixture, action, and result
+    - [x] Remove only the matching legacy future fixture, action, and result
       field after all three platform cases pass. Keep the shared deep path,
-      external-alias, and mount-race setup.
+      external-alias, and mount-race setup. The 92 non-privileged library tests
+      and strict crate Clippy pass.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
