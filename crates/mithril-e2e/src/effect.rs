@@ -477,7 +477,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub path_tree_preexisting_child_denied: bool,
     pub path_tree_meta_depth_denied: bool,
     pub path_tree_future_namespace_denied: bool,
-    pub path_tree_replacement_child_denied: bool,
     pub path_tree_outside_control_allowed: bool,
     pub fsconfig_reconfigure_global_invalidation: bool,
     pub protected_mount_race_denied: bool,
@@ -1590,7 +1589,6 @@ impl EffectTestRunner {
         let mut fixture = EffectProcessFixture::start(&fixture_root)?;
         let paths = fixture.setup()?;
         let path_tree_preexisting = path_tree_root.join("pre-existing");
-        let path_tree_replacement = path_tree_root.join("replacement");
         let path_tree_actor_create = path_tree_root.join("actor-created");
         let path_tree_preexisting_bind_target =
             fixture_root.join("path-tree-preexisting-bind-alias");
@@ -1624,9 +1622,6 @@ impl EffectTestRunner {
         );
         fs::write(&path_tree_preexisting, b"restricted before activation\n").context(IoSnafu {
             path: &path_tree_preexisting,
-        })?;
-        fs::write(&path_tree_replacement, b"first object\n").context(IoSnafu {
-            path: &path_tree_replacement,
         })?;
         let propagation_peer_pid = fixture.prepare_propagation_peer(&paths)?;
         let external_mount_namespace = ExternalMountNamespace::acquire(fixture.pid())?;
@@ -2064,26 +2059,21 @@ impl EffectTestRunner {
         }
 
         if protect {
-            for (path, label) in [
-                (&path_tree_preexisting, "pre-existing path-tree child"),
-                (&path_tree_replacement, "initial replacement-test child"),
-            ] {
-                let marker = observations.cursor();
-                ensure!(
-                    fixture.open(path)?.denied(),
-                    InvalidInputSnafu {
-                        path,
-                        reason: format!("the {label} returned a file descriptor"),
-                    }
-                );
-                wait_for_path_tree_effect(
-                    &reader,
-                    &observations,
-                    marker,
-                    path,
-                    KernelEffectOperationV1::OpenRead,
-                )?;
-            }
+            let marker = observations.cursor();
+            ensure!(
+                fixture.open(&path_tree_preexisting)?.denied(),
+                InvalidInputSnafu {
+                    path: &path_tree_preexisting,
+                    reason: "the pre-existing path-tree child returned a file descriptor",
+                }
+            );
+            wait_for_path_tree_effect(
+                &reader,
+                &observations,
+                marker,
+                &path_tree_preexisting,
+                KernelEffectOperationV1::OpenRead,
+            )?;
             path_tree_meta_depth_denied = true;
 
             let create_marker = observations.cursor();
@@ -2105,28 +2095,6 @@ impl EffectTestRunner {
                 create_marker,
                 &path_tree_actor_create,
                 KernelEffectOperationV1::Create,
-            )?;
-
-            fs::remove_file(&path_tree_replacement).context(IoSnafu {
-                path: &path_tree_replacement,
-            })?;
-            fs::write(&path_tree_replacement, b"replacement object\n").context(IoSnafu {
-                path: &path_tree_replacement,
-            })?;
-            let replacement_marker = observations.cursor();
-            ensure!(
-                fixture.open(&path_tree_replacement)?.denied(),
-                InvalidInputSnafu {
-                    path: &path_tree_replacement,
-                    reason: "a replacement child returned a file descriptor",
-                }
-            );
-            wait_for_path_tree_effect(
-                &reader,
-                &observations,
-                replacement_marker,
-                &path_tree_replacement,
-                KernelEffectOperationV1::OpenRead,
             )?;
 
             let outside_marker = observations.cursor();
@@ -4556,7 +4524,6 @@ impl EffectTestRunner {
             path_tree_preexisting_child_denied: protect,
             path_tree_meta_depth_denied,
             path_tree_future_namespace_denied,
-            path_tree_replacement_child_denied: protect,
             path_tree_outside_control_allowed: protect,
             fsconfig_reconfigure_global_invalidation,
             protected_mount_race_denied: true,

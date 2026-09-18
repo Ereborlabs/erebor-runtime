@@ -1592,7 +1592,7 @@ test does not close a row when its physical condition or an assertion changed.
       three platform cases pass. Keep the pre-existing, maximum-depth, future
       namespace, denied-create, replacement-child, and allowed-control cases.
       The 92 non-privileged library tests and strict crate Clippy pass.
-  - [ ] Replace the replacement-child block with one actor-driven platform
+  - [x] Replace the replacement-child block with one actor-driven platform
     test. Reuse the wildcard actor and signed policy. Create the first child
     before policy activation. After Node recovers the actor, require its first
     open to return `EACCES`, then make it unlink and recreate the same path.
@@ -1609,10 +1609,11 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit it. The exact case passed in 79.10
       seconds. The unchanged later-child and wildcard cases passed in 75.69
       and 133.37 seconds.
-    - [ ] Remove only the matching legacy initial-child and replacement-child
+    - [x] Remove only the matching legacy initial-child and replacement-child
       actions and result field after all three platform cases pass. Keep the
       pre-existing, maximum-depth, future-namespace, denied-create, and
-      allowed-control cases.
+      allowed-control cases. The 92 non-privileged library tests and strict
+      crate Clippy pass.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
