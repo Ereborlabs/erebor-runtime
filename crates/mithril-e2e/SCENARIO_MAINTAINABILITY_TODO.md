@@ -1627,7 +1627,8 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The exact case passed in 34.63
       seconds. The unchanged later-child, replacement-child, and wildcard
       cases passed in 29.29, 34.95, and 29.19 seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact case passed in 77.61
+      seconds.
     - [ ] Remove only the matching legacy denied-create action after all
       three platform cases pass. Keep the pre-existing, maximum-depth,
       future-namespace, and allowed-control cases.
