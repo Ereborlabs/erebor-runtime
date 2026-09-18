@@ -524,8 +524,6 @@ if [[ $entry_role_runtime_only == true ]]; then
     .newer_kubernetes_subpath_alias_path_tree_denied and
     .container_bind_mount_succeeded and
     .container_bind_alias_path_tree_denied and
-    .single_wildcard_path_tree_denied and
-    .recursive_wildcard_path_tree_denied and
     .concurrent_exec_detached_mounts_preserved_view and
     .bounded_reader_queue_preserved_concurrent_burst and
     .recursive_wildcard_stable_after_concurrent_exec and

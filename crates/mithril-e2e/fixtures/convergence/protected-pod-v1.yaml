@@ -50,18 +50,6 @@ spec:
           else echo PATH_TREE_DENIED >
           /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-bind-result;
           fi;
-          if cat /home/alice/secrets/models/secret >/dev/null 2>&1;
-          then echo PATH_TREE_ALLOWED >
-          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-wildcard-result;
-          else echo PATH_TREE_DENIED >
-          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-wildcard-result;
-          fi;
-          if cat /srv/team/blue/secrets/models/secret >/dev/null 2>&1;
-          then echo PATH_TREE_ALLOWED >
-          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-recursive-wildcard-result;
-          else echo PATH_TREE_DENIED >
-          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-recursive-wildcard-result;
-          fi;
           if cat /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.lifecycle-ready
           >/dev/null 2>&1;
           then echo CONTROL_ALLOWED >

@@ -235,8 +235,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub newer_kubernetes_subpath_alias_path_tree_denied: bool,
     pub container_bind_mount_succeeded: bool,
     pub container_bind_alias_path_tree_denied: bool,
-    pub single_wildcard_path_tree_denied: bool,
-    pub recursive_wildcard_path_tree_denied: bool,
     pub concurrent_exec_detached_mounts_preserved_view: bool,
     pub bounded_reader_queue_preserved_concurrent_burst: bool,
     pub recursive_wildcard_stable_after_concurrent_exec: bool,
@@ -3427,8 +3425,6 @@ impl EffectTestRunner {
                 "if /bin/cat /home/kubelet-attack/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/var/lib/mithril-convergence/kubernetes-subpath.result; else echo PATH_TREE_DENIED >/var/lib/mithril-convergence/kubernetes-subpath.result; fi; ",
                 "if /bin/cat /home/kubelet-attack-newer/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/var/lib/mithril-convergence/kubernetes-subpath-newer.result; else echo PATH_TREE_DENIED >/var/lib/mithril-convergence/kubernetes-subpath-newer.result; fi; ",
                 "if /bin/cat /home/attack/models/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/var/lib/mithril-convergence/container-bind.result; else echo PATH_TREE_DENIED >/var/lib/mithril-convergence/container-bind.result; fi; ",
-                "if /bin/cat /home/alice/secrets/models/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/var/lib/mithril-convergence/single-wildcard.result; else echo PATH_TREE_DENIED >/var/lib/mithril-convergence/single-wildcard.result; fi; ",
-                "if /bin/cat /srv/team/blue/secrets/models/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/var/lib/mithril-convergence/recursive-wildcard.result; else echo PATH_TREE_DENIED >/var/lib/mithril-convergence/recursive-wildcard.result; fi; ",
                 "if /bin/cat /var/lib/mithril-convergence/protected.lifecycle-ready >/dev/null 2>&1; then echo CONTROL_ALLOWED >/var/lib/mithril-convergence/path-tree-control.result; else echo CONTROL_DENIED >/var/lib/mithril-convergence/path-tree-control.result; fi; ",
                 "echo READY >/var/lib/mithril-convergence/concurrent-recursive-ready; read -r concurrent_recursive_start </var/lib/mithril-convergence/concurrent-recursive-start.fifo; ",
                 "concurrent_recursive_result=PATH_TREE_DENIED; concurrent_recursive_count=0; while [ \"$concurrent_recursive_count\" -lt 16384 ] && [ ! -e /var/lib/mithril-convergence/concurrent-recursive-stop ]; do if command : </srv/team/blue/secrets/models/secret; then concurrent_recursive_result=PATH_TREE_ALLOWED; break; fi; concurrent_recursive_count=$((concurrent_recursive_count + 1)); done 2>/dev/null; ",
@@ -4560,21 +4556,6 @@ impl EffectTestRunner {
                 ),
             }
         );
-        let initial_recursive_wildcard_result = role_directory.join("recursive-wildcard.result");
-        let initial_recursive_wildcard = fs::read_to_string(&initial_recursive_wildcard_result)
-            .context(IoSnafu {
-                path: &initial_recursive_wildcard_result,
-            })?;
-        ensure!(
-            initial_recursive_wildcard.trim() == "PATH_TREE_DENIED",
-            InvalidInputSnafu {
-                path: &initial_recursive_wildcard_result,
-                reason: format!(
-                    "the admitted application used stale process-view routes instead of the OCI routes: result={}",
-                    initial_recursive_wildcard.trim(),
-                ),
-            }
-        );
         fs::write(role_directory.join("poststart-overlap.fifo"), b"release\n").context(
             IoSnafu {
                 path: &role_directory,
@@ -4721,8 +4702,6 @@ impl EffectTestRunner {
             role_directory.join("kubernetes-subpath-newer.result");
         let container_bind_mount_result = role_directory.join("container-bind-mount.result");
         let container_bind_result = role_directory.join("container-bind.result");
-        let single_wildcard_result = role_directory.join("single-wildcard.result");
-        let recursive_wildcard_result = role_directory.join("recursive-wildcard.result");
         for (result, description) in [
             (
                 &container_bind_mount_result,
@@ -4739,11 +4718,6 @@ impl EffectTestRunner {
             (
                 &container_bind_result,
                 "the in-container bind denial result",
-            ),
-            (&single_wildcard_result, "the single-wildcard denial result"),
-            (
-                &recursive_wildcard_result,
-                "the recursive-wildcard denial result",
             ),
         ] {
             wait_for_path(result, true, description)?;
@@ -4771,13 +4745,6 @@ impl EffectTestRunner {
         let container_bind = fs::read_to_string(&container_bind_result).context(IoSnafu {
             path: &container_bind_result,
         })?;
-        let single_wildcard = fs::read_to_string(&single_wildcard_result).context(IoSnafu {
-            path: &single_wildcard_result,
-        })?;
-        let recursive_wildcard =
-            fs::read_to_string(&recursive_wildcard_result).context(IoSnafu {
-                path: &recursive_wildcard_result,
-            })?;
         let path_tree_control = fs::read_to_string(&path_tree_control_result).context(IoSnafu {
             path: &path_tree_control_result,
         })?;
@@ -4786,13 +4753,11 @@ impl EffectTestRunner {
                 && kubernetes_subpath.trim() == "PATH_TREE_DENIED"
                 && newer_kubernetes_subpath.trim() == "PATH_TREE_DENIED"
                 && container_bind.trim() == "PATH_TREE_DENIED"
-                && single_wildcard.trim() == "PATH_TREE_DENIED"
-                && recursive_wildcard.trim() == "PATH_TREE_DENIED"
                 && path_tree_control.trim() == "CONTROL_ALLOWED",
             InvalidInputSnafu {
                 path: &kubernetes_subpath_result,
                 reason: format!(
-                    "the direct runc path-tree results differ: container_bind_mount={container_bind_mount:?}, mount_stderr={container_bind_mount_stderr:?}, older_kubernetes_subpath={kubernetes_subpath:?}, newer_kubernetes_subpath={newer_kubernetes_subpath:?}, container_bind={container_bind:?}, single_wildcard={single_wildcard:?}, recursive_wildcard={recursive_wildcard:?}, control={path_tree_control:?}, relevant_effects={:?}",
+                    "the direct runc path-tree results differ: container_bind_mount={container_bind_mount:?}, mount_stderr={container_bind_mount_stderr:?}, older_kubernetes_subpath={kubernetes_subpath:?}, newer_kubernetes_subpath={newer_kubernetes_subpath:?}, container_bind={container_bind:?}, control={path_tree_control:?}, relevant_effects={:?}",
                     observations
                         .recent_since(marker)
                         .iter()
@@ -6250,8 +6215,6 @@ impl EffectTestRunner {
             newer_kubernetes_subpath_alias_path_tree_denied: true,
             container_bind_mount_succeeded: true,
             container_bind_alias_path_tree_denied: true,
-            single_wildcard_path_tree_denied: true,
-            recursive_wildcard_path_tree_denied: true,
             concurrent_exec_detached_mounts_preserved_view,
             bounded_reader_queue_preserved_concurrent_burst,
             recursive_wildcard_stable_after_concurrent_exec,

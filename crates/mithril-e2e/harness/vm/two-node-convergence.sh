@@ -2124,8 +2124,6 @@ prepare_pod_markers() {
       "$marker_root/$pod_name.path-tree-subpath-result" \
       "$marker_root/$pod_name.path-tree-subpath-newer-result" \
       "$marker_root/$pod_name.path-tree-bind-result" \
-      "$marker_root/$pod_name.path-tree-wildcard-result" \
-      "$marker_root/$pod_name.path-tree-recursive-wildcard-result" \
       "$marker_root/$pod_name.path-tree-recursive-wildcard-stable-result" \
       "$marker_root/$pod_name.path-tree-control-result" \
       "$marker_root/$pod_name.concurrent-recursive-ready" \
@@ -3453,8 +3451,6 @@ for path_tree_result in \
     path-tree-subpath-result:PATH_TREE_DENIED \
     path-tree-subpath-newer-result:PATH_TREE_DENIED \
     path-tree-bind-result:PATH_TREE_DENIED \
-    path-tree-wildcard-result:PATH_TREE_DENIED \
-    path-tree-recursive-wildcard-result:PATH_TREE_DENIED \
     path-tree-recursive-wildcard-stable-result:PATH_TREE_DENIED \
     path-tree-control-result:CONTROL_ALLOWED \
     concurrent-recursive-result:PATH_TREE_DENIED; do
