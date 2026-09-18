@@ -82,7 +82,7 @@ fn startup_role_is_isolated<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn readiness_role_is_isolated<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("readiness-isolation")?;

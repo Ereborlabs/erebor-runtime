@@ -1505,7 +1505,8 @@ setup, production actions, assertions, and focused test.
     entry-isolation policy family, FIFO readiness owner, and result fields.
   - [x] The exact Host case passed in 29.41 seconds. The existing startup case
     passed in 28.71 seconds with the expanded shared policy.
-  - [ ] Pass and commit direct `runc`.
+  - [x] The exact direct-`runc` case passed in 37.38 seconds. The existing
+    startup case passed in 36.80 seconds with the expanded shared policy.
   - [ ] Pass and commit Kubernetes.
   - [ ] Remove only the matching readiness loop action and compatibility gate
     after all three platform cases pass.
