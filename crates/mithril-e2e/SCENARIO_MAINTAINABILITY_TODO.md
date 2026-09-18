@@ -1517,7 +1517,7 @@ setup, production actions, assertions, and focused test.
   - [x] Keep the 72-line standard test below 100 lines. Reuse the shared actor,
     entry-isolation policy family, FIFO readiness owner, and result fields.
   - [x] The exact Host case passed in 30.79 seconds.
-  - [ ] Pass and commit direct `runc`.
+  - [x] The exact direct-`runc` case passed in 38.46 seconds.
   - [ ] Pass and commit Kubernetes.
   - [ ] Remove only the matching liveness loop action and compatibility gate
     after all three platform cases pass.
