@@ -1516,6 +1516,17 @@ test does not close a row when its physical condition or an assertion changed.
     VM run passed 26 Host tests and the direct-`runc` entry-role probe, then
     stopped at this stale assertion on 2026-09-17. Do not initialize the row
     in a test helper or change BPF behavior.
+    - [ ] Make the shared actor pause after it clones both trees with
+      `open_tree`. Require the activity sequence to increase and the mutation
+      epoch to stay unchanged before `move_mount` attaches either tree.
+    - [ ] Keep the existing attachment, dirty-view, rebuild, protected denial,
+      allowed control, and exact evidence assertions in the same platform
+      test. Keep the test file at or below its approved 150-line limit.
+    - [ ] Pass Host, direct `runc`, and Kubernetes. Commit each verified
+      platform separately.
+    - [ ] Remove the stale pre-policy counter read and its legacy result field
+      only after all three platform cases pass. Keep the prepared `MoveMount`
+      fail-closed case.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
