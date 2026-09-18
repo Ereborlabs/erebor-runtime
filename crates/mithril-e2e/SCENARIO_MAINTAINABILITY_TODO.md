@@ -1495,7 +1495,7 @@ test does not close a row when its physical condition or an assertion changed.
     rebuilds it. Require `EACCES` and `PATH_TREE_POLICY_DENY` for the protected
     attachment. Require the allowed read and its `EXACT_POLICY_ALLOW` evidence
     as the control. Do not add a Platform API. This specific test can contain
-    at most 150 lines. The implementation has 139 lines. The limit preserves
+    at most 150 lines. The implementation has 143 lines. The limit preserves
     the two-stage actor protocol, dirty-state proof, Node recovery, bounded
     readiness diagnostics, and explicit effect assertions.
     - [x] Pass Host and commit it. The exact test passed in 50.04 seconds. The
@@ -1528,7 +1528,8 @@ test does not close a row when its physical condition or an assertion changed.
       in 28.66, 27.90, and 28.24 seconds.
     - [x] Pass direct `runc` and commit it. The exact test passed in 52.42
       seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact test passed in 95.08
+      seconds.
     - [ ] Remove the stale pre-policy counter read and its legacy result field
       only after all three platform cases pass. Keep the prepared `MoveMount`
       fail-closed case.
