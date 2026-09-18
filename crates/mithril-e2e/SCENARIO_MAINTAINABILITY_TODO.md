@@ -1542,7 +1542,8 @@ test does not close a row when its physical condition or an assertion changed.
     read as the control, and task-attributed `PATH_TREE_POLICY_DENY` and
     `EXACT_POLICY_ALLOW` evidence. Do not add a Platform API. Keep the later
     concurrent recursive-read and stale-cache cases separate.
-    - [ ] Pass Host and commit it.
+    - [x] Pass Host and commit it. The exact test passed in 34.27 seconds. The
+      Rust test has 85 lines.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy initial wildcard actions and result
