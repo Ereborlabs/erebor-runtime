@@ -1486,6 +1486,20 @@ test does not close a row when its physical condition or an assertion changed.
       seconds.
     - [x] Remove only the matching legacy recursive-bind actions and result
       fields after all three platforms pass. The move-mount case stays.
+  - [ ] Replace the detached-tree attachment block with one actor-driven
+    platform test. After Node recovers the actor, the actor must clone the
+    protected and allowed trees with `open_tree` and attach them with
+    `move_mount`. Use the existing `SysAdmin` policy permission. Require both
+    attachments to succeed, the mutation epoch and activity sequence to
+    increase, and the global security view to become dirty before production
+    rebuilds it. Require `EACCES` and `PATH_TREE_POLICY_DENY` for the protected
+    attachment. Require the allowed read and its `EXACT_POLICY_ALLOW` evidence
+    as the control. Do not add a Platform API.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy move-mount actions, helper, and
+      result fields after all three platforms pass.
   - [ ] Replace the pre-policy `mount_global_mutation_epoch` read. The
     production policy owner creates this hash-map row during policy
     installation. The old probe reads it before policy installation. The full
