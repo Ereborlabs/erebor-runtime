@@ -27,6 +27,8 @@ mod lifetime_result;
 #[cfg(test)]
 mod lifetime_test;
 #[cfg(test)]
+mod mount_alias;
+#[cfg(test)]
 mod moved_exec;
 #[cfg(test)]
 mod namespace_init;
