@@ -531,10 +531,9 @@ if [[ $entry_role_runtime_only == true ]]; then
     .recursive_wildcard_stable_after_concurrent_exec and
     .stale_mount_cache_rebuilt and
     .unreachable_mount_cache_rows_collected and
-    .other_role_path_tree_allowed and
     .path_tree_control_allowed and
     .application_admitted_entry_rule_id > 0 and
-    (.independent_entries | length) == 5 and
+    (.independent_entries | length) == 4 and
     (.independent_entries | all(
       .active_role_id > 0 and
       .profile_generation_ref_id == 2 and

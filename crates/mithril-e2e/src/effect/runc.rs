@@ -242,7 +242,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub recursive_wildcard_stable_after_concurrent_exec: bool,
     pub stale_mount_cache_rebuilt: bool,
     pub unreachable_mount_cache_rows_collected: bool,
-    pub other_role_path_tree_allowed: bool,
     pub path_tree_control_allowed: bool,
     pub application_admitted_entry_rule_id: u32,
     pub independent_entries: Vec<RuncEntryRoleProbeV1>,
@@ -5586,13 +5585,11 @@ impl EffectTestRunner {
             }
         );
         let mut independent_entries = Vec::new();
-        let mut other_role_path_tree_allowed = false;
         let mut prestop_retained_during_runtime_inventory_omission = false;
         let application_control_host = role_directory.join("application.denied");
         for (name, declaration_name, executable) in [
             ("poststart", "poststart", "/bin/cp"),
             ("prestop", "prestop", "/bin/dd"),
-            ("startup", "startup", "/bin/cat"),
             ("readiness", "readiness", "/bin/grep"),
             ("liveness", "liveness", "/bin/wc"),
         ] {
@@ -5692,9 +5689,6 @@ impl EffectTestRunner {
                 path: &application_control_host,
             })?;
             let status = wait_for_child(&mut child)?;
-            if name == "startup" {
-                other_role_path_tree_allowed = status.success();
-            }
             let deny_pid_path = fixture_root.join(format!("{name}-deny.pid"));
             let deny_stdout = output_directory.join(format!("runc-entry-{name}-deny.stdout"));
             let deny_stderr = output_directory.join(format!("runc-entry-{name}-deny.stderr"));
@@ -5769,13 +5763,6 @@ impl EffectTestRunner {
                 application_policy_not_inherited: true,
             });
         }
-        ensure!(
-            other_role_path_tree_allowed,
-            InvalidInputSnafu {
-                path: &role_directory,
-                reason: "the application path-tree denial affected the startup role",
-            }
-        );
         let entry_literal_paths_enforced = application_literal_path_admission_enforced
             && independent_entries
                 .iter()
@@ -6443,7 +6430,6 @@ impl EffectTestRunner {
             recursive_wildcard_stable_after_concurrent_exec,
             stale_mount_cache_rebuilt,
             unreachable_mount_cache_rows_collected,
-            other_role_path_tree_allowed,
             path_tree_control_allowed: true,
             application_admitted_entry_rule_id: active.admitted_entry_rule_id,
             independent_entries,

@@ -1498,14 +1498,14 @@ setup, production actions, assertions, and focused test.
   node reconciliation calls and exact map absence checks visible.
 - [ ] Independent additional entries: keep each declaration, stock exec,
   role, rule, process state, and isolation assertion.
-- [ ] Startup entry policy isolation: use stock `cat`. Require the startup
+- [x] Startup entry policy isolation: use stock `cat`. Require the startup
   role to read a path tree denied to the application role, then deny its own
   exact file read with matching role, admission-rule, and kernel evidence.
   - [x] The exact Host case passed twice in 29.58 and 29.08 seconds.
   - [x] The exact direct-`runc` case passed in 36.44 seconds.
   - [x] The exact Kubernetes case passed in 69.11 seconds.
-  - [ ] Remove only the matching startup loop action and compatibility fields
-    after all three cases pass.
+  - [x] Removed only the matching startup loop action, result field, and shell
+    gate after all three platform cases passed.
 - [x] Reusable PostStart entry: use the existing
   `external_roots::concurrent_roots_stay_distinct` standard test. Start the
   same signed PostStart entry twice. Require different host PIDs, task
