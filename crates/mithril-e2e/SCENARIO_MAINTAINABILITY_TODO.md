@@ -1456,7 +1456,8 @@ test does not close a row when its physical condition or an assertion changed.
     protected alias. Require the allowed alias read and its
     `EXACT_POLICY_ALLOW` evidence as the control.
     - [x] Pass Host and commit it. The exact test passed in 28.82 seconds.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact test passed in 36.36
+      seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy actions and result field after all
       three platforms pass. Keep later recursive-bind and move-mount cases.
