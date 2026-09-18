@@ -687,6 +687,15 @@ count as maintainability migrations.
     Kubernetes workload-recovery case passed in 66.85 seconds with the actor
     image digest that `run.sh` specifies. This result does not close the
     remaining outage migrations.
+  - The current source at `309359c` passed all generated platform tests on
+    2026-09-18: 41 Host cases, 32 direct-`runc` cases, and 32 Kubernetes
+    cases. Reported test time was 608.97 seconds for Host, 470.69 seconds for
+    direct `runc`, and 1,165.07 seconds for Kubernetes. The
+    first Kubernetes identity run passed 22 of 23 cases. One actor Pod exited
+    with code 1 and empty logs. The same three-test transition passed on Host,
+    direct `runc`, and Kubernetes. The unchanged Kubernetes identity rerun
+    passed all 23 cases. The VM had no resource pressure. No code changed for
+    this transient failure.
 - [x] Make exact single-test cleanup and complete-lane cleanup bounded and
   diagnostic on all three platforms. Do not depend on process exit, VM
   deletion, or K3s deletion for normal cleanup.
