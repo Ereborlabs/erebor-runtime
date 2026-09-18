@@ -1651,7 +1651,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit it. The exact case passed in 33.57 seconds.
       The complete eight-case `mount_late_host` lifecycle passed in 99.91
       seconds.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact case passed in 37.59
+      seconds. The complete eight-case `mount_late_runc` lifecycle passed in
+      105.69 seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy open and the pre-existing and
       maximum-depth result fields after all three platform cases pass. Keep
