@@ -1546,7 +1546,8 @@ test does not close a row when its physical condition or an assertion changed.
       Rust test has 85 lines.
     - [x] Pass direct `runc` and commit it. The exact test passed in 33.19
       seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact test passed in 74.20
+      seconds.
     - [ ] Remove only the matching legacy initial wildcard actions and result
       fields after all three platform cases pass.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
