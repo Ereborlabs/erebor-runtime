@@ -120,15 +120,9 @@ fn moved_mount_keeps_policy<P: Platform>() -> TestResult<()> {
                 .collect::<Vec<_>>();
             *last.borrow_mut() = format!("{:?}", fresh.iter().rev().take(8));
             let matches = |reason: &str, result| {
-                fresh.iter().any(|event| {
-                    event.task_cookie == task.snapshot.task_cookie
-                        && event.reason == reason
-                        && event.effect_family == u32::from(F::File as u16)
-                        && event.operation == u32::from(O::OpenRead as u16)
-                        && event.active_role_id == task.snapshot.active_role_id
-                        && event.admitted_entry_rule_id == task.snapshot.admitted_entry_rule_id
-                        && event.kernel_result == result
-                })
+                fresh
+                    .iter()
+                    .any(|event| task.matches_effect(event, reason, F::File, O::OpenRead, result))
             };
             Ok((matches("PATH_TREE_POLICY_DENY", -libc::EACCES)
                 && matches("EXACT_POLICY_ALLOW", 0))

@@ -5,11 +5,11 @@ use std::time::Duration;
 use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{
     CreatedByEdgeV1, ExecutionApprovalSlotKeyV1, ExecutionApprovalSlotV1, Id128V1,
-    IdentityRuntimeConfigV1, PendingExecV1, ProcessExecutionInstanceV1, ProcessSecurityStateV1,
-    ReferenceTombstoneStateV1, TaskCoordinateStateV1, TaskCoordinateV1, TaskReferenceTombstoneV1,
-    TASK_REFERENCE_ALL_V1,
+    IdentityRuntimeConfigV1, KernelEffectFamilyV1, KernelEffectOperationV1, PendingExecV1,
+    ProcessExecutionInstanceV1, ProcessSecurityStateV1, ReferenceTombstoneStateV1,
+    TaskCoordinateStateV1, TaskCoordinateV1, TaskReferenceTombstoneV1, TASK_REFERENCE_ALL_V1,
 };
-use erebor_runtime_ipc::v1::MithrilObservationSnapshot;
+use erebor_runtime_ipc::v1::{MithrilEffectObservation, MithrilObservationSnapshot};
 use mithril_node::{NativeTaskSnapshotV1, ReconciliationReportV1};
 use snafu::ResultExt as _;
 use zerocopy::{IntoBytes as _, KnownLayout, TryFromBytes};
@@ -69,6 +69,25 @@ pub(crate) struct Task {
     pub(crate) ns_pid: u32,
     pub(crate) snapshot: NativeTaskSnapshotV1,
     pub(crate) coordinate: TaskCoordinateV1,
+}
+
+impl Task {
+    pub(crate) fn matches_effect(
+        &self,
+        event: &MithrilEffectObservation,
+        reason: &str,
+        family: KernelEffectFamilyV1,
+        operation: KernelEffectOperationV1,
+        result: i32,
+    ) -> bool {
+        event.task_cookie == self.snapshot.task_cookie
+            && event.reason == reason
+            && event.effect_family == u32::from(family as u16)
+            && event.operation == u32::from(operation as u16)
+            && event.active_role_id == self.snapshot.active_role_id
+            && event.admitted_entry_rule_id == self.snapshot.admitted_entry_rule_id
+            && event.kernel_result == result
+    }
 }
 
 pub(crate) struct Thread {

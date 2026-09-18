@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::BTreeSet, time::Duration};
 
-use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
+use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
 
 use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
@@ -38,8 +38,6 @@ fn wildcards_keep_policy<P: Platform>() -> TestResult<()> {
     assert_eq!(result["recursive"], libc::EACCES);
     assert_eq!(result["allowed"], "allowed control\n");
 
-    let file = u32::from(KernelEffectFamilyV1::File as u16);
-    let read = u32::from(KernelEffectOperationV1::OpenRead as u16);
     let path = env.maps().0.to_owned();
     let last = RefCell::new(String::from("<none>"));
     wait_for(
@@ -64,13 +62,7 @@ fn wildcards_keep_policy<P: Platform>() -> TestResult<()> {
                 fresh
                     .iter()
                     .filter(|event| {
-                        event.task_cookie == task.snapshot.task_cookie
-                            && event.reason == reason
-                            && event.effect_family == file
-                            && event.operation == read
-                            && event.active_role_id == task.snapshot.active_role_id
-                            && event.admitted_entry_rule_id == task.snapshot.admitted_entry_rule_id
-                            && event.kernel_result == result
+                        task.matches_effect(event, reason, F::File, O::OpenRead, result)
                     })
                     .count()
             };

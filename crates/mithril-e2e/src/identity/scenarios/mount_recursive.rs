@@ -74,13 +74,13 @@ fn recursive_bind_keeps_policy<P: Platform>() -> TestResult<()> {
             *last.borrow_mut() = format!("{:?}", fresh.iter().rev().take(8));
             let matches = |reason: &str, result| {
                 fresh.iter().any(|event| {
-                    event.task_cookie == task.snapshot.task_cookie
-                        && event.reason == reason
-                        && event.effect_family == u32::from(KernelEffectFamilyV1::File as u16)
-                        && event.operation == u32::from(KernelEffectOperationV1::OpenRead as u16)
-                        && event.active_role_id == task.snapshot.active_role_id
-                        && event.admitted_entry_rule_id == task.snapshot.admitted_entry_rule_id
-                        && event.kernel_result == result
+                    task.matches_effect(
+                        event,
+                        reason,
+                        KernelEffectFamilyV1::File,
+                        KernelEffectOperationV1::OpenRead,
+                        result,
+                    )
                 })
             };
             Ok((matches("PATH_TREE_POLICY_DENY", -libc::EACCES)

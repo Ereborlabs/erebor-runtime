@@ -725,13 +725,19 @@ count as maintainability migrations.
   Reuse it for production Control and Node connections.
 - [x] Keep one synchronous readiness function with an exact timeout, resource
   path, operation name, and caller-supplied last-state diagnostic.
-- [ ] Put the repeated effect-attribution comparison on the existing `Task`
+- [x] Put the repeated effect-attribution comparison on the existing `Task`
   owner. Compare the task cookie, active role, admitted entry rule, reason,
   effect family, operation, and kernel result. Do not hide snapshot reads,
   readiness waits, event counts, or scenario assertions in this method.
   Replace the duplicate comparison in `mount_alias`, `mount_late`,
   `mount_recursive`, `mount_move`, and `path_wildcards`. Pass the affected
   Host, direct-`runc`, and Kubernetes mount lifecycles before commit.
+  The mount-alias lifecycle passed one Host case in 33.24 seconds and one
+  direct-`runc` case in 34.94 seconds. The mount-late lifecycle passed four
+  Host cases in 75.08 seconds, four direct-`runc` cases in 75.96 seconds, and
+  four Kubernetes cases in 165.15 seconds. The Kubernetes mount-alias case
+  also passed. The 92 non-privileged library tests and strict crate Clippy
+  pass.
 - [x] Make `ProcessFixture` own spawn readiness, stdin actions, bounded exit
   diagnostics, explicit stop, and idempotent drop cleanup.
 - [x] Keep actor selection outside `ProcessFixture`. The scenario gives
