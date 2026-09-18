@@ -1501,7 +1501,8 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit it. The exact test passed in 50.04 seconds. The
       preexisting-bind, late-bind, and recursive-bind Host regression tests
       passed in 28.41, 28.37, and 28.17 seconds.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact test passed in 63.05
+      seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy move-mount actions, helper, and
       result fields after all three platforms pass.
