@@ -681,6 +681,12 @@ count as maintainability migrations.
   - Keep `workload_recovery`, `recovery_tasks`, and `external_roots` separate.
     Each starts its actor before Node and must not inherit an already-running
     identity Node.
+  - The current source at `bc0af1fa` passed all generated platform tests on
+    2026-09-18: 39 Host cases, 30 direct-`runc` cases, and 30 Kubernetes
+    cases. The run used one process for each lifecycle and platform. The final
+    Kubernetes workload-recovery case passed in 66.85 seconds with the actor
+    image digest that `run.sh` specifies. This result does not close the
+    remaining outage migrations.
 - [x] Make exact single-test cleanup and complete-lane cleanup bounded and
   diagnostic on all three platforms. Do not depend on process exit, VM
   deletion, or K3s deletion for normal cleanup.
