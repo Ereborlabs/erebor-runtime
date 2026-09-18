@@ -1574,6 +1574,20 @@ test does not close a row when its physical condition or an assertion changed.
       fields after all three platform cases pass. Keep the concurrent recursive
       read and stable-after-exec checks. The 92 non-privileged library tests,
       package clippy, formatting, shell syntax, and whitespace checks pass.
+  - [ ] Replace the child-created-after-activation block with one actor-driven
+    platform test. Reuse the wildcard actor and signed policy. Create the
+    parent tree before policy activation. After Node recovers the actor, make
+    the actor create one child under `/work/wildcard/srv/**/secrets`, then open
+    that child. Require successful creation, `EACCES`, and task-attributed
+    `PATH_TREE_POLICY_DENY` evidence. Require the existing allowed file read
+    and its `EXACT_POLICY_ALLOW` evidence as the control. Do not add a Platform
+    API.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy action and result field after all
+      three platform cases pass. Keep the pre-existing, maximum-depth, future
+      namespace, denied-create, replacement-child, and allowed-control cases.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
