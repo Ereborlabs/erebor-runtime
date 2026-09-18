@@ -1486,7 +1486,7 @@ test does not close a row when its physical condition or an assertion changed.
       seconds.
     - [x] Remove only the matching legacy recursive-bind actions and result
       fields after all three platforms pass. The move-mount case stays.
-  - [ ] Replace the detached-tree attachment block with one actor-driven
+  - [x] Replace the detached-tree attachment block with one actor-driven
     platform test. After Node recovers the actor, the actor must clone the
     protected and allowed trees with `open_tree` and attach them with
     `move_mount`. Use the existing `SysAdmin` policy permission. Require both
@@ -1505,8 +1505,11 @@ test does not close a row when its physical condition or an assertion changed.
       seconds.
     - [x] Pass Kubernetes and commit it. The exact test passed in 96.96
       seconds.
-    - [ ] Remove only the matching legacy move-mount actions, helper, and
-      result fields after all three platforms pass.
+    - [x] Remove only the matching legacy move-mount actions, helper, and
+      result fields after all three platforms pass. The prepared `MoveMount`
+      fail-closed case and detached `open_tree` activity assertion remain.
+      All Mithril E2E targets compile. The 92 non-privileged library tests,
+      package clippy, formatting, and whitespace checks pass.
   - [ ] Replace the pre-policy `mount_global_mutation_epoch` read. The
     production policy owner creates this hash-map row during policy
     installation. The old probe reads it before policy installation. The full

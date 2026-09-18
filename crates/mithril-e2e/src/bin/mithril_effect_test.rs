@@ -23,8 +23,7 @@ use containerd_client::types::{
 };
 use containerd_client::with_namespace;
 use mithril_e2e::{
-    run_effect_child, run_mount_move_child, run_mount_reconfigure_child, run_mount_setattr_child,
-    EffectTestRunner,
+    run_effect_child, run_mount_reconfigure_child, run_mount_setattr_child, EffectTestRunner,
 };
 use prost::Message as _;
 use prost_types::Any as ProtobufAny;
@@ -158,8 +157,6 @@ enum Command {
         #[arg(long)]
         path: PathBuf,
     },
-    #[command(hide = true)]
-    MountMove { source: PathBuf, target: PathBuf },
     #[command(hide = true)]
     OciStageFixture {
         #[arg(long)]
@@ -1024,7 +1021,6 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
         Command::MountReconfigure { namespace, path } => {
             Ok(run_mount_reconfigure_child(&namespace, &path)?)
         }
-        Command::MountMove { source, target } => Ok(run_mount_move_child(&source, &target)?),
         Command::OciStageFixture {
             stage,
             request_directory,

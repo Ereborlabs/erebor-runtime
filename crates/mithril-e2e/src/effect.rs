@@ -55,9 +55,7 @@ use crate::physical::{boot_identity, ProbeCgroup, ProbeDirectory, ProbeFile};
 use crate::LatencyDistributionV1;
 use crate::Result;
 
-pub use child::{
-    run_effect_child, run_mount_move_child, run_mount_reconfigure_child, run_mount_setattr_child,
-};
+pub use child::{run_effect_child, run_mount_reconfigure_child, run_mount_setattr_child};
 pub use network::{
     run_network_peer_server, NetworkFixtureResultV1, NetworkPeerServerResultV1,
     NetworkPeerTargetV1, NetworkPhysicalProbeBundleV1, NetworkTestRunner, NETWORK_PEER_DENIED_PORT,
@@ -482,10 +480,7 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub path_tree_later_child_denied: bool,
     pub path_tree_replacement_child_denied: bool,
     pub path_tree_outside_control_allowed: bool,
-    pub path_tree_move_mount_alias_denied: bool,
-    pub allowed_move_mount_alias_allowed: bool,
     pub detached_open_tree_activity_observed: bool,
-    pub move_mount_attachment_invalidated_security_view: bool,
     pub fsconfig_reconfigure_global_invalidation: bool,
     pub protected_mount_race_denied: bool,
     pub mount_snapshot_rebuilt_after_mutation: bool,
@@ -1602,13 +1597,10 @@ impl EffectTestRunner {
         let path_tree_actor_create = path_tree_root.join("actor-created");
         let path_tree_preexisting_bind_target =
             fixture_root.join("path-tree-preexisting-bind-alias");
-        let path_tree_move_mount_target = fixture_root.join("path-tree-move-mount-alias");
         let allowed_bind_source = fixture_root.join("allowed-bind-source");
         let allowed_bind_source_file = allowed_bind_source.join("allowed");
         let allowed_bind_target = fixture_root.join("allowed-bind-alias");
         let allowed_bind_alias = allowed_bind_target.join("allowed");
-        let allowed_move_mount_target = fixture_root.join("allowed-move-mount-alias");
-        let allowed_move_mount_alias = allowed_move_mount_target.join("allowed");
         fs::create_dir_all(&path_tree_root).context(IoSnafu {
             path: &path_tree_root,
         })?;
@@ -1618,12 +1610,7 @@ impl EffectTestRunner {
         fs::write(&allowed_bind_source_file, b"allowed bind source\n").context(IoSnafu {
             path: &allowed_bind_source_file,
         })?;
-        for target in [
-            &path_tree_preexisting_bind_target,
-            &path_tree_move_mount_target,
-            &allowed_bind_target,
-            &allowed_move_mount_target,
-        ] {
+        for target in [&path_tree_preexisting_bind_target, &allowed_bind_target] {
             fs::create_dir(target).context(IoSnafu { path: target })?;
         }
         ensure!(
@@ -2037,9 +2024,6 @@ impl EffectTestRunner {
 
         let mut path_tree_future_namespace_denied = false;
         let mut path_tree_meta_depth_denied = false;
-        let mut path_tree_move_mount_alias_denied = false;
-        let mut allowed_move_mount_alias_allowed = false;
-        let mut move_mount_attachment_invalidated_security_view = false;
         if protect {
             let future_fixture_root = fixture_root.join("future-mount-namespace");
             fs::create_dir(&future_fixture_root).context(IoSnafu {
@@ -4122,70 +4106,6 @@ impl EffectTestRunner {
         external_mount_namespace.unmount(&allowed_bind_target)?;
         reconcile_policy_lifecycle(&policy, &mut host)?;
 
-        if protect {
-            let move_mount_epoch = global_mount_mutation_epoch(&host)?;
-            let move_mount_activity = global_mount_activity_sequence(&host)?;
-            external_mount_namespace.move_mount(&path_tree_root, &path_tree_move_mount_target)?;
-            external_mount_namespace
-                .move_mount(&allowed_bind_source, &allowed_move_mount_target)?;
-            move_mount_attachment_invalidated_security_view = global_mount_mutation_epoch(&host)?
-                > move_mount_epoch
-                && global_mount_activity_sequence(&host)? > move_mount_activity
-                && global_mount_view_is_dirty(&host)?;
-            ensure!(
-                move_mount_attachment_invalidated_security_view,
-                InvalidInputSnafu {
-                    path: &path_tree_move_mount_target,
-                    reason: "move_mount attachment did not dirty the represented security view",
-                }
-            );
-            reconcile_policy_lifecycle(&policy, &mut host)?;
-
-            let protected_move_child = path_tree_move_mount_target.join("pre-existing");
-            let protected_move_marker = observations.cursor();
-            ensure!(
-                fixture.open(&protected_move_child)?.denied(),
-                InvalidInputSnafu {
-                    path: &protected_move_child,
-                    reason: "a successful move_mount attachment exposed a protected child",
-                }
-            );
-            wait_for_path_tree_effect(
-                &reader,
-                &observations,
-                protected_move_marker,
-                &protected_move_child,
-                KernelEffectOperationV1::OpenRead,
-            )?;
-            path_tree_move_mount_alias_denied = true;
-
-            let allowed_move_marker = observations.cursor();
-            ensure!(
-                fixture.open(&allowed_move_mount_alias)?.allowed,
-                InvalidInputSnafu {
-                    path: &allowed_move_mount_alias,
-                    reason: "the allowed move_mount alias was denied",
-                }
-            );
-            wait_for_exact_effect(
-                &reader,
-                &observations,
-                allowed_move_marker,
-                "EXACT_POLICY_ALLOW",
-                (
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::OpenRead,
-                ),
-                PathSelectorV1::kernel_handle_for_id("manual-benign-bind"),
-                None,
-            )?;
-            allowed_move_mount_alias_allowed = true;
-
-            external_mount_namespace.unmount(&path_tree_move_mount_target)?;
-            external_mount_namespace.unmount(&allowed_move_mount_target)?;
-            reconcile_policy_lifecycle(&policy, &mut host)?;
-        }
-
         ensure!(
             fixture.propagation_peer_open()?.allowed,
             InvalidInputSnafu {
@@ -4673,10 +4593,7 @@ impl EffectTestRunner {
             path_tree_later_child_denied: protect,
             path_tree_replacement_child_denied: protect,
             path_tree_outside_control_allowed: protect,
-            path_tree_move_mount_alias_denied,
-            allowed_move_mount_alias_allowed,
             detached_open_tree_activity_observed,
-            move_mount_attachment_invalidated_security_view,
             fsconfig_reconfigure_global_invalidation,
             protected_mount_race_denied: true,
             mount_snapshot_rebuilt_after_mutation: true,

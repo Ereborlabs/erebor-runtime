@@ -30,12 +30,11 @@ pub use closure::ClosureLedgerV1;
 pub use digest::DigestV1;
 pub use effect::run_network_peer_server;
 pub use effect::{
-    run_effect_child, run_mount_move_child, run_mount_reconfigure_child, run_mount_setattr_child,
-    EffectHealthV1, EffectPhysicalProbeBundleV1, EffectTestRunner,
-    HfStaticEffectClassificationCaseV1, HfStaticEffectClassificationV1,
-    LocalEnforcementFixtureResultV1, NetworkFixtureResultV1, NetworkPeerServerResultV1,
-    NetworkPeerTargetV1, NetworkPhysicalProbeBundleV1, NetworkTestRunner,
-    RecoveredContainerEntryProbeV1, ReplacementGenerationExceptionProbeV1,
+    run_effect_child, run_mount_reconfigure_child, run_mount_setattr_child, EffectHealthV1,
+    EffectPhysicalProbeBundleV1, EffectTestRunner, HfStaticEffectClassificationCaseV1,
+    HfStaticEffectClassificationV1, LocalEnforcementFixtureResultV1, NetworkFixtureResultV1,
+    NetworkPeerServerResultV1, NetworkPeerTargetV1, NetworkPhysicalProbeBundleV1,
+    NetworkTestRunner, RecoveredContainerEntryProbeV1, ReplacementGenerationExceptionProbeV1,
     RuncEntryRoleRuntimeProbeV1, RuncRetainedRuntimeGateProbeV1, NETWORK_PEER_DENIED_PORT,
     NETWORK_PEER_TCP_PORT, NETWORK_PEER_UDP_PORT,
 };
