@@ -1614,6 +1614,19 @@ test does not close a row when its physical condition or an assertion changed.
       pre-existing, maximum-depth, future-namespace, denied-create, and
       allowed-control cases. The 92 non-privileged library tests and strict
       crate Clippy pass.
+  - [ ] Replace the denied-create block with one actor-driven platform test.
+    Reuse the wildcard actor and signed policy. Create the protected parent
+    before policy activation. After Node recovers the actor, make it create
+    one child in that protected tree. Require `EACCES`, require that the child
+    does not exist, and require task-attributed `PATH_TREE_POLICY_DENY`
+    evidence for `Create`. Require the existing allowed file read and its
+    `EXACT_POLICY_ALLOW` evidence as the control. Do not add a Platform API.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy denied-create action after all
+      three platform cases pass. Keep the pre-existing, maximum-depth,
+      future-namespace, and allowed-control cases.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
