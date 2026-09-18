@@ -34,6 +34,9 @@ with open(os.path.join(secret, "blocked"), "w", encoding="utf-8") as output:
     output.write("restricted bind source\n")
 with open(os.path.join(allowed, "open"), "w", encoding="utf-8") as output:
     output.write("allowed bind source\n")
+result_path = os.path.join(sys.argv[1], "mount-result.json")
+with open(result_path, "w", encoding="utf-8"):
+    pass
 
 check(libc.unshare(CLONE_NEWNS))
 check(libc.mount(None, b"/", None, MS_REC | MS_PRIVATE, None))
@@ -53,4 +56,5 @@ try:
         value = source.read()
 except OSError as error:
     value = f"errno:{error.errno}"
-print(json.dumps({"denied": denied, "allowed": value}), file=sys.stderr, flush=True)
+with open(result_path, "r+", encoding="utf-8") as output:
+    json.dump({"denied": denied, "allowed": value}, output)

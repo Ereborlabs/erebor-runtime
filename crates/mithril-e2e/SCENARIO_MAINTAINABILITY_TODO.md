@@ -1445,7 +1445,8 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit it. The exact test passed in 28.92 seconds.
     - [x] Pass direct `runc` and commit it. The exact test passed in 35.96
       seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact test passed in 73.88
+      seconds.
     - [ ] Remove the matching legacy actions, result fields, and shell checks
       only after all three platforms pass.
   - [ ] Replace the pre-policy `mount_global_mutation_epoch` read. The

@@ -8,7 +8,7 @@ use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = mount_alias]
 fn preexisting_bind_keeps_policy<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("mount-alias")?;
@@ -41,7 +41,8 @@ fn preexisting_bind_keeps_policy<P: Platform>() -> TestResult<()> {
     let status = actor.wait_exit("bind alias reads", Duration::from_secs(5))?;
     let stderr = actor.stderr()?;
     assert!(status.success(), "{status}; stderr: {stderr:?}");
-    let result: serde_json::Value = serde_json::from_str(stderr.trim())?;
+    let result: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(env.work().join("mount-result.json"))?)?;
     assert_eq!(result["denied"], libc::EACCES);
     assert_eq!(result["allowed"], "allowed bind source\n");
 
