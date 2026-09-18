@@ -1584,7 +1584,8 @@ test does not close a row when its physical condition or an assertion changed.
     API.
     - [x] Pass Host and commit it. The exact case passed in 33.29 seconds.
       The unchanged wildcard case passed in 29.17 seconds.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact case passed in 40.02
+      seconds. The unchanged wildcard case passed in 30.74 seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy action and result field after all
       three platform cases pass. Keep the pre-existing, maximum-depth, future
