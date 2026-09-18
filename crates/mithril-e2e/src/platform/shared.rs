@@ -849,13 +849,7 @@ impl Shared {
             }),
         };
         target.workload_binding_generation_digest = workload_target_fact_digest(&target)?;
-        ensure!(
-            plane.replace_kubernetes_workload_inventory(vec![target.clone()])?,
-            InvalidInputSnafu {
-                path: &path,
-                reason: "Control did not accept the PID-reuse workload inventory",
-            }
-        );
+        plane.replace_kubernetes_workload_inventory(vec![target.clone()])?;
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
         let policy = self
             .policy

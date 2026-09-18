@@ -650,6 +650,11 @@ count as maintainability migrations.
     on 2026-09-16.
   - The current filtered lifecycle passed 17 tests in 222.98 seconds on
     2026-09-16.
+- [x] Accept an unchanged Control workload inventory during an explicit
+  repeated policy sync. Control returns `false` when the valid inventory did
+  not change. The shared platform must still reconcile the policy. The
+  two-test mount lifecycle passed Host in 36.26 seconds, direct `runc` in 49.79
+  seconds, and Kubernetes in 98.18 seconds.
 - [x] Share one Helm Control Deployment, one Node DaemonSet, and one runtime
   integration installation across the serial Kubernetes platform lane. Keep
   each workload namespace, policy instance, actor Pod, runtime identity,
