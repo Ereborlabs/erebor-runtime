@@ -1582,7 +1582,8 @@ test does not close a row when its physical condition or an assertion changed.
     `PATH_TREE_POLICY_DENY` evidence. Require the existing allowed file read
     and its `EXACT_POLICY_ALLOW` evidence as the control. Do not add a Platform
     API.
-    - [ ] Pass Host and commit it.
+    - [x] Pass Host and commit it. The exact case passed in 33.29 seconds.
+      The unchanged wildcard case passed in 29.17 seconds.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy action and result field after all

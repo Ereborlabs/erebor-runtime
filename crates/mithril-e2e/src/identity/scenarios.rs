@@ -43,6 +43,8 @@ mod non_leader_exec;
 #[cfg(test)]
 mod orphan;
 #[cfg(test)]
+mod path_later;
+#[cfg(test)]
 mod path_wildcards;
 #[cfg(test)]
 mod policy_replace;
