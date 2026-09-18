@@ -63,6 +63,11 @@
             "name": "deny-nested-secrets",
             "path": "/work/wildcard/srv/**/secrets",
             "operations": ["OpenRead"]
+          },
+          {
+            "name": "deny-created-child",
+            "path": "/work/wildcard/create-denied",
+            "operations": ["Create"]
           }
         ],
         "execution": [
@@ -107,4 +112,3 @@
     "exceptionGrants": []
   }
 }
-

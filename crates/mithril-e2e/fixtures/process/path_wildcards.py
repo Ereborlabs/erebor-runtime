@@ -5,7 +5,7 @@ import sys
 
 if len(sys.argv) == 2:
     mode = "wildcards"
-elif len(sys.argv) == 3 and sys.argv[2] in ("late", "replace"):
+elif len(sys.argv) == 3 and sys.argv[2] in ("late", "replace", "deny-create"):
     mode = sys.argv[2]
 else:
     sys.exit(2)
@@ -22,14 +22,19 @@ elif mode == "late":
         "late": os.path.join(root, "srv/team/green/secrets/created-after"),
         "allowed": os.path.join(root, "allowed/open"),
     }
-else:
+elif mode == "replace":
     paths = {
         "replacement": os.path.join(root, "srv/team/red/secrets/replacement"),
         "allowed": os.path.join(root, "allowed/open"),
     }
+else:
+    paths = {
+        "create": os.path.join(root, "create-denied/actor-created"),
+        "allowed": os.path.join(root, "allowed/open"),
+    }
 for name, path in paths.items():
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    if mode == "late" and name == "late":
+    if (mode, name) in (("late", "late"), ("deny-create", "create")):
         continue
     with open(path, "w", encoding="utf-8") as output:
         output.write("allowed control\n" if path == paths["allowed"] else "secret\n")
@@ -39,6 +44,7 @@ command = {
     "wildcards": "read\n",
     "late": "create-read\n",
     "replace": "replace-read\n",
+    "deny-create": "create\n",
 }[mode]
 if sys.stdin.readline() != command:
     sys.exit(2)
@@ -68,7 +74,16 @@ elif mode == "replace":
         result["created"] = True
     except OSError as error:
         result["created"] = error.errno
+elif mode == "deny-create":
+    try:
+        with open(paths["create"], "w", encoding="utf-8") as output:
+            output.write("forbidden child\n")
+        result["created"] = True
+    except OSError as error:
+        result["created"] = error.errno
 for name, path in paths.items():
+    if mode == "deny-create" and name == "create":
+        continue
     try:
         with open(path, encoding="utf-8") as source:
             result[name] = source.read()

@@ -1621,7 +1621,9 @@ test does not close a row when its physical condition or an assertion changed.
     does not exist, and require task-attributed `PATH_TREE_POLICY_DENY`
     evidence for `Create`. Require the existing allowed file read and its
     `EXACT_POLICY_ALLOW` evidence as the control. Do not add a Platform API.
-    - [ ] Pass Host and commit it.
+    - [x] Pass Host and commit it. The exact case passed in 34.05 seconds.
+      The unchanged later-child, replacement-child, and wildcard cases passed
+      in 29.38, 33.65, and 28.56 seconds.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy denied-create action after all
