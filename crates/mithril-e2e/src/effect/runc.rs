@@ -5590,7 +5590,6 @@ impl EffectTestRunner {
         for (name, declaration_name, executable) in [
             ("poststart", "poststart", "/bin/cp"),
             ("prestop", "prestop", "/bin/dd"),
-            ("readiness", "readiness", "/bin/grep"),
             ("liveness", "liveness", "/bin/wc"),
         ] {
             if name == "prestop" {
@@ -5631,9 +5630,8 @@ impl EffectTestRunner {
                     "/home/alice/secrets/models/secret".to_owned(),
                     application_control.to_owned(),
                 ],
-                "/bin/grep" => vec!["application".to_owned(), application_control.to_owned()],
                 "/bin/wc" => vec![application_control.to_owned()],
-                _ => unreachable!("the entry fixture has one of five BusyBox applets"),
+                _ => unreachable!("the entry fixture has one of four BusyBox applets"),
             };
             let control_argument_refs = control_arguments
                 .iter()
@@ -5698,9 +5696,8 @@ impl EffectTestRunner {
                 "/bin/cp" => vec![denied_path.clone(), deny_output.clone()],
                 "/bin/dd" => vec![format!("if={denied_path}"), format!("of={deny_output}")],
                 "/bin/cat" => vec![denied_path.clone()],
-                "/bin/grep" => vec!["denied".to_owned(), denied_path.clone()],
                 "/bin/wc" => vec![denied_path.clone()],
-                _ => unreachable!("the entry fixture has one of five BusyBox applets"),
+                _ => unreachable!("the entry fixture has one of four BusyBox applets"),
             };
             let deny_argument_refs = deny_arguments
                 .iter()

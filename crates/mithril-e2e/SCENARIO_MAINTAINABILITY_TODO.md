@@ -1498,7 +1498,7 @@ setup, production actions, assertions, and focused test.
   node reconciliation calls and exact map absence checks visible.
 - [ ] Independent additional entries: keep each declaration, stock exec,
   role, rule, process state, and isolation assertion.
-- [ ] Readiness entry policy isolation: use stock `grep`. Require the
+- [x] Readiness entry policy isolation: use stock `grep`. Require the
   readiness role to read the application-denied file, then deny its own exact
   file read with matching role, admission-rule, and kernel evidence.
   - [x] Keep the 73-line standard test below 100 lines. Reuse the shared actor,
@@ -1509,7 +1509,7 @@ setup, production actions, assertions, and focused test.
     startup case passed in 36.80 seconds with the expanded shared policy.
   - [x] The exact Kubernetes case passed in 72.08 seconds. The existing
     startup case passed in 71.84 seconds with the expanded shared policy.
-  - [ ] Remove only the matching readiness loop action and compatibility gate
+  - [x] Remove only the matching readiness loop action and compatibility gate
     after all three platform cases pass.
 - [x] Startup entry policy isolation: use stock `cat`. Require the startup
   role to read a path tree denied to the application role, then deny its own

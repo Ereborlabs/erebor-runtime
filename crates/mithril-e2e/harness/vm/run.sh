@@ -533,7 +533,7 @@ if [[ $entry_role_runtime_only == true ]]; then
     .unreachable_mount_cache_rows_collected and
     .path_tree_control_allowed and
     .application_admitted_entry_rule_id > 0 and
-    (.independent_entries | length) == 4 and
+    (.independent_entries | length) == 3 and
     (.independent_entries | all(
       .active_role_id > 0 and
       .profile_generation_ref_id == 2 and
