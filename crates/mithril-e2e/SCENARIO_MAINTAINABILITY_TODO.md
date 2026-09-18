@@ -1678,7 +1678,8 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The corrected recovery-order case
       passed in 35.82 seconds. The unchanged pre-existing bind case passed in
       30.41 seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact case passed in 87.71
+      seconds. The unchanged pre-existing bind case passed in 77.40 seconds.
     - [ ] Remove only the matching legacy future fixture, action, and result
       field after all three platform cases pass. Keep the shared deep path,
       external-alias, and mount-race setup.
