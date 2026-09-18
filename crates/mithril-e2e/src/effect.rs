@@ -1589,7 +1589,6 @@ impl EffectTestRunner {
         let mut fixture = EffectProcessFixture::start(&fixture_root)?;
         let paths = fixture.setup()?;
         let path_tree_preexisting = path_tree_root.join("pre-existing");
-        let path_tree_actor_create = path_tree_root.join("actor-created");
         let path_tree_preexisting_bind_target =
             fixture_root.join("path-tree-preexisting-bind-alias");
         let allowed_bind_source = fixture_root.join("allowed-bind-source");
@@ -2075,27 +2074,6 @@ impl EffectTestRunner {
                 KernelEffectOperationV1::OpenRead,
             )?;
             path_tree_meta_depth_denied = true;
-
-            let create_marker = observations.cursor();
-            ensure!(
-                fixture
-                    .run_prepared(HardClosedOperation::Create {
-                        path: path_tree_actor_create.clone(),
-                    })?
-                    .denied()
-                    && !path_tree_actor_create.exists(),
-                InvalidInputSnafu {
-                    path: &path_tree_actor_create,
-                    reason: "a managed create produced a child in the protected tree",
-                }
-            );
-            wait_for_path_tree_effect(
-                &reader,
-                &observations,
-                create_marker,
-                &path_tree_actor_create,
-                KernelEffectOperationV1::Create,
-            )?;
 
             let outside_marker = observations.cursor();
             ensure!(
