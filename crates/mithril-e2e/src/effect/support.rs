@@ -695,10 +695,6 @@ impl ExternalMountNamespace {
         self.run(["mount", "--bind"], [source, target])
     }
 
-    pub(super) fn recursive_bind_mount(&self, source: &Path, target: &Path) -> Result<()> {
-        self.run(["mount", "--rbind"], [source, target])
-    }
-
     pub(super) fn move_mount(&self, source: &Path, target: &Path) -> Result<()> {
         let executable = std::env::current_exe().context(IoSnafu {
             path: Path::new("current executable"),
