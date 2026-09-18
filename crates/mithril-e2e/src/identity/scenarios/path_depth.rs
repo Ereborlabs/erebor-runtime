@@ -8,7 +8,7 @@ use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = mount_late]
 fn maximum_depth_child_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("path-depth")?;

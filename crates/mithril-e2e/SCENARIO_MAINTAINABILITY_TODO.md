@@ -1654,7 +1654,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The exact case passed in 37.59
       seconds. The complete eight-case `mount_late_runc` lifecycle passed in
       105.69 seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact case passed in 83.44
+      seconds. The complete eight-case `mount_late_kubernetes` lifecycle
+      passed in 248.38 seconds.
     - [ ] Remove only the matching legacy open and the pre-existing and
       maximum-depth result fields after all three platform cases pass. Keep
       the deep fixture until the future-mount-namespace case has its own
