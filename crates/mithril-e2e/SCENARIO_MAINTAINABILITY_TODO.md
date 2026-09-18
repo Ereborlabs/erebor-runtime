@@ -1449,6 +1449,17 @@ test does not close a row when its physical condition or an assertion changed.
       seconds.
     - [x] Remove the matching legacy actions and result fields after all three
       platforms pass. No shell check consumed these fields.
+  - [ ] Replace the post-activation bind-alias block with one actor-driven
+    platform test. Start Control and the actor, then install the policy and
+    start Node. After Node recovers the actor, the actor must create the
+    protected bind mount. Require `EACCES` and `PATH_TREE_POLICY_DENY` for the
+    protected alias. Require the allowed alias read and its
+    `EXACT_POLICY_ALLOW` evidence as the control.
+    - [x] Pass Host and commit it. The exact test passed in 28.82 seconds.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy actions and result field after all
+      three platforms pass. Keep later recursive-bind and move-mount cases.
   - [ ] Replace the pre-policy `mount_global_mutation_epoch` read. The
     production policy owner creates this hash-map row during policy
     installation. The old probe reads it before policy installation. The full

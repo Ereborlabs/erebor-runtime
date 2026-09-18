@@ -69,6 +69,13 @@
             "action": "Allow"
           }
         ],
+        "capabilities": [
+          {
+            "name": "allow-sys-admin",
+            "capabilities": ["SysAdmin"],
+            "action": "Allow"
+          }
+        ],
         "network": {
           "socketControls": [],
           "destinations": []
