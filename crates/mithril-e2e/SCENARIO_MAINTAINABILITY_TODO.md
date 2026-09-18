@@ -725,6 +725,13 @@ count as maintainability migrations.
   Reuse it for production Control and Node connections.
 - [x] Keep one synchronous readiness function with an exact timeout, resource
   path, operation name, and caller-supplied last-state diagnostic.
+- [ ] Put the repeated effect-attribution comparison on the existing `Task`
+  owner. Compare the task cookie, active role, admitted entry rule, reason,
+  effect family, operation, and kernel result. Do not hide snapshot reads,
+  readiness waits, event counts, or scenario assertions in this method.
+  Replace the duplicate comparison in `mount_alias`, `mount_late`,
+  `mount_recursive`, `mount_move`, and `path_wildcards`. Pass the affected
+  Host, direct-`runc`, and Kubernetes mount lifecycles before commit.
 - [x] Make `ProcessFixture` own spawn readiness, stdin actions, bounded exit
   diagnostics, explicit stop, and idempotent drop cleanup.
 - [x] Keep actor selection outside `ProcessFixture`. The scenario gives
