@@ -39,6 +39,12 @@
             "kind": "ReadinessProbe",
             "executionRule": "readiness-grep",
             "role": "readiness"
+          },
+          {
+            "name": "liveness",
+            "kind": "LivenessProbe",
+            "executionRule": "liveness-wc",
+            "role": "liveness"
           }
         ],
         "administrativeEntry": {
@@ -110,6 +116,30 @@
           {
             "name": "readiness-grep",
             "path": "/usr/bin/grep",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "network": {"socketControls": [], "destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "liveness",
+        "files": [
+          {
+            "name": "deny-liveness-file",
+            "path": "/work/liveness.denied",
+            "recursive": false,
+            "operations": ["OpenRead"],
+            "action": "Deny"
+          }
+        ],
+        "execution": [
+          {
+            "name": "liveness-wc",
+            "path": "/usr/bin/wc",
             "recursive": false,
             "operations": ["Execute"],
             "action": "Allow"
