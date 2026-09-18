@@ -1443,7 +1443,8 @@ test does not close a row when its physical condition or an assertion changed.
     before Node starts. Require recovered identity, `PATH_TREE_POLICY_DENY`
     with `EACCES`, and `EXACT_POLICY_ALLOW` for the allowed control.
     - [x] Pass Host and commit it. The exact test passed in 28.92 seconds.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact test passed in 35.96
+      seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove the matching legacy actions, result fields, and shell checks
       only after all three platforms pass.
