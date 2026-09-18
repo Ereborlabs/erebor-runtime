@@ -1676,6 +1676,16 @@ setup, production actions, assertions, and focused test.
   terminal exec, evidence retention, holder release, and absence proof.
 - [ ] External entry and external cgroup entrant: keep both physical execs and
   rule-zero fail-closed evidence assertions.
+  - [x] Extend the existing unlisted runtime-exec test with its exact
+    `UNSUPPORTED_OBJECT`, exec-family, execute-operation, external-role,
+    rule-zero, and `EACCES` evidence checks. The 75-line test passed Host in
+    29.77 seconds, direct `runc` in 37.23 seconds, and Kubernetes in 76.22
+    seconds.
+  - [ ] Add one small platform test for a host process placed in the protected
+    actor cgroup. Require its restricted external identity, denied exec, and
+    matching task-cookie, role, rule-zero, and `EACCES` evidence.
+  - [ ] Pass Host, direct `runc`, and Kubernetes before removing the matching
+    legacy actions, result fields, and shell checks.
 - [ ] Final container and resource cleanup: require container success and
   absence of the pin root, lease, cgroup, and fixture root.
 
