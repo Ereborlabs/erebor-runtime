@@ -1511,7 +1511,7 @@ setup, production actions, assertions, and focused test.
     startup case passed in 71.84 seconds with the expanded shared policy.
   - [x] Remove only the matching readiness loop action and compatibility gate
     after all three platform cases pass.
-- [ ] Liveness entry policy isolation: use stock `wc`. Require the liveness
+- [x] Liveness entry policy isolation: use stock `wc`. Require the liveness
   role to read the application-denied file, then deny its own exact file read
   with matching role, admission-rule, and kernel evidence.
   - [x] Keep the 72-line standard test below 100 lines. Reuse the shared actor,
@@ -1519,7 +1519,7 @@ setup, production actions, assertions, and focused test.
   - [x] The exact Host case passed in 30.79 seconds.
   - [x] The exact direct-`runc` case passed in 38.46 seconds.
   - [x] The exact Kubernetes case passed in 74.60 seconds.
-  - [ ] Remove only the matching liveness loop action and compatibility gate
+  - [x] Remove only the matching liveness loop action and compatibility gate
     after all three platform cases pass.
 - [x] Startup entry policy isolation: use stock `cat`. Require the startup
   role to read a path tree denied to the application role, then deny its own
