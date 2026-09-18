@@ -1600,7 +1600,9 @@ test does not close a row when its physical condition or an assertion changed.
     task-attributed `PATH_TREE_POLICY_DENY` events. Require the existing
     allowed file read and its `EXACT_POLICY_ALLOW` evidence as the control. Do
     not add a Platform API.
-    - [ ] Pass Host and commit it.
+    - [x] Pass Host and commit it. The exact case passed in 35.67 seconds.
+      The unchanged later-child and wildcard cases passed in 30.44 and 30.55
+      seconds.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy initial-child and replacement-child

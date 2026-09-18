@@ -45,6 +45,8 @@ mod orphan;
 #[cfg(test)]
 mod path_later;
 #[cfg(test)]
+mod path_replace;
+#[cfg(test)]
 mod path_wildcards;
 #[cfg(test)]
 mod policy_replace;
