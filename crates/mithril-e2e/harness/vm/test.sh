@@ -82,6 +82,8 @@ grep -Fq 'fixtures/process/"*; do' "$directory/run.sh"
 grep -Fq 'identity:k3s-platform-tests' "$directory/run.sh"
 grep -Fq 'workload_recovery:k3s-workload-recovery' "$directory/run.sh"
 grep -Fq 'process_recovery:k3s-process-recovery' "$directory/run.sh"
+grep -Fq 'ptrace_recovery:k3s-ptrace-recovery' "$directory/run.sh"
+grep -Fq 'signal_recovery:k3s-signal-recovery' "$directory/run.sh"
 grep -Fq '"${lifecycle}_kubernetes" --ignored --nocapture --test-threads=1' \
   "$directory/run.sh"
 grep -Fq 'k3s-images.sh' "$directory/run.sh"

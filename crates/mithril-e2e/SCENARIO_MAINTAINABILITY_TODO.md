@@ -682,9 +682,9 @@ count as maintainability migrations.
   - Four compatible Host physical tests now use `identity_physical`. They own
     and stop their temporary physical host and can share the outer platform
     lifecycle. The group passed four tests in 137.49 seconds on 2026-09-16.
-  - Keep `workload_recovery`, `recovery_tasks`, and `external_roots` separate.
-    Each starts its actor before Node and must not inherit an already-running
-    identity Node.
+  - Keep `workload_recovery`, `recovery_tasks`, `external_roots`,
+    `ptrace_recovery`, and `signal_recovery` separate. Each starts its actor
+    before Node and must not inherit an already-running identity Node.
   - The current source at `bc0af1fa` passed all generated platform tests on
     2026-09-18: 39 Host cases, 30 direct-`runc` cases, and 30 Kubernetes
     cases. The run used one process for each lifecycle and platform. The final
@@ -1821,6 +1821,15 @@ test does not close a row when its physical condition or an assertion changed.
       isolated case passed Host in 28.70 seconds, direct `runc` in 28.76
       seconds, and Kubernetes in 74.66 seconds. The unchanged Kubernetes
       workload-recovery lifecycle passed separately in 70.02 seconds.
+    - [x] Keep protected ptrace and signal-zero recovery in separate
+      `ptrace_recovery` and `signal_recovery` lifecycles. A combined Kubernetes
+      identity run passed 23 tests but correctly rejected both new actor Pods
+      after a prior Node activation. The direct-`runc` retained-gate probe
+      reproduced the condition and required `DENY_NODE_UNAVAILABLE` while the
+      denied process remained absent. Protected ptrace passed Host, direct
+      `runc`, and Kubernetes in 28.07, 29.18, and 67.52 seconds. Signal zero
+      passed the same platforms in 28.12, 28.37, and 68.33 seconds on
+      2026-09-19.
     - [ ] Pass the `SIGCONT` denial case on Host and commit it.
     - [ ] Pass the `SIGCONT` denial case on direct `runc` and commit it.
     - [ ] Pass the `SIGCONT` denial case on Kubernetes and commit it.

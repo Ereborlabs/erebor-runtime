@@ -630,7 +630,9 @@ if [[ $with_k3s == true ]]; then
   for suite in \
     identity:k3s-platform-tests \
     workload_recovery:k3s-workload-recovery \
-    process_recovery:k3s-process-recovery; do
+    process_recovery:k3s-process-recovery \
+    ptrace_recovery:k3s-ptrace-recovery \
+    signal_recovery:k3s-signal-recovery; do
     IFS=: read -r lifecycle evidence <<<"$suite"
     partial=$output_directory/$evidence.txt.partial
     "$provider" run "$vm_name" sudo env \

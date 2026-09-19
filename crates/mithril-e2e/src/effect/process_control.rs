@@ -7,7 +7,7 @@ use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
-#[lifecycle = identity]
+#[lifecycle = ptrace_recovery]
 fn protected_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("process-ptrace")?;
     env.start_control()?;
@@ -98,7 +98,7 @@ fn protected_ptrace_is_denied<P: Platform>() -> TestResult<()> {
 }
 
 #[platform_test(host, runc, kubernetes)]
-#[lifecycle = identity]
+#[lifecycle = signal_recovery]
 fn signal_zero_is_allowed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("process-signal-zero")?;
     env.start_control()?;
