@@ -79,10 +79,10 @@ grep -Fq '.target.name == "mithril_e2e"' "$directory/run.sh"
 grep -Fq '"$test_bin" "$remote_bin/mithril-e2e-tests"' "$directory/run.sh"
 grep -Fq 'fixtures/process/$fixture' "$directory/run.sh"
 grep -Fq 'fixtures/process/"*; do' "$directory/run.sh"
-grep -Fq 'identity_kubernetes --ignored --nocapture --test-threads=1' \
-  "$directory/run.sh"
-grep -Fq \
-  'identity::scenarios::workload_recovery::workload_recovers::workload_recovery_kubernetes' \
+grep -Fq 'identity:k3s-platform-tests' "$directory/run.sh"
+grep -Fq 'workload_recovery:k3s-workload-recovery' "$directory/run.sh"
+grep -Fq 'process_recovery:k3s-process-recovery' "$directory/run.sh"
+grep -Fq '"${lifecycle}_kubernetes" --ignored --nocapture --test-threads=1' \
   "$directory/run.sh"
 grep -Fq 'k3s-images.sh' "$directory/run.sh"
 if grep -Fq 'k3s-administrative-exec' \

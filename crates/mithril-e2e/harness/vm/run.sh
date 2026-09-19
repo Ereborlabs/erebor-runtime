@@ -627,39 +627,27 @@ if [[ $with_k3s == true ]]; then
   k3s_cri_effect_partial=$output_directory/k3s-cri-effect.txt.partial
   run_k3s_cri_effect PROTECT >"$k3s_cri_effect_partial"
   mv -- "$k3s_cri_effect_partial" "$output_directory/k3s-cri-effect.txt"
-  k3s_rust_partial=$output_directory/k3s-platform-tests.txt.partial
-  "$provider" run "$vm_name" sudo env \
-    "MITHRIL_TEST_ROOT=$remote_source" \
-    "MITHRIL_TEST_OUTPUT=$remote_root/platform-tests" \
-    "MITHRIL_TEST_KUBECONFIG=/etc/rancher/k3s/k3s.yaml" \
-    "MITHRIL_TEST_HELM=$remote_bin/helm" \
-    "MITHRIL_TEST_K3S=/usr/local/bin/k3s" \
-    "MITHRIL_TEST_KUBE_EXEC=$remote_bin/mithril-kube-exec" \
-    "MITHRIL_TEST_NODE_IMAGE=$node_image" \
-    "MITHRIL_TEST_CONTROL_IMAGE=$control_image" \
-    "MITHRIL_TEST_ACTOR_IMAGE=$actor_image" \
-    "$remote_bin/mithril-e2e-tests" \
-    identity_kubernetes --ignored --nocapture --test-threads=1 \
-    >"$k3s_rust_partial"
-  mv -- "$k3s_rust_partial" "$output_directory/k3s-platform-tests.txt"
-
-  k3s_recovery_partial=$output_directory/k3s-workload-recovery.txt.partial
-  "$provider" run "$vm_name" sudo env \
-    "MITHRIL_TEST_ROOT=$remote_source" \
-    "MITHRIL_TEST_OUTPUT=$remote_root/platform-tests" \
-    "MITHRIL_TEST_KUBECONFIG=/etc/rancher/k3s/k3s.yaml" \
-    "MITHRIL_TEST_HELM=$remote_bin/helm" \
-    "MITHRIL_TEST_K3S=/usr/local/bin/k3s" \
-    "MITHRIL_TEST_KUBE_EXEC=$remote_bin/mithril-kube-exec" \
-    "MITHRIL_TEST_NODE_IMAGE=$node_image" \
-    "MITHRIL_TEST_CONTROL_IMAGE=$control_image" \
-    "MITHRIL_TEST_ACTOR_IMAGE=$actor_image" \
-    "$remote_bin/mithril-e2e-tests" \
-    identity::scenarios::workload_recovery::workload_recovers::workload_recovery_kubernetes \
-    --exact --ignored --nocapture --test-threads=1 \
-    >"$k3s_recovery_partial"
-  mv -- "$k3s_recovery_partial" \
-    "$output_directory/k3s-workload-recovery.txt"
+  for suite in \
+    identity:k3s-platform-tests \
+    workload_recovery:k3s-workload-recovery \
+    process_recovery:k3s-process-recovery; do
+    IFS=: read -r lifecycle evidence <<<"$suite"
+    partial=$output_directory/$evidence.txt.partial
+    "$provider" run "$vm_name" sudo env \
+      "MITHRIL_TEST_ROOT=$remote_source" \
+      "MITHRIL_TEST_OUTPUT=$remote_root/platform-tests" \
+      "MITHRIL_TEST_KUBECONFIG=/etc/rancher/k3s/k3s.yaml" \
+      "MITHRIL_TEST_HELM=$remote_bin/helm" \
+      "MITHRIL_TEST_K3S=/usr/local/bin/k3s" \
+      "MITHRIL_TEST_KUBE_EXEC=$remote_bin/mithril-kube-exec" \
+      "MITHRIL_TEST_NODE_IMAGE=$node_image" \
+      "MITHRIL_TEST_CONTROL_IMAGE=$control_image" \
+      "MITHRIL_TEST_ACTOR_IMAGE=$actor_image" \
+      "$remote_bin/mithril-e2e-tests" \
+      "${lifecycle}_kubernetes" --ignored --nocapture --test-threads=1 \
+      >"$partial"
+    mv -- "$partial" "$output_directory/$evidence.txt"
+  done
 fi
 
 qualification_output=$remote_root/kernel-qualification

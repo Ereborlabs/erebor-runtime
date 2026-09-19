@@ -97,7 +97,7 @@ fn protected_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn signal_zero_is_allowed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("process-signal-zero")?;
@@ -185,7 +185,7 @@ fn signal_zero_is_allowed<P: Platform>() -> TestResult<()> {
 }
 
 #[platform_test(host, runc, kubernetes)]
-#[lifecycle = identity]
+#[lifecycle = process_recovery]
 fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("process-ptrace-unmatched")?;
     env.start_control()?;

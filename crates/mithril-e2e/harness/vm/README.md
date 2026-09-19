@@ -161,7 +161,8 @@ the observe result before the protect result.
 
 The option prepares the production Node and Control images, the pinned Python
 actor image, Helm, and the standard Rust test executable. It runs the complete
-`identity_kubernetes` lifecycle and the separate workload-recovery test. The
+`identity_kubernetes`, `workload_recovery_kubernetes`, and
+`process_recovery_kubernetes` lifecycles. The
 administrative tests use a disposable HTTPS OIDC provider, Kubernetes
 TokenReview, CONNECT admission, and a real `pods/exec` request. They require
 the approved role for one matching request and the restricted role after the

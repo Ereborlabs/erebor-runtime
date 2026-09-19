@@ -1813,7 +1813,14 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass the signal-zero allow case on direct `runc` and commit it. The
       exact case passed in 28.65 seconds. Both renamed direct-`runc` ptrace
       cases passed together in 50.59 seconds.
-    - [ ] Pass the signal-zero allow case on Kubernetes and commit it.
+    - [x] Pass the signal-zero allow case on Kubernetes and commit it. The
+      exact case passed in 69.69 seconds.
+    - [x] Keep the recovery-first unmatched ptrace case in its own
+      `process_recovery` lifecycle. A prior installed hook correctly rejected
+      its actor while Node was down in the shared identity lifecycle. The
+      isolated case passed Host in 28.70 seconds, direct `runc` in 28.76
+      seconds, and Kubernetes in 74.66 seconds. The unchanged Kubernetes
+      workload-recovery lifecycle passed separately in 70.02 seconds.
     - [ ] Pass the `SIGCONT` denial case on Host and commit it.
     - [ ] Pass the `SIGCONT` denial case on direct `runc` and commit it.
     - [ ] Pass the `SIGCONT` denial case on Kubernetes and commit it.
