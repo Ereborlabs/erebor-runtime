@@ -1722,6 +1722,29 @@ test does not close a row when its physical condition or an assertion changed.
       `runc` passed 38 tests in eight processes, and Kubernetes passed 38 tests
       in eight processes. Cleanup left no Mithril runtime files, namespaces,
       or BPF pin roots.
+  - [ ] Replace the bounded and expired exception block with small standard
+    platform tests. Use one shared Python actor and scenario policy. Do not add
+    a Platform API or change Interceptor behavior.
+    - [ ] Release eight actor threads to open the protected write target at the
+      same time. Require exactly two allowed opens, six `EACCES` results, and
+      no other result.
+    - [ ] Attribute every result to its worker task and the exact protected
+      object. Require exactly two `EXACT_POLICY_ALLOW` observations and six
+      `EXCEPTION_UNAVAILABLE` observations.
+    - [ ] Require two consumed uses, the `Exhausted` runtime state, and only
+      consumed receipt ordinals `[1, 2]`.
+    - [ ] Restart Node through the existing Platform lifecycle. Require the
+      exhausted state to remain unchanged and require another write to fail
+      with `EXCEPTION_UNAVAILABLE`.
+    - [ ] Require the separate one-use expired exception to start `Active`
+      with zero uses, deny its write, and enter `Expired` with zero uses.
+    - [ ] Keep each test below 100 lines. Split independent behavior into
+      separate tests instead of hiding scenario assertions in a helper.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy actions, result fields, mailbox
+      operations, and fixture owner after all three platform cases pass.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
