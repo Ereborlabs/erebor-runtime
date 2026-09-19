@@ -2125,6 +2125,10 @@ setup, production actions, assertions, and focused test.
     `restored_or_unknown_root`. Do not preserve the old `fail_closed_unknown`
     application result. It came from direct identity-host activation without
     Control, Node, an effect policy, or production recovery.
+    - [x] Reap the non-init actor before PID 1 during cleanup. Linux keeps PID
+      1 in `zap_pid_ns_processes` while an unreaped sibling remains. The exact
+      Host, direct-`runc`, and Kubernetes cases passed in 28.20, 28.66, and
+      66.25 seconds on 2026-09-19.
   - [x] Replace the successful runtime-entry classifications with
     `runtime_entries::runtime_entries_stay_distinct` on Host, direct `runc`,
     and Kubernetes. Use only `add_actor` for process entry.

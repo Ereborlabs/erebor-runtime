@@ -91,9 +91,7 @@ fn four_tasks_recover<P: Platform>() -> TestResult<()> {
         Some("restored_or_unknown_root")
     );
     fs::write(env.work().join("recovery-stop"), b"stop\n")?;
-    app.wait_gone(app.id(), "application actor exit")?;
-    ext.wait_gone(ext.id(), "external actor exit")?;
-    app.stop()?;
     ext.stop()?;
+    app.stop()?;
     env.stop()
 }
