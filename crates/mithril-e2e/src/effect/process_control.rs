@@ -12,8 +12,8 @@ fn protected_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("process-ptrace")?;
     env.start_control()?;
     env.stop_node()?;
-    let mut actor = env.start_actor("process_ptrace.py", &[])?;
-    env.install_policy("process_ptrace_policy.json")?;
+    let mut actor = env.start_actor("process_control.py", &["ptrace"])?;
+    env.install_policy("process_control_policy.json")?;
     env.start_node()?;
     env.sync_policy()?;
     env.node_ready()?;
@@ -45,8 +45,8 @@ fn protected_ptrace_is_denied<P: Platform>() -> TestResult<()> {
         .into_iter()
         .map(|event| (event.source_cpu_id, event.source_sequence))
         .collect::<BTreeSet<_>>();
-    fs::write(env.work().join("ptrace"), b"ptrace\n")?;
-    let result_path = env.work().join("ptrace-result");
+    fs::write(env.work().join("act"), b"act\n")?;
+    let result_path = env.work().join("control-result");
     let denied = actor.wait_text(&result_path, "ptrace result")?;
     assert_eq!(denied.trim(), libc::EACCES.to_string());
 
@@ -97,6 +97,93 @@ fn protected_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
+#[platform_test(host)]
+#[lifecycle = identity]
+fn signal_zero_is_allowed<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("process-signal-zero")?;
+    env.start_control()?;
+    env.stop_node()?;
+    let mut actor = env.start_actor("process_control.py", &["signal-zero"])?;
+    env.install_policy("process_control_policy.json")?;
+    env.start_node()?;
+    env.sync_policy()?;
+    env.node_ready()?;
+    env.running(actor.id())?;
+    let parent = env.recovered(actor.id(), "signal controller")?;
+    actor.ensure_running("recovered signal actor")?;
+
+    fs::write(env.work().join("spawn"), b"spawn\n")?;
+    let pid = actor.wait_child(actor.id(), "signal target")?;
+    actor.track(pid)?;
+    let target = env.task(pid, "signal target identity")?;
+    let parent_state = &parent.snapshot;
+    let target_state = &target.snapshot;
+    assert_eq!(
+        target_state.creator_task_cookie,
+        Some(parent_state.task_cookie)
+    );
+    assert_eq!(
+        target_state.profile_generation_ref_id,
+        parent_state.profile_generation_ref_id
+    );
+    assert_eq!(target_state.active_role_id, parent_state.active_role_id);
+    assert_ne!(target_state.task_cookie, parent_state.task_cookie);
+    assert_ne!(target_state.process_state_id, parent_state.process_state_id);
+
+    let seen = env
+        .snapshot()?
+        .recent_effects
+        .into_iter()
+        .map(|event| (event.source_cpu_id, event.source_sequence))
+        .collect::<BTreeSet<_>>();
+    fs::write(env.work().join("act"), b"act\n")?;
+    let result = actor.wait_text(&env.work().join("control-result"), "signal result")?;
+    assert_eq!(result.trim(), "0");
+
+    let path = env.maps().0.to_owned();
+    wait_for(
+        &path,
+        "allowed signal evidence",
+        Duration::from_secs(30),
+        || {
+            let snapshot = env.snapshot().map_err(|source| {
+                InvalidInputSnafu {
+                    path: &path,
+                    reason: source.to_string(),
+                }
+                .build()
+            })?;
+            Ok(snapshot.recent_effects.into_iter().find(|event| {
+                !seen.contains(&(event.source_cpu_id, event.source_sequence))
+                    && parent.matches_effect(
+                        event,
+                        "EXACT_POLICY_ALLOW",
+                        F::Privilege,
+                        O::Signal,
+                        0,
+                    )
+                    && event.operation_argument == 0
+                    && event.profile_generation_ref_id == parent_state.profile_generation_ref_id
+                    && event.controller_process_state_id == parent_state.process_state_id
+                    && event.process_state_vector_id > 0
+                    && event.target_task_cookie == target_state.task_cookie
+                    && event.target_profile_generation_ref_id
+                        == target_state.profile_generation_ref_id
+                    && event.target_role_id == target_state.active_role_id
+                    && event.target_process_state_id == target_state.process_state_id
+                    && event.target_process_state_vector_id > 0
+            }))
+        },
+        || "no exact signal allow observed".to_owned(),
+    )?;
+
+    fs::write(env.work().join("release"), b"release\n")?;
+    let status = actor.wait_exit("allowed signal", Duration::from_secs(5))?;
+    assert_eq!(status.code(), Some(0), "{:?}", actor.stderr()?);
+    actor.stop()?;
+    env.stop()
+}
+
 #[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
@@ -105,7 +192,12 @@ fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     env.stop_node()?;
     let mut init = env.start_actor("ready.py", &[])?;
     env.place(init.id())?;
-    let args = ["/fixtures/process_ptrace.py", "/work", "no-result"];
+    let args = [
+        "/fixtures/process_control.py",
+        "/work",
+        "ptrace",
+        "no-result",
+    ];
     let mut actor = env.add_actor("python", &args)?;
     env.place(actor.id())?;
     env.install_policy("python_policy.json")?;
@@ -133,7 +225,7 @@ fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     assert_ne!(target_state.task_cookie, parent_state.task_cookie);
     assert_ne!(target_state.process_state_id, parent_state.process_state_id);
     let path = env.maps().0.to_owned();
-    fs::write(env.work().join("ptrace"), b"ptrace\n")?;
+    fs::write(env.work().join("act"), b"act\n")?;
     let comm = std::path::PathBuf::from(format!("/proc/{}/comm", actor.id()));
     let expected = format!("ptrace-{}", libc::EACCES);
     let state = RefCell::new(String::from("<unread>"));

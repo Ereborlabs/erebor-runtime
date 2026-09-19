@@ -2,7 +2,7 @@
   "apiVersion": "mithril.erebor.dev/v1alpha1",
   "kind": "WorkloadProtectionPolicy",
   "metadata": {
-    "name": "process-ptrace",
+    "name": "process-control",
     "namespace": "default",
     "uid": "10000000-0000-4000-8000-000000000024",
     "generation": 1,
@@ -40,7 +40,7 @@
         "files": [
           {
             "name": "allow-result",
-            "path": "/work/ptrace-result",
+            "path": "/work/control-result",
             "recursive": false,
             "operations": ["OpenWrite", "Write", "SetAttributes"],
             "action": "Allow"
@@ -65,6 +65,20 @@
             "targetRole": "worker",
             "operation": "Ptrace",
             "requests": [18],
+            "action": "Deny"
+          },
+          {
+            "name": "allow-worker-signal-zero",
+            "targetRole": "worker",
+            "operation": "Signal",
+            "signals": [0],
+            "action": "Allow"
+          },
+          {
+            "name": "deny-worker-signal-cont",
+            "targetRole": "worker",
+            "operation": "Signal",
+            "signals": [18],
             "action": "Deny"
           }
         ],

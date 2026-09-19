@@ -1,6 +1,7 @@
 import ctypes
 import os
 import select
+import signal
 import sys
 import time
 
@@ -14,7 +15,10 @@ libc.ptrace.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.c_void_p, ctypes.c_v
 libc.ptrace.restype = ctypes.c_long
 libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
 work = sys.argv[1]
-result_path = os.path.join(work, "ptrace-result")
+mode = sys.argv[2]
+if mode not in {"ptrace", "signal-zero", "signal-cont"}:
+    raise ValueError(f"unsupported process-control mode: {mode}")
+result_path = os.path.join(work, "control-result")
 write_result = "no-result" not in sys.argv[2:]
 
 
@@ -40,19 +44,28 @@ if child == 0:
     os._exit(0)
 os.close(read_fd)
 
-wait("ptrace")
+wait("act")
 
 ctypes.set_errno(0)
-result = libc.ptrace(PTRACE_ATTACH, child, None, None)
-error = ctypes.get_errno() if result == -1 else 0
+if mode == "ptrace":
+    result = libc.ptrace(PTRACE_ATTACH, child, None, None)
+    error = ctypes.get_errno() if result == -1 else 0
+else:
+    try:
+        os.kill(child, 0 if mode == "signal-zero" else signal.SIGCONT)
+        result = 0
+        error = 0
+    except OSError as failure:
+        result = -1
+        error = failure.errno
 if write_result:
     with open(result_path, "w", encoding="ascii") as output:
         output.write(f"{error}\n")
-if result == 0:
+if mode == "ptrace" and result == 0:
     os.waitpid(child, os.WUNTRACED)
     libc.ptrace(PTRACE_DETACH, child, None, None)
 if not write_result:
-    name = ctypes.create_string_buffer(f"ptrace-{error}".encode("ascii"))
+    name = ctypes.create_string_buffer(f"{mode}-{error}".encode("ascii"))
     if libc.prctl(PR_SET_NAME, ctypes.addressof(name), 0, 0, 0) != 0:
         raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
     wait("release")

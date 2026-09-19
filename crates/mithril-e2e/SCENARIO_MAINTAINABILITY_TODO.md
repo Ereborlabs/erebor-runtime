@@ -1807,7 +1807,9 @@ test does not close a row when its physical condition or an assertion changed.
       target tasks.
     - [ ] Keep each test below 100 lines. Keep actor result checks and security
       assertions in each test.
-    - [ ] Pass the signal-zero allow case on Host and commit it.
+    - [x] Pass the signal-zero allow case on Host and commit it. The exact case
+      passed in 28.59 seconds. Both renamed Host ptrace cases passed together
+      in 49.29 seconds.
     - [ ] Pass the signal-zero allow case on direct `runc` and commit it.
     - [ ] Pass the signal-zero allow case on Kubernetes and commit it.
     - [ ] Pass the `SIGCONT` denial case on Host and commit it.
