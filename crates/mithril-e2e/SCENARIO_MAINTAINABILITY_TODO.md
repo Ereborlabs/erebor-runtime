@@ -519,6 +519,10 @@ Single-node and guest cases:
     its first exact Rust test when an image is absent. Keep K3s, its OCI hook,
     and its prepared images between test runs. Do not uninstall K3s or import
     unchanged archives between exact tests.
+  - [x] Use canonical local Node and Control image names. If a Docker archive
+    omits the name of the pinned multi-architecture actor image, pull only that
+    exact digest after archive import. The fresh retained K3s store contains
+    the exact actor digest, and the VM harness behavior checks pass.
   - [x] Require lightweight and Kubernetes cleanup to prove that Node removed
     both runtime sockets. The Kubernetes `preStop` hook must close admission
     and seccomp endpoints before the termination deadline.

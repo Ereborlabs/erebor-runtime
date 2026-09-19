@@ -40,7 +40,8 @@ target=$image_dir/mithril-e2e-$cache.tar
 install -d -m 0700 "$image_dir"
 "$k3s" ctr images import "$archive" >/dev/null
 for image in "$@"; do
-  "$k3s" crictl inspecti "$image" >/dev/null || {
+  "$k3s" crictl inspecti "$image" >/dev/null ||
+    "$k3s" crictl pull "$image" >/dev/null || {
     echo "K3s archive does not provide image: $image" >&2
     exit 1
   }

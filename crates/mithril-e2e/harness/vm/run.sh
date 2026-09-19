@@ -14,8 +14,8 @@ recovered_entry_only=false
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
 source_mount=${MITHRIL_VM_SOURCE_MOUNT:-}
 actor_image=docker.io/library/python@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285
-control_image=mithril-control:platform-test
-node_image=mithril-node:platform-test
+control_image=docker.io/library/mithril-control:platform-test
+node_image=docker.io/library/mithril-node:platform-test
 usage() {
   echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--entry-role-runtime-only] [--recovered-entry-only] [--keep-vm] [--manual]" >&2
 }
