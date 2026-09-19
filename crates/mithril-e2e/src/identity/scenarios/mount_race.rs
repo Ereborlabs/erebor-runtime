@@ -6,8 +6,8 @@ use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
-#[lifecycle = mount_alias]
+#[platform_test(host, runc, kubernetes)]
+#[lifecycle = mount_race]
 fn protected_mount_race_is_closed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("mount-race")?;
     env.start_control()?;
@@ -28,23 +28,27 @@ fn protected_mount_race_is_closed<P: Platform>() -> TestResult<()> {
         .into_iter()
         .map(|event| (event.source_cpu_id, event.source_sequence))
         .collect::<BTreeSet<_>>();
-    actor.send(b"race\n")?;
+    if let Err(error) = actor.send(b"race\n") {
+        return Err(format!("{error}; stderr: {:?}", actor.stderr()?).into());
+    }
     actor.close();
-    let status = actor.wait_exit("protected mount race", Duration::from_secs(5))?;
-    assert!(
-        status.success(),
-        "{status}; stderr: {:?}; result: {:?}",
-        actor.stderr()?,
-        std::fs::read_to_string(env.work().join("mount-result.json"))
-    );
-    let result: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(env.work().join("mount-result.json"))?)?;
+    let result_path = env.work().join("mount-result.json");
+    let result: serde_json::Value = wait_for(
+        &result_path,
+        "mount race result",
+        Duration::from_secs(5),
+        || {
+            Ok(std::fs::read(&result_path)
+                .ok()
+                .and_then(|data| serde_json::from_slice(&data).ok()))
+        },
+        || format!("last result: {:?}", std::fs::read_to_string(&result_path)),
+    )?;
     assert_eq!(result["mount_allowed"], 0);
     assert_eq!(result["mount_denied"], 8);
     assert_eq!(result["mount_other"], 0);
     assert_eq!(result["denied"], libc::EACCES);
     assert_eq!(result["allowed"], "allowed bind source\n");
-
     let path = env.maps().0.to_owned();
     let last = RefCell::new(String::from("<none>"));
     wait_for(
@@ -78,16 +82,8 @@ fn protected_mount_race_is_closed<P: Platform>() -> TestResult<()> {
             let deny = file("EXACT_POLICY_DENY", -libc::EACCES);
             let allow = file("EXACT_POLICY_ALLOW", 0);
             *last.borrow_mut() = format!(
-                "mount={mount} deny={deny} allow={allow}; {:?}",
-                fresh
-                    .iter()
-                    .map(|event| (
-                        &event.reason,
-                        event.effect_family,
-                        event.operation,
-                        event.kernel_result,
-                    ))
-                    .collect::<Vec<_>>()
+                "mount={mount} deny={deny} allow={allow}; fresh={}",
+                fresh.len()
             );
             Ok((mount && deny && allow).then_some(()))
         },

@@ -1697,14 +1697,17 @@ test does not close a row when its physical condition or an assertion changed.
     errors, and `UNSUPPORTED_OBJECT` mount evidence. After the race, require an
     exact protected-file denial and an exact allowed-file control from the main
     actor. Do not add a Platform API. Keep the test below 100 lines.
-    - [x] Pass Host and commit it. The exact case passed in 28.40 seconds. The
-      complete three-case `mount_alias_host` lifecycle passed in 57.07 seconds.
-      The test stops a reused Node before it creates the actor. Node then
-      recovers the actor after policy installation.
+    - [x] Pass Host and commit it. The exact case passed in 28.40 seconds. It
+      passed again in its final lifecycle in 28.71 seconds.
     - [x] Pass direct `runc` and commit it. The exact case passed in 34.95
-      seconds. The complete three-case `mount_alias_runc` lifecycle passed in
-      76.44 seconds with the production OCI hook.
-    - [ ] Pass Kubernetes and commit it.
+      seconds. It passed again in its final lifecycle in 35.40 seconds with the
+      production OCI hook.
+    - [x] Pass Kubernetes and commit it. The exact case passed in 72.13 seconds.
+      Mount race has its own lifecycle because its actor must start before Node
+      installs the retained OCI hook. A reused installed hook correctly denies
+      a new Pod while Node is stopped. The two compatible `mount_alias`
+      Kubernetes cases passed together in 92.53 seconds. Failed and successful
+      lifecycle teardown both removed the runtime integration.
     - [ ] Remove only the matching legacy mount-race setup, action, and result
       field after all three platform cases pass. Run the complete Host,
       direct-`runc`, and Kubernetes matrix because this is the third completed

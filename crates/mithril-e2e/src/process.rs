@@ -570,6 +570,11 @@ impl ProcessFixture {
             .context(IoSnafu { path: &self.path })
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_input(&mut self, input: File) {
+        self.stdin = Some(Box::new(input));
+    }
+
     pub(crate) fn owns_status(&self) -> bool {
         self.child.is_some() || self.raw_pid.is_some() || self.exit_probe.is_some()
     }

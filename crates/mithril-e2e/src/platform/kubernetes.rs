@@ -106,6 +106,7 @@ pub(crate) struct KubernetesState {
     work_up: bool,
     helm_up: bool,
     hook_up: bool,
+    runtime_up: bool,
     actor_id: Option<String>,
     actor_pid: Option<u32>,
     actor_cgroup: Option<PathBuf>,
@@ -861,6 +862,12 @@ impl KubernetesState {
                 format!("{source}; Node logs: {logs}")
             })?;
         let pid = actor.wait_group_task(group, &before, program, "Kubernetes exec host PID")?;
+        let input_path = PathBuf::from(format!("/proc/{pid}/fd/0"));
+        let input = File::options()
+            .write(true)
+            .open(&input_path)
+            .context(IoSnafu { path: &input_path })?;
+        actor.set_input(input);
         actor.set_actor(pid)?;
         self.approval.clear();
         Ok(actor)
@@ -944,7 +951,7 @@ impl KubernetesState {
                     .map_err(Into::into),
             );
         }
-        if self.hook_up {
+        if self.runtime_up {
             Self::retain(&mut failed, self.wait_sockets());
             let input = RuntimeIntegrationDecommissionV1 {
                 owner: format!("{}/mithril", self.system),
@@ -962,7 +969,7 @@ impl KubernetesState {
                     .map_err(Into::into),
             );
             Self::retain(&mut failed, self.wait_api());
-            self.hook_up = false;
+            self.runtime_up = false;
         }
         Self::retain(&mut failed, self.approval.stop());
         if self.helm_up {
@@ -1239,6 +1246,7 @@ impl Platform for Kubernetes {
             work_up: false,
             helm_up: false,
             hook_up: false,
+            runtime_up: false,
             actor_id: None,
             actor_pid: None,
             actor_cgroup: None,
@@ -1278,6 +1286,7 @@ impl Platform for Kubernetes {
         if self.hook_up {
             return self.wait_node();
         }
+        self.runtime_up = true;
         let nodes = Api::<Node>::all(self.client.clone());
         let patch = json!({"metadata": {"labels": {(SELECTOR): self.token}}});
         self.runtime.block_on(nodes.patch(
