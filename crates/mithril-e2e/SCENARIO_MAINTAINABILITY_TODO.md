@@ -1768,7 +1768,7 @@ test does not close a row when its physical condition or an assertion changed.
     - [ ] Remove only the matching legacy prepared-descriptor actions, result
       fields, mailbox operations, and fixture owner after all three platforms
       pass. Keep the independent-process mapping cases.
-  - [ ] Replace the protected `PTRACE_ATTACH` block with one small standard
+  - [x] Replace the protected `PTRACE_ATTACH` block with one small standard
     platform test. Use one shared Python actor and scenario policy. Do not add
     a Platform API.
     - [x] Start the protected actor, then make it fork one live target after
