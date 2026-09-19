@@ -1697,7 +1697,10 @@ test does not close a row when its physical condition or an assertion changed.
     errors, and `UNSUPPORTED_OBJECT` mount evidence. After the race, require an
     exact protected-file denial and an exact allowed-file control from the main
     actor. Do not add a Platform API. Keep the test below 100 lines.
-    - [ ] Pass Host and commit it.
+    - [x] Pass Host and commit it. The exact case passed in 28.40 seconds. The
+      complete three-case `mount_alias_host` lifecycle passed in 57.07 seconds.
+      The test stops a reused Node before it creates the actor. Node then
+      recovers the actor after policy installation.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy mount-race setup, action, and result

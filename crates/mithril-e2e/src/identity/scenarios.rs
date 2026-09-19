@@ -35,6 +35,8 @@ mod mount_late;
 #[cfg(test)]
 mod mount_move;
 #[cfg(test)]
+mod mount_race;
+#[cfg(test)]
 mod mount_recursive;
 #[cfg(test)]
 mod moved_exec;

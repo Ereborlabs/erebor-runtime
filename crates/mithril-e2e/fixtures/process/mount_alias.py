@@ -1,7 +1,9 @@
 import ctypes
+import errno
 import json
 import os
 import sys
+import threading
 
 
 libc = ctypes.CDLL(None, use_errno=True)
@@ -52,7 +54,7 @@ def move_tree(tree, target):
 
 
 args = sys.argv[2:]
-if args not in ([], ["late"], ["recursive"], ["move"], ["future"]):
+if args not in ([], ["late"], ["recursive"], ["move"], ["future"], ["race"]):
     sys.exit(2)
 mode = args[0] if args else "early"
 root = os.path.join(sys.argv[1], "mount")
@@ -79,14 +81,36 @@ if mode == "early":
     check(libc.mount(secret.encode(), denied_alias.encode(), None, MS_BIND, None))
 if mode not in ("recursive", "future"):
     check(libc.mount(allowed.encode(), allowed_alias.encode(), None, MS_BIND, None))
+race_results = [None] * 8
+race_barrier = threading.Barrier(9)
+race_threads = []
+if mode == "race":
+    def run_mount(index):
+        race_barrier.wait()
+        result = libc.mount(allowed.encode(), secret.encode(), None, MS_BIND, None)
+        race_results[index] = ctypes.get_errno() if result else 0
+
+    race_threads = [threading.Thread(target=run_mount, args=(index,)) for index in range(8)]
+    for thread in race_threads:
+        thread.start()
 print("native-fixture-ready", flush=True)
 command = sys.stdin.readline()
 allowed_mount_error = 0
+mount_allowed = 0
+mount_denied = 0
+mount_other = 0
 if mode == "future" and command == "read\n":
     check(libc.unshare(CLONE_NEWNS))
     result = libc.mount(None, b"/", None, MS_REC | MS_PRIVATE, None)
     mount_error = ctypes.get_errno() if result else 0
     mount_namespace = os.stat("/proc/self/ns/mnt").st_ino
+elif mode == "race" and command == "race\n":
+    race_barrier.wait()
+    for thread in race_threads:
+        thread.join()
+    mount_allowed = race_results.count(0)
+    mount_denied = sum(result in (errno.EACCES, errno.EPERM) for result in race_results)
+    mount_other = 8 - mount_allowed - mount_denied
 elif mode == "move" and command == "open\n":
     denied_tree = open_tree(secret)
     allowed_tree = open_tree(allowed)
@@ -123,28 +147,31 @@ if mode in ("late", "recursive") and command == "mount-read\n":
     if mode == "recursive":
         result = libc.mount(allowed.encode(), allowed_alias.encode(), None, flags, None)
         allowed_mount_error = ctypes.get_errno() if result else 0
-elif command != "read\n":
+elif command not in ("read\n", "race\n"):
     sys.exit(2)
 
 try:
-    denied_path = secret if mode == "future" else denied_alias
+    denied_path = secret if mode in ("future", "race") else denied_alias
     with open(os.path.join(denied_path, "blocked"), encoding="utf-8"):
         denied = 0
 except OSError as error:
     denied = error.errno
 try:
-    allowed_path = allowed if mode == "future" else allowed_alias
+    allowed_path = allowed if mode in ("future", "race") else allowed_alias
     with open(os.path.join(allowed_path, "open"), encoding="utf-8") as source:
         value = source.read()
 except OSError as error:
     value = f"errno:{error.errno}"
-with open(result_path, "r+", encoding="utf-8") as output:
+with open(result_path, "w", encoding="utf-8") as output:
     json.dump(
         {
             "phase": "read",
             "mount_namespace": mount_namespace,
             "mount": mount_error,
             "allowed_mount": allowed_mount_error,
+            "mount_allowed": mount_allowed,
+            "mount_denied": mount_denied,
+            "mount_other": mount_other,
             "denied": denied,
             "allowed": value,
         },
