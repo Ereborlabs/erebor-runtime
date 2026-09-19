@@ -1768,6 +1768,23 @@ test does not close a row when its physical condition or an assertion changed.
     - [ ] Remove only the matching legacy prepared-descriptor actions, result
       fields, mailbox operations, and fixture owner after all three platforms
       pass. Keep the independent-process mapping cases.
+  - [ ] Replace the protected `PTRACE_ATTACH` block with one small standard
+    platform test. Use one shared Python actor and scenario policy. Do not add
+    a Platform API.
+    - [ ] Start the protected actor, then make it fork one live target after
+      activation. Resolve the target through `ProcessFixture::wait_child` and
+      require a separate inherited task identity.
+    - [ ] Attempt `PTRACE_ATTACH` from the actor. Require `EACCES` and
+      `EXACT_POLICY_DENY` for request 16.
+    - [ ] Attribute the decision to the exact controller and target task
+      cookies, profile generations, roles, and distinct process-state IDs.
+      Keep the test below 100 lines.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy ptrace action, result field, and
+      fixture operation after all three platforms pass. Keep both signal
+      cases and the shared process target until their replacements pass.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
