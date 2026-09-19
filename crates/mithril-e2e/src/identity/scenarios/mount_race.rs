@@ -6,7 +6,7 @@ use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = mount_alias]
 fn protected_mount_race_is_closed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("mount-race")?;

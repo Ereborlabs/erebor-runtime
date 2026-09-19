@@ -1701,7 +1701,9 @@ test does not close a row when its physical condition or an assertion changed.
       complete three-case `mount_alias_host` lifecycle passed in 57.07 seconds.
       The test stops a reused Node before it creates the actor. Node then
       recovers the actor after policy installation.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact case passed in 34.95
+      seconds. The complete three-case `mount_alias_runc` lifecycle passed in
+      76.44 seconds with the production OCI hook.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy mount-race setup, action, and result
       field after all three platform cases pass. Run the complete Host,
