@@ -862,12 +862,14 @@ impl KubernetesState {
                 format!("{source}; Node logs: {logs}")
             })?;
         let pid = actor.wait_group_task(group, &before, program, "Kubernetes exec host PID")?;
-        let input_path = PathBuf::from(format!("/proc/{pid}/fd/0"));
-        let input = File::options()
-            .write(true)
-            .open(&input_path)
-            .context(IoSnafu { path: &input_path })?;
-        actor.set_input(input);
+        if !self.hook_up {
+            let input_path = PathBuf::from(format!("/proc/{pid}/fd/0"));
+            let input = File::options()
+                .write(true)
+                .open(&input_path)
+                .context(IoSnafu { path: &input_path })?;
+            actor.set_input(input);
+        }
         actor.set_actor(pid)?;
         self.approval.clear();
         Ok(actor)

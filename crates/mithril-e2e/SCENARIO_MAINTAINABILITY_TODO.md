@@ -1707,7 +1707,11 @@ test does not close a row when its physical condition or an assertion changed.
       installs the retained OCI hook. A reused installed hook correctly denies
       a new Pod while Node is stopped. The two compatible `mount_alias`
       Kubernetes cases passed together in 92.53 seconds. Failed and successful
-      lifecycle teardown both removed the runtime integration.
+      lifecycle teardown both removed the runtime integration. Kubernetes keeps
+      its exec stream while Node is active and uses direct actor input only
+      before Node installs the hook. The 23-test `identity_kubernetes`
+      lifecycle passed in 581.31 seconds, and mount race passed again in 73.22
+      seconds.
     - [x] Remove only the matching legacy mount-race setup, action, result
       field, mailbox requests, and worker owner after all three platform cases
       pass. This removed 205 lines. The 92 non-privileged library tests and
