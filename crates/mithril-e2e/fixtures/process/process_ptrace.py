@@ -1,14 +1,18 @@
 import ctypes
 import os
+import select
 import sys
 import time
 
 
 PTRACE_ATTACH = 16
 PTRACE_DETACH = 17
+PR_SET_DUMPABLE = 4
+PR_SET_NAME = 15
 libc = ctypes.CDLL(None, use_errno=True)
 libc.ptrace.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
 libc.ptrace.restype = ctypes.c_long
+libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
 work = sys.argv[1]
 result_path = os.path.join(work, "ptrace-result")
 write_result = "no-result" not in sys.argv[2:]
@@ -28,7 +32,11 @@ read_fd, release_fd = os.pipe()
 child = os.fork()
 if child == 0:
     os.close(release_fd)
-    os.read(read_fd, 1)
+    if libc.prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_DUMPABLE)")
+    poller = select.poll()
+    poller.register(read_fd, select.POLLIN | select.POLLHUP)
+    poller.poll()
     os._exit(0)
 os.close(read_fd)
 
@@ -44,6 +52,10 @@ if result == 0:
     os.waitpid(child, os.WUNTRACED)
     libc.ptrace(PTRACE_DETACH, child, None, None)
 if not write_result:
+    name = ctypes.create_string_buffer(b"ptrace-done")
+    if libc.prctl(PR_SET_NAME, ctypes.addressof(name), 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
+    wait("release")
     os.close(release_fd)
     os.waitpid(child, 0)
     sys.exit(error)

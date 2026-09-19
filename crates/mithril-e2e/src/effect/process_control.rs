@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fs, time::Duration};
+use std::{cell::RefCell, collections::BTreeSet, fs, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
 
@@ -105,10 +105,8 @@ fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     env.stop_node()?;
     let mut init = env.start_actor("ready.py", &[])?;
     env.place(init.id())?;
-    let mut actor = env.add_actor(
-        "python",
-        &["/fixtures/process_ptrace.py", "/work", "no-result"],
-    )?;
+    let args = ["/fixtures/process_ptrace.py", "/work", "no-result"];
+    let mut actor = env.add_actor("python", &args)?;
     env.place(actor.id())?;
     env.install_policy("python_policy.json")?;
     env.start_node()?;
@@ -118,10 +116,8 @@ fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     env.recovered(init.id(), "ptrace workload")?;
     let parent = env.task(actor.id(), "ptrace controller")?;
     actor.ensure_running("external ptrace actor")?;
-    assert_eq!(
-        parent.snapshot.root_class.as_deref(),
-        Some("restored_or_unknown_root")
-    );
+    let root = parent.snapshot.root_class.as_deref();
+    assert_eq!(root, Some("restored_or_unknown_root"));
     assert_eq!(parent.snapshot.admitted_entry_rule_id, 0);
 
     fs::write(env.work().join("spawn"), b"spawn\n")?;
@@ -137,12 +133,23 @@ fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     assert_eq!(target_state.active_role_id, parent_state.active_role_id);
     assert_ne!(target_state.task_cookie, parent_state.task_cookie);
     assert_ne!(target_state.process_state_id, parent_state.process_state_id);
-
     let path = env.maps().0.to_owned();
     fs::write(env.work().join("ptrace"), b"ptrace\n")?;
-    let status = actor.wait_exit("unmatched ptrace", Duration::from_secs(5))?;
-    assert_eq!(status.code(), Some(libc::EACCES), "{:?}", actor.stderr()?);
+    let comm = std::path::PathBuf::from(format!("/proc/{}/comm", actor.id()));
+    let state = RefCell::new(String::from("<unread>"));
     wait_for(
+        &comm,
+        "ptrace completion",
+        Duration::from_secs(5),
+        || {
+            let value = fs::read_to_string(&comm).unwrap_or_else(|error| format!("<{error}>"));
+            *state.borrow_mut() = value.clone();
+            Ok((value.trim() == "ptrace-done").then_some(()))
+        },
+        || format!("last task name: {}", state.borrow()),
+    )?;
+    let last = RefCell::new(BTreeSet::new());
+    let effect = wait_for(
         &path,
         "unmatched ptrace evidence",
         Duration::from_secs(30),
@@ -154,6 +161,14 @@ fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
                 }
                 .build()
             })?;
+            last.borrow_mut().extend(
+                snapshot
+                    .recent_effects
+                    .iter()
+                    .filter(|event| event.operation == O::Ptrace as u32)
+                    .filter(|event| event.operation_argument != 9)
+                    .map(|event| format!("{event:?}")),
+            );
             Ok(snapshot.recent_effects.into_iter().find(|event| {
                 parent.matches_effect(
                     event,
@@ -168,10 +183,14 @@ fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
                     && event.target_process_state_id == target_state.process_state_id
             }))
         },
-        || "no unmatched ptrace denial observed".to_owned(),
-    )?;
+        || format!("non-recovery ptrace effects: {:?}", last.borrow()),
+    );
 
+    fs::write(env.work().join("release"), b"release\n")?;
+    let status = actor.wait_exit("unmatched ptrace", Duration::from_secs(5))?;
     actor.stop()?;
+    assert_eq!(status.code(), Some(libc::EACCES), "{:?}", actor.stderr()?);
+    effect?;
     init.stop()?;
     env.stop()
 }

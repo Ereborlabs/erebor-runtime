@@ -244,6 +244,7 @@ impl ProcessFixture {
             rootfs,
             linux_raw_sys::general::CLONE_INTO_CGROUP
                 | u64::from(linux_raw_sys::general::CLONE_NEWPID),
+            None,
             path,
         )
     }
@@ -254,17 +255,21 @@ impl ProcessFixture {
         args: I,
         cgroup: &Path,
         rootfs: &Path,
+        init: u32,
     ) -> Result<Self>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        let path = PathBuf::from(format!("/proc/{init}/ns/pid"));
+        let pidns = File::open(&path).context(IoSnafu { path: &path })?;
         Self::held(
             command,
             args,
             cgroup,
             rootfs,
             linux_raw_sys::general::CLONE_INTO_CGROUP,
+            Some(&pidns),
             command,
         )
     }
@@ -276,6 +281,7 @@ impl ProcessFixture {
         cgroup: &Path,
         rootfs: &Path,
         flags: u64,
+        pidns: Option<&File>,
         path: &Path,
     ) -> Result<Self>
     where
@@ -288,11 +294,6 @@ impl ProcessFixture {
         for arg in args {
             values.push(cstring(Path::new(arg.as_ref()))?);
         }
-        let mut argv = values
-            .iter()
-            .map(|value| value.as_ptr())
-            .collect::<Vec<_>>();
-        argv.push(std::ptr::null());
         let group = File::open(cgroup).context(IoSnafu { path: cgroup })?;
         let pipe = || {
             rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
@@ -326,26 +327,60 @@ impl ProcessFixture {
                 0
             },
         };
-        let result =
-            unsafe { libc::syscall(libc::SYS_clone3, &raw const clone, size_of::<clone_args>()) };
-        if result == 0 {
-            run_held(
-                &command,
-                &argv,
-                &child_in,
-                &child_out,
-                &child_err,
-                &child_gate,
-                &root_c,
-            );
-        }
+        let spawn = || {
+            let mut argv = values
+                .iter()
+                .map(|value| value.as_ptr())
+                .collect::<Vec<_>>();
+            argv.push(std::ptr::null());
+            let result = unsafe {
+                libc::syscall(libc::SYS_clone3, &raw const clone, size_of::<clone_args>())
+            };
+            if result == 0 {
+                run_held(
+                    &command,
+                    &argv,
+                    &child_in,
+                    &child_out,
+                    &child_err,
+                    &child_gate,
+                    &root_c,
+                );
+            }
+            let error = (result < 0).then(|| unsafe { *libc::__errno_location() });
+            (result, error)
+        };
+        let (result, error) = if let Some(pidns) = pidns {
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        if unsafe { libc::setns(pidns.as_raw_fd(), libc::CLONE_NEWPID) } < 0 {
+                            return (-1, Some(unsafe { *libc::__errno_location() }));
+                        }
+                        spawn()
+                    })
+                    .join()
+            })
+            .map_err(|_| {
+                InvalidInputSnafu {
+                    path,
+                    reason: "PID namespace actor setup thread panicked",
+                }
+                .build()
+            })?
+        } else {
+            spawn()
+        };
         ensure!(
             result > 0,
             InvalidInputSnafu {
                 path,
                 reason: format!(
                     "clone3 held actor failed: {}",
-                    std::io::Error::last_os_error()
+                    error.map_or_else(
+                        std::io::Error::last_os_error,
+                        std::io::Error::from_raw_os_error
+                    )
                 ),
             }
         );
@@ -1036,15 +1071,9 @@ impl ProcessFixture {
                 child.wait().context(IoSnafu { path: &self.path })?;
                 self.stopped = true;
             }
-        } else if let Some(pid) = self.raw_pid.take() {
-            let mut status = 0;
-            if unsafe { libc::waitpid(pid as libc::pid_t, &raw mut status, 0) } < 0 {
-                failed = Some(format!(
-                    "reap tracked process {pid}: {}",
-                    std::io::Error::last_os_error()
-                ));
-            } else {
-                self.stopped = true;
+        } else if self.raw_pid.is_some() {
+            if let Err(source) = self.wait_exit("forced process cleanup", STOP_GRACE) {
+                failed = Some(source.to_string());
             }
         }
         let group = self.group.as_ref();

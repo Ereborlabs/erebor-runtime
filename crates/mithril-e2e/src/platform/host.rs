@@ -89,7 +89,8 @@ impl Host {
         );
         let rootfs = self.shared.output().join("bundle/rootfs");
         let program = Path::new(command);
-        let mut actor = ProcessFixture::held_cgroup(program, args, self.shared.cgroup(), &rootfs)?;
+        let mut actor =
+            ProcessFixture::held_cgroup(program, args, self.shared.cgroup(), &rootfs, init)?;
         let pid = actor.id();
         let placement = self
             .shared
