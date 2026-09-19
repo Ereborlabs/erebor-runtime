@@ -1745,6 +1745,24 @@ test does not close a row when its physical condition or an assertion changed.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy actions, result fields, mailbox
       operations, and fixture owner after all three platform cases pass.
+  - [ ] Replace the pre-activation descriptor read and mapping block with one
+    small standard platform test. Use one shared Python actor and scenario
+    policy. Do not add a Platform API.
+    - [ ] Make the actor open protected and allowed file descriptors before
+      policy activation and Node startup. Recover the running actor through
+      the production startup path.
+    - [ ] Require `EACCES` for `Read` and `MmapRead` through the retained
+      protected descriptor. Require both operations to succeed through the
+      retained allowed descriptor.
+    - [ ] Attribute all four decisions to the recovered actor task and their
+      exact protected or allowed object. Keep setup, action, assertions, and
+      teardown in a test of fewer than 100 lines.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy prepared-descriptor actions, result
+      fields, mailbox operations, and fixture owner after all three platforms
+      pass. Keep the independent-process mapping cases.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
