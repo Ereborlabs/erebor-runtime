@@ -97,7 +97,7 @@ fn protected_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("process-ptrace-unmatched")?;
