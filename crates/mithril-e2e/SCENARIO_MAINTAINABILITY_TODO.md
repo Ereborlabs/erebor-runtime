@@ -1795,6 +1795,30 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Remove only the matching legacy ptrace action, result field, and
       fixture operation after all three platforms pass. Keep both signal
       cases and the shared process target until their replacements pass.
+  - [ ] Replace the process-signal block with three small standard platform
+    tests. Reuse the process-control actor and its one live child. Do not add
+    a Platform API.
+    - [ ] With the protected policy, send signal zero. Require success and
+      `EXACT_POLICY_ALLOW` evidence for the exact controller and target tasks.
+    - [ ] With the protected policy, send `SIGCONT`. Require `EACCES` and
+      `EXACT_POLICY_DENY` evidence for the exact controller and target tasks.
+    - [ ] With no matching process-control rule, send signal zero. Require
+      `EACCES` and `UNSUPPORTED_OBJECT` evidence for the exact controller and
+      target tasks.
+    - [ ] Keep each test below 100 lines. Keep actor result checks and security
+      assertions in each test.
+    - [ ] Pass the signal-zero allow case on Host and commit it.
+    - [ ] Pass the signal-zero allow case on direct `runc` and commit it.
+    - [ ] Pass the signal-zero allow case on Kubernetes and commit it.
+    - [ ] Pass the `SIGCONT` denial case on Host and commit it.
+    - [ ] Pass the `SIGCONT` denial case on direct `runc` and commit it.
+    - [ ] Pass the `SIGCONT` denial case on Kubernetes and commit it.
+    - [ ] Pass the unmatched signal-zero case on Host and commit it.
+    - [ ] Pass the unmatched signal-zero case on direct `runc` and commit it.
+    - [ ] Pass the unmatched signal-zero case on Kubernetes and commit it.
+    - [ ] Remove only the matching legacy signal actions, result fields, and
+      fixture operations after all three tests pass on all three platforms.
+      Remove the shared process target only when no legacy operation uses it.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
