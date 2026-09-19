@@ -707,6 +707,13 @@ count as maintainability migrations.
     and 1,225.54 seconds for Kubernetes. All 22 processes passed without a
     rerun or source change. The Kubernetes run retained the existing K3s
     cluster.
+  - The current source at `50910f48` passed all generated platform tests on
+    2026-09-19: 50 Host cases, 41 direct-`runc` cases, and 41 Kubernetes
+    cases. The run used one process for each lifecycle and platform. Reported
+    test time was 813.06 seconds for Host, 679.19 seconds for direct `runc`,
+    and 1,554.23 seconds for Kubernetes. Every current lifecycle process
+    passed without a rerun or source change. The Kubernetes run retained the
+    existing K3s cluster.
 - [x] Make exact single-test cleanup and complete-lane cleanup bounded and
   diagnostic on all three platforms. Do not depend on process exit, VM
   deletion, or K3s deletion for normal cleanup.
