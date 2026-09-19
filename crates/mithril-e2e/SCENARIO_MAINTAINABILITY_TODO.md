@@ -1781,7 +1781,7 @@ test does not close a row when its physical condition or an assertion changed.
       cookies, profile generations, roles, and distinct process-state IDs.
       Keep the test below 100 lines.
     - [x] Pass Host and commit it.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy ptrace action, result field, and
       fixture operation after all three platforms pass. Keep both signal
