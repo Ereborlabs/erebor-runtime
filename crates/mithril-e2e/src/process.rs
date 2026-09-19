@@ -624,10 +624,19 @@ impl ProcessFixture {
 
     pub(crate) fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
         if let Some(child) = self.child.as_mut() {
-            return child
-                .try_wait()
-                .context(IoSnafu { path: &self.path })
-                .inspect(|status| self.stopped |= status.is_some());
+            #[cfg(test)]
+            let transport = child.id() != self.actor_pid;
+            let status = child.try_wait().context(IoSnafu { path: &self.path })?;
+            #[cfg(test)]
+            if status.is_some()
+                && transport
+                && Path::new(&format!("/proc/{}", self.actor_pid)).exists()
+            {
+                self.child = None;
+                return Ok(None);
+            }
+            self.stopped |= status.is_some();
+            return Ok(status);
         }
         if let Some(probe) = self.exit_probe.as_mut() {
             return probe()

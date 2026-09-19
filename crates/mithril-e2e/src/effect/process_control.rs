@@ -97,7 +97,7 @@ fn protected_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("process-ptrace-unmatched")?;
@@ -115,7 +115,6 @@ fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     env.running(init.id())?;
     env.recovered(init.id(), "ptrace workload")?;
     let parent = env.task(actor.id(), "ptrace controller")?;
-    actor.ensure_running("external ptrace actor")?;
     let root = parent.snapshot.root_class.as_deref();
     assert_eq!(root, Some("restored_or_unknown_root"));
     assert_eq!(parent.snapshot.admitted_entry_rule_id, 0);
@@ -136,6 +135,7 @@ fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     let path = env.maps().0.to_owned();
     fs::write(env.work().join("ptrace"), b"ptrace\n")?;
     let comm = std::path::PathBuf::from(format!("/proc/{}/comm", actor.id()));
+    let expected = format!("ptrace-{}", libc::EACCES);
     let state = RefCell::new(String::from("<unread>"));
     wait_for(
         &comm,
@@ -144,7 +144,7 @@ fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
         || {
             let value = fs::read_to_string(&comm).unwrap_or_else(|error| format!("<{error}>"));
             *state.borrow_mut() = value.clone();
-            Ok((value.trim() == "ptrace-done").then_some(()))
+            Ok((value.trim() == expected).then_some(()))
         },
         || format!("last task name: {}", state.borrow()),
     )?;
@@ -187,9 +187,8 @@ fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     );
 
     fs::write(env.work().join("release"), b"release\n")?;
-    let status = actor.wait_exit("unmatched ptrace", Duration::from_secs(5))?;
+    actor.wait_gone(actor.id(), "unmatched ptrace exit")?;
     actor.stop()?;
-    assert_eq!(status.code(), Some(libc::EACCES), "{:?}", actor.stderr()?);
     effect?;
     init.stop()?;
     env.stop()

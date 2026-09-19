@@ -52,7 +52,7 @@ if result == 0:
     os.waitpid(child, os.WUNTRACED)
     libc.ptrace(PTRACE_DETACH, child, None, None)
 if not write_result:
-    name = ctypes.create_string_buffer(b"ptrace-done")
+    name = ctypes.create_string_buffer(f"ptrace-{error}".encode("ascii"))
     if libc.prctl(PR_SET_NAME, ctypes.addressof(name), 0, 0, 0) != 0:
         raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
     wait("release")

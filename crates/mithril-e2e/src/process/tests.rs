@@ -143,6 +143,47 @@ fn external_wait_has_no_exit_status() -> crate::Result<()> {
 }
 
 #[test]
+fn wait_ignores_transport_exit() -> crate::Result<()> {
+    let mut actor = Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .context(IoSnafu { path: "sleep" })?;
+    let pid = actor.id();
+    let waiter = std::thread::spawn(move || actor.wait());
+    let mut child = Command::new("true")
+        .spawn()
+        .context(IoSnafu { path: "true" })?;
+    assert!(child.wait().context(IoSnafu { path: "true" })?.success());
+    let mut fixture = ProcessFixture::new(child, Path::new("true"));
+    fixture.set_actor(pid)?;
+    let mut polls = 0;
+
+    fixture.wait_path(
+        Path::new("/proc"),
+        "actor after transport exit",
+        Duration::from_secs(1),
+        || {
+            polls += 1;
+            Ok((polls > 1).then_some(()))
+        },
+        || "actor is still running".to_owned(),
+    )?;
+    fixture.stop()?;
+    let status = waiter
+        .join()
+        .map_err(|_| {
+            InvalidInputSnafu {
+                path: "sleep",
+                reason: "actor waiter panicked",
+            }
+            .build()
+        })?
+        .context(IoSnafu { path: "sleep" })?;
+    assert!(status.signal().is_some());
+    Ok(())
+}
+
+#[test]
 fn actor_survives_input_loss() -> crate::Result<()> {
     let dir = tempfile::tempdir().context(IoSnafu {
         path: "temporary directory",

@@ -1783,13 +1783,15 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit it.
     - [x] Pass direct `runc` and commit it.
     - [x] Pass Kubernetes and commit it.
-    - [ ] Preserve the unmatched `PTRACE_ATTACH` case in a second small
+    - [x] Preserve the unmatched `PTRACE_ATTACH` case in a second small
       platform test. Use the same Python actor and a policy with no matching
       process-control rule. Require `EACCES`, `UNSUPPORTED_OBJECT`, operation
       argument 18, and the exact controller and target task identities.
     - [x] Pass the unmatched case on Host and commit it.
     - [x] Pass the unmatched case on direct `runc` and commit it.
-    - [ ] Pass the unmatched case on Kubernetes and commit it.
+    - [x] Pass the unmatched case on Kubernetes and commit it. The corrected
+      shared fixture passed Host in 30.44 seconds, direct `runc` in 30.01
+      seconds, and Kubernetes in 71.73 seconds on 2026-09-19.
     - [ ] Remove only the matching legacy ptrace action, result field, and
       fixture operation after all three platforms pass. Keep both signal
       cases and the shared process target until their replacements pass.
