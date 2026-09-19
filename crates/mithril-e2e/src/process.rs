@@ -643,6 +643,25 @@ impl ProcessFixture {
     }
 
     #[cfg(test)]
+    pub(crate) fn wait_text(&mut self, path: &Path, operation: &str) -> Result<String> {
+        let last = RefCell::new(String::from("<absent>"));
+        self.wait_path(
+            path,
+            operation,
+            START_LIMIT,
+            || match fs::read_to_string(path) {
+                Ok(text) => {
+                    *last.borrow_mut() = text.clone();
+                    Ok((!text.trim().is_empty()).then_some(text))
+                }
+                Err(source) if source.kind() == ErrorKind::NotFound => Ok(None),
+                Err(source) => Err(source).context(IoSnafu { path }),
+            },
+            || format!("last text: {:?}", last.borrow()),
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn wait_pid(&mut self, path: &Path, operation: &str) -> Result<u32> {
         let last = RefCell::new(String::from("<absent>"));
         self.wait_path(

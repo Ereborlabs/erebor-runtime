@@ -6,6 +6,8 @@ mod mailbox;
 mod network;
 #[cfg(test)]
 mod node_restart;
+#[cfg(test)]
+mod process_control;
 mod runc;
 mod support;
 

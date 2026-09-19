@@ -1771,15 +1771,16 @@ test does not close a row when its physical condition or an assertion changed.
   - [ ] Replace the protected `PTRACE_ATTACH` block with one small standard
     platform test. Use one shared Python actor and scenario policy. Do not add
     a Platform API.
-    - [ ] Start the protected actor, then make it fork one live target after
+    - [x] Start the protected actor, then make it fork one live target after
       activation. Resolve the target through `ProcessFixture::wait_child` and
       require a separate inherited task identity.
-    - [ ] Attempt `PTRACE_ATTACH` from the actor. Require `EACCES` and
-      `EXACT_POLICY_DENY` for request 16.
-    - [ ] Attribute the decision to the exact controller and target task
+    - [x] Attempt request 16 (`PTRACE_ATTACH`) from the actor. Require `EACCES`
+      and `EXACT_POLICY_DENY` for kernel access mode 18
+      (`PTRACE_MODE_ATTACH_REALCREDS`).
+    - [x] Attribute the decision to the exact controller and target task
       cookies, profile generations, roles, and distinct process-state IDs.
       Keep the test below 100 lines.
-    - [ ] Pass Host and commit it.
+    - [x] Pass Host and commit it.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy ptrace action, result field, and
