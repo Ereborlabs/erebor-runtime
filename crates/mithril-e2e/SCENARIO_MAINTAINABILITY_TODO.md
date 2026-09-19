@@ -1716,8 +1716,12 @@ test does not close a row when its physical condition or an assertion changed.
       field, mailbox requests, and worker owner after all three platform cases
       pass. This removed 205 lines. The 92 non-privileged library tests and
       strict crate Clippy pass.
-    - [ ] Run the complete Host, direct-`runc`, and Kubernetes matrix because
-      this is the third completed migration since the last full matrix.
+    - [x] Run the complete Host, direct-`runc`, and Kubernetes matrix because
+      this is the third completed migration since the last full matrix. On
+      2026-09-19, Host passed 47 tests in nine lifecycle processes, direct
+      `runc` passed 38 tests in eight processes, and Kubernetes passed 38 tests
+      in eight processes. Cleanup left no Mithril runtime files, namespaces,
+      or BPF pin roots.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
