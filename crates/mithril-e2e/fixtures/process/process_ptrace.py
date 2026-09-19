@@ -11,14 +11,16 @@ libc.ptrace.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.c_void_p, ctypes.c_v
 libc.ptrace.restype = ctypes.c_long
 work = sys.argv[1]
 result_path = os.path.join(work, "ptrace-result")
+write_result = "no-result" not in sys.argv[2:]
 
 
 def wait(name):
     while not os.path.exists(os.path.join(work, name)):
         time.sleep(0.01)
 
-with open(result_path, "w", encoding="ascii"):
-    pass
+if write_result:
+    with open(result_path, "w", encoding="ascii"):
+        pass
 print("native-fixture-ready", flush=True)
 wait("spawn")
 
@@ -35,11 +37,16 @@ wait("ptrace")
 ctypes.set_errno(0)
 result = libc.ptrace(PTRACE_ATTACH, child, None, None)
 error = ctypes.get_errno() if result == -1 else 0
-with open(result_path, "w", encoding="ascii") as output:
-    output.write(f"{error}\n")
+if write_result:
+    with open(result_path, "w", encoding="ascii") as output:
+        output.write(f"{error}\n")
 if result == 0:
     os.waitpid(child, os.WUNTRACED)
     libc.ptrace(PTRACE_DETACH, child, None, None)
+if not write_result:
+    os.close(release_fd)
+    os.waitpid(child, 0)
+    sys.exit(error)
 wait("release")
 os.close(release_fd)
 os.waitpid(child, 0)

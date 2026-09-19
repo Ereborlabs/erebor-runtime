@@ -96,3 +96,82 @@ fn protected_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     actor.stop()?;
     env.stop()
 }
+
+#[platform_test(host)]
+#[lifecycle = identity]
+fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("process-ptrace-unmatched")?;
+    env.start_control()?;
+    env.stop_node()?;
+    let mut init = env.start_actor("ready.py", &[])?;
+    env.place(init.id())?;
+    let mut actor = env.add_actor(
+        "python",
+        &["/fixtures/process_ptrace.py", "/work", "no-result"],
+    )?;
+    env.place(actor.id())?;
+    env.install_policy("python_policy.json")?;
+    env.start_node()?;
+    env.sync_policy()?;
+    env.node_ready()?;
+    env.running(init.id())?;
+    env.recovered(init.id(), "ptrace workload")?;
+    let parent = env.task(actor.id(), "ptrace controller")?;
+    actor.ensure_running("external ptrace actor")?;
+    assert_eq!(
+        parent.snapshot.root_class.as_deref(),
+        Some("restored_or_unknown_root")
+    );
+    assert_eq!(parent.snapshot.admitted_entry_rule_id, 0);
+
+    fs::write(env.work().join("spawn"), b"spawn\n")?;
+    let pid = actor.wait_child(actor.id(), "ptrace target")?;
+    actor.track(pid)?;
+    let target = env.task(pid, "ptrace target identity")?;
+    let parent_state = &parent.snapshot;
+    let target_state = &target.snapshot;
+    assert_eq!(
+        target_state.creator_task_cookie,
+        Some(parent_state.task_cookie)
+    );
+    assert_eq!(target_state.active_role_id, parent_state.active_role_id);
+    assert_ne!(target_state.task_cookie, parent_state.task_cookie);
+    assert_ne!(target_state.process_state_id, parent_state.process_state_id);
+
+    let path = env.maps().0.to_owned();
+    fs::write(env.work().join("ptrace"), b"ptrace\n")?;
+    let status = actor.wait_exit("unmatched ptrace", Duration::from_secs(5))?;
+    assert_eq!(status.code(), Some(libc::EACCES), "{:?}", actor.stderr()?);
+    wait_for(
+        &path,
+        "unmatched ptrace evidence",
+        Duration::from_secs(30),
+        || {
+            let snapshot = env.snapshot().map_err(|source| {
+                InvalidInputSnafu {
+                    path: &path,
+                    reason: source.to_string(),
+                }
+                .build()
+            })?;
+            Ok(snapshot.recent_effects.into_iter().find(|event| {
+                parent.matches_effect(
+                    event,
+                    "UNSUPPORTED_OBJECT",
+                    F::Privilege,
+                    O::Ptrace,
+                    -libc::EACCES,
+                ) && event.operation_argument == 18
+                    && event.controller_process_state_id == parent_state.process_state_id
+                    && event.target_task_cookie == target_state.task_cookie
+                    && event.target_role_id == target_state.active_role_id
+                    && event.target_process_state_id == target_state.process_state_id
+            }))
+        },
+        || "no unmatched ptrace denial observed".to_owned(),
+    )?;
+
+    actor.stop()?;
+    init.stop()?;
+    env.stop()
+}
