@@ -1684,6 +1684,22 @@ test does not close a row when its physical condition or an assertion changed.
       field after all three platform cases pass. Keep the shared deep path,
       external-alias, and mount-race setup. The 92 non-privileged library tests
       and strict crate Clippy pass.
+  - [ ] Replace the protected mount-race block with one actor-driven platform
+    test. Reuse the mount-alias actor. Before readiness, make it start eight
+    workers that wait at one barrier. Start Control and the actor before policy
+    and Node, then recover the workers through production startup. Release all
+    workers to bind mount the allowed source over the protected target. Require
+    zero successful mounts, eight `EACCES` or `EPERM` results, zero other
+    errors, and `UNSUPPORTED_OBJECT` mount evidence. After the race, require an
+    exact protected-file denial and an exact allowed-file control from the main
+    actor. Do not add a Platform API. Keep the test below 100 lines.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy mount-race setup, action, and result
+      field after all three platform cases pass. Run the complete Host,
+      direct-`runc`, and Kubernetes matrix because this is the third completed
+      migration since the last full matrix.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
