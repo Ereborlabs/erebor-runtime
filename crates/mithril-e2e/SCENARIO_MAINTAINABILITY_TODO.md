@@ -1792,7 +1792,7 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass the unmatched case on Kubernetes and commit it. The corrected
       shared fixture passed Host in 30.44 seconds, direct `runc` in 30.01
       seconds, and Kubernetes in 71.73 seconds on 2026-09-19.
-    - [ ] Remove only the matching legacy ptrace action, result field, and
+    - [x] Remove only the matching legacy ptrace action, result field, and
       fixture operation after all three platforms pass. Keep both signal
       cases and the shared process target until their replacements pass.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and

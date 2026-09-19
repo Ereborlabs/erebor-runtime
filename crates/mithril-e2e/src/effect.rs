@@ -419,8 +419,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub inherited_unix_stream_send_denied: bool,
     pub unix_stream_stale_peer_denied: bool,
     pub unix_stream_unmatched_denied: bool,
-    pub ptrace_hard_closed: bool,
-    pub process_ptrace_exact_denied: bool,
     pub process_signal_zero_permission_allowed: bool,
     pub process_signal_unmatched_denied: bool,
     pub namespace_privilege_hard_closed: bool,
@@ -2593,15 +2591,6 @@ impl EffectTestRunner {
                 "EXACT_POLICY_DENY",
                 true,
             )?;
-            require_exact_process_control(
-                &mut fixture,
-                &reader,
-                &observations,
-                HardClosedOperation::Ptrace,
-                KernelEffectOperationV1::Ptrace,
-                "EXACT_POLICY_DENY",
-                true,
-            )?;
         } else {
             require_hard_close(
                 &mut fixture,
@@ -2614,18 +2603,6 @@ impl EffectTestRunner {
                     KernelEffectOperationV1::Signal,
                 ),
                 "unmatched signal process control",
-            )?;
-            require_hard_close(
-                &mut fixture,
-                &reader,
-                &observations,
-                HardClosedOperation::Ptrace,
-                "UNSUPPORTED_OBJECT",
-                (
-                    KernelEffectFamilyV1::Privilege,
-                    KernelEffectOperationV1::Ptrace,
-                ),
-                "unmatched ptrace process control",
             )?;
         }
 
@@ -4315,8 +4292,6 @@ impl EffectTestRunner {
             inherited_unix_stream_send_denied: protect,
             unix_stream_stale_peer_denied: protect,
             unix_stream_unmatched_denied: protect,
-            ptrace_hard_closed: true,
-            process_ptrace_exact_denied: protect,
             process_signal_zero_permission_allowed: protect,
             process_signal_unmatched_denied: protect,
             namespace_privilege_hard_closed: true,

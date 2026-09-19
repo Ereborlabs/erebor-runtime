@@ -223,7 +223,6 @@ pub(super) enum PreparedOperation {
     InheritedUnixStreamSend,
     UnixStreamStalePeer,
     UnixStreamUnmatched,
-    Ptrace,
     Signal,
     SignalUnmatched,
     Namespace,
@@ -2627,37 +2626,6 @@ impl PreparedOperations {
                         target
                             .restart()
                             .map_or_else(error_outcome, |()| target.roundtrip())
-                    })
-            }
-            PreparedOperation::Ptrace => {
-                self.process_target
-                    .as_ref()
-                    .map_or_else(missing_process_target, |target| {
-                        // SAFETY: this is an ordinary PTRACE_ATTACH attempt against the
-                        // fixture-owned process; no pointer argument is dereferenced.
-                        let result = unsafe {
-                            libc::ptrace(
-                                libc::PTRACE_ATTACH,
-                                target.pid,
-                                std::ptr::null_mut::<libc::c_void>(),
-                                std::ptr::null_mut::<libc::c_void>(),
-                            )
-                        };
-                        if result == 0 {
-                            let mut status = 0;
-                            // SAFETY: a successful attach makes this child waitable; detach
-                            // restores it so a failed enforcement assertion can still clean up.
-                            unsafe {
-                                libc::waitpid(target.pid, &mut status, 0);
-                                libc::ptrace(
-                                    libc::PTRACE_DETACH,
-                                    target.pid,
-                                    std::ptr::null_mut::<libc::c_void>(),
-                                    std::ptr::null_mut::<libc::c_void>(),
-                                );
-                            }
-                        }
-                        libc_outcome(result)
                     })
             }
             PreparedOperation::Signal => {
