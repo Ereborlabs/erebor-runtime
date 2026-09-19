@@ -452,7 +452,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub bind_alias_canonicalized: bool,
     pub path_tree_outside_control_allowed: bool,
     pub fsconfig_reconfigure_global_invalidation: bool,
-    pub protected_mount_race_denied: bool,
     pub mount_snapshot_rebuilt_after_mutation: bool,
     pub mount_propagation_reached_peer: bool,
     pub mount_propagation_all_views_rebuilt: bool,
@@ -1606,12 +1605,6 @@ impl EffectTestRunner {
         let mutation_source = paths.mutation_root.join("mutation-source");
         let link_target = paths.mutation_root.join("link-target");
         let rename_target = paths.mutation_root.join("rename-target");
-        let mount_race_target = if protect {
-            &path_tree_root
-        } else {
-            &paths.mount_target
-        };
-        fixture.prepare_mount_race(&paths.source, mount_race_target, 8)?;
         fixture.prepare_operations(&paths, &truncate_target)?;
         let shared_mmap_target_pid = fixture.shared_mmap_target_pid()?;
         let unix_stream_peer_pid = fixture.prepare_unix_stream_target()?;
@@ -3767,48 +3760,6 @@ impl EffectTestRunner {
             )?;
         }
 
-        let mount_marker = observations.cursor();
-        let mount_race = fixture.mount_race(&paths.source, mount_race_target, 8)?;
-        ensure!(
-            mount_race.allowed == 0 && mount_race.denied == 8 && mount_race.other_errors == 0,
-            InvalidInputSnafu {
-                path: mount_race_target,
-                reason: "one or more protected mount attempts escaped hard safety",
-            }
-        );
-        wait_for_effect(
-            &reader,
-            &observations,
-            mount_marker,
-            "UNSUPPORTED_OBJECT",
-            (KernelEffectFamilyV1::Mount, KernelEffectOperationV1::Mount),
-        )?;
-        reconcile_policy_lifecycle(&policy, &mut host)?;
-        let reconciled_marker = observations.cursor();
-        ensure!(
-            fixture.open(&paths.secret)?.allowed != protect,
-            InvalidInputSnafu {
-                path: &paths.secret,
-                reason: "failed protected mounts left the exact path permanently unavailable",
-            }
-        );
-        wait_for_exact_effect(
-            &reader,
-            &observations,
-            reconciled_marker,
-            if protect {
-                "EXACT_POLICY_DENY"
-            } else {
-                "WOULD_DENY"
-            },
-            (
-                KernelEffectFamilyV1::File,
-                KernelEffectOperationV1::OpenRead,
-            ),
-            PathSelectorV1::kernel_handle_for_id("manual-secret"),
-            None,
-        )?;
-
         let mount_snapshots_before_mutation = ready_canonical_mount_snapshots(&host)?;
         let mount_epoch_before_mutation = global_mount_mutation_epoch(&host)?;
         let changed_mount_secret = paths.mount_target.join("secret");
@@ -4397,7 +4348,6 @@ impl EffectTestRunner {
             bind_alias_canonicalized: true,
             path_tree_outside_control_allowed: protect,
             fsconfig_reconfigure_global_invalidation,
-            protected_mount_race_denied: true,
             mount_snapshot_rebuilt_after_mutation: true,
             mount_propagation_reached_peer: true,
             mount_propagation_all_views_rebuilt: true,

@@ -78,16 +78,6 @@ enum ChildRequest {
     },
     ReadPrepared,
     MmapPrepared,
-    PrepareMountRace {
-        source: PathBuf,
-        target: PathBuf,
-        count: u32,
-    },
-    MountRace {
-        source: PathBuf,
-        target: PathBuf,
-        count: u32,
-    },
     PreparePropagationPeer {
         shared_mount: PathBuf,
         benign: PathBuf,
@@ -546,42 +536,6 @@ impl EffectProcessFixture {
         }
     }
 
-    pub(super) fn mount_race(
-        &mut self,
-        source: &Path,
-        target: &Path,
-        count: u32,
-    ) -> Result<BatchOutcome> {
-        match self.request(&ChildRequest::MountRace {
-            source: source.to_path_buf(),
-            target: target.to_path_buf(),
-            count,
-        })? {
-            ChildResponse::Batch(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong mount response",
-            )),
-        }
-    }
-
-    pub(super) fn prepare_mount_race(
-        &mut self,
-        source: &Path,
-        target: &Path,
-        count: u32,
-    ) -> Result<()> {
-        match self.request(&ChildRequest::PrepareMountRace {
-            source: source.to_path_buf(),
-            target: target.to_path_buf(),
-            count,
-        })? {
-            ChildResponse::Prepared => Ok(()),
-            _ => Err(invalid_state(
-                "effect child returned the wrong mount preparation response",
-            )),
-        }
-    }
-
     pub(super) fn prepare_propagation_peer(&mut self, paths: &EffectPaths) -> Result<u32> {
         match self.request(&ChildRequest::PreparePropagationPeer {
             shared_mount: paths.source.clone(),
@@ -1035,7 +989,6 @@ impl Drop for EffectProcessFixture {
 pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> {
     enter_private_mount_namespace()?;
     let mut mailbox = SharedMailbox::open(mailbox_path)?;
-    let mut prepared_mount_race = None;
     let mut prepared_write_race = None;
     let mut prepared_file = None;
     let mut prepared_hard_closed = None;
@@ -1119,33 +1072,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 )),
                 false,
             ),
-            ChildRequest::PrepareMountRace {
-                source,
-                target,
-                count,
-            } => match PreparedMountRace::new(source, target, count) {
-                Ok(prepared) => {
-                    prepared_mount_race = Some(prepared);
-                    (Ok(ChildResponse::Prepared), false)
-                }
-                Err(error) => (Err(error), false),
-            },
-            ChildRequest::MountRace {
-                source,
-                target,
-                count,
-            } => match prepared_mount_race.take() {
-                Some(prepared) => (
-                    prepared
-                        .run(&source, &target, count)
-                        .map(ChildResponse::Batch),
-                    false,
-                ),
-                None => (
-                    Err(invalid_state("effect mount race was not prepared")),
-                    false,
-                ),
-            },
             ChildRequest::PreparePropagationPeer {
                 shared_mount,
                 benign,
@@ -2090,87 +2016,6 @@ impl PreparedWriteRace {
                 result.denied += 1;
             } else {
                 result.other_errors += 1;
-            }
-        }
-        result.elapsed_ns = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
-        Ok(result)
-    }
-}
-
-struct PreparedMountRace {
-    source: PathBuf,
-    target: PathBuf,
-    barrier: Arc<Barrier>,
-    handles: Vec<std::thread::JoinHandle<std::result::Result<(), rustix::io::Errno>>>,
-}
-
-impl PreparedMountRace {
-    fn new(source: PathBuf, target: PathBuf, count: u32) -> Result<Self> {
-        let worker_count = usize::try_from(count).map_err(|error| {
-            invalid_state(format!("effect mount worker count is invalid: {error}"))
-        })?;
-        ensure!(
-            worker_count > 0,
-            InvalidInputSnafu {
-                path: &target,
-                reason: "effect mount race needs at least one worker",
-            }
-        );
-        let barrier = Arc::new(Barrier::new(worker_count + 1));
-        let mut handles = Vec::with_capacity(worker_count);
-        for _ in 0..worker_count {
-            let worker_source = source.clone();
-            let worker_target = target.clone();
-            let worker_barrier = Arc::clone(&barrier);
-            handles.push(
-                std::thread::Builder::new()
-                    .spawn(move || {
-                        worker_barrier.wait();
-                        rustix::mount::mount_bind(worker_source, worker_target)
-                    })
-                    .context(IoSnafu {
-                        path: Path::new("effect mount thread"),
-                    })?,
-            );
-        }
-        Ok(Self {
-            source,
-            target,
-            barrier,
-            handles,
-        })
-    }
-
-    fn run(self, source: &Path, target: &Path, count: u32) -> Result<BatchOutcome> {
-        ensure!(
-            source == self.source
-                && target == self.target
-                && usize::try_from(count).ok() == Some(self.handles.len()),
-            InvalidInputSnafu {
-                path: target,
-                reason: "effect mount race differs from its prepared workers",
-            }
-        );
-        let start = Instant::now();
-        self.barrier.wait();
-        let mut result = BatchOutcome {
-            allowed: 0,
-            denied: 0,
-            other_errors: 0,
-            elapsed_ns: 0,
-        };
-        for handle in self.handles {
-            match handle
-                .join()
-                .map_err(|_| invalid_state("effect mount thread panicked"))?
-            {
-                Ok(()) => result.allowed += 1,
-                Err(error)
-                    if error == rustix::io::Errno::ACCESS || error == rustix::io::Errno::PERM =>
-                {
-                    result.denied += 1;
-                }
-                Err(_) => result.other_errors += 1,
             }
         }
         result.elapsed_ns = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);

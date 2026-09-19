@@ -1688,7 +1688,7 @@ test does not close a row when its physical condition or an assertion changed.
       field after all three platform cases pass. Keep the shared deep path,
       external-alias, and mount-race setup. The 92 non-privileged library tests
       and strict crate Clippy pass.
-  - [ ] Replace the protected mount-race block with one actor-driven platform
+  - [x] Replace the protected mount-race block with one actor-driven platform
     test. Reuse the mount-alias actor. Before readiness, make it start eight
     workers that wait at one barrier. Start Control and the actor before policy
     and Node, then recover the workers through production startup. Release all
@@ -1708,10 +1708,12 @@ test does not close a row when its physical condition or an assertion changed.
       a new Pod while Node is stopped. The two compatible `mount_alias`
       Kubernetes cases passed together in 92.53 seconds. Failed and successful
       lifecycle teardown both removed the runtime integration.
-    - [ ] Remove only the matching legacy mount-race setup, action, and result
-      field after all three platform cases pass. Run the complete Host,
-      direct-`runc`, and Kubernetes matrix because this is the third completed
-      migration since the last full matrix.
+    - [x] Remove only the matching legacy mount-race setup, action, result
+      field, mailbox requests, and worker owner after all three platform cases
+      pass. This removed 205 lines. The 92 non-privileged library tests and
+      strict crate Clippy pass.
+    - [ ] Run the complete Host, direct-`runc`, and Kubernetes matrix because
+      this is the third completed migration since the last full matrix.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 
