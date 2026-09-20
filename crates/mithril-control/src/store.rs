@@ -21,10 +21,10 @@ use crate::evidence_segment::{
 use crate::{
     canonical_policy_spec_digest, CoverageIntakeStateV1, CoverageReport, CoverageReportInputV1,
     EvidenceBatchInputV1, EvidenceConsumptionStateV1, EvidenceConsumptionWatermarkV1,
-    EvidenceIntakeIdentityV1, EvidenceRecord, EvidenceRecords, EvidenceStoreOutcomeV1,
-    ExceptionActivationAcknowledgementV1, ExceptionActivationStateV1, ExceptionDeliveryCandidateV1,
-    ExceptionDeliveryOperationV1, ExceptionRolloutStateV1, ExceptionSourceRevisionV1,
-    ExceptionSourceStateV1, IntakeStateV1, NodeDecommissionStateV1,
+    EvidenceCpuBindingV1, EvidenceIntakeIdentityV1, EvidenceRecord, EvidenceRecords,
+    EvidenceStoreOutcomeV1, ExceptionActivationAcknowledgementV1, ExceptionActivationStateV1,
+    ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1, ExceptionRolloutStateV1,
+    ExceptionSourceRevisionV1, ExceptionSourceStateV1, IntakeStateV1, NodeDecommissionStateV1,
     PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1, PolicyDocumentV1,
     PolicyRolloutStateV1, PolicyRolloutStatusV1, PolicySourceRevisionV1, PolicySourceStateV1,
     PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1, Result,
@@ -32,7 +32,10 @@ use crate::{
     TrustGenerationAcknowledgementV1, TrustGenerationV1, MAX_PENDING_EVIDENCE_RECORDS,
 };
 
-const STORE_SCHEMA_VERSION: u32 = 4;
+const STORE_SCHEMA_VERSION: u32 = 5;
+
+mod evidence_read;
+pub use evidence_read::*;
 const STATE_DIGEST_BYTES: usize = 32;
 const MAX_STATE_BYTES: usize = 64 * 1_024 * 1_024;
 
@@ -105,11 +108,11 @@ impl ControlStateOwner {
                 });
             }
         }
-        let state = owner.read()?.unwrap_or_default();
+        let state = owner.read(root)?.unwrap_or_default();
         Ok((owner, state))
     }
 
-    fn read(&self) -> Result<Option<ControlStoreState>> {
+    fn read(&self, root: &Path) -> Result<Option<ControlStoreState>> {
         let bytes = match fs::read(&self.path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -149,12 +152,59 @@ impl ControlStateOwner {
             }
             .build()
         })?;
-        if durable.schema_version != STORE_SCHEMA_VERSION {
+        if durable.schema_version != STORE_SCHEMA_VERSION && durable.schema_version != 4 {
             return ControlStoreSnafu {
                 path: self.path.clone(),
                 reason: "the current Control state schema is invalid".to_owned(),
             }
             .fail();
+        }
+        if durable.schema_version == 4 {
+            if !durable.state.evidence_cpu_bindings.is_empty() {
+                return ControlStoreSnafu {
+                    path: self.path.clone(),
+                    reason: "schema 4 contains unsupported evidence CPU metadata".to_owned(),
+                }
+                .fail();
+            }
+            let backup = root.join("state-v4.bin");
+            match fs::hard_link(&self.path, &backup) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if fs::read(&backup).context(IoSnafu { path: &backup })? != bytes {
+                        return ControlStoreSnafu {
+                            path: backup,
+                            reason: "the schema migration recovery copy differs from the source"
+                                .to_owned(),
+                        }
+                        .fail();
+                    }
+                }
+                Err(source) => {
+                    return Err(crate::Error::Io {
+                        path: backup,
+                        source,
+                        location: snafu::Location::default(),
+                    })
+                }
+            }
+            File::open(&backup)
+                .and_then(|file| file.sync_all())
+                .context(IoSnafu { path: &backup })?;
+            File::open(root)
+                .and_then(|directory| directory.sync_all())
+                .context(IoSnafu { path: root })?;
+            self.replace(root, &durable.state)?;
+        }
+        for (identity, binding) in durable.state.evidence_cpu_bindings.iter() {
+            validate_evidence_identity(identity, root)?;
+            if binding.first_cursor == 0 {
+                return ControlStoreSnafu {
+                    path: self.path.clone(),
+                    reason: "evidence CPU metadata has a zero first cursor".to_owned(),
+                }
+                .fail();
+            }
         }
         Ok(Some(durable.state))
     }
@@ -425,6 +475,8 @@ struct ControlStoreState {
         BTreeMap<(String, u64, [u8; 16], u64), TrustGenerationAcknowledgementV1>,
     evidence_cursors: Arc<BTreeMap<EvidenceIntakeIdentityV1, IntakeStateV1>>,
     evidence_stream_ids: Arc<BTreeMap<EvidenceIntakeIdentityV1, u64>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    evidence_cpu_bindings: Arc<BTreeMap<EvidenceIntakeIdentityV1, EvidenceCpuBindingV1>>,
     evidence_segment_commits: BTreeMap<EvidenceSegmentStreamV1, EvidenceSegmentPositionV1>,
     #[serde(skip)]
     evidence_batches: Arc<BTreeMap<EvidenceBatchKeyV1, StoredEvidenceBatchV1>>,
@@ -488,6 +540,10 @@ struct EvidenceSourceEpochKeyV1 {
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 // Each variant contains all state that must become durable in one transaction.
 enum ControlTransactionV1 {
+    EvidenceCpuBound {
+        identity: EvidenceIntakeIdentityV1,
+        binding: EvidenceCpuBindingV1,
+    },
     NodeSessionAdvanced {
         advance: Box<NodeSessionAdvanceTransactionV1>,
     },
@@ -712,6 +768,18 @@ pub fn startup_absence_proof_digest(
 }
 
 impl ControlStore {
+    pub fn evidence_cpu_binding(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+    ) -> Result<Option<EvidenceCpuBindingV1>> {
+        Ok(self
+            .lock()?
+            .state
+            .evidence_cpu_bindings
+            .get(identity)
+            .copied())
+    }
+
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         Self::open_with_evidence_limits(root, EvidenceStoreLimitsV1::default())
     }
@@ -1534,6 +1602,18 @@ impl ControlStore {
         validate_evidence_identity(&identity, &inner.root)?;
         validate_evidence_batch_input(&batch, &inner.root)?;
         validate_source_label(&inner.state, &identity, &inner.root)?;
+        if inner
+            .state
+            .evidence_cpu_bindings
+            .get(&identity)
+            .is_some_and(|binding| binding.cpu_id != batch.cpu_id)
+        {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "one evidence source epoch changed CPU identity".to_owned(),
+            }
+            .fail();
+        }
         let consumed_cursor = inner
             .state
             .evidence_consumption
@@ -1698,6 +1778,33 @@ impl ControlStore {
             .fail();
         }
         let stream_id = evidence_stream_id_for_write(&inner.state, &identity, &inner.root)?;
+        if !inner.state.evidence_cpu_bindings.contains_key(&identity) {
+            let last_legacy_cursor = inner
+                .state
+                .pending_evidence_batches
+                .iter()
+                .filter(|(key, _)| key.identity == identity)
+                .map(|(_, batch)| batch.last_cursor)
+                .max()
+                .unwrap_or(0)
+                .max(cursor.contiguous_cursor);
+            let first_cursor = checked_store_increment(
+                last_legacy_cursor,
+                &inner.root,
+                "the CPU binding cursor is exhausted",
+            )?;
+            // Sync the stream binding before segment acceptance. Old prefixes keep unknown CPU.
+            commit(
+                &mut inner,
+                ControlTransactionV1::EvidenceCpuBound {
+                    identity: identity.clone(),
+                    binding: EvidenceCpuBindingV1 {
+                        cpu_id: batch.cpu_id,
+                        first_cursor,
+                    },
+                },
+            )?;
+        }
         let mut batches = inner.evidence_segments.write_frames(
             &identity,
             stream_id,
@@ -1880,6 +1987,18 @@ impl ControlStore {
         let mut inner = self.evidence_lock()?;
         validate_evidence_identity(&input.identity, &inner.root)?;
         validate_source_label(&inner.state, &input.identity, &inner.root)?;
+        if inner
+            .state
+            .evidence_cpu_bindings
+            .get(&input.identity)
+            .is_some_and(|binding| binding.cpu_id != input.report.cpu_id)
+        {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "coverage changed the bound evidence CPU identity".to_owned(),
+            }
+            .fail();
+        }
         if input.report.source_epoch != input.identity.source_epoch || input.report.revision == 0 {
             return ControlStoreSnafu {
                 path: inner.root.clone(),
@@ -3317,6 +3436,18 @@ fn apply_transaction(
         return Ok(());
     }
     match transaction {
+        ControlTransactionV1::EvidenceCpuBound { identity, binding } => {
+            validate_evidence_identity(identity, path)?;
+            validate_source_label(state, identity, path)?;
+            if binding.first_cursor == 0 || state.evidence_cpu_bindings.contains_key(identity) {
+                return ControlStoreSnafu {
+                    path: path.to_owned(),
+                    reason: "evidence CPU metadata is invalid or already bound".to_owned(),
+                }
+                .fail();
+            }
+            Arc::make_mut(&mut state.evidence_cpu_bindings).insert(identity.clone(), *binding);
+        }
         ControlTransactionV1::NodeSessionAdvanced { advance } => {
             validate_node_session_advance(state, advance, path)?;
             for rollout in &advance.policy_rollout_states {
@@ -6327,6 +6458,130 @@ mod tests {
     }
 
     #[test]
+    fn discovery_migration_preserves_state_and_checked_recovery_copy(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use sha2::{Digest as _, Sha256};
+        for interrupted in [false, true] {
+            let directory = TempDir::new()?;
+            let store = super::ControlStore::open(directory.path())?;
+            let document = PolicyDocumentV1::parse(
+                Path::new("policy-v1.yaml"),
+                include_bytes!("../tests/fixtures/policy-v1.yaml"),
+            )?;
+            let source = source_revision(&document, PolicySourceStateV1::Accepted, 1, 'a')?;
+            store.accept_compiled_source_revision(
+                source.clone(),
+                document.clone(),
+                signed_artifact(&document, 1)?,
+            )?;
+            let mut trust = crate::TrustGenerationV1 {
+                generation: 1,
+                bundle_digest: String::new(),
+                policy_issuer_sequence_epoch: 1,
+                policy_signers: vec![],
+            };
+            trust.bundle_digest = trust.computed_bundle_digest();
+            store.install_trust_generation(trust.clone())?;
+            let manifest = crate::DiscoveryInputManifestV1::from_json(include_bytes!(
+                "../../mithril-e2e/fixtures/discovery/manifest.json"
+            ))?;
+            let identity = manifest.records[0].id.stream.clone();
+            let record = manifest.records[0].observation.to_wire_record()?;
+            store.accept_evidence_batch(
+                identity.clone(),
+                crate::EvidenceBatchInputV1::encode(1, vec![record.clone()])?,
+            )?;
+            let health = store.health()?;
+            let mut state = store.lock()?.state.clone();
+            state.evidence_cpu_bindings = Arc::new(BTreeMap::new());
+            drop(store);
+            let encoded = rmp_serde::to_vec_named(&super::DurableControlStateV1 {
+                schema_version: 4,
+                state,
+            })?;
+            let mut original = Sha256::digest(&encoded).to_vec();
+            original.extend_from_slice(&encoded);
+            let path = directory.path().join("state.bin");
+            std::fs::write(&path, &original)?;
+            if interrupted {
+                std::fs::hard_link(&path, directory.path().join("state-v4.bin"))?;
+                std::fs::write(
+                    directory.path().join("state.tmp"),
+                    b"interrupted replacement",
+                )?;
+            }
+            let migrated = super::ControlStore::open(directory.path())?;
+            assert_eq!(migrated.health()?, health);
+            assert_eq!(
+                migrated.source_revision(&source.policy_source_revision_id)?,
+                Some(source)
+            );
+            assert_eq!(migrated.current_trust_generation()?, Some(trust));
+            assert_eq!(
+                std::fs::read(directory.path().join("state-v4.bin"))?,
+                original
+            );
+            let bytes = std::fs::read(&path)?;
+            let durable: super::DurableControlStateV1 =
+                rmp_serde::from_slice(&bytes[super::STATE_DIGEST_BYTES..])?;
+            assert_eq!(durable.schema_version, 5);
+            assert_ne!(durable.schema_version, 4);
+            assert!(durable.state.evidence_cpu_bindings.is_empty());
+            assert_eq!(migrated.evidence_cpu_binding(&identity)?, None);
+            assert_eq!(
+                migrated.accepted_evidence_records(&identity)?,
+                vec![record.clone()]
+            );
+            let mut next = crate::EvidenceBatchInputV1::encode(2, vec![record])?;
+            next.cpu_id = 7;
+            migrated.accept_evidence_batch(identity.clone(), next)?;
+            assert_eq!(
+                migrated.evidence_cpu_binding(&identity)?,
+                Some(crate::EvidenceCpuBindingV1 {
+                    cpu_id: 7,
+                    first_cursor: 2
+                })
+            );
+            let health = migrated.health()?;
+            drop(migrated);
+            assert_eq!(
+                super::ControlStore::open(directory.path())?.health()?,
+                health
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn discovery_migration_rejects_corrupt_conflicting_and_future_state(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use sha2::{Digest as _, Sha256};
+        for scenario in ["checksum", "backup", "future"] {
+            let directory = TempDir::new()?;
+            let encoded = rmp_serde::to_vec_named(&super::DurableControlStateV1 {
+                schema_version: if scenario == "future" { 6 } else { 4 },
+                state: super::ControlStoreState::default(),
+            })?;
+            let mut bytes = Sha256::digest(&encoded).to_vec();
+            bytes.extend_from_slice(&encoded);
+            if scenario == "checksum" {
+                bytes[0] ^= 1;
+            }
+            if scenario == "backup" {
+                std::fs::write(directory.path().join("state-v4.bin"), b"different state")?;
+            }
+            let path = directory.path().join("state.bin");
+            std::fs::write(&path, &bytes)?;
+            assert!(
+                super::ControlStore::open(directory.path()).is_err(),
+                "{scenario}"
+            );
+            assert_eq!(std::fs::read(&path)?, bytes);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn exception_request_must_fit_the_current_grant() -> crate::Result<()> {
         let mut document = PolicyDocumentV1::parse(
             Path::new("policy-v1.yaml"),
@@ -6723,6 +6978,7 @@ mod tests {
             source_id: [3; 16],
             source_epoch: 1,
         };
+        let mut initial_state = Vec::new();
         for batch_index in 0..BATCHES {
             let first_cursor = batch_index * RECORDS_PER_BATCH + 1;
             let records = (first_cursor..first_cursor + RECORDS_PER_BATCH)
@@ -6748,6 +7004,10 @@ mod tests {
                 )?,
                 crate::EvidenceStoreOutcomeV1::Accepted
             );
+            if batch_index == 0 {
+                initial_state =
+                    std::fs::read(&state).context(crate::error::IoSnafu { path: &state })?;
+            }
         }
         let segments = directory.path().join("evidence/segments-v2");
         let segment_count = std::fs::read_dir(&segments)
@@ -6758,10 +7018,14 @@ mod tests {
             })?
             .count();
         assert_eq!(segment_count, 1);
-        assert!(!state.exists());
+        assert_eq!(
+            std::fs::read(&state).context(crate::error::IoSnafu { path: &state })?,
+            initial_state
+        );
+        assert!(initial_state.len() < 4096);
         assert!(!directory.path().join("commits").exists());
 
-        let mut stored_bytes = 0_u64;
+        let mut stored_bytes = initial_state.len() as u64;
         for entry in std::fs::read_dir(&segments).map_err(|error| crate::Error::Io {
             path: segments.clone(),
             source: error,
@@ -6791,7 +7055,7 @@ mod tests {
         let started = std::time::Instant::now();
         let reopened = super::ControlStore::open(directory.path())?;
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
-        assert_eq!(reopened.commit_index(), 0);
+        assert_eq!(reopened.commit_index(), 1);
         assert_eq!(
             reopened.accepted_evidence_records(&identity)?.len() as u64,
             record_count
