@@ -1,5 +1,7 @@
 #[cfg(test)]
 mod admin_exec;
+#[cfg(test)]
+mod bpf;
 mod child;
 #[cfg(test)]
 mod file_effect;

@@ -1933,6 +1933,17 @@ test does not close a row when its physical condition or an assertion changed.
     dispatch arm after all three platform cases pass. The cleanup removed 16
     lines from the oversized legacy files. The 93 non-privileged library tests
     and strict all-target Clippy pass.
+  - [ ] Replace the BPF map-create privilege block with one standard platform
+    test. Use one shared Python actor and the existing Python policy. Start the
+    runtime-added actor before Node to preserve the original external-root
+    classification. Require user-space and BPF `EACCES`,
+    `UNSUPPORTED_OBJECT`, the exact actor task, and no policy object.
+  - [x] Pass the BPF map-create test on Host and commit it. The 76-line
+    scenario passed in 28.53 seconds on 2026-09-20.
+  - [ ] Pass the BPF map-create test on direct `runc` and commit it.
+  - [ ] Pass the BPF map-create test on Kubernetes and commit it.
+  - [ ] Remove only the matching legacy action, result field, enum case,
+    dispatch arm, and actor syscall code after all three platform cases pass.
 
 ### Network
 
