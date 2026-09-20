@@ -286,6 +286,17 @@ between Phases 6 and 7. Phase 12 allocation decisions may begin after Phase 0, b
 physical evaluation must wait for the owning prerequisite named in Phase 12.
 Phase 12 cannot satisfy a Phase 11 core gate.
 
+The [combined Araphor implementation order](../araphor-discovery-engine/README.md#combined-implementation-order)
+inserts discovery and console work without changing this Mithril order.
+Discovery 1 and 2 can proceed against the existing Control owners while 6.2
+qualification closes; 6.3 is already recorded Done. In this combined delivery,
+7 consumes Discovery 2's bounded reader and derived store. Then Discovery 3–6
+deliver and qualify the first investigation and policy workflow before 8.
+Phases 8, 9, and 10 each own the adapter and console work for their new
+exception, response, or provider capabilities. Phase 11 proves the combined
+release. No later capability is required to close the first bounded discovery
+release, and that release does not complete this master plan.
+
 Phase 6 owns the node WAL, upload client, replay behavior, and protocol-facing
 acknowledgement cursor. Phase 6.1 moves that behavior to typed gRPC services
 without changing its durable meaning. Phase 6.2 owns the production Control

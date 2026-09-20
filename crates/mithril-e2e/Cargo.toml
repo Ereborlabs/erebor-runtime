@@ -63,6 +63,10 @@ tower.workspace = true
 tonic-build.workspace = true
 
 [[bin]]
+name = "mithril_discovery_test"
+path = "src/bin/mithril_discovery_test.rs"
+
+[[bin]]
 name = "mithril-kernel-qualification"
 path = "src/bin/mithril_kernel_qualification.rs"
 

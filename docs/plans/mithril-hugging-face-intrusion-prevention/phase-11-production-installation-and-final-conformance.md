@@ -1,6 +1,6 @@
 # Phase 11: Production Installation And Final Conformance
 
-Status: Proposed; depends on Phases 0-10, including Phases 6.1 and 6.2,
+Status: Proposed; depends on Phases 0-10, including Phases 6.1, 6.2, and 6.3,
 `Done`.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
@@ -92,6 +92,16 @@ twelve Chapter 37 results, exact active fixture equality, raw performance and
 capacity evidence, install/upgrade proofs, and the limited release claim.
 
 ## Required Tests And Fixtures
+
+For the [combined Araphor release](../araphor-discovery-engine/README.md#combined-implementation-order),
+require the bounded Discovery 6 result and the adapter/console results owned
+by Mithril 8–10. Rerun their required cases on the exact release revision;
+earlier passes do not transfer. Include SQL isolation, disclosure, tenant
+scope, policy approval/publication, critical escalation, response readback,
+provider capability limits, and one complete local-defender/console loop.
+Pin client/model and runbook versions for every assisted claim. Test upgrades,
+rebuilds, backup/restore, cursor expiry, and load with discovery enabled and
+disabled. Local enforcement must remain independent of SQL and model health.
 
 `FIXTURE-REGISTRY-COMPLETE-001` must prove exact equality among Appendix C,
 documentation markers, `fixtures.yaml`, executable tests, criterion mapping,

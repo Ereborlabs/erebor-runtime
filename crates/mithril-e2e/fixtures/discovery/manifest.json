@@ -1,0 +1,756 @@
+{
+  "schema_version": 1,
+  "tenant_id": {
+    "high": 1,
+    "low": 2
+  },
+  "source_revision": "synthetic-discovery-corpus-v1",
+  "proof_kind": "SYNTHETIC",
+  "coverage": [
+    {
+      "stream": {
+        "tenant_id": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          2
+        ],
+        "node_id": "node-a",
+        "node_boot_id": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          4
+        ],
+        "label_epoch": 1,
+        "source_id": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          5,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          6
+        ],
+        "source_epoch": 1
+      },
+      "cpu_id": 0,
+      "first_cursor": 1,
+      "last_cursor": 3,
+      "expected_records": 3,
+      "coverage_revision": 1,
+      "coverage_interval_id": {"high": 7, "low": 8},
+      "state": "HEALTHY",
+      "gap_reasons": []
+    }
+  ],
+  "contexts": [
+    {
+      "record_id": {
+        "stream": {
+          "tenant_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            2
+          ],
+          "node_id": "node-a",
+          "node_boot_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            3,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            4
+          ],
+          "label_epoch": 1,
+          "source_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            5,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            6
+          ],
+          "source_epoch": 1
+        },
+        "cpu_id": 0,
+        "durable_cursor": 1
+      },
+      "subject_revision": "workload-uid-a/revision-1",
+      "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "configuration_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "process_instance_id": {
+        "high": 21,
+        "low": 22
+      },
+      "entry_instance_id": {
+        "high": 23,
+        "low": 24
+      },
+      "binding_id": {
+        "high": 25,
+        "low": 26
+      },
+      "role_id": 1,
+      "state_id": 1,
+      "entry_rule_id": 1,
+      "catalog_revision": 1,
+      "static_key": {
+        "workload_selector_id": "worker",
+        "protected_scope_id": "33333333-3333-4333-8333-333333333333",
+        "execution_set_id": "44444444-4444-4444-8444-444444444444",
+        "entry_kind": "CONTAINER_START",
+        "role_id": "converter",
+        "process_state_id": "base",
+        "effect_family": "FILE",
+        "operation_id": "OPEN_READ",
+        "object_selector": "CLASS:PROJECTED_TOKEN",
+        "binding_lifecycle": "ACTIVE"
+      }
+    },
+    {
+      "record_id": {
+        "stream": {
+          "tenant_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            2
+          ],
+          "node_id": "node-a",
+          "node_boot_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            3,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            4
+          ],
+          "label_epoch": 1,
+          "source_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            5,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            6
+          ],
+          "source_epoch": 1
+        },
+        "cpu_id": 0,
+        "durable_cursor": 2
+      },
+      "subject_revision": "workload-uid-a/revision-1",
+      "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "configuration_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "process_instance_id": {
+        "high": 21,
+        "low": 22
+      },
+      "entry_instance_id": {
+        "high": 23,
+        "low": 24
+      },
+      "binding_id": {
+        "high": 25,
+        "low": 26
+      },
+      "role_id": 1,
+      "state_id": 1,
+      "entry_rule_id": 1,
+      "catalog_revision": 1,
+      "static_key": {
+        "workload_selector_id": "worker",
+        "protected_scope_id": "33333333-3333-4333-8333-333333333333",
+        "execution_set_id": "44444444-4444-4444-8444-444444444444",
+        "entry_kind": "CONTAINER_START",
+        "role_id": "converter",
+        "process_state_id": "base",
+        "effect_family": "FILE",
+        "operation_id": "OPEN_READ",
+        "object_selector": "CLASS:PROJECTED_TOKEN",
+        "binding_lifecycle": "ACTIVE"
+      }
+    }
+  ],
+  "records": [
+    {
+      "id": {
+        "stream": {
+          "tenant_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            2
+          ],
+          "node_id": "node-a",
+          "node_boot_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            3,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            4
+          ],
+          "label_epoch": 1,
+          "source_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            5,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            6
+          ],
+          "source_epoch": 1
+        },
+        "cpu_id": 0,
+        "durable_cursor": 1
+      },
+      "original_kernel_sequence": 101,
+      "observation": {
+        "tenant_id": {
+          "high": 1,
+          "low": 2
+        },
+        "node_boot_id": {
+          "high": 3,
+          "low": 4
+        },
+        "source_id": {
+          "high": 5,
+          "low": 6
+        },
+        "source_epoch": 1,
+        "source_sequence": 1,
+        "cpu_id": 0,
+        "observed_boottime_ns": 1001,
+        "ingested_utc_ns": 2001,
+        "coverage_interval_id": {
+          "high": 7,
+          "low": 8
+        },
+        "profile_generation_ref_id": 9,
+        "temporal_coverage": "COMPLETE",
+        "effect": {
+          "task_cookie": 10,
+          "target_task_cookie": null,
+          "process_lineage_id": {
+            "high": 11,
+            "low": 12
+          },
+          "authority_domain_id": {
+            "high": 13,
+            "low": 14
+          },
+          "execution_set_id": {
+            "high": 15,
+            "low": 16
+          },
+          "exact_object_id": {
+            "high": 17,
+            "low": 18
+          },
+          "destination_id": null,
+          "policy_rule_id": 19,
+          "reason": 9,
+          "decision": 1,
+          "effect_family": 2,
+          "operation": 2,
+          "operation_argument": null,
+          "configured_errno": -13,
+          "kernel_result": -13
+        }
+      }
+    },
+    {
+      "id": {
+        "stream": {
+          "tenant_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            2
+          ],
+          "node_id": "node-a",
+          "node_boot_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            3,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            4
+          ],
+          "label_epoch": 1,
+          "source_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            5,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            6
+          ],
+          "source_epoch": 1
+        },
+        "cpu_id": 0,
+        "durable_cursor": 2
+      },
+      "original_kernel_sequence": 102,
+      "observation": {
+        "tenant_id": {
+          "high": 1,
+          "low": 2
+        },
+        "node_boot_id": {
+          "high": 3,
+          "low": 4
+        },
+        "source_id": {
+          "high": 5,
+          "low": 6
+        },
+        "source_epoch": 1,
+        "source_sequence": 2,
+        "cpu_id": 0,
+        "observed_boottime_ns": 1002,
+        "ingested_utc_ns": 2002,
+        "coverage_interval_id": {
+          "high": 7,
+          "low": 8
+        },
+        "profile_generation_ref_id": 9,
+        "temporal_coverage": "COMPLETE",
+        "effect": {
+          "task_cookie": 10,
+          "target_task_cookie": null,
+          "process_lineage_id": {
+            "high": 11,
+            "low": 12
+          },
+          "authority_domain_id": {
+            "high": 13,
+            "low": 14
+          },
+          "execution_set_id": {
+            "high": 15,
+            "low": 16
+          },
+          "exact_object_id": {
+            "high": 17,
+            "low": 18
+          },
+          "destination_id": null,
+          "policy_rule_id": 19,
+          "reason": 9,
+          "decision": 1,
+          "effect_family": 2,
+          "operation": 2,
+          "operation_argument": null,
+          "configured_errno": -13,
+          "kernel_result": -13
+        }
+      }
+    },
+    {
+      "id": {
+        "stream": {
+          "tenant_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            2
+          ],
+          "node_id": "node-a",
+          "node_boot_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            3,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            4
+          ],
+          "label_epoch": 1,
+          "source_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            5,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            6
+          ],
+          "source_epoch": 1
+        },
+        "cpu_id": 0,
+        "durable_cursor": 3
+      },
+      "original_kernel_sequence": 103,
+      "observation": {
+        "tenant_id": {
+          "high": 1,
+          "low": 2
+        },
+        "node_boot_id": {
+          "high": 3,
+          "low": 4
+        },
+        "source_id": {
+          "high": 5,
+          "low": 6
+        },
+        "source_epoch": 1,
+        "source_sequence": 3,
+        "cpu_id": 0,
+        "observed_boottime_ns": 1003,
+        "ingested_utc_ns": 2003,
+        "coverage_interval_id": {
+          "high": 7,
+          "low": 8
+        },
+        "profile_generation_ref_id": 9,
+        "temporal_coverage": "COMPLETE",
+        "effect": {
+          "task_cookie": 10,
+          "target_task_cookie": null,
+          "process_lineage_id": {
+            "high": 11,
+            "low": 12
+          },
+          "authority_domain_id": {
+            "high": 13,
+            "low": 14
+          },
+          "execution_set_id": {
+            "high": 15,
+            "low": 16
+          },
+          "exact_object_id": {
+            "high": 17,
+            "low": 18
+          },
+          "destination_id": null,
+          "policy_rule_id": 19,
+          "reason": 9,
+          "decision": 1,
+          "effect_family": 2,
+          "operation": 2,
+          "operation_argument": null,
+          "configured_errno": -13,
+          "kernel_result": -13
+        }
+      }
+    },
+    {
+      "id": {
+        "stream": {
+          "tenant_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            2
+          ],
+          "node_id": "node-a",
+          "node_boot_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            3,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            4
+          ],
+          "label_epoch": 1,
+          "source_id": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            5,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            6
+          ],
+          "source_epoch": 1
+        },
+        "cpu_id": 0,
+        "durable_cursor": 1
+      },
+      "original_kernel_sequence": 101,
+      "observation": {
+        "tenant_id": {
+          "high": 1,
+          "low": 2
+        },
+        "node_boot_id": {
+          "high": 3,
+          "low": 4
+        },
+        "source_id": {
+          "high": 5,
+          "low": 6
+        },
+        "source_epoch": 1,
+        "source_sequence": 1,
+        "cpu_id": 0,
+        "observed_boottime_ns": 1001,
+        "ingested_utc_ns": 2001,
+        "coverage_interval_id": {
+          "high": 7,
+          "low": 8
+        },
+        "profile_generation_ref_id": 9,
+        "temporal_coverage": "COMPLETE",
+        "effect": {
+          "task_cookie": 10,
+          "target_task_cookie": null,
+          "process_lineage_id": {
+            "high": 11,
+            "low": 12
+          },
+          "authority_domain_id": {
+            "high": 13,
+            "low": 14
+          },
+          "execution_set_id": {
+            "high": 15,
+            "low": 16
+          },
+          "exact_object_id": {
+            "high": 17,
+            "low": 18
+          },
+          "destination_id": null,
+          "policy_rule_id": 19,
+          "reason": 9,
+          "decision": 1,
+          "effect_family": 2,
+          "operation": 2,
+          "operation_argument": null,
+          "configured_errno": -13,
+          "kernel_result": -13
+        }
+      }
+    }
+  ]
+}

@@ -8,6 +8,13 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Araphor discovery rejected {code}: {reason}"))]
+    Discovery {
+        code: &'static str,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Mithril Control configuration is invalid: {reason}"))]
     InvalidConfiguration {
         reason: String,
@@ -104,7 +111,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::InvalidConfiguration { .. }
+            Self::Discovery { .. }
+            | Self::InvalidConfiguration { .. }
             | Self::Json { .. }
             | Self::PolicySource { .. }
             | Self::PolicyValidation { .. }
@@ -122,7 +130,8 @@ impl ErrorExt for Error {
         match self {
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Serve { .. } => RetryHint::Retryable,
-            Self::InvalidConfiguration { .. }
+            Self::Discovery { .. }
+            | Self::InvalidConfiguration { .. }
             | Self::Json { .. }
             | Self::Tls { .. }
             | Self::PolicySource { .. }
