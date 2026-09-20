@@ -184,10 +184,12 @@ decisions before Phase 2. A benchmark not run is not a store-selection result.
 
 ## Result
 
-**Not done.** The offline implementation, frozen synthetic corpus, and native
-storage qualification exist. The source-extension contract review remains
-open. Phase 2 has not started. The database binding is test-only. No live
-collector, API, model, or policy mutation was added.
+**Done.** The offline implementation, frozen synthetic corpus, native SQLite
+selection, and source-extension contract review pass this phase's boundary.
+The final verification and proof limits are recorded below. The database
+binding is test-only. No live collector, API, model, or policy mutation was
+added. Durable implementation and live intake/rollout interference remain
+Phase 2 requirements.
 
 ### Source and proof limits
 
@@ -346,6 +348,11 @@ test.
 
 ### Remaining work before Phase 2
 
+This was the open checklist after the first storage experiment. The contract
+correction, native store selection, corpus, and final source review below close
+items 1–5. Live primary-owner interference is assigned to Phase 2, where the
+production discovery owner exists. It is not an offline benchmark claim.
+
 1. Freeze the complete labeled corpus, operator-task protocol, HF capability
    map, and defender-loop fixtures. Current tests cover the denied-read
    investigation and selected negative contracts, not that complete corpus.
@@ -497,3 +504,46 @@ the frozen protocol when the later assistance implementation exists.
 `bash .github/scripts/verify-rust-ci.sh` passed after the final corpus edit:
 format, workspace check, clippy, and workspace tests. The corpus deliverable
 is **Done**. Physical tests remain separate; ignored cases are not passes.
+
+### Source-extension contract review
+
+Reviewed against main `36cf6449` and the offline implementation at `6aa98343`.
+The live changes below belong to Phase 2. No Interceptor ABI change is needed.
+
+| Current owner and call path | Required extension and compatibility rule |
+| --- | --- |
+| [EffectObservationV1](../../../crates/erebor-interceptor-abi/src/abi.rs) → [EffectObservationStore::record_events](../../../crates/mithril-node/src/observation.rs) → [ObservationCanonicalizer::normalize_kernel](../../../crates/mithril-node/src/observation/model.rs) | Preserve process, entry, binding, role/state, entry rule, exact key/handle, composite atom, and original sequence. Reuse the one observation ingress. Base events survive absent optional context. |
+| [NodePolicyGenerationOwner::install](../../../crates/mithril-node/src/policy.rs) and generation semantics | Build the bounded immutable lookup from validated generation data and measured selectors. Key it by generation and binding; numeric role handles alone are insufficient. Retained semantics are checked for handle conflicts. Missing historical selectors remain unresolved. No event-time filesystem or Control lookup. |
+| [ObservationEnvelopeV1::{to_wire_record,from_wire_record}](../../../crates/mithril-control/src/evidence/model.rs) → [EvidenceRecordV1](../../../crates/mithril-node/src/observation/wal.rs) | Add optional versioned context at protobuf field 21; retain fields 1–20. Keep original kernel sequence separate from the cursor passed to `from_wire_record`. Absent context encodes no new bytes, so old frame checksums and record hashes stay valid. |
+| [EvidenceIntakeOwner](../../../crates/mithril-control/src/evidence.rs) → [EvidenceSegmentOwner](../../../crates/mithril-control/src/evidence_segment.rs) | Upgrade Control first. Validate new optional fields and their bound without replacing the base record. Preserve the original framed bytes and checksum. Reject unknown context versions explicitly. |
+| [EvidenceIntakeOwner::validate_batch](../../../crates/mithril-control/src/evidence.rs) → `EvidenceBatchInputV1` | CPU ID is validated through the envelope but is not retained in the current batch input. Persist an immutable CPU binding per accepted stream in the same transaction. Reject a changed CPU at the same identity. Old streams without a retained CPU fact stay unresolved; do not substitute CPU zero. |
+| [ControlStore::accepted_evidence_records](../../../crates/mithril-control/src/store.rs) | Do not use this whole-range, lock-held reader for discovery. The new reader selects at most 256 records, 1 MiB, and four handles under the lock, then checks and decodes frozen frame ranges outside it. An active segment can append; its selected committed prefix must not change. |
+| [ControlStore::acknowledge_evidence_consumption](../../../crates/mithril-control/src/store.rs) | This is one shared watermark, not a discovery subscription. Discovery must not call it. Open handles survive unlink; reclamation before open returns exact missing bounds. Sync copied input before its durable discovery reference. |
+| [WorkloadTargetFactV1](../../../crates/mithril-control/src/policy/reconciliation.rs) | Pin image, controller, container, and target revision from the existing owner. A present-day inventory result cannot repair missing historical input. |
+| [ControlStateOwner](../../../crates/mithril-control/src/store.rs) | Schema 4 stores a checksummed state image. Extend the same owner with bounded heads and a checked migration copy. Keep bulk records in immutable artifacts and one SQLite index, not in the fixed-size state image. |
+
+The Node normalization callers are the production observation store and the
+observation window/WAL tests. Wire construction is centralized in the shared
+envelope adapter; intake validates each decoded record before acceptance. The
+new compatibility checks must cover all these paths, not only discovery's
+offline manifest.
+
+Available packet facts now pin their owner-qualified reference, recorded time,
+and validity interval. The cutoff includes the start and excludes the end.
+Future-recorded, not-yet-valid, expired, and zero-time facts fail validation.
+The producer remains responsible for supplying authentic owner facts; this
+schema check is not a live owner lookup or authorization decision.
+
+### Final verification
+
+`cargo test -p mithril-control discovery:: -- --nocapture` passed 23 tests.
+`bash .github/scripts/verify-rust-ci.sh` then passed after the last Rust edit:
+format, workspace check, clippy with warnings denied, and workspace tests.
+The e2e library passed 98 tests; 160 physical/explicit helper tests were ignored.
+The Node library passed 243 tests. The documentation check found no broken
+local links. Native storage proof remains the separate measured VM run above.
+
+The frozen task protocol is ready for later agent/operator evaluation. No
+model quality, human task-time improvement, live owner lookup, response runtime,
+or full HF protection is claimed. The offline contracts and selected store are
+ready for the already approved durable implementation. Result: **Done**.

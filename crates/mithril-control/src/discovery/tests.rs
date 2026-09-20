@@ -540,3 +540,27 @@ fn valid_citation_does_not_establish_provider_use() -> TestResult<()> {
     );
     Ok(())
 }
+
+#[test]
+fn packet_rejects_future_and_expired_owner_facts() -> TestResult<()> {
+    let (mut packet, _) = investigation()?;
+    for (recorded, start, end, valid) in [
+        (2000, 2000, None, true),
+        (3000, 3000, Some(3001), true),
+        (3001, 2000, None, false),
+        (2000, 3001, None, false),
+        (2000, 2000, Some(3000), false),
+        (2000, 2000, Some(2999), false),
+        (0, 2000, None, false),
+        (2000, 0, None, false),
+    ] {
+        packet.owner_facts = vec![DiscoveryOwnerFactV1::Available {
+            reference: packet.scope.subject.clone(),
+            recorded_utc_ns: recorded,
+            valid_from_utc_ns: start,
+            valid_until_utc_ns: end,
+        }];
+        assert_eq!(packet.validate().is_ok(), valid);
+    }
+    Ok(())
+}

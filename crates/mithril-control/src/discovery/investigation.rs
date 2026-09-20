@@ -66,6 +66,9 @@ pub struct DisclosurePolicyV1 {
 pub enum DiscoveryOwnerFactV1 {
     Available {
         reference: DiscoveryReferenceV1,
+        recorded_utc_ns: u64,
+        valid_from_utc_ns: u64,
+        valid_until_utc_ns: Option<u64>,
     },
     Unsupported {
         owner: DiscoveryReferenceOwnerV1,
@@ -357,7 +360,22 @@ impl ContextPacket {
         )?;
         for fact in &self.owner_facts {
             match fact {
-                DiscoveryOwnerFactV1::Available { reference } => self.reference(reference)?,
+                DiscoveryOwnerFactV1::Available {
+                    reference,
+                    recorded_utc_ns,
+                    valid_from_utc_ns,
+                    valid_until_utc_ns,
+                } => {
+                    self.reference(reference)?;
+                    require(
+                        *recorded_utc_ns > 0
+                            && *recorded_utc_ns <= self.cutoff_utc_ns
+                            && *valid_from_utc_ns > 0
+                            && *valid_from_utc_ns <= self.cutoff_utc_ns
+                            && valid_until_utc_ns.is_none_or(|end| end > self.cutoff_utc_ns),
+                        "OWNER_FACT_VALIDITY",
+                    )?;
+                }
                 DiscoveryOwnerFactV1::Unsupported { reason, .. } => {
                     require(!reason.is_empty(), "UNSUPPORTED_REASON")?
                 }
@@ -425,7 +443,7 @@ impl ContextPacket {
                 || self.scope.parents.contains(reference)
                 || self.owner_facts.iter().any(|fact| {
                     matches!(fact,
-                    DiscoveryOwnerFactV1::Available { reference: known } if known == reference)
+                    DiscoveryOwnerFactV1::Available { reference: known, .. } if known == reference)
                 }),
             "UNKNOWN_REFERENCE",
         )
