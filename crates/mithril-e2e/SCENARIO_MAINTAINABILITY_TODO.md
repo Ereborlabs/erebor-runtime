@@ -1942,6 +1942,9 @@ test does not close a row when its physical condition or an assertion changed.
     scenario passed in 28.53 seconds on 2026-09-20.
   - [x] Pass the BPF map-create test on direct `runc` and commit it. The exact
     case passed in 37.05 seconds on 2026-09-20 through the production OCI hook.
+  - [x] Reproduce the Kubernetes execution transport status in the lightweight
+    fixture test. The actor exits successfully, the transport exits with code
+    1, and `ProcessFixture` preserves the distinct transport result.
   - [ ] Pass the BPF map-create test on Kubernetes and commit it.
   - [ ] Remove only the matching legacy action, result field, enum case,
     dispatch arm, and actor syscall code after all three platform cases pass.
