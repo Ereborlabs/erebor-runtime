@@ -15,7 +15,7 @@ execution before Phase 2.
 
 ## Implementation flow
 
-Partial [run_discovery_offline](../../../crates/mithril-e2e/src/discovery.rs): Engineer selects a recorded workload case. Only the synthetic case exists.<br>
+[pilot corpus](../../../crates/mithril-e2e/fixtures/discovery/pilot.json): Engineer selects a frozen synthetic workload case. No production trace is supplied.<br>
 -> Partial [manifest](../../../crates/mithril-e2e/fixtures/discovery/manifest.json): Engineer pins source revision, target inputs, and permitted data scope. The inputs are fixture data.<br>
 -> [DiscoveryInputManifestV1::validate](../../../crates/mithril-control/src/discovery/model.rs): Input adapter validates the existing envelope and coverage records.<br>
 -> Partial [derive_recorded](../../../crates/mithril-control/src/discovery/recorded.rs): Adapter joins owner-supplied actor and resource bindings. Current joins use supplied fixture bindings.<br>
@@ -184,10 +184,10 @@ decisions before Phase 2. A benchmark not run is not a store-selection result.
 
 ## Result
 
-**Not done.** The offline implementation and initial feasibility tests exist.
-The complete corpus and storage qualification are not done. Phase 2 has not
-started. No live collector, database binding, API, model, or policy mutation was
-added.
+**Not done.** The offline implementation, frozen synthetic corpus, and native
+storage qualification exist. The source-extension contract review remains
+open. Phase 2 has not started. The database binding is test-only. No live
+collector, API, model, or policy mutation was added.
 
 ### Source and proof limits
 
@@ -460,3 +460,40 @@ edits. Four ordinary native-storage tests passed; explicit guest runs covered
 the ignored qualification and fault helpers. Result for storage selection:
 **Done**. The full phase remains **Not done** until the fixture and source
 contract work is complete.
+
+### Frozen pilot corpus
+
+[pilot.json](../../../crates/mithril-e2e/fixtures/discovery/pilot.json) fixes 21
+synthetic cases, four evaluation partitions, six operator-protocol rules, and
+the seven master HF capability boundaries. Each case has counted input groups,
+expected atoms, unresolved and prevented counts, coverage, a question,
+acceptable dispositions, required facts, and a next check. The builder uses
+the pinned image, configuration, and native key in the existing manifest.
+This is not a recorded HF incident or a trained classifier.
+
+[Case::input](../../../crates/mithril-control/src/discovery/tests/corpus.rs)
+constructs the bounded input.<br>
+-> [DiscoveryOwner::derive_recorded](../../../crates/mithril-control/src/discovery/recorded.rs)
+builds exact atoms.<br>
+-> [corpus checks](../../../crates/mithril-control/src/discovery/tests/corpus.rs)
+compare counts, coverage, bounded samples, and duplicate/permuted replay.
+
+The 10,000-routine/one-forbidden case retains one separate prevented record.
+Two replicas retain separate identities and unequal coverage. A release change
+does not merge image/configuration facts. Missing native network bindings stay
+unresolved; the fixture does not infer TLS or provider semantics.
+
+The defender contract check serializes and restores a packet and report. A
+low model priority or refusal leaves the critical finding reference, failed
+notification reference, absent human receipt, and unsupported response owner
+unchanged. A replacement lifetime rejects the prior report. These are schema
+and reference checks, not a running notification, approval, or response loop.
+The late-input check creates a new digest without changing the sealed result.
+
+`cargo test -p mithril-control discovery:: -- --nocapture` passed 22 tests.
+No operator-time or model-quality result is claimed. Those measurements use
+the frozen protocol when the later assistance implementation exists.
+
+`bash .github/scripts/verify-rust-ci.sh` passed after the final corpus edit:
+format, workspace check, clippy, and workspace tests. The corpus deliverable
+is **Done**. Physical tests remain separate; ignored cases are not passes.
