@@ -79,6 +79,14 @@ pub(crate) struct IntakeStateV1 {
     pub contiguous_cursor: u64,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceCpuBindingV1 {
+    pub cpu_id: u32,
+    /// Earlier records have no retained CPU proof.
+    pub first_cursor: u64,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CoverageIntakeStateV1 {
@@ -87,6 +95,7 @@ pub(crate) struct CoverageIntakeStateV1 {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct EvidenceBatchInputV1 {
+    pub cpu_id: u32,
     pub first_cursor: u64,
     pub last_cursor: u64,
     pub framed_records: prost::bytes::Bytes,
@@ -125,6 +134,7 @@ impl EvidenceBatchInputV1 {
                 .build()
             })?;
         Ok(Self {
+            cpu_id: 0,
             first_cursor,
             last_cursor,
             framed_records: framed_records.into(),
@@ -149,6 +159,7 @@ impl EvidenceBatchInputV1 {
             .map(|end| end - byte_index)
             .collect();
         Self {
+            cpu_id: self.cpu_id,
             first_cursor: self.first_cursor + record_index as u64,
             last_cursor: self.last_cursor,
             framed_records,
@@ -264,6 +275,7 @@ impl EvidenceIntakeOwner {
         batches: Vec<(AuthenticatedEvidenceNodeV1, EvidenceBatch)>,
     ) -> std::result::Result<EvidenceAck, Status> {
         let mut group_identity = None;
+        let mut group_cpu = None;
         let mut group_first_cursor: Option<u64> = None;
         let mut group_last_cursor: Option<u64> = None;
         let mut framed_records = Vec::new();
@@ -273,6 +285,7 @@ impl EvidenceIntakeOwner {
             if group_identity
                 .as_ref()
                 .is_some_and(|group| group != &identity)
+                || group_cpu.is_some_and(|cpu| cpu != input.cpu_id)
                 || group_last_cursor
                     .and_then(|cursor| cursor.checked_add(1))
                     .is_some_and(|next| next != input.first_cursor)
@@ -291,10 +304,12 @@ impl EvidenceIntakeOwner {
             group_first_cursor.get_or_insert(input.first_cursor);
             group_last_cursor = Some(input.last_cursor);
             group_identity.get_or_insert(identity);
+            group_cpu.get_or_insert(input.cpu_id);
         }
         let identity = group_identity
             .ok_or_else(|| Status::invalid_argument("an evidence commit group is empty"))?;
         let stored = EvidenceBatchInputV1 {
+            cpu_id: group_cpu.unwrap_or_default(),
             first_cursor: group_first_cursor.unwrap_or_default(),
             last_cursor: group_last_cursor.unwrap_or_default(),
             framed_records: framed_records.into(),
@@ -434,6 +449,7 @@ impl EvidenceIntakeOwner {
             source_epoch: batch.source_epoch,
         };
         let stored = EvidenceBatchInputV1 {
+            cpu_id: batch.cpu_id,
             first_cursor: batch.first_cursor,
             last_cursor,
             framed_records: batch.framed_records,
@@ -747,6 +763,55 @@ mod tests {
             source_epoch: 7,
             ..identity()
         }
+    }
+
+    #[test]
+    fn discovery_read_cpu_binding_survives_restart_and_rejects_changed_cpu(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let owner = EvidenceIntakeOwner::open(directory.path())?;
+        let mut first = batch(1, 2)?;
+        first.cpu_id = 7;
+        owner.receive(&authenticated(), first.clone())?;
+        let binding = owner
+            .store()
+            .evidence_cpu_binding(&identity())?
+            .ok_or("CPU binding is absent")?;
+        assert_eq!(binding.cpu_id, 7);
+        assert_eq!(binding.first_cursor, 1);
+        let commit = owner.store().health()?.commit_index;
+        owner.receive(&authenticated(), first.clone())?;
+        assert_eq!(owner.store().health()?.commit_index, commit);
+        first.cpu_id = 8;
+        assert!(owner.receive(&authenticated(), first).is_err());
+        assert_eq!(owner.contiguous_cursor(&identity())?, 2);
+        drop(owner);
+        let reopened = EvidenceIntakeOwner::open(directory.path())?;
+        assert_eq!(
+            reopened.store().evidence_cpu_binding(&identity())?,
+            Some(binding)
+        );
+        let mut next = batch(3, 1)?;
+        next.cpu_id = 7;
+        reopened.receive(&authenticated(), next)?;
+        assert_eq!(reopened.contiguous_cursor(&identity())?, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn discovery_read_commit_group_rejects_mixed_cpu_before_acceptance(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let owner = EvidenceIntakeOwner::open(directory.path())?;
+        let first = batch(1, 1)?;
+        let mut second = batch(2, 1)?;
+        second.cpu_id = 1;
+        assert!(owner
+            .receive_group(vec![(authenticated(), first), (authenticated(), second)])
+            .is_err());
+        assert_eq!(owner.contiguous_cursor(&identity())?, 0);
+        assert_eq!(owner.store().evidence_cpu_binding(&identity())?, None);
+        Ok(())
     }
 
     #[test]

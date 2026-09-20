@@ -29,5 +29,9 @@ pub use service::{
     AllowedNodeIdentity, ControlPlane, KubernetesNodeSessionV1, PolicySignerTrustV1,
     TrustGenerationV1,
 };
-pub use store::{startup_absence_proof_digest, ControlStore, ControlStoreHealthV1};
+pub use store::{
+    startup_absence_proof_digest, ControlStore, ControlStoreHealthV1, EvidenceReadMetadataV1,
+    EvidenceReadPageV1, EvidenceReadV1, MAX_EVIDENCE_READ_BYTES, MAX_EVIDENCE_READ_HANDLES,
+    MAX_EVIDENCE_READ_RECORDS,
+};
 pub use trust::*;

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
+use std::os::unix::fs::FileExt as _;
 use std::path::{Path, PathBuf};
 
 use prost::Message;
@@ -217,6 +218,52 @@ struct EvidenceFrameIndexV1 {
     payload_start: usize,
     payload_end: usize,
     end: usize,
+}
+
+pub(crate) struct EvidenceSegmentReadV1 {
+    file: File,
+    path: PathBuf,
+    frames: Vec<EvidenceFrameIndexV1>,
+    pub(crate) first: u64,
+    pub(crate) encoded_bytes: usize,
+}
+
+impl EvidenceSegmentReadV1 {
+    pub(crate) fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    pub(crate) fn decode<M: Message + Default>(self) -> Result<Vec<M>> {
+        let mut records = Vec::with_capacity(self.frames.len());
+        for frame in self.frames {
+            let start = frame.payload_start - 4;
+            let mut bytes = vec![0; frame.end - start];
+            self.file
+                .read_exact_at(&mut bytes, start as u64)
+                .context(IoSnafu { path: &self.path })?;
+            let length = u32::from_be_bytes(bytes[..4].try_into().unwrap_or_default()) as usize;
+            let checksum_start = bytes.len() - 4;
+            let checksum =
+                u32::from_be_bytes(bytes[checksum_start..].try_into().unwrap_or_default());
+            if length != frame.payload_end - frame.payload_start
+                || crc32c::crc32c(&bytes[..checksum_start]) != checksum
+            {
+                return ControlStoreSnafu {
+                    path: self.path,
+                    reason: "a frozen evidence frame changed length or checksum".to_owned(),
+                }
+                .fail();
+            }
+            records.push(M::decode(&bytes[4..checksum_start]).map_err(|error| {
+                ControlStoreSnafu {
+                    path: self.path.clone(),
+                    reason: format!("a frozen evidence frame failed decoding: {error}"),
+                }
+                .build()
+            })?);
+        }
+        Ok(records)
+    }
 }
 
 struct EncodedEvidenceFramesV1 {
@@ -910,6 +957,75 @@ impl EvidenceSegmentOwner {
             .fail();
         }
         Ok(crate::EvidenceRecords { records })
+    }
+
+    pub(crate) fn open_read(
+        &self,
+        segment_id: u64,
+        expected: EvidenceSegmentKindV1,
+        maximum_records: usize,
+        maximum_bytes: usize,
+    ) -> Result<Option<EvidenceSegmentReadV1>> {
+        let state = self.segments.get(&segment_id).ok_or_else(|| {
+            ControlStoreSnafu {
+                path: self.root.clone(),
+                reason: "the evidence read selected an absent segment".to_owned(),
+            }
+            .build()
+        })?;
+        let actual = state.descriptor.kind;
+        if expected.stream() != actual.stream()
+            || expected.first() < actual.first()
+            || expected.first() > actual.last()
+            || expected.last() < expected.first()
+        {
+            return ControlStoreSnafu {
+                path: state.path.clone(),
+                reason: "the evidence read selected a foreign or invalid range".to_owned(),
+            }
+            .fail();
+        }
+        let start = usize::try_from(expected.first() - actual.first()).map_err(|error| {
+            ControlStoreSnafu {
+                path: state.path.clone(),
+                reason: format!("the evidence read start exceeds local bounds: {error}"),
+            }
+            .build()
+        })?;
+        let count = usize::try_from(expected.last().min(actual.last()) - expected.first() + 1)
+            .unwrap_or(usize::MAX)
+            .min(maximum_records);
+        let selected = state
+            .frames
+            .get(start..start.saturating_add(count))
+            .ok_or_else(|| {
+                ControlStoreSnafu {
+                    path: state.path.clone(),
+                    reason: "the evidence read exceeds its frame index".to_owned(),
+                }
+                .build()
+            })?;
+        let mut frames = Vec::with_capacity(count);
+        let mut encoded_bytes = 0;
+        for frame in selected {
+            let length = frame.end - (frame.payload_start - 4);
+            if length > maximum_bytes - encoded_bytes {
+                break;
+            }
+            frames.push(*frame);
+            encoded_bytes += length;
+        }
+        if frames.is_empty() {
+            return Ok(None);
+        }
+        let file = File::open(&state.path).context(IoSnafu { path: &state.path })?;
+        Ok(Some(EvidenceSegmentReadV1 {
+            file,
+            path: state.path.clone(),
+            frames,
+            first: expected.first(),
+            encoded_bytes,
+        }))
     }
 
     pub(crate) fn read_record_frames(

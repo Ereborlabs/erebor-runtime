@@ -8,6 +8,16 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display(
+        "Evidence range {first_cursor}..={last_cursor} expired before it was opened"
+    ))]
+    RetainedRangeExpired {
+        identity: Box<crate::EvidenceIntakeIdentityV1>,
+        first_cursor: u64,
+        last_cursor: u64,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Araphor discovery rejected {code}: {reason}"))]
     Discovery {
         code: &'static str,
@@ -111,6 +121,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
+            Self::RetainedRangeExpired { .. } => StatusCode::NotFound,
             Self::Discovery { .. }
             | Self::InvalidConfiguration { .. }
             | Self::Json { .. }
@@ -130,7 +141,8 @@ impl ErrorExt for Error {
         match self {
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Serve { .. } => RetryHint::Retryable,
-            Self::Discovery { .. }
+            Self::RetainedRangeExpired { .. }
+            | Self::Discovery { .. }
             | Self::InvalidConfiguration { .. }
             | Self::Json { .. }
             | Self::Tls { .. }

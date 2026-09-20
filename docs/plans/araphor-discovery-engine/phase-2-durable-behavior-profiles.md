@@ -70,7 +70,8 @@ Implement these changes in order. Paths below are relative to the named crate.
    revision. Return at most 256 records and 1 MiB per page. Copy coverage
    intervals and counters for that revision. Preserve each accepted-record ID.
    The current intake drops batch CPU ID before persistence. Add an immutable
-   per-stream CPU binding to the intake transaction and store image. Reject a
+   per-stream CPU binding to the store image before the first new segment is
+   accepted. Do not rewrite the store image for each later batch. Reject a
    changed CPU for the same stream. An old stream without a retained CPU fact
    stays unresolved. Perform the checked schema migration in step 6 before
    this new metadata is written; reuse it when discovery heads are added.
@@ -191,5 +192,41 @@ are proven. Phase 3 requires approval.
 
 ## Result
 
-**Not done.** No derivation loop, SQL database, reader, metadata protocol, or durable profile was added
-in this planning change.
+**Not done.** The bounded reader and checked store migration are implemented.
+The Node context protocol, durable derivation, SQL index, runtime loop, context
+import, and revision feed remain to be implemented and verified.
+
+### Bounded reader and source metadata
+
+Read [intake](../../../crates/mithril-control/src/evidence.rs),
+[store migration and CPU binding](../../../crates/mithril-control/src/store.rs),
+[bounded reader](../../../crates/mithril-control/src/store/evidence_read.rs),
+then [segment handles](../../../crates/mithril-control/src/evidence_segment.rs).
+Intake commits one immutable CPU binding before new segment acceptance. Later
+batches keep the segment-only write path. The binding has a first cursor. An
+old retained prefix has no CPU proof, including pending old records.
+
+The reader freezes accepted bounds, CPU metadata, and one coverage revision.
+A page has at most 256 records, 1 MiB of framed bytes, and four file handles.
+Coverage metadata has its separate existing 3-MiB payload limit. The store lock
+protects handle selection, not decode. Open handles survive reclamation.
+Reclamation before open returns `RetainedRangeExpired` with exact missing
+bounds. Reads do not change the shared consumption watermark.
+
+Schema 4 migration checks the state checksum, preserves a synced
+`state-v4.bin` recovery copy, and atomically replaces the current image with
+schema 5. A conflicting recovery copy, corrupt state, or future schema fails
+without replacement. The schema 4 reader rejects schema 5. This is not an
+automatic downgrade procedure.
+
+Tests cover frozen coverage and bounds, retry, byte and handle limits, unknown
+CPU, cross-store handles, changed frame checksums, CPU changes, mixed-CPU commit
+groups, reclamation before and after open, and interrupted migration. The
+storage test checks that 130 batches write CPU metadata once, preserve the
+existing storage bound, and reopen within its existing one-second limit.
+
+Verification: `bash .github/scripts/verify-rust-ci.sh` passed after the final
+Rust edit. The Control library passed 147 tests; the Node library passed 243.
+The e2e library passed 98 tests and ignored 160 physical or manual cases. These
+ignored cases are not physical passes. The local document check passed 210
+links across 27 documents. This result covers the reader and migration only.
