@@ -262,7 +262,92 @@ def measure(engine, manifest, directory, count, atom_count):
         "selection": "Reject", "reason": "qualification incomplete: native Rust binding, full projection limits, concurrent owner latency, and qualified-host repeat runs remain"}
 
 
+def native_qualification(binary, directory):
+    binary = str(binary.resolve())
+    directory.mkdir(exist_ok=False)
+    prefix = ["bwrap", "--unshare-all", "--die-with-parent", "--new-session",
+        "--ro-bind", "/usr", "/usr", "--symlink", "usr/lib", "/lib",
+        "--symlink", "usr/lib64", "/lib64", "--proc", "/proc", "--dev", "/dev",
+        "--tmpfs", "/tmp", "--ro-bind", binary, "/worker", "--clearenv"]
+
+    def query(sql, data):
+        started = time.perf_counter()
+        result = subprocess.run(prefix + ["--setenv", "MITHRIL_DISCOVERY_QUERY_SQL", sql,
+            "--", "/usr/bin/prlimit", "--as=268435456", "--cpu=15", "--nofile=32",
+            "--fsize=1048576", "--", "/worker",
+            "discovery::storage::discovery_native_query_worker", "--exact", "--ignored",
+            "--nocapture", "--test-threads=1"], input=data, capture_output=True, timeout=20,
+            env={"PATH": "/usr/bin:/bin"})
+        result_rows = [line.partition(b"ARAPHOR_QUERY_RESULT=")[2]
+            for line in result.stdout.splitlines() if b"ARAPHOR_QUERY_RESULT=" in line]
+        return {"elapsed_ms": (time.perf_counter()-started)*1000,
+            "returncode": result.returncode,
+            "rows": json.loads(result_rows[0]) if result_rows else None,
+            "stderr": result.stderr.decode(errors="replace")[:4096]}
+
+    data = b"".join(struct.pack("<qq", i, i % 10) for i in range(200))
+    samples = []
+    for _ in range(21):
+        result = query("SELECT count(*) FROM events", data)
+        assert result["returncode"] == 0 and result["rows"] == [[200]], result
+        samples.append(result["elapsed_ms"])
+    assert percentile(samples[1:],.95) <= 500, samples
+    rejected = []
+    for sql in ["SELECT secret FROM events", "SELECT count(*) FROM events WHERE secret='x'",
+        "SELECT id FROM events ORDER BY secret", "SELECT * FROM sqlite_master",
+        "SELECT * FROM pragma_table_info('events')", "PRAGMA database_list",
+        "SELECT load_extension('x')", "ATTACH '/etc/passwd' AS stolen",
+        "SELECT readfile('/etc/passwd')", "SELECT writefile('/tmp/x','x')",
+        "SELECT id FROM events; SELECT atom FROM events", "SELECT ?1",
+        "DELETE FROM events", "SELECT randomblob(1000000000)",
+        "WITH RECURSIVE x(n) AS(SELECT 1 UNION ALL SELECT n+1 FROM x) SELECT n FROM x",
+        "SELECT id FROM events WHERE EXISTS(SELECT secret FROM events)"]:
+        result = query(sql, data)
+        assert result["returncode"] != 0, sql
+        rejected.append(sql)
+    hostile = query("SELECT count(*) FROM events a CROSS JOIN events b CROSS JOIN events c CROSS JOIN events d CROSS JOIN events e", data)
+    assert hostile["returncode"] != 0 and hostile["elapsed_ms"] < 2000, hostile
+    rows_over = query("SELECT id FROM events",data + struct.pack("<qq",201,1))
+    assert rows_over["returncode"] != 0, rows_over
+    bytes_over = query("SELECT '" + "x"*6000 + "' FROM events",data)
+    assert bytes_over["returncode"] != 0, bytes_over
+    full_data = struct.pack("<qq", 1, 1)*(64*MIB//16)
+    full = query("SELECT count(*) FROM events",full_data)
+    assert full["returncode"] == 0 and full["rows"] == [[64*MIB//16]], full
+    overflow = query("SELECT count(*) FROM events",full_data+b"x")
+    assert overflow["returncode"] != 0 and "PROJECTION_LIMIT" in overflow["stderr"], overflow
+    del full_data
+    fault = subprocess.run(prefix + ["--size", str(16*MIB), "--tmpfs", "/limited",
+        "--setenv", "MITHRIL_DISCOVERY_FULL_ROOT", "/limited", "--", "/worker",
+        "discovery::storage::discovery_native_filesystem_full", "--exact", "--ignored",
+        "--nocapture", "--test-threads=1"], capture_output=True, text=True, timeout=30)
+    assert fault.returncode == 0, (fault.stdout, fault.stderr)
+    subprocess.run([binary,"discovery::storage::discovery_native_crash_boundaries",
+        "--exact","--nocapture","--test-threads=1"], check=True, timeout=30)
+    measurements = []
+    for repeat in range(3):
+        output = directory / f"native-{repeat}"
+        subprocess.run([binary,"discovery::storage::discovery_native_storage_qualification",
+            "--exact","--ignored","--nocapture","--test-threads=1"], check=True, timeout=120,
+            env={"PATH":"/usr/bin:/bin", "MITHRIL_DISCOVERY_STORAGE_OUTPUT":str(output)})
+        measurements.append(json.loads((output / "result.json").read_text()))
+    result = {"host":platform.uname()._asdict(), "cpus":os.cpu_count(),
+        "memory":Path("/proc/meminfo").read_text().splitlines()[0],
+        "binary_digest":hashlib.sha256(Path(binary).read_bytes()).hexdigest(),
+        "isolated_query_first_ms":samples[0],"isolated_query_p95_ms":percentile(samples[1:],.95),
+        "rejected_sql":rejected,"adversarial_join":hostile,"projection_64_mib":full,
+        "projection_overflow":overflow,"filesystem_full":"PASS", "crash_boundaries":"PASS",
+        "measurements":measurements,"selection":"SQLite",
+        "reason":"Native storage and worker gates passed; live Control interference remains an integration gate"}
+    with (directory / "result.json").open("x") as output:
+        json.dump(result, output, indent=2)
+    print(json.dumps({"result":str(directory / "result.json")}))
+
+
 def main():
+    if len(sys.argv) == 4 and sys.argv[1] == "--native-test-binary":
+        native_qualification(Path(sys.argv[2]),Path(sys.argv[3]))
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "--query-worker":
         query_worker(sys.argv[2], sys.argv[3])
         return
