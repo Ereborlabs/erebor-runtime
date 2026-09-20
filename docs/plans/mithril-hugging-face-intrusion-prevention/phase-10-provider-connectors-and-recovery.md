@@ -67,6 +67,26 @@ Appendix A.16 where they are already supplied by Phase 10 providers. Do not
 claim named GitHub Actions/GitLab/Jenkins/Tekton step enforcement; those
 adapters remain a Phase 12 allocation decision.
 
+## Agent and console integration
+
+Follow the [combined Araphor order](../araphor-discovery-engine/README.md#combined-implementation-order).
+For each provider, implement its source/actuator and qualification first.
+Then extend existing query/context views, response plan types, tool capability
+descriptions, and investigation screens. This phase owns those changes and
+their tests. Reuse `plan_response` and `execute_response`; do not add a
+generic provider-call tool or a second response coordinator.
+
+Bind disclosure grants to the provider evidence fields and approved model
+recipient. Do not place provider credentials in agent context. Keep account,
+project, repository, lease, and action scope explicit. A missing provider
+capability stays Unsupported even if another action from that provider passed.
+
+Repeat the shared local-defender and console loop with each advertised typed
+provider action. Test missing authority, revoked handles, ambiguous identity,
+rate limits, lost replies, contradictory readback, and provider outage.
+Require the provider's actual postcondition and its source coverage; a query
+fixture or HTTP success cannot complete this increment.
+
 ## Checkpoint
 
 Every advertised provider/mesh/connector/message/artifact source has exact

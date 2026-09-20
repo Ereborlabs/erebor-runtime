@@ -46,9 +46,23 @@ controllers that recreate Pods and for broader workload/cgroup/socket impact.
 
 ### D9.4 — Durable transaction lifecycle
 
-Persist `PREPARING`, `AUTHORIZED`, `DISPATCHED`, `APPLIED`, `VERIFYING`, and
-terminal response state with idempotent retries, cancellation, expiry,
-dependency failure, restart recovery, and one durable owner per transition.
+Use the state names in validated Chapter 24 and Appendix A.15.4:
+
+```text
+PROPOSED -> AUTHORIZED -> REVALIDATING -> APPLYING -> VERIFYING -> WATCHING
+  -> VERIFIED | PARTIAL | FAILED | UNKNOWN | EXPIRED | CANCELLED
+```
+
+Persist each compare-and-swap transition with prior revision, principal,
+reason, deadline, and per-action idempotency key. Retain applied effects during
+cancellation or expiry. Recover unknown dispatch results at the actuator before
+retry. ResponseCoordinator is the only plan-state writer; console and agent
+tools consume the same state, not translated copies.
+
+Bind the originating finding/graph revision and any supporting assessment
+references. Publish committed result revisions to the shared Control read
+projection. A replacement or late branch creates a new authorized plan revision;
+it cannot widen the prior approval or change that plan's frozen scope.
 
 ### D9.5 — Blast-radius approval
 
@@ -71,6 +85,28 @@ seed, established flows, distributed child workloads, and replacement-
 controller behavior under stale/reused/late/duplicate/failure variants without
 damaging unrelated controls. Provider-specific completion remains Phase 10.
 
+## Agent and console integration
+
+Follow the [combined Araphor order](../araphor-discovery-engine/README.md#combined-implementation-order).
+Implement and test ResponseCoordinator and local/Kubernetes actuators before
+exposing `plan_response` and `execute_response` through the existing
+ConsoleHttpOwner and stdio MCP adapter. This phase owns that wiring; it is not
+unfinished Discovery 5 work. Reuse the shared types, principal/grant checks,
+finding references, and read projection.
+
+Extend the existing investigation view with frozen targets, blast radius,
+authorization, per-action state, readback, and open replacement branches.
+Query/follow returns the same committed revisions to agents and the console.
+No additional job-query API or client-owned response state is required.
+Keep provider actions Unsupported until their Phase 10 qualification.
+
+Run the Discovery 6 query/authorization/local-defender cases with real response
+owners. Add revoked grants, stale findings, lost execution replies, concurrent
+approval, PID/UID reuse, Control/client restart, and late replacement branches.
+Require matching lightweight and physical state transitions, postconditions,
+and healthy-watch results. A policy activation, process exit, or successful
+tool reply cannot substitute for these response proofs.
+
 ## Checkpoint
 
 An authorized finding drives only typed, exactly re-resolved local/Kubernetes
@@ -90,6 +126,8 @@ applicable live two-node response cases.
 - No raw shell, free-form provider call, or stale coordinate can actuate.
 - Wider physical impact is calculated and approved before effect.
 - Repeated/restarted requests do not duplicate or widen response.
+- Console and local defender reopen the same response revision after client or
+  Control restart. Dropped replies cannot duplicate an action or hide a late branch.
 - Verified status requires the named physical postcondition and healthy
   coverage interval.
 - Unrelated worker/controller branches remain functional.

@@ -1,6 +1,6 @@
 # Phase 7: Mithril Control And Detection Packages
 
-Status: Proposed; depends on Phase 6.2 `Done`.
+Status: Proposed; depends on Phases 6.2 and 6.3 `Done`.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -20,13 +20,23 @@ Chapters 8, 22-25, 30, 32, and 34-35; Appendices A.10 and A.15.
 
 ## Deliverables
 
+For the [combined Araphor delivery](../araphor-discovery-engine/README.md#combined-implementation-order),
+also require Discovery 2 Done. Implement this phase before Discovery 3–6.
+Use the bounded reader and one derived store from Discovery 2. Implement
+graph/finding and notification owner methods and committed read projections
+here; public HTTP/MCP and console wiring remain Discovery 5. Do not depend on
+that later API to complete this phase.
+
 ### D7.1 — Accepted-evidence index and merged coverage
 
 Consume only records committed by the Phase 6.2 `EvidenceIntakeOwner`. Build
 bounded indexes and merged source views without changing the accepted
 observation, intake cursor, or node coverage interval. An absent, delayed,
 gapped, or offline source never becomes a clean interval. Index rebuild after
-restart must produce the same package input set.
+restart must produce the same package input set. Reuse ControlStore's bounded
+accepted-evidence read contract and the shared derived store from Discovery 2;
+do not create a second intake or raw-event database for detection. Keep package
+checkpoints distinct from discovery progress and source retention authority.
 
 ### D7.2 — Immutable graph and finding revisions
 
@@ -51,6 +61,28 @@ and no invented provider semantics.
 Deliver sensitivity-filtered finding revisions with route authorization,
 retry, dedupe, sink health, and failure evidence. Notification cannot mutate a
 finding, policy, actor role, or response plan.
+
+Use the same accepted-evidence references and finding revisions as discovery,
+the local defender, and the console. NotificationRouter owns routing state;
+neither DiscoveryOwner nor an agent may create a parallel escalation queue.
+Approved routing configuration sets a minimum priority, human-acknowledgement
+deadline, bounded retry policy, and escalation route for qualified findings.
+Model priority is advisory and cannot reduce that floor or defer delivery.
+An approved advisory route can also request human review of a submitted model
+concern. It must identify that concern as unconfirmed; it cannot create a
+proved finding or response authorization.
+
+Persist the finding/revision/route key, routing-policy revision, delivery
+attempt/result, deadline, and authorized human acknowledgement. Agent receipt
+and sink acceptance do not satisfy human acknowledgement. Restart retains the
+deadline; duplicate delivery does not create a second obligation. Route failure
+and overdue acknowledgement remain visible until handled by the configured
+policy. Revisions with a new required action get their own obligation.
+
+Implement scoped reads and the human-acknowledgement operation on this owner.
+Discovery 5 exposes those methods through the shared Control API.
+Acknowledgement is not finding closure, response approval,
+or policy authority. No model call is required to route a critical finding.
 
 ### D7.5 — Provider-neutral authority lease foundation
 
@@ -99,6 +131,9 @@ Cross-node and provider packages remain explicitly incomplete.
 - Byte-order/delivery-order graph determinism, contradiction, source-gap,
   index rebuild, graph-store restart/retention, notification
   secret/retry/dedupe, and authority-record restart tests.
+- Model refusal, low suggested priority, missing human acknowledgement, route
+  failure, duplicate delivery, clock/restart recovery, and late finding revision
+  must preserve the approved escalation rule and bounded retry state.
 - Source-revision, candidate, target, activation, observation, and finding
   provenance tests under complete, partial, stale, and mixed rollouts.
 - Tenant-crossing graph, package, notification, and authority-record rejection
@@ -114,6 +149,8 @@ Cross-node and provider packages remain explicitly incomplete.
 - Proof quality and coverage mechanically limit findings.
 - Every policy-dependent finding names the exact source, candidate, target,
   and active node generation that its evidence proves.
+- Mandatory routing and human-acknowledgement deadlines do not depend on a
+  successful AI assessment. The console and defender read the same receipts.
 - Notifications and leases cannot grant node or provider authority by
   themselves.
 - Node remains the sole local physical decision owner.
