@@ -30,7 +30,7 @@ const COORD_MAP: &str = "task_coordinates";
 type Coord = TaskCoordinateV1;
 type State = ExceptionRuntimeStateV1;
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = exception]
 fn bounded_exception_is_exact<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("exception-exact")?;
@@ -134,7 +134,7 @@ fn bounded_exception_is_exact<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = exception]
 fn exhaustion_survives_restart<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("exception-restart")?;
@@ -230,7 +230,7 @@ fn exhaustion_survives_restart<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = exception]
 fn unused_exception_expires<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("exception-expiry")?;
