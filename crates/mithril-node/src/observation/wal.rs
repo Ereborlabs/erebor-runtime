@@ -1505,6 +1505,50 @@ mod tests {
     }
 
     #[test]
+    fn discovery_context_old_and_new_wal_frames_reopen_without_reencoding(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use prost::Message as _;
+        let directory = tempfile::tempdir()?;
+        let mut wal = EvidenceWal::open(directory.path(), limits())?;
+        let mut old = observation(101)?;
+        old.decision_context = None;
+        let new = observation(202)?;
+        let old_wire = old.to_wire_record()?;
+        let new_wire = new.to_wire_record()?;
+        assert!(old_wire.decision_context.is_none());
+        assert_eq!(
+            mithril_control::EvidenceRecord {
+                observed_boottime_ns: 1,
+                ..Default::default()
+            }
+            .encode_to_vec(),
+            vec![8, 1]
+        );
+        wal.append(&old)?;
+        wal.append(&new)?;
+        let path = active_segment(directory.path())?;
+        let before = std::fs::read(&path)?;
+        let first = wal.next_batch().ok_or("missing batch")?;
+        assert_eq!((first.first_cursor, first.last_cursor), (1, 2));
+        assert_eq!(first.decode_records()?, vec![old_wire, new_wire.clone()]);
+        drop(wal);
+        let reopened = EvidenceWal::open(directory.path(), limits())?;
+        assert_eq!(std::fs::read(&path)?, before);
+        let replay = reopened.next_batch().ok_or("missing replay")?;
+        assert_eq!(replay, first);
+        assert_eq!(
+            replay.decode_records()?[1]
+                .decision_context
+                .as_ref()
+                .ok_or("missing context")?
+                .original_kernel_sequence,
+            202
+        );
+        assert_eq!(replay.decode_records()?[1], new_wire);
+        Ok(())
+    }
+
+    #[test]
     fn wal_replays_and_keeps_a_partially_acknowledged_segment_unchanged(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;

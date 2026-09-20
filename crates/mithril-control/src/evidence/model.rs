@@ -7,9 +7,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::{Location, Snafu};
 
-use crate::{EvidenceRecord, EvidenceTemporalCoverage, TemporalCoverageV1};
+use crate::{
+    EvidenceDecisionContext, EvidenceExactFileObject, EvidenceRecord, EvidenceTemporalCoverage,
+    TemporalCoverageV1,
+};
 
 const OBSERVATION_ID_DOMAIN: &[u8] = b"MITHRIL-KERNEL-OBSERVATION-V2\0";
+pub const MAX_EVIDENCE_DECISION_CONTEXT_BYTES: usize = 16 * 1024;
 
 pub type EvidenceDigestV1 = [u8; 32];
 pub type EvidenceIdV1 = Id128V1;
@@ -204,6 +208,82 @@ pub struct ObservationEnvelopeV1 {
     pub profile_generation_ref_id: Option<u64>,
     pub temporal_coverage: TemporalCoverageV1,
     pub effect: KernelEffectEvidenceV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_context: Option<EvidenceDecisionContext>,
+}
+
+impl EvidenceDecisionContext {
+    fn validate_for(&self, observation: &ObservationEnvelopeV1) -> EvidenceModelResult<()> {
+        if self.schema_version != 1
+            || self.original_kernel_sequence == 0
+            || self.encoded_len() > MAX_EVIDENCE_DECISION_CONTEXT_BYTES
+            || self.profile_generation_ref_id
+                != observation.profile_generation_ref_id.unwrap_or_default()
+            || self.composite_atom_id != observation.effect.policy_rule_id.unwrap_or_default()
+        {
+            return InvalidSnafu {
+                reason: "decision context version, size, sequence, or base coordinates differ",
+            }
+            .fail();
+        }
+        for (bytes, name) in [
+            (&self.process_instance_id, "process instance"),
+            (&self.entry_instance_id, "entry instance"),
+            (&self.binding_id, "binding"),
+        ] {
+            optional_id(bytes, name)?;
+        }
+        match (&self.exact_file_object, observation.effect.exact_object_id) {
+            (Some(object), Some(expected)) if self.exact_object_key_id != 0 => {
+                if object.observation_id(self.exact_object_key_id) != expected {
+                    return InvalidSnafu {
+                        reason: "decision context exact object differs from the base observation",
+                    }
+                    .fail();
+                }
+            }
+            (None, None) if self.exact_object_key_id == 0 => {}
+            _ => {
+                return InvalidSnafu {
+                    reason: "decision context exact object or handle is absent",
+                }
+                .fail();
+            }
+        }
+        Ok(())
+    }
+}
+
+impl From<erebor_interceptor_abi::ExactFileObjectKeyV1> for EvidenceExactFileObject {
+    fn from(raw: erebor_interceptor_abi::ExactFileObjectKeyV1) -> Self {
+        Self {
+            profile_generation_ref_id: raw.profile_generation_ref_id,
+            mount_id_unique: raw.mount_id_unique,
+            inode: raw.inode,
+            inode_generation: raw.inode_generation,
+            mount_namespace_inode: raw.mount_namespace_inode,
+            filesystem_device: raw.filesystem_device,
+        }
+    }
+}
+
+impl EvidenceExactFileObject {
+    pub fn observation_id(&self, handle: u64) -> EvidenceIdV1 {
+        use zerocopy::IntoBytes as _;
+        let raw = erebor_interceptor_abi::ExactFileObjectKeyV1 {
+            profile_generation_ref_id: self.profile_generation_ref_id,
+            mount_id_unique: self.mount_id_unique,
+            inode: self.inode,
+            inode_generation: self.inode_generation,
+            mount_namespace_inode: self.mount_namespace_inode,
+            filesystem_device: self.filesystem_device,
+        };
+        let mut digest = Sha256::new();
+        digest.update(b"MITHRIL-EXACT-OBJECT-V1\0");
+        digest.update(raw.as_bytes());
+        digest.update(handle.to_be_bytes());
+        EvidenceDigestV1::from(digest.finalize()).into()
+    }
 }
 
 impl ObservationEnvelopeV1 {
@@ -275,6 +355,9 @@ impl ObservationEnvelopeV1 {
             }
             .fail();
         }
+        if let Some(context) = &self.decision_context {
+            context.validate_for(self)?;
+        }
         Ok(())
     }
 
@@ -305,6 +388,7 @@ impl ObservationEnvelopeV1 {
                 TemporalCoverageV1::Gapped => EvidenceTemporalCoverage::Gapped as i32,
                 TemporalCoverageV1::Unknown => EvidenceTemporalCoverage::Unknown as i32,
             },
+            decision_context: self.decision_context.clone(),
         })
     }
 
@@ -341,6 +425,7 @@ impl ObservationEnvelopeV1 {
             coverage_interval_id: required_id(&record.coverage_interval_id, "coverage interval")?,
             profile_generation_ref_id: record.profile_generation_ref_id,
             temporal_coverage,
+            decision_context: record.decision_context.clone(),
             effect: KernelEffectEvidenceV1 {
                 task_cookie: record.task_cookie,
                 target_task_cookie: record.target_task_cookie,

@@ -683,6 +683,7 @@ mod tests {
             coverage_interval_id: EvidenceIdV1::new(11, 12),
             profile_generation_ref_id: Some(8),
             temporal_coverage: TemporalCoverageV1::Complete,
+            decision_context: None,
             effect: KernelEffectEvidenceV1 {
                 task_cookie: 14,
                 target_task_cookie: None,
@@ -763,6 +764,82 @@ mod tests {
             source_epoch: 7,
             ..identity()
         }
+    }
+
+    #[test]
+    fn discovery_context_intake_preserves_coordinates_and_rejects_conflicting_context(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = crate::ControlStore::open(directory.path())?;
+        let intake = EvidenceIntakeOwner::from_store(store.clone());
+        let mut original = observation(101);
+        let object = crate::EvidenceExactFileObject {
+            profile_generation_ref_id: 8,
+            mount_id_unique: 21,
+            inode: 22,
+            inode_generation: 23,
+            mount_namespace_inode: 24,
+            filesystem_device: 25,
+        };
+        original.effect.exact_object_id = Some(object.observation_id(26));
+        original.decision_context = Some(crate::EvidenceDecisionContext {
+            schema_version: 1,
+            original_kernel_sequence: 101,
+            process_instance_id: vec![27; 16],
+            entry_instance_id: vec![28; 16],
+            binding_id: vec![29; 16],
+            profile_generation_ref_id: 8,
+            role_id: 1,
+            state_id: 2,
+            entry_rule_id: 3,
+            exact_file_object: Some(object),
+            exact_object_key_id: 26,
+            composite_atom_id: 23,
+        });
+        let record = original.to_wire_record()?;
+        let accepted = batch_from_records(1, vec![record.clone()])?;
+        intake.receive(&authenticated(), accepted.clone())?;
+        intake.receive(&authenticated(), accepted)?;
+        assert_eq!(store.evidence_cursor(&identity())?, 1);
+        for scenario in ["generation", "object", "identity", "limit"] {
+            let mut changed = record.clone();
+            let context = changed.decision_context.as_mut().ok_or("context absent")?;
+            match scenario {
+                "generation" => context.profile_generation_ref_id += 1,
+                "object" => {
+                    context
+                        .exact_file_object
+                        .as_mut()
+                        .ok_or("object absent")?
+                        .inode += 1
+                }
+                "identity" => context.binding_id = vec![0; 16],
+                _ => context.binding_id = vec![1; crate::MAX_EVIDENCE_DECISION_CONTEXT_BYTES + 1],
+            }
+            assert!(
+                intake
+                    .receive(&authenticated(), batch_from_records(2, vec![changed])?)
+                    .is_err(),
+                "{scenario}"
+            );
+        }
+        assert_eq!(store.evidence_cursor(&identity())?, 1);
+        drop(intake);
+        drop(store);
+        let reopened = crate::ControlStore::open(directory.path())?;
+        let read = reopened.begin_evidence_read(&identity(), 1)?;
+        let page = reopened.read_evidence_page(&read, 1)?;
+        assert_eq!(page.first_cursor, 1);
+        assert_eq!(page.records, vec![record]);
+        assert_eq!(
+            page.records[0]
+                .decision_context
+                .as_ref()
+                .ok_or("context absent")?
+                .original_kernel_sequence,
+            101
+        );
+        Ok(())
     }
 
     #[test]
