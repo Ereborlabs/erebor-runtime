@@ -3,6 +3,8 @@ use crate::{CoverageStateV1, PolicyDocumentV1, SimulatedDispositionV1, Simulated
 
 type TestResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+mod corpus;
+
 fn input() -> TestResult<DiscoveryInputManifestV1> {
     DiscoveryInputManifestV1::from_json(include_bytes!(
         "../../../mithril-e2e/fixtures/discovery/manifest.json"
