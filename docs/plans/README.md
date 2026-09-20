@@ -21,6 +21,16 @@ master plan invented for them.
 
 ## Proposed Master Plans
 
+- [Araphor discovery engine](araphor-discovery-engine/README.md) — source-grounded
+  evidence and context for agents, simple SQL query/follow, classification,
+  and governed policy tools. Response tools retain the master plan's owner and
+  physical-proof gates. Local or hosted clients need explicit export permission.
+  One implementation document per phase defines owners, limits, and proof.
+- [Araphor console](araphor-console/README.md) — one interface for agent and
+  workload protection, policy review, action evidence, and recorded platform
+  verification. Araphor is the new product name for Erebor and Mithril. The
+  plan keeps current repository and technical identifiers. Public operator
+  reports, project documentation, and incident studies inform its workflows.
 - [Mithril Hugging Face intrusion prevention](mithril-hugging-face-intrusion-prevention/README.md)
   — phased single-gatherer Linux/Kubernetes/provider prevention, causal
   correlation, and verified response built around the published incident

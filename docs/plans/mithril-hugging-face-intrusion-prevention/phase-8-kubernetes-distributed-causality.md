@@ -19,6 +19,10 @@ Chapters 7-8, 23, 25, and 30-31; Appendices A.9-A.10 and A.15.3.
 
 ## Deliverables
 
+In the [combined Araphor order](../araphor-discovery-engine/README.md#combined-implementation-order),
+start after the bounded Discovery 6 release. The existing query, assessment,
+console, and policy workflow are inputs, not work to repeat.
+
 ### D8.1 — Kubernetes source adapters and coverage
 
 Enrich the Phase 6.2 object, scheduler-binding, admission, runtime, and
@@ -65,6 +69,29 @@ Prove the node-A-to-node-B privileged Pod/fan-out branch is rejected at an
 advertised admission/node floor or reported with the exact weaker result. A
 denial must have API/runtime/physical workload-absence or restricted-root
 oracle, not only an audit event.
+
+## Agent and console integration
+
+After the source and graph owners pass their tests, add the new committed
+records to the existing discovery context and query views. Preserve exact
+request/object/binding references, cross-node branches, and coverage gaps.
+Extend the existing investigation screens; add no separate incident store.
+
+Add `request_exception(grant_id, target, bounds, reason)` through the shared
+HTTP/MCP contract after the existing exception owner has a qualified public
+request/approval method. The first adapter requests an exact precompiled
+bounded file grant. It cannot create a privileged-root exception, approve
+itself, or infer authority from an assessment. Keep D8.4's separately signed
+privileged exceptions distinct. Bind requests to target, use count, expiry,
+reviewer, and revocation state; follow the existing owner's result through
+query. Reuse policy/exception reconciliation, not an agent-owned signer.
+
+This phase owns the adapter, console review, and tests. Require tenant and
+grant rejection, stale-target rejection, duplicate/lost-reply recovery,
+independent approval, physical use-count consumption, expiry, and revocation.
+Run the paired lightweight and physical cases with the same owner APIs.
+Keep response execution unavailable until Phase 9. Do not mark this combined
+increment Done with only graph schemas or an exception-request receipt.
 
 ## Checkpoint
 
