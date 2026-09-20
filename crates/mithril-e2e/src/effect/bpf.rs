@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, time::Duration};
+use std::{cell::RefCell, collections::BTreeSet, fs, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
 
@@ -14,7 +14,7 @@ fn bpf_map_is_denied<P: Platform>() -> TestResult<()> {
     env.stop_node()?;
     let mut init = env.start_actor("ready.py", &[])?;
     env.place(init.id())?;
-    let args = ["/fixtures/bpf_map.py"];
+    let args = ["/fixtures/bpf_map.py", "/work"];
     let mut actor = env.add_actor("python", &args)?;
     actor.ready()?;
     env.place(actor.id())?;
@@ -38,8 +38,19 @@ fn bpf_map_is_denied<P: Platform>() -> TestResult<()> {
         .map(|event| (event.source_cpu_id, event.source_sequence))
         .collect::<BTreeSet<_>>();
     actor.send(b"act\n")?;
-    let status = actor.wait_exit("BPF actor exit", Duration::from_secs(5))?;
-    assert_eq!(status.code(), Some(libc::EACCES));
+    let comm = format!("/proc/{}/comm", actor.id());
+    let last = RefCell::new(String::from("<unread>"));
+    wait_for(
+        comm.as_ref(),
+        "BPF map result",
+        Duration::from_secs(5),
+        || {
+            let value = fs::read_to_string(&comm).unwrap_or_else(|error| format!("<{error}>"));
+            *last.borrow_mut() = value.clone();
+            Ok((value.trim() == format!("bpf-map-{}", libc::EACCES)).then_some(()))
+        },
+        || format!("last task name: {}", last.borrow()),
+    )?;
 
     let path = env.maps().0.to_owned();
     wait_for(
@@ -70,6 +81,8 @@ fn bpf_map_is_denied<P: Platform>() -> TestResult<()> {
         || "no attributed BPF denial observed".to_owned(),
     )?;
 
+    fs::write(env.work().join("release"), b"release\n")?;
+    actor.wait_gone(actor.id(), "BPF actor exit")?;
     actor.stop()?;
     init.stop()?;
     env.stop()
