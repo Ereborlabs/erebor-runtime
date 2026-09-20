@@ -196,6 +196,32 @@ message EvidenceRecord {
   EvidenceTemporalCoverage temporal_coverage = 18;
   optional uint64 target_task_cookie = 19;
   optional uint32 operation_argument = 20;
+  optional EvidenceDecisionContext decision_context = 21;
+}
+
+// Records kernel coordinates. These fields do not grant policy authority.
+message EvidenceDecisionContext {
+  uint32 schema_version = 1;
+  uint64 original_kernel_sequence = 2;
+  bytes process_instance_id = 3;
+  bytes entry_instance_id = 4;
+  bytes binding_id = 5;
+  uint64 profile_generation_ref_id = 6;
+  uint32 role_id = 7;
+  uint32 state_id = 8;
+  uint32 entry_rule_id = 9;
+  optional EvidenceExactFileObject exact_file_object = 10;
+  uint64 exact_object_key_id = 11;
+  uint64 composite_atom_id = 12;
+}
+
+message EvidenceExactFileObject {
+  uint64 profile_generation_ref_id = 1;
+  uint64 mount_id_unique = 2;
+  uint64 inode = 3;
+  uint64 inode_generation = 4;
+  uint32 mount_namespace_inode = 5;
+  uint32 filesystem_device = 6;
 }
 
 enum EvidenceTemporalCoverage {

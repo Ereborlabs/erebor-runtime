@@ -193,7 +193,7 @@ are proven. Phase 3 requires approval.
 ## Result
 
 **Not done.** The bounded reader and checked store migration are implemented.
-The Node context protocol, durable derivation, SQL index, runtime loop, context
+The signed-context lookup, durable derivation, SQL index, runtime loop, context
 import, and revision feed remain to be implemented and verified.
 
 ### Bounded reader and source metadata
@@ -230,3 +230,37 @@ Rust edit. The Control library passed 147 tests; the Node library passed 243.
 The e2e library passed 98 tests and ignored 160 physical or manual cases. These
 ignored cases are not physical passes. The local document check passed 210
 links across 27 documents. This result covers the reader and migration only.
+
+### Kernel context transport
+
+Field 21 of [EvidenceRecord](../../../crates/mithril-control/proto/erebor/mithril/control/v1/control.proto)
+is optional `EvidenceDecisionContext`. Its first version preserves the original
+kernel sequence, process/entry/binding IDs, generation, role/state/entry-rule
+IDs, exact object key and handle, and composite atom. The
+[Node canonicalizer](../../../crates/mithril-node/src/observation/model.rs)
+fills these fields from the existing ABI event. It does not resolve a path or
+read the filesystem. No BPF layout or collector changes are required.
+
+The [shared evidence model](../../../crates/mithril-control/src/evidence/model.rs)
+checks the context version, 16-KiB size limit, identity lengths, base generation,
+composite atom, and exact-object digest. The Node and Control use the same
+exact-object digest method. Missing IDs remain absent. These coordinates do not
+claim that a signed selector or current workload fact was found; that join is
+the next implementation step.
+
+The [WAL check](../../../crates/mithril-node/src/observation/wal.rs) writes old
+and new records together, reopens the WAL, and checks unchanged bytes and frame
+checksums. Kernel sequences 101 and 202 use durable cursors 1 and 2. A legacy
+record without context keeps its prior protobuf encoding. The
+[intake check](../../../crates/mithril-control/src/evidence.rs) rejects changed
+context coordinates, retains duplicate input once, restarts Control, and reads
+the same context through the bounded reader. Upgrade Control before Node.
+
+Verification: the focused context commands passed one Control test and two
+Node tests. After the final Rust edit, `bash .github/scripts/verify-rust-ci.sh`
+passed. The Node library passed 245 tests. The e2e library passed 98 tests and
+ignored 163 physical or manual cases. An earlier gate stopped because the host
+disk was full; it is not a pass. Scoped Cargo cleanup removed only generated
+Mithril build output before the successful repeat. The document check passed
+215 local links across 27 documents. Signed-catalog lookup and the live
+context-roundtrip case remain open.

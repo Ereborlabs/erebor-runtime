@@ -12,6 +12,14 @@ fn main() -> Result<(), io::Error> {
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
+        .type_attribute(
+            ".erebor.mithril.control.v1.EvidenceDecisionContext",
+            "#[derive(serde::Serialize, serde::Deserialize, Eq)] #[serde(deny_unknown_fields)]",
+        )
+        .type_attribute(
+            ".erebor.mithril.control.v1.EvidenceExactFileObject",
+            "#[derive(serde::Serialize, serde::Deserialize, Eq)] #[serde(deny_unknown_fields)]",
+        )
         .bytes([
             ".erebor.mithril.control.v1.EvidenceBatch.framed_records",
             ".erebor.mithril.control.v1.EvidenceRecord.coverage_interval_id",
