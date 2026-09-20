@@ -428,7 +428,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub ptmx_derived_peer_hard_closed: bool,
     pub ptmx_derived_peer_installed_nothing: bool,
     pub zero_device_ioctl_exact_denied: bool,
-    pub bpf_hard_closed: bool,
     pub managed_link_pin_unlink_denied: bool,
     pub bounded_exception_maximum_uses: u32,
     pub bounded_exception_n_allows: bool,
@@ -2901,34 +2900,18 @@ impl EffectTestRunner {
                 reason: "denied rename changed the source or target",
             }
         );
-        for (operation, effect, label) in [
+        require_hard_close(
+            &mut fixture,
+            &reader,
+            &observations,
+            HardClosedOperation::Ipc,
+            "UNSUPPORTED_OBJECT",
             (
-                HardClosedOperation::Ipc,
-                (
-                    KernelEffectFamilyV1::Ipc,
-                    KernelEffectOperationV1::IpcAccess,
-                ),
-                "SysV IPC access",
+                KernelEffectFamilyV1::Ipc,
+                KernelEffectOperationV1::IpcAccess,
             ),
-            (
-                HardClosedOperation::Bpf,
-                (
-                    KernelEffectFamilyV1::Privilege,
-                    KernelEffectOperationV1::Bpf,
-                ),
-                "BPF map creation",
-            ),
-        ] {
-            require_hard_close(
-                &mut fixture,
-                &reader,
-                &observations,
-                operation,
-                "UNSUPPORTED_OBJECT",
-                effect,
-                label,
-            )?;
-        }
+            "SysV IPC access",
+        )?;
         let unix_stream_marker = observations.cursor();
         let unix_stream_outcome = fixture.run_prepared(HardClosedOperation::UnixStream)?;
         reader
@@ -4174,7 +4157,6 @@ impl EffectTestRunner {
             ptmx_derived_peer_hard_closed: protect,
             ptmx_derived_peer_installed_nothing: protect,
             zero_device_ioctl_exact_denied: protect,
-            bpf_hard_closed: true,
             managed_link_pin_unlink_denied: true,
             bounded_exception_maximum_uses: if protect { 2 } else { 0 },
             bounded_exception_n_allows: protect,

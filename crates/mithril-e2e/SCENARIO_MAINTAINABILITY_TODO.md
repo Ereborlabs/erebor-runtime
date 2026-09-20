@@ -1952,8 +1952,12 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the BPF map-create test on Kubernetes and commit it. The exact
     case passed in 76.19 seconds on 2026-09-20 against the retained K3s
     cluster.
-  - [ ] Remove only the matching legacy action, result field, enum case,
-    dispatch arm, and actor syscall code after all three platform cases pass.
+  - [x] Remove only the matching legacy action, result field, enum case, and
+    dispatch arm after all three platform cases pass. Keep the raw map-create
+    helper because the independent network BPF-setup case still uses it. The
+    cleanup removed 22 net lines from the oversized legacy files. The 13
+    focused child-fixture tests, 93 non-privileged library tests, formatting,
+    and strict all-target Clippy pass.
 
 ### Network
 

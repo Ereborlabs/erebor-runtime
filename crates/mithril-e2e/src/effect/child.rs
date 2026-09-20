@@ -222,7 +222,6 @@ pub(super) enum PreparedOperation {
     InheritedUnixStreamSend,
     UnixStreamStalePeer,
     UnixStreamUnmatched,
-    Bpf,
     Create { path: PathBuf },
     Setattr { path: PathBuf },
     Truncate,
@@ -2583,7 +2582,6 @@ impl PreparedOperations {
                             .map_or_else(error_outcome, |()| target.roundtrip())
                     })
             }
-            PreparedOperation::Bpf => bpf_map_create_outcome(),
             PreparedOperation::Create { path } => {
                 match fs::OpenOptions::new()
                     .write(true)
