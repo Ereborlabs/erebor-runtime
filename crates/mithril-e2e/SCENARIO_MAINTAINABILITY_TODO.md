@@ -1761,6 +1761,16 @@ test does not close a row when its physical condition or an assertion changed.
       fix, it exited successfully, retained complete identity pins, and a
       second real Node recovered those pins and reached admission readiness.
       The focused test passed in 37.52 seconds. No readiness limit changed.
+    - [x] Reproduce Kubernetes exception retirement in lightweight
+      qualification before the Node fix. Cleanup removes the workload target
+      and uses the production Control owner to retire missing exceptions.
+      After base-policy retirement, the signed revoke stayed pending with no
+      revoked result. The focused Host test failed with one pending exception
+      and zero revoked exceptions.
+    - [ ] Apply signed revocation through the durable exception authority
+      after base-policy retirement. Activation must still require an active
+      policy owner. Verify live delivery and startup recovery with the focused
+      lightweight case before Kubernetes.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy actions, result fields, mailbox
       operations, and fixture owner after all three platform cases pass.
