@@ -629,7 +629,9 @@ impl ProcessFixture {
             let status = child.try_wait().context(IoSnafu { path: &self.path })?;
             #[cfg(test)]
             if status.is_some() && transport {
-                self.child = None;
+                if self.exit_probe.is_some() {
+                    self.child = None;
+                }
                 if let Some(probe) = self.exit_probe.as_mut() {
                     return probe()
                         .context(IoSnafu { path: &self.path })

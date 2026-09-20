@@ -39,6 +39,31 @@ fn python_start_stop() -> crate::Result<()> {
 }
 
 #[test]
+fn transport_waits_for_actor() -> crate::Result<()> {
+    let mut actor = ProcessFixture::python(&fixture("ready.py"), std::iter::empty::<&str>())?;
+    let child = Command::new("true")
+        .spawn()
+        .context(IoSnafu { path: "true" })?;
+    let mut transport = ProcessFixture::new(child, Path::new("true"));
+    transport.set_actor(actor.id())?;
+    let Some(child) = transport.child.as_mut() else {
+        return InvalidInputSnafu {
+            path: "true",
+            reason: "transport child is missing",
+        }
+        .fail();
+    };
+    child.wait().context(IoSnafu { path: "true" })?;
+
+    assert!(transport.try_wait()?.is_none());
+    actor.stop()?;
+    assert!(transport
+        .wait_exit("transport status", Duration::from_secs(5))?
+        .success());
+    transport.stop()
+}
+
+#[test]
 fn stop_kills_actor() -> crate::Result<()> {
     let script = fixture("ready.py");
     let mut actor = ProcessFixture::python(&script, std::iter::empty::<&str>())?;
