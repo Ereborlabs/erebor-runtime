@@ -69,6 +69,11 @@ Implement these changes in order. Paths below are relative to the named crate.
    identity, CPU, start/end durable cursors, retained floor, and coverage
    revision. Return at most 256 records and 1 MiB per page. Copy coverage
    intervals and counters for that revision. Preserve each accepted-record ID.
+   The current intake drops batch CPU ID before persistence. Add an immutable
+   per-stream CPU binding to the intake transaction and store image. Reject a
+   changed CPU for the same stream. An old stream without a retained CPU fact
+   stays unresolved. Perform the checked schema migration in step 6 before
+   this new metadata is written; reuse it when discovery heads are added.
 2. **Retention — same owners.** Open at most four immutable segment handles
    under the store lock; decode outside it. Reclamation before open returns
    `RetainedRangeExpired` and exact missing bounds. Reclamation after open must

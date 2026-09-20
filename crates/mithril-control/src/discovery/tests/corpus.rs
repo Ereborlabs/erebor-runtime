@@ -269,7 +269,12 @@ fn discovery_defender_contract_keeps_owner_obligations_after_client_restart() ->
     };
     packet.scope.finding = Some(finding.clone());
     packet.owner_facts = vec![
-        DiscoveryOwnerFactV1::Available { reference: finding },
+        DiscoveryOwnerFactV1::Available {
+            reference: finding,
+            recorded_utc_ns: 2500,
+            valid_from_utc_ns: 2500,
+            valid_until_utc_ns: None,
+        },
         DiscoveryOwnerFactV1::Available {
             reference: DiscoveryReferenceV1 {
                 owner: DiscoveryReferenceOwnerV1::Notification,
@@ -277,6 +282,9 @@ fn discovery_defender_contract_keeps_owner_obligations_after_client_restart() ->
                 digest: DiscoveryDigestV1::of(&"delivery-failed;human-ack-absent")?,
                 ..packet.scope.subject.clone()
             },
+            recorded_utc_ns: 2600,
+            valid_from_utc_ns: 2600,
+            valid_until_utc_ns: None,
         },
         DiscoveryOwnerFactV1::Unsupported {
             owner: DiscoveryReferenceOwnerV1::Approval,

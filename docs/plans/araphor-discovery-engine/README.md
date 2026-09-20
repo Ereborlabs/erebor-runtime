@@ -88,14 +88,15 @@ Control restarts or retained input is incomplete
 ## Status and source baseline
 
 - Plan status: In progress, 2026-09-20. The user approved the Now work.
-- Implementation result: **Not done**. The offline owner, contract checks, and
-  storage experiment exist. Phase 1 retains open acceptance gates. Phase 2 has
-  not started. See the [current result](phase-1-contracts-and-offline-proof.md#result).
+- Implementation result: Phase 1 **Done**. The offline contracts, frozen
+  synthetic corpus, source-extension review, and native SQLite selection pass.
+  Phase 2 is next and remains **Not done**. See the
+  [current result](phase-1-contracts-and-offline-proof.md#result).
 - Plan location: `worktrees/mithril-ui`, branch `codex/mithril-ui`.
-- Implementation worktree HEAD: `e36d1cff21a07834c5db29076f1776c78931c7e1`,
-  with uncommitted discovery changes. The rebase includes local main at
-  `d08517c9cd9a52fb3adad304370225c555f4300b`. Git restored the tracked plan
-  changes from its autostash. Untracked plan files remain in place.
+- Current source baseline: main `36cf6449`. The rebased implementation commits
+  include `ef00f8ce` (offline foundation), `e9494488` (reference checks),
+  `d037b61a` (native SQLite proof), and `6aa98343` (frozen corpus). The final
+  validity checks and source review are recorded in the phase result.
 - The planning-only UI snapshot was
   `bc090201c1d2bd96b1b098d2f7bd6c104867b4db`, with main at
   `787c03233ea1cf1593fd487b086c2e467e855a21`.
@@ -216,8 +217,8 @@ sample controls to production services.
 
 ## Ordered implementation
 
-Each phase requires explicit implementation approval. All results are
-**Not done**. A completed phase does not approve the next one.
+The user approved Phases 1 and 2. Phase 1 is **Done**; later results remain
+**Not done**. This approval does not include Phase 3 or later work.
 
 | Phase | Output | Stop condition |
 | --- | --- | --- |
@@ -333,7 +334,7 @@ not prerequisites for useful native discovery.
 | --- | --- | --- |
 | Missing decision context | Preserve existing ABI fields and bounded Node-owned context in the existing evidence path; reuse Control workload facts | Phase 2 wire compatibility and replay tests |
 | Shared evidence reader and retention | Bounded export; no discovery acknowledgement of the shared watermark | Phase 2 retention-race tests |
-| Aggregation and database | DuckDB is the analytical candidate; SQLite is the transactional baseline. Select one from the same ingestion, query, recovery, and memory experiment | Phase 1 result, before Phase 2 dependency selection |
+| Aggregation and database | SQLite selected with pinned `rusqlite` 0.40.2 and bundled SQLite 3.53.2; native memory, isolation, crash, disk-full, and repeat-run gates passed | Phase 2 live intake/rollout interference and durable integration |
 | Noise reduction | Exact groups plus rule intent, workload context, counterevidence, reviewed history, and tested suggestions; no automatic exceptions or incident closure | Phase 3 methods and Phase 6 task study |
 | Intelligence methods | Deterministic methods first; compare typed classification and one existing agent on documented SQL/context on the same tasks | Phase 4 measured adoption decision |
 | Model location | Local, self-hosted, or hosted. Require an explicit export/recipient policy; the external client owns model execution | Before the first model request |
