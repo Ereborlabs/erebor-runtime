@@ -1747,7 +1747,9 @@ test does not close a row when its physical condition or an assertion changed.
       with zero uses, deny its write, and enter `Expired` with zero uses.
     - [ ] Keep each test below 100 lines. Split independent behavior into
       separate tests instead of hiding scenario assertions in a helper.
-    - [ ] Pass Host and commit it.
+    - [x] Pass Host and commit it. The three focused tests passed together in
+      79.88 seconds. Public file rules used one nonzero signed path atom and no
+      exact-object key. The test matched all eight worker cookies to that atom.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy actions, result fields, mailbox
