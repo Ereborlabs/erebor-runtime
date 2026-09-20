@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod admin_exec;
 mod child;
+#[cfg(test)]
+mod file_effect;
 mod fixture_syscalls;
 mod mailbox;
 mod network;

@@ -1896,6 +1896,17 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace the managed `/proc/self/environ` read with one standard
+    platform test. Use one shared Python actor and the existing Python policy.
+    Start the runtime-added actor before Node so it retains the original
+    external-root classification. Require `EACCES`, `UNRESOLVED_OBJECT`, the
+    exact actor task, and no exact or path policy object.
+  - [x] Pass the managed proc test on Host and commit it. The 89-line scenario
+    file passed in 29.43 seconds on 2026-09-20.
+  - [ ] Pass the managed proc test on direct `runc` and commit it.
+  - [ ] Pass the managed proc test on Kubernetes and commit it.
+  - [ ] Remove only the matching legacy action and result field after all
+    three platform cases pass.
 
 ### Network
 
