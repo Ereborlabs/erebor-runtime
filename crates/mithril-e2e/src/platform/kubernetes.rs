@@ -28,8 +28,8 @@ use mithril_control::{
     KUBERNETES_PROFILE_ANNOTATION, KUBERNETES_READY_LABEL, KUBERNETES_SOURCE_ANNOTATION,
 };
 use mithril_node::{
-    NativeIdentityInspector, NativeTaskSnapshotV1, NodeConfig, RuntimeIntegrationDecommissionV1,
-    RuntimeIntegrationOwner,
+    NativeIdentityInspector, NativeTaskSnapshotV1, NodeConfig, RuntimeAdmissionClient,
+    RuntimeIntegrationDecommissionV1, RuntimeIntegrationOwner,
 };
 use serde_json::{json, Value};
 use snafu::ResultExt as _;
@@ -324,6 +324,8 @@ impl KubernetesState {
 
     fn wait_node(&self) -> TestResult<()> {
         let sets = Api::<DaemonSet>::namespaced(self.client.clone(), &self.system);
+        let admission =
+            RuntimeAdmissionClient::new(self.socket_path.clone(), Duration::from_secs(1))?;
         let last = RefCell::new(String::from("<absent>"));
         let path = Self::resource(&self.system, "daemonset", "mithril-node");
         Ok(wait_for(
@@ -332,13 +334,14 @@ impl KubernetesState {
             READY_LIMIT,
             || match self.runtime.block_on(sets.get("mithril-node")) {
                 Ok(set) => {
-                    *last.borrow_mut() = format!("{:?}", set.status);
-                    let ready = set.status.is_some_and(|status| {
+                    let ready = set.status.as_ref().is_some_and(|status| {
                         status.desired_number_scheduled == 1
                             && status.number_ready == 1
                             && status.number_unavailable.unwrap_or_default() == 0
                     });
-                    Ok(ready.then_some(()))
+                    let live = ready && self.runtime.block_on(admission.available());
+                    *last.borrow_mut() = format!("{:?}; admission live: {live}", set.status);
+                    Ok(live.then_some(()))
                 }
                 Err(source) => {
                     *last.borrow_mut() = source.to_string();

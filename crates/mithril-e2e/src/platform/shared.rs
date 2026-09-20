@@ -1271,6 +1271,7 @@ mod tests {
     use std::fs;
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     use rustix::process::{kill_process, Pid, Signal};
 
@@ -1330,13 +1331,25 @@ mod tests {
             drop(blocked);
             socket.cleanup()?;
             env.cri = Some(CriFixture::start(&env.cri_path)?);
+            let stale = UnixListener::bind(&env.admit_path)?;
+            drop(stale);
+            let health = mithril_node::RuntimeAdmissionClient::new(
+                env.admit_path.clone(),
+                Duration::from_millis(100),
+            )?;
+            assert!(env.admit_path.exists() && !env.runtime.block_on(health.available()));
             let mut recovered = start()?;
             recovered.wait_path(
                 &env.admit_path,
                 "recovered Node admission readiness",
                 READY_LIMIT,
-                || Ok(env.admit_path.exists().then_some(())),
-                || "the admission socket is absent".to_owned(),
+                || Ok(env.runtime.block_on(health.available()).then_some(())),
+                || {
+                    format!(
+                        "live admission unavailable; path exists: {}",
+                        env.admit_path.exists()
+                    )
+                },
             )?;
             let pid = Pid::from_raw(i32::try_from(recovered.id())?)
                 .ok_or("recovered mithril-node has an invalid PID")?;
