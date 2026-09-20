@@ -1903,7 +1903,9 @@ test does not close a row when its physical condition or an assertion changed.
     exact actor task, and no exact or path policy object.
   - [x] Pass the managed proc test on Host and commit it. The 89-line scenario
     file passed in 29.43 seconds on 2026-09-20.
-  - [ ] Pass the managed proc test on direct `runc` and commit it.
+  - [x] Pass the managed proc test on direct `runc` and commit it. The exact
+    case passed in 35.10 seconds on 2026-09-20 through the production OCI
+    hook.
   - [ ] Pass the managed proc test on Kubernetes and commit it.
   - [ ] Remove only the matching legacy action and result field after all
     three platform cases pass.
