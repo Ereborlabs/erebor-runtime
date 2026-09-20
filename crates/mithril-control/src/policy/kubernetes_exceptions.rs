@@ -572,6 +572,20 @@ impl PolicyDesiredStateOwner {
             namespace_uid,
             object_name,
         )?;
+        if state == ExceptionSourceStateV1::DeletionRequested {
+            if let Some(source) = current.as_ref().filter(|source| {
+                source.object_uid == object_uid && source.state == ExceptionSourceStateV1::Accepted
+            }) {
+                let stored = self.stored_exception_result(source, now_utc_ns)?;
+                if !matches!(
+                    stored.rollout_state.state,
+                    WorkloadProtectionExceptionStateV1::Pending
+                        | WorkloadProtectionExceptionStateV1::Active
+                ) {
+                    return Ok(stored);
+                }
+            }
+        }
         // An accepted exception stays on its first base generation. A later policy
         // update cannot regrant the same bounded request.
         let base_source = match state {
@@ -738,18 +752,27 @@ impl PolicyDesiredStateOwner {
                 "the policy reconcile owner lock is poisoned",
             )
         })?;
-        self.store
+        let mut retired = Vec::new();
+        for source in self
+            .store
             .latest_live_exception_sources()?
             .into_iter()
             .filter(|source| !seen_object_uids.contains(&source.object_uid))
-            .map(|source| {
-                self.reconcile_exception_revocation(
+        {
+            let stored = self.stored_exception_result(&source, now_utc_ns)?;
+            if matches!(
+                stored.rollout_state.state,
+                WorkloadProtectionExceptionStateV1::Pending
+                    | WorkloadProtectionExceptionStateV1::Active
+            ) {
+                retired.push(self.reconcile_exception_revocation(
                     source.deletion_requested()?,
                     now_utc_ns,
                     ExceptionDesiredPurposeV1::SourceLifecycle,
-                )
-            })
-            .collect()
+                )?);
+            }
+        }
+        Ok(retired)
     }
 
     fn reconcile_exception_revocation(

@@ -1089,9 +1089,23 @@ fn terminal_exception_does_not_block_a_new_bounded_instance() -> TestResult {
             NOW + 4,
         )?)?;
 
+    let committed = owner.store().commit_index();
+    let deleted = owner.reconcile_exception(
+        &exception_resource(EXCEPTION_UID, true)?,
+        NAMESPACE_UID,
+        &inventory,
+        NOW + 5,
+    )?;
+    assert_eq!(deleted.candidate, first.candidate);
+    assert_eq!(
+        deleted.rollout_state.state,
+        WorkloadProtectionExceptionStateV1::Consumed
+    );
+    assert_eq!(owner.store().commit_index(), committed);
+
     let mut next_resource = exception_resource("30000000-0000-4000-8000-000000000003", false)?;
     next_resource.metadata.name = Some("temporary-file-access-next".to_owned());
-    let next = owner.reconcile_exception(&next_resource, NAMESPACE_UID, &inventory, NOW + 5)?;
+    let next = owner.reconcile_exception(&next_resource, NAMESPACE_UID, &inventory, NOW + 6)?;
     assert_eq!(
         next.rollout_state.state,
         mithril_control::WorkloadProtectionExceptionStateV1::Pending

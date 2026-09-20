@@ -725,6 +725,27 @@ impl NodePolicyDeliveryOwner {
         self.state.inventory_retirement.clone()
     }
 
+    pub(crate) fn exception_cleanup_pending(&self) -> Result<bool> {
+        let Some(cleanup) = self.state.inventory_retirement.as_ref() else {
+            return Ok(false);
+        };
+        for record in self.state.exception_records.values().filter(|record| {
+            matches!(
+                record.state,
+                LocalExceptionStateV1::Pending | LocalExceptionStateV1::Active
+            )
+        }) {
+            if self
+                .read_exception_candidate(record)?
+                .base_candidate_content_id
+                == cleanup.candidate_content_id
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(crate) fn startup_authority_absence(
         &self,
         host: &erebor_interceptor::KernelHost,
@@ -4169,12 +4190,12 @@ mod tests {
         RegistryDigestsV1, WorkloadProtectionException, WorkloadTargetFactV1,
     };
     use sha2::{Digest as _, Sha256};
-    use snafu::ResultExt as _;
+    use snafu::{OptionExt as _, ResultExt as _};
     use zerocopy::IntoBytes as _;
 
     use super::{
-        write_atomic, NodePolicyDeliveryOwner, PolicyActivationProofV1, PolicyDeliveryOperationV1,
-        PolicyTransferActionV1, TransferStateV1,
+        write_atomic, IdentityStateSnafu, NodePolicyDeliveryOwner, PolicyActivationProofV1,
+        PolicyDeliveryOperationV1, PolicyTransferActionV1, TransferStateV1,
     };
     use crate::error::{IoSnafu, PolicySnafu};
     use crate::trust::InstalledPolicySignerV1;
@@ -5040,6 +5061,26 @@ mod tests {
             legacy_control_commit_index: 0,
             delivery_state_retired: false,
         });
+        assert!(owner.exception_cleanup_pending()?);
+        owner
+            .state
+            .exception_records
+            .values_mut()
+            .next()
+            .context(IdentityStateSnafu {
+                reason: "the fixture has no exception record",
+            })?
+            .state = super::LocalExceptionStateV1::Consumed;
+        assert!(!owner.exception_cleanup_pending()?);
+        owner
+            .state
+            .exception_records
+            .values_mut()
+            .next()
+            .context(IdentityStateSnafu {
+                reason: "the fixture has no exception record",
+            })?
+            .state = super::LocalExceptionStateV1::Pending;
         owner.finish_inventory_retirement()?;
 
         let recovered = NodePolicyDeliveryOwner::load(directory.path())?;

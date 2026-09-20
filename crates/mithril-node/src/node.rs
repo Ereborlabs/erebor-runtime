@@ -2440,6 +2440,9 @@ impl NodeChassis {
         let Some(cleanup) = self.policy_delivery.inventory_retirement() else {
             return Ok(false);
         };
+        if self.policy_delivery.exception_cleanup_pending()? {
+            return Ok(false);
+        }
         self.policy_delivery
             .omit_inventory_retirement_from_config(&mut self.config)?;
         let host = self.host.as_mut().ok_or_else(|| {
