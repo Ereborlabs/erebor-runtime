@@ -454,3 +454,87 @@ fn coverage_and_zero_kernel_result_do_not_merge_with_proven_denial() -> TestResu
     );
     Ok(())
 }
+
+#[test]
+fn investigation_rejects_unknown_owner_records_and_invalid_methods() -> TestResult<()> {
+    let (packet, report) = investigation()?;
+    let mut unknown = packet.scope.subject.clone();
+    unknown.id = "invented".into();
+    for payload in [
+        DiscoverySuggestionPayloadV1::RunReviewedTest {
+            fixture: unknown.clone(),
+        },
+        DiscoverySuggestionPayloadV1::PolicyChange {
+            proposal: unknown.clone(),
+        },
+        DiscoverySuggestionPayloadV1::ResponsePlan {
+            plan: Some(unknown.clone()),
+            unsupported_reason: None,
+        },
+    ] {
+        let mut changed = report.clone();
+        changed.suggestions[0].payload = payload;
+        assert!(changed.validate_against(&packet).is_err());
+    }
+    let mut changed = report.clone();
+    changed.suggestions[0].tests.push(unknown);
+    assert!(changed.validate_against(&packet).is_err());
+    for change in 0..4 {
+        let mut changed = report.clone();
+        match change {
+            0 => changed.classification.method.id.clear(),
+            1 => changed.classification.method.version.clear(),
+            2 => changed.classification.method.parameters_digest.0 = [0; 32],
+            _ => changed.classification.claims[0].refuting = packet.records.clone(),
+        }
+        assert!(changed.validate_against(&packet).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn investigation_binds_evidence_cutoff_coverage_and_disclosure() -> TestResult<()> {
+    let (mut packet, _) = investigation()?;
+    let input = input()?;
+    packet.cutoff_utc_ns = u64::try_from(input.records[0].observation.ingested_utc_ns)?;
+    packet.validate_evidence(&input)?;
+    packet.validate_disclosure(&packet.disclosure)?;
+    for change in 0..4 {
+        let mut current = packet.disclosure.clone();
+        match change {
+            0 => current.principal = "other-principal".into(),
+            1 => current.purpose = "other-purpose".into(),
+            2 => current.destination = DiscoveryDisclosureDestinationV1::HostedRedacted,
+            _ => current.allowed_fields.clear(),
+        }
+        assert!(packet.validate_disclosure(&current).is_err());
+    }
+    packet.cutoff_utc_ns -= 1;
+    assert!(packet.validate_evidence(&input).is_err());
+    packet.cutoff_utc_ns += 1;
+    packet.records[0].durable_cursor = 999;
+    assert!(packet.validate_evidence(&input).is_err());
+    let (mut packet, _) = investigation()?;
+    let mut input = input;
+    input.coverage[0].state = CoverageStateV1::Gapped;
+    packet.scope.input_digest = DiscoveryOwner
+        .derive_recorded(&input)?
+        .snapshot
+        .input_digest;
+    packet.complete_coverage = true;
+    assert!(packet.validate_evidence(&input).is_err());
+    Ok(())
+}
+
+#[test]
+fn valid_citation_does_not_establish_provider_use() -> TestResult<()> {
+    let (packet, mut report) = investigation()?;
+    report.classification.claims[0].text = "The provider accepted the stolen credential.".into();
+    report.validate_against(&packet)?;
+    assert!(packet.missing_facts.contains(&"PROVIDER_AUDIT".into()));
+    assert_eq!(
+        DiscoveryOwner.derive_recorded(&input()?)?.snapshot.atoms[0].physical_result,
+        DiscoveryPhysicalResultV1::Prevented
+    );
+    Ok(())
+}

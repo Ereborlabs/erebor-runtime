@@ -97,6 +97,19 @@ pub struct DiscoveryMethodV1 {
     pub client_supplied: bool,
 }
 
+impl DiscoveryMethodV1 {
+    fn validate(&self) -> Result<()> {
+        require(
+            !self.id.trim().is_empty()
+                && self.id.len() <= 256
+                && !self.version.trim().is_empty()
+                && self.version.len() <= 128
+                && self.parameters_digest.0 != [0; 32],
+            "METHOD_SCHEMA",
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum DiscoveryDetectionResultV1 {
@@ -319,7 +332,8 @@ impl ContextPacket {
                 && self.cutoff_utc_ns > 0
                 && self.disclosure.revision > 0
                 && !self.disclosure.principal.is_empty()
-                && !self.disclosure.purpose.is_empty(),
+                && !self.disclosure.purpose.is_empty()
+                && self.scope.input_digest.0 != [0; 32],
             "PACKET_SCHEMA",
         )?;
         require(
@@ -364,6 +378,57 @@ impl ContextPacket {
             .build()
         })?;
         Ok(())
+    }
+
+    pub fn validate_evidence(&self, input: &DiscoveryInputManifestV1) -> Result<()> {
+        self.validate()?;
+        let derived = super::DiscoveryOwner.derive_recorded(input)?;
+        require(
+            self.scope.tenant_id == input.tenant_id
+                && self.proof_kind == input.proof_kind
+                && self.scope.input_digest == derived.snapshot.input_digest,
+            "PACKET_INPUT",
+        )?;
+        require(
+            !self.complete_coverage
+                || derived
+                    .snapshot
+                    .coverage
+                    .iter()
+                    .all(|coverage| coverage.state == crate::CoverageStateV1::Healthy),
+            "PACKET_COVERAGE",
+        )?;
+        for citation in &self.records {
+            let record = input.records.iter().find(|record| &record.id == citation);
+            require(record.is_some(), "UNKNOWN_CITATION")?;
+            if let Some(record) = record {
+                require(
+                    u64::try_from(record.observation.ingested_utc_ns)
+                        .is_ok_and(|time| time > 0 && time <= self.cutoff_utc_ns),
+                    "PACKET_FUTURE_EVIDENCE",
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_disclosure(&self, current: &DisclosurePolicyV1) -> Result<()> {
+        self.validate()?;
+        require(self.disclosure == *current, "DISCLOSURE_CHANGED")
+    }
+
+    fn known_reference(&self, reference: &DiscoveryReferenceV1) -> Result<()> {
+        self.reference(reference)?;
+        require(
+            reference == &self.scope.subject
+                || self.scope.finding.as_ref() == Some(reference)
+                || self.scope.parents.contains(reference)
+                || self.owner_facts.iter().any(|fact| {
+                    matches!(fact,
+                    DiscoveryOwnerFactV1::Available { reference: known } if known == reference)
+                }),
+            "UNKNOWN_REFERENCE",
+        )
     }
 
     fn reference(&self, reference: &DiscoveryReferenceV1) -> Result<()> {
@@ -414,6 +479,12 @@ impl AssessmentReport {
             self.classification.context_digest == DiscoveryDigestV1::of(packet)?,
             "CONTEXT_DIGEST",
         )?;
+        self.classification.method.validate()?;
+        require(
+            !self.classification.taxonomy_version.trim().is_empty()
+                && !self.classification.activity.trim().is_empty(),
+            "CLASSIFICATION_SCHEMA",
+        )?;
         require(
             self.detections.len() <= 100
                 && self.suggestions.len() <= 100
@@ -436,6 +507,13 @@ impl AssessmentReport {
             )?;
             packet.citations(&claim.supporting)?;
             packet.citations(&claim.refuting)?;
+            require(
+                claim
+                    .supporting
+                    .iter()
+                    .all(|id| !claim.refuting.contains(id)),
+                "CONTRADICTORY_CITATION",
+            )?;
             require(
                 !claim.supporting.is_empty()
                     || !claim.refuting.is_empty()
@@ -460,8 +538,16 @@ impl AssessmentReport {
         )?;
         for detection in &self.detections {
             require(detection.scope == packet.scope, "DETECTION_SCOPE")?;
+            detection.method.validate()?;
             packet.citations(&detection.supporting)?;
             packet.citations(&detection.refuting)?;
+            require(
+                detection
+                    .supporting
+                    .iter()
+                    .all(|id| !detection.refuting.contains(id)),
+                "CONTRADICTORY_CITATION",
+            )?;
             require(
                 detection.result != DiscoveryDetectionResultV1::Matched
                     || !detection.supporting.is_empty(),
@@ -482,6 +568,8 @@ impl AssessmentReport {
                     && receipt.disclosure_revision == packet.disclosure.revision
                     && receipt.view_version == 1
                     && receipt.read_revision > 0
+                    && receipt.query_digest.0 != [0; 32]
+                    && receipt.result_digest.0 != [0; 32]
                     && receipt.returned_rows <= 200
                     && receipt.returned_bytes <= 1024 * 1024,
                 "RECEIPT_SCOPE",
@@ -499,18 +587,16 @@ impl AssessmentReport {
                         .all(|id| claim_ids.contains(id)),
                 "SUGGESTION_SCOPE",
             )?;
-            packet.reference(&suggestion.target)?;
-            require(suggestion.target == packet.scope.subject || packet.owner_facts.iter().any(|fact|
-                matches!(fact, DiscoveryOwnerFactV1::Available { reference } if reference == &suggestion.target)), "UNKNOWN_TARGET")?;
+            packet.known_reference(&suggestion.target)?;
             for reference in &suggestion.tests {
-                packet.reference(reference)?;
+                packet.known_reference(reference)?;
             }
             match &suggestion.payload {
                 DiscoverySuggestionPayloadV1::RunReviewedTest { fixture } => {
-                    packet.reference(fixture)?
+                    packet.known_reference(fixture)?
                 }
                 DiscoverySuggestionPayloadV1::PolicyChange { proposal } => {
-                    packet.reference(proposal)?;
+                    packet.known_reference(proposal)?;
                     require(
                         proposal.owner == DiscoveryReferenceOwnerV1::Discovery,
                         "PROPOSAL_OWNER",
@@ -525,7 +611,7 @@ impl AssessmentReport {
                         "RESPONSE_AVAILABILITY",
                     )?;
                     if let Some(plan) = plan {
-                        packet.reference(plan)?;
+                        packet.known_reference(plan)?;
                         require(
                             plan.owner == DiscoveryReferenceOwnerV1::Response,
                             "RESPONSE_OWNER",
@@ -541,8 +627,10 @@ impl AssessmentReport {
                 DiscoverySuggestionPayloadV1::AskOwner { question } => {
                     require(!question.is_empty(), "OWNER_QUESTION")?
                 }
-                DiscoverySuggestionPayloadV1::GatherEvidence { .. }
-                | DiscoverySuggestionPayloadV1::DetectionDraft { .. } => {}
+                DiscoverySuggestionPayloadV1::GatherEvidence { query } => {
+                    require(query.0 != [0; 32], "QUERY_DIGEST")?;
+                }
+                DiscoverySuggestionPayloadV1::DetectionDraft { method } => method.validate()?,
             }
         }
         Ok(())
