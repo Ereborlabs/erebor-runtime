@@ -1933,7 +1933,7 @@ test does not close a row when its physical condition or an assertion changed.
     dispatch arm after all three platform cases pass. The cleanup removed 16
     lines from the oversized legacy files. The 93 non-privileged library tests
     and strict all-target Clippy pass.
-  - [ ] Replace the BPF map-create privilege block with one standard platform
+  - [x] Replace the BPF map-create privilege block with one standard platform
     test. Use one shared Python actor and the existing Python policy. Start the
     runtime-added actor before Node to preserve the original external-root
     classification. Require user-space and BPF `EACCES`,
@@ -1958,6 +1958,15 @@ test does not close a row when its physical condition or an assertion changed.
     cleanup removed 22 net lines from the oversized legacy files. The 13
     focused child-fixture tests, 93 non-privileged library tests, formatting,
     and strict all-target Clippy pass.
+  - [x] Add Node logs to an actor early-exit diagnostic. The actor logs were
+    empty in two Kubernetes exits with code 1 and one exit with code 139.
+  - [ ] Finish the third-migration platform matrix. All 55 Host cases and all
+    46 direct-`runc` cases passed. The first Kubernetes identity run passed 22
+    of 24 cases. The failing three-case and two-case sequences then passed.
+    A second identity run failed a different actor start after 13 cases. The
+    next unchanged identity run passed all 24 cases in 628.48 seconds. Run the
+    remaining ten Kubernetes lifecycle processes after the intermittent actor
+    exit has a lightweight reproduction or an infrastructure cause.
 
 ### Network
 

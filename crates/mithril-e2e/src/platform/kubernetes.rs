@@ -1497,10 +1497,13 @@ impl Platform for Kubernetes {
                         let logs = self
                             .logs(&self.namespace, &format!("pod/{ACTOR}"))
                             .unwrap_or_else(|error| error.to_string());
+                        let node = self
+                            .logs(&self.system, "daemonset/mithril-node")
+                            .unwrap_or_else(|error| error.to_string());
                         return Err(InvalidInputSnafu {
                             path: &script,
                             reason: format!(
-                                "Kubernetes actor exited with code {}; reason: {:?}; message: {:?}; logs: {logs:?}",
+                                "Kubernetes actor exited with code {}; reason: {:?}; message: {:?}; logs: {logs:?}; Node logs: {node}",
                                 exit.exit_code, exit.reason, exit.message
                             ),
                         }
