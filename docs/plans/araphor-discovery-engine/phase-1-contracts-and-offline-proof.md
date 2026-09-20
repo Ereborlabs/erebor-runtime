@@ -359,3 +359,34 @@ test.
 5. Review the Node context extension and bounded ControlStore export contract.
    Preserve compatibility and the separate source-retention owner. Then rerun
    the complete Rust gate and record Done before starting Phase 2.
+
+### Investigation contract correction
+
+This correction starts from `25618bf4`, after the rebase onto main at
+`e59aad20`. It does not change a live owner or grant execution authority.
+
+Read [ContextPacket](../../../crates/mithril-control/src/discovery/investigation.rs)
+before `AssessmentReport::validate_against` in the same file. The caller supplies
+the sealed input to `validate_evidence`. That method checks the input digest,
+tenant, proof kind, cited record membership, intake-time cutoff, and claimed
+coverage. `validate_disclosure` compares the complete current disclosure policy,
+not its revision alone. The caller must obtain that policy from its authority;
+this offline method does not authenticate a client or redact data.
+
+Report validation now rejects empty or unversioned methods, zero method and
+receipt digests, contradictory citations in one claim, and unknown references
+in suggestion targets, tests, proposals, and response plans. A reference must
+occur in the packet's subject, finding, parents, or available owner facts.
+An unsupported response stays unsupported. A draft never becomes an approval.
+
+The [contract tests](../../../crates/mithril-control/src/discovery/tests.rs)
+include a valid citation with an unsupported provider-use claim. Structural
+validation accepts the citation; the fixture's provider-audit gap refutes the
+claim of support. Do not treat structural validity as semantic verification.
+Owner-document validity and provenance remain part of the context work below.
+
+Focused verification: `cargo test --offline -p mithril-control discovery:: --
+--nocapture` passed 19 tests. `bash .github/scripts/verify-rust-ci.sh` passed
+after the last Rust edit. The e2e library passed 94 tests and did not run 156
+physical tests. The Node library passed 243 tests. Result for this contract
+correction: **Done**. The complete phase remains **Not done**.
