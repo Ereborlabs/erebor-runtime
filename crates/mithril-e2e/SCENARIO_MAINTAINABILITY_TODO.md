@@ -1860,7 +1860,8 @@ test does not close a row when its physical condition or an assertion changed.
       probe then passed with both recovered task classes, the runtime bootstrap
       marker, runtime-internal rule-zero execution, both policy denials, and
       all cleanup fields.
-    - [ ] Pass the `SIGCONT` denial case on direct `runc` and commit it.
+    - [x] Pass the `SIGCONT` denial case on direct `runc` and commit it. The
+      unchanged scenario passed in 36.26 seconds on 2026-09-20.
     - [ ] Pass the `SIGCONT` denial case on Kubernetes and commit it.
     - [ ] Pass the unmatched signal-zero case on Host and commit it.
     - [ ] Pass the unmatched signal-zero case on direct `runc` and commit it.
