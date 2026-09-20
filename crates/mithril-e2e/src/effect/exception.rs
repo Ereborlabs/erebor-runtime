@@ -30,7 +30,7 @@ const COORD_MAP: &str = "task_coordinates";
 type Coord = TaskCoordinateV1;
 type State = ExceptionRuntimeStateV1;
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = exception]
 fn bounded_exception_is_exact<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("exception-exact")?;
@@ -113,7 +113,7 @@ fn bounded_exception_is_exact<P: Platform>() -> TestResult<()> {
     let mut counts = [0, 0, 0];
     let mut atom = 0;
     for event in snapshot.recent_effects.iter().filter(|event| {
-        cookies.iter().any(|cookie| *cookie == event.task_cookie)
+        cookies.contains(&event.task_cookie)
             && event.effect_family == u32::from(F::File as u16)
             && event.operation == u32::from(O::OpenWrite as u16)
             && event.composite_atom_id != 0
@@ -134,7 +134,7 @@ fn bounded_exception_is_exact<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = exception]
 fn exhaustion_survives_restart<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("exception-restart")?;
@@ -230,7 +230,7 @@ fn exhaustion_survives_restart<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = exception]
 fn unused_exception_expires<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("exception-expiry")?;

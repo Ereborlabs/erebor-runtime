@@ -23,7 +23,8 @@ use kube::config::{KubeConfigOptions, Kubeconfig};
 use kube::{Api, Client, Config, ResourceExt as _};
 use mithril_control::{
     ControlConfig, KubernetesConditionStatusV1, PolicySignerTrustV1, TrustGenerationV1,
-    WorkloadProtectionPolicy, KUBERNETES_LABEL_EPOCH_ANNOTATION, KUBERNETES_NODE_BOOT_ANNOTATION,
+    WorkloadProtectionException, WorkloadProtectionExceptionStateV1, WorkloadProtectionPolicy,
+    KUBERNETES_LABEL_EPOCH_ANNOTATION, KUBERNETES_NODE_BOOT_ANNOTATION,
     KUBERNETES_NODE_ID_ANNOTATION, KUBERNETES_NODE_UID_ANNOTATION, KUBERNETES_NOT_READY_TAINT,
     KUBERNETES_PROFILE_ANNOTATION, KUBERNETES_READY_LABEL, KUBERNETES_SOURCE_ANNOTATION,
 };
@@ -220,6 +221,58 @@ impl KubernetesState {
     fn snapshot(&self) -> TestResult<MithrilObservationSnapshot> {
         let client = MithrilObservationClient::new(self.observation_path.clone(), "/".to_owned());
         Ok(self.runtime.block_on(client.snapshot())?)
+    }
+
+    fn install_exception(&mut self, bytes: &[u8], path: &Path) -> TestResult<()> {
+        let mut resource: WorkloadProtectionException = serde_json::from_slice(bytes)?;
+        let name = resource
+            .metadata
+            .name
+            .clone()
+            .ok_or("the exception fixture has no metadata.name")?;
+        let pod = self.pod()?;
+        resource.metadata = ObjectMeta {
+            name: Some(name.clone()),
+            namespace: Some(self.namespace.clone()),
+            ..ObjectMeta::default()
+        };
+        resource.spec.policy_ref.name = self
+            .policy_name
+            .clone()
+            .ok_or("the exception has no installed policy")?;
+        resource.spec.target.pod.name = ACTOR.to_owned();
+        resource.spec.target.pod.uid = pod.metadata.uid.ok_or("the actor Pod has no UID")?;
+        resource.spec.target.container_name = CONTAINER.to_owned();
+        let resources =
+            Api::<WorkloadProtectionException>::namespaced(self.client.clone(), &self.namespace);
+        self.runtime
+            .block_on(resources.create(&PostParams::default(), &resource))?;
+        let last = RefCell::new(String::from("<absent>"));
+        Ok(wait_for(
+            path,
+            "Kubernetes exception activation",
+            READY_LIMIT,
+            || {
+                let current = match self.runtime.block_on(resources.get(&name)) {
+                    Ok(current) => current,
+                    Err(source) => {
+                        return InvalidInputSnafu {
+                            path,
+                            reason: format!("Kubernetes exception read failed: {source}"),
+                        }
+                        .fail()
+                    }
+                };
+                *last.borrow_mut() = format!("{:?}", current.status);
+                Ok(current
+                    .status
+                    .is_some_and(|status| {
+                        status.state == WorkloadProtectionExceptionStateV1::Active
+                    })
+                    .then_some(()))
+            },
+            || format!("last exception status: {}", last.borrow()),
+        )?)
     }
 
     fn cgroup(pid: u32) -> TestResult<PathBuf> {
@@ -1343,7 +1396,12 @@ impl Platform for Kubernetes {
 
     fn install_policy(&mut self, fixture: &str) -> TestResult<()> {
         let path = policy_path(&self.root, fixture)?;
-        let mut policy: WorkloadProtectionPolicy = serde_json::from_slice(&fs::read(&path)?)?;
+        let bytes = fs::read(&path)?;
+        let value: Value = serde_json::from_slice(&bytes)?;
+        if value.get("kind").and_then(Value::as_str) == Some("WorkloadProtectionException") {
+            return self.install_exception(&bytes, &path);
+        }
+        let mut policy: WorkloadProtectionPolicy = serde_json::from_slice(&bytes)?;
         let fixture_name = policy
             .metadata
             .name
