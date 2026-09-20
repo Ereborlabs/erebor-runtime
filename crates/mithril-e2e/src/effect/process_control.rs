@@ -278,6 +278,102 @@ fn signal_cont_is_denied<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
+#[platform_test(host)]
+#[lifecycle = signal_unmatched]
+fn unmatched_signal_is_denied<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("process-signal-unmatched")?;
+    env.start_control()?;
+    env.stop_node()?;
+    let mut init = env.start_actor("ready.py", &[])?;
+    env.place(init.id())?;
+    let args = [
+        "/fixtures/process_control.py",
+        "/work",
+        "signal-zero",
+        "no-result",
+    ];
+    let mut actor = env.add_actor("python", &args)?;
+    env.place(actor.id())?;
+    env.install_policy("python_policy.json")?;
+    env.start_node()?;
+    env.sync_policy()?;
+    env.node_ready()?;
+    env.running(init.id())?;
+    env.recovered(init.id(), "signal workload")?;
+    let parent = env.task(actor.id(), "signal controller")?;
+    assert_eq!(
+        parent.snapshot.root_class.as_deref(),
+        Some("restored_or_unknown_root")
+    );
+    assert_eq!(parent.snapshot.admitted_entry_rule_id, 0);
+
+    fs::write(env.work().join("spawn"), b"spawn\n")?;
+    let pid = actor.wait_child(actor.id(), "signal target")?;
+    actor.track(pid)?;
+    let target = env.task(pid, "signal target identity")?;
+    let parent_state = &parent.snapshot;
+    let target_state = &target.snapshot;
+    assert_eq!(
+        target_state.creator_task_cookie,
+        Some(parent_state.task_cookie)
+    );
+    assert_eq!(target_state.active_role_id, parent_state.active_role_id);
+    assert_ne!(target_state.task_cookie, parent_state.task_cookie);
+    assert_ne!(target_state.process_state_id, parent_state.process_state_id);
+
+    fs::write(env.work().join("act"), b"act\n")?;
+    let comm = std::path::PathBuf::from(format!("/proc/{}/comm", actor.id()));
+    let expected = format!("signal-zero-{}", libc::EACCES);
+    let state = RefCell::new(String::from("<unread>"));
+    wait_for(
+        &comm,
+        "signal completion",
+        Duration::from_secs(5),
+        || {
+            let value = fs::read_to_string(&comm).unwrap_or_else(|error| format!("<{error}>"));
+            *state.borrow_mut() = value.clone();
+            Ok((value.trim() == expected).then_some(()))
+        },
+        || format!("last task name: {}", state.borrow()),
+    )?;
+
+    let path = env.maps().0.to_owned();
+    wait_for(
+        &path,
+        "unmatched signal evidence",
+        Duration::from_secs(30),
+        || {
+            let snapshot = env.snapshot().map_err(|source| {
+                InvalidInputSnafu {
+                    path: &path,
+                    reason: source.to_string(),
+                }
+                .build()
+            })?;
+            Ok(snapshot.recent_effects.into_iter().find(|event| {
+                parent.matches_effect(
+                    event,
+                    "UNSUPPORTED_OBJECT",
+                    F::Privilege,
+                    O::Signal,
+                    -libc::EACCES,
+                ) && event.operation_argument == 0
+                    && event.controller_process_state_id == parent_state.process_state_id
+                    && event.target_task_cookie == target_state.task_cookie
+                    && event.target_role_id == target_state.active_role_id
+                    && event.target_process_state_id == target_state.process_state_id
+            }))
+        },
+        || "no unmatched signal denial observed".to_owned(),
+    )?;
+
+    fs::write(env.work().join("release"), b"release\n")?;
+    actor.wait_gone(actor.id(), "unmatched signal exit")?;
+    actor.stop()?;
+    init.stop()?;
+    env.stop()
+}
+
 #[platform_test(host, runc, kubernetes)]
 #[lifecycle = process_recovery]
 fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {

@@ -1868,7 +1868,12 @@ test does not close a row when its physical condition or an assertion changed.
       code. `ProcessFixture` now uses the existing Pod exit probe when the
       attach transport closes. The exact case passed in 75.36 seconds on
       2026-09-20.
-    - [ ] Pass the unmatched signal-zero case on Host and commit it.
+    - [x] Pass the unmatched signal-zero case on Host and commit it. The first
+      setup used an admitted application entry, whose missing process-control
+      row correctly used application default allow. The final 96-line test
+      preserves the original external-root condition: Node recovers the
+      runtime-added actor with entry rule zero before it attempts signal zero.
+      The exact case passed in 30.04 seconds on 2026-09-20.
     - [ ] Pass the unmatched signal-zero case on direct `runc` and commit it.
     - [ ] Pass the unmatched signal-zero case on Kubernetes and commit it.
     - [ ] Remove only the matching legacy signal actions, result fields, and
