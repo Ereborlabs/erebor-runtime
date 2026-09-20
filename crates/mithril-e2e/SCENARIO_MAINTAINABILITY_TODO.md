@@ -1920,7 +1920,9 @@ test does not close a row when its physical condition or an assertion changed.
     object.
   - [x] Pass the namespace privilege test on Host and commit it. The 79-line
     scenario passed in 29.46 seconds on 2026-09-20.
-  - [ ] Pass the namespace privilege test on direct `runc` and commit it.
+  - [x] Pass the namespace privilege test on direct `runc` and commit it. The
+    exact case passed in 34.63 seconds on 2026-09-20 through the production OCI
+    hook.
   - [ ] Pass the namespace privilege test on Kubernetes and commit it.
   - [ ] Remove only the matching legacy action, result field, enum case, and
     dispatch arm after all three platform cases pass.
