@@ -42,10 +42,23 @@ async fn run() -> mithril_node::Result<()> {
         node_id = %config.node_id,
         kubernetes_node = %config.kubernetes_node_name.as_deref().unwrap_or("none")
     );
-    let node = NodeChassis::start_with_held_initial_pids(config, &cli.held_initial_pid).await?;
+    let mut signal = Box::pin(shutdown_signal());
+    let node = tokio::select! {
+        result = NodeChassis::start_with_held_initial_pids(config, &cli.held_initial_pid) => {
+            result?
+        }
+        result = &mut signal => {
+            result.map_err(|source| mithril_node::Error::Io {
+                path: PathBuf::from("Node shutdown signal"),
+                source,
+                location: snafu::Location::default(),
+            })?;
+            return Ok(());
+        }
+    };
     let (shutdown, receiver) = watch::channel(false);
     tokio::spawn(async move {
-        let _result = shutdown_signal().await;
+        let _result = signal.await;
         shutdown.send_replace(true);
     });
     node.run(receiver).await

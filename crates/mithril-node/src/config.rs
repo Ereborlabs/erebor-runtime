@@ -9,7 +9,7 @@ use snafu::{ensure, ResultExt as _};
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, JsonSnafu};
 use crate::Result;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct InterceptorConfig {
     pub runtime_btf_path: PathBuf,
@@ -17,7 +17,7 @@ pub struct InterceptorConfig {
     pub pin_root: PathBuf,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeControlConfig {
     pub endpoint: String,
@@ -33,7 +33,7 @@ pub struct NodeControlConfig {
     pub maximum_clock_skew_ns: i64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeObservationConfig {
     pub socket_path: PathBuf,
@@ -41,7 +41,7 @@ pub struct RuntimeObservationConfig {
     pub cgroup_scope: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeAdmissionConfig {
     pub socket_path: PathBuf,
@@ -53,7 +53,7 @@ pub struct RuntimeAdmissionConfig {
     pub timeout_ms: u64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceConfig {
     pub tenant_id: String,
@@ -107,7 +107,7 @@ impl EvidenceConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContainerRuntimeConfig {
     pub socket_path: PathBuf,
@@ -116,7 +116,7 @@ pub struct ContainerRuntimeConfig {
     pub reconciliation_interval_ms: u64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyCandidateConfig {
     pub artifact_path: PathBuf,
@@ -127,7 +127,7 @@ pub struct PolicyCandidateConfig {
     pub rollback_public_key_path: Option<PathBuf>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdministrativeAuthorizationConfig {
     pub tenant_id: String,
@@ -143,7 +143,7 @@ pub struct AdministrativeAuthorizationConfig {
     pub maximum_clock_skew_ns: i64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeDecommissionConfig {
     pub cluster_uid: String,
@@ -244,7 +244,7 @@ pub struct WorkloadBindingConfig {
     pub arm_initial_root: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeConfig {
     pub node_id: String,

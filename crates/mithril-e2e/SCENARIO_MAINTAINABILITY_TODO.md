@@ -1752,6 +1752,13 @@ test does not close a row when its physical condition or an assertion changed.
       exact-object key. The test matched all eight worker cookies to that atom.
     - [x] Pass direct `runc` and commit it. The three focused tests passed
       together in 112.97 seconds with the production OCI hook.
+    - [x] Reproduce the Kubernetes startup-termination condition in
+      lightweight qualification before the Node fix. The real Node reached
+      the pinned identity map and received `SIGTERM` while the CRI version
+      request was held. Before the fix, it exited with signal 15. After the
+      fix, it exited successfully, retained complete identity pins, and a
+      second real Node recovered those pins and reached admission readiness.
+      The focused test passed in 37.52 seconds. No readiness limit changed.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy actions, result fields, mailbox
       operations, and fixture owner after all three platform cases pass.

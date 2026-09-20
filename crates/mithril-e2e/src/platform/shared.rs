@@ -605,15 +605,62 @@ impl Shared {
             }
             self.stop_node()?;
         }
+        if self.cri.is_none() {
+            self.cri = Some(CriFixture::start(&self.cri_path)?);
+        }
+        let config = self.node_config()?;
+        let (stop, receiver) = watch::channel(false);
+        let (started, ready) = mpsc::sync_channel(1);
+        let task = thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|source| mithril_node::Error::Io {
+                    path: PathBuf::from("Node fixture runtime"),
+                    source,
+                    location: snafu::Location::default(),
+                })?;
+            runtime.block_on(async move {
+                match NodeChassis::start(config).await {
+                    Ok(node) => {
+                        let _result = started.send(Ok(node.readiness()));
+                        node.run(receiver).await
+                    }
+                    Err(source) => {
+                        let _result = started.send(Err(source.to_string()));
+                        Err(source)
+                    }
+                }
+            })
+        });
+        self.node_stop = Some(stop);
+        self.node_task = Some(task);
+        match ready.recv_timeout(READY_LIMIT) {
+            Ok(Ok(receiver)) => {
+                self.ready = Some(receiver);
+                Ok(())
+            }
+            outcome => {
+                let reason = match outcome {
+                    Ok(Err(source)) => format!("Node start failed: {source}"),
+                    Err(source) => format!("Node start did not report readiness: {source}"),
+                    Ok(Ok(_receiver)) => unreachable!("the ready result was handled"),
+                };
+                match self.stop_node() {
+                    Ok(()) => Err(reason.into()),
+                    Err(source) => Err(format!("{reason}; Node cleanup failed: {source}").into()),
+                }
+            }
+        }
+    }
+
+    fn node_config(&self) -> TestResult<NodeConfig> {
         let address = self
             .control
             .as_ref()
             .ok_or("Control is not running")?
             .address();
-        if self.cri.is_none() {
-            self.cri = Some(CriFixture::start(&self.cri_path)?);
-        }
-        let config = NodeConfig {
+        Ok(NodeConfig {
             node_id: NODE_ID.to_owned(),
             kubernetes_node_name: Some("node-a".to_owned()),
             state_directory: self.state_path.clone(),
@@ -667,50 +714,7 @@ impl Shared {
                 maximum_clock_skew_ns: 300_000_000_000,
             }),
             decommission: None,
-        };
-        let (stop, receiver) = watch::channel(false);
-        let (started, ready) = mpsc::sync_channel(1);
-        let task = thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|source| mithril_node::Error::Io {
-                    path: PathBuf::from("Node fixture runtime"),
-                    source,
-                    location: snafu::Location::default(),
-                })?;
-            runtime.block_on(async move {
-                match NodeChassis::start(config).await {
-                    Ok(node) => {
-                        let _result = started.send(Ok(node.readiness()));
-                        node.run(receiver).await
-                    }
-                    Err(source) => {
-                        let _result = started.send(Err(source.to_string()));
-                        Err(source)
-                    }
-                }
-            })
-        });
-        self.node_stop = Some(stop);
-        self.node_task = Some(task);
-        match ready.recv_timeout(READY_LIMIT) {
-            Ok(Ok(receiver)) => {
-                self.ready = Some(receiver);
-                Ok(())
-            }
-            outcome => {
-                let reason = match outcome {
-                    Ok(Err(source)) => format!("Node start failed: {source}"),
-                    Err(source) => format!("Node start did not report readiness: {source}"),
-                    Ok(Ok(_receiver)) => unreachable!("the ready result was handled"),
-                };
-                match self.stop_node() {
-                    Ok(()) => Err(reason.into()),
-                    Err(source) => Err(format!("{reason}; Node cleanup failed: {source}").into()),
-                }
-            }
-        }
+        })
     }
 
     pub(super) fn install_policy(&mut self, name: &str) -> TestResult<()> {
@@ -1257,5 +1261,90 @@ impl Shared {
 impl Drop for Shared {
     fn drop(&mut self) {
         let _result = self.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+    use std::ffi::OsStr;
+    use std::fs;
+    use std::os::unix::net::UnixListener;
+    use std::path::{Path, PathBuf};
+
+    use rustix::process::{kill_process, Pid, Signal};
+
+    use super::{Shared, READY_LIMIT};
+    use crate::physical::ProbeFile;
+    use crate::platform::{test_lifecycle, CriFixture, Host, TestResult};
+    use crate::process::ProcessFixture;
+
+    #[test]
+    #[ignore = "requires its physical test environment"]
+    fn startup_sigterm_is_recoverable() -> TestResult<()> {
+        test_lifecycle::<Host, _>("node-startup-signal", || {
+            let mut env = Shared::setup("startup-signal")?;
+            env.start_control()?;
+            let socket = ProbeFile::new(&env.cri_path);
+            let blocked = UnixListener::bind(&env.cri_path)?;
+            let config = env.output().join("node.json");
+            fs::write(&config, serde_json::to_vec_pretty(&env.node_config()?)?)?;
+            let bin = env::var_os("MITHRIL_BIN_DIRECTORY")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| env.source().join("target/debug"))
+                .join("mithril-node");
+            env.move_out(std::process::id())?;
+            let group = env.node_path.clone();
+            let start = || {
+                let mut node = ProcessFixture::held_cgroup(
+                    &bin,
+                    [OsStr::new("--config"), config.as_os_str()],
+                    &group,
+                    Path::new("/"),
+                    std::process::id(),
+                )?;
+                node.release()?;
+                Ok::<_, crate::Error>(node)
+            };
+            let mut node = start()?;
+            let map = env.pin_path.join("maps/identity_config");
+            node.wait_path(
+                &map,
+                "Node startup BPF attachment",
+                READY_LIMIT,
+                || Ok(map.exists().then_some(())),
+                || "the identity map is absent".to_owned(),
+            )?;
+            let pid = Pid::from_raw(i32::try_from(node.id())?)
+                .ok_or("mithril-node has an invalid PID")?;
+            kill_process(pid, Signal::TERM)?;
+            let status = node.wait_exit("Node startup termination", READY_LIMIT)?;
+            let stderr = node.stderr()?;
+            assert!(
+                status.success()
+                    && env.pin_path.join("maps").is_dir()
+                    && env.pin_path.join("links").is_dir(),
+                "{status}; retained pin root: {}; stderr: {stderr}",
+                env.pin_path.display()
+            );
+            drop(blocked);
+            socket.cleanup()?;
+            env.cri = Some(CriFixture::start(&env.cri_path)?);
+            let mut recovered = start()?;
+            recovered.wait_path(
+                &env.admit_path,
+                "recovered Node admission readiness",
+                READY_LIMIT,
+                || Ok(env.admit_path.exists().then_some(())),
+                || "the admission socket is absent".to_owned(),
+            )?;
+            let pid = Pid::from_raw(i32::try_from(recovered.id())?)
+                .ok_or("recovered mithril-node has an invalid PID")?;
+            kill_process(pid, Signal::TERM)?;
+            let status = recovered.wait_exit("recovered Node shutdown", READY_LIMIT)?;
+            let stderr = recovered.stderr()?;
+            assert!(status.success(), "{status}; stderr: {stderr}");
+            env.stop()
+        })
     }
 }
