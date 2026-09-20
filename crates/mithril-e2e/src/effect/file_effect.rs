@@ -6,7 +6,7 @@ use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = process_recovery]
 fn managed_proc_read_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("managed-proc-read")?;
