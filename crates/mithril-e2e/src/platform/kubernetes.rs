@@ -1571,6 +1571,9 @@ impl Platform for Kubernetes {
             )?;
         }
 
+        let k3s = self.k3s_path.clone();
+        let kube = self.kube_path.clone();
+        let namespace = self.namespace.clone();
         let mut actor = if self.hook_up {
             let mut command = Command::new(&self.k3s_path);
             command
@@ -1595,31 +1598,27 @@ impl Platform for Kubernetes {
                 .write(true)
                 .open(&input_path)
                 .context(IoSnafu { path: &input_path })?;
-            let mut actor = ProcessFixture::from_pid(pid, input, &script);
-            let k3s = self.k3s_path.clone();
-            let kube = self.kube_path.clone();
-            let namespace = self.namespace.clone();
-            actor.set_exit_probe(move || {
-                let output = Command::new(&k3s)
-                    .arg("kubectl")
-                    .args(["--kubeconfig"])
-                    .arg(&kube)
-                    .args(["-n", &namespace, "get", "pod", ACTOR, "-o"])
-                    .arg("jsonpath={.status.containerStatuses[0].state.terminated.exitCode}")
-                    .output()?;
-                if !output.status.success() {
-                    return Ok(None);
-                }
-                let value = String::from_utf8_lossy(&output.stdout);
-                let value = value.trim();
-                if value.is_empty() {
-                    return Ok(None);
-                }
-                let code = value.parse::<i32>().map_err(std::io::Error::other)?;
-                Ok(Some(std::process::ExitStatus::from_raw(code << 8)))
-            });
-            actor
+            ProcessFixture::from_pid(pid, input, &script)
         };
+        actor.set_exit_probe(move || {
+            let output = Command::new(&k3s)
+                .arg("kubectl")
+                .args(["--kubeconfig"])
+                .arg(&kube)
+                .args(["-n", &namespace, "get", "pod", ACTOR, "-o"])
+                .arg("jsonpath={.status.containerStatuses[0].state.terminated.exitCode}")
+                .output()?;
+            if !output.status.success() {
+                return Ok(None);
+            }
+            let value = String::from_utf8_lossy(&output.stdout);
+            let value = value.trim();
+            if value.is_empty() {
+                return Ok(None);
+            }
+            let code = value.parse::<i32>().map_err(std::io::Error::other)?;
+            Ok(Some(std::process::ExitStatus::from_raw(code << 8)))
+        });
         actor.set_init(pid)?;
         actor.set_group(&cgroup);
         self.actor_id = Some(id);

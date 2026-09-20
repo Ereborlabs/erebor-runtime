@@ -628,12 +628,16 @@ impl ProcessFixture {
             let transport = child.id() != self.actor_pid;
             let status = child.try_wait().context(IoSnafu { path: &self.path })?;
             #[cfg(test)]
-            if status.is_some()
-                && transport
-                && Path::new(&format!("/proc/{}", self.actor_pid)).exists()
-            {
+            if status.is_some() && transport {
                 self.child = None;
-                return Ok(None);
+                if let Some(probe) = self.exit_probe.as_mut() {
+                    return probe()
+                        .context(IoSnafu { path: &self.path })
+                        .inspect(|status| self.stopped |= status.is_some());
+                }
+                if Path::new(&format!("/proc/{}", self.actor_pid)).exists() {
+                    return Ok(None);
+                }
             }
             self.stopped |= status.is_some();
             return Ok(status);

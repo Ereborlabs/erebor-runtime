@@ -1862,7 +1862,12 @@ test does not close a row when its physical condition or an assertion changed.
       all cleanup fields.
     - [x] Pass the `SIGCONT` denial case on direct `runc` and commit it. The
       unchanged scenario passed in 36.26 seconds on 2026-09-20.
-    - [ ] Pass the `SIGCONT` denial case on Kubernetes and commit it.
+    - [x] Pass the `SIGCONT` denial case on Kubernetes and commit it. The
+      unchanged security checks passed, but the first run exposed a fixture
+      error: `kubectl attach` returned zero instead of the actor Pod's exit
+      code. `ProcessFixture` now uses the existing Pod exit probe when the
+      attach transport closes. The exact case passed in 75.36 seconds on
+      2026-09-20.
     - [ ] Pass the unmatched signal-zero case on Host and commit it.
     - [ ] Pass the unmatched signal-zero case on direct `runc` and commit it.
     - [ ] Pass the unmatched signal-zero case on Kubernetes and commit it.

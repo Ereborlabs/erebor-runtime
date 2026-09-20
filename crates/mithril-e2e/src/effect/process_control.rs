@@ -184,7 +184,7 @@ fn signal_zero_is_allowed<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn signal_cont_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("process-signal-cont")?;
