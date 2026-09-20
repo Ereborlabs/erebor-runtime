@@ -384,7 +384,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub protected_deployment_digest: String,
     pub local_enforcement_fixture_results: Vec<LocalEnforcementFixtureResultV1>,
     pub hf_static_effect_classification: Vec<HfStaticEffectClassificationCaseV1>,
-    pub managed_proc_read_hard_closed: bool,
     pub exact_open_observed: bool,
     pub exact_open_denied_before_effect: bool,
     pub inherited_fd_read_denied: bool,
@@ -2592,25 +2591,6 @@ impl EffectTestRunner {
                 "UNSUPPORTED_OBJECT",
                 (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
             )?;
-
-            let proc_marker = observations.cursor();
-            ensure!(
-                fixture.read(Path::new("/proc/self/environ"))?.denied(),
-                InvalidInputSnafu {
-                    path: Path::new("/proc/self/environ"),
-                    reason: "the managed proc-object open returned a file descriptor or bytes",
-                }
-            );
-            wait_for_effect(
-                &reader,
-                &observations,
-                proc_marker,
-                "UNRESOLVED_OBJECT",
-                (
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::OpenRead,
-                ),
-            )?;
         } else {
             let exec_marker = observations.cursor();
             // The signed image decision must be observe-only. A later dynamic
@@ -4159,7 +4139,6 @@ impl EffectTestRunner {
             protected_deployment_digest,
             local_enforcement_fixture_results: local_enforcement_fixture_results(protect),
             hf_static_effect_classification: hf_static_effect_classification(),
-            managed_proc_read_hard_closed: protect,
             exact_open_observed: true,
             exact_open_denied_before_effect: protect,
             inherited_fd_read_denied: protect,

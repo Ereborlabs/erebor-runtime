@@ -1908,8 +1908,10 @@ test does not close a row when its physical condition or an assertion changed.
     hook.
   - [x] Pass the managed proc test on Kubernetes and commit it. The exact case
     passed in 73.64 seconds on 2026-09-20 against the retained K3s cluster.
-  - [ ] Remove only the matching legacy action and result field after all
-    three platform cases pass.
+  - [x] Remove only the matching legacy action and result field after all
+    three platform cases pass. The cleanup removed 21 lines from the oversized
+    legacy scenario and kept its shared actor read operation. The 92
+    non-privileged library tests and strict crate Clippy pass.
 
 ### Network
 
