@@ -264,6 +264,19 @@ reimplement a production owner operation.
 - Allow environment identities and timestamps to differ. Require decisions
   and meaningful result fields to match.
 - Keep production architecture and public result schemas unchanged.
+- Keep `maximumUses` and `requestedUses` as the bounded-use contract. Do not
+  restrict an exception to one use in this refactor.
+- Treat the signed use-start deadline as the time limit on unused authority.
+  The deadline does not limit a process that an exception already started.
+- Treat consumed and expired exceptions as terminal. Do not send a later
+  revoke for either state.
+- Do not turn exception-object deletion into a Node revoke operation. An
+  unused installed exception remains bounded by its signed deadline and use
+  count.
+- Retire exception authority for a deleted container through the normal exact
+  binding and generation cleanup. Do not add a separate Node revoke path.
+- Keep durable exception counters and receipts as audit records. They do not
+  authorize an action without a live exact binding.
 
 ### Shared fixtures
 
@@ -1761,16 +1774,22 @@ test does not close a row when its physical condition or an assertion changed.
       fix, it exited successfully, retained complete identity pins, and a
       second real Node recovered those pins and reached admission readiness.
       The focused test passed in 37.52 seconds. No readiness limit changed.
-    - [x] Reproduce Kubernetes exception retirement in lightweight
-      qualification before the Node fix. Cleanup removes the workload target
-      and uses the production Control owner to retire missing exceptions.
-      After base-policy retirement, the signed revoke stayed pending with no
-      revoked result. The focused Host test failed with one pending exception
-      and zero revoked exceptions.
-    - [ ] Apply signed revocation through the durable exception authority
-      after base-policy retirement. Activation must still require an active
-      policy owner. Verify live delivery and startup recovery with the focused
-      lightweight case before Kubernetes.
+    - [x] Diagnose the Kubernetes cleanup failure. The former Control path
+      created a signed revoke after the exact workload and its base-policy
+      owner were gone. The revoke could not run and kept teardown pending.
+      This is not the accepted exception lifecycle.
+    - [x] Record the accepted lifecycle. Keep `maximumUses` unchanged. Let the
+      signed deadline expire unused authority. Let consumption remain
+      terminal. Let normal exact binding and generation cleanup retire
+      authority when its container disappears. Keep counters and receipts as
+      non-authorizing records. Do not send a Node revoke.
+    - [ ] Stop Control from creating a revoke candidate for exception-object
+      deletion, complete-relist absence, or exact-target disappearance.
+      Preserve the original activation record, use count, deadline, and
+      receipts.
+    - [ ] Verify that container cleanup removes the live exact binding and
+      permits base-policy retirement without a revoke candidate. Verify that
+      deletion does not refund uses or extend the signed deadline.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy actions, result fields, mailbox
       operations, and fixture owner after all three platform cases pass.

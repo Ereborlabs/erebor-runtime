@@ -2198,8 +2198,9 @@ exception candidate. The stored
 object proves accepted desired state, but it does not prove which human wrote
 it. The resource cannot supply approval proof, compiled keys, authority deltas,
 policy or candidate digests, or a node target. The node consumes a use
-atomically and reports a durable receipt. Expiry, exhaustion, deletion, or
-revocation closes that runtime instance through a signed revocation without
+atomically and reports a durable receipt. Expiry and exhaustion are terminal.
+Deletion creates no new delivery operation. Normal exact binding and
+generation cleanup makes a deleted container's authority unreachable without
 resetting the consumption record or migrating the base policy generation.
 
 #### Deliberately absent fields
@@ -9240,13 +9241,14 @@ transition.
 
 Base-policy deletion creates `DELETION_REQUESTED` source state and removes its
 bundles from complete desired node inventory. It creates no policy candidate.
-Exception deletion, expiry, exhaustion, or revocation creates a signed
-`REVOKE` operation for the exact exception instance and keeps the consumption
-record. A node never removes a generation merely because a CRD, namespace, or
-finalizer disappeared. It waits for runtime inventory to prove that the
-matching container lifetime is absent. If Control is unavailable, the last
-valid base generation remains available according to its signed validity and
-local failure posture.
+Exception deletion creates no delivery operation. The installed deadline and
+use count continue to bound unused authority. Expiry and exhaustion are
+terminal. A node never removes a generation merely because a CRD, namespace,
+or finalizer disappeared. It waits for runtime inventory to prove that the
+matching container lifetime is absent. It then removes the exact binding and
+generation while it keeps counters and receipts as non-authorizing records.
+If Control is unavailable, the last valid base generation remains available
+according to its signed validity and local failure posture.
 
 #### A.11.8 Required goldens and stable failures
 

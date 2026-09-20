@@ -695,10 +695,9 @@ sequenceDiagram
     Node->>Kernel: Publish bounded runtime authority
     Node-->>Store: Report active, used, or expired state
     API->>Desired: Target disappears or request deletes
-    Desired->>Store: Commit exact signed revocation
-    Store-->>Node: Deliver revocation after activation
-    Node->>Kernel: Remove exact runtime authority
-    Node-->>Store: Report terminal state
+    Desired->>Store: Keep activation, counters, and receipts
+    Node->>Kernel: Remove exact binding with container generation
+    Kernel-->>Node: Keep no reachable exception authority
 ```
 
 The exception owner accepts one namespaced request for one named base-policy
@@ -707,13 +706,12 @@ the selected node, boot, label epoch, active base generation, compiled cells,
 deadline, and remaining use bound. The request cannot contain compiled keys,
 digests, signatures, or node authority.
 
-The accepted source stays accepted when its exact Pod target disappears.
-Control commits a target-retirement transaction and signs a `REVOKE`
-candidate for the original target. The store requires the latest complete
-workload snapshot to prove that the target is absent. A partial inventory
-cannot retire the target. A pending activation stays ahead of its revocation.
-Reappearance does not activate the same exception object again. The operator
-must create a new object UID.
+The accepted source remains a durable record when its exact Pod target
+disappears or the request is deleted. Control creates no second exception
+candidate. The installed deadline and use count remain authoritative. Normal
+container generation cleanup removes the exact binding. Counters and receipts
+remain non-authorizing records. Reappearance does not activate the same
+exception object again. The operator must create a new object UID.
 
 ## Node Eligibility Flow
 
@@ -1183,7 +1181,7 @@ and coverage messages remain the Phase 6 types.
 | `PreparedContainer` deadline, held-TGID mismatch, wrong binding, wrong entry, or later external root | BPF denies and does not activate the application |
 | Runtime-created object after `ACTIVE` | The effect checks explicit policy and exception authority, then uses the exact admitted-entry default when no decision matches; no prepared-state grant remains |
 | Mixed rollout | Status reports exact per-state counts; it does not claim global activation |
-| Exact target disappears while an exception is active | Control keeps the source accepted and sends an exact signed revocation; it does not refund uses or retarget the request |
+| Exact target disappears while an exception is active | Normal exact binding and generation cleanup removes reachable authority; Control creates no new candidate and does not refund uses, extend the deadline, or retarget the request |
 | Runtime admission caller cancels after publication starts | The node removes the exact new binding and restores the prior durable state; an incomplete rollback closes readiness |
 | Node disconnect or Control outage | The last valid node generation stays active |
 | Same-name Node gets a new UID | Readiness closes until the new API object binds; the next policy candidate names the live physical predecessor |

@@ -299,7 +299,7 @@ run.
 | Partial rollout | Per-node state and mixed generation are explicit; no global-active claim |
 | Stale node message | Old boot, target, source, or candidate cannot advance current state |
 | Policy deletion | A complete desired inventory omits the deleted policy. The node retains live runtime protection and removes stale local membership only after runtime absence. Control creates no cleanup candidate. |
-| Exception removal | Target disappearance, deletion, or explicit revocation creates an exact signed revocation. Expiry and exhaustion settle from the installed bounds. All paths preserve consumption history. |
+| Exception removal | Deletion creates no new exception operation. The signed deadline and use count stay unchanged. Container cleanup removes the exact live binding. Expiry and exhaustion are terminal. Counters and receipts remain non-authorizing records. |
 | Control/API outage | Installed local policy continues; new Control-owned work is unavailable |
 | Watch relist | Same source revision and target state reconstruct without duplicate authority |
 | Complete relist deletion | A durable source that is absent from the complete snapshot is absent from the next complete desired inventory |
