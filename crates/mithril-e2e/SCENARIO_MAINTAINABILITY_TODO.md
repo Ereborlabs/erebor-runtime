@@ -1940,7 +1940,8 @@ test does not close a row when its physical condition or an assertion changed.
     `UNSUPPORTED_OBJECT`, the exact actor task, and no policy object.
   - [x] Pass the BPF map-create test on Host and commit it. The 76-line
     scenario passed in 28.53 seconds on 2026-09-20.
-  - [ ] Pass the BPF map-create test on direct `runc` and commit it.
+  - [x] Pass the BPF map-create test on direct `runc` and commit it. The exact
+    case passed in 37.05 seconds on 2026-09-20 through the production OCI hook.
   - [ ] Pass the BPF map-create test on Kubernetes and commit it.
   - [ ] Remove only the matching legacy action, result field, enum case,
     dispatch arm, and actor syscall code after all three platform cases pass.
