@@ -1,0 +1,26 @@
+{
+  "apiVersion": "mithril.erebor.dev/v1alpha1",
+  "kind": "WorkloadProtectionException",
+  "metadata": {
+    "name": "expired-write",
+    "namespace": "default",
+    "uid": "20000000-0000-4000-8000-000000000002",
+    "generation": 1,
+    "resourceVersion": "1"
+  },
+  "spec": {
+    "policyRef": {
+      "name": "exception"
+    },
+    "grant": "expired-write",
+    "target": {
+      "pod": {
+        "name": "pid-reuse",
+        "uid": "99999999-9999-4999-8999-999999999999"
+      },
+      "containerName": "worker"
+    },
+    "requestedDuration": "10s",
+    "requestedUses": 1
+  }
+}

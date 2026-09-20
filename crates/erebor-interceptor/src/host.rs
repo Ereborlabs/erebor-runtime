@@ -310,6 +310,22 @@ impl KernelStateReader {
             })
         }
     }
+
+    pub fn keys(&self, name: &str) -> Result<Vec<Vec<u8>>> {
+        ensure!(
+            !name.is_empty() && !name.contains('/'),
+            InvalidConfigurationSnafu {
+                path: &self.maps_root,
+                reason: format!("invalid pinned map name `{name}`"),
+            }
+        );
+        let path = self.maps_root.join(name);
+        let map = MapHandle::from_pinned_path(&path).context(LibbpfSnafu {
+            action: "open pinned BPF map for read",
+            path: &path,
+        })?;
+        Ok(map.keys().collect())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

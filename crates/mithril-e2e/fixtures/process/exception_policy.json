@@ -1,0 +1,138 @@
+{
+  "apiVersion": "mithril.erebor.dev/v1alpha1",
+  "kind": "WorkloadProtectionPolicy",
+  "metadata": {
+    "name": "exception",
+    "namespace": "default",
+    "uid": "10000000-0000-4000-8000-000000000030",
+    "generation": 1,
+    "resourceVersion": "1"
+  },
+  "spec": {
+    "podSelector": {
+      "matchLabels": {
+        "app.kubernetes.io/name": "pid-reuse"
+      },
+      "matchExpressions": []
+    },
+    "mode": "Protect",
+    "containers": [
+      {
+        "names": ["worker"],
+        "kinds": ["Application"],
+        "images": [
+          "fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ],
+        "applicationEntry": {
+          "executionRule": "python",
+          "role": "worker"
+        },
+        "additionalEntries": [],
+        "administrativeEntry": {
+          "role": "administrator"
+        },
+        "externalRole": "external"
+      }
+    ],
+    "roles": [
+      {
+        "name": "worker",
+        "files": [
+          {
+            "name": "bounded-secret",
+            "path": "/work/bounded-secret",
+            "recursive": false,
+            "operations": ["OpenWrite"],
+            "action": "Deny"
+          },
+          {
+            "name": "expired-secret",
+            "path": "/work/expired-secret",
+            "recursive": false,
+            "operations": ["OpenWrite"],
+            "action": "Deny"
+          },
+          {
+            "name": "thread-ids",
+            "path": "/work/thread-ids",
+            "recursive": false,
+            "operations": ["OpenWrite", "Write"],
+            "action": "Allow"
+          },
+          {
+            "name": "race-result",
+            "path": "/work/race-result",
+            "recursive": false,
+            "operations": ["OpenWrite", "Write"],
+            "action": "Allow"
+          },
+          {
+            "name": "again-result",
+            "path": "/work/again-result",
+            "recursive": false,
+            "operations": ["OpenWrite", "Write"],
+            "action": "Allow"
+          },
+          {
+            "name": "expired-result",
+            "path": "/work/expired-result",
+            "recursive": false,
+            "operations": ["OpenWrite", "Write"],
+            "action": "Allow"
+          }
+        ],
+        "execution": [
+          {
+            "name": "python",
+            "path": "/usr/bin/python3",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "network": {
+          "socketControls": [],
+          "destinations": []
+        },
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "administrator",
+        "files": [],
+        "execution": [],
+        "network": {
+          "socketControls": [],
+          "destinations": []
+        },
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "external",
+        "files": [],
+        "execution": [],
+        "network": {
+          "socketControls": [],
+          "destinations": []
+        },
+        "processControl": [],
+        "unixStreams": []
+      }
+    ],
+    "exceptionGrants": [
+      {
+        "name": "bounded-write",
+        "fileRules": ["bounded-secret"],
+        "maximumDuration": "1h",
+        "maximumUses": 2
+      },
+      {
+        "name": "expired-write",
+        "fileRules": ["expired-secret"],
+        "maximumDuration": "1h",
+        "maximumUses": 1
+      }
+    ]
+  }
+}

@@ -19,7 +19,8 @@ use mithril_control::{
     ContainerKindV1 as ControlContainerKind, ControlPlane, ControlStore,
     KubernetesWorkloadIdentityV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
     PolicySignerConfigV1, PolicySignerTrustV1, PolicySourceRevisionV1, PolicySourceStateV1,
-    TrustGenerationV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
+    TrustGenerationV1, WorkloadProtectionException, WorkloadProtectionExceptionStateV1,
+    WorkloadProtectionPolicy, WorkloadTargetFactV1,
 };
 use mithril_node::{
     AdministrativeAuthorizationConfig, ContainerKindV1, ContainerRuntimeConfig, EvidenceConfig,
@@ -37,7 +38,9 @@ use zerocopy::TryFromBytes as _;
 use super::lifecycle::{enter, LifecycleGuard};
 use super::{policy_path, CriFixture, Task, TestResult};
 use crate::control_fixture::{ControlServerFixture, MtlsFixture};
-use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
+use crate::error::{
+    InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu, PolicySnafu,
+};
 use crate::physical::{
     wait_for, wait_for_async, wait_stable, ProbeCgroup, ProbeDirectory, ProbeFile,
 };
@@ -81,6 +84,7 @@ pub(super) struct SharedState {
     resource: Option<WorkloadProtectionPolicy>,
     policy_path: Option<PathBuf>,
     binding: Option<WorkloadBindingConfig>,
+    target: Option<WorkloadTargetFactV1>,
     revision: Option<String>,
     cri: Option<CriFixture>,
     node_stop: Option<watch::Sender<bool>>,
@@ -140,6 +144,7 @@ impl SharedState {
         self.resource = None;
         self.policy_path = None;
         self.binding = None;
+        self.target = None;
         self.revision = None;
         Ok(())
     }
@@ -333,6 +338,7 @@ impl SharedState {
         }
         self.resource = None;
         self.binding = None;
+        self.target = None;
         self.revision = None;
         Ok(())
     }
@@ -528,6 +534,7 @@ impl Shared {
             resource: None,
             policy_path: None,
             binding: None,
+            target: None,
             revision: None,
             cri: None,
             node_stop: None,
@@ -709,6 +716,13 @@ impl Shared {
     pub(super) fn install_policy(&mut self, name: &str) -> TestResult<()> {
         let path = policy_path(&self.root, name)?;
         let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).context(JsonSnafu { path: &path })?;
+        if value.get("kind").and_then(serde_json::Value::as_str)
+            == Some("WorkloadProtectionException")
+        {
+            return self.install_exception(&bytes, &path);
+        }
         let mut resource: WorkloadProtectionPolicy =
             serde_json::from_slice(&bytes).context(JsonSnafu { path: &path })?;
         if self
@@ -756,6 +770,47 @@ impl Shared {
             self.revision = Some(result.source_revision.policy_source_revision_id);
         }
         Ok(())
+    }
+
+    fn install_exception(&mut self, bytes: &[u8], path: &Path) -> TestResult<()> {
+        let mut resource: WorkloadProtectionException =
+            serde_json::from_slice(bytes).context(JsonSnafu { path })?;
+        resource.spec.policy_ref.name = "scenario".to_owned();
+        resource.spec.target.pod.name = "pid-reuse".to_owned();
+        resource.spec.target.pod.uid = POD_UID.to_owned();
+        resource.spec.target.container_name = "worker".to_owned();
+        let target = self
+            .target
+            .clone()
+            .ok_or("the exception has no active workload target")?;
+        let policy = self
+            .policy
+            .as_ref()
+            .ok_or("Control policy is not running")?
+            .clone();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
+        let result = policy.reconcile_exception(&resource, NAMESPACE_UID, &[target], now)?;
+        let candidate = result.candidate;
+        let store = policy.store();
+        let last = RefCell::new(String::from("<absent>"));
+        Ok(wait_for(
+            path,
+            "exception activation",
+            READY_LIMIT,
+            || {
+                let state = store
+                    .exception_rollout_state(
+                        &candidate.candidate_content_id,
+                        &candidate.exact_target.node_id,
+                    )
+                    .context(PolicySnafu)?;
+                *last.borrow_mut() = format!("{state:?}");
+                Ok(state
+                    .is_some_and(|state| state.state == WorkloadProtectionExceptionStateV1::Active)
+                    .then_some(()))
+            },
+            || format!("last exception rollout: {}", last.borrow()),
+        )?)
     }
 
     pub(super) fn sync_policy(&mut self) -> TestResult<()> {
@@ -878,6 +933,7 @@ impl Shared {
             .profile_generation_ref_id
             .ok_or("the active policy has no profile generation reference")?;
         self.revision = Some(revision.clone());
+        self.target = Some(target.clone());
         self.binding = Some(WorkloadBindingConfig {
             binding_id: ScheduledRuntimeBindingV1::runtime_binding_id(&authority, &container_id),
             scheduled_binding_authority_id: Some(authority),
