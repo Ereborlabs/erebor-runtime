@@ -1912,7 +1912,7 @@ test does not close a row when its physical condition or an assertion changed.
     three platform cases pass. The cleanup removed 21 lines from the oversized
     legacy scenario and kept its shared actor read operation. The 92
     non-privileged library tests and strict crate Clippy pass.
-  - [ ] Replace the UTS namespace privilege block with one standard platform
+  - [x] Replace the UTS namespace privilege block with one standard platform
     test. Use one shared Python actor and the existing Python policy. Start the
     runtime-added actor before Node to preserve the original external-root
     classification. Require user-space `EPERM`, BPF `EACCES`,
@@ -1929,8 +1929,10 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Pass the namespace privilege test on Kubernetes and commit it. The
     exact case passed in 75.24 seconds on 2026-09-20 against the retained K3s
     cluster.
-  - [ ] Remove only the matching legacy action, result field, enum case, and
-    dispatch arm after all three platform cases pass.
+  - [x] Remove only the matching legacy action, result field, enum case, and
+    dispatch arm after all three platform cases pass. The cleanup removed 16
+    lines from the oversized legacy files. The 93 non-privileged library tests
+    and strict all-target Clippy pass.
 
 ### Network
 

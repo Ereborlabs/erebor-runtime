@@ -222,7 +222,6 @@ pub(super) enum PreparedOperation {
     InheritedUnixStreamSend,
     UnixStreamStalePeer,
     UnixStreamUnmatched,
-    Namespace,
     Bpf,
     Create { path: PathBuf },
     Setattr { path: PathBuf },
@@ -2583,11 +2582,6 @@ impl PreparedOperations {
                             .restart()
                             .map_or_else(error_outcome, |()| target.roundtrip())
                     })
-            }
-            PreparedOperation::Namespace => {
-                // SAFETY: CLONE_NEWUTS requests a private namespace for only
-                // this disposable process.
-                libc_outcome(unsafe { libc::unshare(libc::CLONE_NEWUTS) }.into())
             }
             PreparedOperation::Bpf => bpf_map_create_outcome(),
             PreparedOperation::Create { path } => {

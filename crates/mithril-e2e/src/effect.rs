@@ -422,7 +422,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub inherited_unix_stream_send_denied: bool,
     pub unix_stream_stale_peer_denied: bool,
     pub unix_stream_unmatched_denied: bool,
-    pub namespace_privilege_hard_closed: bool,
     pub ptmx_ioctl_exact_allowed: bool,
     pub ptmx_derived_peer_hard_closed: bool,
     pub ptmx_derived_peer_installed_nothing: bool,
@@ -2910,14 +2909,6 @@ impl EffectTestRunner {
                 "SysV IPC access",
             ),
             (
-                HardClosedOperation::Namespace,
-                (
-                    KernelEffectFamilyV1::Privilege,
-                    KernelEffectOperationV1::Capability,
-                ),
-                "namespace privilege",
-            ),
-            (
                 HardClosedOperation::Bpf,
                 (
                     KernelEffectFamilyV1::Privilege,
@@ -4177,7 +4168,6 @@ impl EffectTestRunner {
             inherited_unix_stream_send_denied: protect,
             unix_stream_stale_peer_denied: protect,
             unix_stream_unmatched_denied: protect,
-            namespace_privilege_hard_closed: true,
             ptmx_ioctl_exact_allowed: protect,
             ptmx_derived_peer_hard_closed: protect,
             ptmx_derived_peer_installed_nothing: protect,
