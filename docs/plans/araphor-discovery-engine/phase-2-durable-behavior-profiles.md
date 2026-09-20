@@ -145,6 +145,10 @@ Implement these changes in order. Paths below are relative to the named crate.
 - Crash at every artifact/head commit boundary yields a valid prior or new
   revision, not a referenced partial artifact.
 - A slow console reader does not hold a write lock or block policy work.
+- Run evidence intake and policy rollout with the live discovery owner enabled
+  and disabled. Record repeat-run latency and completion. Investigate a
+  reproducible regression above 5%. This integration gate completes the store
+  selection proof; the offline database comparison does not replace it.
 - Disablement or query cancellation does not erase evidence or alter active policy.
 - Test budget values at the limit and one over the limit.
 - Pass `DE-PACKET`: a changed owner document makes a new packet, expired facts

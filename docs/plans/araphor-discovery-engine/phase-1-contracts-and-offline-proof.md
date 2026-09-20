@@ -37,8 +37,8 @@ Partial [run_discovery_offline](../../../crates/mithril-e2e/src/discovery.rs): E
 [storage_compare](../../../crates/mithril-e2e/harness/discovery/storage_compare.py): Engineer compares embedded stores on the same generated input.<br>
 -> [measure](../../../crates/mithril-e2e/harness/discovery/storage_compare.py): Experiment measures deduplication, micro-batches, context queries, and recovery.<br>
 -> Partial [measure](../../../crates/mithril-e2e/harness/discovery/storage_compare.py): Evaluator checks equal counts, canonical output, and measured resource use. Full resource qualification remains open.<br>
--> Partial [result below](#storage-experiment): Both candidates remain Reject for production selection. SQLite has fewer open feasibility issues in this experiment.<br>
--> Not implemented: Phase 2 waits until one candidate meets the complete contract.
+-> [native qualification](../../../crates/mithril-e2e/src/discovery/storage.rs): SQLite passes the native storage and isolated-worker gates.<br>
+-> [store selection below](#native-store-selection): Phase 2 uses SQLite. Live Control interference remains an integration gate.
 
 ## Scope and owners
 
@@ -390,3 +390,73 @@ Focused verification: `cargo test --offline -p mithril-control discovery:: --
 after the last Rust edit. The e2e library passed 94 tests and did not run 156
 physical tests. The Node library passed 243 tests. Result for this contract
 correction: **Done**. The complete phase remains **Not done**.
+
+### Native store selection
+
+**Select SQLite** for the durable implementation. Use `rusqlite = 0.40.2` with
+bundled SQLite 3.53.2. The dependency is currently test-only. DuckDB remains
+rejected at the measured 64-MiB engine target. No second production engine or
+driver abstraction is required.
+
+[native_qualification](../../../crates/mithril-e2e/harness/discovery/storage_compare.py)
+starts the isolated query worker.<br>
+-> [SqliteExperiment::authorize](../../../crates/mithril-e2e/src/discovery/storage.rs)
+uses SQLite's parser and authorizer to bind permitted columns and functions.<br>
+-> [SqliteExperiment::query](../../../crates/mithril-e2e/src/discovery/storage.rs)
+bounds evaluation, rows, and encoded output.<br>
+-> [SqliteExperiment::measure](../../../crates/mithril-e2e/src/discovery/storage.rs)
+checks transactional counts, duplicate/conflicting input, two readers, restart,
+and rebuild.<br>
+-> [native fault tests](../../../crates/mithril-e2e/src/discovery/storage.rs)
+check process exit before/after commit and an actual full temporary filesystem.
+
+The final experiment ran three times in a separate x86-64 VM with four vCPUs,
+8 GiB RAM, Linux 6.8.0-139-generic, and a virtio disk on the host's NVMe volume.
+The Rust test binary used the debug profile. The guest ran no other product
+workload. Host compilation ran concurrently. Result:
+`/tmp/araphor-native-suite-3-result.json`, copied from the guest's
+`/var/tmp/araphor-native-suite-3/result.json`.
+
+- Each run passed one million compact records and 50,000 exact groups. It also
+  passed 131,779 rows with a full fixture envelope/context payload: 268,433,823
+  decoded bytes. These repeated payloads measure storage; they are not a
+  million distinct accepted production observations.
+- Peak process RSS was 76,564–76,948 KiB. WAL peak was at most 8,783,872 bytes.
+  Each write batch stayed within 4,096 records and 8 MiB. The writer used a
+  32-MiB cache. Each of two readers used an 8-MiB cache.
+- Concurrent 200-row page p95 was 0.51–0.65 ms. Isolated count-query p95,
+  including worker startup, was 15.65 ms over 21 runs.
+- A 64-MiB authorized projection produced the exact count under the 256-MiB
+  worker address-space cap. End-to-end time was 6.54 seconds. This is a bound
+  test, not a 500-ms interactive pass. Larger input, row overflow, and byte
+  overflow failed explicitly. A public query owner must reject work that
+  exceeds its projection or deadline budget.
+- Sixteen forbidden SQL cases failed. A hostile join returned SQLite's
+  interruption error after 1.02 seconds. The worker had no network, Control
+  files, credentials, or writable host mount.
+- Native before/after-commit process exits preserved exact counts. A 16-MiB
+  temporary filesystem returned `SQLITE_FULL`; the previous committed head
+  survived reopen. This proves filesystem exhaustion, not power-loss behavior.
+
+Reproduce with the compiled e2e test executable and a new output directory:
+
+```sh
+python3 crates/mithril-e2e/harness/discovery/storage_compare.py \
+  --native-test-binary /path/to/mithril-e2e-tests /tmp/native-storage-proof
+```
+
+The guest required root to create Bubblewrap's network namespace. The worker
+still used separate namespaces and only the authorized stdin projection.
+The unprivileged attempt failed before execution and was not counted as a pass.
+
+The additional primary-policy experiment failed its invented one-second bound
+with discovery disabled. It supplied no regression measurement and is not
+part of the selection proof. Measure intake and rollout interference against
+the actual live discovery owner in Phase 2, with discovery enabled and disabled.
+This moves that integration check to its real owner; it does not remove the gate.
+
+`bash .github/scripts/verify-rust-ci.sh` passed after the final Rust and harness
+edits. Four ordinary native-storage tests passed; explicit guest runs covered
+the ignored qualification and fault helpers. Result for storage selection:
+**Done**. The full phase remains **Not done** until the fixture and source
+contract work is complete.

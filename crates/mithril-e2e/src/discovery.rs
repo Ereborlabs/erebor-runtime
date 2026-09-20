@@ -12,6 +12,9 @@ use crate::{
     Result,
 };
 
+#[cfg(test)]
+mod storage;
+
 pub fn run_discovery_offline(output: &Path) -> Result<()> {
     let input_bytes = include_bytes!("../fixtures/discovery/manifest.json");
     let input = DiscoveryInputManifestV1::from_json(input_bytes).context(PolicySnafu)?;
