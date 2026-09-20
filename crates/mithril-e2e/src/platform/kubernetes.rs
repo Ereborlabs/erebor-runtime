@@ -217,6 +217,11 @@ impl KubernetesState {
         Self::run(&mut command, "read Kubernetes logs")
     }
 
+    fn snapshot(&self) -> TestResult<MithrilObservationSnapshot> {
+        let client = MithrilObservationClient::new(self.observation_path.clone(), "/".to_owned());
+        Ok(self.runtime.block_on(client.snapshot())?)
+    }
+
     fn cgroup(pid: u32) -> TestResult<PathBuf> {
         let path = PathBuf::from(format!("/proc/{pid}/cgroup"));
         let state = fs::read_to_string(&path)?;
@@ -1500,10 +1505,24 @@ impl Platform for Kubernetes {
                         let node = self
                             .logs(&self.system, "daemonset/mithril-node")
                             .unwrap_or_else(|error| error.to_string());
+                        let effects = self
+                            .snapshot()
+                            .map(|snapshot| {
+                                format!(
+                                    "{:?}",
+                                    snapshot
+                                        .recent_effects
+                                        .into_iter()
+                                        .rev()
+                                        .take(16)
+                                        .collect::<Vec<_>>()
+                                )
+                            })
+                            .unwrap_or_else(|error| error.to_string());
                         return Err(InvalidInputSnafu {
                             path: &script,
                             reason: format!(
-                                "Kubernetes actor exited with code {}; reason: {:?}; message: {:?}; logs: {logs:?}; Node logs: {node}",
+                                "Kubernetes actor exited with code {}; reason: {:?}; message: {:?}; logs: {logs:?}; Node logs: {node}; effects: {effects}",
                                 exit.exit_code, exit.reason, exit.message
                             ),
                         }
@@ -1885,11 +1904,7 @@ impl Platform for Kubernetes {
     }
 
     fn snapshot(&self) -> TestResult<MithrilObservationSnapshot> {
-        let client = MithrilObservationClient::new(self.observation_path.clone(), "/".to_owned());
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        Ok(runtime.block_on(client.snapshot())?)
+        KubernetesState::snapshot(self)
     }
 
     fn maps(&self) -> (&Path, &KernelStateReader) {

@@ -1960,13 +1960,21 @@ test does not close a row when its physical condition or an assertion changed.
     and strict all-target Clippy pass.
   - [x] Add Node logs to an actor early-exit diagnostic. The actor logs were
     empty in two Kubernetes exits with code 1 and one exit with code 139.
+  - [x] Add the last 16 production effects to the same early-exit diagnostic.
+    Reuse the Kubernetes fixture runtime. Do not create another async runtime.
+    Retained kernel and container-runtime logs contain no crash, OOM, or exit
+    record for the intermittent actor exits.
   - [ ] Finish the third-migration platform matrix. All 55 Host cases and all
     46 direct-`runc` cases passed. The first Kubernetes identity run passed 22
     of 24 cases. The failing three-case and two-case sequences then passed.
     A second identity run failed a different actor start after 13 cases. The
-    next unchanged identity run passed all 24 cases in 628.48 seconds. Run the
-    remaining ten Kubernetes lifecycle processes after the intermittent actor
-    exit has a lightweight reproduction or an infrastructure cause.
+    next unchanged identity run passed all 24 cases in 628.48 seconds. A
+    seven-case prefix passed in 213.14 seconds, a nine-case prefix passed in
+    269.90 seconds, and the complete 24-case lifecycle passed in 651.19
+    seconds with dependency tracing disabled. This correlation does not prove
+    that tracing pressure caused the actor exits. Run the remaining ten
+    Kubernetes lifecycle processes after the intermittent actor exit has a
+    lightweight reproduction or an infrastructure cause.
 
 ### Network
 
