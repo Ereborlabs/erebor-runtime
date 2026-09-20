@@ -1874,7 +1874,8 @@ test does not close a row when its physical condition or an assertion changed.
       preserves the original external-root condition: Node recovers the
       runtime-added actor with entry rule zero before it attempts signal zero.
       The exact case passed in 30.04 seconds on 2026-09-20.
-    - [ ] Pass the unmatched signal-zero case on direct `runc` and commit it.
+    - [x] Pass the unmatched signal-zero case on direct `runc` and commit it.
+      The unchanged case passed in 38.65 seconds on 2026-09-20.
     - [ ] Pass the unmatched signal-zero case on Kubernetes and commit it.
     - [ ] Remove only the matching legacy signal actions, result fields, and
       fixture operations after all three tests pass on all three platforms.

@@ -278,7 +278,7 @@ fn signal_cont_is_denied<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = signal_unmatched]
 fn unmatched_signal_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("process-signal-unmatched")?;
