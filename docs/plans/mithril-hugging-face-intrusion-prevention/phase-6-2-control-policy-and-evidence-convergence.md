@@ -358,7 +358,10 @@ Pod or container terminates
   -> another Pod, container, Node, or boot cannot reuse the retired authority
 
 WorkloadProtectionException target disappears or the request deletes
-  -> Control creates no new exception delivery operation
+  -> the external API exposes no separate revoke operation
+  -> Control can send its existing private signed restrictive transition for
+     active authority
+  -> consumed or expired authority needs no later transition
   -> the signed deadline and use bound remain unchanged
   -> normal exact binding and generation cleanup makes a deleted container's
      exception authority unreachable
@@ -691,13 +694,14 @@ it does not model local stale-membership removal as a new policy. See
 [persistent gRPC policies](https://tetragon.io/docs/concepts/enforcement/persistent-grpc-policies/),
 and [policy-filter state cleanup](https://github.com/cilium/tetragon/blob/main/pkg/policyfilter/state.go).
 
-Exception deletion does not create a second runtime operation. An unused
-installed exception remains bounded by its signed deadline and use count.
-Expiry and exhaustion are terminal. Normal exact binding and generation
-cleanup makes the authority unreachable when its container disappears.
-Control and the node preserve counters and receipts as non-authorizing
-records. A stale exception event or recreated object cannot restore or refund
-the old instance.
+The external API has no separate revoke operation. Exception-object or
+container deletion triggers cleanup. Control can use its existing private
+signed restrictive transition for active authority. It applies that cleanup
+before Node retires the active base-policy owner. Expiry and exhaustion need
+no later transition. Normal exact binding and generation cleanup makes the
+authority unreachable when its container disappears. Control and the node
+preserve counters and receipts as non-authorizing records. A stale event or
+recreated object cannot restore or refund the old instance.
 
 Control does not require or update a CRD finalizer. Forced object deletion,
 namespace deletion, API-server loss, or Control loss cannot remove a node's
@@ -831,7 +835,8 @@ security view cannot be attributed exactly.
 
 Create, update, roll back, delete, and recreate one policy while two selected
 nodes disconnect, reconnect, restart, and reject selected candidates. Create,
-consume, expire, delete, and attempt to replay one file exception.
+consume, expire, delete, clean up active authority, and attempt to replay one
+file exception.
 Prove that each accepted source, policy candidate, and exception candidate is
 canonical,
 each active node generation has an unbroken provenance chain, stale messages

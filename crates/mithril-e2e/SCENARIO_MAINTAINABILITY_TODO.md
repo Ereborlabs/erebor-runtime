@@ -270,11 +270,14 @@ reimplement a production owner operation.
   The deadline does not limit a process that an exception already started.
 - Treat consumed and expired exceptions as terminal. Do not send a later
   revoke for either state.
-- Do not turn exception-object deletion into a Node revoke operation. An
-  unused installed exception remains bounded by its signed deadline and use
-  count.
-- Retire exception authority for a deleted container through the normal exact
-  binding and generation cleanup. Do not add a separate Node revoke path.
+- Do not expose an external revoke operation. Exception-object or container
+  deletion is a cleanup trigger, not a separate user action.
+- Control and Node can use their existing private signed restrictive
+  transition to clean up active authority. Keep that protocol internal. Do
+  not add a public revoke API or another Node cleanup path.
+- Apply private exception cleanup before the active base-policy owner is
+  retired. Then use normal exact binding and generation cleanup for the
+  deleted container.
 - Keep durable exception counters and receipts as audit records. They do not
   authorize an action without a live exact binding.
 
@@ -1778,19 +1781,25 @@ test does not close a row when its physical condition or an assertion changed.
       created a signed revoke after the exact workload and its base-policy
       owner were gone. The revoke could not run and kept teardown pending.
       This is not the accepted exception lifecycle.
-    - [x] Record the accepted lifecycle. Keep `maximumUses` unchanged. Let the
-      signed deadline expire unused authority. Let consumption remain
-      terminal. Let normal exact binding and generation cleanup retire
-      authority when its container disappears. Keep counters and receipts as
-      non-authorizing records. Do not send a Node revoke.
-    - [ ] Stop Control from creating a revoke candidate for exception-object
-      deletion, complete-relist absence, or exact-target disappearance.
-      Preserve the original activation record, use count, deadline, and
-      receipts.
-    - [ ] Verify that container cleanup removes the live exact binding and
-      permits base-policy retirement without a revoke candidate. Verify that
-      deletion does not refund uses or extend the signed deadline.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Record the accepted lifecycle. Keep `maximumUses` unchanged. Expose
+      no external revoke operation. Keep the existing private signed
+      restrictive transition as a Control-to-Node cleanup detail. Keep
+      consumed and expired states terminal. Keep counters and receipts as
+      non-authorizing records.
+    - [x] Apply an active exception's existing private cleanup before Node
+      retires its active base-policy owner. Do not create a second cleanup
+      path. Do not send a later cleanup for an already consumed or expired
+      exception. Commit `5544c9c4` defers base-owner retirement until the
+      existing cleanup becomes terminal. The focused Node test and all 33
+      Control policy reconciliation tests passed.
+    - [x] Verify that private cleanup preserves the use count and deadline.
+      Then verify that normal container cleanup removes the exact binding and
+      permits base-policy retirement. The existing exact-target regression
+      kept the use bound, deadline, target, and predecessor. Host, direct-runc,
+      and Kubernetes lifecycle teardown then completed.
+    - [x] Pass Kubernetes and commit it. All three Kubernetes exception tests
+      passed together in 185.27 seconds. Commit `7e99420c` adds Kubernetes to
+      the same Rust scenarios.
     - [ ] Remove only the matching legacy actions, result fields, mailbox
       operations, and fixture owner after all three platform cases pass.
   - [ ] Replace the pre-activation descriptor read and mapping block with one
