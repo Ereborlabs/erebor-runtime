@@ -3239,6 +3239,7 @@ dependencies = [
  "tonic-build",
  "tower 0.4.13",
  "uuid",
+ "zerocopy",
 ]
 
 [[package]]

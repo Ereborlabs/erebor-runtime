@@ -1,6 +1,5 @@
 use erebor_interceptor_abi::{EffectObservationV1, KernelEffectOperationV1};
 use sha2::{Digest as _, Sha256};
-use zerocopy::IntoBytes as _;
 
 use crate::error::IdentityStateSnafu;
 use crate::Result;
@@ -65,6 +64,13 @@ impl ObservationCanonicalizer {
         }
         let source_id = self.cpu_source_id(event.source_cpu_id);
         let effect = kernel_effect(&event);
+        let context_id = |id: EvidenceIdV1| {
+            if id.is_zero() {
+                Vec::new()
+            } else {
+                id.to_be_bytes().to_vec()
+            }
+        };
         let observation = ObservationEnvelopeV1 {
             tenant_id: self.tenant_id,
             node_boot_id: self.node_boot_id,
@@ -79,6 +85,21 @@ impl ObservationCanonicalizer {
                 .then_some(event.profile_generation_ref_id),
             temporal_coverage,
             effect,
+            decision_context: Some(mithril_control::EvidenceDecisionContext {
+                schema_version: 1,
+                original_kernel_sequence: event.source_sequence,
+                process_instance_id: context_id(event.process_instance_id),
+                entry_instance_id: context_id(event.entry_instance_id),
+                binding_id: context_id(event.binding_id),
+                profile_generation_ref_id: event.profile_generation_ref_id,
+                role_id: event.active_role_id,
+                state_id: event.process_state_vector_id,
+                entry_rule_id: event.admitted_entry_rule_id,
+                exact_file_object: (event.exact_object_key_id != 0)
+                    .then(|| event.file_object.into()),
+                exact_object_key_id: event.exact_object_key_id,
+                composite_atom_id: event.composite_atom_id,
+            }),
         };
         observation.validate()?;
         Ok(observation)
@@ -96,11 +117,10 @@ impl ObservationCanonicalizer {
 
 fn kernel_effect(event: &EffectObservationV1) -> KernelEffectEvidenceV1 {
     let exact_object_id = if event.exact_object_key_id > 0 {
-        let mut digest = Sha256::new();
-        digest.update(b"MITHRIL-EXACT-OBJECT-V1\0");
-        digest.update(event.file_object.as_bytes());
-        digest.update(event.exact_object_key_id.to_be_bytes());
-        Some(EvidenceDigestV1::from(digest.finalize()).into())
+        Some(
+            mithril_control::EvidenceExactFileObject::from(event.file_object)
+                .observation_id(event.exact_object_key_id),
+        )
     } else {
         None
     };
@@ -170,6 +190,87 @@ mod tests {
             physical_result: 1,
             ..EffectObservationV1::default()
         }
+    }
+
+    #[test]
+    fn discovery_context_preserves_kernel_coordinates_without_inventing_catalog_facts(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut event = event(2);
+        event.process_instance_id = Id128V1::new(31, 32);
+        event.entry_instance_id = Id128V1::new(33, 34);
+        event.binding_id = Id128V1::new(35, 36);
+        event.active_role_id = 7;
+        event.process_state_vector_id = 8;
+        event.admitted_entry_rule_id = 9;
+        event.file_object = erebor_interceptor_abi::ExactFileObjectKeyV1 {
+            profile_generation_ref_id: 13,
+            mount_id_unique: 41,
+            inode: 42,
+            inode_generation: 43,
+            mount_namespace_inode: 44,
+            filesystem_device: 45,
+        };
+        let observation = canonicalizer()?.normalize_kernel(
+            event,
+            EvidenceIdV1::new(30, 31),
+            TemporalCoverageV1::Complete,
+            100,
+        )?;
+        let record = observation.to_wire_record()?;
+        let restored = mithril_control::ObservationEnvelopeV1::from_wire_record(
+            observation.tenant_id,
+            observation.node_boot_id,
+            observation.source_id,
+            observation.source_epoch,
+            1,
+            observation.cpu_id,
+            &record,
+        )?;
+        assert_eq!(restored.source_sequence, 1);
+        let context = restored
+            .decision_context
+            .as_ref()
+            .ok_or("missing context")?;
+        assert_eq!(context.original_kernel_sequence, 11);
+        assert_eq!(
+            context.process_instance_id,
+            event.process_instance_id.to_be_bytes()
+        );
+        assert_eq!(
+            context.entry_instance_id,
+            event.entry_instance_id.to_be_bytes()
+        );
+        assert_eq!(context.binding_id, event.binding_id.to_be_bytes());
+        assert_eq!(
+            (context.role_id, context.state_id, context.entry_rule_id),
+            (7, 8, 9)
+        );
+        assert_eq!(context.exact_file_object, Some(event.file_object.into()));
+        assert_eq!(context.exact_object_key_id, 20);
+        assert_eq!(context.composite_atom_id, 21);
+        assert_eq!(context.profile_generation_ref_id, 13);
+        assert_eq!(restored.to_wire_record()?, record);
+        for mutation in 0..7 {
+            let mut changed = restored.clone();
+            let context = changed.decision_context.as_mut().ok_or("missing context")?;
+            match mutation {
+                0 => context.schema_version = 2,
+                1 => context.original_kernel_sequence = 0,
+                2 => context.profile_generation_ref_id += 1,
+                3 => context.composite_atom_id += 1,
+                4 => context.exact_object_key_id += 1,
+                5 => context.binding_id = vec![1; 15],
+                _ => {
+                    context
+                        .exact_file_object
+                        .as_mut()
+                        .ok_or("missing object")?
+                        .inode += 1
+                }
+            }
+            assert!(changed.validate().is_err(), "mutation {mutation}");
+        }
+        Ok(())
     }
 
     #[test]
