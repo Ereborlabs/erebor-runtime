@@ -9,6 +9,8 @@ mod network;
 #[cfg(test)]
 mod node_restart;
 #[cfg(test)]
+mod privilege;
+#[cfg(test)]
 mod process_control;
 mod runc;
 mod support;
