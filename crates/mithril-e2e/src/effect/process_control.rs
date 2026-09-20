@@ -184,6 +184,100 @@ fn signal_zero_is_allowed<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
+#[platform_test(host)]
+#[lifecycle = identity]
+fn signal_cont_is_denied<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("process-signal-cont")?;
+    env.start_control()?;
+    env.start_node()?;
+    env.install_policy("process_control_policy.json")?;
+    env.node_ready()?;
+    let mut actor = env.start_actor("process_control.py", &["signal-cont"])?;
+    let parent = env.task(actor.id(), "signal controller")?;
+
+    fs::write(env.work().join("spawn"), b"spawn\n")?;
+    let pid = actor.wait_child(actor.id(), "signal target")?;
+    actor.track(pid)?;
+    let target = env.task(pid, "signal target identity")?;
+    let parent_state = &parent.snapshot;
+    let target_state = &target.snapshot;
+    assert_eq!(
+        target_state.creator_task_cookie,
+        Some(parent_state.task_cookie)
+    );
+    assert_eq!(
+        target_state.profile_generation_ref_id,
+        parent_state.profile_generation_ref_id
+    );
+    assert_eq!(target_state.active_role_id, parent_state.active_role_id);
+    assert_ne!(target_state.task_cookie, parent_state.task_cookie);
+    assert_ne!(target_state.process_state_id, parent_state.process_state_id);
+
+    let seen = env
+        .snapshot()?
+        .recent_effects
+        .into_iter()
+        .map(|event| (event.source_cpu_id, event.source_sequence))
+        .collect::<BTreeSet<_>>();
+    fs::write(env.work().join("act"), b"act\n")?;
+    let result = actor.wait_text(&env.work().join("control-result"), "signal result")?;
+    assert_eq!(
+        result.trim(),
+        libc::EACCES.to_string(),
+        "signal effects: {:?}",
+        env.snapshot()?
+            .recent_effects
+            .into_iter()
+            .filter(|event| event.operation == O::Signal as u32)
+            .rev()
+            .take(4)
+            .collect::<Vec<_>>()
+    );
+
+    let path = env.maps().0.to_owned();
+    wait_for(
+        &path,
+        "denied signal evidence",
+        Duration::from_secs(30),
+        || {
+            let snapshot = env.snapshot().map_err(|source| {
+                InvalidInputSnafu {
+                    path: &path,
+                    reason: source.to_string(),
+                }
+                .build()
+            })?;
+            Ok(snapshot.recent_effects.into_iter().find(|event| {
+                !seen.contains(&(event.source_cpu_id, event.source_sequence))
+                    && parent.matches_effect(
+                        event,
+                        "EXACT_POLICY_DENY",
+                        F::Privilege,
+                        O::Signal,
+                        -libc::EACCES,
+                    )
+                    && event.operation_argument == libc::SIGCONT as u32
+                    && event.profile_generation_ref_id == parent_state.profile_generation_ref_id
+                    && event.controller_process_state_id == parent_state.process_state_id
+                    && event.process_state_vector_id > 0
+                    && event.target_task_cookie == target_state.task_cookie
+                    && event.target_profile_generation_ref_id
+                        == target_state.profile_generation_ref_id
+                    && event.target_role_id == target_state.active_role_id
+                    && event.target_process_state_id == target_state.process_state_id
+                    && event.target_process_state_vector_id > 0
+            }))
+        },
+        || "no exact signal denial observed".to_owned(),
+    )?;
+
+    fs::write(env.work().join("release"), b"release\n")?;
+    let status = actor.wait_exit("denied signal", Duration::from_secs(5))?;
+    assert_eq!(status.code(), Some(libc::EACCES), "{:?}", actor.stderr()?);
+    actor.stop()?;
+    env.stop()
+}
+
 #[platform_test(host, runc, kubernetes)]
 #[lifecycle = process_recovery]
 fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {

@@ -1837,7 +1837,29 @@ test does not close a row when its physical condition or an assertion changed.
       `runc`, and Kubernetes in 28.07, 29.18, and 67.52 seconds. Signal zero
       passed the same platforms in 28.12, 28.37, and 68.33 seconds on
       2026-09-19.
-    - [ ] Pass the `SIGCONT` denial case on Host and commit it.
+    - [x] Pass the `SIGCONT` denial case on Host and commit it. The feature
+      prevents unauthorized control of another governed process. `SIGCONT` is
+      a safe example for the running fixture target; it is not a separate
+      product feature.
+      The first Host run on 2026-09-19 returned success instead of `EACCES`.
+      Its signal event used `RUNTIME_ENTRY_INFRASTRUCTURE` with argument 18
+      and no controller identity. `runtime_entry_may_control_initial_target`
+      matched the actor child because the child inherits the admitted entry
+      identity. The runtime exemption ran before the signed process-control
+      rule lookup. Keep the failing scenario unchanged until the production
+      exemption is limited to the exact entry-root process.
+      The unchanged recovered-container entry probe passed before the fix. It
+      observed the required runtime bootstrap against the recovered initial
+      task, preserved runtime-internal execution, denied the declared probe,
+      denied unmatched execution, and removed all owned resources. Rerun this
+      probe after the correction to prove that the valid runtime exemption is
+      unchanged.
+      The production predicate now also requires the target process state to
+      equal its entry-root process state. The corrected Host case passed in
+      28.76 seconds on 2026-09-20. The unchanged recovered-container entry
+      probe then passed with both recovered task classes, the runtime bootstrap
+      marker, runtime-internal rule-zero execution, both policy denials, and
+      all cleanup fields.
     - [ ] Pass the `SIGCONT` denial case on direct `runc` and commit it.
     - [ ] Pass the `SIGCONT` denial case on Kubernetes and commit it.
     - [ ] Pass the unmatched signal-zero case on Host and commit it.

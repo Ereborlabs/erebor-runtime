@@ -351,6 +351,7 @@ static __noinline bool runtime_entry_may_control_initial_target(
     execution_set_binding_state_v1 *activation;
     task_label_v1 *current_label;
     task_label_v1 *target_label;
+    process_security_state_v1 *target_process;
     entry_security_state_v1 *current_entry;
     entry_security_state_v1 *target_entry;
     external_root_classification_v1 *classification;
@@ -372,11 +373,16 @@ static __noinline bool runtime_entry_may_control_initial_target(
         return false;
     binding = binding_for_cgroup(target_cgroup, &binding_lookup);
     target_label = bpf_task_storage_get(&task_labels, target, 0, 0);
+    target_process = target_label
+                         ? bpf_map_lookup_elem(&process_states,
+                                               &target_label->process_state_id)
+                         : NULL;
     target_entry = target_label
                        ? bpf_map_lookup_elem(&entry_states,
                                              &target_label->entry_instance_id)
                        : NULL;
-    if (binding_lookup || !binding || !target_label || !target_entry ||
+    if (binding_lookup || !binding || !target_label || !target_process ||
+        !target_entry ||
         policy_binding_lifecycle(binding->lifecycle_state) !=
             binding_lifecycle_state_v1_active ||
         !binding_matches_label(binding, target_label))
@@ -384,6 +390,8 @@ static __noinline bool runtime_entry_may_control_initial_target(
     admitted_initial_target =
         id128_equal(&binding->prepared_container_entry_instance_id,
                     &target_label->entry_instance_id) &&
+        id128_equal(&target_label->process_state_id,
+                    &target_process->entry_root_process_state_id) &&
         target_entry->admitted_entry_rule_id;
     if (!admitted_initial_target &&
         (!transfers_runtime_fd ||
