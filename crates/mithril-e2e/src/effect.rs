@@ -419,8 +419,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub inherited_unix_stream_send_denied: bool,
     pub unix_stream_stale_peer_denied: bool,
     pub unix_stream_unmatched_denied: bool,
-    pub process_signal_zero_permission_allowed: bool,
-    pub process_signal_unmatched_denied: bool,
     pub namespace_privilege_hard_closed: bool,
     pub ptmx_ioctl_exact_allowed: bool,
     pub ptmx_derived_peer_hard_closed: bool,
@@ -1021,66 +1019,6 @@ fn require_hard_close(
         .build()
     })?;
     Ok(marker)
-}
-
-fn require_exact_process_control(
-    fixture: &mut EffectProcessFixture,
-    reader: &EffectObservationReader,
-    observations: &EffectObservationStore,
-    operation: HardClosedOperation,
-    kernel_operation: KernelEffectOperationV1,
-    expected_reason: &str,
-    denied: bool,
-) -> Result<()> {
-    let marker = observations.cursor();
-    let outcome = fixture.run_prepared(operation)?;
-    ensure!(
-        if denied {
-            outcome.denied()
-        } else {
-            outcome.allowed
-        },
-        InvalidInputSnafu {
-            path: Path::new("live effect state"),
-            reason: format!(
-                "exact process-control {} did not produce its signed physical result",
-                kernel_operation as u16
-            ),
-        }
-    );
-    wait_for_effect(
-        reader,
-        observations,
-        marker,
-        expected_reason,
-        (KernelEffectFamilyV1::Privilege, kernel_operation),
-    )?;
-    let zero_id = "0".repeat(32);
-    ensure!(
-        observations.recent_since(marker).iter().any(|event| {
-            event.reason == expected_reason
-                && event.effect_family == u32::from(KernelEffectFamilyV1::Privilege as u16)
-                && event.operation == u32::from(kernel_operation as u16)
-                && event.profile_generation_ref_id == PROFILE_GENERATION_REF_ID
-                && event.target_profile_generation_ref_id == PROFILE_GENERATION_REF_ID
-                && event.task_cookie > 0
-                && event.target_task_cookie > 0
-                && event.task_cookie != event.target_task_cookie
-                && event.active_role_id > 0
-                && event.target_role_id > 0
-                && event.process_state_vector_id > 0
-                && event.target_process_state_vector_id > 0
-                && event.controller_process_state_id != zero_id
-                && event.target_process_state_id != zero_id
-                && event.controller_process_state_id != event.target_process_state_id
-        }),
-        InvalidInputSnafu {
-            path: Path::new("effect_observations"),
-            reason:
-                "process-control evidence did not bind the current controller and exact live target",
-        }
-    );
-    Ok(())
 }
 
 impl EffectTestRunner {
@@ -2569,42 +2507,6 @@ impl EffectTestRunner {
                 ),
             }
         );
-
-        // Both fork children must inherit the active protected identity.
-        fixture.prepare_labeled_targets()?;
-        if protect {
-            require_exact_process_control(
-                &mut fixture,
-                &reader,
-                &observations,
-                HardClosedOperation::Signal,
-                KernelEffectOperationV1::Signal,
-                "EXACT_POLICY_ALLOW",
-                false,
-            )?;
-            require_exact_process_control(
-                &mut fixture,
-                &reader,
-                &observations,
-                HardClosedOperation::SignalUnmatched,
-                KernelEffectOperationV1::Signal,
-                "EXACT_POLICY_DENY",
-                true,
-            )?;
-        } else {
-            require_hard_close(
-                &mut fixture,
-                &reader,
-                &observations,
-                HardClosedOperation::Signal,
-                "UNSUPPORTED_OBJECT",
-                (
-                    KernelEffectFamilyV1::Privilege,
-                    KernelEffectOperationV1::Signal,
-                ),
-                "unmatched signal process control",
-            )?;
-        }
 
         if protect {
             for (operation, label) in [
@@ -4292,8 +4194,6 @@ impl EffectTestRunner {
             inherited_unix_stream_send_denied: protect,
             unix_stream_stale_peer_denied: protect,
             unix_stream_unmatched_denied: protect,
-            process_signal_zero_permission_allowed: protect,
-            process_signal_unmatched_denied: protect,
             namespace_privilege_hard_closed: true,
             ptmx_ioctl_exact_allowed: protect,
             ptmx_derived_peer_hard_closed: protect,

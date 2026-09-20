@@ -1802,17 +1802,17 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Remove only the matching legacy ptrace action, result field, and
       fixture operation after all three platforms pass. Keep both signal
       cases and the shared process target until their replacements pass.
-  - [ ] Replace the process-signal block with three small standard platform
+  - [x] Replace the process-signal block with three small standard platform
     tests. Reuse the process-control actor and its one live child. Do not add
     a Platform API.
-    - [ ] With the protected policy, send signal zero. Require success and
+    - [x] With the protected policy, send signal zero. Require success and
       `EXACT_POLICY_ALLOW` evidence for the exact controller and target tasks.
-    - [ ] With the protected policy, send `SIGCONT`. Require `EACCES` and
+    - [x] With the protected policy, send `SIGCONT`. Require `EACCES` and
       `EXACT_POLICY_DENY` evidence for the exact controller and target tasks.
-    - [ ] With no matching process-control rule, send signal zero. Require
+    - [x] With no matching process-control rule, send signal zero. Require
       `EACCES` and `UNSUPPORTED_OBJECT` evidence for the exact controller and
       target tasks.
-    - [ ] Keep each test below 100 lines. Keep actor result checks and security
+    - [x] Keep each test below 100 lines. Keep actor result checks and security
       assertions in each test.
     - [x] Pass the signal-zero allow case on Host and commit it. The exact case
       passed in 28.59 seconds. Both renamed Host ptrace cases passed together
@@ -1878,9 +1878,22 @@ test does not close a row when its physical condition or an assertion changed.
       The unchanged case passed in 38.65 seconds on 2026-09-20.
     - [x] Pass the unmatched signal-zero case on Kubernetes and commit it. The
       unchanged case passed in 75.29 seconds on 2026-09-20.
-    - [ ] Remove only the matching legacy signal actions, result fields, and
+    - [x] Remove only the matching legacy signal actions, result fields, and
       fixture operations after all three tests pass on all three platforms.
       Remove the shared process target only when no legacy operation uses it.
+      The cleanup removed 242 lines, including the unused combined target
+      request, process target owner, and its actor-only unit test. It kept the
+      independent Unix-stream target. The 13 focused child-fixture tests, the
+      complete non-privileged library suite, formatting, and strict crate
+      Clippy pass.
+    - [x] Run the complete platform matrix after the three signal behaviors.
+      Each of the 52 current Host cases passed across 13 lifecycle processes.
+      One Node start timed out after the physical lifecycle. Cleanup was
+      complete, and the unchanged two-test lifecycle passed on its immediate
+      focused rerun. All 43 direct-`runc` cases and all 43 Kubernetes cases
+      passed across 12 lifecycle processes without a rerun. Cleanup left no
+      Mithril process, namespace, BPF root, cgroup, or owner lease on
+      2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
 

@@ -171,7 +171,6 @@ enum ChildRequest {
         mount_source: PathBuf,
         move_mount_target: PathBuf,
     },
-    PrepareLabeledTargets,
     PrepareUnixStreamTarget,
     SharedMmapTargetPid,
     ReceivePassedSecret,
@@ -223,8 +222,6 @@ pub(super) enum PreparedOperation {
     InheritedUnixStreamSend,
     UnixStreamStalePeer,
     UnixStreamUnmatched,
-    Signal,
-    SignalUnmatched,
     Namespace,
     Bpf,
     Create { path: PathBuf },
@@ -840,15 +837,6 @@ impl EffectProcessFixture {
             ChildResponse::Outcome(outcome) => Ok(outcome),
             _ => Err(invalid_state(
                 "effect child returned the wrong hard-close response",
-            )),
-        }
-    }
-
-    pub(super) fn prepare_labeled_targets(&mut self) -> Result<()> {
-        match self.request(&ChildRequest::PrepareLabeledTargets)? {
-            ChildResponse::Prepared => Ok(()),
-            _ => Err(invalid_state(
-                "effect child returned the wrong labeled-target response",
             )),
         }
     }
@@ -1513,18 +1501,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 }
                 Err(error) => (Err(error), false),
             },
-            ChildRequest::PrepareLabeledTargets => match prepared_hard_closed.as_mut() {
-                Some(prepared) => match prepared.prepare_labeled_targets() {
-                    Ok(()) => (Ok(ChildResponse::Prepared), false),
-                    Err(error) => (Err(error), false),
-                },
-                None => (
-                    Err(invalid_state(
-                        "effect-operation resources were not prepared",
-                    )),
-                    false,
-                ),
-            },
             ChildRequest::PrepareUnixStreamTarget => match prepared_hard_closed.as_mut() {
                 Some(prepared) => match prepared.prepare_unix_stream_target() {
                     Ok(pid) => (Ok(ChildResponse::PreparedProcess { pid }), false),
@@ -2175,7 +2151,6 @@ struct PreparedOperations {
     ioctl_file: fs::File,
     unsupported_ioctl_file: fs::File,
     truncate_file: fs::File,
-    process_target: Option<ProcessControlTarget>,
     unix_stream_path: PathBuf,
     unix_stream_signal: Option<SharedMailbox>,
     unix_stream_signal_path: PathBuf,
@@ -2385,7 +2360,6 @@ impl PreparedOperations {
             ioctl_file,
             unsupported_ioctl_file,
             truncate_file,
-            process_target: None,
             unix_stream_path,
             unix_stream_signal: Some(unix_stream_signal),
             unix_stream_signal_path,
@@ -2394,24 +2368,6 @@ impl PreparedOperations {
             shared_memory,
             shared_mmap_target,
         })
-    }
-
-    fn prepare_labeled_targets(&mut self) -> Result<()> {
-        ensure!(
-            self.process_target.is_none(),
-            InvalidInputSnafu {
-                path: Path::new("labeled effect targets"),
-                reason: "labeled effect targets were already prepared",
-            }
-        );
-        let process_target = ProcessControlTarget::spawn().context(IoSnafu {
-            path: Path::new("process-control target"),
-        })?;
-        self.process_target = Some(process_target);
-        if self.unix_stream_target.is_none() {
-            self.prepare_unix_stream_target()?;
-        }
-        Ok(())
     }
 
     fn prepare_unix_stream_target(&mut self) -> Result<u32> {
@@ -2628,25 +2584,6 @@ impl PreparedOperations {
                             .map_or_else(error_outcome, |()| target.roundtrip())
                     })
             }
-            PreparedOperation::Signal => {
-                self.process_target
-                    .as_ref()
-                    .map_or_else(missing_process_target, |target| {
-                        // Signal zero performs the permission check without changing the target.
-                        // SAFETY: pid names the live fixture-owned fork child.
-                        libc_outcome(unsafe { libc::kill(target.pid, 0) }.into())
-                    })
-            }
-            PreparedOperation::SignalUnmatched => {
-                self.process_target
-                    .as_ref()
-                    .map_or_else(missing_process_target, |target| {
-                        // SIGCONT has no effect on this running target. It proves that an
-                        // unlisted signal argument uses the signed wildcard denial.
-                        // SAFETY: pid names the live fixture-owned fork child.
-                        libc_outcome(unsafe { libc::kill(target.pid, libc::SIGCONT) }.into())
-                    })
-            }
             PreparedOperation::Namespace => {
                 // SAFETY: CLONE_NEWUTS requests a private namespace for only
                 // this disposable process.
@@ -2699,7 +2636,6 @@ impl Drop for PreparedOperations {
             libc::shmdt(self.shared_memory);
         }
         self.unix_stream_target.take();
-        self.process_target.take();
         let _cleanup = fs::remove_file(&self.unix_stream_signal_path);
     }
 }
@@ -2851,68 +2787,6 @@ unsafe fn shared_mmap_target_child(
                 break;
             }
             std::hint::spin_loop();
-        }
-    }
-}
-
-struct ProcessControlTarget {
-    pid: libc::pid_t,
-    release: Option<OwnedFd>,
-}
-
-#[allow(unsafe_code)]
-impl ProcessControlTarget {
-    fn spawn() -> io::Result<Self> {
-        let mut pipe = [-1; 2];
-        // SAFETY: pipe points to storage for both returned descriptors.
-        if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: the child uses only async-signal-safe syscalls before _exit.
-        let pid = unsafe { libc::fork() };
-        if pid < 0 {
-            let error = io::Error::last_os_error();
-            // SAFETY: both descriptors were returned by pipe2 and remain owned here.
-            unsafe {
-                libc::close(pipe[0]);
-                libc::close(pipe[1]);
-            }
-            return Err(error);
-        }
-        if pid == 0 {
-            let mut wait = libc::pollfd {
-                fd: pipe[0],
-                events: libc::POLLIN | libc::POLLHUP,
-                revents: 0,
-            };
-            // SAFETY: the fork child owns the read descriptor and wait is writable.
-            unsafe {
-                libc::close(pipe[1]);
-                while libc::poll(&raw mut wait, 1, -1) < 0 {}
-                libc::close(pipe[0]);
-                libc::_exit(0);
-            }
-        }
-        // SAFETY: the parent owns both descriptors and transfers the write end.
-        unsafe {
-            libc::close(pipe[0]);
-        }
-        Ok(Self {
-            pid,
-            // SAFETY: pipe2 returned this live descriptor and ownership moves here.
-            release: Some(unsafe { OwnedFd::from_raw_fd(pipe[1]) }),
-        })
-    }
-}
-
-#[allow(unsafe_code)]
-impl Drop for ProcessControlTarget {
-    fn drop(&mut self) {
-        self.release.take();
-        let mut status = 0;
-        // SAFETY: pid is this process's live fork child and status is writable.
-        unsafe {
-            libc::waitpid(self.pid, &mut status, 0);
         }
     }
 }
@@ -3848,7 +3722,7 @@ mod tests {
     use super::{
         invalid_state, mmap_outcome, network_read_results, ptmx_number_outcome, ptmx_peer_outcome,
         read_outcome, unlock_ptmx, BatchOutcome, BpfMapCreateAttr, IoOutcome, PreparedWriteRace,
-        ProcessControlTarget, SharedMmapTarget, UnixStreamTarget, BPF_MAP_TYPE_ARRAY,
+        SharedMmapTarget, UnixStreamTarget, BPF_MAP_TYPE_ARRAY,
     };
     use crate::effect::fixture_syscalls;
     use crate::effect::mailbox::SharedMailbox;
@@ -4084,21 +3958,6 @@ mod tests {
             assert!(target.mmap_protected().allowed);
             assert!(target.mmap_benign().allowed);
         }
-        Ok(())
-    }
-
-    #[test]
-    #[allow(unsafe_code)]
-    fn process_control_target_is_live_until_its_owner_releases_it() -> crate::Result<()> {
-        let target = ProcessControlTarget::spawn().map_err(|source| crate::Error::Io {
-            path: "process-control target fixture".into(),
-            source,
-            location: snafu::location!(),
-        })?;
-        // Signal zero does not change the child. It only proves that the PID is live.
-        // SAFETY: target.pid is owned by target until it is dropped below.
-        assert_eq!(unsafe { libc::kill(target.pid, 0) }, 0);
-        drop(target);
         Ok(())
     }
 
