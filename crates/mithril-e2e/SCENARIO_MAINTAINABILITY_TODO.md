@@ -1926,7 +1926,9 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Retain an execution transport status until its remote actor exits. The
     focused fixture test passed in 0.02 seconds. The namespace case then passed
     again on Host in 28.89 seconds and on direct `runc` in 37.18 seconds.
-  - [ ] Pass the namespace privilege test on Kubernetes and commit it.
+  - [x] Pass the namespace privilege test on Kubernetes and commit it. The
+    exact case passed in 75.24 seconds on 2026-09-20 against the retained K3s
+    cluster.
   - [ ] Remove only the matching legacy action, result field, enum case, and
     dispatch arm after all three platform cases pass.
 

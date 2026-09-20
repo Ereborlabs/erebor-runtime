@@ -8,7 +8,7 @@ use crate::platform::{platform_test, Platform, TestResult};
 
 const CAP_SYS_ADMIN: u32 = 21;
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = process_recovery]
 fn namespace_change_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("namespace-change")?;
