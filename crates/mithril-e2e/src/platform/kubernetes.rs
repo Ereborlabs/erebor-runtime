@@ -771,6 +771,48 @@ impl KubernetesState {
         Ok(())
     }
 
+    fn stop_node(&mut self) -> TestResult<()> {
+        if !self.hook_up {
+            return Ok(());
+        }
+        let nodes = Api::<Node>::all(self.client.clone());
+        let patch = json!({"metadata": {"labels": {(SELECTOR): null}}});
+        self.runtime.block_on(nodes.patch(
+            &self.node_name,
+            &PatchParams::default(),
+            &Patch::Merge(&patch),
+        ))?;
+        let pods = Api::<Pod>::namespaced(self.client.clone(), &self.system);
+        let params = ListParams::default().labels("app.kubernetes.io/name=mithril-node");
+        let last = RefCell::new(String::from("<absent>"));
+        let path = Self::resource(&self.system, "pod", "mithril-node");
+        wait_for(
+            &path,
+            "Node Pod stop",
+            STOP_LIMIT,
+            || match self.runtime.block_on(pods.list(&params)) {
+                Ok(list) => {
+                    let state = list
+                        .items
+                        .iter()
+                        .map(|pod| pod.name_any())
+                        .collect::<Vec<_>>();
+                    let stopped = state.is_empty();
+                    *last.borrow_mut() = format!("{state:?}");
+                    Ok(stopped.then_some(()))
+                }
+                Err(source) => {
+                    *last.borrow_mut() = source.to_string();
+                    Ok(None)
+                }
+            },
+            || format!("remaining Node Pods: {}", last.borrow()),
+        )?;
+        self.wait_sockets()?;
+        self.hook_up = false;
+        Ok(())
+    }
+
     fn wait_api(&self) -> TestResult<()> {
         let nodes = Api::<Node>::all(self.client.clone());
         let last = RefCell::new(String::from("<absent>"));
@@ -943,23 +985,10 @@ impl KubernetesState {
 
     fn tear_down(&mut self) -> TestResult<()> {
         let mut failed = self.clean_test().err();
-        if self.system_up {
-            let nodes = Api::<Node>::all(self.client.clone());
-            let patch = json!({"metadata": {"labels": {(SELECTOR): null}}});
-            Self::retain(
-                &mut failed,
-                self.runtime
-                    .block_on(nodes.patch(
-                        &self.node_name,
-                        &PatchParams::default(),
-                        &Patch::Merge(&patch),
-                    ))
-                    .map(|_| ())
-                    .map_err(Into::into),
-            );
+        if self.hook_up {
+            Self::retain(&mut failed, self.stop_node());
         }
         if self.runtime_up {
-            Self::retain(&mut failed, self.wait_sockets());
             let input = RuntimeIntegrationDecommissionV1 {
                 owner: format!("{}/mithril", self.system),
                 hook_directory: PathBuf::from("/usr/libexec/oci/hooks.d"),
@@ -1306,40 +1335,7 @@ impl Platform for Kubernetes {
     }
 
     fn stop_node(&mut self) -> TestResult<()> {
-        if !self.hook_up {
-            return Ok(());
-        }
-        let nodes = Api::<Node>::all(self.client.clone());
-        let patch = json!({"metadata": {"labels": {(SELECTOR): null}}});
-        self.runtime.block_on(nodes.patch(
-            &self.node_name,
-            &PatchParams::default(),
-            &Patch::Merge(&patch),
-        ))?;
-        let sets = Api::<DaemonSet>::namespaced(self.client.clone(), &self.system);
-        let last = RefCell::new(String::from("<absent>"));
-        let path = KubernetesState::resource(&self.system, "daemonset", "mithril-node");
-        wait_for(
-            &path,
-            "Node DaemonSet stop",
-            STOP_LIMIT,
-            || match self.runtime.block_on(sets.get("mithril-node")) {
-                Ok(set) => {
-                    *last.borrow_mut() = format!("{:?}", set.status);
-                    Ok(set
-                        .status
-                        .is_some_and(|status| status.desired_number_scheduled == 0)
-                        .then_some(()))
-                }
-                Err(source) => {
-                    *last.borrow_mut() = source.to_string();
-                    Ok(None)
-                }
-            },
-            || format!("last DaemonSet state: {}", last.borrow()),
-        )?;
-        self.hook_up = false;
-        Ok(())
+        KubernetesState::stop_node(self)
     }
 
     fn install_policy(&mut self, fixture: &str) -> TestResult<()> {
