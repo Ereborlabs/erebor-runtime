@@ -1949,7 +1949,9 @@ test does not close a row when its physical condition or an assertion changed.
     The shared actor publishes its errno in its task name and waits for normal
     release. The 89-line scenario passed again on Host in 29.90 seconds and on
     direct `runc` in 36.48 seconds on 2026-09-20.
-  - [ ] Pass the BPF map-create test on Kubernetes and commit it.
+  - [x] Pass the BPF map-create test on Kubernetes and commit it. The exact
+    case passed in 76.19 seconds on 2026-09-20 against the retained K3s
+    cluster.
   - [ ] Remove only the matching legacy action, result field, enum case,
     dispatch arm, and actor syscall code after all three platform cases pass.
 
