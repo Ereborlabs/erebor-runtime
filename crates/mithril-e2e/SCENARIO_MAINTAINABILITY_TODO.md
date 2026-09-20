@@ -1876,7 +1876,8 @@ test does not close a row when its physical condition or an assertion changed.
       The exact case passed in 30.04 seconds on 2026-09-20.
     - [x] Pass the unmatched signal-zero case on direct `runc` and commit it.
       The unchanged case passed in 38.65 seconds on 2026-09-20.
-    - [ ] Pass the unmatched signal-zero case on Kubernetes and commit it.
+    - [x] Pass the unmatched signal-zero case on Kubernetes and commit it. The
+      unchanged case passed in 75.29 seconds on 2026-09-20.
     - [ ] Remove only the matching legacy signal actions, result fields, and
       fixture operations after all three tests pass on all three platforms.
       Remove the shared process target only when no legacy operation uses it.
