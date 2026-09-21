@@ -2342,8 +2342,10 @@ setup, production actions, assertions, and focused test.
     - [x] Pass Host and commit it. The exact Host test passed in 29.15 seconds
       on 2026-09-21. The existing fatal-exec Host test passed with the extended
       policy in 28.11 seconds.
-    - [ ] Pass direct `runc` and commit it.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass direct `runc` and commit it. The exact direct-`runc` test passed
+      in 29.48 seconds on 2026-09-21.
+    - [x] Pass Kubernetes and commit it. The exact Kubernetes test passed in
+      69.69 seconds on 2026-09-21.
     - [x] Remove only the matching legacy terminal-status assertion and result
       field after all three platforms pass. Keep the action and pending row
       until the evidence-retention and generation-retirement test replaces
@@ -2351,23 +2353,25 @@ setup, production actions, assertions, and focused test.
       inactive-generation assertions remained true.
   - [x] Add one small platform test for terminal evidence during generation
     retirement. Do not add a Platform API or call a test-only Node owner.
-    - [x] Start PID 1 under the fatal-exec policy and retain one
-      `PostPonrFatal` pending-exec row from the declared terminal entry.
-    - [x] Install the replacement policy through Control while PID 1 holds the
-      old generation. Require a new active generation and the old descriptor
-      to enter `Retiring`.
-    - [x] Stop PID 1. Wait for the deployed Node to remove the old descriptor,
-      binding activation targets, and execution-set bindings. Require the
-      terminal pending-exec row to remain byte-for-byte equal.
+    - [x] Start PID 1 under the initial policy. Install the fatal-exec policy
+      as a replacement, start one declared holder in that generation, then
+      retain one `PostPonrFatal` row from its terminal entry.
+    - [x] Install the next replacement policy through Control while PID 1
+      and the declared entry remain live. Require a new active generation and
+      the fatal-exec descriptor to enter `Retiring`.
+    - [x] Stop the declared holder. Wait for the deployed Node to remove the
+      old descriptor, binding activation targets, and execution-set bindings.
+      Require the terminal pending-exec row to remain byte-for-byte equal.
     - [x] Put map parsing in one small generation-state assertion owner. The
       owner can read state and wait for readiness. It must not install policy,
       stop actors, or reproduce Node retirement.
-    - [x] Keep the test below 100 lines. The complete test file is 49 lines.
-    - [x] Pass Host and commit it. The exact Host test passed in 34.56 seconds
-      on 2026-09-21.
-    - [ ] Pass direct `runc` and commit it.
-    - [x] Pass Kubernetes and commit it. The exact Kubernetes test passed in
-      75.96 seconds on 2026-09-21.
+    - [x] Keep the test below 100 lines. The complete test file is 59 lines.
+    - [x] Pass Host and commit it. The corrected Host test passed in 41.18
+      seconds on 2026-09-21.
+    - [x] Pass direct `runc` and commit it. The corrected direct-`runc` test
+      passed in 41.80 seconds on 2026-09-21.
+    - [x] Pass Kubernetes and commit it. The corrected Kubernetes test passed
+      in 87.86 seconds on 2026-09-21.
     - [ ] Remove only the matching legacy terminal-retention and inactive-
       generation fields, actions, and shell assertions after all platforms
       pass. Keep unrelated mount, upgrade, and cleanup behavior.

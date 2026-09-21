@@ -15,15 +15,24 @@ fn terminal_evidence_survives_retirement<P: Platform>() -> TestResult<()> {
     ProcessFixture::fatal_exec(&bin.join("post-ponr-execfail"))?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("fatal_exec_policy.json")?;
+    env.install_policy("actor_policy.json")?;
     env.node_ready()?;
     let mut init = env.start_actor("ready.py", &[])?;
 
+    env.install_policy("fatal_exec_policy.json")?;
+    env.node_ready()?;
+    let mut holder = env.add_actor("python", &["/fixtures/ready.py"])?;
     assert!(env.add_actor("post-ponr-execfail", &[]).is_err());
     let pending = GenerationState::wait_fatal(&env)?;
     let old = pending.source_profile_generation_ref_id;
     let descriptor = GenerationState::descriptor(&env, old)?;
     let held = GenerationState::read(&env, descriptor.profile_id, old, pending.task_cookie)?;
+    assert_eq!(
+        env.task(holder.id(), "generation holder")?
+            .snapshot
+            .profile_generation_ref_id,
+        old
+    );
     assert_eq!(pending.state, PendingExecStateV1::PostPonrFatal);
     assert_eq!(held.active, Some(old));
     assert_eq!(held.descriptor, Some(descriptor));
@@ -38,12 +47,13 @@ fn terminal_evidence_survives_retirement<P: Platform>() -> TestResult<()> {
         Some(PolicyGenerationStateV1::Retiring)
     );
 
-    init.stop()?;
+    holder.stop()?;
     let retired =
         GenerationState::wait_absent(&env, descriptor.profile_id, old, pending.task_cookie)?;
     assert!(retired.descriptor.is_none());
     assert_eq!(retired.targets, 0);
     assert_eq!(retired.bindings, 0);
     assert_eq!(retired.pending, Some(pending));
+    init.stop()?;
     env.stop()
 }
