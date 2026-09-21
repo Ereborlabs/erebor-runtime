@@ -193,8 +193,9 @@ are proven. Phase 3 requires approval.
 ## Result
 
 **Not done.** The bounded reader and checked store migration are implemented.
-The signed-context lookup and durable artifact store are implemented. Durable derivation, SQL index,
-runtime loop, context import, revision feed, and live context roundtrip remain
+The signed-context lookup and durable artifact store are implemented. The SQL
+backend has committed-export replay and transactional counts. Durable derivation,
+profile sealing, runtime loop, context import, revision feed, and live context roundtrip remain
 to be implemented and verified.
 
 ### Bounded reader and source metadata
@@ -385,3 +386,73 @@ Verification: the focused join test passed. After the final Rust edit,
 152 tests; the Node library passed 246. The e2e library passed 98 tests and
 ignored 163 physical or manual cases. The document check passed 233 local
 links across 27 documents. This result covers the join added after `3426e5f3`.
+
+### Transactional export index
+
+This result covers the SQLite backend added after `d5e30762`. The backend is
+not connected to Control startup. It does not close the live engine gates.
+
+[DiscoveryExportPageV1::artifact](../../../crates/mithril-control/src/discovery/index.rs)
+checks one bounded page with its raw records, pinned context, and coverage.
+  -> [ControlStore::put_discovery_artifact](../../../crates/mithril-control/src/store/discovery.rs) stores the immutable page and its previous-page dependency.
+  -> [ControlStore::commit_discovery_head](../../../crates/mithril-control/src/store/discovery.rs) commits the export reference.
+  -> [DiscoveryIndex::apply_export](../../../crates/mithril-control/src/discovery/index.rs) requires that exact committed head.
+  -> [DiscoveryIndex::apply_committed](../../../crates/mithril-control/src/discovery/index.rs) deduplicates the page, updates exact counts, and advances progress in one SQLite transaction.
+  -> Not implemented: derivation seals canonical atom segments and commits a snapshot head.
+
+[DiscoveryIndex::replay_interval](../../../crates/mithril-control/src/discovery/index.rs)
+reads the dependency chain from its committed tip.
+  -> [DiscoveryIndex::export](../../../crates/mithril-control/src/discovery/index.rs) checks artifact hashes, tenant scope, revisions, and increasing commit positions.
+  -> [DiscoveryIndex::apply_committed](../../../crates/mithril-control/src/discovery/index.rs) restores counts and original commit-index/ordinal pairs without duplicate input.
+  -> Not implemented: runtime recovery replaces a corrupt index and exposes committed profiles.
+
+`DiscoveryIndex` owns one writer, two readers, and an exclusive file lease.
+Dropping the owner closes its connections and releases the lease. Admission
+accepts at most one writer and eight pending calls. Both occupied readers
+cause a typed limit failure. Fixed parameterized queries have a one-second
+execution deadline. No caller can submit SQL. Index I/O does not hold the
+primary Control lock or advance evidence consumption.
+
+The backend reuses the qualified `rusqlite = 0.40.2` dependency and bundled
+SQLite 3.53.2. It verifies WAL mode, full synchronous writes, 4-KiB pages,
+foreign keys, query-only readers, and cache settings. Cache targets total
+48 MiB. SQLite bounds rows at 8 MiB and disables attached databases.
+Admission accepts Linux ext-family and tmpfs filesystem types. The ext-family
+type does not distinguish ext2, ext3, and ext4. Other types are rejected.
+Release qualification must name the actual filesystem and mount settings.
+New database and lease files use mode 0600. An existing database with group
+or other-user permissions is rejected.
+
+Native primary keys, foreign keys, and checks protect exact input identity,
+integer counts, the one-million-record bound, the 50,000-atom bound, and the
+256-MiB input charge. New atoms past the bound remain unresolved; no wildcard
+is added. Byte charges use a bounded serialized representation, not a measured
+heap allocation. Process-memory qualification remains open.
+
+An export contains at most 256 records, 1 MiB of wire records, and a separate
+3-MiB coverage report. The encoded page is at most 8 MiB. Unknown CPU input
+stays unresolved. Each previous-head reference retains its original Control
+commit index. Eight-byte big-endian SQL positions preserve the full unsigned
+cursor range and sort order. SQL state ahead of the requested committed tip
+is rejected.
+
+The database, WAL, and shared-memory files reserve half of the 2-GiB index
+budget for a future replacement. The WAL has a 64-MiB bound. Admission
+reserves 32 MiB before a transaction and attempts a bounded checkpoint when
+needed. Shared tenant artifact/index accounting and measured worst-case growth
+remain live-integration requirements.
+
+Four `discovery_index_` tests passed. They check whole-transaction rollback,
+retry, cross-tenant reads, restart, rebuild from committed artifacts, stable
+event positions, writer and reader admission, and an index ahead of Control.
+They also check native counter limits, a SQLite disk-full failure, a future
+schema, and a corrupt header. The capacity test sets counters at their limits;
+it does not claim a one-million-record workload measurement. Corrupt discovery
+state does not stop the primary Control store from opening.
+
+After the final Rust edit, `bash .github/scripts/verify-rust-ci.sh` passed.
+The Control library passed 156 tests; the Node library passed 246. The e2e
+library passed 98 tests and ignored 163 physical or manual cases. The document
+check passed 241 local links across 27 documents. Profile paging, process-kill
+tests, context import, runtime supervision, revision-feed visibility, and live
+intake/rollout measurements remain open. **Not done.**
