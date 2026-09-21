@@ -198,8 +198,9 @@ backend has committed-export replay and transactional counts. The live owner
 exports bounded input and exact retention gaps. Profile sealing and bounded
 snapshot reads are implemented. Disabled-by-default runtime supervision and
 stream checkpoints pass the workspace checks.
-Context import, revision feed, and live context roundtrip remain
-to be implemented and verified.
+Context import and revision projection are implemented with focused checks.
+Live signed-context roundtrip, replacement-index recovery, combined quotas,
+process-kill checks, and resource qualification remain open.
 
 ### Bounded reader and source metadata
 
@@ -658,7 +659,7 @@ Seven derivation checks and the snapshot revision check passed. Clippy passed
 with warnings denied. The checks cover unchanged counts, closed coverage,
 counter gaps, incomplete counter proof, two corrections across restart,
 unchanged prior snapshots, and retry without a new checkpoint. The full
-workspace run is in progress. These changes do not complete context import, the revision feed, index replacement,
+workspace run later passed for `b8b549b2`. These changes do not complete context import, the revision feed, index replacement,
 process-kill checks, or live resource qualification. **Not done.**
 
 ### Lightweight profile restart
@@ -687,10 +688,70 @@ passed. The `mithril_discovery_test --case profile-restart` command also passed
 and wrote `result.json`, `export.json`, and `snapshot.json` under
 `/tmp/araphor-restart-proof.Nouz5k/proof`. The result records cursor, context,
 checkpoint, snapshot, and recovered digests. Formatting passed. The final
-workspace procedure is running for this source state.
+workspace procedure passed for source `b8b549b2`: Control passed 165 tests,
+Node passed 246, and e2e passed 99 with 163 physical or manual cases ignored.
+This run does not cover the later context and revision-feed changes.
 
 This case uses production WAL, transport, intake, and discovery owners. Its
 kernel input is synthetic. It does not load BPF, execute a physical action,
 or resolve signed catalogue context. The signed-context roundtrip, process-kill
 cases, context import, revision feed, and resource qualification remain open.
 **Not done.**
+
+### Versioned context and committed revisions
+
+This result covers the context and revision projection after `b8b549b2`.
+The intended end state is a bounded packet with exact source references and
+a rebuildable revision feed. Neither operation grants policy authority.
+
+[DiscoveryOwner::import_context](../../../crates/mithril-control/src/discovery/context.rs) receives one scoped operator document.
+  -> [DiscoveryContextDocumentV1](../../../crates/mithril-control/src/discovery/context.rs) checks the 64-KiB document limit, exact subject, process lifetime, method, version, origin, validity, sensitivity, trust class, and approver.
+  -> [ControlStore](../../../crates/mithril-control/src/store/discovery.rs) commits the immutable document and its preceding catalogue reference.
+  -> [DiscoveryIndex::replay_context](../../../crates/mithril-control/src/discovery/index.rs) indexes metadata and advances the catalogue position in one transaction.
+  -> [DiscoveryOwner::context_view](../../../crates/mithril-control/src/discovery/context.rs) selects the latest eligible document revision at the cutoff, then checks validity and current access.
+  -> [DiscoveryOwner::read_context](../../../crates/mithril-control/src/discovery/context.rs) rechecks current grants and disclosure before it returns document text.
+
+[DiscoveryOwner::project_revisions](../../../crates/mithril-control/src/discovery/index/feed.rs) freezes the bounded Control head catalogue.
+  -> [RevisionPayload](../../../crates/mithril-control/src/discovery/index/feed.rs) checks retained export, profile, context, and checkpoint artifacts.
+  -> [DiscoveryIndex::publish_revisions](../../../crates/mithril-control/src/discovery/index/feed.rs) projects at most 32 origins per call with original commit-index and ordinal positions.
+  -> [DiscoveryIndex::publish_revision_prefix](../../../crates/mithril-control/src/discovery/index/feed.rs) advances visibility only after all captured heads are represented.
+  -> [DiscoveryOwner::read_revisions](../../../crates/mithril-control/src/discovery/index/feed.rs) returns at most 200 rows and 1 MiB for one tenant.
+
+Control owns the document bytes and revision references. SQLite schema 4 adds
+metadata indexes and derived revision rows. No second authoritative event log,
+client subscription state, network API, arbitrary URL fetch, or model service
+is added. Runtime derivation also advances this projection. An unknown owner
+artifact stops prefix advancement; it cannot be skipped.
+
+Context catalogues admit at most 1,024 document IDs and 8,192 revisions per
+tenant, within the existing artifact quota. The initial packet admits at most
+100 combined references and 256 KiB. Omission counts and conflicting document
+sets remain visible. Reviewed text remains supplied context, not an executable
+instruction. Import time prevents later reviews from entering an earlier
+cutoff. Expired revisions do not fall back to older text as current guidance.
+
+The in-process caller supplies current grants. This contract is not network
+authentication. Packets preserve pinned policy and inventory identities. The
+source does not retain their validity timestamps or a complete rollout status
+at the requested cutoff. These facts remain explicit unknowns; event ingestion
+time does not become policy-validity proof. Evidence reads use retained exports,
+not current cluster lookups. A bounded page does not claim complete coverage.
+
+Focused checks passed for context versions, expiry, historical selection,
+conflicts, document size at N and N+1, changed grants, foreign tenants, and
+projection loss. The feed check passed with 252 observation rows, stable IDs,
+stable positions, two bounded pages, retry, unknown-owner rejection, and equal
+results after rebuild. Seven derivation checks passed. Clippy passed with
+warnings denied. Final workspace verification for this source remains open.
+
+The source recheck preserves the existing direction.
+[Hugging Face's account](https://huggingface.co/blog/agent-intrusion-technical-timeline#how-we-intercepted-and-analyzed-the-attack)
+requires correlation and escalation as separate results.
+[Elastic's report](https://www.elastic.co/security-labs/blog/alert-triage-agentic-soc-self-correcting-agents)
+supports exact rule guides and reviewed history; its accuracy result is an
+internal comparison with analyst decisions, not an Araphor result.
+[Osquery](https://osquery.readthedocs.io/en/stable/deployment/logging/)
+distinguishes snapshots from changes. The cloned Kubewarden replay owner checks
+request equality and preserves recorded failures. These lessons support exact
+context and replay; they do not justify automatic policy learning or a second
+agent runtime. The phase remains **Not done**.
