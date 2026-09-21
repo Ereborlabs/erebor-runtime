@@ -5,6 +5,7 @@ mod bpf;
 mod child;
 #[cfg(test)]
 mod exception;
+#[cfg(test)]
 mod file_effect;
 mod fixture_syscalls;
 mod mailbox;
