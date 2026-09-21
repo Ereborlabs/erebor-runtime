@@ -18,6 +18,7 @@ fn leader_exit_keeps_worker<P: Platform>() -> TestResult<()> {
     let mut init = env.start_actor("ready.py", &[])?;
     let mut actor = env.add_actor("python", &["/fixtures/native_leader_first.py", "/work"])?;
 
+    actor.ready()?;
     let root_pid = actor.id();
     actor.track(root_pid)?;
     let root = env.task(root_pid, "leader root identity")?;

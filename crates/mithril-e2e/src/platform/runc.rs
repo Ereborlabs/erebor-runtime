@@ -106,7 +106,11 @@ impl Runc {
                         })
                         .collect::<Vec<_>>()
                 });
-                return Err(format!("{source}; recent effects: {recent:?}").into());
+                let health = self.shared.health();
+                return Err(format!(
+                    "{source}; identity health: {health:?}; recent effects: {recent:?}"
+                )
+                .into());
             }
         };
         fs::remove_file(&pid_path)?;

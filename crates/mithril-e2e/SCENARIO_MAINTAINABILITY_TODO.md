@@ -220,6 +220,14 @@ reimplement a production owner operation.
   24-test lifecycle passed in 245.11 seconds. The runc readiness error now
   names the entry and reports the last production effect decisions. No test,
   policy, timeout, or production behavior changed.
+- [x] Restore the original readiness boundary for the leader-exit actor. The
+  migrated test now waits for `native-fixture-ready` before its first identity
+  lookup. This matches the pre-TODO `ProcessFixture::start` behavior. The
+  focused Host and direct-`runc` tests passed in 28.64 and 35.14 seconds. The
+  complete direct-`runc` lifecycle then passed all 25 tests in 556.32 seconds.
+  The runtime-entry case also passed in the shared lifecycle. Its PID startup
+  error now reports identity health counters and recent production decisions.
+  No policy, timeout, or production behavior changed.
 - [x] Reproduce and fix the Kubernetes non-leader thread interleaving in
   lightweight. The actor now creates and reaps a decoy thread before the
   target. The test finds the target by its observed host TID and keeps the
