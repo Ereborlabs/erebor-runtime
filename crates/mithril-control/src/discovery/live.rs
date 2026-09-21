@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::Mutex,
+    sync::{Mutex, MutexGuard},
 };
 
 use prost::Message as _;
@@ -20,6 +20,17 @@ pub(super) struct DiscoveryLive {
 }
 
 impl DiscoveryLive {
+    pub(super) fn admit(&self) -> Result<MutexGuard<'_, ()>> {
+        // ponytail: one operation runs at a time; add per-interval locks if throughput requires them.
+        self.operation.try_lock().map_err(|_| {
+            DiscoverySnafu {
+                code: "DISCOVERY_BUSY",
+                reason: "another interval operation is active",
+            }
+            .build()
+        })
+    }
+
     fn write_profile_artifact(
         &self,
         artifact: DiscoveryArtifactV1,
@@ -233,14 +244,7 @@ impl DiscoveryOwner {
         interval_first_cursor: u64,
     ) -> Result<DiscoveryAdvanceV1> {
         let live = &self.live;
-        // ponytail: one interval operation runs at a time; add per-interval locks if throughput requires them.
-        let _operation = live.operation.try_lock().map_err(|_| {
-            DiscoverySnafu {
-                code: "DISCOVERY_BUSY",
-                reason: "another interval operation is active",
-            }
-            .build()
-        })?;
+        let _operation = live.admit()?;
         DiscoveryInputManifestV1::require(interval_first_cursor > 0, "INTERVAL_START")?;
         let key = Self::interval_key(stream, interval_first_cursor)?;
         let previous = live.store.discovery_head(&key)?;
@@ -340,13 +344,7 @@ impl DiscoveryOwner {
 
     pub fn seal_interval(&self, export: &DiscoveryHeadV1) -> Result<DiscoveryHeadV1> {
         let live = &self.live;
-        let _operation = live.operation.try_lock().map_err(|_| {
-            DiscoverySnafu {
-                code: "DISCOVERY_BUSY",
-                reason: "another interval operation is active",
-            }
-            .build()
-        })?;
+        let _operation = live.admit()?;
         let key = DiscoveryProfileV1::head_key(export)?;
         if let Some(snapshot) = live.store.discovery_head(&key)? {
             self.profile(&snapshot)?;
@@ -631,13 +629,7 @@ impl DiscoveryOwner {
 
     pub(super) fn refresh_coverage(&self, profile: &DiscoveryProfileV1) -> Result<DiscoveryHeadV1> {
         let live = &self.live;
-        let _operation = live.operation.try_lock().map_err(|_| {
-            DiscoverySnafu {
-                code: "DISCOVERY_BUSY",
-                reason: "another interval operation is active",
-            }
-            .build()
-        })?;
+        let _operation = live.admit()?;
         let current = live
             .store
             .discovery_head(&profile.export.key)?
@@ -990,12 +982,28 @@ mod tests {
         let owner = DiscoveryOwner::open(store.clone())?;
         assert!(DiscoveryOwner::open(store.clone()).is_err());
         {
-            let _busy = owner
-                .live
-                .operation
-                .lock()
-                .map_err(|_| "operation poisoned")?;
-            assert!(owner.advance(stream, 1).is_err());
+            let _busy = owner.live.admit()?;
+            assert!(matches!(
+                owner.live.admit(),
+                Err(crate::Error::Discovery {
+                    code: "DISCOVERY_BUSY",
+                    ..
+                })
+            ));
+            assert!(matches!(
+                owner.advance(stream, 1),
+                Err(crate::Error::Discovery {
+                    code: "DISCOVERY_BUSY",
+                    ..
+                })
+            ));
+            assert!(matches!(
+                owner.project_revisions(),
+                Err(crate::Error::Discovery {
+                    code: "DISCOVERY_BUSY",
+                    ..
+                })
+            ));
         }
         let DiscoveryAdvanceV1::Applied {
             export: gap,

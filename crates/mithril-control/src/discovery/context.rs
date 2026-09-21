@@ -283,13 +283,7 @@ impl DiscoveryOwner {
             "CONTEXT_IMPORT_DENIED",
         )?;
         let live = &self.live;
-        let _operation = live.operation.try_lock().map_err(|_| {
-            DiscoverySnafu {
-                code: "DISCOVERY_BUSY",
-                reason: "another interval operation is active",
-            }
-            .build()
-        })?;
+        let _operation = live.admit()?;
         let key = ContextRevision::key(access.tenant_id)?;
         let previous = live.store.discovery_head(&key)?;
         if let Some(head) = &previous {
