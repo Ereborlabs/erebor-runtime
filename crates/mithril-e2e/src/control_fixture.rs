@@ -6,14 +6,20 @@ use std::time::Duration;
 
 use mithril_control::{
     serve, AllowedNodeIdentity, ControlPlane, ControlServerTls, ControlStore,
-    EvidenceIntakeIdentityV1, KubernetesAdmissionHttpConfigV1, KubernetesAdmissionOwner,
-    KubernetesNodeReadinessOwner, NodeDecommissionAuthorizationV1, NodeRegistration,
-    PolicyDesiredStateOwner, SignedNodeDecommissionV1, TrustGenerationV1,
+    EvidenceIntakeIdentityV1, TrustGenerationV1,
+};
+#[cfg(test)]
+use mithril_control::{
+    KubernetesAdmissionHttpConfigV1, KubernetesAdmissionOwner, KubernetesNodeReadinessOwner,
+    NodeDecommissionAuthorizationV1, NodeRegistration, PolicyDesiredStateOwner,
+    SignedNodeDecommissionV1,
 };
 use mithril_node::{
-    ControlConnection, EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, NodeControlConfig,
-    NodeControlConnector, NodeDecommissionConfig, ObservationCanonicalizer, TrustCache,
+    EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, NodeControlConfig,
+    NodeControlConnector, ObservationCanonicalizer,
 };
+#[cfg(test)]
+use mithril_node::{ControlConnection, NodeDecommissionConfig, TrustCache};
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa,
     KeyPair,
@@ -21,6 +27,7 @@ use rcgen::{
 use sha2::{Digest as _, Sha256};
 use tokio::sync::oneshot;
 
+#[cfg(test)]
 use crate::physical::wait_for_async;
 
 pub(crate) struct ControlServerFixture {
@@ -53,6 +60,7 @@ impl MtlsFixture {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn kubernetes(server_name: &str) -> Result<Self, Box<dyn StdError>> {
         let directory = tempfile::tempdir()?;
         let certificates = Certificates::issue_for(false, &["localhost", server_name])?;
@@ -96,6 +104,7 @@ impl MtlsFixture {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn effect_batch(
         &self,
         count: usize,
@@ -126,10 +135,12 @@ impl MtlsFixture {
             .ok_or("missing effect batch".into())
     }
 
+    #[cfg(test)]
     pub(crate) fn node_digest(&self) -> String {
         self.certificates.node_digest()
     }
 
+    #[cfg(test)]
     pub(crate) fn decommission(
         &self,
         boot: [u8; 16],
@@ -158,6 +169,7 @@ impl MtlsFixture {
         Ok((config, artifact))
     }
 
+    #[cfg(test)]
     pub(crate) fn control(&self, generation: u64) -> mithril_control::Result<ControlPlane> {
         self.control_with_store(
             ControlStore::open(self.path().join("control-store"))?,
@@ -212,6 +224,7 @@ impl MtlsFixture {
 }
 
 impl ControlServerFixture {
+    #[cfg(test)]
     pub(crate) async fn admission(
         files: &CertificateFiles,
         kube: kube::Client,
@@ -286,6 +299,7 @@ impl ControlServerFixture {
         self.address
     }
 
+    #[cfg(test)]
     pub(crate) async fn connect(
         self,
         client: NodeControlConnector,
@@ -306,6 +320,7 @@ impl ControlServerFixture {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn from_running(
         address: SocketAddr,
         shutdown: oneshot::Sender<()>,
