@@ -22,13 +22,17 @@ use crate::{
 const MAX_INDEX_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_INDEX_WAL_BYTES: u64 = 64 * 1024 * 1024;
 const INDEX_TRANSACTION_RESERVE: u64 = 32 * 1024 * 1024;
-const INDEX_SCHEMA_VERSION: i64 = 2;
+mod feed;
+pub use feed::*;
+
+const INDEX_SCHEMA_VERSION: i64 = 4;
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
-    fn resolved_page() -> std::result::Result<DiscoveryExportPageV1, Box<dyn std::error::Error>> {
+    pub(in crate::discovery) fn resolved_page(
+    ) -> std::result::Result<DiscoveryExportPageV1, Box<dyn std::error::Error>> {
         let input = DiscoveryInputManifestV1::from_json(include_bytes!(
             "../../../mithril-e2e/fixtures/discovery/manifest.json"
         ))?;
@@ -1011,7 +1015,27 @@ impl DiscoveryIndex {
                 tenant BLOB NOT NULL CHECK(length(tenant)=16), snapshot BLOB NOT NULL CHECK(length(snapshot)=32),
                 commit_index BLOB NOT NULL CHECK(length(commit_index)=8), artifact BLOB NOT NULL CHECK(length(artifact)=32),
                 PRIMARY KEY(tenant,snapshot)) WITHOUT ROWID;
-            PRAGMA user_version=2; COMMIT;")
+            CREATE TABLE IF NOT EXISTS context_document(
+                tenant BLOB NOT NULL CHECK(length(tenant)=16), id TEXT NOT NULL, revision BLOB NOT NULL CHECK(length(revision)=8),
+                subject BLOB NOT NULL CHECK(length(subject)=32), lifetime BLOB NOT NULL CHECK(length(lifetime)=16),
+                method BLOB NOT NULL CHECK(length(method)=32), imported BLOB NOT NULL CHECK(length(imported)=8),
+                valid_from BLOB NOT NULL CHECK(length(valid_from)=8), valid_until BLOB,
+                commit_index BLOB NOT NULL CHECK(length(commit_index)=8), head BLOB NOT NULL,
+                PRIMARY KEY(tenant,id,revision), UNIQUE(tenant,commit_index)) WITHOUT ROWID;
+            CREATE INDEX IF NOT EXISTS context_subject ON context_document(tenant,subject,lifetime,method,id,revision);
+            CREATE TABLE IF NOT EXISTS context_progress(tenant BLOB PRIMARY KEY CHECK(length(tenant)=16), head BLOB NOT NULL) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS revision_origin(
+                tenant BLOB NOT NULL CHECK(length(tenant)=16), commit_index BLOB NOT NULL CHECK(length(commit_index)=8),
+                head BLOB NOT NULL, PRIMARY KEY(tenant,commit_index)) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS revision_event(
+                tenant BLOB NOT NULL CHECK(length(tenant)=16), id BLOB NOT NULL CHECK(length(id)=32),
+                commit_index BLOB NOT NULL CHECK(length(commit_index)=8), ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 0 AND 257),
+                payload_digest BLOB NOT NULL CHECK(length(payload_digest)=32), event BLOB NOT NULL,
+                PRIMARY KEY(tenant,id), UNIQUE(tenant,commit_index,ordinal)) WITHOUT ROWID;
+            CREATE INDEX IF NOT EXISTS revision_position ON revision_event(tenant,commit_index,ordinal);
+            CREATE TABLE IF NOT EXISTS revision_prefix(id INTEGER PRIMARY KEY CHECK(id=1), commit_index BLOB NOT NULL CHECK(length(commit_index)=8));
+            INSERT OR IGNORE INTO revision_prefix VALUES(1,x'0000000000000000');
+            PRAGMA user_version=4; COMMIT;")
             .context(DiscoveryDatabaseSnafu { operation: "initialize schema" })?;
         let first = Self::connection(&path, true)?;
         let second = Self::connection(&path, true)?;
@@ -1594,6 +1618,244 @@ impl DiscoveryIndex {
                 operation: "read snapshot projection",
             })?;
         Ok(stored == Some((head.commit_index, head.artifact.sha256)))
+    }
+
+    pub(super) fn require_context(&self, head: &DiscoveryHeadV1) -> Result<()> {
+        let reader = self.reader()?;
+        let known: Option<Vec<u8>> = reader
+            .query_row(
+                "SELECT head FROM context_progress WHERE tenant=?1",
+                [head.key.tenant_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .context(DiscoveryDatabaseSnafu {
+                operation: "read context progress",
+            })?;
+        DiscoveryInputManifestV1::require(
+            known.as_deref() == Some(Self::encode_context_head(head)?.as_slice()),
+            "CONTEXT_INDEX_UNAVAILABLE",
+        )
+    }
+
+    pub(super) fn context_document_count(&self, tenant: crate::EvidenceIdV1) -> Result<u64> {
+        self.reader()?
+            .query_row(
+                "SELECT count(DISTINCT id) FROM context_document WHERE tenant=?1",
+                [tenant.to_be_bytes()],
+                |row| row.get(0),
+            )
+            .context(DiscoveryDatabaseSnafu {
+                operation: "count context documents",
+            })
+    }
+
+    fn encode_context_head(head: &DiscoveryHeadV1) -> Result<Vec<u8>> {
+        rmp_serde::to_vec_named(head).map_err(|error| {
+            DiscoverySnafu {
+                code: "CONTEXT_INDEX_SCHEMA",
+                reason: error.to_string(),
+            }
+            .build()
+        })
+    }
+
+    fn decode_context_head(bytes: &[u8]) -> Result<DiscoveryHeadV1> {
+        rmp_serde::from_slice(bytes).map_err(|error| {
+            DiscoverySnafu {
+                code: "CONTEXT_INDEX_SCHEMA",
+                reason: error.to_string(),
+            }
+            .build()
+        })
+    }
+
+    pub(super) fn context_document(
+        &self,
+        tenant: crate::EvidenceIdV1,
+        id: &str,
+        cutoff: u64,
+    ) -> Result<Option<DiscoveryHeadV1>> {
+        let reader = self.reader()?;
+        let bytes: Option<Vec<u8>> = reader.query_row("SELECT head FROM context_document WHERE tenant=?1 AND id=?2 AND imported<=?3 ORDER BY revision DESC LIMIT 1",
+            params![tenant.to_be_bytes(), id, cutoff.to_be_bytes()], |row| row.get(0)).optional()
+            .context(DiscoveryDatabaseSnafu { operation: "select context document" })?;
+        bytes.as_deref().map(Self::decode_context_head).transpose()
+    }
+
+    pub(super) fn context_revision(&self, head: &DiscoveryHeadV1) -> Result<bool> {
+        let reader = self.reader()?;
+        let bytes: Option<Vec<u8>> = reader
+            .query_row(
+                "SELECT head FROM context_document WHERE tenant=?1 AND commit_index=?2",
+                params![head.key.tenant_id, head.commit_index.to_be_bytes()],
+                |row| row.get(0),
+            )
+            .optional()
+            .context(DiscoveryDatabaseSnafu {
+                operation: "check context revision",
+            })?;
+        Ok(bytes.as_deref() == Some(Self::encode_context_head(head)?.as_slice()))
+    }
+
+    pub(super) fn context_candidates(
+        &self,
+        access: &DiscoveryContextAccessV1,
+        method: &DiscoveryMethodV1,
+        cutoff: u64,
+    ) -> Result<Vec<DiscoveryHeadV1>> {
+        let reader = self.reader()?;
+        let mut query = reader.prepare("SELECT c.head FROM context_document c
+            WHERE c.tenant=?1 AND c.subject=?2 AND c.lifetime=?3 AND c.method=?4 AND c.imported<=?5
+            AND NOT EXISTS(SELECT 1 FROM context_document n WHERE n.tenant=c.tenant AND n.id=c.id AND n.revision>c.revision AND n.imported<=?5)
+            ORDER BY c.id LIMIT 1025").context(DiscoveryDatabaseSnafu { operation: "prepare context selection" })?;
+        let rows = query
+            .query_map(
+                params![
+                    access.tenant_id.to_be_bytes(),
+                    DiscoveryDigestV1::of(&access.subject)?.0,
+                    access.lifetime.to_be_bytes(),
+                    DiscoveryDigestV1::of(method)?.0,
+                    cutoff.to_be_bytes()
+                ],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .context(DiscoveryDatabaseSnafu {
+                operation: "select context",
+            })?;
+        let mut heads = Vec::new();
+        for row in rows {
+            heads.push(Self::decode_context_head(&row.context(
+                DiscoveryDatabaseSnafu {
+                    operation: "read selected context",
+                },
+            )?)?);
+        }
+        DiscoveryInputManifestV1::require(heads.len() <= 1024, "CONTEXT_DOCUMENT_COUNT")?;
+        Ok(heads)
+    }
+
+    pub(super) fn replay_context(&self, tip: &DiscoveryHeadV1) -> Result<()> {
+        use super::context::ContextRevision;
+        DiscoveryInputManifestV1::require(
+            self.store.discovery_head(&tip.key)?.as_ref() == Some(tip),
+            "CONTEXT_NOT_COMMITTED",
+        )?;
+        let _admission = self.writes.try_acquire().map_err(|_| {
+            DiscoverySnafu {
+                code: "INDEX_WRITE_LIMIT",
+                reason: "the writer and eight pending slots are in use",
+            }
+            .build()
+        })?;
+        let known = {
+            let reader = self.reader()?;
+            let bytes: Option<Vec<u8>> = reader
+                .query_row(
+                    "SELECT head FROM context_progress WHERE tenant=?1",
+                    [tip.key.tenant_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .context(DiscoveryDatabaseSnafu {
+                    operation: "read context progress",
+                })?;
+            bytes
+                .as_deref()
+                .map(Self::decode_context_head)
+                .transpose()?
+        };
+        if known.as_ref() == Some(tip) {
+            return Ok(());
+        }
+        let mut chain = Vec::new();
+        let mut current = Some(tip.clone());
+        while current != known {
+            let head = current.ok_or_else(|| {
+                DiscoverySnafu {
+                    code: "CONTEXT_INDEX_CONFLICT",
+                    reason: "the index progress is not in the committed chain",
+                }
+                .build()
+            })?;
+            DiscoveryInputManifestV1::require(chain.len() < 8192, "CONTEXT_REVISION_LIMIT")?;
+            current = ContextRevision::read(&self.store, &head)?.previous;
+            chain.push(head);
+        }
+        for head in chain.into_iter().rev() {
+            let revision = ContextRevision::read(&self.store, &head)?;
+            let document = &revision.document;
+            let mut writer = self.writer.lock().map_err(|_| {
+                DiscoverySnafu {
+                    code: "INDEX_OWNER",
+                    reason: "the writer is poisoned",
+                }
+                .build()
+            })?;
+            self.reserve_write(&writer)?;
+            let transaction = writer.transaction().context(DiscoveryDatabaseSnafu {
+                operation: "begin context projection",
+            })?;
+            let previous: Option<Vec<u8>> = transaction
+                .query_row(
+                    "SELECT head FROM context_progress WHERE tenant=?1",
+                    [head.key.tenant_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .context(DiscoveryDatabaseSnafu {
+                    operation: "check context predecessor",
+                })?;
+            DiscoveryInputManifestV1::require(
+                previous
+                    == revision
+                        .previous
+                        .as_ref()
+                        .map(Self::encode_context_head)
+                        .transpose()?,
+                "CONTEXT_INDEX_CONFLICT",
+            )?;
+            let ids: u64 = transaction
+                .query_row(
+                    "SELECT count(DISTINCT id) FROM context_document WHERE tenant=?1",
+                    [head.key.tenant_id],
+                    |row| row.get(0),
+                )
+                .context(DiscoveryDatabaseSnafu {
+                    operation: "bound context documents",
+                })?;
+            DiscoveryInputManifestV1::require(
+                ids < 1024 || document.revision > 1,
+                "CONTEXT_DOCUMENT_COUNT",
+            )?;
+            let encoded = Self::encode_context_head(&head)?;
+            transaction
+                .execute(
+                    "INSERT INTO context_document VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                    params![
+                        head.key.tenant_id,
+                        document.id,
+                        document.revision.to_be_bytes(),
+                        DiscoveryDigestV1::of(&document.subject)?.0,
+                        document.lifetime.to_be_bytes(),
+                        DiscoveryDigestV1::of(&document.method)?.0,
+                        revision.imported_utc_ns.to_be_bytes(),
+                        document.valid_from_utc_ns.to_be_bytes(),
+                        document.valid_until_utc_ns.map(u64::to_be_bytes),
+                        head.commit_index.to_be_bytes(),
+                        encoded
+                    ],
+                )
+                .context(DiscoveryDatabaseSnafu {
+                    operation: "index context document",
+                })?;
+            transaction.execute("INSERT INTO context_progress VALUES(?1,?2) ON CONFLICT(tenant) DO UPDATE SET head=excluded.head",
+                params![head.key.tenant_id, encoded]).context(DiscoveryDatabaseSnafu { operation: "advance context projection" })?;
+            transaction.commit().context(DiscoveryDatabaseSnafu {
+                operation: "commit context projection",
+            })?;
+        }
+        self.require_context(tip)
     }
 
     pub(super) fn input_counts(&self, head: &DiscoveryHeadV1) -> Result<(u64, u64)> {

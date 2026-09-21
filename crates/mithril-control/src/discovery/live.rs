@@ -14,9 +14,9 @@ use crate::{
 };
 
 pub(super) struct DiscoveryLive {
-    store: ControlStore,
-    index: DiscoveryIndex,
-    operation: Mutex<()>,
+    pub(super) store: ControlStore,
+    pub(super) index: DiscoveryIndex,
+    pub(super) operation: Mutex<()>,
 }
 
 impl DiscoveryLive {
@@ -213,7 +213,7 @@ impl DiscoveryOwner {
         })
     }
 
-    fn live(&self) -> Result<&DiscoveryLive> {
+    pub(super) fn live(&self) -> Result<&DiscoveryLive> {
         self.live.as_ref().ok_or_else(|| {
             DiscoverySnafu {
                 code: "DISCOVERY_DISABLED",
@@ -710,7 +710,7 @@ impl DiscoveryOwner {
         Ok(export)
     }
 
-    fn profile(&self, head: &DiscoveryHeadV1) -> Result<DiscoveryProfileV1> {
+    pub(super) fn profile(&self, head: &DiscoveryHeadV1) -> Result<DiscoveryProfileV1> {
         let live = self.live()?;
         DiscoveryInputManifestV1::require(
             live.store.discovery_head(&head.key)?.as_ref() == Some(head),

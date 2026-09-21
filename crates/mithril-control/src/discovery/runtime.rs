@@ -38,15 +38,15 @@ impl DiscoveryRuntimeConfigV1 {
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct StreamCheckpoint {
-    schema_version: u32,
-    stream: EvidenceIntakeIdentityV1,
-    next_interval_cursor: u64,
-    snapshot: DiscoveryHeadV1,
+pub(super) struct StreamCheckpoint {
+    pub(super) schema_version: u32,
+    pub(super) stream: EvidenceIntakeIdentityV1,
+    pub(super) next_interval_cursor: u64,
+    pub(super) snapshot: DiscoveryHeadV1,
 }
 
 impl StreamCheckpoint {
-    fn key(stream: &EvidenceIntakeIdentityV1) -> Result<DiscoveryHeadKeyV1> {
+    pub(super) fn key(stream: &EvidenceIntakeIdentityV1) -> Result<DiscoveryHeadKeyV1> {
         Ok(DiscoveryHeadKeyV1 {
             tenant_id: stream.tenant_id,
             id: DiscoveryDigestV1::of(&("discovery-stream-checkpoint-v1", stream))?,
@@ -325,6 +325,7 @@ impl DerivationRuntime {
     }
 
     fn step(&mut self, now: Instant) -> Result<bool> {
+        self.owner.project_revisions()?;
         self.admit()?;
         let Some(mut active) = self.active.pop_front() else {
             return Ok(false);
