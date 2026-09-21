@@ -86,7 +86,29 @@ impl Runc {
             .args(args);
         let mut actor = ProcessFixture::spawn(&mut command, Path::new(program))?;
         let parent = actor.id();
-        let pid = actor.wait_pid(&pid_path, "runc exec outer PID")?;
+        let operation = format!("runc exec `{program}` outer PID");
+        let pid = match actor.wait_pid(&pid_path, &operation) {
+            Ok(pid) => pid,
+            Err(source) => {
+                let recent = self.shared.snapshot().map(|snapshot| {
+                    snapshot
+                        .recent_effects
+                        .into_iter()
+                        .rev()
+                        .take(8)
+                        .map(|event| {
+                            (
+                                event.reason,
+                                event.effect_family,
+                                event.operation,
+                                event.kernel_result,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                });
+                return Err(format!("{source}; recent effects: {recent:?}").into());
+            }
+        };
         fs::remove_file(&pid_path)?;
         self.shared.move_out(parent)?;
         actor.wait_command(pid, program)?;
