@@ -1098,3 +1098,10 @@ inside the schema transaction. New databases use the native index from
 `UNIQUE(tenant, commit_index, ordinal)`. The constraint and retained rows do not
 change. `discovery_index_uses_native_revision_position_after_reopen` checks new
 and old layouts and the feed query plan with the pinned Rust SQLite binding.
+
+The same schema transaction removes `input_position`. Input records retain
+their payload digests and commit positions. The primary key and `input_atom`
+still serve counts and evidence samples. The existing
+`discovery_index_replays_only_committed_exports_without_duplicate_counts` test
+creates the old index, reopens the database, checks removal, and verifies equal
+progress and positions after rebuild. No authoritative record is deleted.

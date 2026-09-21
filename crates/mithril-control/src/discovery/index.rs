@@ -272,8 +272,30 @@ pub(super) mod tests {
         let progress = index.apply_export(&second)?;
         assert_eq!(progress.accepted_records, 6);
         assert_eq!(index.replay_interval(&second)?, progress);
+        {
+            let writer = index.writer.lock().map_err(|_| "writer poisoned")?;
+            assert_eq!(
+                writer.query_row(
+                    "SELECT count(*) FROM sqlite_schema WHERE name='input_position'",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )?,
+                0
+            );
+            writer.execute_batch(
+                "CREATE INDEX input_position ON input_record(commit_index,ordinal,tenant,build)",
+            )?;
+        }
         drop(index);
         let reopened = DiscoveryIndex::open(store.clone())?;
+        assert_eq!(
+            reopened.reader()?.query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name='input_position'",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            0
+        );
         assert_eq!(
             reopened.progress(key.tenant_id, &key.id)?,
             Some(progress.clone())
@@ -1213,7 +1235,7 @@ impl DiscoveryIndex {
                 FOREIGN KEY(tenant,build) REFERENCES source_progress(tenant,build),
                 FOREIGN KEY(tenant,build,atom) REFERENCES behavior_atom(tenant,build,atom)) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS input_atom ON input_record(tenant,build,atom,cursor);
-            CREATE INDEX IF NOT EXISTS input_position ON input_record(commit_index,ordinal,tenant,build);
+            DROP INDEX IF EXISTS input_position;
             CREATE TABLE IF NOT EXISTS profile_index(
                 tenant BLOB NOT NULL CHECK(length(tenant)=16), snapshot BLOB NOT NULL CHECK(length(snapshot)=32),
                 commit_index BLOB NOT NULL CHECK(length(commit_index)=8), artifact BLOB NOT NULL CHECK(length(artifact)=32),
