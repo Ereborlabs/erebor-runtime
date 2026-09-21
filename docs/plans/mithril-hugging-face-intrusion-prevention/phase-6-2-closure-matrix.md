@@ -364,9 +364,32 @@ restart. Its log is
 on `mithril-runtime-qualification-1789942727`.
 
 The initial combined-filter command passed 29 identity cases but rejected 18
-cases at the fixture lifecycle guard. That command is not a suite pass. Each
-remaining lifecycle runs in a separate test process. The full current Host
-qualification and Kubernetes qualification remain open.
+cases at the fixture lifecycle guard. That command is not a suite pass. The
+subsequent commands use a separate test process for each lifecycle.
+
+The selected Host qualification is **Done** for `c297f31f`. All 47 cases passed:
+
+| Filter | Passed cases |
+| --- | --- |
+| `identity_host` | 29 |
+| `node_restart_host` | 1 |
+| `exception_host` | 3 |
+| `identity_physical_host` | 4 |
+| `process_recovery_host` | 4 |
+| `ptrace_recovery_host` | 1 |
+| `signal_recovery_host` | 1 |
+| `signal_unmatched_host` | 1 |
+| `external_roots_host` | 1 |
+| `workload_recovery_host` | 1 |
+| `recovery_tasks_host` | 1 |
+
+Each command uses the binary digest above, `--ignored --nocapture`, and
+`--test-threads=1`. The final identity command passed in 265.99 seconds.
+Logs are `current-<filter-prefix>.log` in the VM directory above; the identity
+log is `current-identity.log`. These results do not qualify direct-runc or
+Kubernetes behavior. The two Kubernetes administrative cases that failed
+during Python startup remain unresolved. Version-changed Kubernetes recovery
+and authorized final decommission also remain open. Phase 6.2 is **Not done**.
 
 After the final Rust edit, `bash .github/scripts/verify-rust-ci.sh` passed.
 The Control library passed 152 tests; Node passed 246. The e2e library passed
