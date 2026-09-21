@@ -192,14 +192,42 @@ are proven. Phase 3 requires approval.
 
 ## Result
 
-**Not done.** The bounded reader and checked store migration are implemented.
-The signed-context lookup and durable artifact store are implemented. The SQL
-backend has committed-export replay and transactional counts. The live owner
-exports bounded input and exact retention gaps. Profile sealing and bounded
-snapshot reads are implemented. Disabled-by-default runtime supervision and
-stream checkpoints pass the workspace checks.
-Context import and revision projection are implemented with focused checks.
-Resource qualification and final boundary checks remain open.
+**Done.** Final implementation source: `eff08be`, 2026-09-21.
+`bash .github/scripts/verify-rust-ci.sh` passed after the last Rust edit:
+formatting, workspace check, Clippy with warnings denied, and the full workspace
+test suite. The Control library passed 177 tests and ignored two subprocess
+helpers. Node passed 246 tests. The e2e library passed 102 tests and ignored
+164 physical, release-only, or subprocess cases. Ignored cases are not passes.
+The separate release qualification and its limits are recorded below.
+The scoped document check passed 283 local links and balanced code fences
+across 23 documents.
+
+| Acceptance group | Completed proof |
+| --- | --- |
+| Identity, context, boot, and retention | Old/new WAL compatibility; signed catalogue context over mTLS; distinct kernel and durable cursors; retained CPU identity; frozen reads; reclamation races; unchanged shared consumption state |
+| Store, replay, aggregation, and index | Checked migration; durable artifact/head boundaries; nine process exits; atomic counts/progress; corruption and interrupted replacement; identical snapshot IDs and revision positions after rebuild |
+| Tenant, packet, feed, and limits | Tenant rejection; bounded context and documents; cutoff/access checks; explicit conflicts and omissions; complete committed prefix; native reader cancellation; N/N+1 checks with their stated injection limits |
+| Runtime and resource isolation | Disabled startup; bounded queues and checkpoints; continued intake and eight rollouts during projection failure; repeated enabled/disabled release measurements; 50,000-atom paging and rebuild |
+
+The tests qualify the durable foundation, not an end-to-end intrusion prevention
+release. Kernel input and activation acknowledgements in the new e2e cases are
+synthetic. No new physical enforcement result is claimed. Historical rollout
+status, unproven owner-fact times, and unavailable source health remain explicit
+omissions; current state is not substituted for a past cutoff.
+
+The Hugging Face, Elastic, osquery, and Kubewarden checks support the shared
+evidence/context design recorded below. Grouping is not classification, and a
+model assessment cannot grant authority or replace escalation. Graph findings,
+classification, public query/follow and agent tools, and verified response remain
+with their later phases. The next implementation is Mithril 7, then Discovery 3,
+subject to approval and the prerequisite records in the combined order.
+
+Discovery remains disabled by default. The final release run met the measured
+memory targets, but intake and rollout p95 increased by 16.9% and 7.7% on the
+declared shared host. The investigation and both repeat results remain below.
+This result does not claim a general latency SLA or the proposed 4-vCPU/8-GiB
+host qualification. Earlier **Not done** entries record intermediate source
+states; this result closes the phase.
 
 ### Bounded reader and source metadata
 
@@ -1029,3 +1057,25 @@ The existing single-owner store test passes. Five parallel repeats each passed
 case was excluded from those repeats; it passed in both preceding full runs.
 These are native descriptor and guard checks, not a new physical enforcement claim. Final workspace
 verification remains required. The phase is **Not done**.
+
+### Final live qualification
+
+The isolated release check passed again on `eff08be`. It used the same host,
+six alternating pairs, and first-pair exclusion. No other build or test from
+this agent ran during the measurement. The output is
+`/tmp/araphor-live-proof.SQoiOc/final/result.json`.
+
+| Per-run measurement | Disabled median | Enabled median | Change |
+| --- | ---: | ---: | ---: |
+| Intake p50 | 4.784 ms | 5.019 ms | +4.9% |
+| Intake p95 | 5.759 ms | 6.733 ms | +16.9% |
+| Rollout p50 | 11.981 ms | 12.468 ms | +4.1% |
+| Rollout p95 | 14.816 ms | 15.951 ms | +7.7% |
+
+All enabled runs sealed 8,448 records, completed eight rollouts, and left the
+shared consumption watermark at zero. Peak native SQLite allocation was
+42,858,488 bytes. Peak RSS was 93,581,312 bytes. Both pilot memory targets pass
+for this workload. The different latency results across the two repeats are
+retained above; neither repeat proves a general primary-path latency SLA.
+The measured p95 overhead still exceeds the investigation threshold. The
+shared-store commit cost and enablement limits remain as recorded above.
