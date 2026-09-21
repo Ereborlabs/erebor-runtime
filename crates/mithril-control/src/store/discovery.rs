@@ -10,6 +10,7 @@ pub const MAX_DISCOVERY_TENANT_HEADS: usize = 1024;
 pub const MAX_DISCOVERY_HEAD_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_DISCOVERY_ARTIFACT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 pub const MAX_DISCOVERY_TENANT_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub(crate) const MAX_DISCOVERY_ACTIVE_INDEX_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_ARTIFACT_DEPENDENCIES: usize = 8192;
 const MAX_ARTIFACT_FILES: usize = 131_072;
 
@@ -76,6 +77,28 @@ pub(super) struct DiscoveryFiles {
 }
 
 impl DiscoveryFiles {
+    fn index_reserve(&self) -> Result<u64> {
+        let root = self.root.parent().ok_or_else(|| {
+            DiscoverySnafu {
+                code: "ARTIFACT_PATH",
+                reason: "the discovery store has no parent",
+            }
+            .build()
+        })?;
+        // ponytail: charge the full shared index bound per tenant; add page attribution if this restricts capacity.
+        for name in [
+            "discovery-index.sqlite",
+            "discovery-index.rebuild.sqlite",
+            "discovery-index.previous.sqlite",
+        ] {
+            let path = root.join(name);
+            if path.try_exists().context(IoSnafu { path })? {
+                return Ok(MAX_DISCOVERY_ACTIVE_INDEX_BYTES);
+            }
+        }
+        Ok(0)
+    }
+
     pub(super) fn new(root: &Path) -> Self {
         Self {
             root: root.join("discovery"),
@@ -301,12 +324,14 @@ impl DiscoveryFiles {
             .values()
             .try_fold(0_u64, |sum, value| sum.checked_add(*value))
             .unwrap_or(u64::MAX);
+        let index_reserve = self.index_reserve()?;
         if self.file_count >= MAX_ARTIFACT_FILES
             || usage
                 .get(&artifact.tenant_id)
                 .copied()
                 .unwrap_or(0)
                 .saturating_add(reference.bytes)
+                .saturating_add(index_reserve)
                 > MAX_DISCOVERY_TENANT_ARTIFACT_BYTES
             || total.saturating_add(reference.bytes) > MAX_DISCOVERY_ARTIFACT_BYTES
         {
@@ -411,6 +436,35 @@ impl DiscoveryFiles {
 }
 
 impl ControlStore {
+    pub(crate) fn reserve_discovery_index_tenant(&self, tenant: [u8; 16]) -> Result<()> {
+        let mut files = self.discovery_files.lock().map_err(|_| {
+            DiscoverySnafu {
+                code: "ARTIFACT_OWNER",
+                reason: "discovery file owner is poisoned",
+            }
+            .build()
+        })?;
+        if files.usage.is_none() {
+            files.measure()?;
+        }
+        let bytes = files
+            .usage
+            .as_ref()
+            .and_then(|usage| usage.get(&tenant))
+            .copied()
+            .unwrap_or(0);
+        if bytes.saturating_add(MAX_DISCOVERY_ACTIVE_INDEX_BYTES)
+            > MAX_DISCOVERY_TENANT_ARTIFACT_BYTES
+        {
+            return DiscoverySnafu {
+                code: "INDEX_TENANT_QUOTA",
+                reason: "artifacts and the active index exceed the tenant quota",
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
     pub fn recover_discovery_artifacts(&self) -> Result<usize> {
         let mut files = self.discovery_files.lock().map_err(|_| {
             DiscoverySnafu {
@@ -817,6 +871,55 @@ mod tests {
         last.key.tenant_id = [5; 16];
         last.artifact.tenant_id = [5; 16];
         assert!(DiscoveryFiles::apply_head(&mut state.clone(), &last, None).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn discovery_store_charges_shared_index_reserve_to_tenant_artifacts(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path())?;
+        store.put_discovery_artifact(&artifact(1))?;
+        let index = crate::DiscoveryIndex::open(store.clone())?;
+        let next = artifact(2);
+        let bytes = rmp_serde::to_vec_named(&next)?.len() as u64;
+        {
+            let mut files = store.discovery_files.lock().map_err(|_| "poisoned")?;
+            assert_eq!(files.index_reserve()?, MAX_DISCOVERY_ACTIVE_INDEX_BYTES);
+            files.usage = Some(BTreeMap::from([(
+                [1; 16],
+                MAX_DISCOVERY_TENANT_ARTIFACT_BYTES - MAX_DISCOVERY_ACTIVE_INDEX_BYTES - bytes,
+            )]));
+        }
+        let reference = store.put_discovery_artifact(&next)?;
+        store.reserve_discovery_index_tenant([1; 16])?;
+        assert!(store.put_discovery_artifact(&artifact(3)).is_err());
+        assert_eq!(store.put_discovery_artifact(&next)?, reference);
+        {
+            let mut files = store.discovery_files.lock().map_err(|_| "poisoned")?;
+            files.usage.as_mut().ok_or("usage absent")?.insert(
+                [1; 16],
+                MAX_DISCOVERY_TENANT_ARTIFACT_BYTES - MAX_DISCOVERY_ACTIVE_INDEX_BYTES + 1,
+            );
+        }
+        assert!(store.reserve_discovery_index_tenant([1; 16]).is_err());
+        store.reserve_discovery_index_tenant([2; 16])?;
+        let mut other = artifact(3);
+        other.tenant_id = [2; 16];
+        store.put_discovery_artifact(&other)?;
+        drop(index);
+        drop(store);
+        let store = ControlStore::open(directory.path())?;
+        assert_eq!(
+            store
+                .discovery_files
+                .lock()
+                .map_err(|_| "poisoned")?
+                .index_reserve()?,
+            MAX_DISCOVERY_ACTIVE_INDEX_BYTES
+        );
+        store.recover_discovery_artifacts()?;
+        store.reserve_discovery_index_tenant([1; 16])?;
         Ok(())
     }
 
