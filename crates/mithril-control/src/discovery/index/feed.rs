@@ -231,13 +231,7 @@ impl RevisionPayload {
 impl DiscoveryOwner {
     pub fn project_revisions(&self) -> Result<bool> {
         let live = &self.live;
-        let _operation = live.operation.try_lock().map_err(|_| {
-            DiscoverySnafu {
-                code: "DISCOVERY_BUSY",
-                reason: "another interval operation is active",
-            }
-            .build()
-        })?;
+        let _operation = live.admit()?;
         let (cutoff, heads) = live.store.discovery_catalog()?;
         let mut remaining = 32;
         for tip in heads {
