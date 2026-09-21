@@ -199,7 +199,7 @@ exports bounded input and exact retention gaps. Profile sealing and bounded
 snapshot reads are implemented. Disabled-by-default runtime supervision and
 stream checkpoints pass the workspace checks.
 Context import and revision projection are implemented with focused checks.
-Live signed-context roundtrip, combined quotas,
+Live signed-context roundtrip,
 process-kill checks, and resource qualification remain open.
 
 ### Bounded reader and source metadata
@@ -797,3 +797,25 @@ The prior full workspace run failed because a schema-migration test still
 expected version 2 after context and feed tables raised the version to 4.
 The assertion now uses the schema constant and its focused test passed.
 The 50,000-atom check passed in that workspace run. The phase is **Not done**.
+
+### Combined tenant quota
+
+Artifact admission and each tenant SQL write now share the 2-GiB tenant bound.
+When a retained index file exists, artifact admission reserves the full 1-GiB
+active-index bound for each tenant. The remaining artifact allowance is 1 GiB.
+This is a conservative reservation, not a measured per-tenant SQL page count.
+It avoids a second accounting log and remains in effect after restart or
+disablement. Replacement copies use the separate combined 2-GiB index disk
+bound; they do not count as a second logical tenant data set.
+
+Quota exhaustion rejects new work. It does not delete retained references,
+change existing snapshots, or acknowledge source evidence. An artifact-only
+store without an index retains its original 2-GiB tenant artifact allowance.
+An existing store above the combined allowance can still read its retained
+artifacts, but cannot add tenant index data. Page attribution can replace this
+reservation if the conservative allowance restricts required capacity.
+
+The N/N+1 test covers artifact admission, tenant index admission, idempotent
+artifact retry, another tenant, and reservation after reopen. Usage injection
+checks admission arithmetic; it is not a native disk allocation measurement.
+The 36 focused Discovery checks and Clippy passed. The phase is **Not done**.
