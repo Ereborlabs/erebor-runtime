@@ -1,6 +1,6 @@
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = node_restart]
 fn node_restart_keeps_actor<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("node-restart")?;
