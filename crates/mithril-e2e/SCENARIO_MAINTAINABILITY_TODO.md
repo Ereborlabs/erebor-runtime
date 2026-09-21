@@ -2085,6 +2085,23 @@ test does not close a row when its physical condition or an assertion changed.
   transport, cgroup, nftables, pin, lease, and peer-process cleanup.
 - [ ] `NetworkTestRunner::physical_probe` local socket scenarios: keep signed
   policy compilation, node binding, socket actions, and exact denials visible.
+  - [ ] Replace the unclassified IPv4 connect denial with one standard
+    platform test. Use one shared Python actor and one scenario policy. Do not
+    add a Platform API.
+    - [ ] Resolve the public-policy network-default gap before implementation.
+      A `WorkloadProtectionPolicy` lowers destination rules but does not lower
+      a default for unmatched `Connect`. The legacy policy adds a deny default
+      directly. Do not replace `UNRESOLVED_OBJECT` and its zero object handle
+      with an exact destination denial.
+    - [ ] Connect to `127.0.0.1:9`. Require actor `EACCES` and one
+      `UNRESOLVED_OBJECT` network-connect observation for the exact actor task,
+      IPv4 address, TCP protocol, and port. Require no policy object handle.
+    - [ ] Keep the test below 100 lines.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy action and result field after all
+      three platforms pass.
 - [ ] `NetworkTestRunner::physical_probe` two-node peer scenario: keep the
   same TCP, UDP, and denied-port operations as `two-node-network.sh`.
 
@@ -2304,6 +2321,28 @@ setup, production actions, assertions, and focused test.
   ID, link pin, program tag, and running-identity checks explicit.
 - [ ] Post-point-of-no-return evidence and generation retirement: keep the
   terminal exec, evidence retention, holder release, and absence proof.
+  - [ ] Preserve the declared terminal-entry role. The existing shared fatal
+    exec test keeps one worker role and does not replace the direct-`runc`
+    assertion that the fatal exec selected the one termination-role admission
+    rule.
+  - [ ] Add one small standard platform test for the declared terminal entry.
+    Use `ProcessFixture::fatal_exec` and `Platform::add_actor`. Do not add a
+    Platform API.
+    - [x] Declare one live `PreStop` sleep entry and the fatal `PreStop` entry
+      in the same termination role. Use the live entry only to identify the
+      role through production admission.
+    - [x] Require the fatal runtime entry to fail, retain `PostPonrFatal`, use
+      the termination role, and use its own nonzero admission rule.
+    - [x] Keep the test below 100 lines. The complete test file is 99 lines.
+    - [x] Pass Host and commit it. The exact Host test passed in 29.15 seconds
+      on 2026-09-21. The existing fatal-exec Host test passed with the extended
+      policy in 28.11 seconds.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy terminal-status assertion and result
+      field after all three platforms pass. Keep the action and pending row
+      until the evidence-retention and generation-retirement test replaces
+      them.
 - [x] External entry and external cgroup entrant: keep both physical execs and
   rule-zero fail-closed evidence assertions.
   - [x] Extend the existing unlisted runtime-exec test with its exact

@@ -73,4 +73,6 @@ mod runtime_exec;
 #[cfg(test)]
 mod subreaper;
 #[cfg(test)]
+mod terminal_exec;
+#[cfg(test)]
 mod workload_recovery;

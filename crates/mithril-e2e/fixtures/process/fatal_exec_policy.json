@@ -37,6 +37,18 @@
             "kind": "PostStart",
             "executionRule": "python-actor",
             "role": "worker"
+          },
+          {
+            "name": "prestop-sleep",
+            "kind": "PreStop",
+            "executionRule": "prestop-sleep",
+            "role": "termination-failure"
+          },
+          {
+            "name": "termination-failure",
+            "kind": "PreStop",
+            "executionRule": "termination-failure",
+            "role": "termination-failure"
           }
         ],
         "administrativeEntry": {
@@ -82,6 +94,29 @@
           "socketControls": [],
           "destinations": []
         },
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "termination-failure",
+        "files": [],
+        "execution": [
+          {
+            "name": "prestop-sleep",
+            "path": "/usr/bin/sleep",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          },
+          {
+            "name": "termination-failure",
+            "path": "/work/bin/post-ponr-execfail",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "network": {"socketControls": [], "destinations": []},
         "processControl": [],
         "unixStreams": []
       },
