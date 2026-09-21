@@ -1936,7 +1936,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [ ] Pass Host and commit it.
     - [x] Pass direct `runc` and commit it. The unchanged recovery scenario
       passed through the production OCI hook in 43.32 seconds on 2026-09-21.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The unchanged recovery scenario
+      passed against the retained real K3s cluster in 78.69 seconds on
+      2026-09-21.
     - [ ] Remove only the matching legacy prepared-descriptor actions, result
       fields, mailbox operations, and fixture owner after all three platforms
       pass. Keep the independent-process mapping cases.
