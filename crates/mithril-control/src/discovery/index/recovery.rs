@@ -171,17 +171,17 @@ impl DiscoveryOwner {
         let (_, heads) = store.discovery_catalog()?;
         let index = DiscoveryIndex::open_at(store.clone(), candidate.clone(), lease.clone())?;
         let owner = Self {
-            live: Some(super::super::live::DiscoveryLive {
+            live: super::super::live::DiscoveryLive {
                 store: store.clone(),
                 index,
                 operation: Mutex::new(()),
-            }),
+            },
         };
         while !owner.project_revisions()? {}
         for head in &heads {
             match feed::RevisionPayload::read(&owner, head)? {
                 feed::RevisionPayload::Export(_) => {
-                    owner.live()?.index.replay_interval(head)?;
+                    owner.live.index.replay_interval(head)?;
                 }
                 feed::RevisionPayload::Profile(profile) => {
                     let mut cursor = None;
@@ -211,7 +211,7 @@ impl DiscoveryOwner {
             store.discovery_catalog()?.1 == heads,
             "INDEX_REBUILD_CHANGED",
         )?;
-        owner.live()?.index.validate_and_checkpoint()?;
+        owner.live.index.validate_and_checkpoint()?;
         drop(owner);
         File::open(&candidate)
             .and_then(|file| file.sync_all())
@@ -236,11 +236,11 @@ impl DiscoveryOwner {
         DiscoveryIndex::finish_install(&root)?;
         let index = DiscoveryIndex::open_at(store.clone(), current, lease)?;
         Ok(Self {
-            live: Some(super::super::live::DiscoveryLive {
+            live: super::super::live::DiscoveryLive {
                 store,
                 index,
                 operation: Mutex::new(()),
-            }),
+            },
         })
     }
 }
@@ -300,12 +300,12 @@ mod tests {
             let owner = DiscoveryOwner::open(store.clone())?;
             assert_eq!(
                 owner
-                    .live()?
+                    .live
                     .index
                     .progress(head.key.tenant_id, &head.key.id)?,
                 Some(progress)
             );
-            assert_eq!(owner.live()?.index.atoms(&head, None)?, atoms);
+            assert_eq!(owner.live.index.atoms(&head, None)?, atoms);
             let revisions = owner.read_revisions(head.key.tenant_id.into(), None)?;
             assert_eq!(revisions.events.len(), 3);
             assert!(revisions
@@ -380,7 +380,7 @@ mod tests {
         )?;
         let store = ControlStore::open(directory.path())?;
         let owner = DiscoveryOwner::open(store)?;
-        let index = &owner.live()?.index;
+        let index = &owner.live.index;
         assert_eq!(
             index.progress(head.key.tenant_id, &head.key.id)?,
             Some(progress)

@@ -192,7 +192,7 @@ impl DiscoveryProfileV1 {
 
 impl DiscoveryOwner {
     pub fn resource_usage(&self) -> Result<DiscoveryResourceUsageV1> {
-        self.live()?.index.resource_usage()
+        self.live.index.resource_usage()
     }
 
     pub(super) fn interval_key(
@@ -219,21 +219,11 @@ impl DiscoveryOwner {
         };
         store.recover_discovery_artifacts()?;
         Ok(Self {
-            live: Some(DiscoveryLive {
+            live: DiscoveryLive {
                 store,
                 index,
                 operation: Mutex::new(()),
-            }),
-        })
-    }
-
-    pub(super) fn live(&self) -> Result<&DiscoveryLive> {
-        self.live.as_ref().ok_or_else(|| {
-            DiscoverySnafu {
-                code: "DISCOVERY_DISABLED",
-                reason: "live discovery is not open",
-            }
-            .build()
+            },
         })
     }
 
@@ -242,7 +232,7 @@ impl DiscoveryOwner {
         stream: &EvidenceIntakeIdentityV1,
         interval_first_cursor: u64,
     ) -> Result<DiscoveryAdvanceV1> {
-        let live = self.live()?;
+        let live = &self.live;
         // ponytail: one interval operation runs at a time; add per-interval locks if throughput requires them.
         let _operation = live.operation.try_lock().map_err(|_| {
             DiscoverySnafu {
@@ -349,7 +339,7 @@ impl DiscoveryOwner {
     }
 
     pub fn seal_interval(&self, export: &DiscoveryHeadV1) -> Result<DiscoveryHeadV1> {
-        let live = self.live()?;
+        let live = &self.live;
         let _operation = live.operation.try_lock().map_err(|_| {
             DiscoverySnafu {
                 code: "DISCOVERY_BUSY",
@@ -640,7 +630,7 @@ impl DiscoveryOwner {
     }
 
     pub(super) fn refresh_coverage(&self, profile: &DiscoveryProfileV1) -> Result<DiscoveryHeadV1> {
-        let live = self.live()?;
+        let live = &self.live;
         let _operation = live.operation.try_lock().map_err(|_| {
             DiscoverySnafu {
                 code: "DISCOVERY_BUSY",
@@ -721,7 +711,7 @@ impl DiscoveryOwner {
     }
 
     pub(super) fn profile(&self, head: &DiscoveryHeadV1) -> Result<DiscoveryProfileV1> {
-        let live = self.live()?;
+        let live = &self.live;
         DiscoveryInputManifestV1::require(
             live.store.discovery_head(&head.key)?.as_ref() == Some(head),
             "SNAPSHOT_NOT_COMMITTED",
@@ -805,7 +795,7 @@ impl DiscoveryOwner {
         snapshot: &DiscoveryHeadV1,
         after: Option<&DiscoveryDigestV1>,
     ) -> Result<DiscoverySnapshotPageV1> {
-        let live = self.live()?;
+        let live = &self.live;
         let profile = self.profile(snapshot)?;
         DiscoveryInputManifestV1::require(
             live.index.snapshot_visible(snapshot)?,
@@ -939,13 +929,13 @@ mod tests {
         assert!(bytes > artifact.payload.len() as u64 + 4096);
         let mut used = 128 * 1024 * 1024 - bytes;
         let reference = owner
-            .live()?
+            .live
             .write_profile_artifact(artifact.clone(), &mut used)?;
         assert_eq!(reference.bytes, bytes);
         assert_eq!(used, 128 * 1024 * 1024);
         let mut used = 128 * 1024 * 1024 - bytes + 1;
         assert!(owner
-            .live()?
+            .live
             .write_profile_artifact(artifact, &mut used)
             .is_err());
         assert_eq!(used, 128 * 1024 * 1024 - bytes + 1);
@@ -997,12 +987,11 @@ mod tests {
             coverage_revision: 0,
         })?;
         let before = retention.watermark(stream)?;
-        assert!(DiscoveryOwner::default().advance(stream, 1).is_err());
         let owner = DiscoveryOwner::open(store.clone())?;
         assert!(DiscoveryOwner::open(store.clone()).is_err());
         {
             let _busy = owner
-                .live()?
+                .live
                 .operation
                 .lock()
                 .map_err(|_| "operation poisoned")?;
@@ -1023,7 +1012,7 @@ mod tests {
             ),
             (11, 0, 0)
         );
-        let gap_page = owner.live()?.index.export(&gap)?;
+        let gap_page = owner.live.index.export(&gap)?;
         assert_eq!(
             (gap_page.first_cursor, gap_page.expired_through),
             (1, Some(10))
@@ -1040,7 +1029,7 @@ mod tests {
             ),
             (21, 10, 0)
         );
-        let page = owner.live()?.index.export(&export)?;
+        let page = owner.live.index.export(&export)?;
         assert_eq!(page.previous, Some(gap));
         assert_eq!(page.records.len(), 10);
         assert!(page.records.iter().all(|record| matches!(
@@ -1098,12 +1087,12 @@ mod tests {
         );
         assert_eq!(
             reopened
-                .live()?
+                .live
                 .index
                 .progress(stream.tenant_id, &export.key.id)?,
             Some(progress)
         );
-        assert_eq!(reopened.live()?.index.export(&export)?, page);
+        assert_eq!(reopened.live.index.export(&export)?, page);
         Ok(())
     }
 }

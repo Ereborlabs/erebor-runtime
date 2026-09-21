@@ -8,16 +8,12 @@ use crate::{
     PolicySimulator, Result,
 };
 
-#[derive(Default)]
 pub struct DiscoveryOwner {
-    pub(super) live: Option<super::live::DiscoveryLive>,
+    pub(super) live: super::live::DiscoveryLive,
 }
 
 impl DiscoveryOwner {
-    pub fn derive_recorded(
-        &self,
-        input: &DiscoveryInputManifestV1,
-    ) -> Result<DiscoveryRecordedResultV1> {
+    pub fn derive_recorded(input: &DiscoveryInputManifestV1) -> Result<DiscoveryRecordedResultV1> {
         // ponytail: offline input stays in memory; use bounded pages before live derivation.
         input.validate()?;
         let mut records = BTreeMap::new();
@@ -156,11 +152,10 @@ impl DiscoveryOwner {
     }
 
     pub fn simulate_recorded(
-        &self,
         input: &DiscoveryInputManifestV1,
         candidate: &PolicyDocumentV1,
     ) -> Result<DiscoveryStaticPreviewV1> {
-        let derived = self.derive_recorded(input)?;
+        let derived = Self::derive_recorded(input)?;
         let compiled = PolicyCompiler.compile(candidate)?;
         let keys: BTreeSet<_> = derived
             .snapshot

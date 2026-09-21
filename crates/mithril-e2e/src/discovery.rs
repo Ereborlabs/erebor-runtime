@@ -20,9 +20,7 @@ pub use roundtrip::DiscoveryQualificationRunner;
 pub fn run_discovery_offline(output: &Path) -> Result<()> {
     let input_bytes = include_bytes!("../fixtures/discovery/manifest.json");
     let input = DiscoveryInputManifestV1::from_json(input_bytes).context(PolicySnafu)?;
-    let result = DiscoveryOwner::default()
-        .derive_recorded(&input)
-        .context(PolicySnafu)?;
+    let result = DiscoveryOwner::derive_recorded(&input).context(PolicySnafu)?;
     let snapshot = &result.snapshot;
     ensure!(
         snapshot.proof_kind == DiscoveryProofKindV1::Synthetic
@@ -44,8 +42,7 @@ pub fn run_discovery_offline(output: &Path) -> Result<()> {
     replay.contexts.reverse();
     replay.records.extend(input.records.clone());
     ensure!(
-        DiscoveryOwner::default()
-            .derive_recorded(&replay)
+        DiscoveryOwner::derive_recorded(&replay)
             .context(PolicySnafu)?
             .snapshot
             == *snapshot,
@@ -57,9 +54,7 @@ pub fn run_discovery_offline(output: &Path) -> Result<()> {
     let policy_bytes = include_bytes!("../../mithril-control/tests/fixtures/policy-v1.yaml");
     let policy =
         PolicyDocumentV1::parse(Path::new("policy-v1.yaml"), policy_bytes).context(PolicySnafu)?;
-    let preview = DiscoveryOwner::default()
-        .simulate_recorded(&input, &policy)
-        .context(PolicySnafu)?;
+    let preview = DiscoveryOwner::simulate_recorded(&input, &policy).context(PolicySnafu)?;
     ensure!(
         preview.simulations.len() == 1
             && preview.simulations[0].disposition == SimulatedDispositionV1::WouldDeny

@@ -1079,3 +1079,15 @@ for this workload. The different latency results across the two repeats are
 retained above; neither repeat proves a general primary-path latency SLA.
 The measured p95 overhead still exceeds the investigation threshold. The
 shared-store commit cost and enablement limits remain as recorded above.
+
+### Simplification review and verification
+
+The user approved four changes after the Ponytail review: remove the unopened
+owner state, remove the duplicate revision index, remove the unused input
+position index, and share the operation admission check. This work does not
+change retained artifacts, authoritative heads, scope checks, or runtime limits.
+ControlStore remains the durable owner. No kernel or ABI change is required.
+
+The offline API change passed 47 focused Control tests with two subprocess
+helpers ignored. The 50,000-atom case is reserved for the final full gate.
+The other cleanups and final verification remain **Not done**.
