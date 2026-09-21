@@ -2062,6 +2062,18 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace the unmatched file-create block with one small standard
+    platform test. Use one shared Python actor and the existing Python policy.
+    Start the actor before Node to preserve the original recovered-root
+    condition.
+    Require actor `EACCES`, target absence, `UNRESOLVED_OBJECT`, File/Create,
+    the exact actor task, and no exact or composite policy object.
+    - [x] Pass Host and commit it. The 81-line scenario preserves the recovered
+      root and passed in 29.64 seconds on 2026-09-21.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy action and result field after all
+      three platforms pass.
   - [x] Replace the managed `/proc/self/environ` read with one standard
     platform test. Use one shared Python actor and the existing Python policy.
     Start the runtime-added actor before Node so it retains the original
