@@ -317,11 +317,14 @@ impl DerivationRuntime {
             dependencies: vec![checkpoint.snapshot.artifact.clone()],
             payload,
         })?;
-        self.store.commit_discovery_head(
+        let head = self.store.commit_discovery_head(
             StreamCheckpoint::key(&checkpoint.stream)?,
             expected,
             artifact,
-        )
+        )?;
+        #[cfg(test)]
+        super::test_crash_boundary("stream-checkpoint");
+        Ok(head)
     }
 
     fn step(&mut self, now: Instant) -> Result<bool> {
@@ -652,6 +655,104 @@ mod tests {
             (watermark.evidence_cursor, watermark.coverage_revision),
             (0, 0)
         );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "subprocess worker for derivation crash boundaries"]
+    fn discovery_derivation_crash_worker() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let root = std::env::var("ARAPHOR_TEST_DERIVATION_ROOT")?;
+        let mut runtime = DerivationRuntime::open(
+            ControlStore::open(root)?,
+            DiscoveryRuntimeConfigV1::default(),
+        )?;
+        let now = Instant::now();
+        for tick in 0..4 {
+            runtime.step(now + Duration::from_secs(tick * 61))?;
+        }
+        Err("the requested crash boundary was not reached".into())
+    }
+
+    #[test]
+    fn discovery_derivation_process_crashes_preserve_counts_heads_and_positions(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut baseline = None;
+        for boundary in [
+            "none",
+            "artifact-synced",
+            "artifact-linked",
+            "artifact-installed",
+            "export-head",
+            "before-sql-commit",
+            "sql-commit",
+            "snapshot-head",
+            "snapshot-visible",
+            "stream-checkpoint",
+        ] {
+            let directory = tempfile::tempdir()?;
+            let store = ControlStore::open(directory.path())?;
+            let stream = receive(&store, 1, 1, 1)?;
+            let before = store.evidence_cursor(&stream)?;
+            drop(store);
+            if boundary != "none" {
+                let status = std::process::Command::new(std::env::current_exe()?)
+                    .args([
+                        "discovery::runtime::tests::discovery_derivation_crash_worker",
+                        "--exact",
+                        "--ignored",
+                        "--nocapture",
+                    ])
+                    .env("ARAPHOR_TEST_DERIVATION_ROOT", directory.path())
+                    .env("ARAPHOR_TEST_DERIVATION_KILL", boundary)
+                    .status()?;
+                assert_eq!(status.code(), Some(73), "{boundary}");
+            }
+            let store = ControlStore::open(directory.path())?;
+            let mut runtime =
+                DerivationRuntime::open(store.clone(), DiscoveryRuntimeConfigV1::default())?;
+            if boundary == "snapshot-head" {
+                let export = store
+                    .discovery_head(&DiscoveryOwner::interval_key(&stream, 1)?)?
+                    .ok_or("export absent")?;
+                let snapshot = store
+                    .discovery_head(&super::super::live::DiscoveryProfileV1::head_key(&export)?)?
+                    .ok_or("snapshot absent")?;
+                assert!(runtime.owner.read_snapshot(&snapshot, None).is_err());
+            }
+            let now = Instant::now();
+            for tick in 0..4 {
+                runtime.step(now + Duration::from_secs(tick * 61))?;
+            }
+            while !runtime.owner.project_revisions()? {}
+            let head = store
+                .discovery_head(&StreamCheckpoint::key(&stream)?)?
+                .ok_or("checkpoint absent")?;
+            let checkpoint: StreamCheckpoint =
+                rmp_serde::from_slice(&store.read_discovery_artifact(&head.artifact)?.payload)?;
+            let snapshot = runtime.owner.read_snapshot(&checkpoint.snapshot, None)?;
+            assert_eq!(snapshot.profile.accepted_records, 1, "{boundary}");
+            assert_eq!(snapshot.profile.unresolved_records, 1, "{boundary}");
+            assert_eq!(checkpoint.next_interval_cursor, 2, "{boundary}");
+            assert_eq!(store.evidence_cursor(&stream)?, before);
+            assert_eq!(
+                crate::EvidenceRetentionOwner::from_store(store.clone())
+                    .watermark(&stream)?
+                    .evidence_cursor,
+                0
+            );
+            let events = runtime
+                .owner
+                .read_revisions(stream.tenant_id.into(), None)?
+                .events;
+            let result = (head, snapshot, events);
+            if let Some(expected) = &baseline {
+                assert_eq!(&result, expected, "{boundary}");
+            } else {
+                baseline = Some(result);
+            }
+            receive(&store, 1, 1, 2)?;
+            assert_eq!(store.evidence_cursor(&stream)?, 2);
+        }
         Ok(())
     }
 

@@ -199,7 +199,7 @@ exports bounded input and exact retention gaps. Profile sealing and bounded
 snapshot reads are implemented. Disabled-by-default runtime supervision and
 stream checkpoints pass the workspace checks.
 Context import and revision projection are implemented with focused checks.
-Production derivation process-kill checks and resource qualification remain open.
+Resource qualification and final boundary checks remain open.
 
 ### Bounded reader and source metadata
 
@@ -861,4 +861,25 @@ cargo run -p mithril-e2e --bin mithril_discovery_test -- \
 
 That output contains `result.json`, `export.json`, and `snapshot.json`.
 It is lightweight recorded-input proof, not physical enforcement proof.
+Final workspace verification remains required. The phase is **Not done**.
+
+### Derivation process-crash boundaries
+
+The production artifact, export, SQL apply, snapshot, and stream-checkpoint
+paths have test-only process-exit points. Release builds do not read the test
+environment variables. The subprocess check exits without running destructors
+after artifact sync, hard-link creation, artifact installation, export-head
+commit, SQL commit, snapshot-head commit, snapshot visibility, and stream
+checkpoint commit. It also exits before SQL commit.
+
+Reopen and retry produce the same checkpoint head, profile digest, counts, and
+revision positions as the uninterrupted run. A committed snapshot without index
+visibility is unavailable until projection repair. Orphan artifacts are removed
+only after retained references pass validation. Each recovered run accepts the
+next evidence record. The shared consumption watermark remains zero.
+
+Run `cargo test -p mithril-control --lib discovery_derivation_process_crashes`.
+This check passed at all nine exit points. The 37 focused Discovery checks and
+Clippy passed; two subprocess workers are ignored outside their parent tests.
+This is process-crash proof. It is not host power-loss or filesystem qualification.
 Final workspace verification remains required. The phase is **Not done**.

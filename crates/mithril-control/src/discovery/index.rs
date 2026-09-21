@@ -1370,9 +1370,13 @@ impl DiscoveryIndex {
         let next = page.next_cursor()?;
         transaction.execute("UPDATE source_progress SET commit_index=?3,next_cursor=?4,artifact=?5,accepted=?6,atom_count=?7,input_bytes=input_bytes+?8 WHERE tenant=?1 AND build=?2", params![tenant,build,head.commit_index.to_be_bytes(),next.to_be_bytes(),head.artifact.sha256,accepted,atoms,input_bytes])
             .context(DiscoveryDatabaseSnafu { operation: "advance progress" })?;
+        #[cfg(test)]
+        super::test_crash_boundary("before-sql-commit");
         transaction.commit().context(DiscoveryDatabaseSnafu {
             operation: "commit apply",
         })?;
+        #[cfg(test)]
+        super::test_crash_boundary("sql-commit");
         Ok(DiscoveryIndexProgressV1 {
             commit_index: head.commit_index,
             next_cursor: next,
