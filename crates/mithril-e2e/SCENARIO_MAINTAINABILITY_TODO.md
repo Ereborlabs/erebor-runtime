@@ -2349,7 +2349,7 @@ setup, production actions, assertions, and focused test.
       until the evidence-retention and generation-retirement test replaces
       them. The affected direct-`runc` probe passed. Its retained-evidence and
       inactive-generation assertions remained true.
-  - [ ] Add one small platform test for terminal evidence during generation
+  - [x] Add one small platform test for terminal evidence during generation
     retirement. Do not add a Platform API or call a test-only Node owner.
     - [x] Start PID 1 under the fatal-exec policy and retain one
       `PostPonrFatal` pending-exec row from the declared terminal entry.
@@ -2366,7 +2366,8 @@ setup, production actions, assertions, and focused test.
     - [x] Pass Host and commit it. The exact Host test passed in 34.56 seconds
       on 2026-09-21.
     - [ ] Pass direct `runc` and commit it.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact Kubernetes test passed in
+      75.96 seconds on 2026-09-21.
     - [ ] Remove only the matching legacy terminal-retention and inactive-
       generation fields, actions, and shell assertions after all platforms
       pass. Keep unrelated mount, upgrade, and cleanup behavior.
