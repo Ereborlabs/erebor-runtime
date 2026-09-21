@@ -204,6 +204,11 @@ impl DiscoveryContextViewV1 {
 }
 
 impl ContextRevision {
+    fn require_capacity(previous_revision: u64, next_document_count: u64) -> Result<()> {
+        DiscoveryInputManifestV1::require(next_document_count <= 1024, "CONTEXT_DOCUMENT_COUNT")?;
+        DiscoveryInputManifestV1::require(previous_revision < 8192, "CONTEXT_REVISION_LIMIT")
+    }
+
     pub(super) fn key(tenant: EvidenceIdV1) -> Result<DiscoveryHeadKeyV1> {
         Ok(DiscoveryHeadKeyV1 {
             tenant_id: tenant.to_be_bytes(),
@@ -308,14 +313,14 @@ impl DiscoveryOwner {
             )?;
         } else {
             DiscoveryInputManifestV1::require(document.revision == 1, "CONTEXT_REVISION_CONFLICT")?;
-            DiscoveryInputManifestV1::require(
-                live.index.context_document_count(access.tenant_id)? < 1024,
-                "CONTEXT_DOCUMENT_COUNT",
-            )?;
         }
-        DiscoveryInputManifestV1::require(
-            previous.as_ref().is_none_or(|head| head.revision < 8192),
-            "CONTEXT_REVISION_LIMIT",
+        ContextRevision::require_capacity(
+            previous.as_ref().map_or(0, |head| head.revision),
+            if existing.is_none() {
+                live.index.context_document_count(access.tenant_id)? + 1
+            } else {
+                0
+            },
         )?;
         let imported_utc_ns = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -876,6 +881,69 @@ mod tests {
         document.validate()?;
         document.text.push('x');
         assert!(document.validate().is_err());
+        document.text = "Read the exact retained evidence.".into();
+        document.valid_until_utc_ns = None;
+        document.revision = 1;
+        for ordinal in 0..100 {
+            document.id = format!("bounded-document-{ordinal:03}");
+            owner.import_context(&access, document.clone())?;
+        }
+        let bounded = owner.context_view(
+            &access,
+            &export,
+            &method,
+            u64::MAX,
+            "bounded handles".into(),
+        )?;
+        assert_eq!(
+            bounded.documents.len()
+                + bounded.packet.records.len()
+                + bounded.pinned_references.len(),
+            100
+        );
+        assert_eq!(bounded.omissions.get("DOCUMENT_HANDLE_LIMIT"), Some(&6));
+        let mut wide = access.clone();
+        wide.disclosure
+            .allowed_fields
+            .extend((0..98).map(|ordinal| format!("{ordinal:03}{}", "x".repeat(125))));
+        let bounded =
+            owner.context_view(&wide, &export, &method, u64::MAX, "bounded bytes".into())?;
+        assert!(serde_json::to_vec(&bounded)?.len() <= 256 * 1024);
+        assert!(bounded
+            .omissions
+            .get("PACKET_BYTE_LIMIT")
+            .is_some_and(|count| *count > 0));
+        let mut many = page.clone();
+        many.records = (1..=65)
+            .map(|cursor| {
+                let mut record = page.records[0].clone();
+                if let DiscoveryContextJoinV1::Available(pin) = &mut record.context {
+                    pin.binding.record_id.durable_cursor = cursor;
+                }
+                record
+            })
+            .collect();
+        let store = &owner.live()?.store;
+        let many_head = store.commit_discovery_head(
+            DiscoveryHeadKeyV1 {
+                tenant_id: page.stream.tenant_id,
+                id: DiscoveryDigestV1::of(&"bounded record handles")?,
+            },
+            None,
+            store.put_discovery_artifact(&many.artifact()?)?,
+        )?;
+        let bounded = owner.context_view(
+            &access,
+            &many_head,
+            &method,
+            u64::MAX,
+            "bounded records".into(),
+        )?;
+        assert_eq!(bounded.packet.records.len(), 64);
+        assert_eq!(bounded.omissions.get("EVIDENCE_HANDLE_LIMIT"), Some(&1));
+        ContextRevision::require_capacity(8191, 1024)?;
+        assert!(ContextRevision::require_capacity(8192, 1024).is_err());
+        assert!(ContextRevision::require_capacity(8191, 1025).is_err());
         Ok(())
     }
 }

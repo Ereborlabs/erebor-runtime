@@ -883,3 +883,30 @@ This check passed at all nine exit points. The 37 focused Discovery checks and
 Clippy passed; two subprocess workers are ignored outside their parent tests.
 This is process-crash proof. It is not host power-loss or filesystem qualification.
 Final workspace verification remains required. The phase is **Not done**.
+
+### Context and reader bounds
+
+Control now applies the complete 32-KiB pin limit at the shared context-join
+boundary. Live export reuses that result. Replay rejects a retained export with
+an oversized pin instead of allocating unbounded native query rows. The focused
+test accepts the complete pin at 32 KiB and returns `CONTEXT_LIMIT` one byte over.
+
+Packet checks cover 100 combined handles, explicit document omissions, the
+64-record selection bound, and byte-based omissions below 256 KiB. The catalogue
+admission guard is checked at 1,024 documents and 8,192 revisions, then one over
+each bound. These guard checks do not write 8,192 physical revisions.
+
+The native reader test interrupts a recursive query at the one-second deadline
+and then reuses the reader. Revision projection rejects an unexplained export
+cursor gap and a changed native row position. It cannot move a published event
+backwards. A loaded debug run exposed quadratic page-size checks in the feed;
+the reader now charges each encoded row once, with reserved envelope bytes.
+The 39 focused Discovery checks and Clippy passed after these changes.
+
+`DiscoveryOwner::resource_usage` reports process RSS, peak RSS, native SQLite
+current/peak allocation, and index/WAL bytes. Native counters are process-global
+and include SQLite allocator overhead, not allocator-library overhead. RSS is
+reported separately. See the [SQLite counter contract](https://www.sqlite.org/c3ref/memory_highwater.html).
+These measurements do not set an OS memory limit. The isolated live qualification
+must still check the pilot memory targets and primary-path latency.
+Final workspace verification remains required. The phase is **Not done**.

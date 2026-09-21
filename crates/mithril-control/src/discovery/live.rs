@@ -191,6 +191,10 @@ impl DiscoveryProfileV1 {
 }
 
 impl DiscoveryOwner {
+    pub fn resource_usage(&self) -> Result<DiscoveryResourceUsageV1> {
+        self.live()?.index.resource_usage()
+    }
+
     pub(super) fn interval_key(
         stream: &EvidenceIntakeIdentityV1,
         first_cursor: u64,
@@ -294,7 +298,7 @@ impl DiscoveryOwner {
                 for (ordinal, wire) in page.records.into_iter().take(remaining_records).enumerate()
                 {
                     let cursor = first_cursor + ordinal as u64;
-                    let mut context = if let Some(cpu) = exported
+                    let context = if let Some(cpu) = exported
                         .cpu_binding
                         .filter(|cpu| cursor >= cpu.first_cursor)
                     {
@@ -306,16 +310,6 @@ impl DiscoveryOwner {
                             DiscoveryContextUnavailableV1::MissingSourceCpu,
                         )
                     };
-                    if serde_json::to_writer(
-                        super::model::InputByteLimit(MAX_DISCOVERY_PIN_BYTES),
-                        &context,
-                    )
-                    .is_err()
-                    {
-                        context = DiscoveryContextJoinV1::Unresolved(
-                            DiscoveryContextUnavailableV1::ContextLimit,
-                        );
-                    }
                     exported.records.push(DiscoveryExportRecordV1 {
                         wire_record: wire.encode_to_vec(),
                         context,

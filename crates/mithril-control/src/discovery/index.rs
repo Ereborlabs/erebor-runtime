@@ -156,6 +156,63 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn discovery_context_complete_pin_limit_and_reader_deadline(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut page = resolved_page()?;
+        let DiscoveryContextJoinV1::Available(pin) = &mut page.records[0].context else {
+            return Err("pin absent".into());
+        };
+        pin.workload
+            .pod_labels
+            .insert("padding".into(), String::new());
+        let bytes = serde_json::to_vec(&page.records[0].context)?.len();
+        let DiscoveryContextJoinV1::Available(pin) = &mut page.records[0].context else {
+            return Err("pin absent".into());
+        };
+        *pin.workload
+            .pod_labels
+            .get_mut("padding")
+            .ok_or("padding absent")? = "x".repeat(MAX_DISCOVERY_PIN_BYTES - bytes);
+        let at_limit = page.records[0].context.clone();
+        assert_eq!(
+            serde_json::to_vec(&at_limit)?.len(),
+            MAX_DISCOVERY_PIN_BYTES
+        );
+        assert_eq!(at_limit.clone().into_bounded(), at_limit);
+        let DiscoveryContextJoinV1::Available(pin) = &mut page.records[0].context else {
+            return Err("pin absent".into());
+        };
+        pin.workload
+            .pod_labels
+            .get_mut("padding")
+            .ok_or("padding absent")?
+            .push('x');
+        assert_eq!(
+            page.records[0].context.clone().into_bounded(),
+            DiscoveryContextJoinV1::Unresolved(crate::DiscoveryContextUnavailableV1::ContextLimit)
+        );
+        assert!(page.prepare().is_err());
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path())?;
+        let index = DiscoveryIndex::open(store.clone())?;
+        let started = Instant::now();
+        let reader = index.reader()?;
+        let result = reader.query_row("WITH RECURSIVE work(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM work WHERE n<1000000000) SELECT sum(n) FROM work", [], |row| row.get::<_, i64>(0));
+        assert!(
+            matches!(result, Err(rusqlite::Error::SqliteFailure(error, _)) if error.code == rusqlite::ErrorCode::OperationInterrupted)
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        drop(reader);
+        assert!(index
+            .progress([1; 16], &DiscoveryDigestV1([1; 32]))?
+            .is_none());
+        let usage = index.resource_usage()?;
+        assert!(usage.sqlite_global_bytes > 0 && usage.resident_bytes > 0 && usage.index_bytes > 0);
+        assert_eq!(store.commit_index(), 0);
+        Ok(())
+    }
+
+    #[test]
     fn discovery_index_replays_only_committed_exports_without_duplicate_counts(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
@@ -824,6 +881,14 @@ impl DiscoveryExportPageV1 {
             .iter()
             .enumerate()
             .map(|(ordinal, retained)| {
+                DiscoveryInputManifestV1::require(
+                    serde_json::to_writer(
+                        InputByteLimit(MAX_DISCOVERY_PIN_BYTES),
+                        &retained.context,
+                    )
+                    .is_ok(),
+                    "EXPORT_CONTEXT_LIMIT",
+                )?;
                 let cursor = self.first_cursor + ordinal as u64;
                 let wire =
                     EvidenceRecord::decode(retained.wire_record.as_slice()).map_err(|error| {
@@ -935,7 +1000,67 @@ pub struct DiscoveryAtomPageV1 {
     pub next: Option<DiscoveryDigestV1>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct DiscoveryResourceUsageV1 {
+    pub sqlite_global_bytes: u64,
+    pub sqlite_global_peak_bytes: u64,
+    pub resident_bytes: u64,
+    pub peak_resident_bytes: u64,
+    pub index_bytes: u64,
+    pub wal_bytes: u64,
+}
+
 impl DiscoveryIndex {
+    pub fn resource_usage(&self) -> Result<DiscoveryResourceUsageV1> {
+        let status_path = Path::new("/proc/self/status");
+        let status = fs::read_to_string(status_path).context(IoSnafu { path: status_path })?;
+        let memory = |field: &str| -> Result<u64> {
+            status
+                .lines()
+                .find(|line| line.starts_with(field))
+                .and_then(|line| line.split_whitespace().nth(1))
+                .and_then(|value| value.parse::<u64>().ok())
+                .and_then(|value| value.checked_mul(1024))
+                .ok_or_else(|| {
+                    DiscoverySnafu {
+                        code: "INDEX_RESOURCE_STATUS",
+                        reason: "the process memory counter is absent",
+                    }
+                    .build()
+                })
+        };
+        // SAFETY: SQLite owns these thread-safe counters. No pointer or reset is supplied.
+        #[allow(unsafe_code)]
+        let (used, peak) = unsafe {
+            (
+                rusqlite::ffi::sqlite3_memory_used(),
+                rusqlite::ffi::sqlite3_memory_highwater(0),
+            )
+        };
+        let mut index_bytes = 0_u64;
+        let mut wal_bytes = 0;
+        for suffix in ["", "-wal", "-shm"] {
+            let path = Self::sidecar(&self.path, suffix);
+            let bytes = match fs::metadata(&path) {
+                Ok(metadata) => metadata.len(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+                Err(source) => return Err(source).context(IoSnafu { path }),
+            };
+            index_bytes = index_bytes.saturating_add(bytes);
+            if suffix == "-wal" {
+                wal_bytes = bytes;
+            }
+        }
+        Ok(DiscoveryResourceUsageV1 {
+            sqlite_global_bytes: used.max(0) as u64,
+            sqlite_global_peak_bytes: peak.max(0) as u64,
+            resident_bytes: memory("VmRSS:")?,
+            peak_resident_bytes: memory("VmHWM:")?,
+            index_bytes,
+            wal_bytes,
+        })
+    }
+
     pub fn open(store: ControlStore) -> Result<Self> {
         let lease = Self::lease(&store)?;
         Self::finish_install(&store.root())?;

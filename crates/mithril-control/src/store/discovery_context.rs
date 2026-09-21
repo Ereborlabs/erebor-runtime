@@ -34,6 +34,21 @@ pub enum DiscoveryContextJoinV1 {
     Unresolved(DiscoveryContextUnavailableV1),
 }
 
+impl DiscoveryContextJoinV1 {
+    pub(crate) fn into_bounded(self) -> Self {
+        if serde_json::to_writer(
+            crate::discovery::InputByteLimit(crate::MAX_DISCOVERY_PIN_BYTES),
+            &self,
+        )
+        .is_ok()
+        {
+            self
+        } else {
+            Self::Unresolved(DiscoveryContextUnavailableV1::ContextLimit)
+        }
+    }
+}
+
 impl ControlStore {
     pub fn discovery_context(&self, record: &DiscoveryRecordV1) -> Result<DiscoveryContextJoinV1> {
         use DiscoveryContextUnavailableV1 as Missing;
@@ -213,7 +228,7 @@ impl ControlStore {
             if crate::workload_target_fact_digest(&pin.workload)? != pin.binding.subject_revision {
                 return Ok(unresolved(Missing::PolicyContextMismatch));
             }
-            Ok(DiscoveryContextJoinV1::Available(Box::new(pin)))
+            Ok(DiscoveryContextJoinV1::Available(Box::new(pin)).into_bounded())
         } else {
             Ok(unresolved(Missing::MissingWorkloadFact))
         }
