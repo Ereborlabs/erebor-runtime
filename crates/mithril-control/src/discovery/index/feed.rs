@@ -67,7 +67,7 @@ pub(super) enum RevisionPayload {
 
 impl RevisionPayload {
     pub(super) fn read(owner: &DiscoveryOwner, head: &DiscoveryHeadV1) -> Result<Self> {
-        let live = owner.live()?;
+        let live = &owner.live;
         let artifact = live.store.read_discovery_artifact(&head.artifact)?;
         if rmp_serde::from_slice::<DiscoveryExportPageV1>(&artifact.payload).is_ok() {
             let page = live.index.export(head)?;
@@ -230,7 +230,7 @@ impl RevisionPayload {
 
 impl DiscoveryOwner {
     pub fn project_revisions(&self) -> Result<bool> {
-        let live = self.live()?;
+        let live = &self.live;
         let _operation = live.operation.try_lock().map_err(|_| {
             DiscoverySnafu {
                 code: "DISCOVERY_BUSY",
@@ -286,7 +286,7 @@ impl DiscoveryOwner {
         after: Option<DiscoveryRevisionPositionV1>,
     ) -> Result<DiscoveryRevisionPageV1> {
         DiscoveryInputManifestV1::require(!tenant.is_zero(), "REVISION_TENANT")?;
-        self.live()?.index.read_revisions(tenant, after)
+        self.live.index.read_revisions(tenant, after)
     }
 }
 
@@ -552,7 +552,7 @@ mod tests {
         let mut changed = before.events[0].clone();
         changed.position.commit_index = 0;
         assert!(owner
-            .live()?
+            .live
             .index
             .publish_revisions(&head, &[changed.clone()])
             .is_err());
@@ -561,7 +561,7 @@ mod tests {
         changed.origin.commit_index += 1;
         {
             let writer = owner
-                .live()?
+                .live
                 .index
                 .writer
                 .lock()
@@ -574,7 +574,7 @@ mod tests {
         assert!(owner.read_revisions(tenant.into(), None).is_err());
         {
             let writer = owner
-                .live()?
+                .live
                 .index
                 .writer
                 .lock()
@@ -639,7 +639,7 @@ mod tests {
         assert_eq!(owner.read_revisions(tenant, None)?.complete_through, 0);
         while !owner.project_revisions()? {}
         let first = first.ok_or("first absent")?;
-        owner.live()?.index.require_export_reference(&first)?;
+        owner.live.index.require_export_reference(&first)?;
         let first_page = owner.read_revisions(tenant, None)?;
         assert_eq!(first_page.events.len(), 200);
         assert_eq!(first_page.events[0].origin, first);

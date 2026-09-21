@@ -282,7 +282,7 @@ impl DiscoveryOwner {
                 }),
             "CONTEXT_IMPORT_DENIED",
         )?;
-        let live = self.live()?;
+        let live = &self.live;
         let _operation = live.operation.try_lock().map_err(|_| {
             DiscoverySnafu {
                 code: "DISCOVERY_BUSY",
@@ -380,7 +380,7 @@ impl DiscoveryOwner {
                 && handle.disclosure == access.disclosure,
             "CONTEXT_ACCESS_CHANGED",
         )?;
-        let live = self.live()?;
+        let live = &self.live;
         let head = live
             .store
             .discovery_head(&ContextRevision::key(access.tenant_id)?)?
@@ -446,7 +446,7 @@ impl DiscoveryOwner {
                     .any(|field| field == "context"),
             "CONTEXT_ACCESS",
         )?;
-        let live = self.live()?;
+        let live = &self.live;
         live.index.require_export_reference(&view.export)?;
         let page = live.index.export(&view.export)?;
         for candidate in page.records {
@@ -508,7 +508,7 @@ impl DiscoveryOwner {
                     .any(|field| field == "context"),
             "CONTEXT_ACCESS",
         )?;
-        let live = self.live()?;
+        let live = &self.live;
         let page = live.index.export(export)?;
         live.index.require_export_reference(export)?;
         let catalog = live
@@ -858,7 +858,7 @@ mod tests {
         let owner = DiscoveryOwner::open(crate::ControlStore::open(directory.path())?)?;
         assert!(owner.read_context(&access, &first).is_err());
         assert_eq!(
-            owner.live()?.store.discovery_head(&catalog.key)?,
+            owner.live.store.discovery_head(&catalog.key)?,
             Some(catalog)
         );
         assert!(owner.project_revisions()?);
@@ -923,7 +923,7 @@ mod tests {
                 record
             })
             .collect();
-        let store = &owner.live()?.store;
+        let store = &owner.live.store;
         let many_head = store.commit_discovery_head(
             DiscoveryHeadKeyV1 {
                 tenant_id: page.stream.tenant_id,
