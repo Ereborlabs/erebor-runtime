@@ -2,7 +2,7 @@ use std::{
     fs::{self, File, OpenOptions},
     os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Mutex, MutexGuard},
     time::{Duration, Instant},
 };
 
@@ -16,7 +16,7 @@ use super::*;
 use crate::{
     error::{DiscoveryDatabaseSnafu, DiscoverySnafu, IoSnafu},
     ControlStore, DiscoveryArtifactV1, DiscoveryContextJoinV1, DiscoveryHeadV1,
-    EvidenceCpuBindingV1, EvidenceIntakeIdentityV1, EvidenceRecord, ObservationEnvelopeV1, Result,
+    EvidenceCpuBindingV1, EvidenceIntakeIdentityV1, EvidenceRecord, Result,
 };
 
 const MAX_INDEX_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -80,6 +80,7 @@ mod tests {
                 first_cursor: 1,
             }),
             first_cursor: 1,
+            expired_through: None,
             coverage_record: None,
             previous: None,
             records,
@@ -101,6 +102,15 @@ mod tests {
         let first = store.commit_discovery_head(key.clone(), None, artifact)?;
         let original = index.apply_export(&first)?;
         assert_eq!((original.accepted_records, original.atom_count), (3, 1));
+        let atoms = index.atoms(&first, None)?;
+        assert_eq!(atoms.atoms.len(), 1);
+        assert_eq!(atoms.atoms[0].count, 3);
+        assert_eq!(atoms.atoms[0].evidence_sample.len(), 3);
+        assert!(atoms.next.is_none());
+        assert!(index
+            .atoms(&first, Some(&atoms.atoms[0].id))?
+            .atoms
+            .is_empty());
         page.first_cursor = 4;
         page.previous = Some(first.clone());
         for record in &mut page.records {
@@ -111,6 +121,8 @@ mod tests {
         }
         let artifact = store.put_discovery_artifact(&page.artifact()?)?;
         let second = store.commit_discovery_head(key.clone(), Some(&first), artifact)?;
+        assert!(index.atoms(&first, None).is_err());
+        assert!(index.atoms(&second, None).is_err());
         index.writer.lock().map_err(|_| "writer poisoned")?.execute_batch(
             "CREATE TEMP TRIGGER fail_apply BEFORE INSERT ON input_record
                 WHEN new.cursor=x'0000000000000005' BEGIN SELECT RAISE(ABORT,'injected apply failure'); END;"
@@ -158,6 +170,7 @@ mod tests {
             stream: record.id.stream.clone(),
             cpu_binding: None,
             first_cursor: 1,
+            expired_through: None,
             coverage_record: None,
             previous: None,
             records: vec![
@@ -363,6 +376,95 @@ mod tests {
         assert!(ControlStore::open(directory.path()).is_ok());
         Ok(())
     }
+
+    #[test]
+    fn discovery_index_pages_fifty_thousand_atoms_and_rebuilds_the_same_cursors(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path())?;
+        let index = DiscoveryIndex::open(store.clone())?;
+        let mut page = resolved_page()?;
+        let template = page.records[0].clone();
+        let key = crate::DiscoveryHeadKeyV1 {
+            tenant_id: page.stream.tenant_id,
+            id: DiscoveryDigestV1::of(&"paging")?,
+        };
+        let mut head = None;
+        for first in (1..=50_002_u64).step_by(256) {
+            page.first_cursor = first;
+            page.previous = head.clone();
+            page.records.clear();
+            for cursor in first..=50_002.min(first + 255) {
+                let mut record = template.clone();
+                let DiscoveryContextJoinV1::Available(pin) = &mut record.context else {
+                    return Err("pin absent".into());
+                };
+                pin.binding.record_id.durable_cursor = cursor;
+                pin.binding.role_id = if cursor == 50_002 { 1 } else { cursor as u32 };
+                page.records.push(record);
+            }
+            let artifact = store.put_discovery_artifact(&page.artifact()?)?;
+            let current = store.commit_discovery_head(key.clone(), head.as_ref(), artifact)?;
+            index.apply_export(&current)?;
+            head = Some(current);
+        }
+        let head = head.ok_or("head absent")?;
+        let progress = index
+            .progress(key.tenant_id, &key.id)?
+            .ok_or("progress absent")?;
+        assert_eq!(
+            (progress.accepted_records, progress.atom_count),
+            (50_002, 50_000)
+        );
+        {
+            let writer = index.writer.lock().map_err(|_| "writer poisoned")?;
+            assert_eq!(
+                writer.query_row(
+                    "SELECT count(*) FROM input_record WHERE unresolved='ATOM_LIMIT'",
+                    [],
+                    |row| row.get::<_, u64>(0)
+                )?,
+                1
+            );
+            let plan: String = writer.query_row("EXPLAIN QUERY PLAN SELECT atom FROM behavior_atom WHERE tenant=?1 AND build=?2 AND atom>?3 ORDER BY atom LIMIT 201", params![key.tenant_id,key.id.0,[0_u8;32]], |row| row.get(3))?;
+            assert!(
+                plan.contains("SEARCH behavior_atom USING PRIMARY KEY"),
+                "{plan}"
+            );
+        }
+        let pages = |index: &DiscoveryIndex| -> std::result::Result<Vec<DiscoveryDigestV1>, Box<dyn std::error::Error>> {
+            let mut after = None;
+            let mut last = None;
+            let mut count = 0;
+            let mut observations = 0;
+            let mut digests = Vec::new();
+            loop {
+                let page = index.atoms(&head, after.as_ref())?;
+                assert!(page.atoms.len() <= 200);
+                assert!(serde_json::to_vec(&page)?.len() <= 1024 * 1024);
+                for atom in &page.atoms {
+                    assert!(last.as_ref().is_none_or(|last| last < &atom.id));
+                    assert!(!atom.evidence_sample.is_empty() && atom.evidence_sample.len() <= 8);
+                    last = Some(atom.id.clone());
+                    count += 1;
+                    observations += atom.count;
+                }
+                digests.push(DiscoveryDigestV1::of(&page)?);
+                after = page.next;
+                if after.is_none() { break; }
+                assert!(digests.len() <= 500);
+            }
+            assert_eq!((count,observations), (50_000,50_001));
+            Ok(digests)
+        };
+        let original = pages(&index)?;
+        drop(index);
+        fs::remove_file(directory.path().join("discovery-index.sqlite"))?;
+        let rebuilt = DiscoveryIndex::open(store)?;
+        assert_eq!(rebuilt.replay_interval(&head)?, progress);
+        assert_eq!(pages(&rebuilt)?, original);
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -379,6 +481,8 @@ pub struct DiscoveryExportPageV1 {
     pub stream: EvidenceIntakeIdentityV1,
     pub cpu_binding: Option<EvidenceCpuBindingV1>,
     pub first_cursor: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expired_through: Option<u64>,
     pub coverage_record: Option<Vec<u8>>,
     pub previous: Option<DiscoveryHeadV1>,
     pub records: Vec<DiscoveryExportRecordV1>,
@@ -392,7 +496,22 @@ struct IndexedRecord {
 }
 
 impl DiscoveryExportPageV1 {
-    fn input_bytes(&self) -> Result<u64> {
+    pub(super) fn next_cursor(&self) -> Result<u64> {
+        self.expired_through
+            .map_or_else(
+                || self.first_cursor.checked_add(self.records.len() as u64),
+                |last| last.checked_add(1),
+            )
+            .ok_or_else(|| {
+                DiscoverySnafu {
+                    code: "EXPORT_LIMIT",
+                    reason: "the export cursor is exhausted",
+                }
+                .build()
+            })
+    }
+
+    pub(super) fn input_bytes(&self) -> Result<u64> {
         let mut counter = super::model::InputByteLimit(MAX_DISCOVERY_INPUT_BYTES);
         serde_json::to_writer(&mut counter, self).map_err(|error| {
             DiscoverySnafu {
@@ -440,7 +559,11 @@ impl DiscoveryExportPageV1 {
                 && self
                     .cpu_binding
                     .is_none_or(|binding| binding.first_cursor > 0)
-                && !self.records.is_empty()
+                && self
+                    .expired_through
+                    .map_or(!self.records.is_empty(), |last| {
+                        self.records.is_empty() && last >= self.first_cursor && last < u64::MAX
+                    })
                 && self.records.len() <= 256
                 && self
                     .first_cursor
@@ -502,34 +625,7 @@ impl DiscoveryExportPageV1 {
                         unresolved: Some("UNKNOWN_SOURCE_CPU"),
                     });
                 };
-                let observation = ObservationEnvelopeV1::from_wire_record(
-                    self.stream.tenant_id.into(),
-                    self.stream.node_boot_id.into(),
-                    self.stream.source_id.into(),
-                    self.stream.source_epoch,
-                    cursor,
-                    cpu.cpu_id,
-                    &wire,
-                )
-                .map_err(|error| {
-                    DiscoverySnafu {
-                        code: "EXPORT_RECORD",
-                        reason: error.to_string(),
-                    }
-                    .build()
-                })?;
-                let record = DiscoveryRecordV1 {
-                    id: DiscoveryRecordIdV1 {
-                        stream: self.stream.clone(),
-                        cpu_id: cpu.cpu_id,
-                        durable_cursor: cursor,
-                    },
-                    original_kernel_sequence: wire
-                        .decision_context
-                        .as_ref()
-                        .map(|context| context.original_kernel_sequence),
-                    observation,
-                };
+                let record = DiscoveryRecordV1::from_wire(&self.stream, cpu.cpu_id, cursor, &wire)?;
                 let (atom, unresolved) = match &retained.context {
                     DiscoveryContextJoinV1::Available(pin) => {
                         let key = BehaviorAtomKeyV1::from_record(
@@ -555,6 +651,10 @@ impl DiscoveryExportPageV1 {
                     DiscoveryContextJoinV1::Unresolved(reason) => (
                         None,
                         Some(match reason {
+                            crate::DiscoveryContextUnavailableV1::MissingSourceCpu => {
+                                "UNKNOWN_SOURCE_CPU"
+                            }
+                            crate::DiscoveryContextUnavailableV1::ContextLimit => "CONTEXT_LIMIT",
                             crate::DiscoveryContextUnavailableV1::MissingDecisionCatalog => {
                                 "MISSING_DECISION_CATALOG"
                             }
@@ -593,12 +693,22 @@ pub struct DiscoveryIndex {
     _lease: File,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DiscoveryIndexProgressV1 {
     pub commit_index: u64,
     pub next_cursor: u64,
     pub accepted_records: u64,
     pub atom_count: u64,
+    pub input_bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoveryAtomPageV1 {
+    pub export: DiscoveryHeadV1,
+    pub atoms: Vec<BehaviorAtomV1>,
+    pub next: Option<DiscoveryDigestV1>,
 }
 
 impl DiscoveryIndex {
@@ -796,7 +906,7 @@ impl DiscoveryIndex {
         )
     }
 
-    fn export(&self, head: &DiscoveryHeadV1) -> Result<DiscoveryExportPageV1> {
+    pub(super) fn export(&self, head: &DiscoveryHeadV1) -> Result<DiscoveryExportPageV1> {
         let artifact = self.store.read_discovery_artifact(&head.artifact)?;
         DiscoveryInputManifestV1::require(
             artifact.payload.len() <= 8 * 1024 * 1024 && artifact.tenant_id == head.key.tenant_id,
@@ -918,9 +1028,9 @@ impl DiscoveryIndex {
             }
             .build()
         })?;
-        let existing = transaction.query_row("SELECT stream,commit_index,next_cursor,artifact,accepted,atom_count FROM source_progress WHERE tenant=?1 AND build=?2", params![tenant, build], |row| Ok((row.get::<_,Vec<u8>>(0)?, row.get::<_,[u8;8]>(1)?, row.get::<_,[u8;8]>(2)?, row.get::<_,[u8;32]>(3)?, row.get::<_,u64>(4)?, row.get::<_,u64>(5)?)))
+        let existing = transaction.query_row("SELECT stream,commit_index,next_cursor,artifact,accepted,atom_count,input_bytes FROM source_progress WHERE tenant=?1 AND build=?2", params![tenant, build], |row| Ok((row.get::<_,Vec<u8>>(0)?, row.get::<_,[u8;8]>(1)?, row.get::<_,[u8;8]>(2)?, row.get::<_,[u8;32]>(3)?, row.get::<_,u64>(4)?, row.get::<_,u64>(5)?,row.get::<_,u64>(6)?)))
             .optional().context(DiscoveryDatabaseSnafu { operation: "read progress" })?;
-        if let Some((known_stream, commit, next, artifact, accepted, atoms)) = &existing {
+        if let Some((known_stream, commit, next, artifact, accepted, atoms, bytes)) = &existing {
             DiscoveryInputManifestV1::require(known_stream == &stream, "EXPORT_STREAM_CONFLICT")?;
             DiscoveryInputManifestV1::require(
                 u64::from_be_bytes(*commit) <= committed_tip,
@@ -930,8 +1040,7 @@ impl DiscoveryIndex {
                 if u64::from_be_bytes(*commit) == head.commit_index {
                     DiscoveryInputManifestV1::require(
                         *artifact == head.artifact.sha256
-                            && u64::from_be_bytes(*next)
-                                == page.first_cursor + records.len() as u64,
+                            && u64::from_be_bytes(*next) == page.next_cursor()?,
                         "EXPORT_COMMIT_CONFLICT",
                     )?;
                 }
@@ -940,6 +1049,7 @@ impl DiscoveryIndex {
                     next_cursor: u64::from_be_bytes(*next),
                     accepted_records: *accepted,
                     atom_count: *atoms,
+                    input_bytes: *bytes,
                 });
             }
             DiscoveryInputManifestV1::require(
@@ -973,7 +1083,7 @@ impl DiscoveryIndex {
             Self::insert_record(&transaction, head, record, ordinal, &mut atoms)?;
             accepted += 1;
         }
-        let next = page.first_cursor + records.len() as u64;
+        let next = page.next_cursor()?;
         transaction.execute("UPDATE source_progress SET commit_index=?3,next_cursor=?4,artifact=?5,accepted=?6,atom_count=?7,input_bytes=input_bytes+?8 WHERE tenant=?1 AND build=?2", params![tenant,build,head.commit_index.to_be_bytes(),next.to_be_bytes(),head.artifact.sha256,accepted,atoms,input_bytes])
             .context(DiscoveryDatabaseSnafu { operation: "advance progress" })?;
         transaction.commit().context(DiscoveryDatabaseSnafu {
@@ -984,6 +1094,7 @@ impl DiscoveryIndex {
             next_cursor: next,
             accepted_records: accepted,
             atom_count: atoms,
+            input_bytes: existing.as_ref().map_or(0, |row| row.6) + input_bytes,
         })
     }
 
@@ -1048,6 +1159,13 @@ impl DiscoveryIndex {
         tenant: [u8; 16],
         build: &DiscoveryDigestV1,
     ) -> Result<Option<DiscoveryIndexProgressV1>> {
+        let reader = self.reader()?;
+        reader.query_row("SELECT commit_index,next_cursor,accepted,atom_count,input_bytes FROM source_progress WHERE tenant=?1 AND build=?2", params![tenant,build.0], |row| Ok(DiscoveryIndexProgressV1 {
+            commit_index: u64::from_be_bytes(row.get(0)?), next_cursor: u64::from_be_bytes(row.get(1)?), accepted_records: row.get(2)?, atom_count: row.get(3)?,input_bytes:row.get(4)?,
+        })).optional().context(DiscoveryDatabaseSnafu { operation: "read interval progress" })
+    }
+
+    fn reader(&self) -> Result<MutexGuard<'_, Connection>> {
         let reader = self
             .readers
             .iter()
@@ -1068,8 +1186,134 @@ impl DiscoveryIndex {
             .context(DiscoveryDatabaseSnafu {
                 operation: "set read deadline",
             })?;
-        reader.query_row("SELECT commit_index,next_cursor,accepted,atom_count FROM source_progress WHERE tenant=?1 AND build=?2", params![tenant,build.0], |row| Ok(DiscoveryIndexProgressV1 {
-            commit_index: u64::from_be_bytes(row.get(0)?), next_cursor: u64::from_be_bytes(row.get(1)?), accepted_records: row.get(2)?, atom_count: row.get(3)?,
-        })).optional().context(DiscoveryDatabaseSnafu { operation: "read interval progress" })
+        Ok(reader)
+    }
+
+    pub fn atoms(
+        &self,
+        head: &DiscoveryHeadV1,
+        after: Option<&DiscoveryDigestV1>,
+    ) -> Result<DiscoveryAtomPageV1> {
+        DiscoveryInputManifestV1::require(
+            self.store.discovery_head(&head.key)?.as_ref() == Some(head),
+            "EXPORT_NOT_COMMITTED",
+        )?;
+        let mut reader = self.reader()?;
+        let transaction = reader.transaction().context(DiscoveryDatabaseSnafu {
+            operation: "begin atom page",
+        })?;
+        let tenant = head.key.tenant_id;
+        let build = head.key.id.0;
+        let indexed = transaction
+            .query_row(
+                "SELECT commit_index,artifact FROM source_progress WHERE tenant=?1 AND build=?2",
+                params![tenant, build],
+                |row| Ok((u64::from_be_bytes(row.get(0)?), row.get::<_, [u8; 32]>(1)?)),
+            )
+            .optional()
+            .context(DiscoveryDatabaseSnafu {
+                operation: "check atom page revision",
+            })?;
+        DiscoveryInputManifestV1::require(
+            indexed == Some((head.commit_index, head.artifact.sha256)),
+            "INDEX_REVISION_UNAVAILABLE",
+        )?;
+        let comparison = if after.is_some() { ">" } else { ">=" };
+        let sql = format!("SELECT atom,exact_key,n,first_cursor,last_cursor FROM behavior_atom WHERE tenant=?1 AND build=?2 AND atom {comparison} ?3 ORDER BY atom LIMIT 201");
+        let mut statement = transaction.prepare(&sql).context(DiscoveryDatabaseSnafu {
+            operation: "prepare atom page",
+        })?;
+        let mut rows = statement
+            .query(params![tenant, build, after.map_or([0; 32], |id| id.0)])
+            .context(DiscoveryDatabaseSnafu {
+                operation: "read atom page",
+            })?;
+        let mut atoms = Vec::new();
+        let mut bytes = 0;
+        let mut more = false;
+        let mut samples = transaction.prepare("SELECT cursor FROM input_record WHERE tenant=?1 AND build=?2 AND atom=?3 ORDER BY cursor LIMIT 8").context(DiscoveryDatabaseSnafu { operation: "prepare atom samples" })?;
+        while let Some(row) = rows.next().context(DiscoveryDatabaseSnafu {
+            operation: "advance atom page",
+        })? {
+            if atoms.len() == 200 {
+                more = true;
+                break;
+            }
+            let (digest, encoded, count, first, last) = (|| -> rusqlite::Result<_> {
+                Ok((
+                    row.get::<_, [u8; 32]>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, u64>(2)?,
+                    u64::from_be_bytes(row.get(3)?),
+                    u64::from_be_bytes(row.get(4)?),
+                ))
+            })()
+            .context(DiscoveryDatabaseSnafu {
+                operation: "decode atom row",
+            })?;
+            DiscoveryInputManifestV1::require(encoded.len() <= 1024 * 1024, "ATOM_ROW_LIMIT")?;
+            let key: BehaviorAtomKeyV1 = serde_json::from_slice(&encoded).map_err(|error| {
+                DiscoverySnafu {
+                    code: "ATOM_ENCODING",
+                    reason: error.to_string(),
+                }
+                .build()
+            })?;
+            DiscoveryInputManifestV1::require(
+                DiscoveryDigestV1::of(&key)?.0 == digest && key.stream.tenant_id == tenant,
+                "ATOM_DIGEST_MISMATCH",
+            )?;
+            let cursors = samples
+                .query_map(params![tenant, build, digest], |row| {
+                    Ok(u64::from_be_bytes(row.get(0)?))
+                })
+                .context(DiscoveryDatabaseSnafu {
+                    operation: "read atom samples",
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .context(DiscoveryDatabaseSnafu {
+                    operation: "decode atom samples",
+                })?;
+            let evidence = cursors
+                .into_iter()
+                .map(|durable_cursor| DiscoveryRecordIdV1 {
+                    stream: key.stream.clone(),
+                    cpu_id: key.cpu_id,
+                    durable_cursor,
+                })
+                .collect();
+            let atom = BehaviorAtomV1::from_key(
+                DiscoveryDigestV1(digest),
+                key,
+                count,
+                first,
+                last,
+                evidence,
+            );
+            let mut budget = super::model::InputByteLimit(1024 * 1024);
+            serde_json::to_writer(&mut budget, &atom).map_err(|error| {
+                DiscoverySnafu {
+                    code: "ATOM_ROW_LIMIT",
+                    reason: error.to_string(),
+                }
+                .build()
+            })?;
+            let atom_bytes = 1024 * 1024 - budget.0;
+            if bytes + atom_bytes > 1024 * 1024 - 4096 {
+                DiscoveryInputManifestV1::require(!atoms.is_empty(), "ATOM_ROW_LIMIT")?;
+                more = true;
+                break;
+            }
+            bytes += atom_bytes;
+            atoms.push(atom);
+        }
+        let next = more
+            .then(|| atoms.last().map(|atom| atom.id.clone()))
+            .flatten();
+        Ok(DiscoveryAtomPageV1 {
+            export: head.clone(),
+            atoms,
+            next,
+        })
     }
 }

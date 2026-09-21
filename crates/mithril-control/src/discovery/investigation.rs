@@ -400,7 +400,7 @@ impl ContextPacket {
 
     pub fn validate_evidence(&self, input: &DiscoveryInputManifestV1) -> Result<()> {
         self.validate()?;
-        let derived = super::DiscoveryOwner.derive_recorded(input)?;
+        let derived = super::DiscoveryOwner::default().derive_recorded(input)?;
         require(
             self.scope.tenant_id == input.tenant_id
                 && self.proof_kind == input.proof_kind

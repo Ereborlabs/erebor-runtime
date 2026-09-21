@@ -194,8 +194,9 @@ are proven. Phase 3 requires approval.
 
 **Not done.** The bounded reader and checked store migration are implemented.
 The signed-context lookup and durable artifact store are implemented. The SQL
-backend has committed-export replay and transactional counts. Durable derivation,
-profile sealing, runtime loop, context import, revision feed, and live context roundtrip remain
+backend has committed-export replay and transactional counts. The live owner
+exports bounded input and exact retention gaps. Profile sealing, runtime loop,
+context import, revision feed, and live context roundtrip remain
 to be implemented and verified.
 
 ### Bounded reader and source metadata
@@ -456,3 +457,65 @@ library passed 98 tests and ignored 163 physical or manual cases. The document
 check passed 241 local links across 27 documents. Profile paging, process-kill
 tests, context import, runtime supervision, revision-feed visibility, and live
 intake/rollout measurements remain open. **Not done.**
+
+### Live export and bounded atom reads
+
+This result covers the owner changes after `edb1f7b6`. Control startup does not
+enable this owner yet. Runtime configuration and profile sealing remain open.
+
+[DiscoveryOwner::open](../../../crates/mithril-control/src/discovery/live.rs)
+obtains the index lease before artifact recovery.
+  -> [DiscoveryOwner::advance](../../../crates/mithril-control/src/discovery/live.rs) derives the interval key from the exact stream lifetime and first cursor.
+  -> [DiscoveryIndex](../../../crates/mithril-control/src/discovery/index.rs) resumes the committed export before reading more source input.
+  -> [ControlStore::begin_evidence_read](../../../crates/mithril-control/src/store/evidence_read.rs) freezes the next retained range and coverage.
+  -> [ControlStore::discovery_context](../../../crates/mithril-control/src/store/discovery_context.rs) pins context for each retained record with a known CPU.
+  -> [DiscoveryOwner::advance](../../../crates/mithril-control/src/discovery/live.rs) commits the bounded export before SQL apply.
+  -> [DiscoveryIndex::atoms](../../../crates/mithril-control/src/discovery/index.rs) reads an exact committed revision with stable digest cursors.
+  -> Not implemented: the owner seals atom segments and publishes a snapshot head.
+
+One live interval operation runs at a time. Admission fails when another
+operation holds the owner lock. That lock is separate from the primary Control
+lock. Each advance reads at most one bounded evidence page. It reserves the
+remaining record and input-byte budget before the export head commit. A smaller
+page leaves the next source cursor unchanged for the next call. An interval
+that cannot accept another record returns `INTERVAL_SEAL_REQUIRED`.
+
+A missing CPU stays unresolved. A pinned context is limited to 32 KiB of
+serialized data. The context join checks the workload bound before cloning the
+fact. An oversized pin keeps the base event with `CONTEXT_LIMIT`.
+`RetainedRangeExpired` becomes an immutable gap page with its exact first and
+last cursor. A gap page advances the cursor but adds no accepted record or atom.
+The next page starts immediately after that gap. Export and replay do not
+acknowledge the shared evidence watermark.
+
+An atom page has at most 200 rows and 1 MiB. It uses a primary-key range read
+and up to eight ordered evidence references per atom. The shared atom
+constructor preserves the offline physical-result rules. An old head or a head
+that SQL has not applied returns an error. Readers do not expose a mixed
+revision or retain a transaction after the method returns.
+
+`discovery_derivation_exports_retained_input_and_exact_gaps_then_rebuilds`
+passed through the public intake, retention, and discovery APIs. It checks an
+expired prefix, retained input, unresolved context, unchanged retention state,
+owner admission, and rebuild after source reclamation.
+`discovery_index_pages_fifty_thousand_atoms_and_rebuilds_the_same_cursors`
+passed with 50,002 input records, 50,000 exact atoms, and one unresolved new
+atom past the limit. A repeated existing atom still increments its count.
+Both complete page sequences have equal digests after index rebuild. The test
+checks the primary-key range plan and each result byte bound. Its focused run
+took 299.19 seconds in the debug test build; this is not a production latency
+or memory qualification result.
+
+After the final Rust edit, `bash .github/scripts/verify-rust-ci.sh` passed.
+The Control library passed 158 tests, including the large paging and rebuild
+case; the Node library passed 246. The e2e library passed 98 tests and ignored
+163 physical or manual cases. The document check passed 249 local links across
+27 documents. An earlier full run stopped at the unchanged Runtime CLI test
+`start_rejects_invalid_runtime_config`. That test passed in the same binary
+on rerun and in the repeated full gate. The cause was not established; no
+Runtime CLI code changed.
+
+The 50,000-atom test proves working-index paging, not a sealed snapshot or a
+live performance gate. Context roundtrip, sealing, runtime supervision, process-kill recovery,
+context import, revision-feed visibility, and resource measurements remain
+open. **Not done.**

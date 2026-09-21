@@ -90,10 +90,15 @@ Control restarts or retained input is incomplete
 - Plan status: In progress, 2026-09-20. The user approved the Now work.
 - Implementation result: Phase 1 **Done**. The offline contracts, frozen
   synthetic corpus, source-extension review, and native SQLite selection pass.
-  Phase 2 is next and remains **Not done**. See the
-  [current result](phase-1-contracts-and-offline-proof.md#result).
+  Phase 2 is in progress and remains **Not done**. See the
+  [offline result](phase-1-contracts-and-offline-proof.md#result) and
+  [durable implementation result](phase-2-durable-behavior-profiles.md#result).
+- Current assignment: complete Discovery 2. The user assigns Mithril 6.2 to
+  another agent and accepts that prerequisite as complete for sequencing.
+  Its qualification record remains with that agent. This work does not repeat
+  the Mithril qualification or start Mithril 7 or Discovery 3.
 - Plan location: `worktrees/mithril-ui`, branch `codex/mithril-ui`.
-- Current source baseline: main `36cf6449`. The rebased implementation commits
+- Phase 1 source baseline: main `36cf6449`. The rebased implementation commits
   include `ef00f8ce` (offline foundation), `e9494488` (reference checks),
   `d037b61a` (native SQLite proof), and `6aa98343` (frozen corpus). The final
   validity checks and source review are recorded in the phase result.
