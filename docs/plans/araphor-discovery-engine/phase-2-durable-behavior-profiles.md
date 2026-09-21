@@ -863,6 +863,75 @@ That output contains `result.json`, `export.json`, and `snapshot.json`.
 It is lightweight recorded-input proof, not physical enforcement proof.
 Final workspace verification remains required. The phase is **Not done**.
 
+### Live owner resource qualification
+
+The ignored release check in
+[storage.rs](../../../crates/mithril-e2e/src/discovery/storage.rs) runs the
+production evidence intake, desired-state, rollout, and Discovery runtime owners.
+Each run accepts 8,448 signed-context records and completes eight policy rollouts.
+Kernel input, measured objects, and activation acknowledgements are synthetic.
+This check does not prove physical enforcement. The enabled run must seal all
+8,448 records and leave the shared consumption watermark at zero.
+
+Run the check without concurrent builds or other qualification commands:
+
+```sh
+ARAPHOR_DISCOVERY_LIVE_OUTPUT=/tmp/araphor-live-owner-proof \
+  cargo test --release -p mithril-e2e --lib \
+  discovery_live_intake_rollout_resource_qualification -- \
+  --ignored --nocapture --test-threads=1
+```
+
+Use a new output directory. The check alternates enabled and disabled order
+across six pairs. It excludes the first pair from the latency comparison, but
+retains every run in `result.json`. Each run measures 32 intake calls and eight
+rollouts. The reported comparison is the median of five per-run percentiles;
+it is not a service-wide percentile or a sustained-load capacity result.
+
+The uninstrumented run at source `d3fa321` used Linux 6.8.0-139-generic, x86-64,
+16 logical CPUs, about 30.8 GiB RAM, and an ext-family filesystem. Existing
+desktop and VM processes remained active. This agent ran no concurrent build or
+qualification command. This is not the proposed isolated 4-vCPU/8-GiB host.
+The retained output is `/tmp/araphor-live-proof.SQoiOc/isolated/result.json`.
+
+| Per-run measurement | Disabled median | Enabled median | Change |
+| --- | ---: | ---: | ---: |
+| Intake p50 | 4.506 ms | 4.872 ms | +8.1% |
+| Intake p95 | 4.921 ms | 6.340 ms | +28.8% |
+| Rollout p50 | 11.131 ms | 11.788 ms | +5.9% |
+| Rollout p95 | 14.114 ms | 16.981 ms | +20.3% |
+
+All six enabled runs completed. Peak native SQLite allocation was 42,858,520
+bytes; peak process RSS was 93,958,144 bytes. Both meet the 64-MiB and 256-MiB
+pilot targets for this workload. The five measured enabled runs completed the
+primary work in 0.255–0.268 seconds and sealed all input in 8.14–8.71 seconds.
+Memory counters are process-global high-water values. These results do not
+prove memory use for every admitted input shape.
+
+The regression exceeds the 5% investigation threshold. A separate repeat with
+temporary timing probes confirmed a shared-store cost: 270 Discovery metadata
+commits took 1.672–6.774 ms, with a 4.556-ms median. Twenty-five policy lock waits
+exceeded 100 microseconds; the largest was 4.543 ms. `commit_discovery_head`
+uses the existing low-priority lock and `commit` replaces the durable store
+image before it releases that lock. A queued policy request prevents another
+low-priority acquisition, but cannot preempt a commit already in progress.
+This is a confirmed contributor, not a complete attribution of all latency.
+The timing probes were removed. The diagnostic run is not the latency baseline.
+
+Keep the bounded shared owner and its durability checks. Do not add a second
+metadata authority or claim overhead below 5%. Discovery remains disabled by
+default. Deployments with a stricter primary-path latency budget must qualify
+their own workload before enablement. The integration check proves completion
+and measured interference on this host; it does not establish a general SLA.
+
+`discovery_derivation_failure_preserves_intake_and_policy_rollout` adds an
+unsupported owner revision after runtime startup. The focused check passed:
+intake retained all 8,448 records, eight policy rollouts reached Active, shutdown
+completed within its deadline, and reopen still rejected the unsupported
+revision. The shared consumption watermark remained zero. This test does not
+use a model or a physical activation acknowledgement. Final workspace
+verification remains required. The phase is **Not done**.
+
 ### Derivation process-crash boundaries
 
 The production artifact, export, SQL apply, snapshot, and stream-checkpoint

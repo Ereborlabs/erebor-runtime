@@ -46,6 +46,7 @@ uuid.workspace = true
 zerocopy.workspace = true
 
 [dev-dependencies]
+rmp-serde.workspace = true
 rusqlite.workspace = true
 axum.workspace = true
 crc32c.workspace = true
