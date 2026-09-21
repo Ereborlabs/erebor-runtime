@@ -2080,6 +2080,45 @@ test does not close a row when its physical condition or an assertion changed.
       arm, target, assertion block, and result field. It kept every other file
       mutation case. The 12 focused child-fixture tests and strict crate
       Clippy pass.
+  - [ ] Replace the remaining unmatched file mutations with separate small
+    standard platform tests. Use one shared Python actor and the existing
+    Python policy. Start each actor before Node to preserve the recovered-root
+    condition. Require the exact actor task, `UNRESOLVED_OBJECT`, the original
+    file operation, `EACCES`, and zero exact and composite policy object IDs.
+    - [ ] Replace chmod. Require File/Setattr and mode `0600` after denial.
+      - [ ] Pass Host and commit it.
+      - [ ] Pass direct `runc` and commit it.
+      - [ ] Pass Kubernetes and commit it.
+      - [ ] Remove only the legacy setattr request, dispatch arm, assertion,
+        target, and result field after all three platforms pass.
+    - [ ] Replace truncate. Require File/Setattr and unchanged file length.
+      - [ ] Pass Host and commit it.
+      - [ ] Pass direct `runc` and commit it.
+      - [ ] Pass Kubernetes and commit it.
+      - [ ] Remove only the legacy truncate request, dispatch arm, assertion,
+        retained descriptor, target, and result field after all platforms
+        pass.
+    - [ ] Replace unlink. Require File/Unlink and the target to remain.
+      - [ ] Pass Host and commit it.
+      - [ ] Pass direct `runc` and commit it.
+      - [ ] Pass Kubernetes and commit it.
+      - [ ] Remove only the legacy unlink request, dispatch branch, assertion,
+        target, and result field after all three platforms pass. Keep the
+        shared self-protection unlink branch.
+    - [ ] Replace hard-link creation. Require File/Link, the source to remain,
+      and the target to stay absent.
+      - [ ] Pass Host and commit it.
+      - [ ] Pass direct `runc` and commit it.
+      - [ ] Pass Kubernetes and commit it.
+      - [ ] Remove only the legacy link request, dispatch arm, assertion,
+        target, and result field after all three platforms pass.
+    - [ ] Replace rename. Require File/Rename, the source to remain, and the
+      target to stay absent.
+      - [ ] Pass Host and commit it.
+      - [ ] Pass direct `runc` and commit it.
+      - [ ] Pass Kubernetes and commit it.
+      - [ ] Remove only the legacy rename request, dispatch arm, assertion,
+        targets, and result field after all three platforms pass.
   - [x] Replace the managed `/proc/self/environ` read with one standard
     platform test. Use one shared Python actor and the existing Python policy.
     Start the runtime-added actor before Node so it retains the original
