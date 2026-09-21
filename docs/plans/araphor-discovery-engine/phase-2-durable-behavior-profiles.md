@@ -1093,7 +1093,7 @@ helpers ignored. The 50,000-atom case is reserved for the final full gate.
 The offline e2e case also passed. After all four changes, the same focused
 Control command passed 48 tests with two helpers ignored. The native-index
 reopen check, two revision-feed checks, and input replay check also passed
-separately. Final workspace verification remains **Not done**.
+separately. Final workspace verification passed as recorded below.
 
 `DiscoveryIndex::open_at` removes `revision_position` from existing databases
 inside the schema transaction. New databases use the native index from
@@ -1130,3 +1130,18 @@ artifact recovery, and index replacement rules do not change.
 `discovery_derivation_exports_retained_input_and_exact_gaps_then_rebuilds`
 checks the shared busy result and successful work after guard release. The
 existing context, coverage, and revision tests exercise the other callers.
+
+#### Final cleanup verification
+
+Result: **Done** at source `b441197e`. The four implementation commits are
+`bfc3a7f6`, `32caa639`, `0704adfc`, and `b441197e`.
+`bash .github/scripts/verify-rust-ci.sh` passed with exit status 0 after the last
+Rust edit. Formatting, workspace check, Clippy with warnings denied, and the
+full workspace test suite passed. Control passed 178 library tests and ignored
+two subprocess helpers. The 50,000-atom paging and rebuild case passed in this
+run. Node passed 246 library tests. Ignored cases are not physical passes.
+
+Both changed phase documents passed the local-path and code-fence checks:
+160 local paths exist. The source-linked review above covers this cleanup.
+No new performance or physical enforcement result is claimed. The earlier
+enablement limits remain in effect. No later phase starts with this change.
