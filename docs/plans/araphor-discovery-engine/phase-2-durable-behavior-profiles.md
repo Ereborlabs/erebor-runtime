@@ -199,8 +199,7 @@ exports bounded input and exact retention gaps. Profile sealing and bounded
 snapshot reads are implemented. Disabled-by-default runtime supervision and
 stream checkpoints pass the workspace checks.
 Context import and revision projection are implemented with focused checks.
-Live signed-context roundtrip,
-process-kill checks, and resource qualification remain open.
+Production derivation process-kill checks and resource qualification remain open.
 
 ### Bounded reader and source metadata
 
@@ -819,3 +818,47 @@ The N/N+1 test covers artifact admission, tenant index admission, idempotent
 artifact retry, another tenant, and reservation after reopen. Usage injection
 checks admission arithmetic; it is not a native disk allocation measurement.
 The 36 focused Discovery checks and Clippy passed. The phase is **Not done**.
+
+### Signed-context transport and replay
+
+The `context-roundtrip` lightweight command now uses the existing policy fixture,
+`PolicyDesiredStateOwner::reconcile`, verified signed artifacts, and the Node
+catalogue owner. Synthetic exact-object measurements and raw kernel coordinates
+are fixture inputs. No kernel policy generation is installed. The catalogue
+builder has a supported in-process method for verified candidate inputs; it
+does not verify a new caller or grant policy authority.
+
+The test exposed a scheduled-workload join defect. The signed policy slot and
+runtime execution-set ID can differ. Control now checks the event execution-set
+ID against the exact retained workload and checks the catalogue key against the
+signed policy universe and compiled cell. The regression uses different IDs
+and rejects an event with a foreign runtime execution-set ID.
+
+```text
+policy reconcile -> signed candidate verification -> bounded Node catalogue
+  -> synthetic raw event -> Node WAL -> close/reopen WAL -> mTLS intake
+  -> exact retained workload join -> durable export -> immutable profile
+  -> scoped runbook and evidence packet -> later policy revision
+  -> source reclamation -> index loss -> replay -> same profile and packet
+```
+
+Read [shared fixture](../../../crates/mithril-e2e/src/control_fixture.rs),
+[roundtrip](../../../crates/mithril-e2e/src/discovery/roundtrip.rs), and
+[retained context join](../../../crates/mithril-control/src/store/discovery_context.rs).
+The packet has one evidence handle and one reviewed runbook. Foreign-tenant
+reads fail. The feed preserves original event positions after replay. Missing
+coverage and owner validity times remain explicit; the result is not Complete.
+
+Both roundtrip tests passed. The three Node discovery checks and the scheduled
+Control join check passed. The shared mTLS fixture suite passed 17 checks; its
+two release-only capacity checks were not run here. Clippy passed for Control,
+Node, and e2e with warnings denied. The supported command passed:
+
+```sh
+cargo run -p mithril-e2e --bin mithril_discovery_test -- \
+  --case context-roundtrip --output-directory /tmp/araphor-context-proof.r4KwHo/proof
+```
+
+That output contains `result.json`, `export.json`, and `snapshot.json`.
+It is lightweight recorded-input proof, not physical enforcement proof.
+Final workspace verification remains required. The phase is **Not done**.

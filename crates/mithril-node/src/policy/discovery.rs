@@ -265,7 +265,8 @@ impl NodeDiscoveryContextCatalog {
         }
     }
 
-    pub(super) fn add_verified_binding(
+    /// Add a verified candidate and measured exact objects to the bounded lookup.
+    pub fn add_verified_binding(
         &mut self,
         artifact: &ProfileCandidateArtifactV1,
         binding: &WorkloadBindingConfig,
