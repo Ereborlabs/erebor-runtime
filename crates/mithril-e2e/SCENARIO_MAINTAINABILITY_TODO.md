@@ -213,6 +213,27 @@ reimplement a production owner operation.
 - [x] Recover a lifecycle after a scenario assertion panics. The focused
   mutex-poison regression passed. A failing Host runtime-entry assertion then
   removed its output directory, pin, lease, actor cgroup, and Node cgroup.
+- [x] Qualify the direct-`runc` startup failure found by the full gate. The
+  first lifecycle passed 23 tests, but `runtime_entries_stay_distinct` had one
+  runc helper exit before PID publication. Cleanup removed its runc state and
+  actor cgroup. The exact test then passed in a fresh process, and the complete
+  24-test lifecycle passed in 245.11 seconds. The runc readiness error now
+  names the entry and reports the last production effect decisions. No test,
+  policy, timeout, or production behavior changed.
+- [x] Reproduce and fix the Kubernetes non-leader thread interleaving in
+  lightweight. The actor now creates and reaps a decoy thread before the
+  target. The test finds the target by its observed host TID and keeps the
+  creator, process, execution, role, and counter assertions. The exact test
+  passed on Host, direct `runc`, and Kubernetes in 33.59, 33.80, and 71.40
+  seconds. The strict TID-reuse caller also passed on Host and direct `runc`
+  in 30.27 and 31.93 seconds.
+- [ ] Qualify the Kubernetes actor-admission failures found by the next full
+  identity lifecycle. The lifecycle passed 20 tests. Four unrelated tests
+  failed before actor readiness while Node reported policy convergence and
+  then allowed runtime preparation. The exact non-leader test already passed.
+  Identify the Kubernetes-only physical overlap and reproduce it with the
+  lightweight Host or direct-`runc` lifecycle before a fixture or production
+  change. Do not rerun Kubernetes first.
 - Do not add a test registry, custom test language, replacement harness,
   builder, factory, or scenario-specific lifecycle implementation.
 - Verify serial lifecycle tests first. Enable bounded parallel tests only

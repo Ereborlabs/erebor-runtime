@@ -335,25 +335,43 @@ pub(crate) trait Platform: Sized {
             .map_err(|source| format!("identity runtime configuration is invalid: {source}"))?
             .next_id)
     }
-    fn thread(&mut self, pid: u32, ns_tid: u32, task: u64, name: &str) -> TestResult<Thread> {
+    fn thread(&mut self, pid: u32, ns_tid: u32, first: u64, name: &str) -> TestResult<Thread> {
         let pin = self.maps().0;
-        let last = RefCell::new(String::from("coordinate=<absent>; edge=<absent>"));
+        let last = RefCell::new(String::from("no matching coordinate"));
         Ok(wait_for(
             pin,
             name,
             TASK_LIMIT,
             || {
-                let coordinate = self.coordinate(task)?;
-                let edge = self.edge(task)?;
-                *last.borrow_mut() = format!("coordinate={coordinate:?}; edge={edge:?}");
-                Ok(coordinate.zip(edge).map(|(coordinate, edge)| Thread {
-                    pid,
-                    ns_tid,
-                    coordinate,
-                    edge,
-                }))
+                let next = self.next_id().map_err(|source| {
+                    InvalidInputSnafu {
+                        path: pin,
+                        reason: source.to_string(),
+                    }
+                    .build()
+                })?;
+                for task in first..next {
+                    let Some(coordinate) = self.coordinate(task)? else {
+                        continue;
+                    };
+                    if coordinate.host_tid != pid {
+                        continue;
+                    }
+                    let edge = self.edge(task)?;
+                    *last.borrow_mut() = format!("coordinate={coordinate:?}; edge={edge:?}");
+                    if let Some(edge) = edge {
+                        return Ok(Some(Thread {
+                            pid,
+                            ns_tid,
+                            coordinate,
+                            edge,
+                        }));
+                    }
+                }
+                *last.borrow_mut() = format!("range={first}..{next}; host TID={pid}");
+                Ok(None)
             },
-            || format!("task cookie {task}; last state: {}", last.borrow()),
+            || format!("first task cookie {first}; last state: {}", last.borrow()),
         )?)
     }
     fn task_exit(&mut self, task: u64, name: &str) -> TestResult<TaskCoordinateV1> {

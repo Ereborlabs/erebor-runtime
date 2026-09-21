@@ -45,21 +45,22 @@ fn non_leader_exec<P: Platform>() -> TestResult<()> {
     assert!(initial.active_role_id > 0);
     active(&root);
 
-    let next = env.next_id()?;
+    let first = env.next_id()?;
     actor.send(b"root\n")?;
     let ns_tid = actor.wait_pid(&env.work().join("thread"), "non-leader namespace TID")?;
     let tid = actor.wait_thread(ns_tid, "non-leader host TID")?;
-    let thread = env.thread(tid, ns_tid, next, "non-leader thread identity")?;
+    let thread = env.thread(tid, ns_tid, first, "non-leader thread identity")?;
     assert_ne!(tid, root_pid);
     assert_ne!(ns_tid, root.ns_pid);
     assert_eq!((thread.pid, thread.ns_tid), (tid, ns_tid));
-    assert_eq!(thread.coordinate.task_cookie, next);
+    assert!(thread.coordinate.task_cookie > first);
     assert_eq!(thread.coordinate.host_tgid, root_pid);
     assert_eq!(
         thread.coordinate.process_state_id,
         root.coordinate.process_state_id
     );
     assert_eq!(thread.edge.creator_task_cookie, initial.task_cookie);
+    let next = thread.coordinate.task_cookie;
     let after_id = next.checked_add(2).ok_or("identity ID overflow")?;
     assert_eq!(env.next_id()?, after_id);
 

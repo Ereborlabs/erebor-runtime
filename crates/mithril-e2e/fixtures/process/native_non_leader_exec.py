@@ -14,6 +14,9 @@ def execute():
     release.wait()
     os.execv("/usr/bin/sleep", ["/usr/bin/sleep", "5"])
 
+decoy = threading.Thread(target=lambda: None)
+decoy.start()
+decoy.join()
 thread = threading.Thread(target=execute)
 thread.start()
 sys.stdin.readline()
