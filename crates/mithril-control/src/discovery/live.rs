@@ -348,6 +348,8 @@ impl DiscoveryOwner {
         let export = live
             .store
             .commit_discovery_head(key, exported.previous.as_ref(), artifact)?;
+        #[cfg(test)]
+        super::test_crash_boundary("export-head");
         let progress = live.index.apply_export(&export)?;
         Ok(DiscoveryAdvanceV1::Applied { export, progress })
     }
@@ -635,7 +637,11 @@ impl DiscoveryOwner {
             &mut artifact_bytes,
         )?;
         let snapshot = live.store.commit_discovery_head(key, None, artifact)?;
+        #[cfg(test)]
+        super::test_crash_boundary("snapshot-head");
         live.index.publish_snapshot(&snapshot)?;
+        #[cfg(test)]
+        super::test_crash_boundary("snapshot-visible");
         Ok(snapshot)
     }
 

@@ -352,11 +352,17 @@ impl DiscoveryFiles {
             file.write_all(&bytes)
                 .context(IoSnafu { path: &temporary })?;
             file.sync_all().context(IoSnafu { path: &temporary })?;
+            #[cfg(test)]
+            crate::discovery::test_crash_boundary("artifact-synced");
             fs::hard_link(&temporary, &path).context(IoSnafu { path: &path })?;
+            #[cfg(test)]
+            crate::discovery::test_crash_boundary("artifact-linked");
             fs::remove_file(&temporary).context(IoSnafu { path: &temporary })?;
             File::open(&directory)
                 .and_then(|directory| directory.sync_all())
                 .context(IoSnafu { path: &directory })?;
+            #[cfg(test)]
+            crate::discovery::test_crash_boundary("artifact-installed");
             Ok(())
         })();
         if let Err(error) = result {
