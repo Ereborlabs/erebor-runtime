@@ -195,8 +195,9 @@ are proven. Phase 3 requires approval.
 **Not done.** The bounded reader and checked store migration are implemented.
 The signed-context lookup and durable artifact store are implemented. The SQL
 backend has committed-export replay and transactional counts. The live owner
-exports bounded input and exact retention gaps. Profile sealing, runtime loop,
-context import, revision feed, and live context roundtrip remain
+exports bounded input and exact retention gaps. Profile sealing and bounded
+snapshot reads are implemented. Their final verification is in progress.
+The runtime loop, context import, revision feed, and live context roundtrip remain
 to be implemented and verified.
 
 ### Bounded reader and source metadata
@@ -519,3 +520,55 @@ The 50,000-atom test proves working-index paging, not a sealed snapshot or a
 live performance gate. Context roundtrip, sealing, runtime supervision, process-kill recovery,
 context import, revision-feed visibility, and resource measurements remain
 open. **Not done.**
+
+### Immutable profiles and snapshot visibility
+
+This result covers the snapshot implementation after `9c83eaaa`. The intended
+end state is a checked, immutable profile that remains readable after restart
+or loss of its SQL projection. This result does not enable runtime derivation.
+
+[DiscoveryOwner::seal_interval](../../../crates/mithril-control/src/discovery/live.rs)
+requires the committed export and matching aggregate progress.
+  -> [DiscoveryIndex::export](../../../crates/mithril-control/src/discovery/index.rs) checks each retained page in the source chain.
+  -> [DiscoveryOwner::seal_interval](../../../crates/mithril-control/src/discovery/live.rs) checks source bounds, coverage, accepted counts, unresolved counts, and exact atom counts.
+  -> [DiscoveryLive::write_profile_artifact](../../../crates/mithril-control/src/discovery/live.rs) reserves encoded bytes before it writes each immutable segment and manifest.
+  -> [ControlStore::commit_discovery_head](../../../crates/mithril-control/src/store/discovery.rs) commits the snapshot reference after the files are durable.
+  -> [DiscoveryIndex::publish_snapshot](../../../crates/mithril-control/src/discovery/index.rs) exposes only the matching committed snapshot and artifact digest.
+  -> [DiscoveryOwner::read_snapshot](../../../crates/mithril-control/src/discovery/live.rs) reads bounded atom pages from the checked immutable segments.
+
+[DiscoveryOwner::seal_interval](../../../crates/mithril-control/src/discovery/live.rs)
+receives the same export after a retry or projection loss.
+  -> [DiscoveryOwner::profile](../../../crates/mithril-control/src/discovery/live.rs) checks the existing snapshot manifest and dependencies.
+  -> [DiscoveryIndex::publish_snapshot](../../../crates/mithril-control/src/discovery/index.rs) repairs visibility without changing the snapshot head.
+  -> Not implemented: runtime recovery starts this repair without a caller.
+
+The existing live owner creates and closes these operations. The artifact store
+owns all files. SQL stores only the committed visibility tuple for a sealed
+snapshot. Snapshot reads do not depend on mutable aggregate rows. The index
+schema changes from 1 to 2 in a native transaction; existing input and progress
+rows remain unchanged. No policy, Node, kernel, or ABI owner changes.
+
+Each snapshot has a canonical digest, transformation version, source export,
+exact cursor bounds, accepted and included counts, unresolved and missing
+counts, and ordered segment references. Complete means that the retained input
+passed these checks. Its proof kind remains `RecordedInput`, not physical
+qualification or proof that the workload requires this behavior. Missing source
+coverage, incomplete observation coverage, retention gaps, unresolved input,
+and empty input produce Partial with explicit reasons. A later snapshot cannot
+change a prior snapshot.
+
+The combined encoded manifest and atom segments are limited to 128 MiB. The
+reservation measures the actual MessagePack wrapper, not estimated overhead.
+A segment payload is at most 1 MiB. Each read returns at most 200 atoms and
+1 MiB, including its metadata. Segment bounds skip prior pages before file I/O.
+Counts and stable digest cursors survive projection loss. A missing visibility
+tuple returns `SNAPSHOT_INDEX_UNAVAILABLE` until repair completes. Recovery
+does not acknowledge the shared evidence-consumption watermark.
+
+Focused checks pass for encoded-byte admission at the limit and one byte over,
+schema upgrade, Complete and Partial snapshots, unchanged prior revisions,
+tenant mismatch, source reclamation, and projection repair. These checks use
+recorded fixtures; they do not prove the live signed-context roundtrip.
+The 50,000-atom snapshot check and final workspace gate are in progress.
+Process-kill checks, runtime recovery, context import, revision feed, and live
+resource measurements remain open. **Not done.**
