@@ -130,7 +130,7 @@ impl DerivationRuntime {
                 continue;
             }
             let key = StreamCheckpoint::key(&stream)?;
-            let checkpoint = self.store.discovery_head(&key)?;
+            let mut checkpoint = self.store.discovery_head(&key)?;
             let first_cursor = if let Some(head) = &checkpoint {
                 let artifact = self.store.read_discovery_artifact(&head.artifact)?;
                 DiscoveryInputManifestV1::require(
@@ -171,6 +171,19 @@ impl DerivationRuntime {
                         && profile.last_cursor.checked_add(1) == Some(saved.next_interval_cursor),
                     "CHECKPOINT_INTEGRITY",
                 )?;
+                let refreshed = self.owner.refresh_coverage(&profile)?;
+                if refreshed != profile.export {
+                    let snapshot = self.owner.seal_interval(&refreshed)?;
+                    checkpoint = Some(self.commit_checkpoint(
+                        &StreamCheckpoint {
+                            schema_version: 1,
+                            stream: stream.clone(),
+                            next_interval_cursor: saved.next_interval_cursor,
+                            snapshot,
+                        },
+                        checkpoint.as_ref(),
+                    )?);
+                }
                 saved.next_interval_cursor
             } else {
                 1
@@ -270,24 +283,7 @@ impl DerivationRuntime {
             next_interval_cursor,
             snapshot: snapshot.clone(),
         };
-        let payload = rmp_serde::to_vec_named(&checkpoint).map_err(|error| {
-            crate::error::DiscoverySnafu {
-                code: "CHECKPOINT_SCHEMA",
-                reason: error.to_string(),
-            }
-            .build()
-        })?;
-        let artifact = self.store.put_discovery_artifact(&DiscoveryArtifactV1 {
-            schema_version: 1,
-            tenant_id: active.stream.tenant_id,
-            dependencies: vec![snapshot.artifact],
-            payload,
-        })?;
-        self.store.commit_discovery_head(
-            StreamCheckpoint::key(&active.stream)?,
-            active.checkpoint.as_ref(),
-            artifact,
-        )?;
+        self.commit_checkpoint(&checkpoint, active.checkpoint.as_ref())?;
         let lag = self
             .store
             .evidence_cursor(&active.stream)?
@@ -301,6 +297,31 @@ impl DerivationRuntime {
             accepted = profile.accepted_records, unresolved = profile.unresolved_records,
             partial_reasons = ?self.partial_reasons, "sealed discovery interval");
         Ok((true, true))
+    }
+
+    fn commit_checkpoint(
+        &self,
+        checkpoint: &StreamCheckpoint,
+        expected: Option<&DiscoveryHeadV1>,
+    ) -> Result<DiscoveryHeadV1> {
+        let payload = rmp_serde::to_vec_named(checkpoint).map_err(|error| {
+            crate::error::DiscoverySnafu {
+                code: "CHECKPOINT_SCHEMA",
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        let artifact = self.store.put_discovery_artifact(&DiscoveryArtifactV1 {
+            schema_version: 1,
+            tenant_id: checkpoint.stream.tenant_id,
+            dependencies: vec![checkpoint.snapshot.artifact.clone()],
+            payload,
+        })?;
+        self.store.commit_discovery_head(
+            StreamCheckpoint::key(&checkpoint.stream)?,
+            expected,
+            artifact,
+        )
     }
 
     fn step(&mut self, now: Instant) -> Result<bool> {
@@ -530,6 +551,101 @@ mod tests {
             (2, 2, 1)
         );
         assert_eq!(runtime.owner.read_snapshot(&snapshot, None)?, original);
+        let input = DiscoveryInputManifestV1::from_json(include_bytes!(
+            "../../../mithril-e2e/fixtures/discovery/manifest.json"
+        ))?;
+        let record = &input.records[0];
+        crate::EvidenceIntakeOwner::from_store(store.clone()).receive_coverage(
+            &crate::AuthenticatedEvidenceNodeV1 {
+                tenant_id: stream.tenant_id,
+                node_id: stream.node_id.clone(),
+                node_boot_id: stream.node_boot_id,
+                label_epoch: stream.label_epoch,
+            },
+            &crate::CoverageReport {
+                source_id: stream.source_id.to_vec(),
+                cpu_id: record.id.cpu_id,
+                source_epoch: stream.source_epoch,
+                revision: 1,
+                intervals: vec![crate::CoverageInterval {
+                    interval_id: record
+                        .observation
+                        .coverage_interval_id
+                        .to_be_bytes()
+                        .to_vec(),
+                    source_epoch: stream.source_epoch,
+                    revision: 1,
+                    state: "HEALTHY".into(),
+                    first_sequence: 1,
+                    last_sequence: Some(2),
+                    current: true,
+                    gap_reasons: Vec::new(),
+                    opening_counters: Some(crate::CoverageCounters::default()),
+                    closing_counters: Some(crate::CoverageCounters {
+                        attempted: 2,
+                        requested: 2,
+                        emitted: 2,
+                        next_sequence: 3,
+                        ..Default::default()
+                    }),
+                }],
+            },
+        )?;
+        let corrected_export = runtime.owner.refresh_coverage(&current.profile)?;
+        assert_ne!(corrected_export, current.profile.export);
+        {
+            let intake = crate::EvidenceIntakeOwner::from_store(store.clone());
+            let mut newer = intake
+                .latest_coverage_report(&stream)?
+                .ok_or("coverage absent")?;
+            newer.revision = 2;
+            intake.receive_coverage(
+                &crate::AuthenticatedEvidenceNodeV1 {
+                    tenant_id: stream.tenant_id,
+                    node_id: stream.node_id.clone(),
+                    node_boot_id: stream.node_boot_id,
+                    label_epoch: stream.label_epoch,
+                },
+                &newer,
+            )?;
+        }
+        drop(runtime);
+        drop(store);
+        let store = ControlStore::open(directory.path())?;
+        let mut runtime =
+            DerivationRuntime::open(store.clone(), DiscoveryRuntimeConfigV1::default())?;
+        assert!(!runtime.step(Instant::now())?);
+        let corrected_head = store
+            .discovery_head(&StreamCheckpoint::key(&stream)?)?
+            .ok_or("checkpoint absent")?;
+        let corrected: StreamCheckpoint = rmp_serde::from_slice(
+            &store
+                .read_discovery_artifact(&corrected_head.artifact)?
+                .payload,
+        )?;
+        assert_eq!(corrected.next_interval_cursor, 3);
+        assert_ne!(corrected.snapshot, next.snapshot);
+        let corrected_page = runtime.owner.read_snapshot(&corrected.snapshot, None)?;
+        assert_eq!(corrected_page.profile.replaces, Some(next.snapshot.clone()));
+        assert_eq!(corrected_page.profile.accepted_records, 1);
+        assert_eq!(corrected_page.atoms, current.atoms);
+        assert_eq!(runtime.owner.read_snapshot(&next.snapshot, None)?, current);
+        assert!(!runtime.step(Instant::now())?);
+        let newer_head = store
+            .discovery_head(&StreamCheckpoint::key(&stream)?)?
+            .ok_or("checkpoint absent")?;
+        assert_ne!(newer_head, corrected_head);
+        let newer: StreamCheckpoint =
+            rmp_serde::from_slice(&store.read_discovery_artifact(&newer_head.artifact)?.payload)?;
+        let newer_page = runtime.owner.read_snapshot(&newer.snapshot, None)?;
+        assert_eq!(newer_page.profile.replaces, Some(corrected.snapshot));
+        assert_eq!(newer_page.profile.accepted_records, 1);
+        assert_eq!(newer_page.atoms, current.atoms);
+        assert!(!runtime.step(Instant::now())?);
+        assert_eq!(
+            store.discovery_head(&StreamCheckpoint::key(&stream)?)?,
+            Some(newer_head)
+        );
         let watermark = crate::EvidenceRetentionOwner::from_store(store).watermark(&stream)?;
         assert_eq!(
             (watermark.evidence_cursor, watermark.coverage_revision),

@@ -478,18 +478,46 @@ mod tests {
         assert_eq!(original.atoms[0].count, 3);
         page.previous = Some(first);
         page.first_cursor = 4;
+        let records = std::mem::take(&mut page.records);
+        coverage.revision = 2;
+        coverage.intervals[0].revision = 2;
+        coverage.intervals[0].state = "CLOSED".into();
+        coverage.intervals[0].current = false;
+        let mut current_interval = coverage.intervals[0].clone();
+        current_interval.interval_id = vec![254; 16];
+        current_interval.state = "HEALTHY".into();
+        current_interval.current = true;
+        current_interval.first_sequence = 104;
+        current_interval.last_sequence = None;
+        current_interval.opening_counters = current_interval.closing_counters.take();
+        coverage.intervals.push(current_interval);
+        page.coverage_record = Some(coverage.encode_to_vec());
+        let artifact = store.put_discovery_artifact(&page.artifact()?)?;
+        let closed_export =
+            store.commit_discovery_head(key.clone(), page.previous.as_ref(), artifact)?;
+        let closed = owner.seal_interval(&closed_export)?;
+        let closed_page = owner.read_snapshot(&closed, None)?;
+        assert_eq!(closed_page.profile.state, DiscoveryProfileStateV1::Complete);
+        assert_eq!(closed_page.profile.accepted_records, 3);
+        assert_eq!(closed_page.profile.replaces, Some(complete.clone()));
+        assert_eq!(closed_page.atoms, original.atoms);
+        page.previous = Some(closed_export);
+        page.records = records;
         for retained in &mut page.records {
             let DiscoveryContextJoinV1::Available(pin) = &mut retained.context else {
                 return Err("pin absent".into());
             };
             pin.binding.record_id.durable_cursor += 3;
         }
-        coverage.revision = 2;
+        coverage.revision = 3;
+        coverage.intervals[0].revision = 3;
         coverage.intervals[0].state = "GAPPED".into();
+        coverage.intervals[0].current = true;
+        coverage.intervals.truncate(1);
         coverage.intervals[0].gap_reasons.push("RING_LOSS".into());
         page.coverage_record = Some(coverage.encode_to_vec());
         let artifact = store.put_discovery_artifact(&page.artifact()?)?;
-        let second = store.commit_discovery_head(key, page.previous.as_ref(), artifact)?;
+        let second = store.commit_discovery_head(key.clone(), page.previous.as_ref(), artifact)?;
         let partial = owner.seal_interval(&second)?;
         assert_ne!(partial, complete);
         let changed = owner.read_snapshot(&partial, None)?;
@@ -497,8 +525,33 @@ mod tests {
         assert_eq!(changed.profile.accepted_records, 6);
         assert_eq!(
             changed.profile.partial_reasons,
-            vec!["SOURCE_COVERAGE_UNPROVEN"]
+            vec!["SOURCE_COVERAGE_GAPPED", "SOURCE_COVERAGE_UNPROVEN"]
         );
+        page.previous = Some(second);
+        page.first_cursor = 7;
+        page.records.clear();
+        coverage.revision = 4;
+        coverage.intervals[0].revision = 4;
+        coverage.intervals[0].state = "HEALTHY".into();
+        coverage.intervals[0].gap_reasons.clear();
+        page.coverage_record = Some(coverage.encode_to_vec());
+        let artifact = store.put_discovery_artifact(&page.artifact()?)?;
+        let third = store.commit_discovery_head(key, page.previous.as_ref(), artifact)?;
+        let corrected = owner.seal_interval(&third)?;
+        let corrected_page = owner.read_snapshot(&corrected, None)?;
+        assert_eq!(
+            corrected_page.profile.state,
+            DiscoveryProfileStateV1::Partial
+        );
+        assert_eq!(corrected_page.profile.accepted_records, 6);
+        assert_eq!(corrected_page.profile.replaces, Some(partial.clone()));
+        assert!(corrected_page
+            .profile
+            .partial_reasons
+            .iter()
+            .any(|reason| reason == "SOURCE_COVERAGE_GAPPED"));
+        assert_eq!(corrected_page.atoms, changed.atoms);
+        assert_eq!(owner.read_snapshot(&partial, None)?, changed);
         assert_eq!(owner.read_snapshot(&complete, None)?, original);
         Ok(())
     }
@@ -725,11 +778,11 @@ impl DiscoveryExportPageV1 {
                 && self
                     .cpu_binding
                     .is_none_or(|binding| binding.first_cursor > 0)
-                && self
-                    .expired_through
-                    .map_or(!self.records.is_empty(), |last| {
-                        self.records.is_empty() && last >= self.first_cursor && last < u64::MAX
-                    })
+                && self.expired_through.map_or(
+                    !self.records.is_empty()
+                        || (self.coverage_record.is_some() && self.previous.is_some()),
+                    |last| self.records.is_empty() && last >= self.first_cursor && last < u64::MAX,
+                )
                 && self.records.len() <= 256
                 && self
                     .first_cursor
