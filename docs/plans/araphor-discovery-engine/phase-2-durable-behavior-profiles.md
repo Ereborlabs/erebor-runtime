@@ -1003,3 +1003,29 @@ passed; five explicit qualification/subprocess cases were ignored. The full
 parallel e2e library then passed 102 tests, with 164 physical, release-only,
 or subprocess cases ignored. Final workspace verification remains required.
 The phase is **Not done**.
+
+### Last-owner lease release
+
+A full run at `1aa5267` exposed another restart failure in the store tests.
+A parallel repeat also failed after an invalid-index open released its owner.
+Two new deterministic tests then reproduced the shared defect: a duplicate
+file descriptor retained the Control or index lock after the last Rust owner
+was dropped. Both tests failed before the fix. Linux `flock` associates the
+lock with the open file description; close alone does not release it while a
+duplicate remains. See the [Linux lock contract](https://man7.org/linux/man-pages/man2/flock.2.html).
+
+[StoreLease](../../../crates/mithril-control/src/store.rs) now releases the lock
+explicitly when its last owner is dropped. Control uses this guard directly;
+the index shares it through the existing `Arc`. The guard records the acquiring
+process ID. A child process cannot release its parent's lease through guard
+destruction. This follows the explicit-unlock pattern used by the existing
+filesystem promotion and Interceptor lease owners.
+
+The two descriptor tests now pass. They also check that a retained real owner
+still excludes another writer. A third test injects a different process ID
+and checks that guard destruction leaves the active parent's lock intact.
+The existing single-owner store test passes. Five parallel repeats each passed
+42 Discovery checks, with two subprocess helpers ignored. The large paging
+case was excluded from those repeats; it passed in both preceding full runs.
+These are native descriptor and guard checks, not a new physical enforcement claim. Final workspace
+verification remains required. The phase is **Not done**.
