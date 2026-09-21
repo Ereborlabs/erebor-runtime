@@ -10,9 +10,9 @@ use snafu::{ensure, ResultExt as _};
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, JsonSnafu};
 use crate::{
     AdministrativeHttpConfigV1, AllowedNodeIdentity, ControlPlane, ControlServerTls, ControlStore,
-    EvidenceStoreLimitsV1, KubernetesAdmissionHttpConfigV1, KubernetesNodeControlConfigV1,
-    KubernetesNodeReadinessOwner, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, Result,
-    TrustGenerationV1,
+    DiscoveryRuntimeConfigV1, EvidenceStoreLimitsV1, KubernetesAdmissionHttpConfigV1,
+    KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner, PolicyDesiredStateConfigV1,
+    PolicyDesiredStateOwner, Result, TrustGenerationV1,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -34,6 +34,8 @@ pub struct ControlConfig {
     pub kubernetes_nodes: Option<KubernetesNodeControlConfigV1>,
     #[serde(default)]
     pub kubernetes_admission: Option<KubernetesAdmissionHttpConfigV1>,
+    #[serde(default)]
+    pub discovery: Option<DiscoveryRuntimeConfigV1>,
 }
 
 pub struct ControlRuntimeParts {
@@ -43,6 +45,7 @@ pub struct ControlRuntimeParts {
     pub administrative_exec: Option<AdministrativeHttpConfigV1>,
     pub kubernetes_nodes: Option<KubernetesNodeReadinessOwner>,
     pub kubernetes_admission: Option<KubernetesAdmissionHttpConfigV1>,
+    pub discovery: Option<(DiscoveryRuntimeConfigV1, ControlStore)>,
 }
 
 impl ControlConfig {
@@ -65,7 +68,7 @@ impl ControlConfig {
             store.clone(),
         )?;
         if let Some(policy) = self.kubernetes_policy {
-            let owner = PolicyDesiredStateOwner::open(policy, store)?;
+            let owner = PolicyDesiredStateOwner::open(policy, store.clone())?;
             let (key_id, public_key, issuer_epoch) = owner.signer_identity();
             // Control must trust its configured candidate signer before it starts reconciliation.
             ensure!(
@@ -92,6 +95,7 @@ impl ControlConfig {
             administrative_exec: self.administrative_exec,
             kubernetes_nodes,
             kubernetes_admission: self.kubernetes_admission,
+            discovery: self.discovery.map(|config| (config, store)),
         })
     }
 
@@ -109,6 +113,9 @@ impl ControlConfig {
             }
         );
         self.evidence_store.validate()?;
+        if let Some(discovery) = &self.discovery {
+            discovery.validate()?;
+        }
         ensure!(
             self.control_store_directory
                 .as_ref()
@@ -178,4 +185,63 @@ fn is_sha256_hex(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovery_derivation_configuration_is_disabled_until_selected(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("control.json");
+        let mut source = serde_json::json!({
+            "listen": "127.0.0.1:0",
+            "tls": {
+                "certificate_path": directory.path().join("control.pem"),
+                "private_key_path": directory.path().join("control-key.pem"),
+                "node_ca_path": directory.path().join("node-ca.pem")
+            },
+            "allowed_nodes": [{
+                "node_id": "node-a", "certificate_sha256": "a".repeat(64),
+                "tenant_id": "00000000-0000-0001-0000-000000000002"
+            }],
+            "trust": { "generation": 1, "bundle_digest": "b".repeat(64),
+                "policy_issuer_sequence_epoch": 0, "policy_signers": [] },
+            "administrative_exec": null,
+            "evidence_directory": directory.path()
+        });
+        fs::write(&path, serde_json::to_vec(&source)?)?;
+        let config = ControlConfig::load(&path)?;
+        assert!(config.discovery.is_none());
+        let parts = config.into_parts()?;
+        assert!(parts.discovery.is_none());
+        drop(parts);
+        source["discovery"] = serde_json::json!({});
+        fs::write(&path, serde_json::to_vec(&source)?)?;
+        let parts = ControlConfig::load(&path)?.into_parts()?;
+        assert_eq!(
+            parts
+                .discovery
+                .as_ref()
+                .ok_or("configuration absent")?
+                .0
+                .checkpoint_seconds,
+            60
+        );
+        assert!(!directory.path().join("discovery-index.sqlite").exists());
+        drop(parts);
+        source["discovery"] = serde_json::json!({ "checkpoint_seconds": 0 });
+        fs::write(&path, serde_json::to_vec(&source)?)?;
+        assert!(ControlConfig::load(&path).is_err());
+        source["discovery"] = serde_json::Value::Null;
+        fs::write(&path, serde_json::to_vec(&source)?)?;
+        assert!(ControlConfig::load(&path)?
+            .into_parts()?
+            .discovery
+            .is_none());
+        assert!(!directory.path().join("discovery-index.sqlite").exists());
+        Ok(())
+    }
 }
