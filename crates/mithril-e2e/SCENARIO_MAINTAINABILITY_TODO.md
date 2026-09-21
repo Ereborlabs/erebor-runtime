@@ -2348,6 +2348,27 @@ setup, production actions, assertions, and focused test.
       until the evidence-retention and generation-retirement test replaces
       them. The affected direct-`runc` probe passed. Its retained-evidence and
       inactive-generation assertions remained true.
+  - [ ] Add one small platform test for terminal evidence during generation
+    retirement. Do not add a Platform API or call a test-only Node owner.
+    - [x] Start PID 1 under the fatal-exec policy and retain one
+      `PostPonrFatal` pending-exec row from the declared terminal entry.
+    - [x] Install the replacement policy through Control while PID 1 holds the
+      old generation. Require a new active generation and the old descriptor
+      to enter `Retiring`.
+    - [x] Stop PID 1. Wait for the deployed Node to remove the old descriptor,
+      binding activation targets, and execution-set bindings. Require the
+      terminal pending-exec row to remain byte-for-byte equal.
+    - [x] Put map parsing in one small generation-state assertion owner. The
+      owner can read state and wait for readiness. It must not install policy,
+      stop actors, or reproduce Node retirement.
+    - [x] Keep the test below 100 lines. The complete test file is 49 lines.
+    - [x] Pass Host and commit it. The exact Host test passed in 34.56 seconds
+      on 2026-09-21.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy terminal-retention and inactive-
+      generation fields, actions, and shell assertions after all platforms
+      pass. Keep unrelated mount, upgrade, and cleanup behavior.
 - [x] External entry and external cgroup entrant: keep both physical execs and
   rule-zero fail-closed evidence assertions.
   - [x] Extend the existing unlisted runtime-exec test with its exact

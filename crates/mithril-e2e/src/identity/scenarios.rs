@@ -21,6 +21,8 @@ mod external_cgroup;
 #[cfg(test)]
 mod external_roots;
 #[cfg(test)]
+mod generation_state;
+#[cfg(test)]
 mod lifecycle_sleep;
 #[cfg(test)]
 mod lifetime_result;
@@ -74,5 +76,7 @@ mod runtime_exec;
 mod subreaper;
 #[cfg(test)]
 mod terminal_exec;
+#[cfg(test)]
+mod terminal_retirement;
 #[cfg(test)]
 mod workload_recovery;
