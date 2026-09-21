@@ -1090,8 +1090,10 @@ ControlStore remains the durable owner. No kernel or ABI change is required.
 
 The offline API change passed 47 focused Control tests with two subprocess
 helpers ignored. The 50,000-atom case is reserved for the final full gate.
-The offline e2e case also passed. The other cleanups and final verification
-remain **Not done**.
+The offline e2e case also passed. After all four changes, the same focused
+Control command passed 48 tests with two helpers ignored. The native-index
+reopen check, two revision-feed checks, and input replay check also passed
+separately. Final workspace verification remains **Not done**.
 
 `DiscoveryIndex::open_at` removes `revision_position` from existing databases
 inside the schema transaction. New databases use the native index from
@@ -1105,3 +1107,26 @@ still serve counts and evidence samples. The existing
 `discovery_index_replays_only_committed_exports_without_duplicate_counts` test
 creates the old index, reopens the database, checks removal, and verifies equal
 progress and positions after rebuild. No authoritative record is deleted.
+
+#### Intended end state
+
+An opened owner has complete live state. Offline calls require no owner state.
+All five mutation paths use one admission check. Native SQL indexes serve the
+existing reads without duplicate position indexes.
+
+[DiscoveryOwner::run](../../../crates/mithril-control/src/discovery/runtime.rs) Control starts configured discovery.<br>
+-> [DiscoveryOwner::open](../../../crates/mithril-control/src/discovery/live.rs) opens the existing store and index owners.<br>
+-> [DiscoveryIndex::open_at](../../../crates/mithril-control/src/discovery/index.rs) removes the two redundant indexes inside the schema transaction.<br>
+-> [DiscoveryLive::admit](../../../crates/mithril-control/src/discovery/live.rs) admits one bounded operation or returns `DISCOVERY_BUSY`.<br>
+-> [DiscoveryOwner::advance](../../../crates/mithril-control/src/discovery/live.rs) commits the export before SQL apply.<br>
+-> [DiscoveryOwner::seal_interval](../../../crates/mithril-control/src/discovery/live.rs) commits the snapshot before index visibility.
+
+The owner holds the admission guard until the operation returns. An error drops
+the guard. Import, coverage refresh, and revision projection use the same
+method. Existing authorization checks keep their order. Runtime shutdown still
+waits for the current bounded operation and drops the owner. The store lease,
+artifact recovery, and index replacement rules do not change.
+
+`discovery_derivation_exports_retained_input_and_exact_gaps_then_rebuilds`
+checks the shared busy result and successful work after guard release. The
+existing context, coverage, and revision tests exercise the other callers.
