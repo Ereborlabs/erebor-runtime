@@ -22,7 +22,7 @@ use crate::{
 const MAX_INDEX_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_INDEX_WAL_BYTES: u64 = 64 * 1024 * 1024;
 const INDEX_TRANSACTION_RESERVE: u64 = 32 * 1024 * 1024;
-const INDEX_SCHEMA_VERSION: i64 = 1;
+const INDEX_SCHEMA_VERSION: i64 = 2;
 
 #[cfg(test)]
 mod tests {
@@ -365,7 +365,7 @@ mod tests {
             .writer
             .lock()
             .map_err(|_| "writer poisoned")?
-            .pragma_update(None, "user_version", 2)?;
+            .pragma_update(None, "user_version", INDEX_SCHEMA_VERSION + 1)?;
         drop(index);
         assert!(DiscoveryIndex::open(store.clone()).is_err());
         fs::write(
@@ -374,6 +374,132 @@ mod tests {
         )?;
         assert!(DiscoveryIndex::open(store).is_err());
         assert!(ControlStore::open(directory.path()).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn discovery_index_seals_complete_and_partial_revisions_after_schema_upgrade(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path())?;
+        let index = DiscoveryIndex::open(store.clone())?;
+        let mut page = resolved_page()?;
+        for (ordinal, retained) in page.records.iter_mut().enumerate() {
+            let mut wire = EvidenceRecord::decode(retained.wire_record.as_slice())?;
+            let object = crate::EvidenceExactFileObject {
+                profile_generation_ref_id: wire.profile_generation_ref_id.unwrap_or_default(),
+                mount_id_unique: 1,
+                inode: 2,
+                inode_generation: 3,
+                mount_namespace_inode: 4,
+                filesystem_device: 5,
+            };
+            wire.exact_object_id = object.observation_id(1).to_be_bytes().to_vec().into();
+            wire.decision_context = Some(crate::EvidenceDecisionContext {
+                schema_version: 1,
+                original_kernel_sequence: 101 + ordinal as u64,
+                profile_generation_ref_id: object.profile_generation_ref_id,
+                exact_file_object: Some(object),
+                exact_object_key_id: 1,
+                composite_atom_id: wire.policy_rule_id,
+                ..Default::default()
+            });
+            retained.wire_record = wire.encode_to_vec();
+        }
+        let wire = EvidenceRecord::decode(page.records[0].wire_record.as_slice())?;
+        let mut coverage = crate::CoverageReport {
+            source_id: page.stream.source_id.to_vec(),
+            source_epoch: page.stream.source_epoch,
+            cpu_id: page.cpu_binding.ok_or("CPU absent")?.cpu_id,
+            revision: 1,
+            intervals: vec![crate::CoverageInterval {
+                interval_id: wire.coverage_interval_id.to_vec(),
+                source_epoch: page.stream.source_epoch,
+                revision: 1,
+                state: "HEALTHY".into(),
+                first_sequence: 101,
+                last_sequence: Some(103),
+                opening_counters: Some(crate::CoverageCounters::default()),
+                closing_counters: Some(crate::CoverageCounters {
+                    attempted: 3,
+                    requested: 3,
+                    emitted: 3,
+                    next_sequence: 104,
+                    ..Default::default()
+                }),
+                gap_reasons: Vec::new(),
+                current: true,
+            }],
+        };
+        page.coverage_record = Some(coverage.encode_to_vec());
+        let key = crate::DiscoveryHeadKeyV1 {
+            tenant_id: page.stream.tenant_id,
+            id: DiscoveryDigestV1::of(&"sealing")?,
+        };
+        let artifact = store.put_discovery_artifact(&page.artifact()?)?;
+        let first = store.commit_discovery_head(key.clone(), None, artifact)?;
+        let progress = index.apply_export(&first)?;
+        index
+            .writer
+            .lock()
+            .map_err(|_| "writer poisoned")?
+            .execute_batch("DROP TABLE profile_index; PRAGMA user_version=1;")?;
+        drop(index);
+        let index = DiscoveryIndex::open(store.clone())?;
+        assert_eq!(index.progress(key.tenant_id, &key.id)?, Some(progress));
+        assert_eq!(
+            index
+                .writer
+                .lock()
+                .map_err(|_| "writer poisoned")?
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?,
+            2
+        );
+        drop(index);
+        drop(store);
+        let store = ControlStore::open(directory.path())?;
+        let owner = DiscoveryOwner::open(store.clone())?;
+        let complete = owner.seal_interval(&first)?;
+        let original = owner.read_snapshot(&complete, None)?;
+        assert_eq!(original.profile.state, DiscoveryProfileStateV1::Complete);
+        assert_eq!(
+            original.profile.proof_kind,
+            DiscoveryProofKindV1::RecordedInput
+        );
+        assert_eq!(
+            (
+                original.profile.accepted_records,
+                original.profile.included_records
+            ),
+            (3, 3)
+        );
+        assert!(original.profile.partial_reasons.is_empty());
+        assert_eq!(original.atoms.len(), 1);
+        assert_eq!(original.atoms[0].count, 3);
+        page.previous = Some(first);
+        page.first_cursor = 4;
+        for retained in &mut page.records {
+            let DiscoveryContextJoinV1::Available(pin) = &mut retained.context else {
+                return Err("pin absent".into());
+            };
+            pin.binding.record_id.durable_cursor += 3;
+        }
+        coverage.revision = 2;
+        coverage.intervals[0].state = "GAPPED".into();
+        coverage.intervals[0].gap_reasons.push("RING_LOSS".into());
+        page.coverage_record = Some(coverage.encode_to_vec());
+        let artifact = store.put_discovery_artifact(&page.artifact()?)?;
+        let second = store.commit_discovery_head(key, page.previous.as_ref(), artifact)?;
+        let partial = owner.seal_interval(&second)?;
+        assert_ne!(partial, complete);
+        let changed = owner.read_snapshot(&partial, None)?;
+        assert_eq!(changed.profile.state, DiscoveryProfileStateV1::Partial);
+        assert_eq!(changed.profile.accepted_records, 6);
+        assert_eq!(
+            changed.profile.partial_reasons,
+            vec!["SOURCE_COVERAGE_UNPROVEN"]
+        );
+        assert_eq!(owner.read_snapshot(&complete, None)?, original);
         Ok(())
     }
 
@@ -463,6 +589,46 @@ mod tests {
         let rebuilt = DiscoveryIndex::open(store)?;
         assert_eq!(rebuilt.replay_interval(&head)?, progress);
         assert_eq!(pages(&rebuilt)?, original);
+        drop(rebuilt);
+        let owner = DiscoveryOwner::open(ControlStore::open(directory.path())?)?;
+        let snapshot = owner.seal_interval(&head)?;
+        assert_eq!(owner.seal_interval(&head)?, snapshot);
+        let snapshots = |owner: &DiscoveryOwner| -> std::result::Result<
+            Vec<DiscoveryDigestV1>,
+            Box<dyn std::error::Error>,
+        > {
+            let mut cursor = None;
+            let mut count = 0;
+            let mut observations = 0;
+            let mut digests = Vec::new();
+            loop {
+                let page = owner.read_snapshot(&snapshot, cursor.as_ref())?;
+                assert_eq!(page.profile.state, DiscoveryProfileStateV1::Partial);
+                assert_eq!(page.profile.atom_count, 50_000);
+                assert_eq!(page.profile.unresolved_records, 1);
+                assert!(page.atoms.len() <= 200 && serde_json::to_vec(&page)?.len() <= 1024 * 1024);
+                count += page.atoms.len();
+                observations += page.atoms.iter().map(|atom| atom.count).sum::<u64>();
+                digests.push(DiscoveryDigestV1::of(&page)?);
+                cursor = page.next;
+                if cursor.is_none() {
+                    break;
+                }
+                assert!(digests.len() <= 500);
+            }
+            assert_eq!((count, observations), (50_000, 50_001));
+            Ok(digests)
+        };
+        let original = snapshots(&owner)?;
+        drop(owner);
+        let owner = DiscoveryOwner::open(ControlStore::open(directory.path())?)?;
+        assert_eq!(snapshots(&owner)?, original);
+        drop(owner);
+        fs::remove_file(directory.path().join("discovery-index.sqlite"))?;
+        let owner = DiscoveryOwner::open(ControlStore::open(directory.path())?)?;
+        assert!(owner.read_snapshot(&snapshot, None).is_err());
+        assert_eq!(owner.seal_interval(&head)?, snapshot);
+        assert_eq!(snapshots(&owner)?, original);
         Ok(())
     }
 }
@@ -762,7 +928,7 @@ impl DiscoveryIndex {
                 operation: "read schema",
             })?;
         DiscoveryInputManifestV1::require(
-            version == 0 || version == INDEX_SCHEMA_VERSION,
+            (0..=INDEX_SCHEMA_VERSION).contains(&version),
             "INDEX_SCHEMA",
         )?;
         writer.execute_batch("BEGIN IMMEDIATE;
@@ -788,7 +954,11 @@ impl DiscoveryIndex {
                 FOREIGN KEY(tenant,build,atom) REFERENCES behavior_atom(tenant,build,atom)) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS input_atom ON input_record(tenant,build,atom,cursor);
             CREATE INDEX IF NOT EXISTS input_position ON input_record(commit_index,ordinal,tenant,build);
-            PRAGMA user_version=1; COMMIT;")
+            CREATE TABLE IF NOT EXISTS profile_index(
+                tenant BLOB NOT NULL CHECK(length(tenant)=16), snapshot BLOB NOT NULL CHECK(length(snapshot)=32),
+                commit_index BLOB NOT NULL CHECK(length(commit_index)=8), artifact BLOB NOT NULL CHECK(length(artifact)=32),
+                PRIMARY KEY(tenant,snapshot)) WITHOUT ROWID;
+            PRAGMA user_version=2; COMMIT;")
             .context(DiscoveryDatabaseSnafu { operation: "initialize schema" })?;
         let first = Self::connection(&path, true)?;
         let second = Self::connection(&path, true)?;
@@ -906,6 +1076,20 @@ impl DiscoveryIndex {
         )
     }
 
+    fn reserve_write(&self, writer: &Connection) -> Result<()> {
+        let wal = self.path.with_file_name("discovery-index.sqlite-wal");
+        if fs::metadata(&wal)
+            .is_ok_and(|metadata| metadata.len() > MAX_INDEX_WAL_BYTES - INDEX_TRANSACTION_RESERVE)
+        {
+            writer
+                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+                .context(DiscoveryDatabaseSnafu {
+                    operation: "bound WAL before write",
+                })?;
+        }
+        self.check_disk(INDEX_TRANSACTION_RESERVE)
+    }
+
     pub(super) fn export(&self, head: &DiscoveryHeadV1) -> Result<DiscoveryExportPageV1> {
         let artifact = self.store.read_discovery_artifact(&head.artifact)?;
         DiscoveryInputManifestV1::require(
@@ -1005,17 +1189,7 @@ impl DiscoveryIndex {
             }
             .build()
         })?;
-        let wal = self.path.with_file_name("discovery-index.sqlite-wal");
-        if fs::metadata(&wal)
-            .is_ok_and(|metadata| metadata.len() > MAX_INDEX_WAL_BYTES - INDEX_TRANSACTION_RESERVE)
-        {
-            writer
-                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
-                .context(DiscoveryDatabaseSnafu {
-                    operation: "bound WAL before apply",
-                })?;
-        }
-        self.check_disk(INDEX_TRANSACTION_RESERVE)?;
+        self.reserve_write(&writer)?;
         let transaction = writer.transaction().context(DiscoveryDatabaseSnafu {
             operation: "begin apply",
         })?;
@@ -1315,5 +1489,80 @@ impl DiscoveryIndex {
             atoms,
             next,
         })
+    }
+
+    pub(super) fn publish_snapshot(&self, head: &DiscoveryHeadV1) -> Result<()> {
+        let _admission = self.writes.try_acquire().map_err(|_| {
+            DiscoverySnafu {
+                code: "INDEX_WRITE_LIMIT",
+                reason: "the writer and eight pending slots are in use",
+            }
+            .build()
+        })?;
+        DiscoveryInputManifestV1::require(
+            self.store.discovery_head(&head.key)?.as_ref() == Some(head),
+            "SNAPSHOT_NOT_COMMITTED",
+        )?;
+        let writer = self.writer.lock().map_err(|_| {
+            DiscoverySnafu {
+                code: "INDEX_OWNER",
+                reason: "the writer is poisoned",
+            }
+            .build()
+        })?;
+        self.reserve_write(&writer)?;
+        writer.execute("INSERT INTO profile_index VALUES(?1,?2,?3,?4) ON CONFLICT(tenant,snapshot) DO NOTHING", params![head.key.tenant_id,head.key.id.0,head.commit_index.to_be_bytes(),head.artifact.sha256])
+            .context(DiscoveryDatabaseSnafu { operation: "publish snapshot projection" })?;
+        let stored = writer
+            .query_row(
+                "SELECT commit_index,artifact FROM profile_index WHERE tenant=?1 AND snapshot=?2",
+                params![head.key.tenant_id, head.key.id.0],
+                |row| Ok((u64::from_be_bytes(row.get(0)?), row.get::<_, [u8; 32]>(1)?)),
+            )
+            .context(DiscoveryDatabaseSnafu {
+                operation: "check snapshot projection",
+            })?;
+        DiscoveryInputManifestV1::require(
+            stored == (head.commit_index, head.artifact.sha256),
+            "SNAPSHOT_INDEX_CONFLICT",
+        )
+    }
+
+    pub(super) fn snapshot_visible(&self, head: &DiscoveryHeadV1) -> Result<bool> {
+        let reader = self.reader()?;
+        let stored = reader
+            .query_row(
+                "SELECT commit_index,artifact FROM profile_index WHERE tenant=?1 AND snapshot=?2",
+                params![head.key.tenant_id, head.key.id.0],
+                |row| Ok((u64::from_be_bytes(row.get(0)?), row.get::<_, [u8; 32]>(1)?)),
+            )
+            .optional()
+            .context(DiscoveryDatabaseSnafu {
+                operation: "read snapshot projection",
+            })?;
+        Ok(stored == Some((head.commit_index, head.artifact.sha256)))
+    }
+
+    pub(super) fn input_counts(&self, head: &DiscoveryHeadV1) -> Result<(u64, u64)> {
+        let mut reader = self.reader()?;
+        let transaction = reader.transaction().context(DiscoveryDatabaseSnafu {
+            operation: "begin count check",
+        })?;
+        let indexed = transaction
+            .query_row(
+                "SELECT commit_index,artifact FROM source_progress WHERE tenant=?1 AND build=?2",
+                params![head.key.tenant_id, head.key.id.0],
+                |row| Ok((u64::from_be_bytes(row.get(0)?), row.get::<_, [u8; 32]>(1)?)),
+            )
+            .optional()
+            .context(DiscoveryDatabaseSnafu {
+                operation: "check count revision",
+            })?;
+        DiscoveryInputManifestV1::require(
+            indexed == Some((head.commit_index, head.artifact.sha256)),
+            "INDEX_REVISION_UNAVAILABLE",
+        )?;
+        transaction.query_row("SELECT count(*),coalesce(sum(atom IS NULL),0) FROM input_record WHERE tenant=?1 AND build=?2", params![head.key.tenant_id,head.key.id.0], |row| Ok((row.get(0)?,row.get(1)?)))
+            .context(DiscoveryDatabaseSnafu { operation: "check indexed input counts" })
     }
 }
