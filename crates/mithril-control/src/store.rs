@@ -32,8 +32,10 @@ use crate::{
     TrustGenerationAcknowledgementV1, TrustGenerationV1, MAX_PENDING_EVIDENCE_RECORDS,
 };
 
-const STORE_SCHEMA_VERSION: u32 = 5;
+const STORE_SCHEMA_VERSION: u32 = 6;
 
+mod discovery;
+pub use discovery::*;
 mod evidence_read;
 pub use evidence_read::*;
 const STATE_DIGEST_BYTES: usize = 32;
@@ -43,6 +45,7 @@ const MAX_STATE_BYTES: usize = 64 * 1_024 * 1_024;
 /// Owns current Control metadata and immutable evidence segments.
 pub struct ControlStore {
     inner: Arc<ControlStoreLock>,
+    discovery_files: Arc<Mutex<discovery::DiscoveryFiles>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -152,22 +155,24 @@ impl ControlStateOwner {
             }
             .build()
         })?;
-        if durable.schema_version != STORE_SCHEMA_VERSION && durable.schema_version != 4 {
+        if !matches!(durable.schema_version, 4 | 5 | STORE_SCHEMA_VERSION) {
             return ControlStoreSnafu {
                 path: self.path.clone(),
                 reason: "the current Control state schema is invalid".to_owned(),
             }
             .fail();
         }
-        if durable.schema_version == 4 {
-            if !durable.state.evidence_cpu_bindings.is_empty() {
+        if durable.schema_version < STORE_SCHEMA_VERSION {
+            if (durable.schema_version == 4 && !durable.state.evidence_cpu_bindings.is_empty())
+                || !durable.state.discovery_heads.is_empty()
+            {
                 return ControlStoreSnafu {
                     path: self.path.clone(),
-                    reason: "schema 4 contains unsupported evidence CPU metadata".to_owned(),
+                    reason: "the old schema contains unsupported metadata".to_owned(),
                 }
                 .fail();
             }
-            let backup = root.join("state-v4.bin");
+            let backup = root.join(format!("state-v{}.bin", durable.schema_version));
             match fs::hard_link(&self.path, &backup) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -451,6 +456,8 @@ impl Drop for ControlStorePriorityGuard<'_> {
 #[serde(deny_unknown_fields)]
 struct ControlStoreState {
     commit_index: u64,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    discovery_heads: BTreeMap<DiscoveryHeadKeyV1, DiscoveryHeadV1>,
     source_revisions: BTreeMap<String, PolicySourceRevisionV1>,
     policy_documents: BTreeMap<String, PolicyDocumentV1>,
     latest_sources: BTreeMap<PolicyObjectKeyV1, String>,
@@ -540,6 +547,10 @@ struct EvidenceSourceEpochKeyV1 {
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 // Each variant contains all state that must become durable in one transaction.
 enum ControlTransactionV1 {
+    DiscoveryHeadCommitted {
+        head: DiscoveryHeadV1,
+        expected: Option<DiscoveryHeadV1>,
+    },
     EvidenceCpuBound {
         identity: EvidenceIntakeIdentityV1,
         binding: EvidenceCpuBindingV1,
@@ -801,6 +812,7 @@ impl ControlStore {
             commit_index = %state.commit_index
         );
         Ok(Self {
+            discovery_files: Arc::new(Mutex::new(discovery::DiscoveryFiles::new(&root))),
             inner: Arc::new(ControlStoreLock::new(ControlStoreInner {
                 root,
                 state,
@@ -3436,6 +3448,9 @@ fn apply_transaction(
         return Ok(());
     }
     match transaction {
+        ControlTransactionV1::DiscoveryHeadCommitted { head, expected } => {
+            discovery::DiscoveryFiles::apply_head(state, head, expected.as_ref())?;
+        }
         ControlTransactionV1::EvidenceCpuBound { identity, binding } => {
             validate_evidence_identity(identity, path)?;
             validate_source_label(state, identity, path)?;
@@ -6524,7 +6539,7 @@ mod tests {
             let bytes = std::fs::read(&path)?;
             let durable: super::DurableControlStateV1 =
                 rmp_serde::from_slice(&bytes[super::STATE_DIGEST_BYTES..])?;
-            assert_eq!(durable.schema_version, 5);
+            assert_eq!(durable.schema_version, super::STORE_SCHEMA_VERSION);
             assert_ne!(durable.schema_version, 4);
             assert!(durable.state.evidence_cpu_bindings.is_empty());
             assert_eq!(migrated.evidence_cpu_binding(&identity)?, None);
@@ -6559,7 +6574,11 @@ mod tests {
         for scenario in ["checksum", "backup", "future"] {
             let directory = TempDir::new()?;
             let encoded = rmp_serde::to_vec_named(&super::DurableControlStateV1 {
-                schema_version: if scenario == "future" { 6 } else { 4 },
+                schema_version: if scenario == "future" {
+                    super::STORE_SCHEMA_VERSION + 1
+                } else {
+                    4
+                },
                 state: super::ControlStoreState::default(),
             })?;
             let mut bytes = Sha256::digest(&encoded).to_vec();

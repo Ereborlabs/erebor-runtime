@@ -30,7 +30,8 @@ pub use service::{
     TrustGenerationV1,
 };
 pub use store::{
-    startup_absence_proof_digest, ControlStore, ControlStoreHealthV1, EvidenceReadMetadataV1,
+    startup_absence_proof_digest, ControlStore, ControlStoreHealthV1, DiscoveryArtifactRefV1,
+    DiscoveryArtifactV1, DiscoveryHeadKeyV1, DiscoveryHeadV1, EvidenceReadMetadataV1,
     EvidenceReadPageV1, EvidenceReadV1, MAX_EVIDENCE_READ_BYTES, MAX_EVIDENCE_READ_HANDLES,
     MAX_EVIDENCE_READ_RECORDS,
 };
