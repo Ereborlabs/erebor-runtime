@@ -193,7 +193,7 @@ are proven. Phase 3 requires approval.
 ## Result
 
 **Not done.** The bounded reader and checked store migration are implemented.
-The signed-context lookup is implemented. Durable derivation, SQL index,
+The signed-context lookup and durable artifact store are implemented. Durable derivation, SQL index,
 runtime loop, context import, revision feed, and live context roundtrip remain
 to be implemented and verified.
 
@@ -300,3 +300,53 @@ Rust edit, `bash .github/scripts/verify-rust-ci.sh` passed. The Node library
 passed 246 tests. The e2e library passed 98 tests and ignored 163 physical or
 manual cases. The document check passed 220 local links across 27 documents.
 These checks do not close the live context-roundtrip acceptance case.
+
+### Durable artifacts and bounded heads
+
+This result covers the artifact store added after `2a07bf84`. It does not
+include the live derivation or SQL index.
+
+[ControlStore::put_discovery_artifact](../../../crates/mithril-control/src/store/discovery.rs)
+accepts a bounded tenant artifact and its existing dependencies.
+  -> [DiscoveryFiles::write](../../../crates/mithril-control/src/store/discovery.rs) checks the schema, dependency order, and tenant.
+  -> [DiscoveryFiles::write](../../../crates/mithril-control/src/store/discovery.rs) reserves quota, syncs the file, and syncs its directory.
+  -> [ControlStore::commit_discovery_head](../../../crates/mithril-control/src/store/discovery.rs) checks the artifact and expected head revision.
+  -> [ControlStore](../../../crates/mithril-control/src/store.rs) commits the bounded head with the existing state transaction.
+  -> Not implemented: derivation applies the exported page to the SQL index.
+
+[ControlStore::recover_discovery_artifacts](../../../crates/mithril-control/src/store/discovery.rs)
+runs before artifact admission.
+  -> [DiscoveryFiles::read](../../../crates/mithril-control/src/store/discovery.rs) checks every referenced artifact and dependency.
+  -> [ControlStore::recover_discovery_artifacts](../../../crates/mithril-control/src/store/discovery.rs) removes only unreferenced files in the owned artifact directory.
+  -> Not implemented: the live owner resumes derivation and rebuilds the SQL index.
+
+`ControlStore` creates the shared file owner at open. Artifact I/O uses its
+separate mutex. Head commits use the existing low-priority store lock. File
+reads and checksum work do not hold that store lock. No kernel or ABI change
+is required. No public network API is added.
+
+Each encoded segment is at most 16 MiB. Retained files are limited to 2 GiB per
+tenant and 8 GiB per process. Recovery and admission also enforce a 131,072-file
+bound. Heads are limited to 1,024 per tenant, 4,096 per process, and 8 MiB of
+encoded metadata. Limit failures preserve the prior committed head. A retry
+of the same artifact does not create another head revision. A changed artifact
+requires the expected prior revision.
+
+Schema 6 accepts checked migrations from schema 4 or 5. The migration preserves
+the matching `state-v4.bin` or `state-v5.bin` recovery copy. Schema 5 CPU metadata
+is preserved. Older binaries reject schema 6. Artifact corruption stops
+discovery recovery; it does not stop primary Control from opening its state.
+
+The tests `discovery_store_commits_only_synced_artifacts_and_recovers_orphans`
+and `discovery_store_enforces_segment_quota_and_head_boundaries` check retries,
+stale revisions, failed state replacement, restart, dependency retention,
+orphan removal, tenant mismatch, corruption, and count and byte boundaries.
+`discovery_migration_preserves_schema_five_cpu_metadata` checks the schema 5
+recovery copy and CPU binding. Process-kill and live integration checks remain
+open.
+
+Verification: the two focused artifact tests and three migration tests passed.
+After the final Rust edit, `bash .github/scripts/verify-rust-ci.sh` passed.
+The Node library passed 246 tests. The e2e library passed 98 tests and ignored
+163 physical or manual cases. The document check passed 228 local links across
+27 documents. This result proves the storage owner, not the live engine.
