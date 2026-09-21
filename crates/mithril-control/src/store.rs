@@ -76,7 +76,31 @@ struct ControlStoreInner {
 struct ControlStateOwner {
     path: PathBuf,
     temporary: PathBuf,
-    _lease: File,
+    _lease: StoreLease,
+}
+
+pub(crate) struct StoreLease {
+    pub(crate) file: File,
+    process_id: u32,
+}
+
+impl StoreLease {
+    pub(crate) fn from_locked(file: File) -> Self {
+        Self {
+            file,
+            process_id: std::process::id(),
+        }
+    }
+}
+
+impl Drop for StoreLease {
+    fn drop(&mut self) {
+        // Release the lock even if a child retains a duplicate descriptor.
+        // A child must not release the parent process's lease.
+        if self.process_id == std::process::id() {
+            let _result = self.file.unlock();
+        }
+    }
 }
 
 impl ControlStateOwner {
@@ -100,7 +124,7 @@ impl ControlStateOwner {
         let owner = Self {
             path: root.join("state.bin"),
             temporary: root.join("state.tmp"),
-            _lease: lease,
+            _lease: StoreLease::from_locked(lease),
         };
         match fs::remove_file(&owner.temporary) {
             Ok(()) => {}
@@ -6925,6 +6949,38 @@ mod tests {
             Exception::Revoked,
             Exception::Active
         ));
+    }
+
+    #[test]
+    fn discovery_store_lease_releases_after_last_owner_with_duplicate_descriptor(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = TempDir::new()?;
+        let store = super::ControlStore::open(directory.path())?;
+        let descriptor = store.lock()?.state_file._lease.file.try_clone()?;
+        let active = store.clone();
+        drop(store);
+        assert!(super::ControlStore::open(directory.path()).is_err());
+        drop(active);
+        let reopened = super::ControlStore::open(directory.path())?;
+        drop(descriptor);
+        assert!(super::ControlStore::open(directory.path()).is_err());
+        drop(reopened);
+        Ok(())
+    }
+
+    #[test]
+    fn discovery_store_lease_inherited_guard_cannot_unlock_active_parent(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = TempDir::new()?;
+        let store = super::ControlStore::open(directory.path())?;
+        let mut inherited =
+            super::StoreLease::from_locked(store.lock()?.state_file._lease.file.try_clone()?);
+        inherited.process_id = std::process::id().wrapping_add(1);
+        drop(inherited);
+        assert!(super::ControlStore::open(directory.path()).is_err());
+        drop(store);
+        drop(super::ControlStore::open(directory.path())?);
+        Ok(())
     }
 
     #[test]
