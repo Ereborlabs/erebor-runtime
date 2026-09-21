@@ -117,6 +117,7 @@ one reached.
 | Artifact segment | 16 MiB | Split into checked immutable segments with a bounded manifest. |
 | Discovery heads | 1,024 per tenant, 4,096 per process, and 8 MiB serialized total | Reject new work before the first limit; preserve existing audit records and the overall 64 MiB store limit. |
 | Retained discovery artifacts | 2 GiB per tenant and 8 GiB per process | Reserve quota before admission; expire only eligible bundles or reject. Source evidence keeps its separate limits. |
+| Discovery artifact files | 131,072 per process; at most 8,192 dependencies per artifact | Bound admission and recovery traversal. Reject overflow before a new head commit. |
 | Profile/proposal artifact set | 128 MiB per interval | Stop before commit with a typed size reason. |
 | Pending-review evidence retention | 7 days and 512 MiB per tenant | Reject a new pin or expire a review explicitly; do not block intake. |
 | In-memory derivation working set | 256 MiB total process budget | Backpressure/cancel assistance; prioritize evidence and policy owners. |
