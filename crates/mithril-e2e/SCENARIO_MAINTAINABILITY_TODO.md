@@ -2102,7 +2102,8 @@ test does not close a row when its physical condition or an assertion changed.
       IPv4 address, TCP protocol, and port. Require no policy object handle.
     - [ ] Keep the test below 100 lines.
     - [ ] Pass Host and commit it.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact direct-`runc` test passed
+      in 35.75 seconds on 2026-09-21.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy action and result field after all
       three platforms pass.

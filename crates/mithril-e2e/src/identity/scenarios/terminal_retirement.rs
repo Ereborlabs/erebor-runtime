@@ -6,7 +6,7 @@ use super::generation_state::GenerationState;
 use crate::platform::{platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = terminal_retirement]
 fn terminal_evidence_survives_retirement<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("terminal-retirement")?;
