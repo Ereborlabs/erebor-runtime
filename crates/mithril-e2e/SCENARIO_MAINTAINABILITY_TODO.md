@@ -998,11 +998,15 @@ regressions and verify them with every Control migration:
 
 ### Effect child and observation support
 
-- [ ] Replace the repeated child mailbox readiness loop with the shared wait.
-- [ ] Replace repeated process and descriptor readiness loops with the shared
+- [x] Replace the repeated child mailbox readiness loop with the shared wait.
+- [x] Replace repeated process and descriptor readiness loops with the shared
   wait. Preserve PID, descriptor, and kernel-result diagnostics.
-- [ ] Replace the observation deadline loop with the shared wait. Preserve the
+- [x] Replace the observation deadline loop with the shared wait. Preserve the
   complete recent-observation summary on failure.
+
+The current shared-wait implementations passed all 29 non-privileged
+`effect` regressions in 0.92 seconds on 2026-09-21. The check included the
+child, mailbox, observation, direct-`runc`, and network fixture tests.
 
 Keep and rerun all 23 focused regressions in `effect/child.rs`,
 `effect/mailbox.rs`, `effect/support.rs`, and the four tests at the end of
