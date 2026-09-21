@@ -1,5 +1,5 @@
 use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
-use std::sync::{atomic::AtomicBool, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use erebor_interceptor::KernelHost;
 use erebor_interceptor_abi::{DeclaredEntryRequestV1, Id128V1, PolicyGenerationModeV1};
@@ -16,7 +16,8 @@ use super::{
     reconcile_pending_activations, retire_undeclared_entry_requests, stable_node_id,
     validate_mount_view, ExceptionAuthorityOwner, GenerationHandleAllocator, GenerationRows,
     GenerationSemantics, LoweredGeneration, MeasuredExactObjectV1, MeasuredMountRouteV1,
-    MountRootReconciliation, NodePolicyGenerationOwner, ProfileActivation,
+    MountRootReconciliation, NodeDiscoveryContextCatalog, NodePolicyGenerationOwner,
+    ProfileActivation,
 };
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, PolicySnafu};
 use crate::exact_object::ExactFileObjectView;
@@ -50,6 +51,7 @@ pub(super) struct PreparedPolicy {
     mount_roots: Vec<MountRootReconciliation>,
     rollback: AntiRollbackStore,
     authority: ExceptionAuthorityOwner,
+    context: NodeDiscoveryContextCatalog,
 }
 
 impl PreparedPolicy {
@@ -114,6 +116,7 @@ impl PreparedPolicy {
         let mut activations = BTreeMap::<Id128V1, ProfileActivation>::new();
         let mut validated = BTreeMap::<Id128V1, ValidatedProfileCandidateV1>::new();
         let mut declared_entry_requests = BTreeSet::new();
+        let mut context = NodeDiscoveryContextCatalog::default();
         let node_id = stable_node_id(&config.node_id)?;
         for binding in &config.workload_bindings {
             let (artifact, rollback_authorization) =
@@ -184,6 +187,7 @@ impl PreparedPolicy {
                 deferred.contains(&binding.binding_id)
                     && !measured.resolved.contains(&binding.binding_id),
             )?;
+            context.add_verified_binding(artifact, binding, &measured_for_binding, node_boot_id);
             match generations.get_mut(&binding.active_profile_generation_ref_id) {
                 Some(existing) => existing.merge(lowered)?,
                 None => {
@@ -253,6 +257,7 @@ impl PreparedPolicy {
             mount_roots,
             rollback,
             authority,
+            context,
         })
     }
 
@@ -324,6 +329,7 @@ impl PreparedPolicy {
             measured_mount_routes: self.measured.routes,
             resolved_path_binding_ids: self.measured.resolved,
             generation_semantics,
+            discovery_context: Arc::new(self.context),
             dynamic_rows,
             exception_authority: Mutex::new(self.authority),
             retirement_pending: AtomicBool::new(retirement_pending),

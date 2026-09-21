@@ -5,7 +5,7 @@ use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Mutex,
+    Arc, Mutex,
 };
 
 use erebor_interceptor::{KernelHost, MapInsertResult};
@@ -53,6 +53,7 @@ use crate::{
 };
 
 mod device_process;
+mod discovery;
 mod exception_authority;
 mod generation_allocator;
 mod installation;
@@ -60,6 +61,7 @@ mod ipc;
 mod network;
 
 use self::device_process::{lower_typed_effect, TypedEffectContext};
+pub use self::discovery::NodeDiscoveryContextCatalog;
 use self::exception_authority::ExceptionAuthorityOwner;
 use self::generation_allocator::GenerationHandleAllocator;
 use self::installation::{PolicyMeasurements, PreparedPolicy};
@@ -83,6 +85,7 @@ pub struct NodePolicyGenerationOwner {
     measured_mount_routes: Vec<MeasuredMountRouteV1>,
     resolved_path_binding_ids: BTreeSet<String>,
     generation_semantics: BTreeMap<u64, GenerationSemantics>,
+    discovery_context: Arc<NodeDiscoveryContextCatalog>,
     dynamic_rows: BTreeMap<&'static str, BTreeSet<Vec<u8>>>,
     exception_authority: Mutex<ExceptionAuthorityOwner>,
     retirement_pending: AtomicBool,
@@ -167,6 +170,10 @@ type PlannedGenerationRow<'a> = (&'static str, &'a GenerationRows);
 type ActivationDecisionRow<'a> = (PolicyActivationProbeMapKindV1, &'a GenerationRows);
 
 impl NodePolicyGenerationOwner {
+    pub fn discovery_context(&self) -> Arc<NodeDiscoveryContextCatalog> {
+        Arc::clone(&self.discovery_context)
+    }
+
     pub(crate) fn next_generation_ref_id(
         config: &NodeConfig,
         host: &KernelHost,
@@ -7297,8 +7304,8 @@ mod tests {
         Ok((artifact, binding, object))
     }
 
-    fn entry_roles_artifact() -> crate::Result<(ProfileCandidateArtifactV1, WorkloadBindingConfig)>
-    {
+    pub(super) fn entry_roles_artifact(
+    ) -> crate::Result<(ProfileCandidateArtifactV1, WorkloadBindingConfig)> {
         let spec = WorkloadProtectionPolicySpec::parse(
             Path::new("kubernetes-entry-roles-v1.yaml"),
             include_bytes!("../../mithril-control/tests/fixtures/kubernetes-entry-roles-v1.yaml"),
@@ -7390,7 +7397,7 @@ mod tests {
         Ok((artifact, binding))
     }
 
-    fn entry_role_objects(
+    pub(super) fn entry_role_objects(
         artifact: &ProfileCandidateArtifactV1,
         binding: &WorkloadBindingConfig,
     ) -> crate::Result<Vec<ExactFileObjectConfig>> {

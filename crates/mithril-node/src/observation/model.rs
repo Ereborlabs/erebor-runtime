@@ -99,6 +99,8 @@ impl ObservationCanonicalizer {
                     .then(|| event.file_object.into()),
                 exact_object_key_id: event.exact_object_key_id,
                 composite_atom_id: event.composite_atom_id,
+                catalog_json: Vec::new(),
+                catalog_state: "MISSING_CATALOG".to_owned(),
             }),
         };
         observation.validate()?;
