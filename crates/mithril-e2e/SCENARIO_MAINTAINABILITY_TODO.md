@@ -1923,12 +1923,8 @@ test does not close a row when its physical condition or an assertion changed.
       exact protected or allowed object. Keep setup, action, assertions, and
       teardown in a test of fewer than 100 lines.
     - [ ] Pass Host and commit it.
-    - [x] Pass direct `runc` and commit it. The exact direct-`runc` test passed
-      in 29.48 seconds on 2026-09-21. The existing fatal-exec direct-`runc`
-      test passed with the extended policy in 28.94 seconds.
-    - [x] Pass Kubernetes and commit it. The exact Kubernetes test passed in
-      69.69 seconds on 2026-09-21. The existing fatal-exec Kubernetes test
-      passed with the extended policy in 69.49 seconds.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy prepared-descriptor actions, result
       fields, mailbox operations, and fixture owner after all three platforms
       pass. Keep the independent-process mapping cases.
