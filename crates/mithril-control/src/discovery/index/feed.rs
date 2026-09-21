@@ -58,7 +58,7 @@ pub struct DiscoveryRevisionPageV1 {
     pub next: Option<DiscoveryRevisionPositionV1>,
 }
 
-enum RevisionPayload {
+pub(super) enum RevisionPayload {
     Export(DiscoveryExportPageV1),
     Profile(DiscoveryProfileV1),
     Context(ContextRevision),
@@ -66,7 +66,7 @@ enum RevisionPayload {
 }
 
 impl RevisionPayload {
-    fn read(owner: &DiscoveryOwner, head: &DiscoveryHeadV1) -> Result<Self> {
+    pub(super) fn read(owner: &DiscoveryOwner, head: &DiscoveryHeadV1) -> Result<Self> {
         let live = owner.live()?;
         let artifact = live.store.read_discovery_artifact(&head.artifact)?;
         if rmp_serde::from_slice::<DiscoveryExportPageV1>(&artifact.payload).is_ok() {

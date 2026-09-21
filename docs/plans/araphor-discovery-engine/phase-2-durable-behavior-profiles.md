@@ -199,7 +199,7 @@ exports bounded input and exact retention gaps. Profile sealing and bounded
 snapshot reads are implemented. Disabled-by-default runtime supervision and
 stream checkpoints pass the workspace checks.
 Context import and revision projection are implemented with focused checks.
-Live signed-context roundtrip, replacement-index recovery, combined quotas,
+Live signed-context roundtrip, combined quotas,
 process-kill checks, and resource qualification remain open.
 
 ### Bounded reader and source metadata
@@ -755,3 +755,45 @@ distinguishes snapshots from changes. The cloned Kubewarden replay owner checks
 request equality and preserves recorded failures. These lessons support exact
 context and replay; they do not justify automatic policy learning or a second
 agent runtime. The phase remains **Not done**.
+
+### Replacement-index recovery
+
+Read [index admission](../../../crates/mithril-control/src/discovery/index.rs),
+[replacement recovery](../../../crates/mithril-control/src/discovery/index/recovery.rs),
+then [owner startup](../../../crates/mithril-control/src/discovery/live.rs).
+`DiscoveryOwner::rebuild_index` requires the index owner to be closed. It holds
+the existing exclusive lease, builds a separate SQLite file, and reads only
+committed artifacts. It restores context, profile visibility, revision positions,
+and exported-input counts. It checks each snapshot segment, total counts, native
+integrity, foreign keys, and the retained head set before installation.
+
+```text
+closed index -> exclusive lease -> bounded replacement -> artifact checks
+  -> WAL checkpoint -> close connections -> sync database
+  -> sync SHA-256 install marker -> move prior database and sidecars
+  -> install checked replacement -> sync directory -> remove prior files
+
+restart with install marker -> check replacement digest -> finish installation
+startup with corrupt SQLite -> validate artifacts -> rebuild derived index
+unsupported schema or unknown artifact -> reject; keep prior index
+```
+
+The active database has a 1-GiB file bound. Active, replacement, prior, WAL,
+and shared-memory files have a combined 2-GiB bound. Admission reserves 32 MiB
+before a write. A rebuild failure before the install marker leaves the prior
+database in place. Query service is unavailable during replacement. No primary
+policy, trust, or evidence state moves through SQLite.
+
+Process-exit checks cover the durable install marker, the prior-database move,
+and replacement installation. Reopen preserves counts and original revision
+positions. Focused checks also cover corrupt SQLite, a newer schema, an unknown
+authoritative payload, and combined disk bytes at N and N+1. The 35 focused
+Discovery checks passed; the subprocess worker is ignored outside its parent
+test. All three replacement checks and Clippy passed after the snapshot-count
+check. Final verification remains required. One parallel focused run failed at immediate lease reacquisition;
+the next two runs passed. Its cause is not established.
+
+The prior full workspace run failed because a schema-migration test still
+expected version 2 after context and feed tables raised the version to 4.
+The assertion now uses the schema constant and its focused test passed.
+The 50,000-atom check passed in that workspace run. The phase is **Not done**.

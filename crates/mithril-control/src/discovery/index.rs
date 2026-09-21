@@ -2,7 +2,7 @@ use std::{
     fs::{self, File, OpenOptions},
     os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
-    sync::{Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard},
     time::{Duration, Instant},
 };
 
@@ -23,6 +23,7 @@ const MAX_INDEX_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_INDEX_WAL_BYTES: u64 = 64 * 1024 * 1024;
 const INDEX_TRANSACTION_RESERVE: u64 = 32 * 1024 * 1024;
 mod feed;
+mod recovery;
 pub use feed::*;
 
 const INDEX_SCHEMA_VERSION: i64 = 4;
@@ -457,7 +458,7 @@ pub(super) mod tests {
                 .lock()
                 .map_err(|_| "writer poisoned")?
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?,
-            2
+            INDEX_SCHEMA_VERSION
         );
         drop(index);
         drop(store);
@@ -913,7 +914,7 @@ pub struct DiscoveryIndex {
     writer: Mutex<Connection>,
     writes: tokio::sync::Semaphore,
     readers: [Mutex<Connection>; 2],
-    _lease: File,
+    _lease: Arc<File>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -936,6 +937,13 @@ pub struct DiscoveryAtomPageV1 {
 
 impl DiscoveryIndex {
     pub fn open(store: ControlStore) -> Result<Self> {
+        let lease = Self::lease(&store)?;
+        Self::finish_install(&store.root())?;
+        let path = store.root().join("discovery-index.sqlite");
+        Self::open_at(store, path, lease)
+    }
+
+    fn lease(store: &ControlStore) -> Result<Arc<File>> {
         let root = store.root();
         let filesystem = rustix::fs::statfs(&root)
             .map_err(std::io::Error::from)
@@ -962,7 +970,10 @@ impl DiscoveryIndex {
             }
             .build()
         })?;
-        let path = root.join("discovery-index.sqlite");
+        Ok(Arc::new(lease))
+    }
+
+    fn open_at(store: ControlStore, path: PathBuf, lease: Arc<File>) -> Result<Self> {
         match OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -1133,9 +1144,7 @@ impl DiscoveryIndex {
     fn check_disk(&self, reserve: u64) -> Result<()> {
         let mut bytes = 0_u64;
         for suffix in ["", "-wal", "-shm"] {
-            let path = self
-                .path
-                .with_file_name(format!("discovery-index.sqlite{suffix}"));
+            let path = Self::sidecar(&self.path, suffix);
             let length = match fs::metadata(&path) {
                 Ok(metadata) => metadata.len(),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
@@ -1150,11 +1159,33 @@ impl DiscoveryIndex {
         DiscoveryInputManifestV1::require(
             bytes.saturating_add(reserve) <= MAX_INDEX_DISK_BYTES / 2,
             "INDEX_DISK_LIMIT",
+        )?;
+        let mut total = 0_u64;
+        for name in [
+            "discovery-index.sqlite",
+            "discovery-index.rebuild.sqlite",
+            "discovery-index.previous.sqlite",
+        ] {
+            for suffix in ["", "-wal", "-shm"] {
+                let path = self.store.root().join(format!("{name}{suffix}"));
+                match fs::symlink_metadata(&path) {
+                    Ok(metadata) => {
+                        DiscoveryInputManifestV1::require(metadata.is_file(), "INDEX_FILE_TYPE")?;
+                        total = total.saturating_add(metadata.len());
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(source) => return Err(source).context(IoSnafu { path }),
+                }
+            }
+        }
+        DiscoveryInputManifestV1::require(
+            total.saturating_add(reserve) <= MAX_INDEX_DISK_BYTES,
+            "INDEX_REPLACEMENT_LIMIT",
         )
     }
 
     fn reserve_write(&self, writer: &Connection) -> Result<()> {
-        let wal = self.path.with_file_name("discovery-index.sqlite-wal");
+        let wal = Self::sidecar(&self.path, "-wal");
         if fs::metadata(&wal)
             .is_ok_and(|metadata| metadata.len() > MAX_INDEX_WAL_BYTES - INDEX_TRANSACTION_RESERVE)
         {
