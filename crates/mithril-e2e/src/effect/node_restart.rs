@@ -1,23 +1,40 @@
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc, kubernetes)]
+#[platform_test(host)]
 #[lifecycle = node_restart]
 fn node_restart_keeps_actor<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("node-restart")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("actor_sleep_policy.json")?;
+    env.install_policy("runtime_entries_policy.json")?;
     env.node_ready()?;
     let mut actor = env.start_actor("ready.py", &[])?;
     let before = env.task(actor.id(), "actor before Node restart")?;
-
     env.stop_node()?;
     env.start_node()?;
     env.node_ready()?;
     let after = env.task(actor.id(), "actor after Node restart")?;
-
     assert_eq!(after.snapshot, before.snapshot);
     assert_eq!(after.coordinate, before.coordinate);
+    let args = ["/fixtures/ready.py"];
+    let mut prestop = env.add_actor("python", &args)?;
+    prestop.ready()?;
+    let task = env.task(prestop.id(), "PreStop entry after Node restart")?;
+    assert_eq!(
+        task.snapshot.profile_generation_ref_id,
+        after.snapshot.profile_generation_ref_id
+    );
+    assert_eq!(
+        task.snapshot.root_class.as_deref(),
+        Some("external_runtime_root")
+    );
+    assert_eq!(
+        task.snapshot.installed_role_class.as_deref(),
+        Some("qualified_registered_role")
+    );
+    assert_eq!(task.snapshot.active_role_id, 4);
+    assert_ne!(task.snapshot.admitted_entry_rule_id, 0);
+    prestop.stop()?;
     actor.stop()?;
     env.stop()
 }
