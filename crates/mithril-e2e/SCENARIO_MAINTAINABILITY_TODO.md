@@ -1873,7 +1873,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The exact direct-`runc` test passed
       in 29.48 seconds on 2026-09-21. The existing fatal-exec direct-`runc`
       test passed with the extended policy in 28.94 seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact Kubernetes test passed in
+      69.69 seconds on 2026-09-21. The existing fatal-exec Kubernetes test
+      passed with the extended policy in 69.49 seconds.
     - [ ] Remove only the matching legacy prepared-descriptor actions, result
       fields, mailbox operations, and fixture owner after all three platforms
       pass. Keep the independent-process mapping cases.

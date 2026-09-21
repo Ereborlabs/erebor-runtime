@@ -11,7 +11,7 @@ use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 use crate::process::ProcessFixture;
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = terminal_entry]
 fn terminal_entry_is_fatal<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("terminal-entry")?;
