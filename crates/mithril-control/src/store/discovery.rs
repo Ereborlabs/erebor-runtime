@@ -582,6 +582,15 @@ impl ControlStore {
             .collect())
     }
 
+    pub fn discovery_head(&self, key: &DiscoveryHeadKeyV1) -> Result<Option<DiscoveryHeadV1>> {
+        Ok(self
+            .evidence_lock()?
+            .state
+            .discovery_heads
+            .get(key)
+            .cloned())
+    }
+
     pub fn commit_discovery_head(
         &self,
         key: DiscoveryHeadKeyV1,

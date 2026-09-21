@@ -8,6 +8,14 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Discovery database operation {operation} failed: {source}"))]
+    DiscoveryDatabase {
+        operation: &'static str,
+        #[snafu(source(from(rusqlite::Error, Box::new)))]
+        source: Box<rusqlite::Error>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display(
         "Evidence range {first_cursor}..={last_cursor} expired before it was opened"
     ))]
@@ -133,12 +141,25 @@ impl ErrorExt for Error {
             | Self::ControlStore { .. }
             | Self::Decommission { .. }
             | Self::AdministrativeApproval { .. } => StatusCode::InvalidArguments,
-            Self::Io { .. } | Self::Tls { .. } | Self::Serve { .. } => StatusCode::External,
+            Self::DiscoveryDatabase { .. }
+            | Self::Io { .. }
+            | Self::Tls { .. }
+            | Self::Serve { .. } => StatusCode::External,
         }
     }
 
     fn retry_hint(&self) -> RetryHint {
         match self {
+            Self::DiscoveryDatabase { source, .. } => {
+                if matches!(
+                    source.sqlite_error_code(),
+                    Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                ) {
+                    RetryHint::Retryable
+                } else {
+                    RetryHint::NonRetryable
+                }
+            }
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Serve { .. } => RetryHint::Retryable,
             Self::RetainedRangeExpired { .. }

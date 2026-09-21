@@ -109,38 +109,7 @@ impl DiscoveryOwner {
                 });
                 continue;
             }
-            let operation = CompiledOperationV1::try_from(context.static_key.operation_id.as_str());
-            DiscoveryInputManifestV1::require(
-                u16::from(KernelEffectFamilyV1::from(context.static_key.effect_family) as u8)
-                    == observation.effect.effect_family
-                    && operation.is_ok_and(|operation| {
-                        operation.kernel_id as u16 == observation.effect.operation
-                            && (operation.argument_wildcard
-                                || observation.effect.operation_argument.unwrap_or_default()
-                                    == operation.argument)
-                    }),
-                "CONTEXT_OPERATION_MISMATCH",
-            )?;
-            let key = BehaviorAtomKeyV1 {
-                stream: id.stream.clone(),
-                cpu_id: id.cpu_id,
-                subject_revision: context.subject_revision.clone(),
-                image_digest: context.image_digest.clone(),
-                configuration_digest: context.configuration_digest.clone(),
-                process_instance_id: context.process_instance_id,
-                entry_instance_id: context.entry_instance_id,
-                binding_id: context.binding_id,
-                role_id: context.role_id,
-                state_id: context.state_id,
-                entry_rule_id: context.entry_rule_id,
-                catalog_revision: context.catalog_revision,
-                static_key: context.static_key.clone(),
-                generation: observation.profile_generation_ref_id.unwrap_or_default(),
-                coverage_interval_id: observation.coverage_interval_id,
-                temporal_coverage: observation.temporal_coverage,
-                effect: observation.effect.clone(),
-                proof_kind: input.proof_kind,
-            };
+            let key = BehaviorAtomKeyV1::from_record(record, context, input.proof_kind)?;
             let digest = DiscoveryDigestV1::of(&key)?;
             let atom = atoms
                 .entry(digest.clone())
@@ -237,6 +206,49 @@ impl DiscoveryOwner {
             proof_kind: input.proof_kind,
             unresolved_records: derived.snapshot.unresolved_records,
             simulations,
+        })
+    }
+}
+
+impl BehaviorAtomKeyV1 {
+    pub(crate) fn from_record(
+        record: &DiscoveryRecordV1,
+        context: &DiscoveryContextBindingV1,
+        proof_kind: DiscoveryProofKindV1,
+    ) -> Result<Self> {
+        let observation = &record.observation;
+        let operation = CompiledOperationV1::try_from(context.static_key.operation_id.as_str());
+        DiscoveryInputManifestV1::require(
+            context.record_id == record.id
+                && u16::from(KernelEffectFamilyV1::from(context.static_key.effect_family) as u8)
+                    == observation.effect.effect_family
+                && operation.is_ok_and(|operation| {
+                    operation.kernel_id as u16 == observation.effect.operation
+                        && (operation.argument_wildcard
+                            || observation.effect.operation_argument.unwrap_or_default()
+                                == operation.argument)
+                }),
+            "CONTEXT_OPERATION_MISMATCH",
+        )?;
+        Ok(Self {
+            stream: record.id.stream.clone(),
+            cpu_id: record.id.cpu_id,
+            subject_revision: context.subject_revision.clone(),
+            image_digest: context.image_digest.clone(),
+            configuration_digest: context.configuration_digest.clone(),
+            process_instance_id: context.process_instance_id,
+            entry_instance_id: context.entry_instance_id,
+            binding_id: context.binding_id,
+            role_id: context.role_id,
+            state_id: context.state_id,
+            entry_rule_id: context.entry_rule_id,
+            catalog_revision: context.catalog_revision,
+            static_key: context.static_key.clone(),
+            generation: observation.profile_generation_ref_id.unwrap_or_default(),
+            coverage_interval_id: observation.coverage_interval_id,
+            temporal_coverage: observation.temporal_coverage,
+            effect: observation.effect.clone(),
+            proof_kind,
         })
     }
 }

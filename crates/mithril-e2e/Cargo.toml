@@ -44,7 +44,7 @@ uuid.workspace = true
 zerocopy.workspace = true
 
 [dev-dependencies]
-rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled", "hooks", "limits", "extra_check", "fallible_uint"] }
+rusqlite.workspace = true
 axum.workspace = true
 crc32c.workspace = true
 erebor-runtime-client = { path = "../erebor-runtime-client" }
