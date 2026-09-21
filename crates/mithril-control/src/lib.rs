@@ -31,8 +31,8 @@ pub use service::{
 };
 pub use store::{
     startup_absence_proof_digest, ControlStore, ControlStoreHealthV1, DiscoveryArtifactRefV1,
-    DiscoveryArtifactV1, DiscoveryHeadKeyV1, DiscoveryHeadV1, EvidenceReadMetadataV1,
-    EvidenceReadPageV1, EvidenceReadV1, MAX_EVIDENCE_READ_BYTES, MAX_EVIDENCE_READ_HANDLES,
-    MAX_EVIDENCE_READ_RECORDS,
+    DiscoveryArtifactV1, DiscoveryContextJoinV1, DiscoveryContextUnavailableV1, DiscoveryHeadKeyV1,
+    DiscoveryHeadV1, DiscoveryPinnedContextV1, EvidenceReadMetadataV1, EvidenceReadPageV1,
+    EvidenceReadV1, MAX_EVIDENCE_READ_BYTES, MAX_EVIDENCE_READ_HANDLES, MAX_EVIDENCE_READ_RECORDS,
 };
 pub use trust::*;
