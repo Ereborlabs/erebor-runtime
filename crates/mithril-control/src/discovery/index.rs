@@ -418,6 +418,24 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn discovery_index_lease_releases_after_last_owner_with_duplicate_descriptor(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path())?;
+        let index = DiscoveryIndex::open(store.clone())?;
+        let descriptor = index._lease.file.try_clone()?;
+        let active = index._lease.clone();
+        drop(index);
+        assert!(DiscoveryIndex::open(store.clone()).is_err());
+        drop(active);
+        let reopened = DiscoveryIndex::open(store.clone())?;
+        drop(descriptor);
+        assert!(DiscoveryIndex::open(store).is_err());
+        drop(reopened);
+        Ok(())
+    }
+
+    #[test]
     fn discovery_index_rejects_future_schema_and_corrupt_files_without_changing_control(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
@@ -979,7 +997,7 @@ pub struct DiscoveryIndex {
     writer: Mutex<Connection>,
     writes: tokio::sync::Semaphore,
     readers: [Mutex<Connection>; 2],
-    _lease: Arc<File>,
+    _lease: Arc<crate::store::StoreLease>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1068,7 +1086,7 @@ impl DiscoveryIndex {
         Self::open_at(store, path, lease)
     }
 
-    fn lease(store: &ControlStore) -> Result<Arc<File>> {
+    fn lease(store: &ControlStore) -> Result<Arc<crate::store::StoreLease>> {
         let root = store.root();
         let filesystem = rustix::fs::statfs(&root)
             .map_err(std::io::Error::from)
@@ -1095,10 +1113,14 @@ impl DiscoveryIndex {
             }
             .build()
         })?;
-        Ok(Arc::new(lease))
+        Ok(Arc::new(crate::store::StoreLease::from_locked(lease)))
     }
 
-    fn open_at(store: ControlStore, path: PathBuf, lease: Arc<File>) -> Result<Self> {
+    fn open_at(
+        store: ControlStore,
+        path: PathBuf,
+        lease: Arc<crate::store::StoreLease>,
+    ) -> Result<Self> {
         match OpenOptions::new()
             .write(true)
             .create_new(true)
