@@ -12,8 +12,10 @@ use crate::{
     Result,
 };
 
+mod roundtrip;
 #[cfg(test)]
 mod storage;
+pub use roundtrip::DiscoveryQualificationRunner;
 
 pub fn run_discovery_offline(output: &Path) -> Result<()> {
     let input_bytes = include_bytes!("../fixtures/discovery/manifest.json");

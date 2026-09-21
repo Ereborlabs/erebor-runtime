@@ -2,7 +2,6 @@ mod benchmark;
 mod capability;
 mod capability_matrix;
 mod closure;
-#[cfg(test)]
 mod control_fixture;
 #[cfg(test)]
 mod control_tls;
@@ -29,7 +28,7 @@ pub use benchmark::{LatencyDistributionV1, OpenBenchmarkRecordV1};
 pub use capability::{CompileRecordV1, PlatformProbeV1};
 pub use closure::ClosureLedgerV1;
 pub use digest::DigestV1;
-pub use discovery::run_discovery_offline;
+pub use discovery::{run_discovery_offline, DiscoveryQualificationRunner};
 pub use effect::run_network_peer_server;
 pub use effect::{
     run_effect_child, run_mount_reconfigure_child, run_mount_setattr_child, EffectHealthV1,

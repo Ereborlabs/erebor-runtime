@@ -19,6 +19,7 @@ use rcgen::{
 use sha2::{Digest as _, Sha256};
 use tokio::sync::oneshot;
 
+#[cfg(test)]
 use crate::physical::wait_for_async;
 
 pub(crate) struct ControlServerFixture {
@@ -45,6 +46,7 @@ impl MtlsFixture {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn kubernetes(server_name: &str) -> Result<Self, Box<dyn StdError>> {
         let directory = tempfile::tempdir()?;
         let certificates = Certificates::issue_for(false, &["localhost", server_name])?;
@@ -88,10 +90,12 @@ impl MtlsFixture {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn node_digest(&self) -> String {
         self.certificates.node_digest()
     }
 
+    #[cfg(test)]
     pub(crate) fn control(&self, generation: u64) -> mithril_control::Result<ControlPlane> {
         self.control_with_store(
             ControlStore::open(self.path().join("control-store"))?,
@@ -188,6 +192,7 @@ impl ControlServerFixture {
         self.address
     }
 
+    #[cfg(test)]
     pub(crate) async fn from_running(
         address: SocketAddr,
         shutdown: oneshot::Sender<()>,
