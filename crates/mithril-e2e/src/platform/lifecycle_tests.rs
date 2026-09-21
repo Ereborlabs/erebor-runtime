@@ -61,6 +61,7 @@ fn churn_keeps_next_actor<P: Platform + 'static>() -> TestResult<()> {
         env.install_policy(policy)?;
         env.node_ready()?;
         let mut actor = env.start_actor("task_churn.py", &["512"])?;
+        let base = env.health()?;
         let before = env.task(actor.id(), "actor identity before churn")?;
         actor.send(b"churn\n")?;
         let result = actor
@@ -109,7 +110,13 @@ fn churn_keeps_next_actor<P: Platform + 'static>() -> TestResult<()> {
                 health.missing_identity_denials,
                 health.exec_guard_denials,
             ),
-            (0, 0, 0, 0, 0)
+            (
+                base.allocation_failures,
+                base.coordinate_failures,
+                base.placement_mismatches,
+                base.missing_identity_denials,
+                base.exec_guard_denials,
+            )
         );
         actor.stop()?;
         env.stop()?;

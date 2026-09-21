@@ -251,8 +251,12 @@ reimplement a production owner operation.
   No allocation, coordinate, placement, missing-identity, or exec-guard failure
   occurred. The Kubernetes test passed in 224.78 seconds. It used one retained
   K3s cluster and one real Helm-deployed Control and Node for all eight actor
-  Pods. Do not change Kubernetes readiness to hide a result. Add direct `runc`
-  only after Host passes. Add Kubernetes only after direct `runc` passes.
+  Pods. The first complete Host lifecycle exposed seven cumulative placement
+  mismatches from earlier intentional move tests. The churn test now records
+  its health baseline after policy readiness and requires no counter increase.
+  The complete Host lifecycle then passed all 30 tests in 321.34 seconds. Do
+  not change Kubernetes readiness to hide a result. Add direct `runc` only
+  after Host passes. Add Kubernetes only after direct `runc` passes.
 - Do not add a test registry, custom test language, replacement harness,
   builder, factory, or scenario-specific lifecycle implementation.
 - Verify serial lifecycle tests first. Enable bounded parallel tests only
