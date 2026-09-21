@@ -21,16 +21,14 @@ mod support;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::mem::{offset_of, size_of};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use erebor_interceptor::{EffectObservationReader, KernelHost, KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::{
-    BindingActivationTargetKeyV1, ExceptionReceiptStateV1, ExceptionRuntimeStateKeyV1,
-    ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExceptionUseReceiptV1, Id128V1,
-    IpcOperationV1, KernelEffectFamilyV1, KernelEffectOperationV1, PolicyGenerationStateV1,
-    ProfileGenerationDescriptorV1, QualificationResultV1, MAX_CANONICAL_PATH_COMPONENTS_V1,
+    BindingActivationTargetKeyV1, Id128V1, IpcOperationV1, KernelEffectFamilyV1,
+    KernelEffectOperationV1, PolicyGenerationStateV1, ProfileGenerationDescriptorV1,
+    QualificationResultV1, MAX_CANONICAL_PATH_COMPONENTS_V1,
 };
 use mithril_control::{
     ContainerKindV1, ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1,
@@ -78,11 +76,6 @@ pub(super) const PROFILE_GENERATION_REF_ID: u64 = 1;
 const NEXT_PROFILE_GENERATION_REF_ID: u64 = 2;
 const QUALIFIED_TIOCGPTN_IOCTL: u32 = 2_147_767_344;
 const QUALIFIED_TIOCGPTPEER_IOCTL: u32 = 0x5441;
-const BOUNDED_EXCEPTION_INSTANCE_ID: Id128V1 =
-    Id128V1::new(0x8888_8888_8888_4888, 0x8888_8888_8888_8889);
-const EXPIRED_EXCEPTION_INSTANCE_ID: Id128V1 =
-    Id128V1::new(0x8888_8888_8888_4888, 0x8888_8888_8888_888a);
-
 fn reconcile_policy_lifecycle(
     policy: &NodePolicyGenerationOwner,
     host: &mut KernelHost,
@@ -431,11 +424,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub ptmx_derived_peer_installed_nothing: bool,
     pub zero_device_ioctl_exact_denied: bool,
     pub managed_link_pin_unlink_denied: bool,
-    pub bounded_exception_maximum_uses: u32,
-    pub bounded_exception_n_allows: bool,
-    pub bounded_exception_n_plus_one_denied: bool,
-    pub bounded_exception_expiry_denied: bool,
-    pub bounded_exception_restart_preserved: bool,
     pub hard_link_alias_denied: bool,
     pub symlink_alias_denied: bool,
     pub proc_fd_alias_denied: bool,
@@ -1500,7 +1488,6 @@ impl EffectTestRunner {
         NativeSecurityStateOwner::new(node_boot_id, 1)
             .activate(&mut host)
             .context(NodeSnafu)?;
-
         let mut fixture = EffectProcessFixture::start(&fixture_root)?;
         let paths = fixture.setup()?;
         let path_tree_preexisting = path_tree_root.join("pre-existing");
@@ -1563,9 +1550,6 @@ impl EffectTestRunner {
                 reason: "executable control failed before effect policy activation",
             }
         );
-        if protect {
-            fixture.prepare_write_race(&paths.secret, 8)?;
-        }
         fs::write(cgroup_path.join("cgroup.procs"), fixture.pid().to_string()).context(
             IoSnafu {
                 path: cgroup_path.join("cgroup.procs"),
@@ -1600,7 +1584,9 @@ impl EffectTestRunner {
                 && baseline.allowed == measured_opens,
             InvalidInputSnafu {
                 path: &paths.secret,
-                reason: "baseline file opens failed before effect observation was enabled",
+                reason: format!(
+                    "baseline file opens failed before effect observation was enabled: {baseline:?}"
+                ),
             }
         );
         if protect {
@@ -1876,7 +1862,7 @@ impl EffectTestRunner {
         )
         .context(NodeSnafu)?;
         let sink = observations.clone();
-        let mut reader = host
+        let reader = host
             .effect_observation_reader(move |bytes| {
                 sink.record_bytes(bytes);
                 0
@@ -1924,271 +1910,6 @@ impl EffectTestRunner {
                 PathSelectorV1::kernel_handle_for_id("manual-benign"),
                 None,
             )?;
-
-            let exception_marker = observations.cursor();
-            let exception_race = fixture.write_race(&paths.secret, 8)?;
-            ensure!(
-                exception_race.allowed == 2
-                    && exception_race.denied == 6
-                    && exception_race.other_errors == 0,
-                InvalidInputSnafu {
-                    path: &paths.secret,
-                    reason: format!(
-                        "concurrent bounded exception did not allow exactly N=2 uses: {exception_race:?}"
-                    ),
-                }
-            );
-            wait_for_reason(
-                &reader,
-                &observations,
-                exception_marker,
-                "EXACT_POLICY_ALLOW",
-            )?;
-            wait_for_reason(
-                &reader,
-                &observations,
-                exception_marker,
-                "EXCEPTION_UNAVAILABLE",
-            )?;
-            let exception_events = observations.recent_since(exception_marker);
-            ensure!(
-                exception_events
-                    .iter()
-                    .filter(|event| event.reason == "EXACT_POLICY_ALLOW")
-                    .count()
-                    == 2
-                    && exception_events
-                        .iter()
-                        .filter(|event| event.reason == "EXCEPTION_UNAVAILABLE")
-                        .count()
-                        == 6,
-                InvalidInputSnafu {
-                    path: Path::new("effect_observations"),
-                    reason: "concurrent bounded-exception evidence did not match N and N+1",
-                }
-            );
-            let keys = host
-                .map_keys("exception_runtime_states")
-                .context(InterceptorSnafu)?;
-            ensure!(
-                keys.len() == 2,
-                InvalidInputSnafu {
-                    path: Path::new("exception_runtime_states"),
-                    reason: "exception fixture did not install its bounded and expiry instances",
-                }
-            );
-            let key_for_instance = |instance_id| {
-                keys.iter().find_map(|key| {
-                    ExceptionRuntimeStateKeyV1::try_read_from_bytes(key)
-                        .ok()
-                        .filter(|key| key.exception_instance_id == instance_id)
-                        .map(|_| key.clone())
-                })
-            };
-            let key = key_for_instance(BOUNDED_EXCEPTION_INSTANCE_ID).ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: Path::new("exception_runtime_states"),
-                    reason: "bounded-exception fixture has no signed stable instance",
-                }
-                .build()
-            })?;
-            let expiry_key = key_for_instance(EXPIRED_EXCEPTION_INSTANCE_ID).ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: Path::new("exception_runtime_states"),
-                    reason: "expiry fixture has no signed stable instance",
-                }
-                .build()
-            })?;
-            let exception = host
-                .lookup_map_locked("exception_runtime_states", &key)
-                .context(InterceptorSnafu)?
-                .ok_or_else(|| {
-                    InvalidInputSnafu {
-                        path: Path::new("exception_runtime_states"),
-                        reason: "bounded exception state disappeared after consumption",
-                    }
-                    .build()
-                })?;
-            ensure!(
-                exception.len() == size_of::<ExceptionRuntimeStateV1>()
-                    && u32::from_ne_bytes(
-                        exception[offset_of!(ExceptionRuntimeStateV1, consumed_uses)
-                            ..offset_of!(ExceptionRuntimeStateV1, consumed_uses) + 4]
-                            .try_into()
-                            .unwrap_or_default()
-                    ) == 2
-                    && exception[offset_of!(ExceptionRuntimeStateV1, state)]
-                        == ExceptionRuntimeStateKindV1::Exhausted as u8,
-                InvalidInputSnafu {
-                    path: Path::new("exception_runtime_states"),
-                    reason: "bounded exception did not finish in exact exhausted state",
-                }
-            );
-            let mut consumed_ordinals = Vec::new();
-            let mut other_receipts = 0_usize;
-            for receipt_key in host
-                .map_keys("exception_use_receipts")
-                .context(InterceptorSnafu)?
-                .into_iter()
-                .filter(|receipt_key| receipt_key.starts_with(&key))
-            {
-                let receipt = host
-                    .lookup_map("exception_use_receipts", &receipt_key)
-                    .context(InterceptorSnafu)?
-                    .ok_or_else(|| {
-                        InvalidInputSnafu {
-                            path: Path::new("exception_use_receipts"),
-                            reason: "bounded-exception receipt disappeared during readback",
-                        }
-                        .build()
-                    })?;
-                let receipt =
-                    ExceptionUseReceiptV1::try_read_from_bytes(&receipt).map_err(|error| {
-                        InvalidInputSnafu {
-                            path: Path::new("exception_use_receipts"),
-                            reason: format!("bounded-exception receipt has invalid ABI: {error}"),
-                        }
-                        .build()
-                    })?;
-                match receipt.state {
-                    ExceptionReceiptStateV1::Consumed => {
-                        consumed_ordinals.push(receipt.consumed_ordinal);
-                    }
-                    _ => other_receipts += 1,
-                }
-            }
-            consumed_ordinals.sort_unstable();
-            ensure!(
-                consumed_ordinals == [1, 2] && other_receipts == 0,
-                InvalidInputSnafu {
-                    path: Path::new("exception_use_receipts"),
-                    reason: "bounded exception did not retain only successful-use receipts",
-                }
-            );
-
-            drop(reader);
-            host.shutdown().context(InterceptorSnafu)?;
-            host = KernelHostOwner::new(kernel_config.clone())
-                .start()
-                .context(InterceptorSnafu)?;
-            policy = policy
-                .reload_and_install_for_test_objects(
-                    &node_config,
-                    &mut host,
-                    node_boot_id,
-                    1,
-                    test_exact_objects.clone(),
-                )
-                .context(NodeSnafu)?;
-            NativeSecurityStateOwner::new(node_boot_id, 1)
-                .activate_initial_with_effect_policy(&mut host, true)
-                .context(NodeSnafu)?;
-            let sink = observations.clone();
-            reader = host
-                .effect_observation_reader(move |bytes| {
-                    sink.record_bytes(bytes);
-                    0
-                })
-                .context(InterceptorSnafu)?;
-            ensure!(
-                host.lookup_map_locked("exception_runtime_states", &key)
-                    .context(InterceptorSnafu)?
-                    .as_deref()
-                    == Some(exception.as_slice()),
-                InvalidInputSnafu {
-                    path: Path::new("exception_runtime_states"),
-                    reason: "loader restart changed the exhausted exception state",
-                }
-            );
-            let restart_marker = observations.cursor();
-            ensure!(
-                fixture.open_write(&paths.secret)?.denied(),
-                InvalidInputSnafu {
-                    path: &paths.secret,
-                    reason: "loader restart revived an exhausted bounded exception",
-                }
-            );
-            wait_for_reason(
-                &reader,
-                &observations,
-                restart_marker,
-                "EXCEPTION_UNAVAILABLE",
-            )?;
-
-            let pending_expiry = host
-                .lookup_map_locked("exception_runtime_states", &expiry_key)
-                .context(InterceptorSnafu)?
-                .ok_or_else(|| {
-                    InvalidInputSnafu {
-                        path: Path::new("exception_runtime_states"),
-                        reason: "expiry exception state disappeared before its effect",
-                    }
-                    .build()
-                })?;
-            let pending_expiry = ExceptionRuntimeStateV1::try_read_from_bytes(&pending_expiry)
-                .map_err(|error| {
-                    InvalidInputSnafu {
-                        path: Path::new("exception_runtime_states"),
-                        reason: format!("expiry exception state has invalid ABI: {error}"),
-                    }
-                    .build()
-                })?;
-            ensure!(
-                pending_expiry.maximum_uses == 1
-                    && pending_expiry.consumed_uses == 0
-                    && pending_expiry.transition_version == 1
-                    && pending_expiry.state == ExceptionRuntimeStateKindV1::Active,
-                InvalidInputSnafu {
-                    path: Path::new("exception_runtime_states"),
-                    reason: "expiry exception did not start as one unused signed authority",
-                }
-            );
-            let expiry_marker = observations.cursor();
-            ensure!(
-                fixture.open_write(&paths.benign)?.denied(),
-                InvalidInputSnafu {
-                    path: &paths.benign,
-                    reason: "an expired bounded exception allowed a write-open",
-                }
-            );
-            wait_for_effect(
-                &reader,
-                &observations,
-                expiry_marker,
-                "EXCEPTION_UNAVAILABLE",
-                (
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::OpenWrite,
-                ),
-            )?;
-            let expired = host
-                .lookup_map_locked("exception_runtime_states", &expiry_key)
-                .context(InterceptorSnafu)?
-                .ok_or_else(|| {
-                    InvalidInputSnafu {
-                        path: Path::new("exception_runtime_states"),
-                        reason: "expired exception state disappeared",
-                    }
-                    .build()
-                })?;
-            let expired =
-                ExceptionRuntimeStateV1::try_read_from_bytes(&expired).map_err(|error| {
-                    InvalidInputSnafu {
-                        path: Path::new("exception_runtime_states"),
-                        reason: format!("expired exception state has invalid ABI: {error}"),
-                    }
-                    .build()
-                })?;
-            ensure!(
-                expired.maximum_uses == 1
-                    && expired.consumed_uses == 0
-                    && expired.transition_version == 2
-                    && expired.state == ExceptionRuntimeStateKindV1::Expired,
-                InvalidInputSnafu {
-                    path: Path::new("exception_runtime_states"),
-                    reason: "expired exception was consumed or did not enter EXPIRED state",
-                }
-            );
 
             reconcile_policy_lifecycle(&policy, &mut host)?;
             let inherited_marker = observations.cursor();
@@ -4160,11 +3881,6 @@ impl EffectTestRunner {
             ptmx_derived_peer_installed_nothing: protect,
             zero_device_ioctl_exact_denied: protect,
             managed_link_pin_unlink_denied: true,
-            bounded_exception_maximum_uses: if protect { 2 } else { 0 },
-            bounded_exception_n_allows: protect,
-            bounded_exception_n_plus_one_denied: protect,
-            bounded_exception_expiry_denied: protect,
-            bounded_exception_restart_preserved: protect,
             hard_link_alias_denied: true,
             symlink_alias_denied: protect,
             proc_fd_alias_denied: protect,

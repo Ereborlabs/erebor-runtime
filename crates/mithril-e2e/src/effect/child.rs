@@ -10,7 +10,6 @@ use std::os::unix::net::{SocketAddr as UnixSocketAddr, UnixListener, UnixStream}
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -56,14 +55,6 @@ enum ChildRequest {
     },
     OpenWrite {
         path: PathBuf,
-    },
-    PrepareWriteRace {
-        path: PathBuf,
-        count: u32,
-    },
-    WriteRace {
-        path: PathBuf,
-        count: u32,
     },
     OpenMany {
         path: PathBuf,
@@ -438,41 +429,6 @@ impl EffectProcessFixture {
             ChildResponse::Outcome(outcome) => Ok(outcome),
             _ => Err(invalid_state(
                 "effect child returned the wrong read response",
-            )),
-        }
-    }
-
-    pub(super) fn open_write(&mut self, path: &Path) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::OpenWrite {
-            path: path.to_path_buf(),
-        })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong write-open response",
-            )),
-        }
-    }
-
-    pub(super) fn prepare_write_race(&mut self, path: &Path, count: u32) -> Result<()> {
-        match self.request(&ChildRequest::PrepareWriteRace {
-            path: path.to_path_buf(),
-            count,
-        })? {
-            ChildResponse::Prepared => Ok(()),
-            _ => Err(invalid_state(
-                "effect child returned the wrong write-race preparation response",
-            )),
-        }
-    }
-
-    pub(super) fn write_race(&mut self, path: &Path, count: u32) -> Result<BatchOutcome> {
-        match self.request(&ChildRequest::WriteRace {
-            path: path.to_path_buf(),
-            count,
-        })? {
-            ChildResponse::Batch(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong write-race response",
             )),
         }
     }
@@ -974,7 +930,6 @@ impl Drop for EffectProcessFixture {
 pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> {
     enter_private_mount_namespace()?;
     let mut mailbox = SharedMailbox::open(mailbox_path)?;
-    let mut prepared_write_race = None;
     let mut prepared_file = None;
     let mut prepared_hard_closed = None;
     let mut prepared_network_clone = None;
@@ -1008,22 +963,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
             ChildRequest::OpenWrite { path } => {
                 (Ok(ChildResponse::Outcome(open_write_outcome(&path))), false)
             }
-            ChildRequest::PrepareWriteRace { path, count } => {
-                match PreparedWriteRace::new(path, count) {
-                    Ok(prepared) => {
-                        prepared_write_race = Some(prepared);
-                        (Ok(ChildResponse::Prepared), false)
-                    }
-                    Err(error) => (Err(error), false),
-                }
-            }
-            ChildRequest::WriteRace { path, count } => match prepared_write_race.take() {
-                Some(prepared) => (prepared.run(&path, count).map(ChildResponse::Batch), false),
-                None => (
-                    Err(invalid_state("effect write race was not prepared")),
-                    false,
-                ),
-            },
             ChildRequest::OpenMany { path, count } => {
                 (Ok(ChildResponse::Batch(open_many(&path, count))), false)
             }
@@ -1919,80 +1858,6 @@ fn open_samples(path: &Path, count: u32) -> SampledBatchOutcome {
     SampledBatchOutcome {
         batch,
         raw_samples_ns,
-    }
-}
-
-struct PreparedWriteRace {
-    path: PathBuf,
-    barrier: Arc<Barrier>,
-    handles: Vec<std::thread::JoinHandle<IoOutcome>>,
-}
-
-impl PreparedWriteRace {
-    fn new(path: PathBuf, count: u32) -> Result<Self> {
-        let worker_count = usize::try_from(count).map_err(|error| {
-            invalid_state(format!("effect write worker count is invalid: {error}"))
-        })?;
-        ensure!(
-            worker_count > 0,
-            InvalidInputSnafu {
-                path: &path,
-                reason: "effect write race needs at least one worker",
-            }
-        );
-        let barrier = Arc::new(Barrier::new(worker_count + 1));
-        let mut handles = Vec::with_capacity(worker_count);
-        for _ in 0..worker_count {
-            let worker_path = path.clone();
-            let worker_barrier = Arc::clone(&barrier);
-            handles.push(
-                std::thread::Builder::new()
-                    .spawn(move || {
-                        worker_barrier.wait();
-                        open_write_outcome(&worker_path)
-                    })
-                    .context(IoSnafu {
-                        path: Path::new("effect write thread"),
-                    })?,
-            );
-        }
-        Ok(Self {
-            path,
-            barrier,
-            handles,
-        })
-    }
-
-    fn run(self, path: &Path, count: u32) -> Result<BatchOutcome> {
-        ensure!(
-            path == self.path && usize::try_from(count).ok() == Some(self.handles.len()),
-            InvalidInputSnafu {
-                path,
-                reason: "effect write race differs from its prepared workers",
-            }
-        );
-        let start = Instant::now();
-        self.barrier.wait();
-        let mut result = BatchOutcome {
-            allowed: 0,
-            denied: 0,
-            other_errors: 0,
-            elapsed_ns: 0,
-        };
-        for handle in self.handles {
-            let outcome = handle
-                .join()
-                .map_err(|_| invalid_state("effect write thread panicked"))?;
-            if outcome.allowed {
-                result.allowed += 1;
-            } else if outcome.denied() {
-                result.denied += 1;
-            } else {
-                result.other_errors += 1;
-            }
-        }
-        result.elapsed_ns = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
-        Ok(result)
     }
 }
 
@@ -3713,8 +3578,8 @@ mod tests {
 
     use super::{
         invalid_state, mmap_outcome, network_read_results, ptmx_number_outcome, ptmx_peer_outcome,
-        read_outcome, unlock_ptmx, BatchOutcome, BpfMapCreateAttr, IoOutcome, PreparedWriteRace,
-        SharedMmapTarget, UnixStreamTarget, BPF_MAP_TYPE_ARRAY,
+        read_outcome, unlock_ptmx, BatchOutcome, BpfMapCreateAttr, IoOutcome, SharedMmapTarget,
+        UnixStreamTarget, BPF_MAP_TYPE_ARRAY,
     };
     use crate::effect::fixture_syscalls;
     use crate::effect::mailbox::SharedMailbox;
@@ -3879,22 +3744,6 @@ mod tests {
         assert!(!path.exists());
         assert_eq!(descriptor_len.len(), 7);
         assert_eq!(&mapping[..], b"fixture");
-        Ok(())
-    }
-
-    #[test]
-    fn prepared_write_race_releases_every_preallocated_worker() -> crate::Result<()> {
-        let file = tempfile::NamedTempFile::new().map_err(|source| crate::Error::Io {
-            path: "prepared write fixture".into(),
-            source,
-            location: snafu::location!(),
-        })?;
-        let prepared = PreparedWriteRace::new(file.path().to_path_buf(), 8)?;
-        let outcome = prepared.run(file.path(), 8)?;
-
-        assert_eq!(outcome.allowed, 8);
-        assert_eq!(outcome.denied, 0);
-        assert_eq!(outcome.other_errors, 0);
         Ok(())
     }
 

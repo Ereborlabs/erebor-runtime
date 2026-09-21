@@ -27,6 +27,8 @@ const FILES: [&str; 6] = [
 ];
 const STATE_MAP: &str = "exception_runtime_states";
 const COORD_MAP: &str = "task_coordinates";
+const ALLOW: &str = "EXACT_POLICY_ALLOW";
+const UNAVAILABLE: &str = "EXCEPTION_UNAVAILABLE";
 type Coord = TaskCoordinateV1;
 type State = ExceptionRuntimeStateV1;
 
@@ -66,13 +68,9 @@ fn bounded_exception_is_exact<P: Platform>() -> TestResult<()> {
     let denied = errors.iter().filter(|&&code| code == libc::EACCES).count();
     assert_eq!((errors.len(), allowed, denied), (8, 2, 6));
     let matches = |event: &MithrilEffectObservation, cookie: u64, code: i32| {
+        let reason = if code == 0 { ALLOW } else { UNAVAILABLE };
         event.task_cookie == cookie
-            && event.reason
-                == if code == 0 {
-                    "EXACT_POLICY_ALLOW"
-                } else {
-                    "EXCEPTION_UNAVAILABLE"
-                }
+            && event.reason == reason
             && event.effect_family == u32::from(F::File as u16)
             && event.operation == u32::from(O::OpenWrite as u16)
             && event.active_role_id == root.snapshot.active_role_id
@@ -120,8 +118,8 @@ fn bounded_exception_is_exact<P: Platform>() -> TestResult<()> {
             && event.exact_object_key_id == 0
     }) {
         counts[match event.reason.as_str() {
-            "EXACT_POLICY_ALLOW" => 0,
-            "EXCEPTION_UNAVAILABLE" => 1,
+            ALLOW => 0,
+            UNAVAILABLE => 1,
             _ => 2,
         }] += 1;
         assert!(atom == 0 || atom == event.composite_atom_id);

@@ -1083,34 +1083,6 @@ mod tests {
                 && cell.key.object_selector == "DEVICE:ZERO_DEVICE:2147767344"
                 && cell.physical_result == CompiledPhysicalResultV1::DenyEffect
         }));
-        assert_eq!(
-            artifact
-                .compiled_profile
-                .compiled_cells
-                .iter()
-                .filter(|cell| cell.consuming_exception_id.is_some())
-                .count(),
-            2
-        );
-        for (exception_id, expected_digest) in [
-            (
-                "bounded-secret-write-open",
-                "5bb883e3b91342e70e970fff1794e8cb3299c88fc1b32585de6204dc0a514734",
-            ),
-            (
-                "expired-benign-write-open",
-                "204bf0cbc52163f870bdf789ac161adfc15c44fd8aa8d9695f9d884791363309",
-            ),
-        ] {
-            let cell = cells
-                .iter()
-                .find(|cell| cell.consuming_exception_id.as_deref() == Some(exception_id))
-                .ok_or("protect fixture has no expected exception cell")?;
-            assert_eq!(
-                cell.key.digest(&artifact.compiled_profile.profile_id)?,
-                expected_digest
-            );
-        }
         Ok(())
     }
 }

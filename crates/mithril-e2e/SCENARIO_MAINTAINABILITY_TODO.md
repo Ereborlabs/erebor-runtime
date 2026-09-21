@@ -445,10 +445,10 @@ These Rust files exceed 2,000 lines:
 
 | Source | Current lines |
 | --- | ---: |
-| `effect/runc.rs` | 7,518 |
-| `identity.rs` | 6,394 |
-| `effect.rs` | 5,118 |
-| `effect/child.rs` | 4,472 |
+| `effect/runc.rs` | 7,231 |
+| `identity.rs` | 5,430 |
+| `effect.rs` | 4,155 |
+| `effect/child.rs` | 3,980 |
 | `control_tls.rs` | 2,734 |
 | `effect/network.rs` | 2,329 |
 
@@ -951,7 +951,7 @@ regressions and verify them with every Control migration:
 - [ ] Replace the observation deadline loop with the shared wait. Preserve the
   complete recent-observation summary on failure.
 
-Keep and rerun all 24 focused regressions in `effect/child.rs`,
+Keep and rerun all 23 focused regressions in `effect/child.rs`,
 `effect/mailbox.rs`, `effect/support.rs`, and the four tests at the end of
 `effect.rs`. These tests already express one action and one result. Do not
 move them into a generic scenario table.
@@ -1843,8 +1843,15 @@ test does not close a row when its physical condition or an assertion changed.
       had zero restarts, and all three tests passed in 170.00 seconds. Final
       teardown removed the namespace and runtime sockets. The process exited
       with status 0 without recreating the VM or K3s cluster.
-    - [ ] Remove only the matching legacy actions, result fields, mailbox
-      operations, and fixture owner after all three platform cases pass.
+    - [x] Remove only the matching legacy actions, result fields, mailbox
+      operations, worker owner, and embedded policy rules after all three
+      platform cases pass. The actor-only write-race test was also removed.
+      The final source passes the exact replacement test on Host in 28.74
+      seconds, direct `runc` in 31.38 seconds, and Kubernetes in 69.55 seconds.
+      The exact committed legacy probe fails at the same unrelated pre-policy
+      baseline as the edited source, so this deletion did not cause that
+      failure. The failure reports all 6,000 opens as `EACCES` after the old
+      probe moves an unlabeled actor into an active binding.
   - [ ] Replace the pre-activation descriptor read and mapping block with one
     small standard platform test. Use one shared Python actor and scenario
     policy. Do not add a Platform API.
@@ -2496,7 +2503,6 @@ keep an actor-only duplicate only to preserve the old name.
 - `effect/child.rs::native_exec_and_descriptor_transfer_controls_work_without_policy`
 - `effect/child.rs::network_chain_keeps_file_read_results_separate`
 - `effect/child.rs::prepared_file_fixture_can_read_and_map_before_policy_activation`
-- `effect/child.rs::prepared_write_race_releases_every_preallocated_worker`
 - `effect/child.rs::process_control_target_is_live_until_its_owner_releases_it`
 - `effect/child.rs::ptmx_ioctl_requires_success_and_kernel_output`
 - `effect/child.rs::queued_descriptor_controls_arrive_in_declared_order`
