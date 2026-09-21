@@ -563,6 +563,8 @@ impl NodeChassis {
                 request.oci_root_fd,
                 &bundle,
             )?;
+            self.observations
+                .set_discovery_context(Some(policy.discovery_context()));
             self.bindings
                 .verify_runtime_entry_staging(host, &binding_id)?;
             self.bindings
@@ -797,6 +799,11 @@ impl NodeChassis {
         };
         if next_policy.is_some() || generation_retired {
             self.policy = next_policy;
+            self.observations.set_discovery_context(
+                self.policy
+                    .as_ref()
+                    .map(crate::NodePolicyGenerationOwner::discovery_context),
+            );
         }
         // Keep the global policy gate active while an old generation still has live references.
         self.identity
@@ -888,6 +895,11 @@ impl NodeChassis {
                 reason: error.to_string(),
             };
         }
+        self.observations.set_discovery_context(
+            self.policy
+                .as_ref()
+                .map(crate::NodePolicyGenerationOwner::discovery_context),
+        );
         ReconciliationOutcome::Healthy
     }
 
@@ -1015,6 +1027,11 @@ impl NodeChassis {
             label_epoch: self.label_epoch,
         }
         .activate_policy(host, bundle, prepared)?;
+        self.observations.set_discovery_context(
+            self.policy
+                .as_ref()
+                .map(crate::NodePolicyGenerationOwner::discovery_context),
+        );
         let prevention_enabled = self
             .policy
             .as_ref()

@@ -519,6 +519,12 @@ impl Evidence {
             evidence.into(),
             canonicalizer,
         )?;
+        observations.set_discovery_context(
+            enforcement
+                .policy
+                .as_ref()
+                .map(crate::NodePolicyGenerationOwner::discovery_context),
+        );
         let queue_capacity = evidence.maximum_reader_queue_records;
         let batch_capacity = evidence.maximum_batch_records.min(queue_capacity);
         let (ingress, worker) =

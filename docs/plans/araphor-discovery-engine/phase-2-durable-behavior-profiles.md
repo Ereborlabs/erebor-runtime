@@ -193,8 +193,9 @@ are proven. Phase 3 requires approval.
 ## Result
 
 **Not done.** The bounded reader and checked store migration are implemented.
-The signed-context lookup, durable derivation, SQL index, runtime loop, context
-import, and revision feed remain to be implemented and verified.
+The signed-context lookup is implemented. Durable derivation, SQL index,
+runtime loop, context import, revision feed, and live context roundtrip remain
+to be implemented and verified.
 
 ### Bounded reader and source metadata
 
@@ -264,3 +265,38 @@ disk was full; it is not a pass. Scoped Cargo cleanup removed only generated
 Mithril build output before the successful repeat. The document check passed
 215 local links across 27 documents. Signed-catalog lookup and the live
 context-roundtrip case remain open.
+
+### Signed decision catalogue
+
+Read the [policy catalogue](../../../crates/mithril-node/src/policy/discovery.rs),
+then its construction in
+[NodePolicyGenerationOwner](../../../crates/mithril-node/src/policy.rs),
+publication in [NodeChassis](../../../crates/mithril-node/src/node.rs), and use in
+[EffectObservationStore](../../../crates/mithril-node/src/observation.rs).
+The existing policy owner verifies the signed artifact and measures selector
+bindings before it constructs the immutable lookup. Startup, activation,
+runtime reconciliation, OCI preparation, and retirement publish its snapshot.
+The existing generation allocator rejects a handle with changed semantics.
+
+The lookup requires equal boot, generation, binding, role, state, entry rule,
+effect, operation, exact object, and composite atom. It copies the profile
+identity, signed policy digest, and exact static key into optional context.
+Conflicting static keys remain ambiguous. Unmeasured objects have no match.
+Observation takes one shared snapshot per batch. It makes no filesystem or
+Control request to resolve an event. The catalogue is limited to 16 MiB of
+accounted allocation; the complete context is limited to 16 KiB. A limit or
+missing match keeps the base event with an explicit unavailable reason.
+
+The [Control evidence model](../../../crates/mithril-control/src/evidence/model.rs)
+checks the catalogue digest and its coordinates against the base event. The
+digest is an integrity check, not a new signature or policy authority. The
+live derivation must still join the referenced policy and workload facts from
+Control. WAL replay uses recorded catalogue bytes, not the current lookup.
+The catalogue test covers equal input, conflicting input, changed content,
+reused numeric handles on another boot, WAL restart, and both size limits.
+
+Verification: the focused catalogue check passed one test. After the final
+Rust edit, `bash .github/scripts/verify-rust-ci.sh` passed. The Node library
+passed 246 tests. The e2e library passed 98 tests and ignored 163 physical or
+manual cases. The document check passed 220 local links across 27 documents.
+These checks do not close the live context-roundtrip acceptance case.
