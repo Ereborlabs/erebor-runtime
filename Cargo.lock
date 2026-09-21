@@ -3223,6 +3223,7 @@ dependencies = [
  "rcgen",
  "reqwest",
  "rmp-serde",
+ "rusqlite",
  "rustix",
  "schemars 1.2.2",
  "secrecy",
