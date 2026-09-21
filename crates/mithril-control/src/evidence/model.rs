@@ -212,7 +212,114 @@ pub struct ObservationEnvelopeV1 {
     pub decision_context: Option<EvidenceDecisionContext>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceDecisionCatalogV1 {
+    pub node_boot_id: EvidenceIdV1,
+    pub profile_id: String,
+    pub profile_version: u64,
+    pub policy_document_digest: String,
+    pub profile_generation_ref_id: u64,
+    pub binding_id: EvidenceIdV1,
+    pub role_id: u32,
+    pub state_id: u32,
+    pub entry_rule_id: u32,
+    pub exact_file_object: EvidenceExactFileObject,
+    pub exact_object_key_id: u64,
+    pub composite_atom_id: u64,
+    pub static_key: crate::StaticDecisionKeyV1,
+    pub digest: crate::DiscoveryDigestV1,
+}
+
+impl EvidenceDecisionCatalogV1 {
+    pub fn content_digest(&self) -> crate::Result<crate::DiscoveryDigestV1> {
+        let mut content = self.clone();
+        content.digest = crate::DiscoveryDigestV1([0; 32]);
+        crate::DiscoveryDigestV1::of(&("decision-catalog-v1", content))
+    }
+
+    pub fn seal(mut self) -> crate::Result<Vec<u8>> {
+        self.digest = self.content_digest()?;
+        serde_json::to_vec(&self).map_err(|error| {
+            crate::error::DiscoverySnafu {
+                code: "CATALOG_ENCODING",
+                reason: error.to_string(),
+            }
+            .build()
+        })
+    }
+}
+
 impl EvidenceDecisionContext {
+    pub fn catalog(&self) -> EvidenceModelResult<Option<EvidenceDecisionCatalogV1>> {
+        if self.encoded_len() > MAX_EVIDENCE_DECISION_CONTEXT_BYTES {
+            return InvalidSnafu {
+                reason: "decision context exceeds its size limit",
+            }
+            .fail();
+        }
+        if self.catalog_json.is_empty() {
+            if !matches!(
+                self.catalog_state.as_str(),
+                "" | "MISSING_CATALOG"
+                    | "NO_EXACT_MATCH"
+                    | "AMBIGUOUS"
+                    | "CATALOG_LIMIT"
+                    | "CONTEXT_LIMIT"
+            ) {
+                return InvalidSnafu {
+                    reason: "missing decision catalog has an invalid state",
+                }
+                .fail();
+            }
+            return Ok(None);
+        }
+        if self.catalog_state != "AVAILABLE" {
+            return InvalidSnafu {
+                reason: "present decision catalog has an invalid state",
+            }
+            .fail();
+        }
+        let catalog: EvidenceDecisionCatalogV1 = serde_json::from_slice(&self.catalog_json)
+            .map_err(|_| {
+                InvalidSnafu {
+                    reason: "decision catalog encoding is invalid",
+                }
+                .build()
+            })?;
+        let digest = catalog.content_digest().map_err(|_| {
+            InvalidSnafu {
+                reason: "decision catalog digest cannot be computed",
+            }
+            .build()
+        })?;
+        if catalog.digest != digest
+            || catalog.profile_version == 0
+            || !uuid::Uuid::parse_str(&catalog.profile_id).is_ok_and(|id| !id.is_nil())
+            || catalog.policy_document_digest.len() != 64
+            || !catalog
+                .policy_document_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || catalog.profile_generation_ref_id != self.profile_generation_ref_id
+            || catalog.exact_file_object.profile_generation_ref_id != self.profile_generation_ref_id
+            || catalog.binding_id.is_zero()
+            || catalog.binding_id.to_be_bytes().as_slice() != self.binding_id
+            || catalog.role_id != self.role_id
+            || catalog.state_id != self.state_id
+            || catalog.entry_rule_id != self.entry_rule_id
+            || self.exact_file_object.as_ref() != Some(&catalog.exact_file_object)
+            || catalog.exact_object_key_id != self.exact_object_key_id
+            || catalog.composite_atom_id != self.composite_atom_id
+        {
+            return InvalidSnafu {
+                reason: "decision catalog digest or coordinates differ",
+            }
+            .fail();
+        }
+        Ok(Some(catalog))
+    }
+
     fn validate_for(&self, observation: &ObservationEnvelopeV1) -> EvidenceModelResult<()> {
         if self.schema_version != 1
             || self.original_kernel_sequence == 0
@@ -246,6 +353,29 @@ impl EvidenceDecisionContext {
             _ => {
                 return InvalidSnafu {
                     reason: "decision context exact object or handle is absent",
+                }
+                .fail();
+            }
+        }
+        if let Some(catalog) = self.catalog()? {
+            let operation =
+                crate::CompiledOperationV1::try_from(catalog.static_key.operation_id.as_str())
+                    .map_err(|_| {
+                        InvalidSnafu {
+                            reason: "decision catalog operation is invalid",
+                        }
+                        .build()
+                    })?;
+            if catalog.node_boot_id != observation.node_boot_id
+                || KernelEffectFamilyV1::from(catalog.static_key.effect_family) as u16
+                    != observation.effect.effect_family
+                || operation.kernel_id as u16 != observation.effect.operation
+                || (!operation.argument_wildcard
+                    && operation.argument
+                        != observation.effect.operation_argument.unwrap_or_default())
+            {
+                return InvalidSnafu {
+                    reason: "decision catalog effect differs from the base observation",
                 }
                 .fail();
             }

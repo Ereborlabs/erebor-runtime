@@ -213,6 +213,8 @@ message EvidenceDecisionContext {
   optional EvidenceExactFileObject exact_file_object = 10;
   uint64 exact_object_key_id = 11;
   uint64 composite_atom_id = 12;
+  bytes catalog_json = 13;
+  string catalog_state = 14;
 }
 
 message EvidenceExactFileObject {

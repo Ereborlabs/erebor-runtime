@@ -21,6 +21,7 @@ const MAX_COMPILED_CELLS: usize = 65_536;
 
 /// One exact selector key after the compiler expands all policy dimensions.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StaticDecisionKeyV1 {
     pub workload_selector_id: String,
     pub protected_scope_id: String,

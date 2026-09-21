@@ -795,6 +795,8 @@ mod tests {
             exact_file_object: Some(object),
             exact_object_key_id: 26,
             composite_atom_id: 23,
+            catalog_json: Vec::new(),
+            catalog_state: "MISSING_CATALOG".to_owned(),
         });
         let record = original.to_wire_record()?;
         let accepted = batch_from_records(1, vec![record.clone()])?;

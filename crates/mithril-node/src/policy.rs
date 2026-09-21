@@ -5,7 +5,7 @@ use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Mutex,
+    Arc, Mutex,
 };
 
 use erebor_interceptor::{KernelHost, MapInsertResult};
@@ -54,12 +54,14 @@ use crate::{
 };
 
 mod device_process;
+mod discovery;
 mod exception_authority;
 mod generation_allocator;
 mod ipc;
 mod network;
 
 use self::device_process::{lower_typed_effect, TypedEffectContext};
+pub use self::discovery::NodeDiscoveryContextCatalog;
 use self::exception_authority::ExceptionAuthorityOwner;
 use self::generation_allocator::GenerationHandleAllocator;
 use self::ipc::lower_ipc_relationships;
@@ -82,6 +84,7 @@ pub struct NodePolicyGenerationOwner {
     measured_mount_routes: Vec<MeasuredMountRouteV1>,
     resolved_path_binding_ids: BTreeSet<String>,
     generation_semantics: BTreeMap<u64, GenerationSemantics>,
+    discovery_context: Arc<NodeDiscoveryContextCatalog>,
     dynamic_rows: BTreeMap<&'static str, BTreeSet<Vec<u8>>>,
     exception_authority: Mutex<ExceptionAuthorityOwner>,
     retirement_pending: AtomicBool,
@@ -173,6 +176,10 @@ type PlannedGenerationRow<'a> = (&'static str, &'a GenerationRows);
 type ActivationDecisionRow<'a> = (PolicyActivationProbeMapKindV1, &'a GenerationRows);
 
 impl NodePolicyGenerationOwner {
+    pub fn discovery_context(&self) -> Arc<NodeDiscoveryContextCatalog> {
+        Arc::clone(&self.discovery_context)
+    }
+
     pub(crate) fn next_generation_ref_id(
         config: &NodeConfig,
         host: &KernelHost,
@@ -937,6 +944,7 @@ impl NodePolicyGenerationOwner {
         let mut activations = BTreeMap::<Id128V1, ProfileActivation>::new();
         let mut validated = BTreeMap::<Id128V1, ValidatedProfileCandidateV1>::new();
         let mut declared_entry_requests = BTreeSet::new();
+        let mut discovery_context = NodeDiscoveryContextCatalog::default();
         let node_id = stable_node_id(&config.node_id)?;
         for binding in &config.workload_bindings {
             let (artifact, rollback_authorization) =
@@ -1005,6 +1013,12 @@ impl NodePolicyGenerationOwner {
                 deferred_entry_binding_ids.contains(&binding.binding_id)
                     && !resolved_path_binding_ids.contains(&binding.binding_id),
             )?;
+            discovery_context.add_verified_binding(
+                artifact,
+                binding,
+                &measured_for_binding,
+                node_boot_id,
+            );
             match generations.get_mut(&binding.active_profile_generation_ref_id) {
                 Some(existing) => existing.merge(lowered)?,
                 None => {
@@ -1176,6 +1190,7 @@ impl NodePolicyGenerationOwner {
             measured_mount_routes,
             resolved_path_binding_ids,
             generation_semantics,
+            discovery_context: Arc::new(discovery_context),
             dynamic_rows,
             exception_authority: Mutex::new(exception_authority),
             retirement_pending: AtomicBool::new(retirement_pending),
@@ -7616,8 +7631,8 @@ mod tests {
         Ok((artifact, binding, object))
     }
 
-    fn entry_roles_artifact() -> crate::Result<(ProfileCandidateArtifactV1, WorkloadBindingConfig)>
-    {
+    pub(super) fn entry_roles_artifact(
+    ) -> crate::Result<(ProfileCandidateArtifactV1, WorkloadBindingConfig)> {
         let spec = WorkloadProtectionPolicySpec::parse(
             Path::new("kubernetes-entry-roles-v1.yaml"),
             include_bytes!("../../mithril-control/tests/fixtures/kubernetes-entry-roles-v1.yaml"),
@@ -7709,7 +7724,7 @@ mod tests {
         Ok((artifact, binding))
     }
 
-    fn entry_role_objects(
+    pub(super) fn entry_role_objects(
         artifact: &ProfileCandidateArtifactV1,
         binding: &WorkloadBindingConfig,
     ) -> crate::Result<Vec<ExactFileObjectConfig>> {

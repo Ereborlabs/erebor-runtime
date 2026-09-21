@@ -53,7 +53,7 @@ pub use observation::{
     ObservationCanonicalizer, ObservationEnvelopeV1, OperationResultAuthorityV1, ProofQualityV1,
     RemoteSubjectBindingV1, SensitivityV1, SourceAuthorityV1, TemporalCoverageV1,
 };
-pub use policy::NodePolicyGenerationOwner;
+pub use policy::{NodeDiscoveryContextCatalog, NodePolicyGenerationOwner};
 pub use policy_delivery::{
     policy_delivery_status, NodePolicyDeliveryOwner, PolicyDeliveryStatusV1,
     PolicyDeliveryTargetStatusV1,

@@ -3,7 +3,7 @@ use std::mem;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use erebor_interceptor_abi::{
@@ -47,6 +47,7 @@ pub struct EffectObservationStore {
 }
 
 struct Inner {
+    discovery_context: RwLock<Option<Arc<crate::NodeDiscoveryContextCatalog>>>,
     recent: Mutex<RecentEffects>,
     capacity: usize,
     decoder_errors: AtomicU64,
@@ -155,6 +156,7 @@ impl EffectObservationStore {
     pub fn new(capacity: usize) -> Self {
         Self {
             inner: Arc::new(Inner {
+                discovery_context: RwLock::new(None),
                 recent: Mutex::new(RecentEffects {
                     events: VecDeque::with_capacity(capacity),
                     cursor: 0,
@@ -188,6 +190,7 @@ impl EffectObservationStore {
             .join("evidence-coverage-v1.json");
         Ok(Self {
             inner: Arc::new(Inner {
+                discovery_context: RwLock::new(None),
                 recent: Mutex::new(RecentEffects {
                     events: VecDeque::with_capacity(capacity),
                     cursor: 0,
@@ -217,6 +220,14 @@ impl EffectObservationStore {
         self.record_byte_batch(&[Box::<[u8]>::from(bytes)]);
     }
 
+    pub fn set_discovery_context(&self, context: Option<Arc<crate::NodeDiscoveryContextCatalog>>) {
+        *self
+            .inner
+            .discovery_context
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = context;
+    }
+
     fn record_byte_batch(&self, bytes: &[Box<[u8]>]) {
         let mut events = Vec::with_capacity(bytes.len());
         for bytes in bytes {
@@ -238,6 +249,12 @@ impl EffectObservationStore {
     }
 
     fn record_events(&self, events: &[EffectObservationV1]) {
+        let discovery_context = self
+            .inner
+            .discovery_context
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         {
             let mut recent = self.lock_recent();
             for event in events {
@@ -282,17 +299,19 @@ impl EffectObservationStore {
                         );
                         continue;
                     };
-                    observations.push(
-                        durable
-                            .canonicalizer
-                            .normalize_kernel(
-                                *event,
-                                coverage_interval_id,
-                                temporal_coverage,
-                                utc_now_ns(),
-                            )
-                            .map_err(|error| (Box::new(error), false))?,
-                    );
+                    let mut observation = durable
+                        .canonicalizer
+                        .normalize_kernel(
+                            *event,
+                            coverage_interval_id,
+                            temporal_coverage,
+                            utc_now_ns(),
+                        )
+                        .map_err(|error| (Box::new(error), false))?;
+                    if let Some(context) = &discovery_context {
+                        context.attach(&mut observation);
+                    }
+                    observations.push(observation);
                 }
                 match durable.wal.append_classified_batch(&observations) {
                     Ok(()) => Ok(()),
