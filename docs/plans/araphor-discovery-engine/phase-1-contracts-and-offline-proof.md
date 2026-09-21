@@ -547,3 +547,20 @@ The frozen task protocol is ready for later agent/operator evaluation. No
 model quality, human task-time improvement, live owner lookup, response runtime,
 or full HF protection is claimed. The offline contracts and selected store are
 ready for the already approved durable implementation. Result: **Done**.
+
+### Stateless offline calls
+
+The approved simplification removes the default, unopened `DiscoveryOwner`.
+`derive_recorded` and `simulate_recorded` are associated functions. They retain
+the same input checks, native compiler, output bytes, and replay rules.
+Only `open` and `rebuild_index` construct an owner with live state. Configuration
+still disables discovery by omitting the runtime; it does not create an empty owner.
+
+[derive_recorded](../../../crates/mithril-control/src/discovery/recorded.rs) builds exact atoms and a sealed snapshot from the supplied manifest.<br>
+-> [simulate_recorded](../../../crates/mithril-control/src/discovery/recorded.rs) evaluates reconstructable keys with the native compiler and simulator.<br>
+-> [run_discovery_offline](../../../crates/mithril-e2e/src/discovery.rs) checks the fixture counts and writes the replay proof.
+
+The caller owns the offline input and output. No store, listener, protocol,
+kernel program, or ABI changes. Existing corpus and replay tests exercise the
+associated functions. The final cleanup verification is recorded in
+[Phase 2](phase-2-durable-behavior-profiles.md#simplification-review-and-verification).
