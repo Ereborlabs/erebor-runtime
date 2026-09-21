@@ -197,7 +197,7 @@ The signed-context lookup and durable artifact store are implemented. The SQL
 backend has committed-export replay and transactional counts. The live owner
 exports bounded input and exact retention gaps. Profile sealing and bounded
 snapshot reads are implemented. Disabled-by-default runtime supervision and
-stream checkpoints pass focused checks. Final runtime verification is in progress.
+stream checkpoints pass the workspace checks.
 Context import, revision feed, and live context roundtrip remain
 to be implemented and verified.
 
@@ -621,6 +621,42 @@ Six focused `discovery_derivation_` tests passed before the final logging edit.
 They cover configuration defaults, cadence boundaries, source pagination,
 process and tenant admission limits, restart between snapshot and checkpoint,
 projection loss, unchanged prior snapshots, disabled startup, and continued
-intake during discovery startup failure. The final workspace run is pending.
+intake during discovery startup failure. After the final runtime edit,
+`bash .github/scripts/verify-rust-ci.sh` passed for source `8aeb2d4b`.
+Control passed 164 tests; Node passed 246. The e2e library passed 98 tests and
+ignored 163 physical or manual cases. The document check passed 268 local
+links across 27 documents. This run does not cover the later coverage changes.
 Process-kill checks, index replacement, context import, revision feed, and live
 intake/rollout measurements remain open. **Not done.**
+
+### Late coverage revisions
+
+[EvidenceIntakeOwner::receive_coverage](../../../crates/mithril-control/src/evidence.rs)
+accepts a later source report through the existing owner.
+  -> [DerivationRuntime::admit](../../../crates/mithril-control/src/discovery/runtime.rs) checks coverage when it reopens the last stream checkpoint.
+  -> [DiscoveryOwner::refresh_coverage](../../../crates/mithril-control/src/discovery/live.rs) commits a coverage-only page at the unchanged source cursor.
+  -> [DiscoveryIndex](../../../crates/mithril-control/src/discovery/index.rs) applies that page without an input row or count increment.
+  -> [DiscoveryOwner::seal_interval](../../../crates/mithril-control/src/discovery/live.rs) creates a new snapshot with its exact predecessor reference.
+  -> [DerivationRuntime::commit_checkpoint](../../../crates/mithril-control/src/discovery/runtime.rs) records that revision without changing the next observation cursor.
+
+Transformation version 2 checks the newest retained report for each matching
+coverage interval. Other intervals keep their recorded source report. Closed
+intervals require closing counters. Complete coverage requires matching source
+epoch, CPU, sequence bounds, balanced counter snapshots, and no loss,
+suppression, unresolved input, classifier miss, or counter regression. Missing
+counter proof remains unknown. A later Healthy report cannot remove a recorded
+gap. Each correction keeps its prior snapshot through an artifact dependency.
+Version 1 snapshots remain readable with their original digest and proof class.
+
+A correction does not admit new observations into a sealed interval. If an
+earlier correction was committed but not sealed, recovery finishes that
+revision before it accepts another correction. Retries preserve counts and
+snapshot identities. The existing input-byte and artifact quotas also apply
+to corrections. There is no separate event log or coverage consumer.
+
+Seven derivation checks and the snapshot revision check passed. Clippy passed
+with warnings denied. The checks cover unchanged counts, closed coverage,
+counter gaps, incomplete counter proof, two corrections across restart,
+unchanged prior snapshots, and retry without a new checkpoint. The full
+workspace run is in progress. These changes do not complete context import, the revision feed, index replacement,
+process-kill checks, or live resource qualification. **Not done.**

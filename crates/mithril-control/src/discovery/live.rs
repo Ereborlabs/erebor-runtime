@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, sync::Mutex};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Mutex,
+};
 
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
@@ -82,6 +85,8 @@ pub struct DiscoveryProfileV1 {
     pub proof_kind: DiscoveryProofKindV1,
     pub state: DiscoveryProfileStateV1,
     pub export: DiscoveryHeadV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaces: Option<DiscoveryHeadV1>,
     pub stream: EvidenceIntakeIdentityV1,
     pub first_cursor: u64,
     pub last_cursor: u64,
@@ -121,6 +126,45 @@ pub struct DiscoverySnapshotPageV1 {
 }
 
 impl DiscoveryProfileV1 {
+    fn interval_has_gap(interval: &crate::CoverageInterval) -> bool {
+        interval.state == "GAPPED"
+            || !interval.gap_reasons.is_empty()
+            || interval
+                .opening_counters
+                .as_ref()
+                .zip(interval.closing_counters.as_ref())
+                .is_some_and(|(before, after)| {
+                    after.lost != before.lost
+                        || after.suppressed != before.suppressed
+                        || after.unresolved != before.unresolved
+                        || after.classifier_miss_count != before.classifier_miss_count
+                        || after.attempted < before.attempted
+                        || after.requested < before.requested
+                        || after.emitted < before.emitted
+                        || after.next_sequence < before.next_sequence
+                })
+    }
+
+    fn interval_complete(interval: &crate::CoverageInterval) -> bool {
+        matches!(interval.state.as_str(), "HEALTHY" | "CLOSED")
+            && !Self::interval_has_gap(interval)
+            && interval
+                .opening_counters
+                .as_ref()
+                .zip(interval.closing_counters.as_ref())
+                .is_some_and(|(before, after)| {
+                    [before, after].into_iter().all(|counters| {
+                        counters.suppressed.checked_add(counters.requested)
+                            == Some(counters.attempted)
+                            && counters.emitted.checked_add(counters.lost)
+                                == Some(counters.requested)
+                    }) && before.next_sequence <= interval.first_sequence
+                        && interval
+                            .last_sequence
+                            .is_some_and(|last| after.next_sequence > last)
+                })
+    }
+
     fn digest(&self) -> Result<DiscoveryDigestV1> {
         let mut content = self.clone();
         content.content_digest = DiscoveryDigestV1([0; 32]);
@@ -132,6 +176,7 @@ impl DiscoveryProfileV1 {
             .iter()
             .map(|segment| segment.artifact.clone())
             .chain(std::iter::once(self.export.artifact.clone()))
+            .chain(self.replaces.iter().map(|head| head.artifact.clone()))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect()
@@ -313,6 +358,50 @@ impl DiscoveryOwner {
             return Ok(snapshot);
         }
         let progress = live.resume(export)?;
+        let tip = live.index.export(export)?;
+        let replaces = if tip.records.is_empty() && tip.expired_through.is_none() {
+            let previous = tip.previous.as_ref().ok_or_else(|| {
+                DiscoverySnafu {
+                    code: "SNAPSHOT_PREDECESSOR_MISSING",
+                    reason: "a coverage correction needs its prior export",
+                }
+                .build()
+            })?;
+            Some(
+                live.store
+                    .discovery_head(&DiscoveryProfileV1::head_key(previous)?)?
+                    .ok_or_else(|| {
+                        DiscoverySnafu {
+                            code: "SNAPSHOT_PREDECESSOR_MISSING",
+                            reason: "a coverage correction needs its prior snapshot",
+                        }
+                        .build()
+                    })?,
+            )
+        } else {
+            None
+        };
+        let latest_coverage = tip
+            .coverage_record
+            .map(|bytes| crate::CoverageReport::decode(bytes.as_slice()))
+            .transpose()
+            .map_err(|error| {
+                DiscoverySnafu {
+                    code: "EXPORT_COVERAGE",
+                    reason: error.to_string(),
+                }
+                .build()
+            })?;
+        let latest_intervals: BTreeMap<_, _> = latest_coverage
+            .as_ref()
+            .into_iter()
+            .flat_map(|report| {
+                report
+                    .intervals
+                    .iter()
+                    .map(|interval| (interval.interval_id.as_slice(), interval))
+            })
+            .collect();
         let mut current = Some(export.clone());
         let mut expected_next = progress.next_cursor;
         let mut accepted = 0_u64;
@@ -320,6 +409,16 @@ impl DiscoveryOwner {
         let mut pages = 0;
         let mut stream = None;
         let mut reasons = BTreeSet::new();
+        if let Some(previous) = &replaces {
+            let previous = self.profile(previous)?;
+            if previous
+                .partial_reasons
+                .iter()
+                .any(|reason| reason == "SOURCE_COVERAGE_GAPPED")
+            {
+                reasons.insert("SOURCE_COVERAGE_GAPPED".to_owned());
+            }
+        }
         while let Some(head) = current {
             DiscoveryInputManifestV1::require(pages < 8192, "EXPORT_CHAIN_LIMIT")?;
             pages += 1;
@@ -372,21 +471,50 @@ impl DiscoveryOwner {
                 if wire.temporal_coverage != crate::EvidenceTemporalCoverage::Complete as i32 {
                     reasons.insert("OBSERVATION_COVERAGE_INCOMPLETE".to_owned());
                 }
-                let healthy = coverage.as_ref().is_some_and(|report| {
-                    page.cpu_binding
-                        .is_some_and(|cpu| cpu.cpu_id == report.cpu_id)
-                        && report.intervals.iter().any(|interval| {
-                            interval.interval_id == wire.coverage_interval_id
-                                && interval.state == "HEALTHY"
-                                && interval.gap_reasons.is_empty()
-                                && wire.decision_context.as_ref().is_some_and(|context| {
-                                    context.original_kernel_sequence >= interval.first_sequence
-                                        && interval.last_sequence.is_some_and(|last| {
-                                            context.original_kernel_sequence <= last
-                                        })
-                                })
+                let effective = latest_coverage
+                    .as_ref()
+                    .and_then(|report| {
+                        latest_intervals
+                            .get(wire.coverage_interval_id.as_ref())
+                            .map(|interval| (report, *interval))
+                    })
+                    .or_else(|| {
+                        coverage.as_ref().and_then(|report| {
+                            report
+                                .intervals
+                                .iter()
+                                .find(|interval| interval.interval_id == wire.coverage_interval_id)
+                                .map(|interval| (report, interval))
                         })
-                });
+                    });
+                let recorded_gap = coverage
+                    .as_ref()
+                    .and_then(|report| {
+                        report
+                            .intervals
+                            .iter()
+                            .find(|interval| interval.interval_id == wire.coverage_interval_id)
+                    })
+                    .is_some_and(DiscoveryProfileV1::interval_has_gap);
+                if recorded_gap
+                    || effective
+                        .is_some_and(|(_, interval)| DiscoveryProfileV1::interval_has_gap(interval))
+                {
+                    reasons.insert("SOURCE_COVERAGE_GAPPED".to_owned());
+                }
+                let healthy = !recorded_gap
+                    && effective.is_some_and(|(report, interval)| {
+                        page.cpu_binding
+                            .is_some_and(|cpu| cpu.cpu_id == report.cpu_id)
+                            && interval.source_epoch == page.stream.source_epoch
+                            && DiscoveryProfileV1::interval_complete(interval)
+                            && wire.decision_context.as_ref().is_some_and(|context| {
+                                context.original_kernel_sequence >= interval.first_sequence
+                                    && interval.last_sequence.is_some_and(|last| {
+                                        context.original_kernel_sequence <= last
+                                    })
+                            })
+                    });
                 if !healthy {
                     reasons.insert("SOURCE_COVERAGE_UNPROVEN".to_owned());
                 }
@@ -407,7 +535,7 @@ impl DiscoveryOwner {
         }
         let mut profile = DiscoveryProfileV1 {
             schema_version: 1,
-            transformation_version: 1,
+            transformation_version: 2,
             proof_kind: DiscoveryProofKindV1::RecordedInput,
             state: if reasons.is_empty() {
                 DiscoveryProfileStateV1::Complete
@@ -415,6 +543,7 @@ impl DiscoveryOwner {
                 DiscoveryProfileStateV1::Partial
             },
             export: export.clone(),
+            replaces,
             stream: stream.ok_or_else(|| {
                 DiscoverySnafu {
                     code: "EXPORT_CHAIN",
@@ -500,6 +629,87 @@ impl DiscoveryOwner {
         Ok(snapshot)
     }
 
+    pub(super) fn refresh_coverage(&self, profile: &DiscoveryProfileV1) -> Result<DiscoveryHeadV1> {
+        let live = self.live()?;
+        let _operation = live.operation.try_lock().map_err(|_| {
+            DiscoverySnafu {
+                code: "DISCOVERY_BUSY",
+                reason: "another interval operation is active",
+            }
+            .build()
+        })?;
+        let current = live
+            .store
+            .discovery_head(&profile.export.key)?
+            .ok_or_else(|| {
+                DiscoverySnafu {
+                    code: "EXPORT_NOT_COMMITTED",
+                    reason: "the profile export is absent",
+                }
+                .build()
+            })?;
+        let previous = live.index.export(&current)?;
+        let next_cursor = previous.next_cursor()?;
+        DiscoveryInputManifestV1::require(
+            profile.last_cursor.checked_add(1) == Some(next_cursor),
+            "COVERAGE_INPUT_CHANGED",
+        )?;
+        if current != profile.export {
+            return Ok(current);
+        }
+        let read = live
+            .store
+            .begin_evidence_read(&profile.stream, next_cursor)?;
+        let Some(coverage) = read.metadata().coverage.as_ref() else {
+            return Ok(current);
+        };
+        let coverage_record = coverage.encode_to_vec();
+        if previous.coverage_record.as_ref() == Some(&coverage_record) {
+            return Ok(current);
+        }
+        if let Some(bytes) = &previous.coverage_record {
+            let known = crate::CoverageReport::decode(bytes.as_slice()).map_err(|error| {
+                DiscoverySnafu {
+                    code: "EXPORT_COVERAGE",
+                    reason: error.to_string(),
+                }
+                .build()
+            })?;
+            DiscoveryInputManifestV1::require(
+                coverage.revision > known.revision,
+                "COVERAGE_REVISION_CONFLICT",
+            )?;
+        }
+        let progress = live.resume(&current)?;
+        DiscoveryInputManifestV1::require(
+            profile.accepted_records == progress.accepted_records,
+            "COVERAGE_INPUT_CHANGED",
+        )?;
+        let page = DiscoveryExportPageV1 {
+            schema_version: 1,
+            stream: profile.stream.clone(),
+            cpu_binding: read.metadata().cpu_binding,
+            first_cursor: progress.next_cursor,
+            expired_through: None,
+            coverage_record: Some(coverage_record),
+            previous: Some(current.clone()),
+            records: Vec::new(),
+        };
+        DiscoveryInputManifestV1::require(
+            progress
+                .input_bytes
+                .checked_add(page.input_bytes()?)
+                .is_some_and(|bytes| bytes <= MAX_DISCOVERY_INPUT_BYTES as u64),
+            "INTERVAL_SEAL_REQUIRED",
+        )?;
+        let artifact = live.store.put_discovery_artifact(&page.artifact()?)?;
+        let export =
+            live.store
+                .commit_discovery_head(current.key.clone(), Some(&current), artifact)?;
+        live.index.apply_export(&export)?;
+        Ok(export)
+    }
+
     fn profile(&self, head: &DiscoveryHeadV1) -> Result<DiscoveryProfileV1> {
         let live = self.live()?;
         DiscoveryInputManifestV1::require(
@@ -517,7 +727,12 @@ impl DiscoveryOwner {
             })?;
         DiscoveryInputManifestV1::require(
             profile.schema_version == 1
-                && profile.transformation_version == 1
+                && (1..=2).contains(&profile.transformation_version)
+                && profile.replaces.as_ref().is_none_or(|previous| {
+                    previous.key.tenant_id == head.key.tenant_id
+                        && previous.commit_index < head.commit_index
+                        && previous.key != head.key
+                })
                 && profile.proof_kind == DiscoveryProofKindV1::RecordedInput
                 && (profile.state == DiscoveryProfileStateV1::Complete)
                     == profile.partial_reasons.is_empty()
@@ -655,6 +870,49 @@ impl DiscoveryOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_derivation_requires_counter_proof_for_complete_coverage() {
+        let interval = crate::CoverageInterval {
+            state: "HEALTHY".into(),
+            first_sequence: 1,
+            last_sequence: Some(1),
+            opening_counters: Some(crate::CoverageCounters::default()),
+            closing_counters: Some(crate::CoverageCounters {
+                attempted: 1,
+                requested: 1,
+                emitted: 1,
+                next_sequence: 2,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(DiscoveryProfileV1::interval_complete(&interval));
+        for field in 0..4 {
+            let mut gap = interval.clone();
+            if let Some(counters) = &mut gap.closing_counters {
+                match field {
+                    0 => {
+                        counters.lost = 1;
+                        counters.requested += 1;
+                        counters.attempted += 1;
+                    }
+                    1 => {
+                        counters.suppressed = 1;
+                        counters.attempted += 1;
+                    }
+                    2 => counters.unresolved = 1,
+                    _ => counters.classifier_miss_count = 1,
+                }
+            }
+            assert!(DiscoveryProfileV1::interval_has_gap(&gap));
+            assert!(!DiscoveryProfileV1::interval_complete(&gap));
+        }
+        let mut absent = interval;
+        absent.closing_counters = None;
+        assert!(!DiscoveryProfileV1::interval_has_gap(&absent));
+        assert!(!DiscoveryProfileV1::interval_complete(&absent));
+    }
 
     #[test]
     fn discovery_derivation_reserves_encoded_profile_bytes_before_write(
