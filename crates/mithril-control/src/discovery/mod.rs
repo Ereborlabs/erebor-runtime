@@ -1,3 +1,4 @@
+mod context;
 mod index;
 mod investigation;
 mod live;
@@ -5,6 +6,7 @@ mod model;
 mod recorded;
 mod runtime;
 
+pub use context::*;
 pub use index::*;
 pub use investigation::*;
 pub use live::*;

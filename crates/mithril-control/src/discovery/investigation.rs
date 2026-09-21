@@ -101,7 +101,7 @@ pub struct DiscoveryMethodV1 {
 }
 
 impl DiscoveryMethodV1 {
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         require(
             !self.id.trim().is_empty()
                 && self.id.len() <= 256

@@ -582,6 +582,14 @@ impl ControlStore {
             .collect())
     }
 
+    pub(crate) fn discovery_catalog(&self) -> Result<(u64, Vec<DiscoveryHeadV1>)> {
+        let inner = self.evidence_lock()?;
+        Ok((
+            inner.state.commit_index,
+            inner.state.discovery_heads.values().cloned().collect(),
+        ))
+    }
+
     pub fn discovery_head(&self, key: &DiscoveryHeadKeyV1) -> Result<Option<DiscoveryHeadV1>> {
         Ok(self
             .evidence_lock()?
