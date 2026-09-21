@@ -245,9 +245,12 @@ reimplement a production owner operation.
   transition guard is active. A later scan verifies it. The focused Host test
   passed in a privileged VM in 78.61 seconds. It retained one Control and Node,
   replaced the policy for each actor, and completed all 4,096 thread creations
-  with zero hard identity failures. Do not change Kubernetes readiness to hide
-  a result. Add direct `runc` only after Host passes. Add Kubernetes only after
-  direct `runc` passes.
+  with zero hard identity failures. The same direct-`runc` test passed in
+  127.92 seconds. One real container-change recovery raised the soft
+  `reconciliation_required` retry counter, and Node then restored readiness.
+  No allocation, coordinate, placement, missing-identity, or exec-guard failure
+  occurred. Do not change Kubernetes readiness to hide a result. Add direct
+  `runc` only after Host passes. Add Kubernetes only after direct `runc` passes.
 - Do not add a test registry, custom test language, replacement harness,
   builder, factory, or scenario-specific lifecycle implementation.
 - Verify serial lifecycle tests first. Enable bounded parallel tests only
