@@ -2372,17 +2372,21 @@ setup, production actions, assertions, and focused test.
     107.89 seconds on 2026-09-17.
   - [x] Remove the matching legacy restart snapshot, result field, and shell
     assertion after all three platform cases pass.
-  - [ ] Retain a declared PreStop entry across the same real Node restart.
+  - [x] Retain a declared PreStop entry across the same real Node restart.
     Require the recovered policy generation, external runtime root,
     qualified role, exact PreStop role, and nonzero admission rule.
     - [x] Pass Host and commit it. The 40-line test passed in 52.60 seconds on
       2026-09-21.
     - [x] Pass direct `runc` and commit it. The exact test passed in 69.23
       seconds on 2026-09-21.
-    - [ ] Pass Kubernetes and commit it.
-    - [ ] Remove only the matching legacy runtime-inventory retention result
-      after all three platforms pass. Keep the separate exact file-denial
-      assertion until the public policy can express its exact object.
+    - [x] Pass Kubernetes and commit it. The exact test passed in 106.45
+      seconds on 2026-09-21.
+    - [ ] Replace the separate runtime-inventory omission case before its
+      legacy result is removed. The new restart test uses the normal CRI
+      inventory. It does not prove that a populated cgroup retains its binding
+      when one CRI scan omits it. Keep the result field, shell gate, test-only
+      probe, `/bin/dd` role assertion, and exact file-denial assertion until a
+      small replacement proves all of them.
   - [ ] Remove the reconstructed binding, policy, and identity owners after
     their remaining PreStop, administrative recovery, mount retention, and
     generation retirement consumers move to small tests.
