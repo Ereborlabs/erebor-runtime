@@ -36,6 +36,8 @@ const STORE_SCHEMA_VERSION: u32 = 6;
 
 mod discovery;
 pub use discovery::*;
+mod discovery_context;
+pub use discovery_context::*;
 mod evidence_read;
 pub use evidence_read::*;
 const STATE_DIGEST_BYTES: usize = 32;
@@ -5891,6 +5893,250 @@ mod tests {
         WorkloadTargetFactV1,
     };
     use tempfile::TempDir;
+
+    #[test]
+    fn discovery_context_pins_exact_policy_and_workload_facts(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use crate::{DiscoveryContextJoinV1 as Join, DiscoveryContextUnavailableV1 as Missing};
+        let directory = TempDir::new()?;
+        let store = super::ControlStore::open(directory.path())?;
+        let document = PolicyDocumentV1::parse(
+            Path::new("policy-v1.yaml"),
+            include_bytes!("../tests/fixtures/policy-v1.yaml"),
+        )?;
+        let source = source_revision(&document, PolicySourceStateV1::Accepted, 1, '8')?;
+        let artifact = signed_artifact(&document, 1)?;
+        let static_key = artifact.compiled_profile.compiled_cells[0].key.clone();
+        store.accept_compiled_source_revision(
+            source.clone(),
+            document.clone(),
+            artifact.clone(),
+        )?;
+        let mut target = kubernetes_target(
+            &source,
+            &document,
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            1,
+            1,
+        )?;
+        let workload = &mut target.workload_targets[0];
+        workload.execution_set_id = static_key.execution_set_id.clone();
+        let identity = workload
+            .kubernetes
+            .as_mut()
+            .ok_or("missing Kubernetes identity")?;
+        identity.protected_scope_id = static_key.protected_scope_id.clone();
+        identity.workload_selector_id = static_key.workload_selector_id.clone();
+        let binding_id = uuid::Uuid::parse_str(&identity.binding_id)?.into_bytes();
+        workload.workload_binding_generation_digest = workload_target_fact_digest(workload)?;
+        target.workload_binding_generation_digests =
+            vec![workload.workload_binding_generation_digest.clone()];
+        let expected_workload = workload.clone();
+        let rollout = rollout_transaction(
+            &source,
+            &artifact,
+            vec![(target, None)],
+            PolicyDeliveryOperationV1::Activate,
+            1,
+            1,
+            &SigningKey::from_bytes(&[7; 32]),
+        )?;
+        let snapshot = rollout.target_snapshot.clone();
+        store.create_rollout(
+            rollout.target_snapshot,
+            rollout.bundles,
+            rollout.rollout_states,
+        )?;
+        let input = crate::DiscoveryInputManifestV1::from_json(include_bytes!(
+            "../../mithril-e2e/fixtures/discovery/manifest.json"
+        ))?;
+        let mut record = input.records[0].clone();
+        record.id.stream.tenant_id = uuid::Uuid::parse_str(&source.tenant_id)?.into_bytes();
+        record.id.stream.node_id = "node-a".into();
+        record.id.stream.node_boot_id = [1; 16];
+        record.id.stream.label_epoch = 1;
+        record.original_kernel_sequence = Some(101);
+        let observation = &mut record.observation;
+        observation.tenant_id = record.id.stream.tenant_id.into();
+        observation.node_boot_id = record.id.stream.node_boot_id.into();
+        observation.profile_generation_ref_id = Some(8);
+        observation.effect.execution_set_id = Some(
+            uuid::Uuid::parse_str(&static_key.execution_set_id)?
+                .into_bytes()
+                .into(),
+        );
+        observation.effect.authority_domain_id = Some(
+            uuid::Uuid::parse_str(&static_key.protected_scope_id)?
+                .into_bytes()
+                .into(),
+        );
+        let operation = crate::CompiledOperationV1::try_from(static_key.operation_id.as_str())?;
+        observation.effect.effect_family =
+            erebor_interceptor_abi::KernelEffectFamilyV1::from(static_key.effect_family) as u16;
+        observation.effect.operation = operation.kernel_id as u16;
+        observation.effect.operation_argument =
+            (operation.argument != 0).then_some(operation.argument);
+        observation.effect.policy_rule_id = Some(23);
+        let object = crate::EvidenceExactFileObject {
+            profile_generation_ref_id: 8,
+            mount_id_unique: 21,
+            inode: 22,
+            inode_generation: 23,
+            mount_namespace_inode: 24,
+            filesystem_device: 25,
+        };
+        observation.effect.exact_object_id = Some(object.observation_id(26));
+        let catalog = crate::EvidenceDecisionCatalogV1 {
+            node_boot_id: observation.node_boot_id,
+            profile_id: artifact.header.profile_id.clone(),
+            profile_version: artifact.header.profile_version,
+            policy_document_digest: artifact.header.policy_document_digest.clone(),
+            profile_generation_ref_id: 8,
+            binding_id: binding_id.into(),
+            role_id: 1,
+            state_id: 2,
+            entry_rule_id: 3,
+            exact_file_object: object,
+            exact_object_key_id: 26,
+            composite_atom_id: 23,
+            static_key,
+            digest: crate::DiscoveryDigestV1([0; 32]),
+        };
+        observation.decision_context = Some(crate::EvidenceDecisionContext {
+            schema_version: 1,
+            original_kernel_sequence: 101,
+            process_instance_id: vec![27; 16],
+            entry_instance_id: vec![28; 16],
+            binding_id: binding_id.to_vec(),
+            profile_generation_ref_id: 8,
+            role_id: 1,
+            state_id: 2,
+            entry_rule_id: 3,
+            exact_file_object: Some(object),
+            exact_object_key_id: 26,
+            composite_atom_id: 23,
+            catalog_json: catalog.clone().seal()?,
+            catalog_state: "AVAILABLE".into(),
+        });
+        let resolved = store.discovery_context(&record)?;
+        let Join::Available(pin) = &resolved else {
+            return Err("context was not resolved".into());
+        };
+        assert_eq!(pin.workload, expected_workload);
+        assert_eq!(pin.target_snapshot_digest, snapshot.target_snapshot_digest);
+        assert_eq!(
+            pin.binding.configuration_digest,
+            artifact.header.policy_document_digest
+        );
+        assert_eq!(
+            pin.binding.subject_revision,
+            expected_workload.workload_binding_generation_digest
+        );
+        assert_eq!(pin.control_commit_index, store.commit_index());
+        drop(store);
+        let store = super::ControlStore::open(directory.path())?;
+        assert_eq!(store.discovery_context(&record)?, resolved);
+        for scenario in [
+            "tenant",
+            "node",
+            "boot",
+            "label",
+            "binding",
+            "profile",
+            "selector",
+            "process",
+            "catalog",
+            "operation",
+            "kernel_sequence",
+        ] {
+            let mut changed = record.clone();
+            let mut changed_catalog = catalog.clone();
+            let context = changed
+                .observation
+                .decision_context
+                .as_mut()
+                .ok_or("context absent")?;
+            let expected = match scenario {
+                "tenant" => {
+                    changed.id.stream.tenant_id = [9; 16];
+                    changed.observation.tenant_id = [9; 16].into();
+                    Missing::MissingWorkloadFact
+                }
+                "node" => {
+                    changed.id.stream.node_id = "other".into();
+                    Missing::MissingWorkloadFact
+                }
+                "boot" => {
+                    changed.id.stream.node_boot_id = [9; 16];
+                    changed.observation.node_boot_id = [9; 16].into();
+                    changed_catalog.node_boot_id = [9; 16].into();
+                    Missing::MissingWorkloadFact
+                }
+                "label" => {
+                    changed.id.stream.label_epoch += 1;
+                    Missing::MissingWorkloadFact
+                }
+                "binding" => {
+                    context.binding_id = vec![9; 16];
+                    changed_catalog.binding_id = [9; 16].into();
+                    Missing::MissingWorkloadFact
+                }
+                "profile" => {
+                    changed_catalog.profile_version += 1;
+                    Missing::MissingWorkloadFact
+                }
+                "selector" => {
+                    changed_catalog.static_key.object_selector = "unknown".into();
+                    Missing::PolicyContextMismatch
+                }
+                "process" => {
+                    context.process_instance_id.clear();
+                    Missing::MissingProcessLifetime
+                }
+                "catalog" => {
+                    context.catalog_state = "MISSING_CATALOG".into();
+                    Missing::MissingDecisionCatalog
+                }
+                "operation" => {
+                    changed.observation.effect.operation += 1;
+                    Missing::PolicyContextMismatch
+                }
+                _ => {
+                    changed.original_kernel_sequence = Some(102);
+                    Missing::PolicyContextMismatch
+                }
+            };
+            context.catalog_json = if scenario == "catalog" {
+                Vec::new()
+            } else {
+                changed_catalog.seal()?
+            };
+            if matches!(scenario, "operation" | "kernel_sequence") {
+                assert!(store.discovery_context(&changed).is_err(), "{scenario}");
+            } else {
+                assert_eq!(
+                    store.discovery_context(&changed)?,
+                    Join::Unresolved(expected),
+                    "{scenario}"
+                );
+            }
+        }
+        let mut conflicting = snapshot;
+        conflicting.targets[0].workload_targets[0].image_digest =
+            format!("sha256:{}", "b".repeat(64));
+        {
+            let mut inner = store.evidence_lock()?;
+            inner
+                .state
+                .target_snapshots
+                .insert("conflicting-context".into(), conflicting);
+        }
+        assert_eq!(
+            store.discovery_context(&record)?,
+            Join::Unresolved(Missing::AmbiguousWorkloadFact)
+        );
+        Ok(())
+    }
 
     #[test]
     fn policy_validation_clone_shares_retained_evidence_maps() {
