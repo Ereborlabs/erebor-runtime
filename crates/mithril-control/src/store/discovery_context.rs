@@ -18,6 +18,8 @@ pub struct DiscoveryPinnedContextV1 {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum DiscoveryContextUnavailableV1 {
+    MissingSourceCpu,
+    ContextLimit,
     MissingDecisionCatalog,
     MissingProcessLifetime,
     MissingWorkloadFact,
@@ -154,6 +156,14 @@ impl ControlStore {
                             .any(|cell| cell.key == catalog.static_key)
                     {
                         return Ok(unresolved(Missing::PolicyContextMismatch));
+                    }
+                    if serde_json::to_writer(
+                        crate::discovery::InputByteLimit(crate::MAX_DISCOVERY_PIN_BYTES),
+                        workload,
+                    )
+                    .is_err()
+                    {
+                        return Ok(unresolved(Missing::ContextLimit));
                     }
                     let next = DiscoveryPinnedContextV1 {
                         binding: DiscoveryContextBindingV1 {

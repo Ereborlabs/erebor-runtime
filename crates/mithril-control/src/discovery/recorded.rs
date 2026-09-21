@@ -9,7 +9,9 @@ use crate::{
 };
 
 #[derive(Default)]
-pub struct DiscoveryOwner;
+pub struct DiscoveryOwner {
+    pub(super) live: Option<super::live::DiscoveryLive>,
+}
 
 impl DiscoveryOwner {
     pub fn derive_recorded(
@@ -111,28 +113,16 @@ impl DiscoveryOwner {
             }
             let key = BehaviorAtomKeyV1::from_record(record, context, input.proof_kind)?;
             let digest = DiscoveryDigestV1::of(&key)?;
-            let atom = atoms
-                .entry(digest.clone())
-                .or_insert_with(|| BehaviorAtomV1 {
-                    id: digest,
-                    key: key.clone(),
-                    count: 0,
-                    first_cursor: id.durable_cursor,
-                    last_cursor: id.durable_cursor,
-                    source_reason: observation.effect.reason,
-                    source_decision: observation.effect.decision,
-                    kernel_result: observation.effect.kernel_result,
-                    physical_result: if observation.effect.decision
-                        == EffectPhysicalResultV1::DeniedBeforeEffect as u8
-                        && observation.effect.kernel_result < 0
-                    {
-                        DiscoveryPhysicalResultV1::Prevented
-                    } else {
-                        DiscoveryPhysicalResultV1::Unknown
-                    },
-                    static_key: context.static_key.clone(),
-                    evidence_sample: Vec::new(),
-                });
+            let atom = atoms.entry(digest.clone()).or_insert_with(|| {
+                BehaviorAtomV1::from_key(
+                    digest,
+                    key.clone(),
+                    0,
+                    id.durable_cursor,
+                    id.durable_cursor,
+                    Vec::new(),
+                )
+            });
             DiscoveryInputManifestV1::require(atom.key == key, "ATOM_DIGEST_COLLISION")?;
             atom.count += 1;
             atom.first_cursor = atom.first_cursor.min(id.durable_cursor);
@@ -207,6 +197,38 @@ impl DiscoveryOwner {
             unresolved_records: derived.snapshot.unresolved_records,
             simulations,
         })
+    }
+}
+
+impl BehaviorAtomV1 {
+    pub(crate) fn from_key(
+        id: DiscoveryDigestV1,
+        key: BehaviorAtomKeyV1,
+        count: u64,
+        first_cursor: u64,
+        last_cursor: u64,
+        evidence_sample: Vec<DiscoveryRecordIdV1>,
+    ) -> Self {
+        Self {
+            id,
+            count,
+            first_cursor,
+            last_cursor,
+            source_reason: key.effect.reason,
+            source_decision: key.effect.decision,
+            kernel_result: key.effect.kernel_result,
+            physical_result: if key.effect.decision
+                == EffectPhysicalResultV1::DeniedBeforeEffect as u8
+                && key.effect.kernel_result < 0
+            {
+                DiscoveryPhysicalResultV1::Prevented
+            } else {
+                DiscoveryPhysicalResultV1::Unknown
+            },
+            static_key: key.static_key.clone(),
+            key,
+            evidence_sample,
+        }
     }
 }
 
