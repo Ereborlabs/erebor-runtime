@@ -174,9 +174,8 @@ impl ContainerRuntimeInventory {
         let fallback_at = tokio::time::Instant::now() + self.fallback_scan_interval;
         loop {
             if let Some(events) = self.event_stream.as_mut() {
-                match tokio::time::timeout_at(fallback_at, events.message()).await {
-                    Err(_) => return,
-                    Ok(Ok(Some(event)))
+                match events.message().await {
+                    Ok(Some(event))
                         if matches!(
                             event.topic.as_str(),
                             "/containers/create"
@@ -190,8 +189,8 @@ impl ContainerRuntimeInventory {
                     {
                         return
                     }
-                    Ok(Ok(Some(_event))) => continue,
-                    Ok(Ok(None) | Err(_)) => {
+                    Ok(Some(_event)) => continue,
+                    Ok(None) | Err(_) => {
                         self.event_stream = None;
                         self.event_reconnect_delay = EVENT_RECONNECT_MINIMUM;
                         self.event_reconnect_at =
@@ -888,8 +887,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connected_quiet_event_stream_uses_inventory_fallback(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn quiet_stream_does_not_scan() -> Result<(), Box<dyn std::error::Error>> {
         let channel = Endpoint::from_static("http://[::]").connect_lazy();
         let directory = tempfile::tempdir()?;
         let mut inventory = ContainerRuntimeInventory {
@@ -902,7 +900,9 @@ mod tests {
             event_reconnect_at: tokio::time::Instant::now(),
         };
 
-        tokio::time::timeout(Duration::from_millis(100), inventory.wait_for_change()).await?;
+        let result =
+            tokio::time::timeout(Duration::from_millis(100), inventory.wait_for_change()).await;
+        assert!(result.is_err());
         assert!(inventory.event_stream.is_some());
         Ok(())
     }

@@ -266,6 +266,13 @@ reimplement a production owner operation.
   The complete Host lifecycle then passed all 30 tests in 321.34 seconds. Do
   not change Kubernetes readiness to hide a result. Add direct `runc` only
   after Host passes. Add Kubernetes only after direct `runc` passes.
+- [x] Do not start fallback CRI reconciliation while the containerd event
+  stream is connected and quiet. A runtime event or stream failure starts the
+  recovery check. An unavailable event API keeps the bounded inventory scan.
+  Keep the unchanged-inventory early return and repeated-recovery idempotency.
+  The seven CRI runtime tests passed. The unchanged churn scenario passed on
+  Host in 83.58 seconds, direct `runc` in 135.47 seconds, and Kubernetes in
+  213.48 seconds on 2026-09-21.
 - Do not add a test registry, custom test language, replacement harness,
   builder, factory, or scenario-specific lifecycle implementation.
 - Verify serial lifecycle tests first. Enable bounded parallel tests only
