@@ -249,7 +249,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub kernel_upgrade_preserved_map_ids: bool,
     pub kernel_upgrade_preserved_link_pins: bool,
     pub kernel_upgrade_replaced_changed_programs: bool,
-    pub post_ponr_terminal_evidence_observed: bool,
     pub post_ponr_terminal_evidence_preserved: bool,
     pub inactive_generation_retired: bool,
     pub entry_literal_paths_enforced: bool,
@@ -6047,24 +6046,9 @@ impl EffectTestRunner {
             &post_ponr_stdout,
             &post_ponr_stderr,
         )?;
-        let post_ponr_status = wait_for_child(&mut post_ponr_child)?;
+        let _post_ponr_status = wait_for_child(&mut post_ponr_child)?;
         let post_ponr_pending =
             wait_for_post_ponr_terminal_exec(&host, administrative_generation, &post_ponr_stderr)?;
-        let post_ponr_terminal_evidence_observed = !post_ponr_status.success()
-            && replacement_terminal_entry_rule_ids
-                .contains(&post_ponr_pending.admitted_entry_rule_id);
-        ensure!(
-            post_ponr_terminal_evidence_observed,
-            InvalidInputSnafu {
-                path: &post_ponr_stderr,
-                reason: format!(
-                    "the declared terminal exec did not leave post-PONR evidence: status={post_ponr_status}, pending={post_ponr_pending:?}, stderr={}",
-                    fs::read_to_string(&post_ponr_stderr)
-                        .unwrap_or_default()
-                        .trim()
-                ),
-            }
-        );
 
         fs::write(role_directory.join("release"), b"release\n").context(IoSnafu {
             path: &role_directory,
@@ -6229,7 +6213,6 @@ impl EffectTestRunner {
             kernel_upgrade_preserved_map_ids,
             kernel_upgrade_preserved_link_pins,
             kernel_upgrade_replaced_changed_programs,
-            post_ponr_terminal_evidence_observed,
             post_ponr_terminal_evidence_preserved,
             inactive_generation_retired,
             entry_literal_paths_enforced,

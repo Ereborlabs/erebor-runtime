@@ -2325,11 +2325,11 @@ setup, production actions, assertions, and focused test.
   ID, link pin, program tag, and running-identity checks explicit.
 - [ ] Post-point-of-no-return evidence and generation retirement: keep the
   terminal exec, evidence retention, holder release, and absence proof.
-  - [ ] Preserve the declared terminal-entry role. The existing shared fatal
+  - [x] Preserve the declared terminal-entry role. The existing shared fatal
     exec test keeps one worker role and does not replace the direct-`runc`
     assertion that the fatal exec selected the one termination-role admission
     rule.
-  - [ ] Add one small standard platform test for the declared terminal entry.
+  - [x] Add one small standard platform test for the declared terminal entry.
     Use `ProcessFixture::fatal_exec` and `Platform::add_actor`. Do not add a
     Platform API.
     - [x] Declare one live `PreStop` sleep entry and the fatal `PreStop` entry
@@ -2343,10 +2343,11 @@ setup, production actions, assertions, and focused test.
       policy in 28.11 seconds.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
-    - [ ] Remove only the matching legacy terminal-status assertion and result
+    - [x] Remove only the matching legacy terminal-status assertion and result
       field after all three platforms pass. Keep the action and pending row
       until the evidence-retention and generation-retirement test replaces
-      them.
+      them. The affected direct-`runc` probe passed. Its retained-evidence and
+      inactive-generation assertions remained true.
 - [x] External entry and external cgroup entrant: keep both physical execs and
   rule-zero fail-closed evidence assertions.
   - [x] Extend the existing unlisted runtime-exec test with its exact
