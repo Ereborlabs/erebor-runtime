@@ -1934,11 +1934,8 @@ test does not close a row when its physical condition or an assertion changed.
       exact protected or allowed object. Keep setup, action, assertions, and
       teardown in a test of fewer than 100 lines.
     - [ ] Pass Host and commit it.
-    - [x] Pass direct `runc` and commit it. The unchanged recovery scenario
-      passed through the production OCI hook in 43.32 seconds on 2026-09-21.
-    - [x] Pass Kubernetes and commit it. The unchanged recovery scenario
-      passed against the retained real K3s cluster in 78.69 seconds on
-      2026-09-21.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy prepared-descriptor actions, result
       fields, mailbox operations, and fixture owner after all three platforms
       pass. Keep the independent-process mapping cases.
@@ -2073,8 +2070,11 @@ test does not close a row when its physical condition or an assertion changed.
     the exact actor task, and no exact or composite policy object.
     - [x] Pass Host and commit it. The 81-line scenario preserves the recovered
       root and passed in 29.64 seconds on 2026-09-21.
-    - [ ] Pass direct `runc` and commit it.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass direct `runc` and commit it. The unchanged recovery scenario
+      passed through the production OCI hook in 43.32 seconds on 2026-09-21.
+    - [x] Pass Kubernetes and commit it. The unchanged recovery scenario
+      passed against the retained real K3s cluster in 78.69 seconds on
+      2026-09-21.
     - [x] Remove only the matching legacy action and result field after all
       three platforms pass. The cleanup removed the old request, child match
       arm, target, assertion block, and result field. It kept every other file
