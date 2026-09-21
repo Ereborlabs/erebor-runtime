@@ -14,6 +14,19 @@ runs, the repository inspector also proves that the guest filesystem returns
 because the checked result is `kernel-qualification-x86_64.json`.
 The libvirt `default` network must exist and be active.
 
+Before a single-VM run, list the running qualification VMs:
+
+```bash
+virsh -c qemu:///system list --state-running --name
+```
+
+Shut down an old `mithril-runtime-qualification-*` VM from the same source
+checkout before the run. Use `manual.sh destroy` when it owns the VM state.
+For a diagnostic VM that you must retain, use `virsh shutdown NAME`, wait for
+`virsh domstate NAME` to report `shut off`, and keep its disk and K3s state.
+An active harness-owned two-node pair is valid only while its two-node lane
+runs. An old running VM can delay BPF verification and make Node startup fail.
+
 Run:
 
 ```bash

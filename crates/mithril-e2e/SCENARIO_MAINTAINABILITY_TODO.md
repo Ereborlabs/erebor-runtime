@@ -143,6 +143,10 @@ reimplement a production owner operation.
   platform case as a standard Rust `#[test]`.
 - Run one lifecycle and one platform in each test process. Production uses one
   global Interceptor lease per host, so two lifecycle Nodes must not overlap.
+- Before a single-VM platform lane, stop old qualification VMs from the same
+  source checkout. Keep a retained VM disk and K3s state when more work is
+  expected. An intentional harness-owned two-node pair can run only for its
+  two-node lane.
 - Do not rename tests, add `z` prefixes, move modules, or depend on libtest
   discovery order to make lifecycle users contiguous.
 - Put the lifecycle and platform in each generated leaf test name, such as
@@ -732,6 +736,13 @@ count as maintainability migrations.
     and 1,554.23 seconds for Kubernetes. Every current lifecycle process
     passed without a rerun or source change. The Kubernetes run retained the
     existing K3s cluster.
+  - On 2026-09-20, a same-checkout qualification VM had run for about 43
+    hours. With that VM active, full Node startup exceeded 30 seconds. After
+    an orderly VM shutdown, the unchanged Node-first and actor-first tests
+    initialized Node in 24.96 and 24.15 seconds and passed. Full Node startup
+    now has a 60-second bound. Ordinary readiness, action, and shutdown waits
+    keep their 30-second bounds. With the new bound, the unchanged Node-first
+    and actor-first exact tests passed in 40.96 and 34.38 seconds.
 - [x] Make exact single-test cleanup and complete-lane cleanup bounded and
   diagnostic on all three platforms. Do not depend on process exit, VM
   deletion, or K3s deletion for normal cleanup.

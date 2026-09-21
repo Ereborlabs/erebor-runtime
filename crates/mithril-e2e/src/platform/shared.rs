@@ -48,6 +48,7 @@ use crate::process::ProcessFixture;
 use crate::runtime_input::runtime_observation;
 
 const READY_LIMIT: Duration = Duration::from_secs(30);
+const NODE_START_LIMIT: Duration = Duration::from_secs(60);
 const TENANT_ID: &str = "00000000-0000-0001-0000-000000000002";
 const CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
 const NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
@@ -635,7 +636,7 @@ impl Shared {
         });
         self.node_stop = Some(stop);
         self.node_task = Some(task);
-        match ready.recv_timeout(READY_LIMIT) {
+        match ready.recv_timeout(NODE_START_LIMIT) {
             Ok(Ok(receiver)) => {
                 self.ready = Some(receiver);
                 Ok(())
