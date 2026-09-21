@@ -17,3 +17,10 @@ pub use runtime::DiscoveryRuntimeConfigV1;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) fn test_crash_boundary(boundary: &str) {
+    if std::env::var("ARAPHOR_TEST_DERIVATION_KILL").as_deref() == Ok(boundary) {
+        std::process::exit(73);
+    }
+}
