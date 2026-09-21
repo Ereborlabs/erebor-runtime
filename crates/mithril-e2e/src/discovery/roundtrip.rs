@@ -19,7 +19,9 @@ use snafu::ensure;
 use zerocopy::IntoBytes as _;
 
 use crate::{
-    control_fixture::{MtlsFixture, OutagePolicyFixture, OUTAGE_NAMESPACE_UID},
+    control_fixture::{
+        reopen_control_store, MtlsFixture, OutagePolicyFixture, OUTAGE_NAMESPACE_UID,
+    },
     error::InvalidInputSnafu,
 };
 
@@ -325,8 +327,8 @@ impl DiscoveryQualificationRunner {
         drop(connection);
         server.shutdown().await?;
         drop(store);
+        let store = reopen_control_store(&root).await?;
         fs::remove_file(root.join("discovery-index.sqlite"))?;
-        let store = ControlStore::open(&root)?;
         let recovered = DiscoveryOwner::open(store.clone())?;
         ensure!(
             recovered.read_snapshot(&snapshot, None).is_err(),

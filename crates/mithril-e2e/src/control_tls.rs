@@ -49,8 +49,8 @@ use grpc_throughput_protocol::grpc_throughput_server::{GrpcThroughput, GrpcThrou
 use grpc_throughput_protocol::{FileChunk, FileReceipt};
 
 use crate::control_fixture::{
-    free_address, CertificateFiles, Certificates, ControlServerFixture, MtlsFixture,
-    OutagePolicyFixture, OUTAGE_CLUSTER_UID, OUTAGE_NAMESPACE_UID, OUTAGE_TENANT_ID,
+    control_store_lease_ready, free_address, CertificateFiles, Certificates, ControlServerFixture,
+    MtlsFixture, OutagePolicyFixture, OUTAGE_CLUSTER_UID, OUTAGE_NAMESPACE_UID, OUTAGE_TENANT_ID,
 };
 use crate::physical::{wait_for, wait_for_async};
 
@@ -2382,21 +2382,6 @@ async fn wait_for_decommission_state(
     .await
     .map_err(|_elapsed| format!("decommission did not reach {expected:?}"))?;
     Ok(())
-}
-
-fn control_store_lease_ready<T>(result: mithril_control::Result<T>) -> crate::Result<Option<T>> {
-    match result {
-        Ok(store) => Ok(Some(store)),
-        Err(mithril_control::Error::ControlStore { reason, .. })
-            if reason.starts_with("another Control store owner holds the lease") =>
-        {
-            Ok(None)
-        }
-        Err(source) => Err(crate::Error::Policy {
-            source,
-            location: snafu::Location::default(),
-        }),
-    }
 }
 
 #[derive(Clone)]

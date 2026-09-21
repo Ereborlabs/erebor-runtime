@@ -21,8 +21,63 @@ use rcgen::{
 use sha2::{Digest as _, Sha256};
 use tokio::sync::oneshot;
 
-#[cfg(test)]
 use crate::physical::wait_for_async;
+
+pub(crate) fn control_store_lease_ready<T>(
+    result: mithril_control::Result<T>,
+) -> crate::Result<Option<T>> {
+    match result {
+        Ok(store) => Ok(Some(store)),
+        Err(mithril_control::Error::ControlStore { reason, .. })
+            if reason.starts_with("another Control store owner holds the lease") =>
+        {
+            Ok(None)
+        }
+        Err(source) => Err(crate::Error::Policy {
+            source,
+            location: snafu::Location::default(),
+        }),
+    }
+}
+
+pub(crate) async fn reopen_control_store(path: &Path) -> crate::Result<ControlStore> {
+    wait_for_async(
+        path,
+        "the stopped Control server to release its store lease",
+        Duration::from_secs(5),
+        || control_store_lease_ready(ControlStore::open(path)),
+        || "the stopped server still owns the store lease".to_owned(),
+    )
+    .await
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn discovery_read_restart_waits_for_lease_and_preserves_other_errors(
+) -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let store = ControlStore::open(directory.path())?;
+    let reopening = reopen_control_store(directory.path());
+    tokio::pin!(reopening);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut reopening)
+            .await
+            .is_err()
+    );
+    assert!(ControlStore::open(directory.path()).is_err());
+    drop(store);
+    drop(reopening.await?);
+    let invalid = directory.path().join("not-a-directory");
+    fs::write(&invalid, b"invalid")?;
+    assert!(matches!(
+        reopen_control_store(&invalid).await,
+        Err(crate::Error::Policy {
+            source: mithril_control::Error::Io { .. },
+            ..
+        })
+    ));
+    Ok(())
+}
 
 const OUTAGE_POLICY: &[u8] = include_bytes!("../fixtures/convergence/outage-policy-v1.json");
 pub(crate) const OUTAGE_TENANT_ID: &str = "00000000-0000-0001-0000-000000000002";
