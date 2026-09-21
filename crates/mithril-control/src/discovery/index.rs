@@ -19,7 +19,7 @@ use crate::{
     EvidenceCpuBindingV1, EvidenceIntakeIdentityV1, EvidenceRecord, Result,
 };
 
-const MAX_INDEX_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_INDEX_DISK_BYTES: u64 = 2 * crate::store::MAX_DISCOVERY_ACTIVE_INDEX_BYTES;
 const MAX_INDEX_WAL_BYTES: u64 = 64 * 1024 * 1024;
 const INDEX_TRANSACTION_RESERVE: u64 = 32 * 1024 * 1024;
 mod feed;
@@ -1290,6 +1290,8 @@ impl DiscoveryIndex {
     ) -> Result<DiscoveryIndexProgressV1> {
         let records = page.prepare()?;
         let input_bytes = page.input_bytes()?;
+        self.store
+            .reserve_discovery_index_tenant(head.key.tenant_id)?;
         let mut writer = self.writer.lock().map_err(|_| {
             DiscoverySnafu {
                 code: "INDEX_OWNER",
@@ -1611,6 +1613,8 @@ impl DiscoveryIndex {
             self.store.discovery_head(&head.key)?.as_ref() == Some(head),
             "SNAPSHOT_NOT_COMMITTED",
         )?;
+        self.store
+            .reserve_discovery_index_tenant(head.key.tenant_id)?;
         let writer = self.writer.lock().map_err(|_| {
             DiscoverySnafu {
                 code: "INDEX_OWNER",
@@ -1767,6 +1771,8 @@ impl DiscoveryIndex {
     }
 
     pub(super) fn replay_context(&self, tip: &DiscoveryHeadV1) -> Result<()> {
+        self.store
+            .reserve_discovery_index_tenant(tip.key.tenant_id)?;
         use super::context::ContextRevision;
         DiscoveryInputManifestV1::require(
             self.store.discovery_head(&tip.key)?.as_ref() == Some(tip),

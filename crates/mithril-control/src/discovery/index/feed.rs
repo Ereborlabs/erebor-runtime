@@ -336,6 +336,8 @@ impl DiscoveryIndex {
             .build()
         })?;
         self.reserve_write(&writer)?;
+        self.store
+            .reserve_discovery_index_tenant(head.key.tenant_id)?;
         let transaction = writer.transaction().context(DiscoveryDatabaseSnafu {
             operation: "begin revision projection",
         })?;
