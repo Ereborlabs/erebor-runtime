@@ -350,3 +350,38 @@ After the final Rust edit, `bash .github/scripts/verify-rust-ci.sh` passed.
 The Node library passed 246 tests. The e2e library passed 98 tests and ignored
 163 physical or manual cases. The document check passed 228 local links across
 27 documents. This result proves the storage owner, not the live engine.
+
+### Control policy and workload context
+
+[ControlStore::discovery_context](../../../crates/mithril-control/src/store/discovery_context.rs)
+accepts one retained discovery record.
+  -> [ObservationEnvelopeV1::validate](../../../crates/mithril-control/src/evidence/model.rs) checks the base event and catalogue coordinates.
+  -> [ControlStore::discovery_context](../../../crates/mithril-control/src/store/discovery_context.rs) checks the stream identity and original kernel sequence.
+  -> [ControlStore::discovery_context](../../../crates/mithril-control/src/store/discovery_context.rs) selects retained policy and workload facts for the exact tenant, Node, boot, label epoch, binding, and profile version.
+  -> [DiscoveryPinnedContextV1](../../../crates/mithril-control/src/store/discovery_context.rs) retains the workload fact, policy and snapshot references, and Control read revision.
+  -> Not implemented: the live owner commits this context with an exported page.
+
+The selected static key must exist in the retained compiled policy. Its workload
+selector, protected scope, and execution set must match the workload fact.
+Conflicting facts return `AmbiguousWorkloadFact`. Missing catalogue, process
+lifetime, or workload facts return separate unresolved states. Malformed
+coordinates return an error. No missing fact becomes a guessed image or path.
+Historical context uses the exact retained source, not the latest policy.
+
+This join reads the existing bounded Control metadata under its low-priority
+lock. It performs no filesystem or network lookup. The returned context belongs
+to the caller until the caller stores it in an immutable export. A workload
+without a matching retained `WorkloadTargetFactV1` remains unresolved. This
+implementation does not add host inventory or claim a live roundtrip pass.
+
+`discovery_context_pins_exact_policy_and_workload_facts` checks a signed policy
+and committed target through the public store APIs. It checks restart stability,
+cross-tenant input, another Node or boot, a changed label epoch, binding, profile
+version, static selector, missing process or catalogue, changed operation, and
+changed kernel sequence. A conflicting retained fact cannot select a context.
+
+Verification: the focused join test passed. After the final Rust edit,
+`bash .github/scripts/verify-rust-ci.sh` passed. The Control library passed
+152 tests; the Node library passed 246. The e2e library passed 98 tests and
+ignored 163 physical or manual cases. The document check passed 233 local
+links across 27 documents. This result covers the join added after `3426e5f3`.
