@@ -7,7 +7,7 @@ use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{TaskCoordinateStateV1, TaskCoordinateV1};
@@ -51,6 +51,7 @@ use crate::process::ProcessFixture;
 use crate::runtime_input::runtime_observation;
 
 const READY_LIMIT: Duration = Duration::from_secs(30);
+// Node startup includes BPF verification. Operation deadlines remain separate.
 const NODE_START_LIMIT: Duration = Duration::from_secs(60);
 const TENANT_ID: &str = "00000000-0000-0001-0000-000000000002";
 const CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
@@ -739,6 +740,7 @@ impl Shared {
         let config = self.node_config()?;
         let (stop, receiver) = watch::channel(false);
         let (started, ready) = mpsc::sync_channel(1);
+        let started_at = Instant::now();
         let task = thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -771,7 +773,10 @@ impl Shared {
             outcome => {
                 let reason = match outcome {
                     Ok(Err(source)) => format!("Node start failed: {source}"),
-                    Err(source) => format!("Node start did not report readiness: {source}"),
+                    Err(source) => format!(
+                        "Node start did not report readiness after {} ms: {source}",
+                        started_at.elapsed().as_millis()
+                    ),
                     Ok(Ok(_receiver)) => unreachable!("the ready result was handled"),
                 };
                 match self.stop_node() {
@@ -1650,7 +1655,7 @@ mod tests {
     use snafu::ResultExt as _;
     use zerocopy::TryFromBytes as _;
 
-    use super::{Shared, READY_LIMIT};
+    use super::{Shared, NODE_START_LIMIT, READY_LIMIT};
     use crate::physical::{wait_for, ProbeFile};
     use crate::platform::{test_lifecycle, CriFixture, Host, TestResult};
     use crate::process::ProcessFixture;
@@ -1947,7 +1952,7 @@ mod tests {
             node.wait_path(
                 &map,
                 "Node startup BPF attachment",
-                READY_LIMIT,
+                NODE_START_LIMIT,
                 || Ok(map.exists().then_some(())),
                 || "the identity map is absent".to_owned(),
             )?;
@@ -1977,7 +1982,7 @@ mod tests {
             recovered.wait_path(
                 &env.admit_path,
                 "recovered Node admission readiness",
-                READY_LIMIT,
+                NODE_START_LIMIT,
                 || Ok(env.runtime.block_on(health.available()).then_some(())),
                 || {
                     format!(

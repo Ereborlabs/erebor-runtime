@@ -334,6 +334,45 @@ The historical complete Kubernetes result is
 The historical focused replacement-exception result is
 `target/mithril-replacement-generation-lightweight-20260902-r12/replacement-generation-exception-probe.json`.
 
+## Current Host Qualification Checkpoint
+
+This checkpoint uses `cbca43fd` with the shared fixture startup correction.
+The phase remains **Not done**. The correction changes no production policy,
+kernel decision, or behavior assertion.
+
+[Shared::start_node](../../../crates/mithril-e2e/src/platform/shared.rs) starts Node in its owned thread.
+  -> [NodeChassis::start](../../../crates/mithril-node/src/node.rs) loads and verifies the BPF programs and restores Node state.
+  -> [Shared::start_node](../../../crates/mithril-e2e/src/platform/shared.rs) waits at most 60 seconds for the startup result.
+  -> [Shared](../../../crates/mithril-e2e/src/platform/shared.rs) keeps the separate 30-second operation deadline.
+
+The earlier fixture used the operation deadline for startup. Several runs
+finished Node initialization after that deadline and failed before the case
+could check behavior. BPF syscall traces measured 15.53 seconds for 86 program
+loads in one start and 38.15 seconds for 165 loads across start and restart.
+The unchanged diagnostic cases passed, but these repeats did not remove the
+startup deadline error. The fixture now gives startup its own bound. A startup
+timeout also reports elapsed milliseconds. The process-based startup-signal
+case uses the same startup bound; its shutdown deadline does not change.
+
+The current binary SHA-256 is
+`ccf333ebc9cbdbe98cbd5478a333632314bc716c5f09e830ceed258bd196c92a`.
+It runs on the owned Ubuntu 24.04 VM with Linux `6.8.0-139-generic` and BPF LSM.
+The isolated `node_restart_host` case passed in 58.96 seconds. It checks that
+the running actor keeps its exact snapshot and task coordinates across Node
+restart. Its log is
+`/var/tmp/mithril-runtime-qualification-1789942727/current-node_restart.log`
+on `mithril-runtime-qualification-1789942727`.
+
+The initial combined-filter command passed 29 identity cases but rejected 18
+cases at the fixture lifecycle guard. That command is not a suite pass. Each
+remaining lifecycle runs in a separate test process. The full current Host
+qualification and Kubernetes qualification remain open.
+
+After the final Rust edit, `bash .github/scripts/verify-rust-ci.sh` passed.
+The Control library passed 152 tests; Node passed 246. The e2e library passed
+98 tests and ignored 163 physical or manual cases. The ignored cases are not
+physical passes.
+
 ## Remaining Closure Work
 
 Version-changed Kubernetes recovery and authorized final decommission remain
