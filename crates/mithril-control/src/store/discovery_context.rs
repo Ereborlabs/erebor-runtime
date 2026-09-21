@@ -94,13 +94,12 @@ impl ControlStore {
         let tenant = uuid::Uuid::from_bytes(stream.tenant_id).to_string();
         let boot = hex::encode(stream.node_boot_id);
         let binding = uuid::Uuid::from_bytes(catalog.binding_id.to_be_bytes()).to_string();
-        if observation.effect.execution_set_id.is_some_and(|id| {
-            uuid::Uuid::from_bytes(id.to_be_bytes()).to_string()
-                != catalog.static_key.execution_set_id
-        }) || observation.effect.authority_domain_id.is_some_and(|id| {
-            uuid::Uuid::from_bytes(id.to_be_bytes()).to_string()
-                != catalog.static_key.protected_scope_id
-        }) {
+        if observation.effect.execution_set_id.is_none()
+            || observation.effect.authority_domain_id.is_some_and(|id| {
+                uuid::Uuid::from_bytes(id.to_be_bytes()).to_string()
+                    != catalog.static_key.protected_scope_id
+            })
+        {
             return Ok(unresolved(Missing::PolicyContextMismatch));
         }
         let mut selected: Option<DiscoveryPinnedContextV1> = None;
@@ -146,7 +145,17 @@ impl ControlStore {
                     {
                         continue;
                     }
-                    if workload.execution_set_id != catalog.static_key.execution_set_id
+                    if observation
+                        .effect
+                        .execution_set_id
+                        .map(|id| uuid::Uuid::from_bytes(id.to_be_bytes()).to_string())
+                        .as_ref()
+                        != Some(&workload.execution_set_id)
+                        || !artifact
+                            .policy_document
+                            .protected_universe
+                            .execution_set_ids
+                            .contains(&catalog.static_key.execution_set_id)
                         || identity.protected_scope_id != catalog.static_key.protected_scope_id
                         || identity.workload_selector_id != catalog.static_key.workload_selector_id
                         || !artifact

@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::fs;
@@ -13,18 +12,15 @@ use ed25519_dalek::SigningKey;
 use kube::client::Body as KubeBody;
 use kube::Client;
 use mithril_control::{
-    lower_kubernetes_policy, workload_target_fact_digest, AdministrativeExecArmResult,
-    AdministrativeExecResolution, AllowedNodeIdentity, ArmAdministrativeExec,
-    AuthenticatedEvidenceNodeV1, CapabilityRecord, ContainerKindV1, ControlPlane, ControlStore,
-    EvidenceBatch, EvidenceConsumptionWatermarkV1, EvidenceIntakeIdentityV1, EvidenceIntakeOwner,
-    EvidenceRecord, EvidenceRetentionOwner, EvidenceStoreCapacityPolicyV1, EvidenceStoreLimitsV1,
-    EvidenceTemporalCoverage, KubernetesAdmissionHttpConfigV1, KubernetesAdmissionOwner,
-    KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner, KubernetesWorkloadIdentityV1,
+    AdministrativeExecArmResult, AdministrativeExecResolution, AllowedNodeIdentity,
+    ArmAdministrativeExec, AuthenticatedEvidenceNodeV1, CapabilityRecord, ControlPlane,
+    ControlStore, EvidenceBatch, EvidenceConsumptionWatermarkV1, EvidenceIntakeIdentityV1,
+    EvidenceIntakeOwner, EvidenceRecord, EvidenceRetentionOwner, EvidenceStoreCapacityPolicyV1,
+    EvidenceStoreLimitsV1, EvidenceTemporalCoverage, KubernetesAdmissionHttpConfigV1,
+    KubernetesAdmissionOwner, KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner,
     NodeDecommissionAuthorizationV1, NodeDecommissionStateV1, NodeRegistration,
-    PolicyActivationAcknowledgement, PolicyBundleV1, PolicyDesiredStateConfigV1,
-    PolicyDesiredStateOwner, PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1,
-    ProfileSealRequestV1, RegistryDigestsV1, ResolveAdministrativeExec, SignedNodeDecommissionV1,
-    TrustGenerationV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
+    PolicyActivationAcknowledgement, PolicyBundleV1, ResolveAdministrativeExec,
+    SignedNodeDecommissionV1, TrustGenerationV1, WorkloadProtectionPolicy,
 };
 use mithril_node::{
     AdministrativeControlRequest, CoverageGapReasonV1, EffectObservationStore, EvidenceIdV1,
@@ -54,14 +50,10 @@ use grpc_throughput_protocol::{FileChunk, FileReceipt};
 
 use crate::control_fixture::{
     free_address, CertificateFiles, Certificates, ControlServerFixture, MtlsFixture,
+    OutagePolicyFixture, OUTAGE_CLUSTER_UID, OUTAGE_NAMESPACE_UID, OUTAGE_TENANT_ID,
 };
 use crate::physical::{wait_for, wait_for_async};
 
-const OUTAGE_POLICY: &[u8] = include_bytes!("../fixtures/convergence/outage-policy-v1.json");
-const OUTAGE_TENANT_ID: &str = "00000000-0000-0001-0000-000000000002";
-const OUTAGE_CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
-const OUTAGE_NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
-const OUTAGE_POLICY_UID: &str = "30000000-0000-4000-8000-000000000001";
 const OUTAGE_NOW: i64 = 1_800_000_000_000_000_000;
 const GRPC_THROUGHPUT_CHUNK_BYTES: usize = 3 * 1_024 * 1_024;
 const GRPC_THROUGHPUT_MESSAGE_BYTES: usize = 4 * 1_024 * 1_024;
@@ -235,125 +227,7 @@ fn control_evidence_queue_reclaims_only_durably_consumed_segments() -> Result<()
     Ok(())
 }
 
-struct OutagePolicyFixture {
-    owner: PolicyDesiredStateOwner,
-}
-
 impl OutagePolicyFixture {
-    fn new(store: ControlStore) -> Self {
-        let digest = "0".repeat(64);
-        Self {
-            owner: PolicyDesiredStateOwner::new(
-                PolicyDesiredStateConfigV1 {
-                    tenant_id: OUTAGE_TENANT_ID.to_owned(),
-                    cluster_uid: OUTAGE_CLUSTER_UID.to_owned(),
-                    signer: PolicySignerConfigV1 {
-                        signing_key_id: "outage-policy-key".to_owned(),
-                        signing_key_path: PathBuf::from("/unused/outage-policy-key"),
-                        seal_request_path: PathBuf::from("/unused/outage-seal-request"),
-                        distribution_sequence_epoch: 9,
-                        candidate_validity_ns: 900_000_000_000,
-                    },
-                },
-                store,
-                SigningKey::from_bytes(&[7; 32]),
-                ProfileSealRequestV1 {
-                    signing_key_id: "outage-policy-key".to_owned(),
-                    issuer_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
-                    sequence_epoch: 4,
-                    issuer_sequence: 0,
-                    rollback_authorization_id: None,
-                    registry_digests: RegistryDigestsV1 {
-                        provider_numeric_registry_bundle_digest: digest.clone(),
-                        required_capability_schema_digest: digest.clone(),
-                        source_selector_registry_digest: digest.clone(),
-                        object_classifier_registry_digest: digest.clone(),
-                        reason_code_registry_digest: digest.clone(),
-                        correlation_package_registry_digest: digest.clone(),
-                        provider_vocabulary_registry_digest: digest,
-                    },
-                },
-            ),
-        }
-    }
-
-    fn resource(&self, generation: i64) -> Result<WorkloadProtectionPolicy, Box<dyn StdError>> {
-        let mut resource: WorkloadProtectionPolicy = serde_json::from_slice(OUTAGE_POLICY)?;
-        resource.metadata.namespace = Some("tenant-a".to_owned());
-        resource.metadata.uid = Some(OUTAGE_POLICY_UID.to_owned());
-        resource.metadata.generation = Some(generation);
-        resource.metadata.resource_version = Some(format!("outage-{generation}"));
-        if generation == 2 {
-            resource.spec.roles[0]
-                .files
-                .push(serde_json::from_value(serde_json::json!({
-                    "name": "deny-update-target",
-                    "path": "/var/lib/mithril-convergence/outage-update.denied",
-                    "recursive": false,
-                    "operations": ["OpenRead"],
-                    "action": "Deny"
-                }))?);
-        }
-        Ok(resource)
-    }
-
-    fn inventory(
-        &self,
-        resource: &WorkloadProtectionPolicy,
-    ) -> Result<Vec<WorkloadTargetFactV1>, Box<dyn StdError>> {
-        let policy = lower_kubernetes_policy(
-            resource,
-            OUTAGE_TENANT_ID,
-            OUTAGE_CLUSTER_UID,
-            OUTAGE_NAMESPACE_UID,
-        )?;
-        let source = PolicySourceRevisionV1::from_resource(
-            resource,
-            &policy,
-            OUTAGE_TENANT_ID,
-            OUTAGE_CLUSTER_UID,
-            OUTAGE_NAMESPACE_UID,
-            PolicySourceStateV1::Accepted,
-        )?;
-        let mut target = WorkloadTargetFactV1 {
-            node_id: "node-a".to_owned(),
-            workload_binding_generation_digest: String::new(),
-            execution_set_id: "44444444-4444-4444-8444-444444444444".to_owned(),
-            cluster_uid: OUTAGE_CLUSTER_UID.to_owned(),
-            namespace_uid: OUTAGE_NAMESPACE_UID.to_owned(),
-            controller_uid: "88888888-8888-4888-8888-888888888888".to_owned(),
-            service_account_uid: "77777777-7777-4777-8777-777777777777".to_owned(),
-            pod_uid: "99999999-9999-4999-8999-999999999999".to_owned(),
-            container_id: format!("scheduled:{}", "1".repeat(64)),
-            container_name: "worker".to_owned(),
-            container_kind: ContainerKindV1::Application,
-            image_digest: concat!(
-                "sha256:",
-                "73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
-            )
-            .to_owned(),
-            pod_labels: BTreeMap::from([(
-                "app.kubernetes.io/name".to_owned(),
-                "mithril-outage-worker".to_owned(),
-            )]),
-            kubernetes: Some(KubernetesWorkloadIdentityV1 {
-                namespace_name: "tenant-a".to_owned(),
-                pod_name: "outage-a".to_owned(),
-                profile_id: policy.profile_id().to_owned(),
-                policy_source_revision_id: source.policy_source_revision_id,
-                binding_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
-                protected_scope_id: policy.protected_universe.protected_scope_ids[0].clone(),
-                workload_selector_id: policy.workload_selectors[0].workload_selector_id.clone(),
-                kubernetes_node_name: "worker-a".to_owned(),
-                kubernetes_node_uid: "dddddddd-dddd-4ddd-8ddd-dddddddddddd".to_owned(),
-                node_boot_id: "07".repeat(16),
-                label_epoch: 1,
-            }),
-        };
-        target.workload_binding_generation_digest = workload_target_fact_digest(&target)?;
-        Ok(vec![target])
-    }
-
     fn active_acknowledgement(
         bundle: &PolicyBundleV1,
         profile_generation_ref_id: u64,

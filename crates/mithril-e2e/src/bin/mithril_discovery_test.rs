@@ -6,6 +6,7 @@ use clap::{Parser, ValueEnum};
 enum Case {
     OfflineExact,
     ProfileRestart,
+    ContextRoundtrip,
 }
 
 #[derive(Parser)]
@@ -26,6 +27,11 @@ async fn main() {
         Case::ProfileRestart => {
             mithril_e2e::DiscoveryQualificationRunner::new(cli.output_directory)
                 .profile_restart()
+                .await
+        }
+        Case::ContextRoundtrip => {
+            mithril_e2e::DiscoveryQualificationRunner::new(cli.output_directory)
+                .context_roundtrip()
                 .await
         }
     };

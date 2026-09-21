@@ -5920,7 +5920,8 @@ mod tests {
             1,
         )?;
         let workload = &mut target.workload_targets[0];
-        workload.execution_set_id = static_key.execution_set_id.clone();
+        workload.execution_set_id = "44444444-4444-4444-8444-444444444445".into();
+        assert_ne!(workload.execution_set_id, static_key.execution_set_id);
         let identity = workload
             .kubernetes
             .as_mut()
@@ -5961,7 +5962,7 @@ mod tests {
         observation.node_boot_id = record.id.stream.node_boot_id.into();
         observation.profile_generation_ref_id = Some(8);
         observation.effect.execution_set_id = Some(
-            uuid::Uuid::parse_str(&static_key.execution_set_id)?
+            uuid::Uuid::parse_str(&expected_workload.execution_set_id)?
                 .into_bytes()
                 .into(),
         );
@@ -6048,6 +6049,7 @@ mod tests {
             "catalog",
             "operation",
             "kernel_sequence",
+            "execution_set",
         ] {
             let mut changed = record.clone();
             let mut changed_catalog = catalog.clone();
@@ -6057,6 +6059,10 @@ mod tests {
                 .as_mut()
                 .ok_or("context absent")?;
             let expected = match scenario {
+                "execution_set" => {
+                    changed.observation.effect.execution_set_id = Some([9; 16].into());
+                    Missing::PolicyContextMismatch
+                }
                 "tenant" => {
                     changed.id.stream.tenant_id = [9; 16];
                     changed.observation.tenant_id = [9; 16].into();
