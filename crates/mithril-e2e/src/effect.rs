@@ -2,6 +2,8 @@
 mod admin_exec;
 #[cfg(test)]
 mod bpf;
+#[cfg(test)]
+mod check;
 mod child;
 #[cfg(test)]
 mod exception;

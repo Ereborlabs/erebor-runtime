@@ -538,6 +538,38 @@ impl ProcessFixture {
     }
 
     #[cfg(test)]
+    pub(crate) fn wait_name(
+        &mut self,
+        pid: u32,
+        name: &str,
+        operation: &str,
+        limit: Duration,
+    ) -> Result<()> {
+        let path = PathBuf::from(format!("/proc/{pid}/comm"));
+        let last = RefCell::new(String::from("<absent>"));
+        self.wait_path(
+            &path,
+            operation,
+            limit,
+            || {
+                let value = match fs::read_to_string(&path) {
+                    Ok(value) => value,
+                    Err(source) if process_gone(&source) => return Ok(None),
+                    Err(source) => return Err(source).context(IoSnafu { path: &path }),
+                };
+                *last.borrow_mut() = value.trim().to_owned();
+                Ok((value.trim() == name).then_some(()))
+            },
+            || {
+                format!(
+                    "expected task name {name:?}; last task name: {:?}",
+                    last.borrow()
+                )
+            },
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn id(&self) -> u32 {
         self.actor_pid
     }

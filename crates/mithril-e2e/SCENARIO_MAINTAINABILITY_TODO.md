@@ -2085,6 +2085,11 @@ test does not close a row when its physical condition or an assertion changed.
     Python policy. Start each actor before Node to preserve the recovered-root
     condition. Require the exact actor task, `UNRESOLVED_OBJECT`, the original
     file operation, `EACCES`, and zero exact and composite policy object IDs.
+    - [x] Add one bounded `ProcessFixture` task-name wait and one `EffectCheck`
+      evidence cursor. The create scenario now keeps its setup, action, state
+      check, object checks, and teardown in 51 lines. The unchanged behavior
+      passed on Host in 40.37 seconds, direct `runc` in 43.79 seconds, and
+      Kubernetes in 82.98 seconds on 2026-09-21.
     - [ ] Replace chmod. Require File/Setattr and mode `0600` after denial.
       - [ ] Pass Host and commit it.
       - [ ] Pass direct `runc` and commit it.
