@@ -2372,9 +2372,11 @@ setup, production actions, assertions, and focused test.
       passed in 41.80 seconds on 2026-09-21.
     - [x] Pass Kubernetes and commit it. The corrected Kubernetes test passed
       in 87.86 seconds on 2026-09-21.
-    - [ ] Remove only the matching legacy terminal-retention and inactive-
+    - [x] Remove only the matching legacy terminal-retention and inactive-
       generation fields, actions, and shell assertions after all platforms
-      pass. Keep unrelated mount, upgrade, and cleanup behavior.
+      pass. Keep unrelated mount, upgrade, and cleanup behavior. The affected
+      direct-`runc` probe passed with the remaining recovery, mount, entry-role,
+      upgrade, and cleanup assertions.
 - [x] External entry and external cgroup entrant: keep both physical execs and
   rule-zero fail-closed evidence assertions.
   - [x] Extend the existing unlisted runtime-exec test with its exact

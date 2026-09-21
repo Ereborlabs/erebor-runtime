@@ -41,7 +41,6 @@ use zerocopy::TryFromBytes;
 use crate::closure::QualificationRegistry;
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
 use crate::physical::{boot_identity, wait_for, ProbeDirectory, ProbeFile};
-use crate::process::ProcessFixture;
 use crate::Result;
 
 const WAIT_LIMIT: Duration = Duration::from_secs(30);
@@ -809,10 +808,6 @@ impl IdentityTestRunner {
         let path = output_directory.join("erebor-interceptor.bpf.o");
         fs::write(&path, BUNDLED_BPF_OBJECT).context(IoSnafu { path: &path })?;
         Ok(path)
-    }
-
-    pub(crate) fn materialize_post_ponr_execfail(path: &Path) -> Result<()> {
-        ProcessFixture::fatal_exec(path)
     }
 
     fn wait_for<T, F>(&self, description: &str, path: &Path, inspect: F) -> Result<T>

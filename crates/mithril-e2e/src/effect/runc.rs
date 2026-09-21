@@ -19,8 +19,8 @@ use erebor_interceptor_abi::{
     BindingLifecycleStateV1, CanonicalMountRootKeyV1, CanonicalMountRootV1,
     EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExactFileObjectKeyV1, ExecGuardStateV1,
     ExecutionSetBindingStateV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
-    PendingExecStateV1, PendingExecV1, ProcessSecurityStateV1, RecoveredContainerActivationPhaseV1,
-    RecoveredContainerActivationV1, TaskCoordinateStateV1,
+    ProcessSecurityStateV1, RecoveredContainerActivationPhaseV1, RecoveredContainerActivationV1,
+    TaskCoordinateStateV1,
 };
 use erebor_runtime_ipc::v1::MithrilEffectObservation;
 use k8s_cri::v1::ContainerState;
@@ -60,7 +60,6 @@ use super::{
 use crate::error::{
     CommandSnafu, InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu, PolicySnafu,
 };
-use crate::identity::IdentityTestRunner;
 use crate::physical::{boot_identity, wait_for, ProbeDirectory, ProbeFile};
 use crate::process::ProcessFixture;
 use crate::runtime_input::runtime_observation;
@@ -249,8 +248,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub kernel_upgrade_preserved_map_ids: bool,
     pub kernel_upgrade_preserved_link_pins: bool,
     pub kernel_upgrade_replaced_changed_programs: bool,
-    pub post_ponr_terminal_evidence_preserved: bool,
-    pub inactive_generation_retired: bool,
     pub entry_literal_paths_enforced: bool,
     pub dynamic_loader_paths: Vec<String>,
     pub dynamic_loader_paths_absent_from_policy: bool,
@@ -5994,7 +5991,6 @@ impl EffectTestRunner {
                 path: pin_root,
                 reason: "the recovery cycle did not retain the administrative target",
             })?;
-        let administrative_generation = administrative_binding.active_profile_generation_ref_id;
         let recovered_initial = inspector
             .snapshot(administrative_initial_pid)
             .context(NodeSnafu)?
@@ -6035,20 +6031,6 @@ impl EffectTestRunner {
         restarted_bindings
             .retire_binding_id_for_test(&host, &administrative_binding.binding_id)
             .context(NodeSnafu)?;
-
-        let post_ponr_pid_path = fixture_root.join("post-ponr-terminal.pid");
-        let post_ponr_stdout = output_directory.join("runc-entry-post-ponr.stdout");
-        let post_ponr_stderr = output_directory.join("runc-entry-post-ponr.stderr");
-        let mut post_ponr_child = container.spawn_exec(
-            "/bin/post-ponr-execfail",
-            &[],
-            &post_ponr_pid_path,
-            &post_ponr_stdout,
-            &post_ponr_stderr,
-        )?;
-        let _post_ponr_status = wait_for_child(&mut post_ponr_child)?;
-        let post_ponr_pending =
-            wait_for_post_ponr_terminal_exec(&host, administrative_generation, &post_ponr_stderr)?;
 
         fs::write(role_directory.join("release"), b"release\n").context(IoSnafu {
             path: &role_directory,
@@ -6099,67 +6081,6 @@ impl EffectTestRunner {
         }
         kubernetes_subpath_mounts.cleanup()?;
         drop(restarted_policy_owner);
-        restarted_bindings
-            .retire_profile_bindings_for_test(&host, &policy.profile_id, administrative_generation)
-            .context(NodeSnafu)?;
-        let retirement_deadline = Instant::now() + WAIT_LIMIT;
-        let inactive_generation_retired = loop {
-            if NodePolicyGenerationOwner::retire_profile_generation_for_test(
-                &host,
-                &policy.profile_id,
-                administrative_generation,
-                node_boot_id,
-                1,
-            )
-            .context(NodeSnafu)?
-            {
-                break true;
-            }
-            ensure!(
-                Instant::now() < retirement_deadline,
-                InvalidInputSnafu {
-                    path: pin_root,
-                    reason: "terminal exec evidence blocked inactive policy-generation retirement",
-                }
-            );
-            thread::sleep(Duration::from_millis(25));
-        };
-        let post_ponr_terminal_evidence_preserved = host
-            .lookup_map(
-                "pending_execs",
-                &post_ponr_pending.task_cookie.to_ne_bytes(),
-            )
-            .context(InterceptorSnafu)?
-            .and_then(|value| PendingExecV1::try_read_from_bytes(&value).ok())
-            .is_some_and(|pending| {
-                pending == post_ponr_pending && pending.state == PendingExecStateV1::PostPonrFatal
-            });
-        ensure!(
-            post_ponr_terminal_evidence_preserved,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "policy retirement removed the terminal exec evidence row",
-            }
-        );
-        restarted_bindings
-            .finalize_retired_profile_bindings_for_test(
-                &host,
-                &policy.profile_id,
-                administrative_generation,
-            )
-            .context(NodeSnafu)?;
-        ensure!(
-            NodePolicyGenerationOwner::profile_generation_is_absent_for_test(
-                &host,
-                &policy.profile_id,
-                administrative_generation,
-            )
-            .context(NodeSnafu)?,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "inactive policy generation lacks exact kernel absence proof",
-            }
-        );
         drop(reader);
         host.shutdown().context(InterceptorSnafu)?;
         pin_cleanup.cleanup()?;
@@ -6213,8 +6134,6 @@ impl EffectTestRunner {
             kernel_upgrade_preserved_map_ids,
             kernel_upgrade_preserved_link_pins,
             kernel_upgrade_replaced_changed_programs,
-            post_ponr_terminal_evidence_preserved,
-            inactive_generation_retired,
             entry_literal_paths_enforced,
             dynamic_loader_paths,
             dynamic_loader_paths_absent_from_policy: true,
@@ -6357,7 +6276,7 @@ fn prepare_entry_role_root(
         std::os::unix::fs::symlink("busybox", &destination)
             .context(IoSnafu { path: &destination })?;
     }
-    IdentityTestRunner::materialize_post_ponr_execfail(&rootfs.join("bin/post-ponr-execfail"))?;
+    ProcessFixture::fatal_exec(&rootfs.join("bin/post-ponr-execfail"))?;
     fs::create_dir_all(rootfs.join("var/lib/mithril-convergence"))
         .context(IoSnafu { path: rootfs })?;
     fs::create_dir(role_directory).context(IoSnafu {
@@ -6507,44 +6426,6 @@ fn wait_for_path(path: &Path, exists: bool, name: &str) -> Result<()> {
         || Ok((path.exists() == exists).then_some(())),
         || format!("path exists: {}, expected: {exists}", path.exists()),
     )
-}
-
-fn wait_for_post_ponr_terminal_exec(
-    host: &KernelHost,
-    profile_generation_ref_id: u64,
-    diagnostic_path: &Path,
-) -> Result<PendingExecV1> {
-    let deadline = Instant::now() + WAIT_LIMIT;
-    loop {
-        for key in host.map_keys("pending_execs").context(InterceptorSnafu)? {
-            let Some(value) = host
-                .lookup_map("pending_execs", &key)
-                .context(InterceptorSnafu)?
-            else {
-                continue;
-            };
-            let pending = PendingExecV1::try_read_from_bytes(&value).map_err(|error| {
-                InvalidInputSnafu {
-                    path: diagnostic_path,
-                    reason: format!("a pending exec has invalid ABI: {error}"),
-                }
-                .build()
-            })?;
-            if pending.source_profile_generation_ref_id == profile_generation_ref_id
-                && pending.state == PendingExecStateV1::PostPonrFatal
-            {
-                return Ok(pending);
-            }
-        }
-        ensure!(
-            Instant::now() < deadline,
-            InvalidInputSnafu {
-                path: diagnostic_path,
-                reason: "timed out waiting for terminal post-PONR exec evidence",
-            }
-        );
-        thread::sleep(Duration::from_millis(25));
-    }
 }
 
 fn recent_effect_summary(observations: &EffectObservationStore, marker: u64) -> Vec<String> {
