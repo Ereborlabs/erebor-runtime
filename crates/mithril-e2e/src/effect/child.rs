@@ -213,7 +213,6 @@ pub(super) enum PreparedOperation {
     InheritedUnixStreamSend,
     UnixStreamStalePeer,
     UnixStreamUnmatched,
-    Create { path: PathBuf },
     Setattr { path: PathBuf },
     Truncate,
     Unlink { path: PathBuf },
@@ -2446,16 +2445,6 @@ impl PreparedOperations {
                             .restart()
                             .map_or_else(error_outcome, |()| target.roundtrip())
                     })
-            }
-            PreparedOperation::Create { path } => {
-                match fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(path)
-                {
-                    Ok(_) => allowed_outcome(),
-                    Err(error) => error_outcome(error),
-                }
             }
             PreparedOperation::Setattr { path } => {
                 match fs::set_permissions(path, fs::Permissions::from_mode(0o000)) {

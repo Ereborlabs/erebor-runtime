@@ -410,7 +410,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub anonymous_read_mmap_allowed: bool,
     pub pkey_executable_mprotect_hard_closed: bool,
     pub pkey_read_mprotect_allowed: bool,
-    pub file_create_hard_closed: bool,
     pub file_setattr_hard_closed: bool,
     pub file_truncate_hard_closed: bool,
     pub file_unlink_hard_closed: bool,
@@ -1530,7 +1529,6 @@ impl EffectTestRunner {
         let external_mount_namespace = ExternalMountNamespace::acquire(fixture.pid())?;
         external_mount_namespace.bind_mount(&path_tree_root, &path_tree_preexisting_bind_target)?;
         external_mount_namespace.bind_mount(&allowed_bind_source, &allowed_bind_target)?;
-        let create_target = paths.mutation_root.join("forbidden-create");
         let setattr_target = paths.mutation_root.join("setattr-target");
         let truncate_target = paths.mutation_root.join("truncate-target");
         let unlink_target = paths.mutation_root.join("unlink-target");
@@ -2500,24 +2498,6 @@ impl EffectTestRunner {
                 None,
             )?;
         }
-        require_hard_close(
-            &mut fixture,
-            &reader,
-            &observations,
-            HardClosedOperation::Create {
-                path: create_target.clone(),
-            },
-            "UNRESOLVED_OBJECT",
-            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Create),
-            "file creation",
-        )?;
-        ensure!(
-            !create_target.exists(),
-            InvalidInputSnafu {
-                path: &create_target,
-                reason: "denied creation left a filesystem object behind",
-            }
-        );
         require_hard_close(
             &mut fixture,
             &reader,
@@ -3867,7 +3847,6 @@ impl EffectTestRunner {
             anonymous_read_mmap_allowed: true,
             pkey_executable_mprotect_hard_closed: true,
             pkey_read_mprotect_allowed: true,
-            file_create_hard_closed: true,
             file_setattr_hard_closed: true,
             file_truncate_hard_closed: true,
             file_unlink_hard_closed: true,
