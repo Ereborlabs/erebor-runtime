@@ -979,3 +979,27 @@ reported separately. See the [SQLite counter contract](https://www.sqlite.org/c3
 These measurements do not set an OS memory limit. The isolated live qualification
 must still check the pilot memory targets and primary-path latency.
 Final workspace verification remains required. The phase is **Not done**.
+
+### Restart ownership readiness
+
+The full workspace run at `d9f8bda` passed formatting, check, Clippy, and all
+174 Control tests, including the 50,000-atom paging/rebuild case. The e2e library
+passed 100 tests but failed the profile-restart case: the old store lease was
+still held when the case tried to reopen it after server shutdown. The two
+roundtrip cases passed in isolation. The failed full run is not a pass.
+
+The existing mTLS restart cases already use a bounded lease-readiness check.
+Discovery now uses that same check through
+[reopen_control_store](../../../crates/mithril-e2e/src/control_fixture.rs).
+It retries only the existing lease-busy result, for at most five seconds.
+Other errors return immediately. The qualification acquires the exclusive
+store lease before it removes the rebuildable index. It does not change
+production locking or weaken the exclusive-owner check.
+
+The new regression test holds the prior owner, proves that reopen remains
+pending, releases that owner, and verifies successful reopen. It also verifies
+that an invalid path returns its I/O error. Nine focused Discovery e2e checks
+passed; five explicit qualification/subprocess cases were ignored. The full
+parallel e2e library then passed 102 tests, with 164 physical, release-only,
+or subprocess cases ignored. Final workspace verification remains required.
+The phase is **Not done**.

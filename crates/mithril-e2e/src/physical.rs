@@ -153,7 +153,6 @@ pub(crate) fn wait_stable(
     }
 }
 
-#[cfg(test)]
 pub(crate) async fn wait_for_async<T>(
     path: &Path,
     operation: &str,

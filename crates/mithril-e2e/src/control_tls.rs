@@ -18,8 +18,8 @@ use tokio::sync::{oneshot, watch};
 use tower::service_fn;
 
 use crate::control_fixture::{
-    Certificates, MtlsFixture, OutagePolicyFixture, OUTAGE_CLUSTER_UID,
-    OUTAGE_NAMESPACE_UID, OUTAGE_TENANT_ID,
+    control_store_lease_ready, Certificates, MtlsFixture, OutagePolicyFixture,
+    OUTAGE_CLUSTER_UID, OUTAGE_NAMESPACE_UID, OUTAGE_TENANT_ID,
 };
 
 mod administrative;
@@ -281,21 +281,6 @@ fn capabilities() -> Vec<CapabilityRecord> {
         state: "SUPPORTED".to_owned(),
         reason_code: "EXACT_ATTACH_READBACK".to_owned(),
     }]
-}
-
-fn control_store_lease_ready<T>(result: mithril_control::Result<T>) -> crate::Result<Option<T>> {
-    match result {
-        Ok(store) => Ok(Some(store)),
-        Err(mithril_control::Error::ControlStore { reason, .. })
-            if reason.starts_with("another Control store owner holds the lease") =>
-        {
-            Ok(None)
-        }
-        Err(source) => Err(crate::Error::Policy {
-            source,
-            location: snafu::Location::default(),
-        }),
-    }
 }
 
 struct TcpBlackholeOwner {
