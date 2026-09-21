@@ -22,6 +22,304 @@ struct SqliteExperiment {
     db: Connection,
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "isolated release qualification; requires ARAPHOR_DISCOVERY_LIVE_OUTPUT"]
+async fn discovery_live_intake_rollout_resource_qualification() -> TestResult<()> {
+    if cfg!(debug_assertions) {
+        return Err("run this qualification with --release".into());
+    }
+    let root = PathBuf::from(std::env::var("ARAPHOR_DISCOVERY_LIVE_OUTPUT")?);
+    fs::create_dir(&root)?;
+    let mut runs = Vec::new();
+    for pair in 0..6 {
+        for enabled in if pair % 2 == 0 {
+            [false, true]
+        } else {
+            [true, false]
+        } {
+            let path = root.join(format!(
+                "pair-{pair}-{}",
+                if enabled { "enabled" } else { "disabled" }
+            ));
+            let result = live_owner_measurement(&path, enabled, false).await?;
+            if enabled {
+                let usage = &result["resources"];
+                assert!(usage["sqlite_global_peak_bytes"]
+                    .as_u64()
+                    .is_some_and(|bytes| { bytes > 0 && bytes <= 64 * 1024 * 1024 }));
+                assert!(usage["peak_resident_bytes"]
+                    .as_u64()
+                    .is_some_and(|bytes| { bytes <= 256 * 1024 * 1024 }));
+            }
+            println!("ARAPHOR_LIVE_RUN={result}");
+            runs.push(json!({"pair":pair,"enabled":enabled,"measurement":result}));
+        }
+    }
+    let mut comparison = serde_json::Map::new();
+    for field in [
+        "intake_p50_ns",
+        "intake_p95_ns",
+        "rollout_p50_ns",
+        "rollout_p95_ns",
+    ] {
+        let value = |enabled| -> f64 {
+            let mut samples = runs
+                .iter()
+                .filter(|run| run["pair"] != 0 && run["enabled"] == enabled)
+                .map(|run| run["measurement"][field].as_u64().unwrap_or(0))
+                .collect::<Vec<_>>();
+            samples.sort_unstable();
+            samples[samples.len() / 2] as f64
+        };
+        let ratio = value(true) / value(false);
+        comparison.insert(
+            field.into(),
+            json!({"disabled":value(false),"enabled":value(true),"ratio":ratio}),
+        );
+    }
+    super::write_json(
+        &root.join("result.json"),
+        &json!({
+            "schema_version":1,"qualification":"LIGHTWEIGHT_RELEASE","physical_enforcement":false,
+            "production_owners":["EvidenceIntakeOwner","PolicyDesiredStateOwner","PolicyRolloutOwner","DiscoveryOwner::run"],
+            "input":"synthetic kernel records, measured-object fixtures, and simulated activation acknowledgements",
+            "pairs":6,"warmup_pairs":1,"comparison":comparison,"runs":runs,
+            "result":"MEASURED_REQUIRES_REGRESSION_REVIEW"
+        }),
+    )?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discovery_derivation_failure_preserves_intake_and_policy_rollout() -> TestResult<()> {
+    let root = tempfile::tempdir()?;
+    let result = live_owner_measurement(root.path(), true, true).await?;
+    assert_eq!(result["records"], 8448);
+    assert_eq!(result["rollouts"], 8);
+    assert_eq!(result["projection_failure"], true);
+    Ok(())
+}
+
+async fn live_owner_measurement(
+    root: &Path,
+    enabled: bool,
+    failed_projection: bool,
+) -> TestResult<serde_json::Value> {
+    use mithril_control::*;
+    use prost::Message as _;
+    let store = ControlStore::open(root)?;
+    let boot = EvidenceIdV1::from([7; 16]);
+    let source = EvidenceIdV1::new(3, 4);
+    let tenant = EvidenceIdV1::new(1, 2);
+    let (catalog, mut raw, _) = super::roundtrip::signed_catalog(&store, root, boot)?;
+    raw.source_cpu_id = 3;
+    raw.task_cookie = 7;
+    raw.process_instance_id = EvidenceIdV1::new(8, 9);
+    raw.entry_instance_id = EvidenceIdV1::new(10, 11);
+    raw.physical_result = 1;
+    raw.reason = 9;
+    let canonicalizer = mithril_node::ObservationCanonicalizer::new(tenant, source, 1, boot)?;
+    let mut batches = Vec::new();
+    for batch in 0..33 {
+        let first = batch * 256 + 1;
+        let mut framed = Vec::new();
+        for cursor in first..first + 256 {
+            raw.source_sequence = cursor + 100;
+            raw.observed_boottime_ns = cursor + 1000;
+            let mut observation = canonicalizer.normalize_kernel(
+                raw,
+                EvidenceIdV1::new(5, cursor),
+                TemporalCoverageV1::Complete,
+                1_800_000_000_000_000_000,
+            )?;
+            catalog.attach(&mut observation);
+            let wire = observation.to_wire_record()?.encode_to_vec();
+            let start = framed.len();
+            framed.extend_from_slice(&(wire.len() as u32).to_be_bytes());
+            framed.extend_from_slice(&wire);
+            framed.extend_from_slice(&crc32c::crc32c(&framed[start..]).to_be_bytes());
+        }
+        batches.push(EvidenceBatch {
+            node_boot_id: boot.to_be_bytes().to_vec(),
+            source_id: source.to_be_bytes().to_vec(),
+            source_epoch: 1,
+            cpu_id: 3,
+            first_cursor: first,
+            framed_records: framed.into(),
+            commit_group_tail: true,
+        });
+    }
+    let intake = EvidenceIntakeOwner::from_store(store.clone());
+    let authenticated = AuthenticatedEvidenceNodeV1 {
+        tenant_id: tenant.to_be_bytes(),
+        node_id: "node-a".into(),
+        node_boot_id: boot.to_be_bytes(),
+        label_epoch: 1,
+    };
+    intake.receive(&authenticated, batches.remove(0))?;
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let running = enabled.then(|| {
+        tokio::spawn(DiscoveryOwner::run(
+            store.clone(),
+            DiscoveryRuntimeConfigV1 {
+                checkpoint_seconds: 1,
+            },
+            receiver,
+        ))
+    });
+    if enabled {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while store.discovery_heads(tenant.to_be_bytes())?.is_empty() {
+            assert!(Instant::now() < deadline, "discovery did not start");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+    if failed_projection {
+        let artifact = store.put_discovery_artifact(&DiscoveryArtifactV1 {
+            schema_version: 1,
+            tenant_id: tenant.to_be_bytes(),
+            dependencies: vec![],
+            payload: b"unsupported owner revision".to_vec(),
+        })?;
+        store.commit_discovery_head(
+            DiscoveryHeadKeyV1 {
+                tenant_id: tenant.to_be_bytes(),
+                id: DiscoveryDigestV1([77; 32]),
+            },
+            None,
+            artifact,
+        )?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    let fixture = crate::control_fixture::OutagePolicyFixture::new(store.clone());
+    let mut intake_times = Vec::new();
+    let mut rollout_times = Vec::new();
+    let started = Instant::now();
+    for (ordinal, batch) in batches.into_iter().enumerate() {
+        let start = Instant::now();
+        intake.receive(&authenticated, batch)?;
+        intake_times.push(start.elapsed().as_nanos() as u64);
+        if ordinal % 4 == 0 {
+            let resource = fixture.resource(ordinal as i64 / 4 + 2)?;
+            let inventory = fixture.inventory(&resource)?;
+            let start = Instant::now();
+            let result = fixture.owner.reconcile(
+                &resource,
+                crate::control_fixture::OUTAGE_NAMESPACE_UID,
+                &inventory,
+                1_800_000_000_000_000_001 + ordinal as i64,
+            )?;
+            let bundle = result
+                .bundles
+                .first()
+                .ok_or("the rollout bundle is absent")?;
+            let ack = PolicyActivationAcknowledgementV1 {
+                acknowledgement_content_id: String::new(),
+                tenant_id: bundle.candidate.tenant_id.clone(),
+                node_id: "node-a".into(),
+                node_boot_id: boot.to_be_bytes().to_vec(),
+                label_epoch: 1,
+                candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+                policy_source_revision_id: bundle.candidate.policy_source_revision_id.clone(),
+                target_snapshot_digest: bundle.candidate.target_snapshot_digest.clone(),
+                state: PolicyActivationStateV1::Active,
+                node_bound_generation_digest: Some("1".repeat(64)),
+                profile_generation_ref_id: Some(8),
+                readback_digest: Some("2".repeat(64)),
+                probe_result_digest: Some("3".repeat(64)),
+                reason_code: None,
+                observed_utc_ns: 1_800_000_000_000_000_100 + ordinal as i64,
+                authenticated_channel_receipt_digest: "4".repeat(64),
+            }
+            .finalize()?;
+            assert_eq!(
+                fixture
+                    .owner
+                    .rollout_owner()
+                    .acknowledge(ack)?
+                    .rollout_state
+                    .state,
+                PolicyRolloutStatusV1::Active
+            );
+            rollout_times.push(start.elapsed().as_nanos() as u64);
+        }
+    }
+    let primary_ns = started.elapsed().as_nanos() as u64;
+    if enabled && !failed_projection {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let mut count = 0;
+            for head in store.discovery_heads(tenant.to_be_bytes())? {
+                let artifact = store.read_discovery_artifact(&head.artifact)?;
+                if let Ok(profile) = rmp_serde::from_slice::<DiscoveryProfileV1>(&artifact.payload)
+                {
+                    count += profile.accepted_records;
+                }
+            }
+            if count == 33 * 256 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "discovery did not seal the full retained input: {count}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+    if enabled {
+        shutdown.send(true)?;
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            running.ok_or("the discovery task is absent")?,
+        )
+        .await??;
+    }
+    let elapsed_ns = started.elapsed().as_nanos() as u64;
+    let stream = EvidenceIntakeIdentityV1 {
+        tenant_id: tenant.to_be_bytes(),
+        node_id: "node-a".into(),
+        node_boot_id: boot.to_be_bytes(),
+        label_epoch: 1,
+        source_id: source.to_be_bytes(),
+        source_epoch: 1,
+    };
+    assert_eq!(store.evidence_cursor(&stream)?, 33 * 256);
+    assert_eq!(
+        EvidenceRetentionOwner::from_store(store.clone())
+            .watermark(&stream)?
+            .evidence_cursor,
+        0
+    );
+    drop(fixture);
+    drop(intake);
+    drop(store);
+    let usage = if enabled {
+        let owner = DiscoveryOwner::open(ControlStore::open(root)?)?;
+        let usage = owner.resource_usage()?;
+        if failed_projection {
+            assert!(matches!(
+                owner.project_revisions(),
+                Err(mithril_control::Error::Discovery {
+                    code: "REVISION_OWNER_UNSUPPORTED",
+                    ..
+                })
+            ));
+        }
+        Some(usage)
+    } else {
+        None
+    };
+    intake_times.sort_unstable();
+    rollout_times.sort_unstable();
+    Ok(
+        json!({"records":33 * 256,"measured_intakes":intake_times.len(),"rollouts":rollout_times.len(),
+        "intake_p50_ns":intake_times[intake_times.len()/2],"intake_p95_ns":intake_times[intake_times.len()*95/100],
+        "rollout_p50_ns":rollout_times[rollout_times.len()/2],"rollout_p95_ns":rollout_times[rollout_times.len()*95/100],
+        "primary_ns":primary_ns,"with_drain_ns":elapsed_ns,"resources":usage,
+        "projection_failure":failed_projection}),
+    )
+}
+
 impl SqliteExperiment {
     fn open(path: &Path) -> TestResult<Self> {
         let db = Connection::open(path)?;

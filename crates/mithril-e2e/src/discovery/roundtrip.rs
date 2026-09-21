@@ -424,7 +424,7 @@ fn fixture_handle<'a>(
         + 1)
 }
 
-fn signed_catalog(
+pub(super) fn signed_catalog(
     store: &ControlStore,
     root: &Path,
     boot: EvidenceIdV1,
