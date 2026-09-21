@@ -12,8 +12,9 @@ pub const DISCOVERY_SCHEMA_VERSION: u32 = 1;
 pub const MAX_DISCOVERY_INPUT_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_DISCOVERY_RECORDS: usize = 1_000_000;
 pub const MAX_DISCOVERY_ATOMS: usize = 50_000;
+pub const MAX_DISCOVERY_PIN_BYTES: usize = 32 * 1024;
 
-pub(super) struct InputByteLimit(pub(super) usize);
+pub(crate) struct InputByteLimit(pub(crate) usize);
 
 impl std::io::Write for InputByteLimit {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -122,6 +123,44 @@ pub struct DiscoveryRecordV1 {
     pub id: DiscoveryRecordIdV1,
     pub original_kernel_sequence: Option<u64>,
     pub observation: ObservationEnvelopeV1,
+}
+
+impl DiscoveryRecordV1 {
+    pub(crate) fn from_wire(
+        stream: &EvidenceIntakeIdentityV1,
+        cpu_id: u32,
+        cursor: u64,
+        wire: &crate::EvidenceRecord,
+    ) -> Result<Self> {
+        let observation = ObservationEnvelopeV1::from_wire_record(
+            stream.tenant_id.into(),
+            stream.node_boot_id.into(),
+            stream.source_id.into(),
+            stream.source_epoch,
+            cursor,
+            cpu_id,
+            wire,
+        )
+        .map_err(|error| {
+            DiscoverySnafu {
+                code: "EXPORT_RECORD",
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        Ok(Self {
+            id: DiscoveryRecordIdV1 {
+                stream: stream.clone(),
+                cpu_id,
+                durable_cursor: cursor,
+            },
+            original_kernel_sequence: wire
+                .decision_context
+                .as_ref()
+                .map(|context| context.original_kernel_sequence),
+            observation,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

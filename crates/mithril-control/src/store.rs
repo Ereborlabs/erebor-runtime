@@ -6135,6 +6135,25 @@ mod tests {
             store.discovery_context(&record)?,
             Join::Unresolved(Missing::AmbiguousWorkloadFact)
         );
+        {
+            let mut inner = store.evidence_lock()?;
+            inner
+                .state
+                .target_snapshots
+                .get_mut("conflicting-context")
+                .ok_or("conflicting snapshot absent")?
+                .targets[0]
+                .workload_targets[0]
+                .pod_labels
+                .insert(
+                    "oversized".into(),
+                    "x".repeat(crate::MAX_DISCOVERY_PIN_BYTES),
+                );
+        }
+        assert_eq!(
+            store.discovery_context(&record)?,
+            Join::Unresolved(Missing::ContextLimit)
+        );
         Ok(())
     }
 

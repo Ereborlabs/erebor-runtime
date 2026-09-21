@@ -14,7 +14,7 @@ fn input() -> TestResult<DiscoveryInputManifestV1> {
 
 #[test]
 fn exact_counts_preserve_denial_and_missing_context() -> TestResult<()> {
-    let result = DiscoveryOwner.derive_recorded(&input()?)?;
+    let result = DiscoveryOwner::default().derive_recorded(&input()?)?;
     assert_eq!(result.duplicate_deliveries, 1);
     assert_eq!(result.snapshot.accepted_records, 3);
     assert_eq!(result.snapshot.included_records, 2);
@@ -32,17 +32,23 @@ fn exact_counts_preserve_denial_and_missing_context() -> TestResult<()> {
 #[test]
 fn replay_and_duplicate_delivery_do_not_change_content() -> TestResult<()> {
     let original = input()?;
-    let expected = DiscoveryOwner.derive_recorded(&original)?.snapshot;
+    let expected = DiscoveryOwner::default()
+        .derive_recorded(&original)?
+        .snapshot;
     let mut permuted = original.clone();
     permuted.records.reverse();
     permuted.contexts.reverse();
     assert_eq!(
-        DiscoveryOwner.derive_recorded(&permuted)?.snapshot,
+        DiscoveryOwner::default()
+            .derive_recorded(&permuted)?
+            .snapshot,
         expected
     );
     permuted.records.extend(original.records);
     assert_eq!(
-        DiscoveryOwner.derive_recorded(&permuted)?.snapshot,
+        DiscoveryOwner::default()
+            .derive_recorded(&permuted)?
+            .snapshot,
         expected
     );
     Ok(())
@@ -52,13 +58,15 @@ fn replay_and_duplicate_delivery_do_not_change_content() -> TestResult<()> {
 fn conflicting_duplicates_and_foreign_context_fail() -> TestResult<()> {
     let mut conflicting = input()?;
     conflicting.records[3].observation.effect.kernel_result = 0;
-    assert!(DiscoveryOwner.derive_recorded(&conflicting).is_err());
+    assert!(DiscoveryOwner::default()
+        .derive_recorded(&conflicting)
+        .is_err());
     let mut foreign = input()?;
     foreign.contexts[0].record_id.stream.node_id = "another-node".into();
-    assert!(DiscoveryOwner.derive_recorded(&foreign).is_err());
+    assert!(DiscoveryOwner::default().derive_recorded(&foreign).is_err());
     let mut foreign = input()?;
     foreign.records[0].observation.tenant_id.high = 99;
-    assert!(DiscoveryOwner.derive_recorded(&foreign).is_err());
+    assert!(DiscoveryOwner::default().derive_recorded(&foreign).is_err());
     Ok(())
 }
 
@@ -76,7 +84,7 @@ fn changed_result_actor_image_and_object_remain_distinct() -> TestResult<()> {
             }
         }
         assert_eq!(
-            DiscoveryOwner
+            DiscoveryOwner::default()
                 .derive_recorded(&changed)?
                 .snapshot
                 .atoms
@@ -93,7 +101,7 @@ fn missing_records_never_produce_complete_coverage() -> TestResult<()> {
     partial
         .records
         .retain(|record| record.id.durable_cursor != 3);
-    let result = DiscoveryOwner.derive_recorded(&partial)?;
+    let result = DiscoveryOwner::default().derive_recorded(&partial)?;
     assert_eq!(result.snapshot.coverage[0].state, CoverageStateV1::Gapped);
     assert!(result.snapshot.coverage[0]
         .gap_reasons
@@ -104,13 +112,13 @@ fn missing_records_never_produce_complete_coverage() -> TestResult<()> {
 #[test]
 fn positions_and_proof_kinds_are_not_interchangeable() -> TestResult<()> {
     let mut changed = input()?;
-    let expected = DiscoveryOwner
+    let expected = DiscoveryOwner::default()
         .derive_recorded(&changed)?
         .snapshot
         .input_digest;
     changed.records[1].original_kernel_sequence = Some(999);
     assert_ne!(
-        DiscoveryOwner
+        DiscoveryOwner::default()
             .derive_recorded(&changed)?
             .snapshot
             .input_digest,
@@ -119,7 +127,7 @@ fn positions_and_proof_kinds_are_not_interchangeable() -> TestResult<()> {
     changed = input()?;
     changed.proof_kind = DiscoveryProofKindV1::RecordedInput;
     assert_ne!(
-        DiscoveryOwner
+        DiscoveryOwner::default()
             .derive_recorded(&changed)?
             .snapshot
             .input_digest,
@@ -148,7 +156,7 @@ fn static_preview_calls_the_native_compiler_and_simulator() -> TestResult<()> {
         std::path::Path::new("policy-v1.yaml"),
         include_bytes!("../../tests/fixtures/policy-v1.yaml"),
     )?;
-    let simulation = DiscoveryOwner.simulate_recorded(&input()?, &policy)?;
+    let simulation = DiscoveryOwner::default().simulate_recorded(&input()?, &policy)?;
     assert_eq!(simulation.simulations.len(), 1);
     assert_eq!(simulation.unresolved_records, 1);
     assert_eq!(
@@ -195,7 +203,7 @@ fn exact_file_candidate_uses_native_kubernetes_lowering() -> TestResult<()> {
     for context in &mut input.contexts {
         context.static_key = key.clone();
     }
-    let preview = DiscoveryOwner.simulate_recorded(&input, &policy)?;
+    let preview = DiscoveryOwner::default().simulate_recorded(&input, &policy)?;
     assert_eq!(preview.source_policy_digest, compiled.source_policy_digest);
     assert_eq!(preview.simulations.len(), 1);
     assert_eq!(
@@ -213,7 +221,7 @@ fn exact_file_candidate_uses_native_kubernetes_lowering() -> TestResult<()> {
 fn supplied_context_cannot_change_an_observed_operation() -> TestResult<()> {
     let mut changed = input()?;
     changed.contexts[0].static_key.operation_id = "OPEN_WRITE".into();
-    assert!(DiscoveryOwner.derive_recorded(&changed).is_err());
+    assert!(DiscoveryOwner::default().derive_recorded(&changed).is_err());
     Ok(())
 }
 
@@ -230,7 +238,7 @@ fn interleaved_cpu_cursors_do_not_create_a_false_gap() -> TestResult<()> {
     input.records[1].id.cpu_id = 1;
     input.records[1].observation.cpu_id = 1;
     input.contexts[1].record_id.cpu_id = 1;
-    let result = DiscoveryOwner.derive_recorded(&input)?;
+    let result = DiscoveryOwner::default().derive_recorded(&input)?;
     assert!(result
         .snapshot
         .coverage
@@ -271,7 +279,7 @@ fn query_contract_is_one_request_and_resume_binds_scope_and_epoch() -> TestResul
 
 fn investigation() -> TestResult<(ContextPacket, AssessmentReport)> {
     let input = input()?;
-    let input_digest = DiscoveryOwner
+    let input_digest = DiscoveryOwner::default()
         .derive_recorded(&input)?
         .snapshot
         .input_digest;
@@ -441,7 +449,7 @@ fn coverage_and_zero_kernel_result_do_not_merge_with_proven_denial() -> TestResu
     let mut input = input()?;
     input.records[1].observation.temporal_coverage = crate::TemporalCoverageV1::Gapped;
     input.records[1].observation.effect.kernel_result = 0;
-    let result = DiscoveryOwner.derive_recorded(&input)?;
+    let result = DiscoveryOwner::default().derive_recorded(&input)?;
     assert_eq!(result.snapshot.coverage[0].state, CoverageStateV1::Gapped);
     assert_eq!(result.snapshot.atoms.len(), 2);
     assert!(result
@@ -451,7 +459,11 @@ fn coverage_and_zero_kernel_result_do_not_merge_with_proven_denial() -> TestResu
         .any(|atom| atom.physical_result == DiscoveryPhysicalResultV1::Unknown));
     input.records[1].observation.temporal_coverage = crate::TemporalCoverageV1::Unknown;
     assert_eq!(
-        DiscoveryOwner.derive_recorded(&input)?.snapshot.coverage[0].state,
+        DiscoveryOwner::default()
+            .derive_recorded(&input)?
+            .snapshot
+            .coverage[0]
+            .state,
         CoverageStateV1::Unknown
     );
     Ok(())
@@ -519,7 +531,7 @@ fn investigation_binds_evidence_cutoff_coverage_and_disclosure() -> TestResult<(
     let (mut packet, _) = investigation()?;
     let mut input = input;
     input.coverage[0].state = CoverageStateV1::Gapped;
-    packet.scope.input_digest = DiscoveryOwner
+    packet.scope.input_digest = DiscoveryOwner::default()
         .derive_recorded(&input)?
         .snapshot
         .input_digest;
@@ -535,7 +547,11 @@ fn valid_citation_does_not_establish_provider_use() -> TestResult<()> {
     report.validate_against(&packet)?;
     assert!(packet.missing_facts.contains(&"PROVIDER_AUDIT".into()));
     assert_eq!(
-        DiscoveryOwner.derive_recorded(&input()?)?.snapshot.atoms[0].physical_result,
+        DiscoveryOwner::default()
+            .derive_recorded(&input()?)?
+            .snapshot
+            .atoms[0]
+            .physical_result,
         DiscoveryPhysicalResultV1::Prevented
     );
     Ok(())

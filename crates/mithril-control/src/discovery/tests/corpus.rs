@@ -186,7 +186,7 @@ fn discovery_pilot_preserves_exact_counts_risk_and_replay() -> TestResult<()> {
         assert!(case.untrusted_text.iter().all(|text| text.len() <= 1024));
         let mut input = case.input()?;
         let expected = &case.expected;
-        let result = DiscoveryOwner.derive_recorded(&input)?.snapshot;
+        let result = DiscoveryOwner::default().derive_recorded(&input)?.snapshot;
         assert_eq!(result.accepted_records, expected.accepted, "{}", case.id);
         assert_eq!(result.atoms.len(), expected.atoms, "{}", case.id);
         assert_eq!(
@@ -225,7 +225,7 @@ fn discovery_pilot_preserves_exact_counts_risk_and_replay() -> TestResult<()> {
         input.records.reverse();
         input.contexts.reverse();
         input.records.extend(input.records.clone());
-        let replay = DiscoveryOwner.derive_recorded(&input)?;
+        let replay = DiscoveryOwner::default().derive_recorded(&input)?;
         assert_eq!(replay.duplicate_deliveries, expected.accepted);
         assert_eq!(replay.snapshot, result, "{}", case.id);
     }
@@ -352,7 +352,7 @@ fn discovery_defender_contract_keeps_owner_obligations_after_client_restart() ->
 #[test]
 fn discovery_late_evidence_and_coverage_create_new_content() -> TestResult<()> {
     let mut input = super::input()?;
-    let sealed = DiscoveryOwner.derive_recorded(&input)?.snapshot;
+    let sealed = DiscoveryOwner::default().derive_recorded(&input)?.snapshot;
     let mut late = input.records[0].clone();
     late.id.durable_cursor = 4;
     late.original_kernel_sequence = Some(104);
@@ -368,7 +368,7 @@ fn discovery_late_evidence_and_coverage_create_new_content() -> TestResult<()> {
     input.coverage[0]
         .gap_reasons
         .push("LATE_COVERAGE_CORRECTION".into());
-    let revised = DiscoveryOwner.derive_recorded(&input)?.snapshot;
+    let revised = DiscoveryOwner::default().derive_recorded(&input)?.snapshot;
     assert_ne!(revised.content_digest, sealed.content_digest);
     assert_ne!(revised.input_digest, sealed.input_digest);
     assert_eq!(revised.accepted_records, sealed.accepted_records + 1);

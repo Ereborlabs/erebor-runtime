@@ -131,6 +131,7 @@ one reached.
 | Follow wait | 20 seconds; 16 waiting calls/process, 4/tenant; bounded scan per evaluation | No transaction/worker retained while waiting. Return empty progress or limit; no client queue or durable subscription. |
 | Evidence export page | 256 records, 1 MiB, 4 open segment handles | Stop at the first bound. Release the store lock before decoding or client I/O. |
 | Node decision context | 16 KiB per event; 16 MiB lookup snapshot | Keep the base event with an unavailable-context reason when optional context exceeds the bound. Respect the existing total record limit. |
+| Pinned Control context | 32 KiB per record | Check workload bytes before copying. Keep the base record with `CONTEXT_LIMIT` when the complete pin exceeds the bound. |
 | Optional classifier artifact | 128 MiB | Reject oversized artifact; no runtime download. |
 | Optional native inference worker | 512 MiB memory, 1 CPU allocation, 2 worker threads | Terminate over-budget worker; report assistance unavailable. |
 | Classification batch | 256 rows, 2 seconds execution deadline | Timeout/abstain; no policy-path delay. Initialization has a separate 10-second limit. |

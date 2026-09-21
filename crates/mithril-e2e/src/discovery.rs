@@ -18,7 +18,7 @@ mod storage;
 pub fn run_discovery_offline(output: &Path) -> Result<()> {
     let input_bytes = include_bytes!("../fixtures/discovery/manifest.json");
     let input = DiscoveryInputManifestV1::from_json(input_bytes).context(PolicySnafu)?;
-    let result = DiscoveryOwner
+    let result = DiscoveryOwner::default()
         .derive_recorded(&input)
         .context(PolicySnafu)?;
     let snapshot = &result.snapshot;
@@ -42,7 +42,7 @@ pub fn run_discovery_offline(output: &Path) -> Result<()> {
     replay.contexts.reverse();
     replay.records.extend(input.records.clone());
     ensure!(
-        DiscoveryOwner
+        DiscoveryOwner::default()
             .derive_recorded(&replay)
             .context(PolicySnafu)?
             .snapshot
@@ -55,7 +55,7 @@ pub fn run_discovery_offline(output: &Path) -> Result<()> {
     let policy_bytes = include_bytes!("../../mithril-control/tests/fixtures/policy-v1.yaml");
     let policy =
         PolicyDocumentV1::parse(Path::new("policy-v1.yaml"), policy_bytes).context(PolicySnafu)?;
-    let preview = DiscoveryOwner
+    let preview = DiscoveryOwner::default()
         .simulate_recorded(&input, &policy)
         .context(PolicySnafu)?;
     ensure!(
