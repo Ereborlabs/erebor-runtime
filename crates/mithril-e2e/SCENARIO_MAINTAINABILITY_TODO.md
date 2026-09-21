@@ -1927,8 +1927,7 @@ test does not close a row when its physical condition or an assertion changed.
       exact protected or allowed object. Keep setup, action, assertions, and
       teardown in a test of fewer than 100 lines.
     - [ ] Pass Host and commit it.
-    - [x] Pass direct `runc` and commit it. The exact test passed in 69.23
-      seconds on 2026-09-21.
+    - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy prepared-descriptor actions, result
       fields, mailbox operations, and fixture owner after all three platforms
@@ -2378,7 +2377,8 @@ setup, production actions, assertions, and focused test.
     qualified role, exact PreStop role, and nonzero admission rule.
     - [x] Pass Host and commit it. The 40-line test passed in 52.60 seconds on
       2026-09-21.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact test passed in 69.23
+      seconds on 2026-09-21.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy runtime-inventory retention result
       after all three platforms pass. Keep the separate exact file-denial
