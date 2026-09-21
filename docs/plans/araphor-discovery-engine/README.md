@@ -87,16 +87,17 @@ Control restarts or retained input is incomplete
 
 ## Status and source baseline
 
-- Plan status: In progress, 2026-09-20. The user approved the Now work.
+- Plan status: In progress, 2026-09-21. The approved Now work is complete.
 - Implementation result: Phase 1 **Done**. The offline contracts, frozen
   synthetic corpus, source-extension review, and native SQLite selection pass.
-  Phase 2 is in progress and remains **Not done**. See the
+  Phase 2 is **Done** at implementation source `eff08be`. See the
   [offline result](phase-1-contracts-and-offline-proof.md#result) and
   [durable implementation result](phase-2-durable-behavior-profiles.md#result).
-- Current assignment: complete Discovery 2. The user assigns Mithril 6.2 to
+- Completed assignment: Discovery 1 and 2. The user assigns Mithril 6.2 to
   another agent and accepts that prerequisite as complete for sequencing.
   Its qualification record remains with that agent. This work does not repeat
-  the Mithril qualification or start Mithril 7 or Discovery 3.
+  the Mithril qualification or start Mithril 7 or Discovery 3. The next work
+  in the combined order is Mithril 7, then Discovery 3. New approval is required.
 - Plan location: `worktrees/mithril-ui`, branch `codex/mithril-ui`.
 - Phase 1 source baseline: main `36cf6449`. The rebased implementation commits
   include `ef00f8ce` (offline foundation), `e9494488` (reference checks),
@@ -222,7 +223,7 @@ sample controls to production services.
 
 ## Ordered implementation
 
-The user approved Phases 1 and 2. Phase 1 is **Done**; later results remain
+The user approved Phases 1 and 2. Both are **Done**; Phases 3 through 6 remain
 **Not done**. This approval does not include Phase 3 or later work.
 
 | Phase | Output | Stop condition |
@@ -339,7 +340,7 @@ not prerequisites for useful native discovery.
 | --- | --- | --- |
 | Missing decision context | Preserve existing ABI fields and bounded Node-owned context in the existing evidence path; reuse Control workload facts | Phase 2 wire compatibility and replay tests |
 | Shared evidence reader and retention | Bounded export; no discovery acknowledgement of the shared watermark | Phase 2 retention-race tests |
-| Aggregation and database | SQLite selected with pinned `rusqlite` 0.40.2 and bundled SQLite 3.53.2; native memory, isolation, crash, disk-full, and repeat-run gates passed | Phase 2 live intake/rollout interference and durable integration |
+| Aggregation and database | SQLite selected with pinned `rusqlite` 0.40.2 and bundled SQLite 3.53.2; native memory, isolation, crash, disk-full, and repeat-run gates passed | Phase 2 durable integration is Done. Live overhead and enablement limits are recorded in its result; qualify deployment-specific latency before enablement. |
 | Noise reduction | Exact groups plus rule intent, workload context, counterevidence, reviewed history, and tested suggestions; no automatic exceptions or incident closure | Phase 3 methods and Phase 6 task study |
 | Intelligence methods | Deterministic methods first; compare typed classification and one existing agent on documented SQL/context on the same tasks | Phase 4 measured adoption decision |
 | Model location | Local, self-hosted, or hosted. Require an explicit export/recipient policy; the external client owns model execution | Before the first model request |
