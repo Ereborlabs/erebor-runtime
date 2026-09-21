@@ -137,7 +137,7 @@ impl DiscoveryProfileV1 {
             .collect()
     }
 
-    fn head_key(export: &DiscoveryHeadV1) -> Result<DiscoveryHeadKeyV1> {
+    pub(super) fn head_key(export: &DiscoveryHeadV1) -> Result<DiscoveryHeadKeyV1> {
         Ok(DiscoveryHeadKeyV1 {
             tenant_id: export.key.tenant_id,
             id: DiscoveryDigestV1::of(&("behavior-snapshot-v1", export))?,
@@ -146,6 +146,16 @@ impl DiscoveryProfileV1 {
 }
 
 impl DiscoveryOwner {
+    pub(super) fn interval_key(
+        stream: &EvidenceIntakeIdentityV1,
+        first_cursor: u64,
+    ) -> Result<DiscoveryHeadKeyV1> {
+        Ok(DiscoveryHeadKeyV1 {
+            tenant_id: stream.tenant_id,
+            id: DiscoveryDigestV1::of(&("evidence-export-v1", stream, first_cursor))?,
+        })
+    }
+
     pub fn open(store: ControlStore) -> Result<Self> {
         let index = DiscoveryIndex::open(store.clone())?;
         store.recover_discovery_artifacts()?;
@@ -183,10 +193,7 @@ impl DiscoveryOwner {
             .build()
         })?;
         DiscoveryInputManifestV1::require(interval_first_cursor > 0, "INTERVAL_START")?;
-        let key = DiscoveryHeadKeyV1 {
-            tenant_id: stream.tenant_id,
-            id: DiscoveryDigestV1::of(&("evidence-export-v1", stream, interval_first_cursor))?,
-        };
+        let key = Self::interval_key(stream, interval_first_cursor)?;
         let previous = live.store.discovery_head(&key)?;
         let (first_cursor, remaining_records, remaining_bytes) = if let Some(head) = &previous {
             let progress = live.resume(head)?;

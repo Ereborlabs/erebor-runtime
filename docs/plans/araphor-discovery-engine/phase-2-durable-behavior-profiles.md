@@ -196,8 +196,9 @@ are proven. Phase 3 requires approval.
 The signed-context lookup and durable artifact store are implemented. The SQL
 backend has committed-export replay and transactional counts. The live owner
 exports bounded input and exact retention gaps. Profile sealing and bounded
-snapshot reads are implemented. Their final verification is in progress.
-The runtime loop, context import, revision feed, and live context roundtrip remain
+snapshot reads are implemented. Disabled-by-default runtime supervision and
+stream checkpoints pass focused checks. Final runtime verification is in progress.
+Context import, revision feed, and live context roundtrip remain
 to be implemented and verified.
 
 ### Bounded reader and source metadata
@@ -569,6 +570,57 @@ Focused checks pass for encoded-byte admission at the limit and one byte over,
 schema upgrade, Complete and Partial snapshots, unchanged prior revisions,
 tenant mismatch, source reclamation, and projection repair. These checks use
 recorded fixtures; they do not prove the live signed-context roundtrip.
-The 50,000-atom snapshot check and final workspace gate are in progress.
-Process-kill checks, runtime recovery, context import, revision feed, and live
+The 50,000-atom snapshot check passed with equal page digests after restart and
+projection loss. Its focused debug run took 744.70 seconds. This is not a
+production latency measurement. A workspace run passed for snapshot source
+`68faeef8`: Control passed 160 tests, Node passed 246, and e2e passed 98 with
+163 physical or manual cases ignored. That run precedes the runtime changes.
+The document check passed 259 local links across 27 documents.
+Process-kill checks, full runtime recovery, context import, revision feed, and live
 resource measurements remain open. **Not done.**
+
+### Runtime supervision and stream checkpoints
+
+The intended end state is continuous derivation that does not stop primary
+Control on a discovery failure. This result adds runtime wiring after
+`68faeef8`. Corrupt-index replacement remains open.
+
+[ControlConfig](../../../crates/mithril-control/src/config.rs) selects optional discovery configuration.
+  -> [ControlRuntimeParts](../../../crates/mithril-control/src/config.rs) passes the existing store handle without opening discovery files.
+  -> [Control main](../../../crates/mithril-control/src/main.rs) starts a separate supervised task only when discovery is configured.
+  -> [DiscoveryOwner::run](../../../crates/mithril-control/src/discovery/runtime.rs) opens the owner and runs bounded work outside async worker threads.
+  -> [ControlStore::discovery_sources](../../../crates/mithril-control/src/store/evidence_read.rs) reads at most 32 source identities by stable key.
+  -> [DerivationRuntime](../../../crates/mithril-control/src/discovery/runtime.rs) admits at most four active intervals and 32 pending sources.
+  -> [DiscoveryOwner::advance](../../../crates/mithril-control/src/discovery/live.rs) commits one bounded page before aggregation.
+  -> [DerivationRuntime](../../../crates/mithril-control/src/discovery/runtime.rs) seals at the record or byte limit, or the configured cadence.
+  -> [ControlStore::commit_discovery_head](../../../crates/mithril-control/src/store/discovery.rs) commits the next interval cursor with the completed snapshot reference.
+
+The default is disabled. Set `"discovery": {"checkpoint_seconds": 60}` to
+enable derivation. Omission or `null` disables the task without deleting stored
+data. The cadence must be from 1 through 3,600 seconds. No public job API is
+added. Each tenant has at most two active intervals and eight pending sources.
+Excess sources remain in evidence storage for a later bounded scan. Source
+reclamation remains an explicit gap, not an acknowledgement from discovery.
+
+The runtime owns its bounded queues until shutdown. The existing store owns
+all checkpoints. Restart resumes the committed export. A snapshot committed
+before its stream checkpoint is completed before new input is admitted to the
+next interval. A missing snapshot projection is repaired from that snapshot.
+The next interval starts at the prior exact stopping cursor plus one. A changed
+export after a failed SQL apply is read from Control before another seal attempt.
+
+Startup and task failures remain inside discovery. Derivation failures retry
+after five seconds. They cannot select a primary Control exit branch. Shutdown
+stops admission, waits for the current bounded operation, then closes the owner.
+An unfinished interval retains its exported input and aggregation checkpoint.
+Structured logs expose active and pending counts, accounted queue bytes, input
+bytes, source lag, failures, and bounded partial-reason counters. They do not
+use path or tenant metric labels. These byte counters are not measured RSS.
+
+Six focused `discovery_derivation_` tests passed before the final logging edit.
+They cover configuration defaults, cadence boundaries, source pagination,
+process and tenant admission limits, restart between snapshot and checkpoint,
+projection loss, unchanged prior snapshots, disabled startup, and continued
+intake during discovery startup failure. The final workspace run is pending.
+Process-kill checks, index replacement, context import, revision feed, and live
+intake/rollout measurements remain open. **Not done.**

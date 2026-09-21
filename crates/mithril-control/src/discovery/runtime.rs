@@ -1,0 +1,579 @@
+use std::{
+    collections::{BTreeMap, VecDeque},
+    time::{Duration, Instant},
+};
+
+use erebor_telemetry::{debug, info, warn};
+use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
+
+use super::*;
+use crate::{
+    ControlStore, DiscoveryArtifactV1, DiscoveryHeadKeyV1, DiscoveryHeadV1,
+    EvidenceIntakeIdentityV1, Result,
+};
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DiscoveryRuntimeConfigV1 {
+    pub checkpoint_seconds: u64,
+}
+
+impl Default for DiscoveryRuntimeConfigV1 {
+    fn default() -> Self {
+        Self {
+            checkpoint_seconds: 60,
+        }
+    }
+}
+
+impl DiscoveryRuntimeConfigV1 {
+    pub(crate) fn validate(&self) -> Result<()> {
+        DiscoveryInputManifestV1::require(
+            (1..=3600).contains(&self.checkpoint_seconds),
+            "DISCOVERY_CADENCE",
+        )
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StreamCheckpoint {
+    schema_version: u32,
+    stream: EvidenceIntakeIdentityV1,
+    next_interval_cursor: u64,
+    snapshot: DiscoveryHeadV1,
+}
+
+impl StreamCheckpoint {
+    fn key(stream: &EvidenceIntakeIdentityV1) -> Result<DiscoveryHeadKeyV1> {
+        Ok(DiscoveryHeadKeyV1 {
+            tenant_id: stream.tenant_id,
+            id: DiscoveryDigestV1::of(&("discovery-stream-checkpoint-v1", stream))?,
+        })
+    }
+}
+
+struct ActiveInterval {
+    stream: EvidenceIntakeIdentityV1,
+    first_cursor: u64,
+    deadline: Instant,
+    checkpoint: Option<DiscoveryHeadV1>,
+    export: Option<DiscoveryHeadV1>,
+}
+
+struct DerivationRuntime {
+    owner: DiscoveryOwner,
+    store: ControlStore,
+    config: DiscoveryRuntimeConfigV1,
+    scan_after: Option<EvidenceIntakeIdentityV1>,
+    pending: VecDeque<EvidenceIntakeIdentityV1>,
+    active: VecDeque<ActiveInterval>,
+    failures: u64,
+    partial_reasons: BTreeMap<String, u64>,
+}
+
+impl DerivationRuntime {
+    fn open(store: ControlStore, config: DiscoveryRuntimeConfigV1) -> Result<Self> {
+        config.validate()?;
+        Ok(Self {
+            owner: DiscoveryOwner::open(store.clone())?,
+            store,
+            config,
+            scan_after: None,
+            pending: VecDeque::new(),
+            active: VecDeque::new(),
+            failures: 0,
+            partial_reasons: BTreeMap::new(),
+        })
+    }
+
+    fn admit(&mut self) -> Result<()> {
+        let sources = self.store.discovery_sources(self.scan_after.as_ref())?;
+        self.scan_after = if sources.len() == 32 {
+            sources.last().cloned()
+        } else {
+            None
+        };
+        for stream in sources {
+            if self.pending.len() == 32 {
+                break;
+            }
+            if self.pending.contains(&stream)
+                || self.active.iter().any(|active| active.stream == stream)
+                || self
+                    .pending
+                    .iter()
+                    .filter(|queued| queued.tenant_id == stream.tenant_id)
+                    .count()
+                    >= 8
+            {
+                continue;
+            }
+            self.pending.push_back(stream);
+        }
+        for _ in 0..self.pending.len() {
+            if self.active.len() == 4 {
+                break;
+            }
+            let Some(stream) = self.pending.pop_front() else {
+                break;
+            };
+            if self
+                .active
+                .iter()
+                .filter(|active| active.stream.tenant_id == stream.tenant_id)
+                .count()
+                >= 2
+            {
+                self.pending.push_back(stream);
+                continue;
+            }
+            let key = StreamCheckpoint::key(&stream)?;
+            let checkpoint = self.store.discovery_head(&key)?;
+            let first_cursor = if let Some(head) = &checkpoint {
+                let artifact = self.store.read_discovery_artifact(&head.artifact)?;
+                DiscoveryInputManifestV1::require(
+                    artifact.payload.len() <= 64 * 1024,
+                    "CHECKPOINT_LIMIT",
+                )?;
+                let saved: StreamCheckpoint =
+                    rmp_serde::from_slice(&artifact.payload).map_err(|error| {
+                        crate::error::DiscoverySnafu {
+                            code: "CHECKPOINT_SCHEMA",
+                            reason: error.to_string(),
+                        }
+                        .build()
+                    })?;
+                DiscoveryInputManifestV1::require(
+                    saved.schema_version == 1
+                        && saved.stream == stream
+                        && saved.next_interval_cursor > 1
+                        && saved.snapshot.key.tenant_id == stream.tenant_id
+                        && saved.snapshot.commit_index < head.commit_index
+                        && artifact.dependencies == vec![saved.snapshot.artifact.clone()],
+                    "CHECKPOINT_INTEGRITY",
+                )?;
+                let manifest = self
+                    .store
+                    .read_discovery_artifact(&saved.snapshot.artifact)?;
+                let profile: DiscoveryProfileV1 = rmp_serde::from_slice(&manifest.payload)
+                    .map_err(|error| {
+                        crate::error::DiscoverySnafu {
+                            code: "PROFILE_ENCODING",
+                            reason: error.to_string(),
+                        }
+                        .build()
+                    })?;
+                DiscoveryInputManifestV1::require(
+                    self.owner.seal_interval(&profile.export)? == saved.snapshot
+                        && profile.stream == stream
+                        && profile.last_cursor.checked_add(1) == Some(saved.next_interval_cursor),
+                    "CHECKPOINT_INTEGRITY",
+                )?;
+                saved.next_interval_cursor
+            } else {
+                1
+            };
+            let export = self
+                .store
+                .discovery_head(&DiscoveryOwner::interval_key(&stream, first_cursor)?)?;
+            self.active.push_back(ActiveInterval {
+                stream,
+                first_cursor,
+                export,
+                checkpoint,
+                deadline: Instant::now() + Duration::from_secs(self.config.checkpoint_seconds),
+            });
+        }
+        Ok(())
+    }
+
+    fn advance(&mut self, active: &mut ActiveInterval, now: Instant) -> Result<(bool, bool)> {
+        active.export = self.store.discovery_head(&DiscoveryOwner::interval_key(
+            &active.stream,
+            active.first_cursor,
+        )?)?;
+        let mut seal = now >= active.deadline;
+        if let Some(export) = &active.export {
+            seal |= self
+                .store
+                .discovery_head(&DiscoveryProfileV1::head_key(export)?)?
+                .is_some();
+        }
+        let mut progressed = false;
+        if !seal || active.export.is_none() {
+            match self.owner.advance(&active.stream, active.first_cursor) {
+                Ok(DiscoveryAdvanceV1::Applied { export, progress }) => {
+                    active.export = Some(export);
+                    progressed = true;
+                    seal |= progress.accepted_records >= MAX_DISCOVERY_RECORDS as u64
+                        || progress.input_bytes >= MAX_DISCOVERY_INPUT_BYTES as u64;
+                    let source_lag = self
+                        .store
+                        .evidence_cursor(&active.stream)?
+                        .saturating_sub(progress.next_cursor - 1);
+                    let queue_bytes = self.pending.capacity()
+                        * std::mem::size_of::<EvidenceIntakeIdentityV1>()
+                        + self
+                            .pending
+                            .iter()
+                            .map(|stream| stream.node_id.capacity())
+                            .sum::<usize>()
+                        + self.active.capacity() * std::mem::size_of::<ActiveInterval>()
+                        + self
+                            .active
+                            .iter()
+                            .map(|item| item.stream.node_id.capacity())
+                            .sum::<usize>()
+                        + active.stream.node_id.capacity();
+                    debug!("advanced discovery interval", active = %(self.active.len() + 1),
+                        pending = %self.pending.len(), queue_bytes = %queue_bytes,
+                        input_bytes = %progress.input_bytes, source_lag = %source_lag);
+                }
+                Ok(DiscoveryAdvanceV1::Idle { .. }) => {
+                    if active.export.is_none() {
+                        return Ok((true, false));
+                    }
+                }
+                Err(crate::Error::Discovery {
+                    code: "INTERVAL_SEAL_REQUIRED",
+                    ..
+                }) => {
+                    seal = true;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if !seal {
+            return Ok((false, progressed));
+        }
+        let export = active.export.as_ref().ok_or_else(|| {
+            crate::error::DiscoverySnafu {
+                code: "CHECKPOINT_EXPORT",
+                reason: "the interval has no committed export",
+            }
+            .build()
+        })?;
+        let snapshot = self.owner.seal_interval(export)?;
+        let profile = self.owner.read_snapshot(&snapshot, None)?.profile;
+        let next_interval_cursor = profile.last_cursor.checked_add(1).ok_or_else(|| {
+            crate::error::DiscoverySnafu {
+                code: "CHECKPOINT_LIMIT",
+                reason: "the source cursor is exhausted",
+            }
+            .build()
+        })?;
+        let checkpoint = StreamCheckpoint {
+            schema_version: 1,
+            stream: active.stream.clone(),
+            next_interval_cursor,
+            snapshot: snapshot.clone(),
+        };
+        let payload = rmp_serde::to_vec_named(&checkpoint).map_err(|error| {
+            crate::error::DiscoverySnafu {
+                code: "CHECKPOINT_SCHEMA",
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        let artifact = self.store.put_discovery_artifact(&DiscoveryArtifactV1 {
+            schema_version: 1,
+            tenant_id: active.stream.tenant_id,
+            dependencies: vec![snapshot.artifact],
+            payload,
+        })?;
+        self.store.commit_discovery_head(
+            StreamCheckpoint::key(&active.stream)?,
+            active.checkpoint.as_ref(),
+            artifact,
+        )?;
+        let lag = self
+            .store
+            .evidence_cursor(&active.stream)?
+            .saturating_sub(profile.last_cursor);
+        for reason in profile.partial_reasons {
+            let count = self.partial_reasons.entry(reason).or_default();
+            *count = count.saturating_add(1);
+        }
+        info!(active = self.active.len() + 1,
+            pending = self.pending.len(), source_lag = lag, failures = self.failures,
+            accepted = profile.accepted_records, unresolved = profile.unresolved_records,
+            partial_reasons = ?self.partial_reasons, "sealed discovery interval");
+        Ok((true, true))
+    }
+
+    fn step(&mut self, now: Instant) -> Result<bool> {
+        self.admit()?;
+        let Some(mut active) = self.active.pop_front() else {
+            return Ok(false);
+        };
+        let result = self.advance(&mut active, now);
+        if !matches!(result, Ok((true, _))) {
+            self.active.push_back(active);
+        }
+        result.map(|(_, progressed)| progressed)
+    }
+}
+
+impl DiscoveryOwner {
+    pub async fn run(
+        store: ControlStore,
+        config: DiscoveryRuntimeConfigV1,
+        mut shutdown: watch::Receiver<bool>,
+    ) {
+        if *shutdown.borrow() || shutdown.has_changed().is_err() {
+            return;
+        }
+        let opened =
+            tokio::task::spawn_blocking(move || DerivationRuntime::open(store, config)).await;
+        let mut runtime = match opened {
+            Ok(Ok(runtime)) => runtime,
+            Ok(Err(error)) => {
+                warn!(error; "discovery startup failed; primary Control remains active");
+                while !*shutdown.borrow() && shutdown.changed().await.is_ok() {}
+                return;
+            }
+            Err(_) => {
+                warn!("discovery startup failed; primary Control remains active");
+                while !*shutdown.borrow() && shutdown.changed().await.is_ok() {}
+                return;
+            }
+        };
+        loop {
+            if *shutdown.borrow() || shutdown.has_changed().is_err() {
+                break;
+            }
+            let work = tokio::task::spawn_blocking(move || {
+                let result = runtime.step(Instant::now());
+                (runtime, result)
+            })
+            .await;
+            let (returned, result) = match work {
+                Ok(result) => result,
+                Err(_) => {
+                    warn!("discovery task failed; primary Control remains active");
+                    while !*shutdown.borrow() && shutdown.changed().await.is_ok() {}
+                    return;
+                }
+            };
+            runtime = returned;
+            let delay = match result {
+                Ok(true) => Duration::ZERO,
+                Ok(false) => Duration::from_millis(250),
+                Err(error) => {
+                    runtime.failures = runtime.failures.saturating_add(1);
+                    warn!(error; "discovery derivation failed; retry is bounded", failures = %runtime.failures);
+                    Duration::from_secs(5)
+                }
+            };
+            tokio::select! {
+                _ = shutdown.changed() => {},
+                _ = tokio::time::sleep(delay) => {},
+            }
+            if shutdown.has_changed().is_err() {
+                break;
+            }
+        }
+        info!("stopped discovery after committed work");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prost::Message as _;
+
+    fn receive(
+        store: &ControlStore,
+        tenant: u8,
+        source: u8,
+        cursor: u64,
+    ) -> std::result::Result<EvidenceIntakeIdentityV1, Box<dyn std::error::Error>> {
+        let input = DiscoveryInputManifestV1::from_json(include_bytes!(
+            "../../../mithril-e2e/fixtures/discovery/manifest.json"
+        ))?;
+        let record = &input.records[0];
+        let mut stream = record.id.stream.clone();
+        stream.tenant_id = [tenant; 16];
+        stream.source_id = [source; 16];
+        let wire = record.observation.to_wire_record()?.encode_to_vec();
+        let mut framed = u32::try_from(wire.len())?.to_be_bytes().to_vec();
+        framed.extend_from_slice(&wire);
+        framed.extend_from_slice(&crc32c::crc32c(&framed).to_be_bytes());
+        crate::EvidenceIntakeOwner::from_store(store.clone()).receive(
+            &crate::AuthenticatedEvidenceNodeV1 {
+                tenant_id: stream.tenant_id,
+                node_id: stream.node_id.clone(),
+                node_boot_id: stream.node_boot_id,
+                label_epoch: stream.label_epoch,
+            },
+            crate::EvidenceBatch {
+                node_boot_id: stream.node_boot_id.to_vec(),
+                source_id: stream.source_id.to_vec(),
+                source_epoch: stream.source_epoch,
+                cpu_id: record.id.cpu_id,
+                first_cursor: cursor,
+                framed_records: framed.into(),
+                commit_group_tail: true,
+            },
+        )?;
+        Ok(stream)
+    }
+
+    #[test]
+    fn discovery_derivation_runtime_bounds_sources_and_tenant_admission(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path())?;
+        for tenant in 1..=6 {
+            for source in 1..=10 {
+                receive(&store, tenant, source, 1)?;
+            }
+        }
+        let first = store.discovery_sources(None)?;
+        assert_eq!(first.len(), 32);
+        let second = store.discovery_sources(first.last())?;
+        assert_eq!(second.len(), 28);
+        assert!(first.last() < second.first());
+        let mut runtime = DerivationRuntime::open(store, DiscoveryRuntimeConfigV1::default())?;
+        for _ in 0..8 {
+            runtime.admit()?;
+            assert!(runtime.active.len() <= 4 && runtime.pending.len() <= 32);
+            for tenant in 1..=6 {
+                assert!(
+                    runtime
+                        .active
+                        .iter()
+                        .filter(|item| item.stream.tenant_id == [tenant; 16])
+                        .count()
+                        <= 2
+                );
+                assert!(
+                    runtime
+                        .pending
+                        .iter()
+                        .filter(|stream| stream.tenant_id == [tenant; 16])
+                        .count()
+                        <= 8
+                );
+            }
+        }
+        assert_eq!(runtime.active.len(), 4);
+        assert_eq!(runtime.pending.len(), 32);
+        let before = runtime.store.health()?;
+        drop(runtime);
+        let reopened = ControlStore::open(directory.path())?;
+        assert_eq!(reopened.health()?.evidence_cursors, before.evidence_cursors);
+        Ok(())
+    }
+
+    #[test]
+    fn discovery_derivation_runtime_recovers_interval_and_snapshot_checkpoints(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path())?;
+        let stream = receive(&store, 1, 1, 1)?;
+        let mut runtime =
+            DerivationRuntime::open(store.clone(), DiscoveryRuntimeConfigV1::default())?;
+        assert!(runtime.step(Instant::now())?);
+        let export = store
+            .discovery_head(&DiscoveryOwner::interval_key(&stream, 1)?)?
+            .ok_or("export absent")?;
+        let snapshot = runtime.owner.seal_interval(&export)?;
+        let original = runtime.owner.read_snapshot(&snapshot, None)?;
+        assert!(store
+            .discovery_head(&StreamCheckpoint::key(&stream)?)?
+            .is_none());
+        drop(runtime);
+        drop(store);
+        let store = ControlStore::open(directory.path())?;
+        let mut runtime =
+            DerivationRuntime::open(store.clone(), DiscoveryRuntimeConfigV1::default())?;
+        assert!(runtime.step(Instant::now())?);
+        assert_eq!(
+            store.discovery_head(&DiscoveryOwner::interval_key(&stream, 1)?)?,
+            Some(export)
+        );
+        let head = store
+            .discovery_head(&StreamCheckpoint::key(&stream)?)?
+            .ok_or("checkpoint absent")?;
+        let checkpoint: StreamCheckpoint =
+            rmp_serde::from_slice(&store.read_discovery_artifact(&head.artifact)?.payload)?;
+        assert_eq!(checkpoint.next_interval_cursor, 2);
+        assert_eq!(checkpoint.snapshot, snapshot);
+        assert_eq!(runtime.owner.read_snapshot(&snapshot, None)?, original);
+        drop(runtime);
+        drop(store);
+        std::fs::remove_file(directory.path().join("discovery-index.sqlite"))?;
+        let store = ControlStore::open(directory.path())?;
+        let mut runtime =
+            DerivationRuntime::open(store.clone(), DiscoveryRuntimeConfigV1::default())?;
+        assert!(!runtime.step(Instant::now())?);
+        assert_eq!(runtime.owner.read_snapshot(&snapshot, None)?, original);
+        receive(&store, 1, 1, 2)?;
+        assert!(runtime.step(Instant::now())?);
+        assert!(runtime.step(Instant::now() + Duration::from_secs(61))?);
+        let head = store
+            .discovery_head(&StreamCheckpoint::key(&stream)?)?
+            .ok_or("checkpoint absent")?;
+        let next: StreamCheckpoint =
+            rmp_serde::from_slice(&store.read_discovery_artifact(&head.artifact)?.payload)?;
+        assert_eq!(next.next_interval_cursor, 3);
+        let current = runtime.owner.read_snapshot(&next.snapshot, None)?;
+        assert_eq!(
+            (
+                current.profile.first_cursor,
+                current.profile.last_cursor,
+                current.profile.accepted_records
+            ),
+            (2, 2, 1)
+        );
+        assert_eq!(runtime.owner.read_snapshot(&snapshot, None)?, original);
+        let watermark = crate::EvidenceRetentionOwner::from_store(store).watermark(&stream)?;
+        assert_eq!(
+            (watermark.evidence_cursor, watermark.coverage_revision),
+            (0, 0)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discovery_derivation_runtime_disable_and_failure_leave_intake_active(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path())?;
+        let (_, shutdown) = watch::channel(true);
+        DiscoveryOwner::run(store.clone(), DiscoveryRuntimeConfigV1::default(), shutdown).await;
+        assert!(!directory.path().join("discovery-index.sqlite").exists());
+        assert!(!directory.path().join("discovery").exists());
+        std::fs::write(directory.path().join("discovery-index.sqlite"), b"invalid")?;
+        let (stop, shutdown) = watch::channel(false);
+        let task = tokio::spawn(DiscoveryOwner::run(
+            store.clone(),
+            DiscoveryRuntimeConfigV1::default(),
+            shutdown,
+        ));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!task.is_finished());
+        let stream = receive(&store, 1, 1, 1)?;
+        assert_eq!(store.evidence_cursor(&stream)?, 1);
+        stop.send(true)?;
+        tokio::time::timeout(Duration::from_secs(5), task).await??;
+        assert_eq!(store.evidence_cursor(&stream)?, 1);
+        for seconds in [0, 3601] {
+            assert!(DiscoveryRuntimeConfigV1 {
+                checkpoint_seconds: seconds
+            }
+            .validate()
+            .is_err());
+        }
+        for seconds in [1, 3600] {
+            DiscoveryRuntimeConfigV1 {
+                checkpoint_seconds: seconds,
+            }
+            .validate()?;
+        }
+        Ok(())
+    }
+}

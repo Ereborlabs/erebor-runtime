@@ -58,6 +58,24 @@ impl OpenEvidencePage {
 }
 
 impl ControlStore {
+    pub(crate) fn discovery_sources(
+        &self,
+        after: Option<&EvidenceIntakeIdentityV1>,
+    ) -> Result<Vec<EvidenceIntakeIdentityV1>> {
+        use std::ops::Bound;
+        Ok(self
+            .evidence_lock()?
+            .state
+            .evidence_cursors
+            .range((
+                after.map_or(Bound::Unbounded, Bound::Excluded),
+                Bound::Unbounded,
+            ))
+            .take(32)
+            .map(|(identity, _)| identity.clone())
+            .collect())
+    }
+
     pub fn begin_evidence_read(
         &self,
         identity: &EvidenceIntakeIdentityV1,
