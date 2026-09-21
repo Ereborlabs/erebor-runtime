@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use erebor_telemetry::{error, info, init_stderr_logging};
+use erebor_telemetry::{error, info, init_stderr_logging, warn};
 use mithril_control::{
-    serve, serve_administrative_http, ControlConfig, ControlRuntimeParts, KubernetesAdmissionOwner,
+    serve, serve_administrative_http, ControlConfig, ControlRuntimeParts, DiscoveryOwner,
+    KubernetesAdmissionOwner,
 };
 
 #[derive(Parser)]
@@ -35,12 +36,16 @@ async fn run() -> mithril_control::Result<()> {
         administrative_exec,
         kubernetes_nodes,
         kubernetes_admission,
+        discovery,
     } = config.into_parts()?;
     info!(
         "starting Mithril Control",
         listen = %address,
         allowed_nodes = %control.allowed_nodes().len()
     );
+    let (discovery_shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
+    let discovery_task = discovery
+        .map(|(config, store)| tokio::spawn(DiscoveryOwner::run(store, config, shutdown_receiver)));
     // All optional Kubernetes tasks share the owners created from one validated configuration.
     let policy_owner = control.policy_desired_state();
     let admission_policy_owner = policy_owner.clone();
@@ -79,8 +84,8 @@ async fn run() -> mithril_control::Result<()> {
         }
     };
     tokio::pin!(admission_server);
-    // Any owner exit stops the process because a partial Control process cannot keep its guarantees.
-    if let Some(administrative_exec) = administrative_exec {
+    // Required owner exits stop Control. Discovery failures stay in its supervised task.
+    let result = if let Some(administrative_exec) = administrative_exec {
         let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
         let control_shutdown = shutdown.clone();
         let administrative_shutdown = shutdown.clone();
@@ -126,5 +131,12 @@ async fn run() -> mithril_control::Result<()> {
             _ = &mut node_reconciler => Ok(()),
             result = &mut admission_server => result,
         }
+    };
+    if let Some(task) = discovery_task {
+        let _result = discovery_shutdown.send(true);
+        if task.await.is_err() {
+            warn!("discovery shutdown task failed");
+        }
     }
+    result
 }
