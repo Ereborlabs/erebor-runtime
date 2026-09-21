@@ -72,6 +72,13 @@ impl RevisionPayload {
         if rmp_serde::from_slice::<DiscoveryExportPageV1>(&artifact.payload).is_ok() {
             let page = live.index.export(head)?;
             page.prepare()?;
+            if let Some(previous) = &page.previous {
+                let prior = live.index.export(previous)?;
+                DiscoveryInputManifestV1::require(
+                    prior.stream == page.stream && prior.next_cursor()? == page.first_cursor,
+                    "REVISION_EXPORT_GAP",
+                )?;
+            }
             return Ok(Self::Export(page));
         }
         if rmp_serde::from_slice::<DiscoveryProfileV1>(&artifact.payload).is_ok() {
@@ -368,6 +375,19 @@ impl DiscoveryIndex {
                 {
                     continue;
                 }
+                let prefix: [u8; 8] = transaction
+                    .query_row(
+                        "SELECT commit_index FROM revision_prefix WHERE id=1",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .context(DiscoveryDatabaseSnafu {
+                        operation: "check published revision position",
+                    })?;
+                DiscoveryInputManifestV1::require(
+                    event.position.commit_index > u64::from_be_bytes(prefix),
+                    "REVISION_PUBLISHED_POSITION_CONFLICT",
+                )?;
             }
             transaction.execute("INSERT INTO revision_event VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(tenant,id) DO UPDATE SET commit_index=excluded.commit_index,ordinal=excluded.ordinal,event=excluded.event",
                 params![head.key.tenant_id, event.id.0, event.position.commit_index.to_be_bytes(), event.position.ordinal, payload_digest.0, bytes])
@@ -434,7 +454,7 @@ impl DiscoveryIndex {
             after.commit_index <= cutoff,
             "REVISION_INDEX_BEHIND_CURSOR",
         )?;
-        let mut query = transaction.prepare("SELECT event FROM revision_event WHERE tenant=?1 AND (commit_index,ordinal)>(?2,?3) AND commit_index<=?4 ORDER BY commit_index,ordinal LIMIT 201")
+        let mut query = transaction.prepare("SELECT event,id,commit_index,ordinal FROM revision_event WHERE tenant=?1 AND (commit_index,ordinal)>(?2,?3) AND commit_index<=?4 ORDER BY commit_index,ordinal LIMIT 201")
             .context(DiscoveryDatabaseSnafu { operation: "prepare revision page" })?;
         let mut rows = query
             .query(params![
@@ -451,6 +471,7 @@ impl DiscoveryIndex {
             events: Vec::new(),
             next: None,
         };
+        let mut budget = InputByteLimit(1024 * 1024 - 256);
         while let Some(row) = rows.next().context(DiscoveryDatabaseSnafu {
             operation: "read revision row",
         })? {
@@ -470,8 +491,21 @@ impl DiscoveryIndex {
                     }
                     .build()
                 })?;
+            let indexed_id: [u8; 32] = row.get(1).context(DiscoveryDatabaseSnafu {
+                operation: "read revision identity",
+            })?;
+            let indexed_commit: [u8; 8] = row.get(2).context(DiscoveryDatabaseSnafu {
+                operation: "read revision commit",
+            })?;
+            let indexed_ordinal: u16 = row.get(3).context(DiscoveryDatabaseSnafu {
+                operation: "read revision ordinal",
+            })?;
             DiscoveryInputManifestV1::require(
                 event.origin.key.tenant_id == tenant.to_be_bytes()
+                    && event.id.0 == indexed_id
+                    && event.position.commit_index == u64::from_be_bytes(indexed_commit)
+                    && event.position.ordinal == indexed_ordinal
+                    && event.origin.commit_index == event.position.commit_index
                     && event.position.commit_index <= cutoff
                     && event.position > after
                     && page
@@ -480,13 +514,13 @@ impl DiscoveryIndex {
                         .is_none_or(|previous| previous.position < event.position),
                 "REVISION_POSITION",
             )?;
-            page.events.push(event);
-            if serde_json::to_writer(InputByteLimit(1024 * 1024 - 128), &page).is_err() {
-                page.events.pop();
+            if serde_json::to_writer(&mut budget, &event).is_err() || budget.0 == 0 {
                 DiscoveryInputManifestV1::require(!page.events.is_empty(), "REVISION_ROW_LIMIT")?;
                 page.next = page.events.last().map(|event| event.position);
                 break;
             }
+            budget.0 -= 1;
+            page.events.push(event);
         }
         Ok(page)
     }
@@ -495,6 +529,81 @@ impl DiscoveryIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_index_revision_rejects_gaps_and_changed_native_positions(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path())?;
+        let owner = DiscoveryOwner::open(store.clone())?;
+        let mut page = super::super::tests::resolved_page()?;
+        let tenant = page.stream.tenant_id;
+        let key = crate::DiscoveryHeadKeyV1 {
+            tenant_id: tenant,
+            id: DiscoveryDigestV1::of(&"revision gap")?,
+        };
+        let head = store.commit_discovery_head(
+            key.clone(),
+            None,
+            store.put_discovery_artifact(&page.artifact()?)?,
+        )?;
+        assert!(owner.project_revisions()?);
+        let before = owner.read_revisions(tenant.into(), None)?;
+        let mut changed = before.events[0].clone();
+        changed.position.commit_index = 0;
+        assert!(owner
+            .live()?
+            .index
+            .publish_revisions(&head, &[changed.clone()])
+            .is_err());
+        assert_eq!(owner.read_revisions(tenant.into(), None)?, before);
+        changed = before.events[0].clone();
+        changed.origin.commit_index += 1;
+        {
+            let writer = owner
+                .live()?
+                .index
+                .writer
+                .lock()
+                .map_err(|_| "writer poisoned")?;
+            writer.execute(
+                "UPDATE revision_event SET event=?1 WHERE tenant=?2 AND id=?3",
+                params![rmp_serde::to_vec_named(&changed)?, tenant, changed.id.0],
+            )?;
+        }
+        assert!(owner.read_revisions(tenant.into(), None).is_err());
+        {
+            let writer = owner
+                .live()?
+                .index
+                .writer
+                .lock()
+                .map_err(|_| "writer poisoned")?;
+            writer.execute(
+                "UPDATE revision_event SET event=?1 WHERE tenant=?2 AND id=?3",
+                params![
+                    rmp_serde::to_vec_named(&before.events[0])?,
+                    tenant,
+                    changed.id.0
+                ],
+            )?;
+        }
+        page.previous = Some(head.clone());
+        page.first_cursor = 5;
+        for (ordinal, record) in page.records.iter_mut().enumerate() {
+            if let DiscoveryContextJoinV1::Available(pin) = &mut record.context {
+                pin.binding.record_id.durable_cursor = 5 + ordinal as u64;
+            }
+        }
+        store.commit_discovery_head(
+            key,
+            Some(&head),
+            store.put_discovery_artifact(&page.artifact()?)?,
+        )?;
+        assert!(owner.project_revisions().is_err());
+        assert_eq!(owner.read_revisions(tenant.into(), None)?, before);
+        Ok(())
+    }
 
     #[test]
     fn discovery_index_revision_prefix_pages_and_rebuild_preserve_positions(
