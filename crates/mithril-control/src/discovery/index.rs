@@ -436,6 +436,51 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn discovery_index_uses_native_revision_position_after_reopen(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path())?;
+        let index = DiscoveryIndex::open(store.clone())?;
+        {
+            let writer = index.writer.lock().map_err(|_| "writer poisoned")?;
+            assert_eq!(
+                writer.query_row(
+                    "SELECT count(*) FROM sqlite_schema WHERE name='revision_position'",
+                    [],
+                    |row| row.get::<_, u64>(0),
+                )?,
+                0
+            );
+            writer.execute_batch(
+                "CREATE INDEX revision_position ON revision_event(tenant,commit_index,ordinal)",
+            )?;
+        }
+        drop(index);
+        let index = DiscoveryIndex::open(store)?;
+        let reader = index.reader()?;
+        assert_eq!(
+            reader.query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name='revision_position'",
+                [],
+                |row| row.get::<_, u64>(0),
+            )?,
+            0
+        );
+        let native: String = reader.query_row(
+            "SELECT name FROM pragma_index_list('revision_event') WHERE origin='u'",
+            [],
+            |row| row.get(0),
+        )?;
+        let plan: String = reader.query_row(
+            "EXPLAIN QUERY PLAN SELECT event,id,commit_index,ordinal FROM revision_event WHERE tenant=?1 AND (commit_index,ordinal)>(?2,?3) AND commit_index<=?4 ORDER BY commit_index,ordinal LIMIT 201",
+            params![[1_u8; 16], 0_u64.to_be_bytes(), 0, 10_u64.to_be_bytes()],
+            |row| row.get(3),
+        )?;
+        assert!(plan.contains(&native), "{plan}");
+        Ok(())
+    }
+
+    #[test]
     fn discovery_index_rejects_future_schema_and_corrupt_files_without_changing_control(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
@@ -1190,7 +1235,7 @@ impl DiscoveryIndex {
                 commit_index BLOB NOT NULL CHECK(length(commit_index)=8), ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 0 AND 257),
                 payload_digest BLOB NOT NULL CHECK(length(payload_digest)=32), event BLOB NOT NULL,
                 PRIMARY KEY(tenant,id), UNIQUE(tenant,commit_index,ordinal)) WITHOUT ROWID;
-            CREATE INDEX IF NOT EXISTS revision_position ON revision_event(tenant,commit_index,ordinal);
+            DROP INDEX IF EXISTS revision_position;
             CREATE TABLE IF NOT EXISTS revision_prefix(id INTEGER PRIMARY KEY CHECK(id=1), commit_index BLOB NOT NULL CHECK(length(commit_index)=8));
             INSERT OR IGNORE INTO revision_prefix VALUES(1,x'0000000000000000');
             PRAGMA user_version=4; COMMIT;")

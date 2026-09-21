@@ -1090,4 +1090,11 @@ ControlStore remains the durable owner. No kernel or ABI change is required.
 
 The offline API change passed 47 focused Control tests with two subprocess
 helpers ignored. The 50,000-atom case is reserved for the final full gate.
-The other cleanups and final verification remain **Not done**.
+The offline e2e case also passed. The other cleanups and final verification
+remain **Not done**.
+
+`DiscoveryIndex::open_at` removes `revision_position` from existing databases
+inside the schema transaction. New databases use the native index from
+`UNIQUE(tenant, commit_index, ordinal)`. The constraint and retained rows do not
+change. `discovery_index_uses_native_revision_position_after_reopen` checks new
+and old layouts and the feed query plan with the pinned Rust SQLite binding.
