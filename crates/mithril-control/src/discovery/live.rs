@@ -202,7 +202,17 @@ impl DiscoveryOwner {
     }
 
     pub fn open(store: ControlStore) -> Result<Self> {
-        let index = DiscoveryIndex::open(store.clone())?;
+        let index = match DiscoveryIndex::open(store.clone()) {
+            Ok(index) => index,
+            Err(crate::Error::DiscoveryDatabase { source, .. })
+                if matches!(source.as_ref(), rusqlite::Error::SqliteFailure(error, _)
+                    if matches!(error.code, rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)) =>
+            {
+                store.recover_discovery_artifacts()?;
+                return Self::rebuild_index(store);
+            }
+            Err(error) => return Err(error),
+        };
         store.recover_discovery_artifacts()?;
         Ok(Self {
             live: Some(DiscoveryLive {
