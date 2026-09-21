@@ -45,7 +45,7 @@ fn lifecycle_reuses_node<P: Platform + 'static>() -> TestResult<()> {
     second.stop()
 }
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn churn_keeps_next_actor<P: Platform + 'static>() -> TestResult<()> {
     for index in 0..8 {

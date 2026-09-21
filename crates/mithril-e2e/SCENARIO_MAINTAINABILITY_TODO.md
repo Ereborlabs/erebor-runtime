@@ -227,7 +227,7 @@ reimplement a production owner operation.
   passed on Host, direct `runc`, and Kubernetes in 33.59, 33.80, and 71.40
   seconds. The strict TID-reuse caller also passed on Host and direct `runc`
   in 30.27 and 31.93 seconds.
-- [ ] Qualify the Kubernetes actor-admission failures found by the next full
+- [x] Qualify the Kubernetes actor-admission failures found by the next full
   identity lifecycle. The lifecycle passed 20 tests. Four unrelated tests
   failed before actor readiness while Node reported policy convergence and
   then allowed runtime preparation. The exact non-leader test already passed.
@@ -249,8 +249,10 @@ reimplement a production owner operation.
   127.92 seconds. One real container-change recovery raised the soft
   `reconciliation_required` retry counter, and Node then restored readiness.
   No allocation, coordinate, placement, missing-identity, or exec-guard failure
-  occurred. Do not change Kubernetes readiness to hide a result. Add direct
-  `runc` only after Host passes. Add Kubernetes only after direct `runc` passes.
+  occurred. The Kubernetes test passed in 224.78 seconds. It used one retained
+  K3s cluster and one real Helm-deployed Control and Node for all eight actor
+  Pods. Do not change Kubernetes readiness to hide a result. Add direct `runc`
+  only after Host passes. Add Kubernetes only after direct `runc` passes.
 - Do not add a test registry, custom test language, replacement harness,
   builder, factory, or scenario-specific lifecycle implementation.
 - Verify serial lifecycle tests first. Enable bounded parallel tests only
