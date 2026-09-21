@@ -660,3 +660,37 @@ counter gaps, incomplete counter proof, two corrections across restart,
 unchanged prior snapshots, and retry without a new checkpoint. The full
 workspace run is in progress. These changes do not complete context import, the revision feed, index replacement,
 process-kill checks, or live resource qualification. **Not done.**
+
+### Lightweight profile restart
+
+This result adds the restart case after `dd01bb3b`. Its intended end state is
+an unchanged profile after source reclamation and loss of the SQL projection.
+
+[DiscoveryQualificationRunner::profile_restart](../../../crates/mithril-e2e/src/discovery/roundtrip.rs) starts the existing local mutual-TLS fixture.
+  -> [EffectObservationStore](../../../crates/mithril-node/src/observation.rs) writes one synthetic kernel record to the Node WAL.
+  -> [NodeControlConnection](../../../crates/mithril-node/src/control.rs) sends the batch to the production Control intake.
+  -> [ControlStore::read_evidence_page](../../../crates/mithril-control/src/store/evidence_read.rs) returns the unchanged record at durable cursor 1.
+  -> [DiscoveryOwner](../../../crates/mithril-control/src/discovery/live.rs) exports and seals a Partial profile with one unresolved record.
+  -> [EvidenceRetentionOwner](../../../crates/mithril-control/src/evidence.rs) reclaims the source only after the test supplies a separate consumption acknowledgement.
+  -> [DiscoveryQualificationRunner](../../../crates/mithril-e2e/src/discovery/roundtrip.rs) closes the owners and removes only the temporary SQLite projection.
+  -> [DiscoveryOwner::seal_interval](../../../crates/mithril-control/src/discovery/live.rs) repairs visibility with the same snapshot head and content digest.
+
+The runner owns temporary state and closes the local server before reopening
+Control. It obtains the per-CPU source identity from the Node batch. The raw
+kernel sequence remains 101; it is not the durable cursor. Discovery leaves
+the shared consumption watermark unchanged. The separate test acknowledgement
+advances the retained floor to 2. An existing output directory is rejected
+without changing its proof files.
+
+The focused test `discovery_derivation_profile_restart_uses_wal_and_mtls`
+passed. The `mithril_discovery_test --case profile-restart` command also passed
+and wrote `result.json`, `export.json`, and `snapshot.json` under
+`/tmp/araphor-restart-proof.Nouz5k/proof`. The result records cursor, context,
+checkpoint, snapshot, and recovered digests. Formatting passed. The final
+workspace procedure is running for this source state.
+
+This case uses production WAL, transport, intake, and discovery owners. Its
+kernel input is synthetic. It does not load BPF, execute a physical action,
+or resolve signed catalogue context. The signed-context roundtrip, process-kill
+cases, context import, revision feed, and resource qualification remain open.
+**Not done.**

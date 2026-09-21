@@ -5,10 +5,11 @@ use clap::{Parser, ValueEnum};
 #[derive(Clone, ValueEnum)]
 enum Case {
     OfflineExact,
+    ProfileRestart,
 }
 
 #[derive(Parser)]
-#[command(about = "Verify recorded Araphor discovery without live services")]
+#[command(about = "Verify Araphor discovery with bounded qualification cases")]
 struct Cli {
     #[arg(long, value_enum)]
     case: Case,
@@ -16,14 +17,21 @@ struct Cli {
     output_directory: PathBuf,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
     let result = match cli.case {
-        Case::OfflineExact => mithril_e2e::run_discovery_offline(&cli.output_directory),
+        Case::OfflineExact => mithril_e2e::run_discovery_offline(&cli.output_directory)
+            .map_err(Box::<dyn std::error::Error>::from),
+        Case::ProfileRestart => {
+            mithril_e2e::DiscoveryQualificationRunner::new(cli.output_directory)
+                .profile_restart()
+                .await
+        }
     };
     match result {
         Ok(()) => {
-            println!("Araphor synthetic offline proof passed; no physical action was attempted")
+            println!("Araphor discovery check passed; see result.json for its proof boundary")
         }
         Err(error) => {
             eprintln!("{error}");

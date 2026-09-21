@@ -26,6 +26,7 @@ mithril-control = { path = "../mithril-control", features = ["test-fixtures"] }
 mithril-node = { path = "../mithril-node", features = ["test-support"] }
 prost.workspace = true
 prost-types.workspace = true
+rcgen = "0.13.2"
 rustix = { version = "1.1.4", features = [
     "event",
     "fs",
@@ -39,6 +40,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 snafu.workspace = true
+tempfile = "3.23.0"
 tokio.workspace = true
 uuid.workspace = true
 zerocopy.workspace = true
@@ -51,10 +53,8 @@ erebor-runtime-client = { path = "../erebor-runtime-client" }
 erebor-telemetry = { path = "../erebor-telemetry" }
 mithril-e2e-macros = { path = "../mithril-e2e-macros" }
 prost.workspace = true
-rcgen = "0.13.2"
 reqwest.workspace = true
 serde-saphyr.workspace = true
-tempfile = "3.23.0"
 tokio.workspace = true
 tokio-stream = { workspace = true, features = ["net"] }
 tonic.workspace = true
