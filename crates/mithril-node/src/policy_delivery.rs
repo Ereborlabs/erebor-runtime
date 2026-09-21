@@ -934,6 +934,7 @@ impl NodePolicyDeliveryOwner {
                 reason: "the exception candidate differs from its inventory identity",
             }
         );
+        let revoke_without_policy = self.revoke_needs_no_kernel(&candidate);
         let prepared = self.prepare_exception_delivery(
             candidate,
             trust,
@@ -943,6 +944,15 @@ impl NodePolicyDeliveryOwner {
             now_utc_ns,
         )?;
         self.stage_exception_delivery(&prepared, &inventory.candidate_json, now_utc_ns)?;
+        if revoke_without_policy {
+            self.commit_exception_result(
+                &prepared.candidate,
+                ExceptionActivationStateV1::Revoked,
+                0,
+                now_utc_ns,
+            )?;
+            return Ok(None);
+        }
         if prepared.candidate.operation == ExceptionDeliveryOperationV1::Activate
             && prepared.candidate.valid_until_utc_ns <= now_utc_ns
         {
@@ -1082,9 +1092,30 @@ impl NodePolicyDeliveryOwner {
                 reason: "the verified pending exception disappeared during recovery",
             })?
             .clone();
+        if self.revoke_needs_no_kernel(&candidate) {
+            self.commit_recovered_exception(
+                &instance_id,
+                LocalExceptionStateV1::Revoked,
+                record.consumed_uses,
+                now_utc_ns,
+            )?;
+            return Ok(None);
+        }
         let physical_definition_id = self.exception_activation_candidate_content_id(&candidate)?;
         let physical = readback(&instance_id, &record, &candidate, &physical_definition_id)?;
         self.resolve_pending_exception(&instance_id, &candidate, prepared, physical, now_utc_ns)
+    }
+
+    fn revoke_needs_no_kernel(&self, candidate: &ExceptionDeliveryCandidateV1) -> bool {
+        candidate.operation == ExceptionDeliveryOperationV1::Revoke
+            && (self.state.active_candidate_content_id.is_none()
+                || self
+                    .state
+                    .inventory_retirement
+                    .as_ref()
+                    .is_some_and(|retirement| {
+                        retirement.candidate_content_id == candidate.base_candidate_content_id
+                    }))
     }
 
     fn verified_pending_exception(
@@ -5610,6 +5641,82 @@ mod tests {
     }
 
     #[test]
+    fn retiring_revoke_needs_no_kernel() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary terminal exception directory",
+        })?;
+        let PendingExceptionFixture {
+            config,
+            trust,
+            key,
+            scheduled,
+            source,
+            target,
+            activation,
+            mut owner,
+        } = pending_exception_fixture(directory.path())?;
+        owner.commit_exception_result(&activation, ExceptionActivationStateV1::Active, 0, 24)?;
+        owner.acknowledge_exception_control(&activation.candidate_content_id)?;
+        owner.accept_inventory(PolicyInventory {
+            desired_inventory_complete: true,
+            ..PolicyInventory::default()
+        })?;
+        assert!(owner.inventory_retirement().is_some());
+        assert_eq!(owner.status().active_profile_ids.len(), 1);
+
+        let revoke = ExceptionDeliveryCandidateV1::sign(
+            &source.deletion_requested().context(PolicySnafu)?,
+            scheduled.candidate.candidate_content_id.clone(),
+            scheduled
+                .profile_artifact
+                .policy_document
+                .profile_id()
+                .to_owned(),
+            2,
+            target,
+            ExceptionDeliveryOperationV1::Revoke,
+            1,
+            50,
+            Some(activation.candidate_content_id),
+            1,
+            2,
+            60,
+            100,
+            "test-key".to_owned(),
+            &key,
+        )
+        .context(PolicySnafu)?;
+        let bytes = serde_json::to_vec(&revoke).context(super::JsonSnafu {
+            path: "in-memory retired exception revoke",
+        })?;
+        let prepared = owner.accept_exception_inventory_at(
+            ExceptionInventory {
+                candidate_available: true,
+                candidate_content_id: revoke.candidate_content_id.clone(),
+                operation: "REVOKE".to_owned(),
+                candidate_json: bytes,
+            },
+            &trust,
+            &config,
+            &[1; 16],
+            7,
+            61,
+        )?;
+
+        assert!(prepared.is_none());
+        let ack = owner
+            .pending_exception_acknowledgement()?
+            .context(IdentityStateSnafu {
+                reason: "the retired revoke has no acknowledgement",
+            })?;
+        assert_eq!(ack.state, "REVOKED");
+        assert_eq!(ack.consumed_uses, 0);
+        owner.finish_inventory_retirement()?;
+        assert!(owner.status().active_profile_ids.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn kubernetes_outage_exception_keeps_admission_provenance_across_restart() -> crate::Result<()>
     {
         let directory = tempfile::tempdir().context(IoSnafu {
@@ -5857,6 +5964,29 @@ mod tests {
             ExceptionDeliveryOperationV1::Revoke
         );
         assert_eq!(restarted.status().pending_exception_count, 1);
+
+        restarted.state = pending_revocation_state.clone();
+        restarted.state.active_candidate_content_id = None;
+        restarted.state.active_bundle_digest = None;
+        restarted.state.active_profiles.clear();
+        restarted.persist_state()?;
+        assert!(restarted
+            .reconcile_pending_exception_with_readback(
+                &trust,
+                &config,
+                (&[1; 16], 7),
+                63,
+                |_, _, _, _| unreachable!("retired policy must not need kernel readback"),
+            )?
+            .is_none());
+        let retired_ack =
+            restarted
+                .pending_exception_acknowledgement()?
+                .context(IdentityStateSnafu {
+                    reason: "the retired policy revoke has no acknowledgement",
+                })?;
+        assert_eq!(retired_ack.state, "REVOKED");
+        assert_eq!(retired_ack.consumed_uses, 1);
 
         restarted.state = pending_revocation_state.clone();
         restarted.persist_state()?;

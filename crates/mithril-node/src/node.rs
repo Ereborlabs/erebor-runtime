@@ -576,23 +576,27 @@ impl NodeChassis {
         if let Some(prepared) = pending_exception.filter(|prepared| {
             prepared.candidate.operation == mithril_control::ExceptionDeliveryOperationV1::Revoke
         }) {
-            let policy = policy.as_ref().ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "pending exception revocation has no restored policy owner".to_owned(),
+            match policy.as_ref() {
+                Some(policy) => {
+                    let observation = policy.apply_exception_candidate(
+                        &host,
+                        &prepared.candidate,
+                        prepared.grant_handle,
+                    )?;
+                    policy_delivery.commit_exception_result(
+                        &prepared.candidate,
+                        observation.state,
+                        observation.consumed_uses,
+                        crate::policy::current_utc_ns()?,
+                    )?;
                 }
-                .build()
-            })?;
-            let observation = policy.apply_exception_candidate(
-                &host,
-                &prepared.candidate,
-                prepared.grant_handle,
-            )?;
-            policy_delivery.commit_exception_result(
-                &prepared.candidate,
-                observation.state,
-                observation.consumed_uses,
-                crate::policy::current_utc_ns()?,
-            )?;
+                None => policy_delivery.commit_exception_result(
+                    &prepared.candidate,
+                    mithril_control::ExceptionActivationStateV1::Revoked,
+                    0,
+                    crate::policy::current_utc_ns()?,
+                )?,
+            }
         }
         // Dynamic policy needs evidence and either runtime admission or exact local target facts.
         let dynamic_policy_capable = config.evidence.is_some()
@@ -2854,12 +2858,21 @@ impl NodeChassis {
             }
             .build()
         })?;
-        let policy = self.policy.as_ref().ok_or_else(|| {
-            IdentityStateSnafu {
+        let Some(policy) = self.policy.as_ref() else {
+            if prepared.candidate.operation == mithril_control::ExceptionDeliveryOperationV1::Revoke
+            {
+                return self.policy_delivery.commit_exception_result(
+                    &prepared.candidate,
+                    mithril_control::ExceptionActivationStateV1::Revoked,
+                    0,
+                    crate::policy::current_utc_ns()?,
+                );
+            }
+            return IdentityStateSnafu {
                 reason: "exception delivery has no active policy owner".to_owned(),
             }
-            .build()
-        })?;
+            .fail();
+        };
         let observation =
             policy.apply_exception_candidate(host, &prepared.candidate, prepared.grant_handle)?;
         self.policy_delivery.commit_exception_result(

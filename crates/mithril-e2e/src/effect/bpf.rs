@@ -7,7 +7,7 @@ use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
-#[lifecycle = process_recovery]
+#[lifecycle = bpf_recovery]
 fn bpf_map_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("bpf-map")?;
     env.start_control()?;

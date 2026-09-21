@@ -155,6 +155,10 @@ reimplement a production owner operation.
 - Give an omitted lifecycle a unique name for that scenario. Give recovery,
   outage, restart, replacement, runtime integration, retained-state, owner
   cleanup, and cumulative-health tests a dedicated lifecycle.
+- Give each scenario that starts an actor before the first Node admission a
+  separate lifecycle. After the runtime gate is installed, a stopped Node
+  must make a new container fail closed. Do not weaken that production gate
+  so two pristine-start recovery scenarios can share one lifecycle.
 - Do not infer a lifecycle from a scenario name, environment variable, module
   position, or runtime branch. Do not select a lifecycle in a scenario body.
 - Do not define platform-specific lifecycle globals. The attribute supplies
@@ -200,6 +204,9 @@ reimplement a production owner operation.
 - [x] Prove serial same-lifecycle reuse with a focused physical test. Start
   real Control and Node, stop one test fixture, enter the lifecycle again, and
   require the same Node pin owner.
+- [x] Extend the reuse test with a denied unlisted entry, namespace cleanup,
+  the next policy, and a fresh actor identity. The same test passed on Host,
+  direct `runc`, and Kubernetes in 35.26, 48.61, and 87.55 seconds.
 - [x] Reject a second lifecycle for the same platform in one process. The
   focused owner test passed. It requires the launcher to start a separate test
   process instead of restarting Node.
@@ -1758,23 +1765,23 @@ test does not close a row when its physical condition or an assertion changed.
       `runc` passed 38 tests in eight processes, and Kubernetes passed 38 tests
       in eight processes. Cleanup left no Mithril runtime files, namespaces,
       or BPF pin roots.
-  - [ ] Replace the bounded and expired exception block with small standard
+  - [x] Replace the bounded and expired exception block with small standard
     platform tests. Use one shared Python actor and scenario policy. Do not add
     a Platform API or change Interceptor behavior.
-    - [ ] Release eight actor threads to open the protected write target at the
+    - [x] Release eight actor threads to open the protected write target at the
       same time. Require exactly two allowed opens, six `EACCES` results, and
       no other result.
-    - [ ] Attribute every result to its worker task and the exact protected
+    - [x] Attribute every result to its worker task and the exact protected
       object. Require exactly two `EXACT_POLICY_ALLOW` observations and six
       `EXCEPTION_UNAVAILABLE` observations.
-    - [ ] Require two consumed uses, the `Exhausted` runtime state, and only
+    - [x] Require two consumed uses, the `Exhausted` runtime state, and only
       consumed receipt ordinals `[1, 2]`.
-    - [ ] Restart Node through the existing Platform lifecycle. Require the
+    - [x] Restart Node through the existing Platform lifecycle. Require the
       exhausted state to remain unchanged and require another write to fail
       with `EXCEPTION_UNAVAILABLE`.
-    - [ ] Require the separate one-use expired exception to start `Active`
+    - [x] Require the separate one-use expired exception to start `Active`
       with zero uses, deny its write, and enter `Expired` with zero uses.
-    - [ ] Keep each test below 100 lines. Split independent behavior into
+    - [x] Keep each test below 100 lines. Split independent behavior into
       separate tests instead of hiding scenario assertions in a helper.
     - [x] Pass Host and commit it. The three focused tests passed together in
       79.88 seconds. Public file rules used one nonzero signed path atom and no
@@ -1811,6 +1818,31 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit it. All three Kubernetes exception tests
       passed together in 185.27 seconds. Commit `7e99420c` adds Kubernetes to
       the same Rust scenarios.
+    - [x] Reproduce the later cleanup race without Kubernetes. The exception
+      is terminal, Control has acknowledged that result, and Node retires the
+      base-policy owner before an already-created private cleanup arrives.
+      Before the correction, the owner returned new kernel work. The focused
+      test failed at that assertion.
+    - [x] Complete a private cleanup without kernel work when its predecessor
+      is already terminal. Preserve the consumed-use count and acknowledge the
+      restrictive result. Keep activation without a policy owner invalid. The
+      focused regression, 16 related Node tests, six related Control tests,
+      formatting, and targeted strict Clippy pass.
+    - [x] Reproduce the remaining physical ordering without Kubernetes. The
+      private cleanup can arrive while its exact base policy is retiring or
+      after Node has removed that policy owner. A restrictive transition in
+      either state needs no separate kernel work. Activation without a policy
+      owner remains invalid. The focused checks, all 244 Node library tests,
+      and targeted strict Clippy pass.
+    - [x] Refresh a retained K3s image cache when its supplied archive changes.
+      The former helper skipped the archive when all image names existed. A
+      K3s restart then restored an old Node tag. The helper now compares the
+      supplied and retained archives before it skips import.
+    - [x] Rebuild the Node image and rerun the three-case Kubernetes exception
+      lifecycle. The live Pod used manifest `767ce3a2`, the replacement Node
+      had zero restarts, and all three tests passed in 170.00 seconds. Final
+      teardown removed the namespace and runtime sockets. The process exited
+      with status 0 without recreating the VM or K3s cluster.
     - [ ] Remove only the matching legacy actions, result fields, mailbox
       operations, and fixture owner after all three platform cases pass.
   - [ ] Replace the pre-activation descriptor read and mapping block with one
@@ -1883,12 +1915,14 @@ test does not close a row when its physical condition or an assertion changed.
       cases passed together in 50.59 seconds.
     - [x] Pass the signal-zero allow case on Kubernetes and commit it. The
       exact case passed in 69.69 seconds.
-    - [x] Keep the recovery-first unmatched ptrace case in its own
-      `process_recovery` lifecycle. A prior installed hook correctly rejected
-      its actor while Node was down in the shared identity lifecycle. The
-      isolated case passed Host in 28.70 seconds, direct `runc` in 28.76
-      seconds, and Kubernetes in 74.66 seconds. The unchanged Kubernetes
-      workload-recovery lifecycle passed separately in 70.02 seconds.
+    - [x] Keep each pristine-start BPF, managed-proc, namespace, and unmatched
+      ptrace case in its own lifecycle. Their former shared lifecycle passed
+      its first Kubernetes case, then the retained gate correctly rejected
+      the next three new Pods while Node was down. The separated cases passed
+      on Host in 28.30, 28.20, 28.45, and 28.64 seconds; on direct `runc` in
+      34.25, 35.42, 34.53, and 35.50 seconds; and on Kubernetes in 74.62,
+      71.97, 69.29, and 70.31 seconds. Scenario bodies and security assertions
+      did not change.
     - [x] Keep protected ptrace and signal-zero recovery in separate
       `ptrace_recovery` and `signal_recovery` lifecycles. A combined Kubernetes
       identity run passed 23 tests but correctly rejected both new actor Pods
@@ -2025,17 +2059,16 @@ test does not close a row when its physical condition or an assertion changed.
     Reuse the Kubernetes fixture runtime. Do not create another async runtime.
     Retained kernel and container-runtime logs contain no crash, OOM, or exit
     record for the intermittent actor exits.
-  - [ ] Finish the third-migration platform matrix. All 55 Host cases and all
-    46 direct-`runc` cases passed. The first Kubernetes identity run passed 22
-    of 24 cases. The failing three-case and two-case sequences then passed.
-    A second identity run failed a different actor start after 13 cases. The
-    next unchanged identity run passed all 24 cases in 628.48 seconds. A
-    seven-case prefix passed in 213.14 seconds, a nine-case prefix passed in
-    269.90 seconds, and the complete 24-case lifecycle passed in 651.19
-    seconds with dependency tracing disabled. This correlation does not prove
-    that tracing pressure caused the actor exits. Run the remaining ten
-    Kubernetes lifecycle processes after the intermittent actor exit has a
-    lightweight reproduction or an infrastructure cause.
+  - [x] Finish the third-migration platform matrix. The 58 Host cases and 49
+    direct-`runc` cases passed. After the lifecycle-only correction, all four
+    renamed recovery cases and the strengthened lifecycle-reuse test passed
+    again on both lightweight platforms. Kubernetes passed all 49 cases. Its
+    24-case identity lifecycle passed in 655.12 seconds. One earlier identity
+    run lost the initial task identity for the subreaper Pod after 21 passed
+    cases. The isolated subreaper case, the new lightweight transition, its
+    Kubernetes form, and the unchanged full lifecycle all passed on the next
+    runs. No speculative production change was made. The remaining Kubernetes
+    lifecycle processes passed without changing their scenarios.
 
 ### Network
 

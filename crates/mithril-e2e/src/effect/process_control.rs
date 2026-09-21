@@ -375,7 +375,7 @@ fn unmatched_signal_is_denied<P: Platform>() -> TestResult<()> {
 }
 
 #[platform_test(host, runc, kubernetes)]
-#[lifecycle = process_recovery]
+#[lifecycle = ptrace_unmatched]
 fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("process-ptrace-unmatched")?;
     env.start_control()?;
