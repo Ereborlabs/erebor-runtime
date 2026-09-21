@@ -598,7 +598,10 @@ impl WorkloadBindingOwner {
         configured: &[WorkloadBindingConfig],
     ) -> Result<RuntimeReconciliationResultV1> {
         if self.runtime.is_some() {
-            return self.reconcile_runtime(host, configured).await;
+            return self
+                .reconcile_runtime(host, configured)
+                .await
+                .map(|(result, _)| result);
         }
         // Scheduled placeholders have no cgroup until runtime admission supplies the held task.
         self.publish(
@@ -2152,7 +2155,7 @@ impl WorkloadBindingOwner {
         &mut self,
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
-    ) -> Result<RuntimeReconciliationResultV1> {
+    ) -> Result<(RuntimeReconciliationResultV1, bool)> {
         if self.runtime.is_some() {
             return self.reconcile_runtime(host, configured).await;
         }
@@ -2164,14 +2167,14 @@ impl WorkloadBindingOwner {
             self.terminate_all(host)?;
             return Err(error);
         }
-        Ok(RuntimeReconciliationResultV1::default())
+        Ok((RuntimeReconciliationResultV1::default(), false))
     }
 
     async fn reconcile_runtime(
         &mut self,
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
-    ) -> Result<RuntimeReconciliationResultV1> {
+    ) -> Result<(RuntimeReconciliationResultV1, bool)> {
         match self.reconcile_runtime_inner(host, configured).await {
             Ok(reconciliation) => Ok(reconciliation),
             Err(source) if source.retry_hint() == RetryHint::Retryable => Err(source),
@@ -2186,7 +2189,7 @@ impl WorkloadBindingOwner {
         &mut self,
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
-    ) -> Result<RuntimeReconciliationResultV1> {
+    ) -> Result<(RuntimeReconciliationResultV1, bool)> {
         let observed = self
             .runtime
             .as_mut()
@@ -2204,6 +2207,15 @@ impl WorkloadBindingOwner {
         configured: &[WorkloadBindingConfig],
         observations: Vec<CriRuntimeContainerObservationV1>,
     ) -> Result<RuntimeReconciliationResultV1> {
+        Ok(self.reconcile_observed(host, configured, observations)?.0)
+    }
+
+    pub(crate) fn reconcile_observed(
+        &mut self,
+        host: &KernelHost,
+        configured: &[WorkloadBindingConfig],
+        observations: Vec<CriRuntimeContainerObservationV1>,
+    ) -> Result<(RuntimeReconciliationResultV1, bool)> {
         let observed =
             runtime_identities_from_observations(observations, configured, &self.cgroup_root)?;
         self.reconcile_runtime_identities(host, configured, observed)
@@ -2214,7 +2226,7 @@ impl WorkloadBindingOwner {
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
         observed: Vec<RuntimeContainerIdentity>,
-    ) -> Result<RuntimeReconciliationResultV1> {
+    ) -> Result<(RuntimeReconciliationResultV1, bool)> {
         let observed: BTreeMap<String, RuntimeContainerIdentity> = observed
             .into_iter()
             .map(|identity| (identity.full_container_id.clone(), identity))
@@ -2231,6 +2243,10 @@ impl WorkloadBindingOwner {
         let mut retired_binding_ids = self.retired_configured_binding_ids(configured, &observed)?;
         let plan = self.plan_runtime_reconciliation(observed)?;
         retired_binding_ids.extend(plan.retired_binding_ids.iter().cloned());
+        let changed = !retired_binding_ids.is_empty()
+            || !plan.missing_root_ids.is_empty()
+            || !plan.updates.is_empty()
+            || !plan.new_identities.is_empty();
         for root_id in plan.missing_root_ids {
             self.retire_owned_root(host, root_id)?;
         }
@@ -2274,11 +2290,14 @@ impl WorkloadBindingOwner {
                 [(&resolved, InitialRootPreparationV1::Recovered(&identity))],
             )?;
         }
-        self.retain_only_configured(host)?;
-        Ok(RuntimeReconciliationResultV1 {
-            retired_binding_ids: retired_binding_ids.into_iter().collect(),
-            recovered_bindings,
-        })
+        let stale = self.retain_only_configured(host)?;
+        Ok((
+            RuntimeReconciliationResultV1 {
+                retired_binding_ids: retired_binding_ids.into_iter().collect(),
+                recovered_bindings,
+            },
+            changed || stale,
+        ))
     }
 
     fn plan_runtime_reconciliation(
@@ -2543,7 +2562,8 @@ impl WorkloadBindingOwner {
         Ok(())
     }
 
-    fn retain_only_configured(&self, host: &KernelHost) -> Result<()> {
+    fn retain_only_configured(&self, host: &KernelHost) -> Result<bool> {
+        let mut changed = false;
         for key in host
             .map_keys("execution_set_bindings")
             .context(InterceptorSnafu)?
@@ -2590,8 +2610,9 @@ impl WorkloadBindingOwner {
                 })?;
             host.update_map("execution_set_bindings", &key, value.as_bytes())
                 .context(InterceptorSnafu)?;
+            changed = true;
         }
-        Ok(())
+        Ok(changed)
     }
 
     pub(crate) fn same_activation_identity(

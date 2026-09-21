@@ -52,8 +52,8 @@ impl NodeBindingReconciliation<'_> {
         host: &mut KernelHost,
         observations: Option<Vec<crate::CriRuntimeContainerObservationV1>>,
     ) -> Result<bool> {
-        let runtime = match observations {
-            Some(observations) => self.bindings.reconcile_runtime_observations(
+        let (runtime, changed) = match observations {
+            Some(observations) => self.bindings.reconcile_observed(
                 host,
                 &self.config.workload_bindings,
                 observations,
@@ -64,6 +64,9 @@ impl NodeBindingReconciliation<'_> {
                     .await?
             }
         };
+        if !changed && !self.bindings.has_recovering_binding() {
+            return Ok(false);
+        }
         for binding in &runtime.recovered_bindings {
             self.delivery.record_runtime_binding(binding)?;
         }

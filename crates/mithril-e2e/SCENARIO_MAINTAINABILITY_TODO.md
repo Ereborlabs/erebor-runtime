@@ -231,9 +231,23 @@ reimplement a production owner operation.
   identity lifecycle. The lifecycle passed 20 tests. Four unrelated tests
   failed before actor readiness while Node reported policy convergence and
   then allowed runtime preparation. The exact non-leader test already passed.
-  Identify the Kubernetes-only physical overlap and reproduce it with the
-  lightweight Host or direct-`runc` lifecycle before a fixture or production
-  change. Do not rerun Kubernetes first.
+  Use the existing lifecycle owner to run eight protected actors. Each actor
+  creates and reaps 512 threads. The lifecycle creates 4,096 threads in total.
+  Alternate signed policies, retain the same
+  Control and Node, require a valid actor identity after each start, require
+  zero hard identity failures. The Host case reproduces the physical failure.
+  A task-reconciliation scan ran while `task_alloc` held the process transition
+  guard. The scan marked the original actor coordinate fail-closed. The actor
+  and denied file writes had the same task cookie. BPF then denied the actor
+  writes with `CORRUPT_IDENTITY_OR_GENERATION` and `EACCES`. The approved fix
+  keeps the fallback CRI inventory check. An unchanged inventory returns before
+  policy or task recovery. A real recovery scan defers a process while its
+  transition guard is active. A later scan verifies it. The focused Host test
+  passed in a privileged VM in 78.61 seconds. It retained one Control and Node,
+  replaced the policy for each actor, and completed all 4,096 thread creations
+  with zero hard identity failures. Do not change Kubernetes readiness to hide
+  a result. Add direct `runc` only after Host passes. Add Kubernetes only after
+  direct `runc` passes.
 - Do not add a test registry, custom test language, replacement harness,
   builder, factory, or scenario-specific lifecycle implementation.
 - Verify serial lifecycle tests first. Enable bounded parallel tests only

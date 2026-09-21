@@ -264,9 +264,10 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
                                           &process->active_profile_generation_ref_id)
                                     : NULL;
         if (process &&
-            (process->exec_guard_state == exec_guard_state_v1_preparing ||
+            (process->transition_guard ||
+             process->exec_guard_state == exec_guard_state_v1_preparing ||
              process->exec_guard_state == exec_guard_state_v1_commit_pending)) {
-            /* Exec owns this state until its tracepoint commits or restores it. */
+            /* A task transition owns this state. A later scan verifies it. */
             return 0;
         }
         if (binding_lookup || !label_matches_runtime(label, config) ||
@@ -283,7 +284,6 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
                 process->process_state_vector_id ||
             process_vector->profile_generation_ref_id !=
                 process->active_profile_generation_ref_id ||
-            process->transition_guard ||
             process->exec_guard_state != exec_guard_state_v1_none || !entry ||
             entry->admission_state != entry_admission_state_v1_committed ||
             entry->lifetime_state != entry_lifetime_state_v1_active ||
