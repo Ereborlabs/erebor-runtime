@@ -66,6 +66,9 @@ impl EffectCheck {
                             event.operation,
                             event.kernel_result,
                             event.task_cookie,
+                            event.profile_generation_ref_id,
+                            event.composite_atom_id,
+                            event.exact_object_key_id,
                         )
                     })
                     .collect();
