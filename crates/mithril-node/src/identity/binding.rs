@@ -2339,8 +2339,8 @@ impl WorkloadBindingOwner {
                 expected.accepts_observed_lifetime(&current),
                 IdentityStateSnafu {
                     reason: format!(
-                        "live CRI identity changed for `{}`",
-                        binding.spec.container_id
+                        "live CRI identity changed for `{}`: expected {expected:?}; observed {current:?}",
+                        binding.spec.container_id,
                     ),
                 }
             );
@@ -3438,14 +3438,6 @@ mod tests {
         assert!(restored.missing_root_ids.is_empty());
         assert!(restored.new_identities.is_empty());
         assert_eq!(restored.updates.len(), 1);
-        let mut wrong_cgroup = running.clone();
-        wrong_cgroup.cgroup_path = temporary.path().join("another-workload");
-        assert!(owner
-            .plan_runtime_reconciliation(BTreeMap::from([(
-                wrong_cgroup.full_container_id.clone(),
-                wrong_cgroup,
-            )]))
-            .is_err());
         owner
             .bindings
             .get_mut(&root_id)
@@ -3453,6 +3445,26 @@ mod tests {
                 reason: "test binding disappeared before its running transition",
             })?
             .runtime_identity = Some(running.clone());
+        let mut wrong_cgroup = running.clone();
+        wrong_cgroup.cgroup_path = temporary.path().join("another-workload");
+        let mismatch = owner.plan_runtime_reconciliation(BTreeMap::from([(
+            wrong_cgroup.full_container_id.clone(),
+            wrong_cgroup,
+        )]));
+        assert!(mismatch.is_err());
+        let message = mismatch
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(!message.is_empty());
+        assert!(
+            message.contains("expected RuntimeContainerIdentity"),
+            "{message}"
+        );
+        assert!(
+            message.contains("observed RuntimeContainerIdentity"),
+            "{message}"
+        );
         assert_eq!(owner.exact_object_binding_targets().count(), 1);
 
         let plan = owner.plan_runtime_reconciliation(BTreeMap::new())?;
