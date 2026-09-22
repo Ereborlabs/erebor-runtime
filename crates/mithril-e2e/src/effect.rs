@@ -412,7 +412,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub anonymous_read_mmap_allowed: bool,
     pub pkey_executable_mprotect_hard_closed: bool,
     pub pkey_read_mprotect_allowed: bool,
-    pub file_rename_hard_closed: bool,
     pub sysv_ipc_access_hard_closed: bool,
     pub unix_stream_relationship_allowed: bool,
     pub inherited_unix_stream_send_denied: bool,
@@ -1527,8 +1526,6 @@ impl EffectTestRunner {
         let external_mount_namespace = ExternalMountNamespace::acquire(fixture.pid())?;
         external_mount_namespace.bind_mount(&path_tree_root, &path_tree_preexisting_bind_target)?;
         external_mount_namespace.bind_mount(&allowed_bind_source, &allowed_bind_target)?;
-        let mutation_source = paths.mutation_root.join("mutation-source");
-        let rename_target = paths.mutation_root.join("rename-target");
         fixture.prepare_operations(&paths)?;
         let shared_mmap_target_pid = fixture.shared_mmap_target_pid()?;
         let unix_stream_peer_pid = fixture.prepare_unix_stream_target()?;
@@ -2492,25 +2489,6 @@ impl EffectTestRunner {
                 None,
             )?;
         }
-        require_hard_close(
-            &mut fixture,
-            &reader,
-            &observations,
-            HardClosedOperation::Rename {
-                source: mutation_source.clone(),
-                target: rename_target.clone(),
-            },
-            "UNRESOLVED_OBJECT",
-            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Rename),
-            "file rename",
-        )?;
-        ensure!(
-            mutation_source.exists() && !rename_target.exists(),
-            InvalidInputSnafu {
-                path: &rename_target,
-                reason: "denied rename changed the source or target",
-            }
-        );
         require_hard_close(
             &mut fixture,
             &reader,
@@ -3753,7 +3731,6 @@ impl EffectTestRunner {
             anonymous_read_mmap_allowed: true,
             pkey_executable_mprotect_hard_closed: true,
             pkey_read_mprotect_allowed: true,
-            file_rename_hard_closed: true,
             sysv_ipc_access_hard_closed: true,
             unix_stream_relationship_allowed: protect,
             inherited_unix_stream_send_denied: protect,

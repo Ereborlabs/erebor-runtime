@@ -2191,7 +2191,7 @@ test does not close a row when its physical condition or an assertion changed.
         seconds against the retained real K3s cluster on 2026-09-22.
       - [x] Remove only the legacy link request, dispatch arm, assertion,
         target, and result field after all three platforms pass.
-    - [ ] Replace rename. Require File/Rename, the source to remain, and the
+    - [x] Replace rename. Require File/Rename, the source to remain, and the
       target to stay absent.
       - [x] Pass Host and commit it. The 68-line test passed in 28.31 seconds
         on 2026-09-22. It preserved the recovered external actor, exact task
@@ -2201,7 +2201,7 @@ test does not close a row when its physical condition or an assertion changed.
         2026-09-22.
       - [x] Pass Kubernetes and commit it. The unchanged test passed in 73.12
         seconds against the retained real K3s cluster on 2026-09-22.
-      - [ ] Remove only the legacy rename request, dispatch arm, assertion,
+      - [x] Remove only the legacy rename request, dispatch arm, assertion,
         targets, and result field after all three platforms pass.
   - [x] Replace the managed `/proc/self/environ` read with one standard
     platform test. Use one shared Python actor and the existing Python policy.
