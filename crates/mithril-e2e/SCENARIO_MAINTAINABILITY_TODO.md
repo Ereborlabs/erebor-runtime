@@ -2184,7 +2184,9 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Pass Host and commit it. The 60-line test passed in 27.97 seconds
         on 2026-09-22. It preserved the recovered external actor, exact task
         attribution, source, absent target, and zero policy object IDs.
-      - [ ] Pass direct `runc` and commit it.
+      - [x] Pass direct `runc` and commit it. The unchanged test passed in
+        29.09 seconds through stock `runc` and the production OCI hook on
+        2026-09-22.
       - [ ] Pass Kubernetes and commit it.
       - [ ] Remove only the legacy link request, dispatch arm, assertion,
         target, and result field after all three platforms pass.
