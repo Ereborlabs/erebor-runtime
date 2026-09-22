@@ -122,7 +122,10 @@ impl RuntimeContainerIdentity {
             && (self.init_pid == observed.init_pid
                 || (self.state == RuntimeContainerState::Created
                     && self.init_pid == 0
-                    && observed.state == RuntimeContainerState::Running
+                    && matches!(
+                        observed.state,
+                        RuntimeContainerState::Created | RuntimeContainerState::Running
+                    )
                     && observed.init_pid > 0))
             && self.working_directory == observed.working_directory
             && self.path_entries == observed.path_entries
@@ -1109,6 +1112,12 @@ mod tests {
         created.state = RuntimeContainerState::Created;
         created.init_pid = 0;
         assert!(created.resolve(&configured)?.arm_initial_root);
+        assert!(
+            created.accepts_observed_lifetime(&RuntimeContainerIdentity {
+                init_pid: 42,
+                ..created.clone()
+            })
+        );
         assert!(
             created.accepts_observed_lifetime(&RuntimeContainerIdentity {
                 init_pid: 42,

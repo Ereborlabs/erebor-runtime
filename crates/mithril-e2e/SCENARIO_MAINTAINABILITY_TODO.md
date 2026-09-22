@@ -310,6 +310,13 @@ reimplement a production owner operation.
   event. The lightweight regression failed before the fix and passed after it.
   All 257 Mithril Node tests passed. The three Kubernetes exception tests then
   passed in 145.50 seconds on 2026-09-22.
+- [x] Accept CRI task-PID discovery while the same container remains in the
+  `Created` state. The physical failure kept every stable identity field but
+  changed `init_pid` from zero to the assigned task PID before CRI reported
+  `Running`. The lightweight regression failed before the fix and passed after
+  it. All 257 Mithril Node tests and strict Clippy passed. The exact Kubernetes
+  entry-role scenario passed in 65.41 seconds on 2026-09-22. No stable identity
+  field was relaxed.
 - Do not add a test registry, custom test language, replacement harness,
   builder, factory, or scenario-specific lifecycle implementation.
 - Verify serial lifecycle tests first. Enable bounded parallel tests only
