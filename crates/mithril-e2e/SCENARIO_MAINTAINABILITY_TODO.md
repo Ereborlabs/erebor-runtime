@@ -198,10 +198,14 @@ reimplement a production owner operation.
   truncate recovery checks. The pre-TODO probe started the actor before it
   replaced the kernel host and activated policy. A Node-first create trial
   changed the expected `EACCES` result to success and was reverted.
-- [ ] Audit `external_roots`, the unmatched signal and ptrace checks, and each
-  recovery-named singleton against commit `95775f48`. Move a test into a
-  shared lifecycle when its original behavior does not require a distinct
-  owner order. Keep a singleton only with a concrete incompatible order.
+- [x] Audit all 17 singleton groups against commit `95775f48`. Fourteen groups
+  start the actor before the first Node admission: `bpf_recovery`,
+  `external_roots`, `file_create`, `file_chmod`, `file_truncate`, `mount_race`,
+  `namespace_recovery`, `proc_recovery`, `ptrace_recovery`, `ptrace_unmatched`,
+  `recovery_tasks`, `signal_recovery`, `signal_unmatched`, and
+  `workload_recovery`. They need a pristine runtime gate. `node_restart`
+  replaces the retained Node. `terminal_entry` and `terminal_retirement`
+  retain terminal evidence that must not become another test's initial state.
 - [x] Reject concurrent lifecycle Nodes on one host. A physical interleave
   probe started lifecycle A and then lifecycle B. Production rejected B
   because `/run/erebor-interceptor/owner.lock` was owned. This is the required
