@@ -398,6 +398,9 @@
                                 "maxLength": 4096,
                                 "type": "string"
                               },
+                              "exact": {
+                                "type": "boolean"
+                              },
                               "name": {
                                 "maxLength": 4096,
                                 "type": "string"

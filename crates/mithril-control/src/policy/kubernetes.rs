@@ -249,9 +249,15 @@ pub struct FileRuleV1 {
     pub name: String,
     pub path: String,
     pub recursive: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exact: bool,
     #[schemars(length(min = 1, max = 16))]
     pub operations: Vec<KubernetesFileOperationV1>,
     pub action: KubernetesRuleActionV1,
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(
@@ -1004,7 +1010,7 @@ pub fn lower_kubernetes_policy(
         .map(|selector| selector.workload_selector_id.clone())
         .collect::<Vec<_>>();
     let mut path_selectors = Vec::new();
-    let mut path_selector_ids = BTreeMap::<(String, bool), String>::new();
+    let mut path_selector_ids = BTreeMap::<(String, bool, bool), String>::new();
     let mut rules = Vec::new();
     let mut path_tree_deny_floors = Vec::new();
     let mut effect_family_defaults = Vec::new();
@@ -1036,6 +1042,7 @@ pub fn lower_kubernetes_policy(
                 &mut path_selector_ids,
                 &file.path,
                 file.recursive,
+                file.exact,
             );
             let operations = sorted_unique(
                 file.operations
@@ -1079,6 +1086,7 @@ pub fn lower_kubernetes_policy(
                 &mut path_selector_ids,
                 &execution.path,
                 execution.recursive,
+                false,
             );
             rules.push(local_rule(
                 execution.name.clone(),
@@ -1508,12 +1516,14 @@ fn validate_public_policy(spec: &WorkloadProtectionPolicySpec, policy_id: &str) 
                 &mut names,
             )?;
             ensure!(
-                !rule.operations.is_empty() && all_distinct(&rule.operations),
+                !rule.operations.is_empty()
+                    && all_distinct(&rule.operations)
+                    && !(rule.exact && rule.recursive),
                 PolicyValidationSnafu {
                     policy_id,
                     code: "CFG_KUBERNETES_FILE_RULE",
                     reason: format!(
-                        "file rule `{}` has duplicate or empty operations",
+                        "file rule `{}` has duplicate or empty operations, or combines exact and recursive selection",
                         rule.name
                     ),
                 }
@@ -1817,17 +1827,20 @@ fn rule_subject(
 
 fn path_selector_id(
     selectors: &mut Vec<PathSelectorV1>,
-    ids: &mut BTreeMap<(String, bool), String>,
+    ids: &mut BTreeMap<(String, bool, bool), String>,
     path: &str,
     recursive: bool,
+    exact: bool,
 ) -> String {
-    let key = (path.to_owned(), recursive);
+    let key = (path.to_owned(), recursive, exact);
     if let Some(id) = ids.get(&key) {
         return id.clone();
     }
     let id = format!("path-{}", ids.len());
     let object_class_id = format!("KUBERNETES_PATH_{}", ids.len());
-    selectors.push(if recursive {
+    selectors.push(if exact {
+        PathSelectorV1::exact(&id, path, object_class_id)
+    } else if recursive {
         PathSelectorV1::recursive(&id, path, object_class_id)
     } else {
         PathSelectorV1::path(&id, path, object_class_id)

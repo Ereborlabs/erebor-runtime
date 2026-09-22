@@ -445,6 +445,24 @@ fn application_policy_lowering_does_not_create_implicit_denials() -> TestResult 
 }
 
 #[test]
+fn exact_file_rule_uses_authority() -> TestResult {
+    let mut resource = resource()?;
+    resource.spec.roles[0].files[0].exact = true;
+    let lowered = lower_kubernetes_policy(&resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID)?;
+    let selector = lowered
+        .path_selectors
+        .iter()
+        .find(|selector| selector.path_expression() == "/usr/bin/python")
+        .ok_or("the exact file selector is absent")?;
+    assert!(selector.requires_exact_object());
+    assert_ne!(selector.kernel_handle(), 0);
+
+    resource.spec.roles[0].files[1].exact = true;
+    assert!(lower_kubernetes_policy(&resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID).is_err());
+    Ok(())
+}
+
+#[test]
 fn convergence_policy_has_only_declared_entry_and_explicit_deny_paths() -> TestResult {
     let mut resource: WorkloadProtectionPolicy = serde_saphyr::from_slice(CONVERGENCE_POLICY)?;
     resource.metadata.namespace = Some("mithril-convergence".to_owned());

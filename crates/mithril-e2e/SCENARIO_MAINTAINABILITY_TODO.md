@@ -1968,11 +1968,15 @@ test does not close a row when its physical condition or an assertion changed.
   - [ ] Replace the pre-activation descriptor read and mapping block with one
     small standard platform test. Use one shared Python actor and scenario
     policy. Do not add a Platform API.
-    - [ ] Resolve the public-policy selector gap before implementation.
+    - [x] Resolve the public-policy selector gap before implementation.
       `WorkloadProtectionPolicy` currently lowers every file rule to a live
       `PATH` selector. The baseline case uses an `EXACT` selector and requires
       a nonzero exact-object key. Do not replace that assertion with a path
-      rule's composite atom.
+      rule's composite atom. An explicit `exact: true` file rule now lowers to
+      the existing production `EXACT` selector. It cannot be recursive. The
+      false default is omitted from canonical serialization. The focused
+      public API test, all 201 Mithril Control tests, the generated Helm CRD,
+      and strict Clippy pass on 2026-09-22.
     - [ ] Make the actor open protected and allowed file descriptors before
       policy activation and Node startup. Recover the running actor through
       the production startup path.
