@@ -2088,6 +2088,10 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Add one bounded `ProcessFixture` task-name wait and one `EffectCheck`
       evidence cursor. The actor waits for release with `poll(2)` and does not
       make a second governed file read after its action.
+    - [x] Keep actor-before-Node recovery behaviors in separate lifecycles. A
+      paired Kubernetes run passed chmod, then the retained OCI gate correctly
+      denied the second new Pod while Node was unavailable. Do not weaken the
+      recovery order to share Node state.
     - [ ] Replace chmod. Require File/Setattr and mode `0600` after denial.
       - [x] Pass Host and commit it. An admitted PID1 correctly allowed chmod,
         so that setup was rejected. The 58-line external-actor test passed in
@@ -2095,7 +2099,9 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Pass direct `runc` and commit it. Chmod and corrected create passed
         together through the production OCI hook in 72.69 seconds on
         2026-09-22.
-      - [ ] Pass Kubernetes and commit it.
+      - [x] Pass Kubernetes and commit it. The isolated recovery scenario
+        passed against the retained real K3s cluster in 78.32 seconds on
+        2026-09-22.
       - [ ] Remove only the legacy setattr request, dispatch arm, assertion,
         target, and result field after all three platforms pass.
     - [ ] Replace truncate. Require File/Setattr and unchanged file length.

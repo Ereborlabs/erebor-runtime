@@ -7,7 +7,7 @@ use crate::platform::{platform_test, Platform, TestResult};
 use super::check::EffectCheck;
 
 #[platform_test(host, runc, kubernetes)]
-#[lifecycle = file_mutation]
+#[lifecycle = file_create]
 fn unknown_create_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("unknown-create")?;
     env.start_control()?;
@@ -65,8 +65,8 @@ fn unknown_create_is_denied<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host, runc)]
-#[lifecycle = file_mutation]
+#[platform_test(host, runc, kubernetes)]
+#[lifecycle = file_chmod]
 fn unknown_chmod_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("unknown-chmod")?;
     env.start_control()?;
