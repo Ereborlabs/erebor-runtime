@@ -303,6 +303,13 @@ reimplement a production owner operation.
   patch and requires a second patch after the five-second deadline. All 10
   Node-readiness owner tests passed. The three Kubernetes exception tests then
   passed in 146.09 seconds on 2026-09-22.
+- [x] Defer an inconsistent CRI inventory snapshot during container start.
+  `ListContainers` and `ContainerStatus` can report different states while
+  `StartContainer` is in progress. Do not combine those records into one
+  runtime identity. Keep the existing binding and retry after the next runtime
+  event. The lightweight regression failed before the fix and passed after it.
+  All 257 Mithril Node tests passed. The three Kubernetes exception tests then
+  passed in 145.50 seconds on 2026-09-22.
 - Do not add a test registry, custom test language, replacement harness,
   builder, factory, or scenario-specific lifecycle implementation.
 - Verify serial lifecycle tests first. Enable bounded parallel tests only

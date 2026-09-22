@@ -484,6 +484,9 @@ pub(super) fn runtime_identities_from_observations(
             }
             .build()
         })?;
+        if status.state != container.state {
+            continue;
+        }
         let metadata = status.metadata.as_ref().ok_or_else(|| {
             IdentityStateSnafu {
                 reason: format!(
@@ -841,20 +844,23 @@ fn systemd_slice_path(slice: &str) -> Result<PathBuf> {
 mod tests {
     use std::collections::BTreeMap;
     use std::convert::Infallible;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::pin::Pin;
     use std::task::{Context, Poll};
     use std::time::Duration;
 
     use containerd_client::types::Envelope;
     use k8s_cri::v1::runtime_service_client::RuntimeServiceClient;
-    use k8s_cri::v1::{Container, ContainerMetadata, ContainerState};
+    use k8s_cri::v1::{
+        Container, ContainerMetadata, ContainerState, ContainerStatus, ContainerStatusResponse,
+    };
     use tonic::codec::{Codec, ProstCodec};
     use tonic::transport::Endpoint;
 
     use super::{
-        parse_cgroup_path, runtime_cgroup_source, runtime_state, runtime_state_for_reconciliation,
-        scheduled_recovery_target, ContainerRuntimeInventory, RuntimeCgroupSource,
+        parse_cgroup_path, runtime_cgroup_source, runtime_identities_from_observations,
+        runtime_state, runtime_state_for_reconciliation, scheduled_recovery_target,
+        ContainerRuntimeInventory, CriRuntimeContainerObservationV1, RuntimeCgroupSource,
         RuntimeContainerIdentity, RuntimeContainerState, CONTAINER_NAME_LABEL, POD_NAMESPACE_LABEL,
         POD_UID_LABEL,
     };
@@ -972,6 +978,62 @@ mod tests {
             runtime_state_for_reconciliation(ContainerState::ContainerRunning as i32, 0),
             Some(RuntimeContainerState::Running)
         );
+    }
+
+    #[test]
+    fn inconsistent_cri_state_is_deferred() -> crate::Result<()> {
+        let id = "a".repeat(64);
+        let configured = WorkloadBindingConfig {
+            binding_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+            scheduled_binding_authority_id: None,
+            scheduled_target_digest: None,
+            execution_set_id: "22222222-2222-4222-8222-222222222222".to_owned(),
+            protected_scope_id: "44444444-4444-4444-8444-444444444444".to_owned(),
+            workload_selector_id: "worker".to_owned(),
+            profile_id: "33333333-3333-4333-8333-333333333333".to_owned(),
+            container_id: id.clone(),
+            namespace: "default".to_owned(),
+            cluster_uid: String::new(),
+            namespace_uid: String::new(),
+            controller_uid: String::new(),
+            service_account_uid: String::new(),
+            pod_labels: BTreeMap::new(),
+            pod_uid: "pod-a".to_owned(),
+            sandbox_id: "sandbox-a".to_owned(),
+            container_name: "worker".to_owned(),
+            image_digest: "sha256:image-a".to_owned(),
+            container_kind: ContainerKindV1::Application,
+            container_generation: 7,
+            root_cgroup_path: None,
+            lifecycle_generation: 1,
+            active_profile_generation_ref_id: 1,
+            initial_role_id: 1,
+            external_role_id: 2,
+            arm_initial_root: true,
+        };
+        let observation = CriRuntimeContainerObservationV1 {
+            listed: Container {
+                id: id.clone(),
+                state: ContainerState::ContainerRunning as i32,
+                ..Container::default()
+            },
+            status: ContainerStatusResponse {
+                status: Some(ContainerStatus {
+                    id,
+                    state: ContainerState::ContainerCreated as i32,
+                    ..ContainerStatus::default()
+                }),
+                ..ContainerStatusResponse::default()
+            },
+        };
+
+        assert!(runtime_identities_from_observations(
+            vec![observation],
+            &[configured],
+            Path::new("/sys/fs/cgroup"),
+        )?
+        .is_empty());
+        Ok(())
     }
 
     #[test]
