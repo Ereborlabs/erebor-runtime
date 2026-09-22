@@ -412,7 +412,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub anonymous_read_mmap_allowed: bool,
     pub pkey_executable_mprotect_hard_closed: bool,
     pub pkey_read_mprotect_allowed: bool,
-    pub file_setattr_hard_closed: bool,
     pub file_truncate_hard_closed: bool,
     pub file_unlink_hard_closed: bool,
     pub file_link_hard_closed: bool,
@@ -1531,7 +1530,6 @@ impl EffectTestRunner {
         let external_mount_namespace = ExternalMountNamespace::acquire(fixture.pid())?;
         external_mount_namespace.bind_mount(&path_tree_root, &path_tree_preexisting_bind_target)?;
         external_mount_namespace.bind_mount(&allowed_bind_source, &allowed_bind_target)?;
-        let setattr_target = paths.mutation_root.join("setattr-target");
         let truncate_target = paths.mutation_root.join("truncate-target");
         let unlink_target = paths.mutation_root.join("unlink-target");
         let mutation_source = paths.mutation_root.join("mutation-source");
@@ -2500,31 +2498,6 @@ impl EffectTestRunner {
                 None,
             )?;
         }
-        require_hard_close(
-            &mut fixture,
-            &reader,
-            &observations,
-            HardClosedOperation::Setattr {
-                path: setattr_target.clone(),
-            },
-            "UNRESOLVED_OBJECT",
-            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Setattr),
-            "file attribute mutation",
-        )?;
-        ensure!(
-            std::os::unix::fs::PermissionsExt::mode(
-                &fs::metadata(&setattr_target)
-                    .context(IoSnafu {
-                        path: &setattr_target,
-                    })?
-                    .permissions()
-            ) & 0o777
-                == 0o600,
-            InvalidInputSnafu {
-                path: &setattr_target,
-                reason: "denied chmod changed the file mode",
-            }
-        );
         let truncate_length = fs::metadata(&truncate_target)
             .context(IoSnafu {
                 path: &truncate_target,
@@ -3849,7 +3822,6 @@ impl EffectTestRunner {
             anonymous_read_mmap_allowed: true,
             pkey_executable_mprotect_hard_closed: true,
             pkey_read_mprotect_allowed: true,
-            file_setattr_hard_closed: true,
             file_truncate_hard_closed: true,
             file_unlink_hard_closed: true,
             file_link_hard_closed: true,

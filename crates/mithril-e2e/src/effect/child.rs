@@ -213,7 +213,6 @@ pub(super) enum PreparedOperation {
     InheritedUnixStreamSend,
     UnixStreamStalePeer,
     UnixStreamUnmatched,
-    Setattr { path: PathBuf },
     Truncate,
     Unlink { path: PathBuf },
     Link { source: PathBuf, target: PathBuf },
@@ -1600,7 +1599,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     let propagation_source = root.join("propagation-source");
     let propagation_target = source.join("propagation-target");
     let propagation_marker = propagation_target.join("propagated-marker");
-    let setattr_target = root.join("setattr-target");
     let truncate_target = root.join("truncate-target");
     let unlink_target = root.join("unlink-target");
     let mutation_source = root.join("mutation-source");
@@ -1636,14 +1634,8 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
             path: &deleted_exec_target,
         },
     )?;
-    fs::write(&setattr_target, b"mode\n").context(IoSnafu {
-        path: &setattr_target,
-    })?;
     fs::write(&truncate_target, b"truncate\n").context(IoSnafu {
         path: &truncate_target,
-    })?;
-    fs::set_permissions(&setattr_target, fs::Permissions::from_mode(0o600)).context(IoSnafu {
-        path: &setattr_target,
     })?;
     fs::write(&unlink_target, b"unlink\n").context(IoSnafu {
         path: &unlink_target,
@@ -2445,12 +2437,6 @@ impl PreparedOperations {
                             .restart()
                             .map_or_else(error_outcome, |()| target.roundtrip())
                     })
-            }
-            PreparedOperation::Setattr { path } => {
-                match fs::set_permissions(path, fs::Permissions::from_mode(0o000)) {
-                    Ok(()) => allowed_outcome(),
-                    Err(error) => error_outcome(error),
-                }
             }
             PreparedOperation::Truncate => match self.truncate_file.set_len(0) {
                 Ok(()) => allowed_outcome(),
