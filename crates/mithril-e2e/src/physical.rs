@@ -11,7 +11,7 @@ use snafu::{ensure, ResultExt as _};
 use crate::error::{InvalidInputSnafu, IoSnafu, TimeoutSnafu};
 use crate::Result;
 
-const POLL_INTERVAL: Duration = Duration::from_millis(1);
+const POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[cfg(test)]
 const STABLE_INTERVAL: Duration = Duration::from_secs(1);
 
