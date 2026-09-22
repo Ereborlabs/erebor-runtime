@@ -2112,7 +2112,9 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Pass direct `runc` and commit it. The same retained-descriptor test
         passed through stock `runc` and the production OCI hook in 34.86
         seconds on 2026-09-22.
-      - [ ] Pass Kubernetes and commit it.
+      - [x] Pass Kubernetes and commit it. The same retained-descriptor test
+        passed against the retained real K3s cluster in 70.53 seconds on
+        2026-09-22.
       - [ ] Remove only the legacy truncate request, dispatch arm, assertion,
         retained descriptor, target, and result field after all platforms
         pass.
