@@ -2187,7 +2187,8 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Pass direct `runc` and commit it. The unchanged test passed in
         29.09 seconds through stock `runc` and the production OCI hook on
         2026-09-22.
-      - [ ] Pass Kubernetes and commit it.
+      - [x] Pass Kubernetes and commit it. The unchanged test passed in 72.00
+        seconds against the retained real K3s cluster on 2026-09-22.
       - [ ] Remove only the legacy link request, dispatch arm, assertion,
         target, and result field after all three platforms pass.
     - [ ] Replace rename. Require File/Rename, the source to remain, and the
