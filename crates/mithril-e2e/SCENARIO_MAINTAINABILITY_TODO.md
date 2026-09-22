@@ -2092,7 +2092,9 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Pass Host and commit it. An admitted PID1 correctly allowed chmod,
         so that setup was rejected. The 58-line external-actor test passed in
         30.96 seconds and passed with create in 52.95 seconds on 2026-09-22.
-      - [ ] Pass direct `runc` and commit it.
+      - [x] Pass direct `runc` and commit it. Chmod and corrected create passed
+        together through the production OCI hook in 72.69 seconds on
+        2026-09-22.
       - [ ] Pass Kubernetes and commit it.
       - [ ] Remove only the legacy setattr request, dispatch arm, assertion,
         target, and result field after all three platforms pass.

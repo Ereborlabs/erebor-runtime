@@ -65,7 +65,7 @@ fn unknown_create_is_denied<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = file_mutation]
 fn unknown_chmod_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("unknown-chmod")?;
