@@ -9,6 +9,7 @@ libc = ctypes.CDLL(None, use_errno=True)
 libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
 action = sys.argv[2]
 target = sys.argv[3]
+link_target = sys.argv[4] if action == "link" else None
 descriptor = None
 
 if action == "truncate":
@@ -26,6 +27,8 @@ try:
         os.ftruncate(descriptor, 0)
     elif action == "unlink":
         os.unlink(target)
+    elif action == "link":
+        os.link(target, link_target)
     else:
         raise ValueError(f"unsupported file action: {action}")
 except OSError as failure:
