@@ -2106,7 +2106,9 @@ test does not close a row when its physical condition or an assertion changed.
         target, and result field after all three platforms pass. The focused
         child-fixture tests and strict crate Clippy pass on 2026-09-22.
     - [ ] Replace truncate. Require File/Setattr and unchanged file length.
-      - [ ] Pass Host and commit it.
+      - [x] Pass Host and commit it. The 58-line test retained a writable file
+        descriptor before Node recovery. Its `ftruncate` denial passed in
+        28.68 seconds on 2026-09-22.
       - [ ] Pass direct `runc` and commit it.
       - [ ] Pass Kubernetes and commit it.
       - [ ] Remove only the legacy truncate request, dispatch arm, assertion,

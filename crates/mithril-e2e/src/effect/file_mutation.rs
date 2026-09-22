@@ -125,3 +125,64 @@ fn unknown_chmod_is_denied<P: Platform>() -> TestResult<()> {
     init.stop()?;
     env.stop()
 }
+
+#[platform_test(host)]
+#[lifecycle = file_truncate]
+fn retained_truncate_is_denied<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("retained-truncate")?;
+    env.start_control()?;
+    env.stop_node()?;
+    let target = env.work().join("truncate-target");
+    fs::write(&target, b"truncate\n")?;
+    let length = fs::metadata(&target)?.len();
+    let mut init = env.start_actor("ready.py", &[])?;
+    env.place(init.id())?;
+    let args = [
+        "/fixtures/file_mutation.py",
+        "/work",
+        "truncate",
+        "/work/truncate-target",
+    ];
+    let mut actor = env.add_actor("python", &args)?;
+    actor.ready()?;
+    env.place(actor.id())?;
+    env.install_policy("python_policy.json")?;
+    env.start_node()?;
+    env.sync_policy()?;
+    env.node_ready()?;
+    env.running(init.id())?;
+    env.recovered(init.id(), "file-mutation workload")?;
+    let task = env.task(actor.id(), "truncate actor")?;
+    assert_eq!(
+        task.snapshot.root_class.as_deref(),
+        Some("restored_or_unknown_root")
+    );
+    assert_eq!(task.snapshot.admitted_entry_rule_id, 0);
+    let effects = EffectCheck::new(&env, task)?;
+
+    actor.send(b"truncate\n")?;
+    actor.wait_name(
+        actor.id(),
+        &format!("effect-{}", libc::EACCES),
+        "truncate result",
+        Duration::from_secs(5),
+    )?;
+    assert_eq!(fs::metadata(&target)?.len(), length);
+
+    let effect = effects.wait(
+        &env,
+        "UNRESOLVED_OBJECT",
+        F::File,
+        O::Setattr,
+        -libc::EACCES,
+        "truncate evidence",
+    )?;
+    assert_eq!(effect.exact_object_key_id, 0);
+    assert_eq!(effect.composite_atom_id, 0);
+
+    actor.send(b"release\n")?;
+    actor.wait_gone(actor.id(), "truncate actor exit")?;
+    actor.stop()?;
+    init.stop()?;
+    env.stop()
+}

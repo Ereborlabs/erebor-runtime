@@ -9,6 +9,10 @@ libc = ctypes.CDLL(None, use_errno=True)
 libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
 action = sys.argv[2]
 target = sys.argv[3]
+descriptor = None
+
+if action == "truncate":
+    descriptor = os.open(target, os.O_WRONLY)
 
 print("native-fixture-ready", flush=True)
 sys.stdin.buffer.readline()
@@ -18,6 +22,8 @@ try:
         os.close(descriptor)
     elif action == "chmod":
         os.chmod(target, 0)
+    elif action == "truncate":
+        os.ftruncate(descriptor, 0)
     else:
         raise ValueError(f"unsupported file action: {action}")
 except OSError as failure:
