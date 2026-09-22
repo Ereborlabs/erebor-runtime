@@ -187,7 +187,7 @@ fn retained_truncate_is_denied<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = file_unlink]
 fn unknown_unlink_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("unknown-unlink")?;
