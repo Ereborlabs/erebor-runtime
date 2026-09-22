@@ -316,7 +316,12 @@ reimplement a production owner operation.
   `Running`. The lightweight regression failed before the fix and passed after
   it. All 257 Mithril Node tests and strict Clippy passed. The exact Kubernetes
   entry-role scenario passed in 65.41 seconds on 2026-09-22. No stable identity
-  field was relaxed.
+  field was relaxed. Refresh the complete retained K3s preload archive through
+  the existing image helper; a direct one-image import is replaced when the
+  runtime-hook setup restarts K3s. The live Node then used manifest
+  `b4953ffd`. Policy replacement passed in 72.16 seconds, churn passed in
+  201.66 seconds, and all 25 shared Kubernetes identity tests passed in 783.56
+  seconds.
 - Do not add a test registry, custom test language, replacement harness,
   builder, factory, or scenario-specific lifecycle implementation.
 - Verify serial lifecycle tests first. Enable bounded parallel tests only
