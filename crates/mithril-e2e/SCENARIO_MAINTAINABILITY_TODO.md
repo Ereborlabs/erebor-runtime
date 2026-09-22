@@ -2068,13 +2068,13 @@ test does not close a row when its physical condition or an assertion changed.
     condition.
     Require actor `EACCES`, target absence, `UNRESOLVED_OBJECT`, File/Create,
     the exact actor task, and no exact or composite policy object.
-    - [x] Pass Host and commit it. The 81-line scenario preserves the recovered
-      root and passed in 29.64 seconds on 2026-09-21.
-    - [x] Pass direct `runc` and commit it. The unchanged recovery scenario
-      passed through the production OCI hook in 43.32 seconds on 2026-09-21.
-    - [x] Pass Kubernetes and commit it. The unchanged recovery scenario
-      passed against the retained real K3s cluster in 78.69 seconds on
-      2026-09-21.
+    - [x] Pass Host and commit it. The corrected test requires the runtime-added
+      actor to have `restored_or_unknown_root` and entry rule zero. It passed
+      with chmod in the shared Host lifecycle in 52.95 seconds on 2026-09-22.
+    - [x] Pass direct `runc` and commit it. The corrected external actor passed
+      through the production OCI hook in 37.98 seconds on 2026-09-22.
+    - [x] Pass Kubernetes and commit it. The corrected external actor passed
+      against the retained real K3s cluster in 92.11 seconds on 2026-09-22.
     - [x] Remove only the matching legacy action and result field after all
       three platforms pass. The cleanup removed the old request, child match
       arm, target, assertion block, and result field. It kept every other file
@@ -2086,12 +2086,12 @@ test does not close a row when its physical condition or an assertion changed.
     condition. Require the exact actor task, `UNRESOLVED_OBJECT`, the original
     file operation, `EACCES`, and zero exact and composite policy object IDs.
     - [x] Add one bounded `ProcessFixture` task-name wait and one `EffectCheck`
-      evidence cursor. The create scenario now keeps its setup, action, state
-      check, object checks, and teardown in 51 lines. The unchanged behavior
-      passed on Host in 40.37 seconds, direct `runc` in 43.79 seconds, and
-      Kubernetes in 82.98 seconds on 2026-09-21.
+      evidence cursor. The actor waits for release with `poll(2)` and does not
+      make a second governed file read after its action.
     - [ ] Replace chmod. Require File/Setattr and mode `0600` after denial.
-      - [ ] Pass Host and commit it.
+      - [x] Pass Host and commit it. An admitted PID1 correctly allowed chmod,
+        so that setup was rejected. The 58-line external-actor test passed in
+        30.96 seconds and passed with create in 52.95 seconds on 2026-09-22.
       - [ ] Pass direct `runc` and commit it.
       - [ ] Pass Kubernetes and commit it.
       - [ ] Remove only the legacy setattr request, dispatch arm, assertion,
