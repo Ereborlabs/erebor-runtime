@@ -412,7 +412,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub anonymous_read_mmap_allowed: bool,
     pub pkey_executable_mprotect_hard_closed: bool,
     pub pkey_read_mprotect_allowed: bool,
-    pub file_unlink_hard_closed: bool,
     pub file_link_hard_closed: bool,
     pub file_rename_hard_closed: bool,
     pub sysv_ipc_access_hard_closed: bool,
@@ -1529,7 +1528,6 @@ impl EffectTestRunner {
         let external_mount_namespace = ExternalMountNamespace::acquire(fixture.pid())?;
         external_mount_namespace.bind_mount(&path_tree_root, &path_tree_preexisting_bind_target)?;
         external_mount_namespace.bind_mount(&allowed_bind_source, &allowed_bind_target)?;
-        let unlink_target = paths.mutation_root.join("unlink-target");
         let mutation_source = paths.mutation_root.join("mutation-source");
         let link_target = paths.mutation_root.join("link-target");
         let rename_target = paths.mutation_root.join("rename-target");
@@ -2496,24 +2494,6 @@ impl EffectTestRunner {
                 None,
             )?;
         }
-        require_hard_close(
-            &mut fixture,
-            &reader,
-            &observations,
-            HardClosedOperation::Unlink {
-                path: unlink_target.clone(),
-            },
-            "UNRESOLVED_OBJECT",
-            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Unlink),
-            "file unlink",
-        )?;
-        ensure!(
-            unlink_target.exists(),
-            InvalidInputSnafu {
-                path: &unlink_target,
-                reason: "denied unlink removed its target",
-            }
-        );
         require_hard_close(
             &mut fixture,
             &reader,
@@ -3794,7 +3774,6 @@ impl EffectTestRunner {
             anonymous_read_mmap_allowed: true,
             pkey_executable_mprotect_hard_closed: true,
             pkey_read_mprotect_allowed: true,
-            file_unlink_hard_closed: true,
             file_link_hard_closed: true,
             file_rename_hard_closed: true,
             sysv_ipc_access_hard_closed: true,

@@ -212,7 +212,6 @@ pub(super) enum PreparedOperation {
     InheritedUnixStreamSend,
     UnixStreamStalePeer,
     UnixStreamUnmatched,
-    Unlink { path: PathBuf },
     Link { source: PathBuf, target: PathBuf },
     Rename { source: PathBuf, target: PathBuf },
     SelfProtect { path: PathBuf },
@@ -1590,7 +1589,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     let propagation_source = root.join("propagation-source");
     let propagation_target = source.join("propagation-target");
     let propagation_marker = propagation_target.join("propagated-marker");
-    let unlink_target = root.join("unlink-target");
     let mutation_source = root.join("mutation-source");
     fs::create_dir(&source).context(IoSnafu { path: &source })?;
     fs::write(&secret, b"restricted\n").context(IoSnafu { path: &secret })?;
@@ -1624,9 +1622,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
             path: &deleted_exec_target,
         },
     )?;
-    fs::write(&unlink_target, b"unlink\n").context(IoSnafu {
-        path: &unlink_target,
-    })?;
     fs::write(&mutation_source, b"mutation\n").context(IoSnafu {
         path: &mutation_source,
     })?;
@@ -2416,12 +2411,10 @@ impl PreparedOperations {
                             .map_or_else(error_outcome, |()| target.roundtrip())
                     })
             }
-            PreparedOperation::Unlink { path } | PreparedOperation::SelfProtect { path } => {
-                match fs::remove_file(path) {
-                    Ok(()) => allowed_outcome(),
-                    Err(error) => error_outcome(error),
-                }
-            }
+            PreparedOperation::SelfProtect { path } => match fs::remove_file(path) {
+                Ok(()) => allowed_outcome(),
+                Err(error) => error_outcome(error),
+            },
             PreparedOperation::Link { source, target } => match fs::hard_link(source, target) {
                 Ok(()) => allowed_outcome(),
                 Err(error) => error_outcome(error),

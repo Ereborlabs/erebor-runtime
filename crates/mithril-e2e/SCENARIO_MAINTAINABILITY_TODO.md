@@ -2167,7 +2167,7 @@ test does not close a row when its physical condition or an assertion changed.
         2026-09-22. The 25-test identity lifecycle passed in 771.73 seconds.
         The remaining groups passed without a source change. The final
         `workload_recovery` group passed in 69.97 seconds.
-    - [ ] Replace unlink. Require File/Unlink and the target to remain.
+    - [x] Replace unlink. Require File/Unlink and the target to remain.
       - [x] Pass Host and commit it. The 62-line test passed in 28.24 seconds
         on 2026-09-22. It preserved the recovered external actor, exact task
         attribution, `EACCES`, retained target, and zero policy object IDs.
@@ -2176,9 +2176,9 @@ test does not close a row when its physical condition or an assertion changed.
         2026-09-22.
       - [x] Pass Kubernetes and commit it. The unchanged test passed in 70.23
         seconds against the retained real K3s cluster on 2026-09-22.
-      - [ ] Remove only the legacy unlink request, dispatch branch, assertion,
-        target, and result field after all three platforms pass. Keep the
-        shared self-protection unlink branch.
+      - [x] Remove only the legacy unlink request, dispatch branch, assertion,
+        target, and result field after all three platforms pass. The shared
+        self-protection unlink branch remains.
     - [ ] Replace hard-link creation. Require File/Link, the source to remain,
       and the target to stay absent.
       - [ ] Pass Host and commit it.
