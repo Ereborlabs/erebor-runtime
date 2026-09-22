@@ -2168,7 +2168,9 @@ test does not close a row when its physical condition or an assertion changed.
         The remaining groups passed without a source change. The final
         `workload_recovery` group passed in 69.97 seconds.
     - [ ] Replace unlink. Require File/Unlink and the target to remain.
-      - [ ] Pass Host and commit it.
+      - [x] Pass Host and commit it. The 62-line test passed in 28.24 seconds
+        on 2026-09-22. It preserved the recovered external actor, exact task
+        attribution, `EACCES`, retained target, and zero policy object IDs.
       - [ ] Pass direct `runc` and commit it.
       - [ ] Pass Kubernetes and commit it.
       - [ ] Remove only the legacy unlink request, dispatch branch, assertion,

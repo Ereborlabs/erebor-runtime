@@ -24,6 +24,8 @@ try:
         os.chmod(target, 0)
     elif action == "truncate":
         os.ftruncate(descriptor, 0)
+    elif action == "unlink":
+        os.unlink(target)
     else:
         raise ValueError(f"unsupported file action: {action}")
 except OSError as failure:

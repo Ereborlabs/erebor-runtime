@@ -186,3 +186,67 @@ fn retained_truncate_is_denied<P: Platform>() -> TestResult<()> {
     init.stop()?;
     env.stop()
 }
+
+#[platform_test(host)]
+#[lifecycle = file_unlink]
+fn unknown_unlink_is_denied<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("unknown-unlink")?;
+    env.start_control()?;
+    env.stop_node()?;
+    let target = env.work().join("unlink-target");
+    fs::write(&target, b"unlink\n")?;
+    let mut init = env.start_actor("ready.py", &[])?;
+    env.place(init.id())?;
+    let args = [
+        "/fixtures/file_mutation.py",
+        "/work",
+        "unlink",
+        "/work/unlink-target",
+    ];
+    let mut actor = env.add_actor("python", &args)?;
+    actor.ready()?;
+    env.place(actor.id())?;
+    env.install_policy("python_policy.json")?;
+    env.start_node()?;
+    env.sync_policy()?;
+    env.node_ready()?;
+    env.running(init.id())?;
+    env.recovered(init.id(), "file-mutation workload")?;
+    let task = env.task(actor.id(), "unlink actor")?;
+    assert_eq!(
+        task.snapshot.root_class.as_deref(),
+        Some("restored_or_unknown_root")
+    );
+    assert_eq!(task.snapshot.admitted_entry_rule_id, 0);
+    let effects = EffectCheck::new(&env, task)?;
+
+    actor.send(b"unlink\n")?;
+    actor.wait_name(
+        actor.id(),
+        &format!("effect-{}", libc::EACCES),
+        "unlink result",
+        Duration::from_secs(5),
+    )?;
+    assert!(
+        target.exists(),
+        "denied unlink removed {}",
+        target.display()
+    );
+
+    let effect = effects.wait(
+        &env,
+        "UNRESOLVED_OBJECT",
+        F::File,
+        O::Unlink,
+        -libc::EACCES,
+        "unlink evidence",
+    )?;
+    assert_eq!(effect.exact_object_key_id, 0);
+    assert_eq!(effect.composite_atom_id, 0);
+
+    actor.send(b"release\n")?;
+    actor.wait_gone(actor.id(), "unlink actor exit")?;
+    actor.stop()?;
+    init.stop()?;
+    env.stop()
+}
