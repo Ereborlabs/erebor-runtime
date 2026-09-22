@@ -3,7 +3,10 @@ use std::ffi::{OsStr, OsString};
 use std::mem::size_of;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 
 use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
@@ -81,6 +84,7 @@ pub struct NodePolicyGenerationOwner {
     generation_semantics: BTreeMap<u64, GenerationSemantics>,
     dynamic_rows: BTreeMap<&'static str, BTreeSet<Vec<u8>>>,
     exception_authority: Mutex<ExceptionAuthorityOwner>,
+    retirement_pending: AtomicBool,
 }
 
 pub(crate) struct PolicyActivationReceiptV1 {
@@ -1139,7 +1143,7 @@ impl NodePolicyGenerationOwner {
             )?;
         }
         exception_authority.reconcile(host, now_utc_ns)?;
-        reconcile_generation_retirement(host, node_boot_id, label_epoch)?;
+        let retirement_pending = reconcile_generation_retirement(host, node_boot_id, label_epoch)?;
         let mut generation_semantics = BTreeMap::new();
         for (generation, semantics) in retained_generation_semantics {
             if host
@@ -1174,6 +1178,7 @@ impl NodePolicyGenerationOwner {
             generation_semantics,
             dynamic_rows,
             exception_authority: Mutex::new(exception_authority),
+            retirement_pending: AtomicBool::new(retirement_pending),
         };
         let publication: Result<()> = (|| {
             for generation in generations.values() {
@@ -1992,8 +1997,13 @@ impl NodePolicyGenerationOwner {
                 .build()
             })?
             .reconcile(host, current_utc_ns()?)?;
-        reconcile_generation_retirement(host, self.node_boot_id, self.label_epoch)?;
+        let pending = reconcile_generation_retirement(host, self.node_boot_id, self.label_epoch)?;
+        self.retirement_pending.store(pending, Ordering::Release);
         Ok(true)
+    }
+
+    pub(crate) fn retirement_pending(&self) -> bool {
+        self.retirement_pending.load(Ordering::Acquire)
     }
 
     #[cfg(feature = "test-support")]
@@ -3991,7 +4001,8 @@ fn reconcile_generation_retirement(
     host: &KernelHost,
     node_boot_id: Id128V1,
     label_epoch: u64,
-) -> Result<()> {
+) -> Result<bool> {
+    let mut pending = false;
     let active_generations = host
         .map_keys("active_profile_generations")
         .context(InterceptorSnafu)?
@@ -4086,11 +4097,12 @@ fn reconcile_generation_retirement(
         if descriptor.state == PolicyGenerationStateV1::Retiring
             && generation_has_retained_authority(host, generation)?
         {
+            pending = true;
             continue;
         }
         retire_generation_rows(host, generation, &mut descriptor, &descriptor_key)?;
     }
-    Ok(())
+    Ok(pending)
 }
 
 fn generation_has_retained_authority(host: &KernelHost, generation: u64) -> Result<bool> {

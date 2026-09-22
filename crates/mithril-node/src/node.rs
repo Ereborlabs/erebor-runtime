@@ -868,7 +868,8 @@ impl NodeChassis {
         identity: &NativeSecurityStateOwner,
         policy_authority_present: bool,
     ) -> Result<bool> {
-        if let Some(policy) = policy {
+        let mut policy = policy;
+        if let Some(policy) = policy.as_deref_mut() {
             identity.set_effect_policy(host, policy_authority_present)?;
             policy.reconcile_cri_exact_bindings(config, host, bindings)?;
             bindings.adopt_activated_profiles(host, &config.workload_bindings)?;
@@ -877,6 +878,9 @@ impl NodeChassis {
         let recovery_barrier_observed = bindings.has_recovering_binding();
         identity.recover_tasks(host, policy_authority_present)?;
         bindings.read_back_recovered_activations(host)?;
+        if let Some(policy) = policy.filter(|_| recovery_barrier_observed) {
+            policy.reconcile_cri_exact_bindings(config, host, bindings)?;
+        }
         Ok(recovery_barrier_observed)
     }
 
@@ -1453,6 +1457,13 @@ impl NodeChassis {
                                 }
                             }
                             () = policy_work.pacing.wait_until_ready(&mut policy_poll) => {
+                                match (self.policy.as_ref(), self.host.as_mut()) {
+                                    (Some(policy), Some(host)) if policy.retirement_pending() =>
+                                    {
+                                        policy.reconcile_policy_lifecycle(host)?;
+                                    }
+                                    _ => {}
+                                }
                                 // Ready-only policy RPCs wait while the same session reports
                                 // a local identity or evidence readiness failure.
                                 if !identity_healthy || !evidence_healthy {

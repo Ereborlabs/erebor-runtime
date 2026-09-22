@@ -2119,6 +2119,28 @@ test does not close a row when its physical condition or an assertion changed.
         retained descriptor, target, and result field after all platforms
         pass. The 12 focused child-fixture tests and strict crate Clippy pass
         on 2026-09-22.
+    - [x] Complete exact mount-policy installation in the same real recovery
+      operation. A recovering binding is not an exact-object target until BPF
+      commits it as active recovered. The Node now installs its exact rows
+      after that commit. A quiet CRI event stream still does no work. The
+      unchanged eight-test mount-late lifecycle passed on Host in 97.44
+      seconds, direct `runc` in 154.01 seconds, and Kubernetes in 258.75
+      seconds on 2026-09-22.
+    - [x] Retire an inactive policy generation after its last task exits. A
+      policy activation records pending retirement. The existing policy
+      control tick retries lifecycle cleanup only while retirement is pending.
+      A quiet Node does not scan CRI inventory or BPF maps. The unchanged
+      terminal-evidence test passed on Host in 43.53 seconds, direct `runc` in
+      48.71 seconds, and Kubernetes in 96.15 seconds on 2026-09-22.
+    - [ ] Run the complete Host, direct-`runc`, and Kubernetes matrices after
+      the create, chmod, and truncate migrations and the recovery corrections.
+      - [x] The complete Host matrix passed all 22 lifecycle groups.
+      - [x] The complete direct-`runc` matrix passed all 21 lifecycle groups.
+        The local build artifacts disappeared during its first identity run.
+        After the existing hook and test binary were rebuilt, the complete
+        25-case identity lifecycle passed in 551.56 seconds. All later groups
+        passed without another artifact loss.
+      - [ ] Pass the complete Kubernetes matrix.
     - [ ] Replace unlink. Require File/Unlink and the target to remain.
       - [ ] Pass Host and commit it.
       - [ ] Pass direct `runc` and commit it.
