@@ -313,3 +313,74 @@ fn unknown_link_is_denied<P: Platform>() -> TestResult<()> {
     init.stop()?;
     env.stop()
 }
+
+#[platform_test(host)]
+#[lifecycle = file_rename]
+fn unknown_rename_is_denied<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("unknown-rename")?;
+    env.start_control()?;
+    env.stop_node()?;
+    let source = env.work().join("mutation-source");
+    let target = env.work().join("rename-target");
+    fs::write(&source, b"mutation\n")?;
+    let mut init = env.start_actor("ready.py", &[])?;
+    env.place(init.id())?;
+    let args = [
+        "/fixtures/file_mutation.py",
+        "/work",
+        "rename",
+        "/work/mutation-source",
+        "/work/rename-target",
+    ];
+    let mut actor = env.add_actor("python", &args)?;
+    actor.ready()?;
+    env.place(actor.id())?;
+    env.install_policy("python_policy.json")?;
+    env.start_node()?;
+    env.sync_policy()?;
+    env.node_ready()?;
+    env.running(init.id())?;
+    env.recovered(init.id(), "file-mutation workload")?;
+    let task = env.task(actor.id(), "rename actor")?;
+    assert_eq!(
+        task.snapshot.root_class.as_deref(),
+        Some("restored_or_unknown_root")
+    );
+    assert_eq!(task.snapshot.admitted_entry_rule_id, 0);
+    let effects = EffectCheck::new(&env, task)?;
+
+    actor.send(b"rename\n")?;
+    actor.wait_name(
+        actor.id(),
+        &format!("effect-{}", libc::EACCES),
+        "rename result",
+        Duration::from_secs(5),
+    )?;
+    assert!(
+        source.exists(),
+        "denied rename removed {}",
+        source.display()
+    );
+    assert!(
+        !target.exists(),
+        "denied rename created {}",
+        target.display()
+    );
+
+    let effect = effects.wait(
+        &env,
+        "UNRESOLVED_OBJECT",
+        F::File,
+        O::Rename,
+        -libc::EACCES,
+        "rename evidence",
+    )?;
+    assert_eq!(effect.exact_object_key_id, 0);
+    assert_eq!(effect.composite_atom_id, 0);
+
+    actor.send(b"release\n")?;
+    actor.wait_gone(actor.id(), "rename actor exit")?;
+    actor.stop()?;
+    init.stop()?;
+    env.stop()
+}

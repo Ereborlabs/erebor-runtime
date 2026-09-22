@@ -2193,7 +2193,9 @@ test does not close a row when its physical condition or an assertion changed.
         target, and result field after all three platforms pass.
     - [ ] Replace rename. Require File/Rename, the source to remain, and the
       target to stay absent.
-      - [ ] Pass Host and commit it.
+      - [x] Pass Host and commit it. The 68-line test passed in 28.31 seconds
+        on 2026-09-22. It preserved the recovered external actor, exact task
+        attribution, source, absent target, and zero policy object IDs.
       - [ ] Pass direct `runc` and commit it.
       - [ ] Pass Kubernetes and commit it.
       - [ ] Remove only the legacy rename request, dispatch arm, assertion,
