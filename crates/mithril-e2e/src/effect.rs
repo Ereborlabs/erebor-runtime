@@ -412,7 +412,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub anonymous_read_mmap_allowed: bool,
     pub pkey_executable_mprotect_hard_closed: bool,
     pub pkey_read_mprotect_allowed: bool,
-    pub file_truncate_hard_closed: bool,
     pub file_unlink_hard_closed: bool,
     pub file_link_hard_closed: bool,
     pub file_rename_hard_closed: bool,
@@ -1530,12 +1529,11 @@ impl EffectTestRunner {
         let external_mount_namespace = ExternalMountNamespace::acquire(fixture.pid())?;
         external_mount_namespace.bind_mount(&path_tree_root, &path_tree_preexisting_bind_target)?;
         external_mount_namespace.bind_mount(&allowed_bind_source, &allowed_bind_target)?;
-        let truncate_target = paths.mutation_root.join("truncate-target");
         let unlink_target = paths.mutation_root.join("unlink-target");
         let mutation_source = paths.mutation_root.join("mutation-source");
         let link_target = paths.mutation_root.join("link-target");
         let rename_target = paths.mutation_root.join("rename-target");
-        fixture.prepare_operations(&paths, &truncate_target)?;
+        fixture.prepare_operations(&paths)?;
         let shared_mmap_target_pid = fixture.shared_mmap_target_pid()?;
         let unix_stream_peer_pid = fixture.prepare_unix_stream_target()?;
         if protect {
@@ -2498,32 +2496,6 @@ impl EffectTestRunner {
                 None,
             )?;
         }
-        let truncate_length = fs::metadata(&truncate_target)
-            .context(IoSnafu {
-                path: &truncate_target,
-            })?
-            .len();
-        require_hard_close(
-            &mut fixture,
-            &reader,
-            &observations,
-            HardClosedOperation::Truncate,
-            "UNRESOLVED_OBJECT",
-            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Setattr),
-            "file truncation",
-        )?;
-        ensure!(
-            fs::metadata(&truncate_target)
-                .context(IoSnafu {
-                    path: &truncate_target,
-                })?
-                .len()
-                == truncate_length,
-            InvalidInputSnafu {
-                path: &truncate_target,
-                reason: "denied truncate changed the file length",
-            }
-        );
         require_hard_close(
             &mut fixture,
             &reader,
@@ -3822,7 +3794,6 @@ impl EffectTestRunner {
             anonymous_read_mmap_allowed: true,
             pkey_executable_mprotect_hard_closed: true,
             pkey_read_mprotect_allowed: true,
-            file_truncate_hard_closed: true,
             file_unlink_hard_closed: true,
             file_link_hard_closed: true,
             file_rename_hard_closed: true,

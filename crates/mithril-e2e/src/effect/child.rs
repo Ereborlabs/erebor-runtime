@@ -152,7 +152,6 @@ enum ChildRequest {
         path: PathBuf,
     },
     PrepareHardClosed {
-        truncate_path: PathBuf,
         exec_path: PathBuf,
         allowed_exec_path: PathBuf,
         script_path: PathBuf,
@@ -213,7 +212,6 @@ pub(super) enum PreparedOperation {
     InheritedUnixStreamSend,
     UnixStreamStalePeer,
     UnixStreamUnmatched,
-    Truncate,
     Unlink { path: PathBuf },
     Link { source: PathBuf, target: PathBuf },
     Rename { source: PathBuf, target: PathBuf },
@@ -761,13 +759,8 @@ impl EffectProcessFixture {
         }
     }
 
-    pub(super) fn prepare_operations(
-        &mut self,
-        paths: &EffectPaths,
-        truncate_path: &Path,
-    ) -> Result<()> {
+    pub(super) fn prepare_operations(&mut self, paths: &EffectPaths) -> Result<()> {
         match self.request(&ChildRequest::PrepareHardClosed {
-            truncate_path: truncate_path.to_path_buf(),
             exec_path: paths.exec_target.clone(),
             allowed_exec_path: paths.allowed_exec_target.clone(),
             script_path: paths.script_target.clone(),
@@ -1410,7 +1403,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 false,
             ),
             ChildRequest::PrepareHardClosed {
-                truncate_path,
                 exec_path,
                 allowed_exec_path,
                 script_path,
@@ -1420,7 +1412,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 mount_source,
                 move_mount_target,
             } => match PreparedOperations::new(
-                &truncate_path,
                 &exec_path,
                 &allowed_exec_path,
                 &script_path,
@@ -1599,7 +1590,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     let propagation_source = root.join("propagation-source");
     let propagation_target = source.join("propagation-target");
     let propagation_marker = propagation_target.join("propagated-marker");
-    let truncate_target = root.join("truncate-target");
     let unlink_target = root.join("unlink-target");
     let mutation_source = root.join("mutation-source");
     fs::create_dir(&source).context(IoSnafu { path: &source })?;
@@ -1634,9 +1624,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
             path: &deleted_exec_target,
         },
     )?;
-    fs::write(&truncate_target, b"truncate\n").context(IoSnafu {
-        path: &truncate_target,
-    })?;
     fs::write(&unlink_target, b"unlink\n").context(IoSnafu {
         path: &unlink_target,
     })?;
@@ -2004,7 +1991,6 @@ struct PreparedOperations {
     mount_tree: fs::File,
     ioctl_file: fs::File,
     unsupported_ioctl_file: fs::File,
-    truncate_file: fs::File,
     unix_stream_path: PathBuf,
     unix_stream_signal: Option<SharedMailbox>,
     unix_stream_signal_path: PathBuf,
@@ -2018,7 +2004,6 @@ struct PreparedOperations {
 impl PreparedOperations {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        truncate_path: &Path,
         exec_path: &Path,
         allowed_exec_path: &Path,
         script_path: &Path,
@@ -2127,12 +2112,6 @@ impl PreparedOperations {
                 source,
                 location: snafu::location!(),
             })?;
-        let truncate_file = fs::OpenOptions::new()
-            .write(true)
-            .open(truncate_path)
-            .context(IoSnafu {
-                path: truncate_path,
-            })?;
         let unix_stream_path =
             PathBuf::from(format!("/tmp/mithril-effect-{}.sock", std::process::id()));
         let unix_stream_signal_path = secret_path
@@ -2213,7 +2192,6 @@ impl PreparedOperations {
             mount_tree,
             ioctl_file,
             unsupported_ioctl_file,
-            truncate_file,
             unix_stream_path,
             unix_stream_signal: Some(unix_stream_signal),
             unix_stream_signal_path,
@@ -2438,10 +2416,6 @@ impl PreparedOperations {
                             .map_or_else(error_outcome, |()| target.roundtrip())
                     })
             }
-            PreparedOperation::Truncate => match self.truncate_file.set_len(0) {
-                Ok(()) => allowed_outcome(),
-                Err(error) => error_outcome(error),
-            },
             PreparedOperation::Unlink { path } | PreparedOperation::SelfProtect { path } => {
                 match fs::remove_file(path) {
                     Ok(()) => allowed_outcome(),

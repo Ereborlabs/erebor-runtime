@@ -2105,7 +2105,7 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Remove only the legacy setattr request, dispatch arm, assertion,
         target, and result field after all three platforms pass. The focused
         child-fixture tests and strict crate Clippy pass on 2026-09-22.
-    - [ ] Replace truncate. Require File/Setattr and unchanged file length.
+    - [x] Replace truncate. Require File/Setattr and unchanged file length.
       - [x] Pass Host and commit it. The 58-line test retained a writable file
         descriptor before Node recovery. Its `ftruncate` denial passed in
         28.68 seconds on 2026-09-22.
@@ -2115,9 +2115,10 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Pass Kubernetes and commit it. The same retained-descriptor test
         passed against the retained real K3s cluster in 70.53 seconds on
         2026-09-22.
-      - [ ] Remove only the legacy truncate request, dispatch arm, assertion,
+      - [x] Remove only the legacy truncate request, dispatch arm, assertion,
         retained descriptor, target, and result field after all platforms
-        pass.
+        pass. The 12 focused child-fixture tests and strict crate Clippy pass
+        on 2026-09-22.
     - [ ] Replace unlink. Require File/Unlink and the target to remain.
       - [ ] Pass Host and commit it.
       - [ ] Pass direct `runc` and commit it.
