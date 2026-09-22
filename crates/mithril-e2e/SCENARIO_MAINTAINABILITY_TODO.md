@@ -194,10 +194,10 @@ reimplement a production owner operation.
   groups. `identity`, `identity_physical`, `mount_late`, `mount_alias`, and
   `exception` already share compatible tests. The other 17 groups contain one
   test each and require baseline review.
-- [ ] Restore the baseline Node-first order for unknown create, chmod, and
-  truncate checks. Give each actor a declared entry, move one test at a time
-  into `identity`, pass Host, direct `runc`, and Kubernetes, and commit each
-  test separately.
+- [x] Keep separate pristine-start lifecycles for unknown create, chmod, and
+  truncate recovery checks. The pre-TODO probe started the actor before it
+  replaced the kernel host and activated policy. A Node-first create trial
+  changed the expected `EACCES` result to success and was reverted.
 - [ ] Audit `external_roots`, the unmatched signal and ptrace checks, and each
   recovery-named singleton against commit `95775f48`. Move a test into a
   shared lifecycle when its original behavior does not require a distinct
