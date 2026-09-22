@@ -152,13 +152,20 @@ reimplement a production owner operation.
 - Put the lifecycle and platform in each generated leaf test name, such as
   `identity_host`. A launcher selects this suffix to run one lifecycle and one
   platform in a process. Parent module names do not control lifecycle order.
-- Give an omitted lifecycle a unique name for that scenario. Give recovery,
-  outage, restart, replacement, runtime integration, retained-state, owner
-  cleanup, and cumulative-health tests a dedicated lifecycle.
+- Share a named lifecycle between all tests that can use the same retained
+  Control, Node, and runtime integration. A lifecycle is a resource boundary,
+  not a scenario label. An omitted lifecycle is temporary until the test is
+  classified.
+- Use a dedicated lifecycle only when a test requires an incompatible owner
+  start, stop, outage, restart, or retained-state order. Compare the test with
+  the pre-TODO baseline before adding that boundary.
 - Give each scenario that starts an actor before the first Node admission a
   separate lifecycle. After the runtime gate is installed, a stopped Node
   must make a new container fail closed. Do not weaken that production gate
   so two pristine-start recovery scenarios can share one lifecycle.
+- Do not change a Node-first baseline check into a recovery check only to make
+  its actor executable. Declare the required actor entry in that test policy,
+  keep the original production order, and reuse the compatible lifecycle.
 - Do not infer a lifecycle from a scenario name, environment variable, module
   position, or runtime branch. Do not select a lifecycle in a scenario body.
 - Do not define platform-specific lifecycle globals. The attribute supplies
@@ -183,6 +190,18 @@ reimplement a production owner operation.
   state, owned paths, and actor diagnostics.
 - Keep exact single-test invocation valid. It must initialize its lifecycle,
   run one scenario, perform per-test cleanup, and tear down retained resources.
+- [x] Audit the current lifecycle names. The suite has 22 platform lifecycle
+  groups. `identity`, `identity_physical`, `mount_late`, `mount_alias`, and
+  `exception` already share compatible tests. The other 17 groups contain one
+  test each and require baseline review.
+- [ ] Restore the baseline Node-first order for unknown create, chmod, and
+  truncate checks. Give each actor a declared entry, move one test at a time
+  into `identity`, pass Host, direct `runc`, and Kubernetes, and commit each
+  test separately.
+- [ ] Audit `external_roots`, the unmatched signal and ptrace checks, and each
+  recovery-named singleton against commit `95775f48`. Move a test into a
+  shared lifecycle when its original behavior does not require a distinct
+  owner order. Keep a singleton only with a concrete incompatible order.
 - [x] Reject concurrent lifecycle Nodes on one host. A physical interleave
   probe started lifecycle A and then lifecycle B. Production rejected B
   because `/run/erebor-interceptor/owner.lock` was owned. This is the required
