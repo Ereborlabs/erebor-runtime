@@ -2109,7 +2109,9 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Pass Host and commit it. The 58-line test retained a writable file
         descriptor before Node recovery. Its `ftruncate` denial passed in
         28.68 seconds on 2026-09-22.
-      - [ ] Pass direct `runc` and commit it.
+      - [x] Pass direct `runc` and commit it. The same retained-descriptor test
+        passed through stock `runc` and the production OCI hook in 34.86
+        seconds on 2026-09-22.
       - [ ] Pass Kubernetes and commit it.
       - [ ] Remove only the legacy truncate request, dispatch arm, assertion,
         retained descriptor, target, and result field after all platforms
