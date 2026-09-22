@@ -212,7 +212,6 @@ pub(super) enum PreparedOperation {
     InheritedUnixStreamSend,
     UnixStreamStalePeer,
     UnixStreamUnmatched,
-    Link { source: PathBuf, target: PathBuf },
     Rename { source: PathBuf, target: PathBuf },
     SelfProtect { path: PathBuf },
 }
@@ -2412,10 +2411,6 @@ impl PreparedOperations {
                     })
             }
             PreparedOperation::SelfProtect { path } => match fs::remove_file(path) {
-                Ok(()) => allowed_outcome(),
-                Err(error) => error_outcome(error),
-            },
-            PreparedOperation::Link { source, target } => match fs::hard_link(source, target) {
                 Ok(()) => allowed_outcome(),
                 Err(error) => error_outcome(error),
             },

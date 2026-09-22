@@ -2179,7 +2179,7 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Remove only the legacy unlink request, dispatch branch, assertion,
         target, and result field after all three platforms pass. The shared
         self-protection unlink branch remains.
-    - [ ] Replace hard-link creation. Require File/Link, the source to remain,
+    - [x] Replace hard-link creation. Require File/Link, the source to remain,
       and the target to stay absent.
       - [x] Pass Host and commit it. The 60-line test passed in 27.97 seconds
         on 2026-09-22. It preserved the recovered external actor, exact task
@@ -2189,7 +2189,7 @@ test does not close a row when its physical condition or an assertion changed.
         2026-09-22.
       - [x] Pass Kubernetes and commit it. The unchanged test passed in 72.00
         seconds against the retained real K3s cluster on 2026-09-22.
-      - [ ] Remove only the legacy link request, dispatch arm, assertion,
+      - [x] Remove only the legacy link request, dispatch arm, assertion,
         target, and result field after all three platforms pass.
     - [ ] Replace rename. Require File/Rename, the source to remain, and the
       target to stay absent.
