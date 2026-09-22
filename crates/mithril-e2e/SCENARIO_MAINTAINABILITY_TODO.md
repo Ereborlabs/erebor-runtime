@@ -2155,7 +2155,7 @@ test does not close a row when its physical condition or an assertion changed.
       A quiet Node does not scan CRI inventory or BPF maps. The unchanged
       terminal-evidence test passed on Host in 43.53 seconds, direct `runc` in
       48.71 seconds, and Kubernetes in 96.15 seconds on 2026-09-22.
-    - [ ] Run the complete Host, direct-`runc`, and Kubernetes matrices after
+    - [x] Run the complete Host, direct-`runc`, and Kubernetes matrices after
       the create, chmod, and truncate migrations and the recovery corrections.
       - [x] The complete Host matrix passed all 22 lifecycle groups.
       - [x] The complete direct-`runc` matrix passed all 21 lifecycle groups.
@@ -2163,7 +2163,10 @@ test does not close a row when its physical condition or an assertion changed.
         After the existing hook and test binary were rebuilt, the complete
         25-case identity lifecycle passed in 551.56 seconds. All later groups
         passed without another artifact loss.
-      - [ ] Pass the complete Kubernetes matrix.
+      - [x] The complete Kubernetes matrix passed all 22 lifecycle groups on
+        2026-09-22. The 25-test identity lifecycle passed in 771.73 seconds.
+        The remaining groups passed without a source change. The final
+        `workload_recovery` group passed in 69.97 seconds.
     - [ ] Replace unlink. Require File/Unlink and the target to remain.
       - [ ] Pass Host and commit it.
       - [ ] Pass direct `runc` and commit it.
