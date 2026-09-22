@@ -23,6 +23,7 @@ pub const KUBERNETES_NODE_UID_ANNOTATION: &str = "mithril.erebor.dev/node-uid";
 pub const KUBERNETES_NODE_BOOT_ANNOTATION: &str = "mithril.erebor.dev/node-boot-id";
 pub const KUBERNETES_LABEL_EPOCH_ANNOTATION: &str = "mithril.erebor.dev/label-epoch";
 pub const KUBERNETES_NOT_READY_TAINT: &str = "mithril.erebor.dev/not-ready";
+const NODE_PATCH_LIMIT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -236,10 +237,12 @@ impl KubernetesNodeReadinessOwner {
         } else {
             node_projection_patch(node, constraints, session)
         };
-        let result = nodes
-            .patch(&name, &PatchParams::default(), &Patch::Merge(&patch))
-            .await;
-        if let (Ok(projected), Some(decommissioning)) = (result, decommissioning) {
+        let result = tokio::time::timeout(
+            NODE_PATCH_LIMIT,
+            nodes.patch(&name, &PatchParams::default(), &Patch::Merge(&patch)),
+        )
+        .await;
+        if let (Ok(Ok(projected)), Some(decommissioning)) = (result, decommissioning) {
             if node_has_decommission_quarantine(&projected, &decommissioning) {
                 let _result = control
                     .confirm_node_decommission_quarantine(&decommissioning)
@@ -501,7 +504,9 @@ fn kubernetes_dns_name_is_valid(value: &str) -> bool {
 mod tests {
     use std::collections::BTreeMap;
     use std::convert::Infallible;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::time::Duration;
 
     use axum::body::Body;
     use axum::http::{header, HeaderValue, Method, Request, Response};
@@ -929,6 +934,94 @@ mod tests {
         assert!(requests
             .iter()
             .any(|(_, uri)| uri.contains("continue=next")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hung_node_patch_is_retried() -> crate::Result<()> {
+        let patches = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::clone(&patches);
+        let service = service_fn(move |request: Request<KubeBody>| {
+            let calls = Arc::clone(&calls);
+            async move {
+                let path = request.uri().path();
+                let value = if request.method() == Method::PATCH {
+                    if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                        std::future::pending::<()>().await;
+                    }
+                    json!({
+                        "apiVersion": "v1",
+                        "kind": "Node",
+                        "metadata": {"name": "node-a", "uid": "node-uid"}
+                    })
+                } else if path.ends_with("/daemonsets/mithril-node") {
+                    json!({
+                        "apiVersion": "apps/v1",
+                        "kind": "DaemonSet",
+                        "metadata": {"name": "mithril-node", "resourceVersion": "1"},
+                        "spec": {
+                            "selector": {},
+                            "template": {"spec": {"containers": []}}
+                        }
+                    })
+                } else if request
+                    .uri()
+                    .query()
+                    .is_some_and(|query| query.contains("watch=true"))
+                {
+                    json!({})
+                } else {
+                    json!({
+                        "apiVersion": "v1",
+                        "kind": "NodeList",
+                        "metadata": {"resourceVersion": "1"},
+                        "items": [{
+                            "apiVersion": "v1",
+                            "kind": "Node",
+                            "metadata": {"name": "node-a", "uid": "node-uid"}
+                        }]
+                    })
+                };
+                let mut response = Response::new(Body::from(value.to_string()));
+                response.headers_mut().insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                );
+                Ok::<_, Infallible>(response)
+            }
+        });
+        let owner = KubernetesNodeReadinessOwner::new(KubernetesNodeControlConfigV1 {
+            daemon_set_namespace: "mithril-system".to_owned(),
+            daemon_set_name: "mithril-node".to_owned(),
+            session_ttl_seconds: 30,
+            reconcile_interval_ms: 10,
+        })?;
+        let control = ControlPlane::new(
+            Vec::new(),
+            TrustGenerationV1 {
+                generation: 1,
+                bundle_digest: "0".repeat(64),
+                policy_issuer_sequence_epoch: 0,
+                policy_signers: Vec::new(),
+            },
+        );
+        let task = tokio::spawn(async move {
+            owner
+                .run_client(Client::new(service, "default"), control)
+                .await;
+        });
+        tokio::time::timeout(Duration::from_secs(7), async {
+            while patches.load(Ordering::SeqCst) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .map_err(|_| crate::Error::InvalidConfiguration {
+            reason: "the Kubernetes Node patch did not retry".to_owned(),
+            location: snafu::Location::default(),
+        })?;
+        task.abort();
+        assert!(patches.load(Ordering::SeqCst) >= 2);
         Ok(())
     }
 }

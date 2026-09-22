@@ -296,6 +296,13 @@ reimplement a production owner operation.
   The seven CRI runtime tests passed. The unchanged churn scenario passed on
   Host in 83.58 seconds, direct `runc` in 135.47 seconds, and Kubernetes in
   213.48 seconds on 2026-09-21.
+- [x] Recover Node readiness projection when the Kubernetes API restarts during
+  the first Node patch. The Helm runtime installer restarts K3s after it starts
+  the Control and Node Pods. An unbounded patch could keep the readiness owner
+  blocked after K3s recovered. The lightweight owner test stalls the first
+  patch and requires a second patch after the five-second deadline. All 10
+  Node-readiness owner tests passed. The three Kubernetes exception tests then
+  passed in 146.09 seconds on 2026-09-22.
 - Do not add a test registry, custom test language, replacement harness,
   builder, factory, or scenario-specific lifecycle implementation.
 - Verify serial lifecycle tests first. Enable bounded parallel tests only
