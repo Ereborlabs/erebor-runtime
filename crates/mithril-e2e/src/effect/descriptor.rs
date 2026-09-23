@@ -5,7 +5,7 @@ use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn retained_descriptor_is_enforced<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("retained-descriptor")?;

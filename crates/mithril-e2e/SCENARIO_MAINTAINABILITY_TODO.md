@@ -1996,7 +1996,11 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The unchanged scenario passed
       through stock `runc` and the production OCI hook in 38.26 seconds on
       2026-09-22.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The unchanged scenario passed against
+      the retained real K3s cluster in 68.95 seconds on 2026-09-22. The first
+      physical run found a stale live CRD that did not contain the committed
+      `exact` field, so Kubernetes pruned it. Refreshing that CRD from the
+      checked-in Helm manifest preserved the exact selectors.
     - [ ] Remove only the matching legacy prepared-descriptor actions, result
       fields, mailbox operations, and fixture owner after all three platforms
       pass. Keep the independent-process mapping cases.
