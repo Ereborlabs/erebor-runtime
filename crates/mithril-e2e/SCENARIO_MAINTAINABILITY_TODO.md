@@ -2375,7 +2375,9 @@ test does not close a row when its physical condition or an assertion changed.
       retired cleanly. The test found that file-descriptor release tombstoned
       each socket before TCP emitted its closing packet. The approved fix moves
       cleanup to the kernel socket destruction boundary.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact direct-runc test passed
+      in 29.12 seconds with the same actor, policy, assertions, and clean
+      retirement.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy result fields and standalone boolean
       assertions. Keep the socket operations as setup while sendmsg, sendfile,
