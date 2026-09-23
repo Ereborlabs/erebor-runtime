@@ -194,7 +194,7 @@ installs the pinned K3s version, and waits for two Ready nodes. It pins one peer
 Pod to each node and starts the Rust peer server inside each Pod network
 namespace. The opposite host runs the production physical network probe
 against the remote Pod IP. Both directions must deliver allowed TCP and UDP,
-deny the unapproved port without peer receipt, and pass all 13 network fixture
+deny the unapproved port without peer receipt, and pass all 12 network fixture
 rows. The companion then removes its namespace, K3s installations, and owned
 VMs.
 

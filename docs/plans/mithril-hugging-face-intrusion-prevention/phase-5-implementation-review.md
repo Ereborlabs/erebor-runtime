@@ -15,7 +15,7 @@ network path.
 
 ## Review Claim
 
-The implementation closes one qualified x86_64 network tier. All 13 allocated
+The implementation closes one qualified x86_64 network tier. All 12 allocated
 fixtures have physical `PASS` results in the single-host probe and in both
 directions of the two-node K3s Flannel probe. Each row has a negative oracle,
 a legitimate positive control, and the required lifecycle assertion.
@@ -30,7 +30,7 @@ The advertised path has these properties:
 - a created socket keeps creator authority in kernel socket storage;
 - connect, send, and receive intersect current-actor and retained creator
   decisions;
-- selected socket controls have a separate exact default;
+- role policy has no socket-option rules;
 - accepted-socket and cross-network-namespace transfers preserve creator,
   accepter, current-actor, and namespace authority;
 - delegated requests preserve request identity and final destination;
@@ -59,7 +59,7 @@ Do not infer any of these broader claims:
 
 1. Read the [phase result](./phase-5-process-aware-network-plane.md#phase-result)
    and [closure decision](./phase-5-closure-matrix.md#closure-decision). Start
-   with the 13-row claim and its explicit topology and protocol limits.
+   with the 12-row claim and its explicit topology and protocol limits.
 2. Read the architecture chapters for process-aware network enforcement,
    final-destination policy, response floors, and delivery qualification in
    the [validated architecture](./policy-and-protection-algorithm-architecture-readable.md).
@@ -350,7 +350,7 @@ sequenceDiagram
     H->>B: Run physical probe for Node A Pod IP
     B->>PA: Deliver approved TCP and UDP through Flannel
     B--xPA: Deny the distinct port before peer receipt
-    H->>H: Validate both peer results and both 13-row matrices
+    H->>H: Validate both peer results and both 12-row matrices
     H->>H: Remove namespace, K3s installations, and owned VMs
 ```
 
@@ -363,9 +363,9 @@ sequenceDiagram
 | `lsm/socket_connect` | Reads the explicit destination and retains a flow authorization. | Current and creator destinations and decisions must both allow. |
 | `lsm/socket_sendmsg` | Uses an explicit datagram address or the retained connected peer. | No address fallback can widen a connected or unconnected path. |
 | `lsm/socket_recvmsg` | Uses the retained connected peer for the qualified receive path. | The physical claim covers only the connected TCP receive control. |
-| `lsm/socket_bind`, `socket_listen`, and `socket_accept` | Apply destination or exact control policy to Internet sockets. | Source support does not create a physical claim for every control variant. Unix sockets stay with IPC. |
+| `lsm/socket_bind`, `socket_listen`, and `socket_accept` | Apply address policy and socket lifecycle state to Internet sockets. | Source support does not create a physical claim for every lifecycle variant. Unix sockets stay with IPC. |
 | `fexit/inet_csk_accept` | Labels a returned accepted socket and records its parent socket. | The accepted-socket and namespace-transfer controls must preserve creator, accepter, current actor, and retained namespace authority. |
-| `lsm/socket_setsockopt` | Allows only represented safe options to reach network control policy. | The qualified fixture proves `TCP_NODELAY`; other options do not inherit it. |
+| `lsm/socket_setsockopt` | Does not consume role policy. Linux applies socket-option rules. | Do not claim a Mithril role denial for `SO_MARK` or a separate role allowance for `TCP_NODELAY`. |
 | `lsm/socket_shutdown` | Applies exact control policy and any response floor. | The probe proves post-fence denial. |
 | `cgroup_skb/egress` | Checks retained flow state, packet destination, creator and flow-authorizer handles, and response floor without current-task context. | The local-output DNAT and host-to-remote-Pod Flannel controls prove the tested placements. Other topology claims need separate qualification. |
 | `fentry/__sock_release` | Deletes the exact response floor, decrements creator and flow-authorizer references, and tombstones socket state. | The release fixture must observe a zero generation reference after close. |
@@ -475,7 +475,9 @@ dedicated cgroups. It then performs this assertion sequence:
    Resolver destinations and unrepresented families or protocols deny.
 3. When a remote peer is present, its approved TCP and UDP destinations
    succeed. Its distinct denied port rejects the connection.
-4. `TCP_NODELAY` succeeds, `SO_MARK` denies, and ordinary shutdown succeeds.
+4. The allowed TCP actor sets `TCP_NODELAY` and requests a connection. The
+   role's destination decision allows `Connect`. The socket option has no
+   separate role decision.
 5. Clone and fork holders send on one socket. Final close releases the retained
    reference. A later socket has a new generation.
 6. A narrow actor receives a passed accepted socket but cannot send or receive.

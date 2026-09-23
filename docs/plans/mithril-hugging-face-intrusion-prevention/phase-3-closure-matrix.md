@@ -82,7 +82,6 @@ or active denial is implemented.
 | `NET-RECV-001` | `NETWORK/READ/RECEIVE_SOCKET` → `HARD_DENY_UNSUPPORTED` | Exact simulation. Receive-side remote identity is absent. | Phase 5 receive path | Done |
 | `NET-REWRITE-001` | `NETWORK/CONNECT/REWRITTEN_DESTINATION` → `HARD_DENY_UNSUPPORTED` | Exact simulation. A pre-rewrite destination cannot authorize the final flow. | Phase 5 rewrite and final-flow identity | Done |
 | `NET-SHARED-RESPONSE-002` | `NETWORK/READ/SHARED_SOCKET` → `HARD_DENY_UNSUPPORTED` | Exact simulation. Shared-socket response attribution is absent. | Phase 5 shared response attribution | Done |
-| `NET-SOCKCTL-001` | `NETWORK/CONNECT/SOCKET_CONTROL` → `HARD_DENY_UNSUPPORTED` | Exact simulation. Socket control state is not a positive destination claim. | Phase 5 socket-control model | Done |
 | `NET-SOCKET-LIFE-001` | `NETWORK/CONNECT/SOCKET_LIFETIME` → `HARD_DENY_UNSUPPORTED` | Exact simulation. Socket lifetime, reuse, and final-flow identity remain unqualified. | Phase 5 socket lifecycle | Done |
 
 ## Physical Closure Record

@@ -76,7 +76,6 @@ pub struct NetworkPhysicalProbeBundleV2 {
     pub sendfile_allowed: bool,
     pub splice_allowed: bool,
     pub allowed_receive: bool,
-    pub allowed_socket_control: bool,
     pub whole_socket_fence_installed: bool,
     pub restart_preserved_task_state: bool,
     pub restart_preserved_socket_state: bool,
@@ -96,7 +95,6 @@ pub struct NetworkPhysicalProbeBundleV2 {
     pub io_uring_sqpoll_denied: bool,
     pub tun_tap_setup_denied: bool,
     pub bpf_setup_denied: bool,
-    pub unsafe_socket_control_denied: bool,
     pub accepted_socket_narrow_actor_denied: bool,
     pub accepted_socket_approved_actor_allowed: bool,
     pub cross_namespace_narrow_actor_denied: bool,
@@ -134,7 +132,6 @@ struct NetworkFixtureProof {
     receive: bool,
     rewrite: bool,
     shared_response: bool,
-    socket_control: bool,
     socket_life: bool,
 }
 
@@ -558,14 +555,13 @@ impl NetworkTestRunner {
                 }
                 .build()
             })?;
-        let allowed_socket_control = fixture.network_set_nodelay()?.allowed;
         let allowed_send_received = fixture.network_send(PAYLOAD)?.allowed;
         let allowed_receive = fixture.network_receive()?.allowed;
         ensure!(
-            allowed_socket_control && allowed_send_received && allowed_receive,
+            allowed_send_received && allowed_receive,
             InvalidInputSnafu {
                 path: Path::new("allowed network socket"),
-                reason: "the signed socket control, send, or receive failed",
+                reason: "the signed send or receive failed",
             }
         );
         fixture.network_clone()?;
@@ -574,17 +570,15 @@ impl NetworkTestRunner {
         let sendmsg_allowed = fixture.network_sendmsg(SENDMSG_PAYLOAD)?.allowed;
         let sendfile_allowed = fixture.network_sendfile(&token_path)?.allowed;
         let splice_allowed = fixture.network_splice(&token_path)?.allowed;
-        let unsafe_socket_control_denied = fixture.network_set_mark(7)?.denied();
         ensure!(
             cloned_socket_allowed
                 && inherited_socket_allowed
                 && sendmsg_allowed
                 && sendfile_allowed
-                && splice_allowed
-                && unsafe_socket_control_denied,
+                && splice_allowed,
             InvalidInputSnafu {
                 path: Path::new("network socket variants"),
-                reason: "a socket transfer path, inherited path, or unsafe control failed",
+                reason: "a socket transfer or inherited path failed",
             }
         );
 
@@ -1280,9 +1274,6 @@ impl NetworkTestRunner {
             receive: allowed_receive && accepted_socket_narrow_actor_denied,
             rewrite: rewritten_forbidden_packet_absent && rewritten_allowed_destination_received,
             shared_response: shared_socket_holders_denied,
-            socket_control: allowed_socket_control
-                && unsafe_socket_control_denied
-                && lifecycle_shutdown,
             socket_life: socket_reference_released
                 && cloned_socket_allowed
                 && inherited_socket_allowed
@@ -1330,7 +1321,6 @@ impl NetworkTestRunner {
             sendfile_allowed,
             splice_allowed,
             allowed_receive,
-            allowed_socket_control,
             whole_socket_fence_installed,
             restart_preserved_task_state,
             restart_preserved_socket_state,
@@ -1350,7 +1340,6 @@ impl NetworkTestRunner {
             io_uring_sqpoll_denied,
             tun_tap_setup_denied,
             bpf_setup_denied,
-            unsafe_socket_control_denied,
             accepted_socket_narrow_actor_denied,
             accepted_socket_approved_actor_allowed,
             cross_namespace_narrow_actor_denied,
@@ -2107,11 +2096,6 @@ impl NetworkFixtureProof {
                 "WHOLE_SOCKET_FENCE_DENIED_ALL_SHARED_HOLDERS",
             ),
             (
-                "NET-SOCKCTL-001",
-                self.socket_control,
-                "SAFE_SOCKET_CONTROLS_ALLOWED_AND_UNSAFE_CONTROL_DENIED",
-            ),
-            (
                 "NET-SOCKET-LIFE-001",
                 self.socket_life,
                 "CLONE_FORK_CLOSE_AND_NEW_GENERATION_LIFECYCLE_PROVED",
@@ -2162,11 +2146,10 @@ mod tests {
             receive: true,
             rewrite: true,
             shared_response: true,
-            socket_control: true,
             socket_life: true,
         }
         .results();
-        assert_eq!(results.len(), 13);
+        assert_eq!(results.len(), 12);
         assert_eq!(
             results
                 .iter()

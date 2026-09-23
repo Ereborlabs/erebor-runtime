@@ -93,7 +93,6 @@ enum ChildRequest {
         path: PathBuf,
     },
     NetworkReceive,
-    NetworkSetNoDelay,
     NetworkShutdown,
     NetworkClose,
     NetworkEnterNamespace,
@@ -132,9 +131,6 @@ enum ChildRequest {
         family: i32,
         socket_type: i32,
         protocol: i32,
-    },
-    NetworkSetMark {
-        value: u32,
     },
     NetworkIoUringSqpoll,
     NetworkTunTap,
@@ -556,10 +552,6 @@ impl EffectProcessFixture {
         self.request(&ChildRequest::NetworkReceive)?.try_into()
     }
 
-    pub(super) fn network_set_nodelay(&mut self) -> Result<IoOutcome> {
-        self.request(&ChildRequest::NetworkSetNoDelay)?.try_into()
-    }
-
     pub(super) fn network_shutdown(&mut self) -> Result<IoOutcome> {
         self.request(&ChildRequest::NetworkShutdown)?.try_into()
     }
@@ -692,11 +684,6 @@ impl EffectProcessFixture {
             protocol,
         })?
         .try_into()
-    }
-
-    pub(super) fn network_set_mark(&mut self, value: u32) -> Result<IoOutcome> {
-        self.request(&ChildRequest::NetworkSetMark { value })?
-            .try_into()
     }
 
     pub(super) fn network_io_uring_sqpoll(&mut self) -> Result<IoOutcome> {
@@ -1070,16 +1057,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 )),
                 false,
             ),
-            ChildRequest::NetworkSetNoDelay => (
-                Ok(ChildResponse::Outcome(
-                    prepared_network_stream
-                        .as_ref()
-                        .map_or_else(missing_prepared_network, |stream| {
-                            io_outcome(stream.set_nodelay(true))
-                        }),
-                )),
-                false,
-            ),
             ChildRequest::NetworkShutdown => (
                 Ok(ChildResponse::Outcome(
                     prepared_network_stream
@@ -1284,16 +1261,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                     socket_type,
                     protocol,
                 ))),
-                false,
-            ),
-            ChildRequest::NetworkSetMark { value } => (
-                Ok(ChildResponse::Outcome(
-                    prepared_network_stream
-                        .as_ref()
-                        .map_or_else(missing_prepared_network, |stream| {
-                            network_set_mark(stream.as_raw_fd(), value)
-                        }),
-                )),
                 false,
             ),
             ChildRequest::NetworkIoUringSqpoll => (
@@ -3160,25 +3127,6 @@ fn network_socket_outcome(family: i32, socket_type: i32, protocol: i32) -> IoOut
         // SAFETY: fd is the live descriptor returned by socket.
         unsafe { libc::close(fd) };
         allowed_outcome()
-    }
-}
-
-#[allow(unsafe_code)]
-fn network_set_mark(fd: libc::c_int, value: u32) -> IoOutcome {
-    // SAFETY: value is a live u32 and its size matches SO_MARK.
-    let result = unsafe {
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_MARK,
-            (&raw const value).cast(),
-            std::mem::size_of_val(&value) as libc::socklen_t,
-        )
-    };
-    if result == 0 {
-        allowed_outcome()
-    } else {
-        error_outcome(io::Error::last_os_error())
     }
 }
 

@@ -2370,7 +2370,7 @@ test does not close a row when its physical condition or an assertion changed.
       32 identity cases. Direct runc passed 27 identity cases. Kubernetes
       passed 27 identity cases. Ptrace, signal, and workload recovery passed
       separately on all three platforms.
-  - [ ] Retire `NET-SOCKCTL-001`. Role network policy must use the Cilium
+  - [x] Retire `NET-SOCKCTL-001`. Role network policy uses the Cilium
     boundary. It governs destinations, protocols, ports, and traffic. It does
     not govern socket options.
     - [x] Remove `socketControls` from the public role policy and its compiler.
@@ -2378,7 +2378,7 @@ test does not close a row when its physical condition or an assertion changed.
       connection to an allowed destination. Assert the production `Connect`
       decision. A Linux refusal because no service listens is not a policy
       denial. Do not assert a separate `SETSOCKOPT` decision.
-    - [ ] Do not claim that Mithril denies `SO_MARK`. Linux capability checks
+    - [x] Do not claim that Mithril denies `SO_MARK`. Linux capability checks
       govern that option.
     - [x] Do not change `network_unsupported()` for this migration.
     - [x] Keep the test below 100 lines. The test has 36 lines.
@@ -2390,8 +2390,8 @@ test does not close a row when its physical condition or an assertion changed.
       Host case.
     - [x] Pass Kubernetes and commit it. The physical Kubernetes case passed
       on 2026-09-23 with the same test body, actor, policy, and assertions.
-    - [ ] Remove only the matching legacy actions, fields, and fixture row
-      after all three platforms pass.
+    - [x] Remove only the matching legacy actions, fields, and fixture row
+      after all three platforms pass. The other 12 network fixture rows remain.
 - [ ] `NetworkTestRunner::physical_probe` two-node peer scenario: keep the
   same TCP, UDP, and denied-port operations as `two-node-network.sh`.
 

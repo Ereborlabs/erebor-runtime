@@ -10,11 +10,11 @@
 
 Phase 5 is **Done for the qualified x86_64 network tier**. The current tier
 advertises destination policy for TCP sockets, retained creator authority,
-current-actor intersection, selected socket controls, receive, whole-socket
+current-actor intersection, receive, whole-socket
 response fences, exact socket-reference release, local-output DNAT, and the
 tested bidirectional K3s Flannel route.
 
-The physical result contains one `PASS` classification for each of the 13
+The physical result contains one `PASS` classification for each of the 12
 allocated fixtures. No allocated fixture is `FAIL`, `DEGRADED`, or
 `UNSUPPORTED`.
 
@@ -22,7 +22,7 @@ allocated fixtures. No allocated fixture is `FAIL`, `DEGRADED`, or
 control, and the required lifecycle assertion. The qualified result covers the
 implemented single-host variants for accepted-socket transfer,
 cross-network-namespace transfer, delegated egress, token-read result
-separation, and local-output DNAT. The two-node companion runs the same 13-row
+separation, and local-output DNAT. The two-node companion runs the same 12-row
 probe in both directions against a peer in the remote Pod network namespace.
 
 The tier does not advertise every rewrite topology, arbitrary delegated remote
@@ -34,11 +34,11 @@ families and protocols.
 | Deliverable | Closed result | Exact boundary |
 | --- | --- | --- |
 | `D5.1` | Created Internet sockets retain creator profile generation, socket generation, network namespace, peer, flow authorization, and response identity in kernel socket storage. Accepted, cloned, inherited, and passed sockets follow kernel socket lifetime. Release removes both creator and current-generation references. | The physical tier proves accepted-socket transfer and live-socket duplication into private network namespaces with narrow-deny and approved-allow controls. It does not generalize those controls to every transfer mechanism. |
-| `D5.2` | The policy model and BPF hooks cover Internet socket creation, destination lookup, connect, send, receive, selected controls, shutdown, bind, listen, and accept. Each represented use intersects current-actor and retained creator decisions. An exact destination decision takes precedence over an explicit signed role default. Unix sockets remain with the IPC owner. | The physical tier advertises TCP and UDP on IPv4 and IPv6, connected and unconnected UDP send, signed receive, accepted-socket transfer, selected controls, and release. The standard platform test proves explicit unmatched-connect denial on Host, direct runc, and Kubernetes. Raw, packet, TUN, AF_XDP, RDMA, vsock, netlink, SCTP, MPTCP, and unrepresented asynchronous paths fail closed and remain outside the claim. |
+| `D5.2` | The role policy model covers network destinations, protocols, ports, and traffic. Socket options are not role policy. Each represented traffic use intersects current-actor and retained creator decisions. An exact destination decision takes precedence over an explicit signed role default. Unix sockets remain with the IPC owner. | The physical tier advertises TCP and UDP on IPv4 and IPv6, connected and unconnected UDP send, signed receive, accepted-socket transfer, and release. The standard platform test proves explicit unmatched-connect denial on Host, direct runc, and Kubernetes. Raw, packet, TUN, AF_XDP, RDMA, vsock, netlink, SCTP, MPTCP, and unrepresented asynchronous paths remain outside the claim. |
 | `D5.3` | A cgroup egress program reads retained socket state and has no dependency on a packet-stage current task. IPv4 and IPv6 TCP or UDP parsing, fragment closure, destination lookup, and response-floor lookup are implemented. | The physical probes cover local-output `nftables` DNAT and a bidirectional host-to-remote-Pod route through K3s Flannel. BPF redirect setup and TUN/TAP setup fail closed. The result does not generalize to Pod-origin enforcement, another CNI, an arbitrary service mesh, SNAT, or dynamic route mutation. |
 | `D5.4` | The node can install a whole-socket response floor with insert-only semantics. Later socket operations intersect that floor. The physical probe proves that a later send and shutdown deny, no later bytes reach the server, and final close releases the socket reference. | The tier claims whole-socket scope. It does not claim per-lineage attribution for queued bytes, retransmits, or shared transport state. |
 | `D5.5` | The selected `DENY_DNS_AND_USE_POLICY_RESOLVED_ADDRESSES` mode rejects any policy range that includes port 53. Destination policy remains independent of DNS payload content. | The tier has no DNS parser, qname, answer, CNAME, cardinality, DoT, DoH, or encrypted-protocol semantic claim. The alternate destination-only mode retains an explicit payload gap. |
-| `D5.6` | The standard platform test denies an unclassified destination. The network probe denies resolver destinations, unsafe controls, and narrow transferred actors. It proves signed network paths, delegated egress, governed token reads, and provider receipt as separate results. | The tier does not infer an API verb, bearer purpose, token lineage, or provider result from an allowed TLS destination. The delegated proof covers the exact local proxy protocol in the fixture. |
+| `D5.6` | The standard platform test denies an unclassified destination. The network probe denies resolver destinations and narrow transferred actors. It proves signed network paths, delegated egress, governed token reads, and provider receipt as separate results. | The tier does not infer an API verb, bearer purpose, token lineage, or provider result from an allowed TLS destination. The delegated proof covers the exact local proxy protocol in the fixture. |
 
 ## Appendix C Fixture Closure
 
@@ -55,7 +55,6 @@ families and protocols.
 | `NET-RECV-001` | `PASS` | A signed connected TCP socket receives the server byte. A narrow actor that receives a passed accepted socket cannot receive. |
 | `NET-REWRITE-001` | `PASS` | Probe-owned local-output DNAT maps `198.18.0.1` and `198.18.0.2` to `127.0.0.4`. The forbidden policy mismatch denies before receipt. The allowed rewritten flow reaches the server. |
 | `NET-SHARED-RESPONSE-002` | `PASS` | An accepter and approved receiver retain one accepted socket. A whole-socket fence denies both holders, and the client receives no post-fence bytes. No per-lineage queued-byte claim is made. |
-| `NET-SOCKCTL-001` | `PASS` | `TCP_NODELAY` and ordinary shutdown succeed. `SO_MARK` denies. Shutdown after a whole-socket fence denies. Other controls do not inherit this result. |
 | `NET-SOCKET-LIFE-001` | `PASS` | Clone and fork holders send successfully. One close cannot release shared authority. Final close releases the retained reference, and a later socket has a new generation. |
 
 ## Physical Record

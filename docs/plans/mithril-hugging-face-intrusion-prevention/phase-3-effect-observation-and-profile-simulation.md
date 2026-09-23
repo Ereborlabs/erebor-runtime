@@ -108,7 +108,7 @@ matcher passes its hostile corpus. Policy denial remains physically disabled.
   `HF-011-READ-RESULT-001`, `HF-NET-001`, `IPC-LOCAL-INET-008`,
   `NET-ACCEPT-PASS-001`, `NET-DNS-EXFIL-001`, `NET-NS-PASS-001`,
   `NET-RECV-001`, `NET-REWRITE-001`, `NET-SHARED-RESPONSE-002`,
-  `NET-SOCKCTL-001`, and `NET-SOCKET-LIFE-001`.
+  and `NET-SOCKET-LIFE-001`.
 - Path bind/rename/link/mount ambiguity, pre-existing hard-link alias cache
   equivalence, ordinary-subdirectory limits, and oldest-mount controls must
   accompany `MOUNT-SNAPSHOT-004`, `FILE-IDENTITY-001`, and

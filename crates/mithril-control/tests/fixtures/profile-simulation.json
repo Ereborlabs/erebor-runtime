@@ -38,7 +38,6 @@
     {"case_id":"NET-RECV-001","fixture_id":"NET-RECV-001","actor":"managed-converter","object":"RECEIVE_SOCKET","effect_family":"NETWORK","operation_id":"READ","expected":"HARD_DENY_UNSUPPORTED"},
     {"case_id":"NET-REWRITE-001","fixture_id":"NET-REWRITE-001","actor":"managed-converter","object":"REWRITTEN_DESTINATION","effect_family":"NETWORK","operation_id":"CONNECT","expected":"HARD_DENY_UNSUPPORTED"},
     {"case_id":"NET-SHARED-RESPONSE-002","fixture_id":"NET-SHARED-RESPONSE-002","actor":"managed-converter","object":"SHARED_SOCKET","effect_family":"NETWORK","operation_id":"READ","expected":"HARD_DENY_UNSUPPORTED"},
-    {"case_id":"NET-SOCKCTL-001","fixture_id":"NET-SOCKCTL-001","actor":"managed-converter","object":"SOCKET_CONTROL","effect_family":"NETWORK","operation_id":"CONNECT","expected":"HARD_DENY_UNSUPPORTED"},
     {"case_id":"NET-SOCKET-LIFE-001","fixture_id":"NET-SOCKET-LIFE-001","actor":"managed-converter","object":"SOCKET_LIFETIME","effect_family":"NETWORK","operation_id":"CONNECT","expected":"HARD_DENY_UNSUPPORTED"},
     {"case_id":"HF-002-MANAGED","fixture_id":"HF-002","actor":"managed-converter","object":"PROTECTED_PROC_OBJECT","effect_family":"FILE","operation_id":"OPEN_READ","expected":"WOULD_DENY"},
     {"case_id":"HF-002-EXTERNAL","fixture_id":"HF-002","actor":"external-sandbox","object":"EXTERNAL_ESTATE","effect_family":"FILE","operation_id":"NO_COVERED_EFFECT","expected":"UNRESOLVED_OUTSIDE_AUTHORITY"},

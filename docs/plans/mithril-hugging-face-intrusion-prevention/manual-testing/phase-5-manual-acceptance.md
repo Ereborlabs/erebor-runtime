@@ -53,7 +53,7 @@ crates/mithril-e2e/harness/vm/two-node-network.sh \
    root so it can load BPF programs and create the probe cgroup.
 4. Check that every Boolean physical oracle in
    `network-physical-probe.json` is `true`.
-5. Check that the fixture array has the exact 13 allocated rows and that each
+5. Check that the fixture array has the exact 12 allocated rows and that each
    row is `PASS`. Compare every row with the
    [closure matrix](../phase-5-closure-matrix.md).
 6. Confirm that the script removed the pin root, owner lease, cgroup, and
@@ -65,7 +65,7 @@ crates/mithril-e2e/harness/vm/two-node-network.sh \
    Ready nodes with different boot identities and one peer Pod on each node.
 9. Confirm that the source probe reaches the remote Pod IP through the Flannel
    CNI route in both directions. Allowed TCP and UDP must arrive. The denied
-   port must have no peer receipt. All 13 fixture rows must pass in each
+   port must have no peer receipt. All 12 fixture rows must pass in each
    direction.
 10. Confirm that the harness removes its namespace, K3s installations, and
     both owned VMs. Do not remove an unrelated VM or ownership record.
@@ -89,7 +89,6 @@ oracle and a legitimate positive control in the physical probe.
 | `NET-RECV-001` | receive on a signed connected socket and a passed socket held by a narrower actor | the signed receive succeeds; the narrower actor cannot receive |
 | `NET-REWRITE-001` | install the probe-owned local-output DNAT rules for two documentation-range destinations | the policy mismatch denies the forbidden rewritten flow; the allowed rewritten flow reaches `127.0.0.4` |
 | `NET-SHARED-RESPONSE-002` | retain an accepted socket in the accepter and approved receiver, then install a whole-socket fence | both holders cannot send and the client receives no post-fence bytes |
-| `NET-SOCKCTL-001` | bind, listen, accept, set `TCP_NODELAY`, set `SO_MARK`, and shut down | represented safe controls succeed; `SO_MARK` fails; ordinary shutdown succeeds and fenced shutdown fails |
 | `NET-SOCKET-LIFE-001` | create, clone, fork, inherit, close, reuse a descriptor, and create a new socket generation | live clones and inherited descriptors work; final close releases references; the new socket has a new generation |
 
 ## Encrypted-Channel Claim Limit
@@ -107,7 +106,7 @@ syscall results, server receipt, response-fence result, reference-release
 result, and cleanup result. For the CNI companion, retain the two-node summary,
 Kubernetes node inventory, both directional probe results, and both peer
 results. The qualified tier passes only when all Boolean oracles are true, all
-13 fixture rows have their expected terminal status in every required run, and
+12 fixture rows have their expected terminal status in every required run, and
 the probe-owned resources are absent after cleanup.
 
 The pass rule applies only to the exact delegated-I/O, token-read,

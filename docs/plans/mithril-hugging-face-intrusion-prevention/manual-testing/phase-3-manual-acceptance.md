@@ -292,7 +292,6 @@ cannot be created reliably by hand.
 | `NET-RECV-001` | receive through qualified and unsupported paths | exact receive-stage result or explicit unsupported status |
 | `NET-REWRITE-001` | route through NAT/CNI/mesh/redirect variants | actor-stage candidate and final rewritten destination remain separate |
 | `NET-SHARED-RESPONSE-002` | share established socket across lineages | disclosed socket/flow/cgroup scope; no per-lineage queued-byte claim |
-| `NET-SOCKCTL-001` | bind/listen/accept/shutdown/setsockopt controls | exact socket generation and operation result |
 | `NET-SOCKET-LIFE-001` | create/inherit/pass/reuse/destroy sockets | exact socket live interval/generation; fd or cookie reuse does not inherit state |
 
 ## Required Artifacts And Pass Rule

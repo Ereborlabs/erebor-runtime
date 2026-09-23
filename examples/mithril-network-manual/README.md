@@ -22,7 +22,7 @@ The probe proves these results:
 - clone, fork, inherit, close, descriptor reuse, and generation-reference
   checks follow the kernel socket lifetime.
 
-The result contains one `PASS` row for each of the 13 allocated fixtures. It
+The result contains one `PASS` row for each of the 12 allocated fixtures. It
 does not claim DNS payload parsing, TLS operation semantics, every network
 topology, or every network protocol.
 
@@ -61,7 +61,7 @@ jq . /tmp/mithril-network-review-1/network-physical-probe.json
 ```
 
 The script exits with an error unless every Boolean physical oracle is `true`
-and the exact 13-row fixture list contains only `PASS` results. The result does
+and the exact 12-row fixture list contains only `PASS` results. The result does
 not turn an untested product capability into a support claim.
 
 ## Two-Node Automation Boundary

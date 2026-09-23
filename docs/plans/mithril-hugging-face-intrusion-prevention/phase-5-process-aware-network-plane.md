@@ -84,7 +84,7 @@ variants without claiming TLS semantics.
   `HF-011-READ-RESULT-001`, `HF-NET-001`, and `IPC-LOCAL-INET-008`.
 - `NET-ACCEPT-PASS-001`, `NET-DNS-EXFIL-001`, `NET-NS-PASS-001`,
   `NET-RECV-001`, `NET-REWRITE-001`, `NET-SHARED-RESPONSE-002`,
-  `NET-SOCKCTL-001`, and `NET-SOCKET-LIFE-001`.
+  and `NET-SOCKET-LIFE-001`.
 - Shared-socket response controls and the network portions of the live
   two-node lifecycle probe.
 
@@ -118,7 +118,7 @@ Files and durable owners changed: network policy source and validation; portable
   evidence, recovery, or cleanup reader.
 Upstream-adoption dossier IDs used: none; the checked Cilium and Tetragon
   learning document records the source study and adopted design lessons.
-Fixture cases and exact physical results: all 13 allocated fixtures are PASS
+Fixture cases and exact physical results: all 12 allocated fixtures are PASS
   in the single-host probe and in both two-node directions; allowed peer TCP
   and UDP payloads arrive, and the denied peer receives no connection.
 Commands and exact source state covered: current checked source;

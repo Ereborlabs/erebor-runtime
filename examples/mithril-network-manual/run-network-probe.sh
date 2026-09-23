@@ -60,7 +60,6 @@ jq -e '
     "NET-RECV-001",
     "NET-REWRITE-001",
     "NET-SHARED-RESPONSE-002",
-    "NET-SOCKCTL-001",
     "NET-SOCKET-LIFE-001"
   ]) and
   all(.fixture_results[]; .result == "PASS" and (.physical_oracle | length > 0)) and
@@ -71,5 +70,5 @@ jq -e '
   ))
 ' "$result" >/dev/null
 
-echo "all 13 network fixtures passed"
+echo "all 12 network fixtures passed"
 echo "result: $result"

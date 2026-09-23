@@ -10345,12 +10345,6 @@ by option or use a specialized hook, never dereferenced from mutable userspace
 for authorization. Socket ioctl/compat and bounded netlink-control messages
 have their own qualified paths.
 
-`NET-SOCKCTL-001` tries route/mark/interface changes, transparent/freebind,
-attaching/replacing BPF filters, reuseport listener selection, packet fanout,
-TCP ULP/MPTCP changes, native/compat ioctls, and an unknown option. The final
-packet fence and socket readback must remain consistent; an approved harmless
-option is the negative control.
-
 ##### Exact socket-generation reference lifetime
 
 An fd `close` event is not socket death: duplicated/passed descriptors,
@@ -15336,7 +15330,7 @@ external subject and records only the evidence the source actually supplied.
 | `HF-011/A open`; `B positive-read`; `C inherited-fd`; `D resident-memory` | A exact projected-token object. B exact read request and positive return with qualified coverage. C acquisition/transfer provenance. D no new object read | A `LOCAL_EFFECT_V1(FILE, OPEN_READ)`. B completion package. C current actor + immutable file provenance. D next-effect route | A `EACCES`/no fd. B alone may say `SENSITIVE_BYTES_READ`. C use denies by current actor/object floor. D cannot be unread | Missing completion downgrades to `SENSITIVE_ACCESS_PERMITTED_OR_ATTEMPTED` | Controller role opens/reads its declared token and receives stricter publication floor | `FILE-SA-TOKEN-OPEN-001`, `HF-011-READ-RESULT-001`, `FILE-FD-PASS-001`, `FILE-MMAP-001`; `KA-CODE-018`, `TG-CODE-011` |
 | `HF-012/A fresh-connect`; `B rewrite`; `C existing-socket`; `D allowed-controller-verb` | Exact destination registry generation, final IPv4/IPv6 address, netns, socket lifetime; D Kubernetes/AWS authoritative operation/result | A-C `LOCAL_EFFECT_V1(NETWORK)` using exact socket/channel floors. D `POST_EFFECT` authority rule | Forbidden new or existing path returns errno/no packet. D alerts/responds to forbidden semantic verb | Missing final-address/rewrite or packet coverage makes that path unsupported; DNS text is insufficient | Approved controller reaches exact API endpoint and performs allowed `get` | `HF-NET-001`, `NET-REWRITE-001`, `NET-SOCKET-LIFE-001`, `NET-NS-PASS-001`; `KA-CODE-012`, `KA-CODE-025`, `TG-CODE-019` |
 | `HF-013/A distinct-channel`; `B broker/read-only`; `C same-TLS-write` | A exact endpoint. B broker lease/token permissions or synchronous semantic request. C provider-confirmed repo operation and revision | A local network deny. B `REMOTE_PRE_ADMISSION`. C `POST_EFFECT` plus artifact edge | A errno/no packet. B reject/no write-capability issued. C alert and quarantine exact revision; no local “push denied” claim | Bearer token and Git verb inside TLS are invisible locally; same channel can only be wholly denied | Read-only token clones the allowed repository; approved release token pushes through the semantic gate | `HF-GRAN-DEAD-DROP-001`, `EDGE-ARTIFACT-CONSUMER-005`; `SOURCE-BOUNDARY-001` |
-| `HF-014/A intact-local`; `B tampered-or-unknown`; `C mesh-provider` | A exact exec/device/ioctl/capability/socket events and healthy enforcement. B failed link/map/runtime integrity probe. C authoritative mesh request/result | A native/device/network keys. B hard response state. C pre-admission gate or post-effect audit | A forbidden effect errno/no packet. B local prevention claim becomes ineligible and independent fence/alert runs. C only synchronous admission rejects | TUN denial does not cover userspace networking; audit cannot retrospectively stop enrollment | Approved mesh daemon with declared binary, device/ioctl set and destination | `HF-GRAN-MESH-ROOT-001`, `SELF-PROTECT-001`, `NET-SOCKCTL-001`; `KA-CODE-020`, `TG-CODE-007` |
+| `HF-014/A intact-local`; `B tampered-or-unknown`; `C mesh-provider` | A exact exec/device/ioctl/capability/socket events and healthy enforcement. B failed link/map/runtime integrity probe. C authoritative mesh request/result | A native/device/network keys. B hard response state. C pre-admission gate or post-effect audit | A forbidden effect errno/no packet. B local prevention claim becomes ineligible and independent fence/alert runs. C only synchronous admission rejects | TUN denial does not cover userspace networking; audit cannot retrospectively stop enrollment | Approved mesh daemon with declared binary, device/ioctl set and destination | `HF-GRAN-MESH-ROOT-001`, `SELF-PROTECT-001`; `KA-CODE-020`, `TG-CODE-007` |
 | `HF-015/A mesh-admission`; `B audit-only-existing-devices` | A authenticated key/device enrollment request before commit. B exact key/device IDs, provider result and inventory revision | A `REMOTE_PRE_ADMISSION`. B `POST_EFFECT` plus response coordinator | A reject means no new device. B revoke key and remove every exact device, then read back both postconditions | External host with no mesh source is outside authority; silence is not removal proof | Approved employee device enrolls with an approved key and remains present after readback | `HF-GRAN-MESH-SOCKS-001`, `HF-GRAN-MESH-ENUM-001`; `SOURCE-BOUNDARY-001` |
 | `HF-016/A direct-worker-connector`; `B catalog-to-cluster`; `C shared-credential` | A exact worker destination/request. B forwarded request ID or unique lease plus cluster audit. C only shared credential/time | A local network or connector admission. B typed multi-node provider edge. C contextual edge | A deny/reject at its boundary. B exact cause only with forwarded ID. C never upgrades to exact | Missing forwarded ID is `CONTEXTUAL_SHARED_AUTHORITY`, not a Tetragon/KubeArmor defect | Approved connector request carries its request ID into an allowed cluster read | `HF-GRAN-CONNECTOR-DIRECT-001`, `HF-GRAN-CLUSTER-SHARED-001`, `EDGE-CONNECTOR-FORWARD-004`; `TG-CODE-005` |
 | `HF-017/A external-AWS`; `B same-worker`; `C acquisition-to-use` | A CloudTrail session/access-key operation. B exact worker STS/private endpoint/socket. C protected inventory, broker lease, or credential fingerprint join | A post-effect authority. B local network plus provider result. C typed credential edge only with join proof | A alerts/responds to exact session. B forbidden socket errno/no packet. C attributes local acquisition only when proof exists | An access-key ID binds AWS use to a credential, not automatically to one Linux reader | Approved deployment role obtains its brokered session and performs declared AWS read/dry-run | `HF-GRAN-AWS-SPLIT-001`, `EDGE-AWS-SHARED-001`, `HF-GRAN-AWS-DRYRUN-001`; `TG-CODE-005` |
@@ -16850,7 +16844,6 @@ NormativeFixtureSetV1 {
   NET-RECV-001
   NET-REWRITE-001
   NET-SHARED-RESPONSE-002
-  NET-SOCKCTL-001
   NET-SOCKET-LIFE-001
   NODE-FLOOR-EXCEPTION-002
   SECCOMP-QUAL-001
@@ -17166,7 +17159,6 @@ criterion 4, ALWAYS:
   NET-NS-PASS-001
   NET-RECV-001
   NET-REWRITE-001
-  NET-SOCKCTL-001
   NET-SOCKET-LIFE-001
   SECCOMP-QUAL-001
   STATE-LOCAL-INET-LAUNDER-008
