@@ -2357,8 +2357,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit it. The Host case passed on 2026-09-22 with
       the production Control, Node, policy compiler, BPF program, and evidence
       path.
-    - [ ] Pass direct `runc` and commit it. The earlier checked item belonged
-      to the terminal-retirement test and did not prove this behavior.
+    - [x] Pass direct `runc` and commit it. The direct-runc case passed on
+      2026-09-22 with the same test body, actor, policy, and assertions as the
+      Host case.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy action and result field after all
       three platforms pass.
