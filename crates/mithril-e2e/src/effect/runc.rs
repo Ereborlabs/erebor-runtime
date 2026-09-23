@@ -226,7 +226,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub bpf_runtime_topology_initialized: bool,
     pub application_entry_allow_observed: bool,
     pub application_default_file_allow_observed: bool,
-    pub application_descendant_default_exec_role_preserved: bool,
     pub held_runtime_admission_reconciled: bool,
     pub application_exec_transition_event_driven: bool,
     pub kubernetes_subpath_alias_path_tree_denied: bool,
@@ -4801,31 +4800,6 @@ impl EffectTestRunner {
                 reason: "the first configured executable did not activate normal policy",
             }
         );
-        wait_for_application_default_effect(
-            &reader,
-            &observations,
-            marker,
-            (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
-        )?;
-        let application_descendant_default_exec_role_preserved =
-            observations.recent_since(marker).iter().any(|event| {
-                event.reason == "APPLICATION_DEFAULT_ALLOW"
-                    && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
-                    && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
-                    && event.task_cookie != active.task_cookie
-                    && event.active_role_id == active.active_role_id
-                    && event.admitted_entry_rule_id == active.admitted_entry_rule_id
-                    && event.composite_atom_id == 0
-                    && event.exact_object_key_id == 0
-            });
-        ensure!(
-            application_descendant_default_exec_role_preserved,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason:
-                    "an application descendant did not retain its application role and admission ID",
-            }
-        );
         reader
             .poll(Duration::from_millis(100))
             .context(InterceptorSnafu)?;
@@ -6069,7 +6043,6 @@ impl EffectTestRunner {
             bpf_runtime_topology_initialized,
             application_entry_allow_observed: true,
             application_default_file_allow_observed: true,
-            application_descendant_default_exec_role_preserved,
             held_runtime_admission_reconciled: true,
             application_exec_transition_event_driven,
             kubernetes_subpath_alias_path_tree_denied: true,

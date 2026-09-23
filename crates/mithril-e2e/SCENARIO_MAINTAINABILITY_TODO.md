@@ -2479,15 +2479,15 @@ setup, production actions, assertions, and focused test.
       entry-role test passed in 69.81 seconds with the shared policy change.
   - [x] Remove only the matching legacy action, result field, recent-window
     churn assertion, and shell assertion after all three platform cases pass.
-  - [ ] Retire the duplicate application-descendant default-exec assertion.
+  - [x] Retire the duplicate application-descendant default-exec assertion.
     Reuse `running_task_uses_new_policy`, `policy_replace.py`, and their policy.
     Keep `APPLICATION_DEFAULT_ALLOW`, Exec/Execute, child task attribution,
     inherited role and admission rule, and zero composite and exact keys
     explicit. Do not add another test, actor, policy, or Platform API.
     - [x] Host passed in 35.99 seconds. The strengthened test has 99 lines.
     - [x] Direct `runc` passed in 36.10 seconds.
-    - [ ] Pass Kubernetes in a separate verified commit, then remove only the
-      matching legacy assertion, result field, and shell assertion.
+    - [x] Kubernetes passed in 71.86 seconds. Remove only the matching legacy
+      assertion, result field, and shell assertion.
 - [ ] Kubernetes subpath, bind alias, and wildcard paths: keep the same mount
   order and protected reads as the Kubernetes workload.
 - [ ] Concurrent exec and reader-queue saturation: keep the same containerd
