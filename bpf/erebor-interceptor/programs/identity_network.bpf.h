@@ -1181,13 +1181,11 @@ int BPF_PROG(erebor_identity_socket_shutdown, struct socket *socket, int how,
         network_current_actor(kernel_effect_operation_v1_shutdown, ret));
 }
 
-SEC("fentry/__sock_release")
-int BPF_PROG(erebor_network_socket_release, struct socket *socket,
-             struct inode *inode)
+SEC("fentry/inet_sock_destruct")
+int BPF_PROG(erebor_network_socket_release, struct sock *sock)
 {
     network_socket_state_v1 *state;
     network_response_floor_key_v1 key = {};
-    struct sock *sock = ipc_socket_sock(socket);
     __u64 *socket_refs;
     __u64 *flow_refs;
 

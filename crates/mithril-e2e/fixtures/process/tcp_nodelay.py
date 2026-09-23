@@ -1,4 +1,5 @@
 import ctypes
+import errno
 import socket
 import sys
 
@@ -19,6 +20,7 @@ def result(name, action):
         action()
     except OSError as failure:
         error = failure.errno or errno.EIO
+        print(f"{name}: {failure}", file=sys.stderr, flush=True)
     else:
         error = 0
     set_name(f"{name}-{error}")
@@ -34,9 +36,42 @@ def nodelay():
             pass
 
 
+def roundtrip():
+    stage = "socket setup"
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+            server.settimeout(3)
+            stage = "bind"
+            server.bind(("127.0.0.1", 19091))
+            stage = "listen"
+            server.listen(1)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                client.settimeout(3)
+                stage = "connect"
+                client.connect(server.getsockname())
+                stage = "accept"
+                with server.accept()[0] as peer:
+                    peer.settimeout(3)
+                    stage = "request send"
+                    client.sendall(b"request")
+                    stage = "request receive"
+                    if peer.recv(7, socket.MSG_WAITALL) != b"request":
+                        raise OSError(errno.EIO, "server received the wrong payload")
+                    stage = "response send"
+                    peer.sendall(b"response")
+                    stage = "response receive"
+                    if client.recv(8, socket.MSG_WAITALL) != b"response":
+                        raise OSError(errno.EIO, "client received the wrong payload")
+    except OSError as failure:
+        raise OSError(failure.errno or errno.EIO, f"{stage}: {failure}") from failure
+
+
 print("native-fixture-ready", flush=True)
 for command in sys.stdin:
     if command == "nodelay\n":
         result("nodelay", nodelay)
+    elif command == "roundtrip\n":
+        result("roundtrip", roundtrip)
+        break
     elif command == "release\n":
         break

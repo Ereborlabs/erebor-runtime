@@ -172,9 +172,8 @@ int BPF_PROG(qualification_socket_shutdown, struct socket *socket, int how,
     return ret;
 }
 
-SEC("fentry/__sock_release")
-int BPF_PROG(qualification_socket_release, struct socket *socket,
-             struct inode *inode)
+SEC("fentry/inet_sock_destruct")
+int BPF_PROG(qualification_socket_release, struct sock *sock)
 {
     return 0;
 }

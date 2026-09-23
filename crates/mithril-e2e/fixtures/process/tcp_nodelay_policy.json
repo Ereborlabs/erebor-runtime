@@ -43,11 +43,14 @@
         "network": {
           "destinations": [
             {
-              "name": "loopback-discard",
-              "operations": ["Connect"],
+              "name": "loopback-services",
+              "operations": ["Connect", "Send", "Receive"],
               "protocols": ["TCP"],
               "cidrs": ["127.0.0.1/32"],
-              "ports": [{"first": 9, "last": 9}],
+              "ports": [
+                {"first": 9, "last": 9},
+                {"first": 1024, "last": 65535}
+              ],
               "action": "Allow"
             }
           ]

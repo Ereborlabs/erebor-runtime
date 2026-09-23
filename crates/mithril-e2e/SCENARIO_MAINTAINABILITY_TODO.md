@@ -2366,6 +2366,51 @@ test does not close a row when its physical condition or an assertion changed.
       socket-fence, and restart checks use its socket and production event.
       Keep those checks and sendmsg, sendfile, splice, receive-authority, and
       peer behavior for later migrations.
+  - [ ] Replace the connected TCP send and receive results by extending the
+    existing TCP actor, policy, and test file. Bind one fixed loopback port.
+    Require successful payload exchange and exact production Connect, Send,
+    and Receive evidence. Do not add an actor, policy, helper, or Platform API.
+    - [x] Pass Host and commit it. The exact Host test passed in 28.07 seconds.
+      It completed the payload exchange, observed all three Allow results, and
+      retired cleanly. The test found that file-descriptor release tombstoned
+      each socket before TCP emitted its closing packet. The approved fix moves
+      cleanup to the kernel socket destruction boundary.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy result fields and standalone boolean
+      assertions. Keep the socket operations as setup while sendmsg, sendfile,
+      splice, clone, fork, socket-fence, and restart checks still use it.
+  - [ ] Replace connected `sendmsg`, `sendfile`, and `splice` behaviors. Keep
+    each syscall, payload receipt, file-backed input, role, and exact network
+    result visible. Use the shared actor and one small test where this remains
+    clear.
+  - [ ] Replace clone-send and fork-send socket inheritance. Keep distinct
+    child execution, payload receipt, creator identity, and allowed result
+    assertions. Keep socket-generation non-reuse as a separate lifecycle test.
+  - [ ] Replace the whole-socket fence and Node restart group. Preserve the
+    installed response floor, retained task, socket, mount, and active-policy
+    state, denied send and shutdown, absent bytes and bypass packets, released
+    socket reference, and idempotent restart recovery.
+  - [ ] Replace IPv6 TCP, connected UDP, and unconnected UDP behavior. Keep
+    address family, protocol, destination, payload receipt, and policy result
+    explicit in each small test.
+  - [ ] Replace unsupported network family, `io_uring` SQPOLL, TUN/TAP, and BPF
+    setup denials. Keep each syscall and fail-closed result explicit.
+  - [ ] Replace accepted-socket transfer authority. Keep the narrow actor
+    denial, approved actor success, descriptor transfer, role, and received
+    payload assertions.
+  - [ ] Replace cross-network-namespace socket transfer. Keep narrow denial,
+    approved success, descriptor transfer, payload receipt, and distinct
+    creator and current namespace evidence.
+  - [ ] Replace shared-socket-holder fencing. Keep both holders denied after
+    the response floor, no received bytes, and the shared reference alive
+    until the last close.
+  - [ ] Replace rewritten-destination enforcement. Keep the forbidden final
+    address packet absent and the allowed final destination payload received.
+  - [ ] Replace delegated egress. Keep the request ID, requested and final
+    destinations, forbidden request absence, and allowed request receipt.
+  - [ ] Replace separate read-result and provider-write behavior. Keep the
+    governed file read classes, provider receipt, and network result evidence.
   - [x] Replace the unclassified IPv4 connect denial with one standard
     platform test. Use one shared Python actor and one scenario policy. Do not
     add a Platform API.
