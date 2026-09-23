@@ -71,7 +71,6 @@ pub struct NetworkFixtureResultV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct NetworkPhysicalProbeBundleV2 {
     pub schema_version: u32,
-    pub allowed_connect: bool,
     pub allowed_send_received: bool,
     pub sendmsg_allowed: bool,
     pub sendfile_allowed: bool,
@@ -419,14 +418,7 @@ impl NetworkTestRunner {
         let governed_mmap_allowed = governed_mmap.allowed;
 
         let allowed_marker = observations.cursor();
-        let allowed_connect = fixture.network_connect(allowed_address)?.allowed;
-        ensure!(
-            allowed_connect,
-            InvalidInputSnafu {
-                path: Path::new("allowed network listener"),
-                reason: "the signed destination did not connect",
-            }
-        );
+        fixture.network_connect(allowed_address)?;
         wait_for_effect(
             &reader,
             &observations,
@@ -1137,9 +1129,7 @@ impl NetworkTestRunner {
                 && post_fence_bypass_packets_absent
                 && peer_network_passed
                 && allowed_send_received,
-            local_inet: allowed_connect
-                && tcp_ipv6_allowed
-                && accepted_socket_approved_actor_allowed,
+            local_inet: tcp_ipv6_allowed && accepted_socket_approved_actor_allowed,
             accept_pass: accepted_socket_narrow_actor_denied
                 && accepted_socket_approved_actor_allowed,
             namespace_pass: cross_namespace_narrow_actor_denied
@@ -1182,7 +1172,6 @@ impl NetworkTestRunner {
         resources.stop()?;
         Ok(NetworkPhysicalProbeBundleV2 {
             schema_version: 2,
-            allowed_connect,
             allowed_send_received,
             sendmsg_allowed,
             sendfile_allowed,

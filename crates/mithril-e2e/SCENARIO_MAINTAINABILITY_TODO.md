@@ -2348,7 +2348,7 @@ test does not close a row when its physical condition or an assertion changed.
     governed cgroup and do not use this obsolete setup.
 - [ ] `NetworkTestRunner::physical_probe` local socket scenarios: keep signed
   policy compilation, node binding, socket actions, and exact denials visible.
-  - [ ] Replace the allowed TCP Connect result by strengthening the existing
+  - [x] Replace the allowed TCP Connect result by strengthening the existing
     TCP network-role test. Keep the exact address, port, protocol, destination
     handle, and production Allow evidence. Do not add an actor, policy, test,
     or Platform API.
@@ -2360,10 +2360,12 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit it. The exact Kubernetes case passed in
       65.79 seconds in the retained K3s cluster with the same actor, policy,
       and assertions.
-    - [ ] Remove only the matching legacy connect action and result field after
-      all three platform cases pass. Keep send, receive, sendmsg, sendfile,
-      splice, clone, fork, socket-fence, receive-authority, and peer behavior
-      for later migrations.
+    - [x] Remove the matching legacy connect result field and standalone
+      boolean assertion after all three platform cases pass. Keep the connect
+      operation as setup because the remaining send, receive, clone, fork,
+      socket-fence, and restart checks use its socket and production event.
+      Keep those checks and sendmsg, sendfile, splice, receive-authority, and
+      peer behavior for later migrations.
   - [x] Replace the unclassified IPv4 connect denial with one standard
     platform test. Use one shared Python actor and one scenario policy. Do not
     add a Platform API.
