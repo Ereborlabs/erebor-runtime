@@ -124,6 +124,21 @@ impl PolicyDocumentV1 {
             .flat_map(|policy| &policy.destination_policies)
             .map(|policy| policy.destination_policy_id.as_str())
             .collect::<BTreeSet<_>>();
+        let dns_ids = self
+            .network_policy
+            .iter()
+            .filter(|policy| {
+                policy.dns_mode == DnsPolicyModeV1::DenyDnsAndUsePolicyResolvedAddresses
+            })
+            .flat_map(|policy| &policy.destination_policies)
+            .filter(|policy| {
+                policy
+                    .port_ranges
+                    .iter()
+                    .any(|range| (range.first..=range.last).contains(&53))
+            })
+            .map(|policy| policy.destination_policy_id.as_str())
+            .collect::<BTreeSet<_>>();
         let coverage_ids = self
             .source_coverage_health_rules
             .iter()
@@ -457,6 +472,14 @@ impl PolicyDocumentV1 {
                                 .all(|id| destination_ids.contains(id.as_str())),
                         "CFG_NETWORK_DESTINATION_REFERENCE",
                         format!("rule `{}` has unknown network destinations", rule.rule_id)
+                    );
+                    require!(
+                        rule.requested_disposition == PolicyDispositionV1::Deny
+                            || destination_policy_ids
+                                .iter()
+                                .all(|id| !dns_ids.contains(id.as_str())),
+                        "CFG_NETWORK_DNS_MODE",
+                        "policy-resolved address mode cannot authorize DNS port 53"
                     );
                 }
                 if let LocalObjectSelectorV1::ObjectClasses { object_class_ids } = &effect.object {

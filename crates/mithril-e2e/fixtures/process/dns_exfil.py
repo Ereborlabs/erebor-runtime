@@ -9,6 +9,15 @@ def tcp(address):
         connection.connect(address)
 
 
+def udp(address, connected):
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as connection:
+        if connected:
+            connection.connect(address)
+            connection.send(b"dns")
+        else:
+            connection.sendto(b"dns", address)
+
+
 def require_denied(name, action):
     try:
         action()
@@ -20,10 +29,18 @@ def require_denied(name, action):
 
 
 print("native-fixture-ready", flush=True)
-sys.stdin.buffer.readline()
-for name, action in [
-    ("TCP DNS", lambda: tcp(("127.0.0.1", 53))),
-    ("TCP DoT", lambda: tcp(("127.0.0.53", 853))),
-    ("TCP DoH", lambda: tcp(("127.0.0.53", 443))),
-]:
+mode = sys.stdin.buffer.readline().strip()
+actions = {
+    b"run": [
+        ("TCP DNS", lambda: tcp(("127.0.0.1", 53))),
+        ("TCP DoT", lambda: tcp(("127.0.0.53", 853))),
+        ("TCP DoH", lambda: tcp(("127.0.0.53", 443))),
+    ],
+    b"udp": [
+        ("UDP DNS", lambda: udp(("127.0.0.1", 53), False)),
+        ("UDP external DNS", lambda: udp(("8.8.8.8", 53), True)),
+        ("UDP alternate resolver", lambda: udp(("127.0.0.53", 5353), False)),
+    ],
+}
+for name, action in actions[mode]:
     require_denied(name, action)

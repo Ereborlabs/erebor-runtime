@@ -2,7 +2,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use erebor_interceptor_abi::MAX_NETWORK_PORT_RANGES_V1;
 
-use super::super::source::{DestinationPolicyRecordV1, DnsPolicyModeV1, NetworkPolicyV1};
+use super::super::source::{DestinationPolicyRecordV1, NetworkPolicyV1};
 use super::value::PolicyValue;
 use super::{Validate, ValidationResult};
 
@@ -21,17 +21,6 @@ impl Validate for NetworkPolicyV1 {
         for policy in &self.destination_policies {
             policy.validate()?;
         }
-        require!(
-            self.dns_mode != DnsPolicyModeV1::DenyDnsAndUsePolicyResolvedAddresses
-                || self.destination_policies.iter().all(|policy| {
-                    policy
-                        .port_ranges
-                        .iter()
-                        .all(|range| !(range.first..=range.last).contains(&53))
-                }),
-            "CFG_NETWORK_DNS_MODE",
-            "policy-resolved address mode cannot authorize DNS port 53"
-        );
         Ok(())
     }
 }

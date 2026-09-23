@@ -987,6 +987,9 @@ fn destination_policy_compiles_only_canonical_bounded_network_rules() -> mithril
     assert!(PolicyCompiler
         .compile(&dns)
         .is_err_and(|error| error.to_string().contains("CFG_NETWORK_DNS_MODE")));
+    dns.rules[0].requested_disposition = PolicyDispositionV1::Deny;
+    dns.rules[0].errno = Some(ErrnoV1::Eacces);
+    assert!(PolicyCompiler.compile(&dns).is_ok());
     Ok(())
 }
 

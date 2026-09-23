@@ -2405,6 +2405,17 @@ test does not close a row when its physical condition or an assertion changed.
     the public role defaults. Keep unconnected sends to `127.0.0.1:53` and
     `127.0.0.53:5353`, and a connected request to `8.8.8.8:53`. Preserve the
     legacy checks until this separate scenario passes all platforms.
+    - [x] Use exact role destination denies for the two unconnected UDP sends.
+      Keep the existing Network `Connect` default for the connected request.
+      Control now accepts a DNS-port destination that only a `Deny` rule uses.
+      It still rejects an `Allow` or `Alert` rule for that destination.
+    - [x] Keep the Rust test below 100 lines. The test has 21 lines.
+    - [x] Pass Host and commit it. The exact case passed in 28.15 seconds on
+      2026-09-23. No BPF, Node, or platform change was required.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy UDP actions and result field after
+      all three platform cases pass.
   - [x] Retire `NET-SOCKCTL-001`. Role network policy uses the Cilium
     boundary. It governs destinations, protocols, ports, and traffic. It does
     not govern socket options.

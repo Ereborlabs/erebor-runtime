@@ -47,7 +47,26 @@
             "action": "Allow"
           }
         ],
-        "network": {"destinations": []},
+        "network": {
+          "destinations": [
+            {
+              "name": "deny-udp-dns",
+              "operations": ["Send"],
+              "protocols": ["UDP"],
+              "cidrs": ["127.0.0.1/32"],
+              "ports": [{"first": 53, "last": 53}],
+              "action": "Deny"
+            },
+            {
+              "name": "deny-udp-alt-resolver",
+              "operations": ["Send"],
+              "protocols": ["UDP"],
+              "cidrs": ["127.0.0.53/32"],
+              "ports": [{"first": 5353, "last": 5353}],
+              "action": "Deny"
+            }
+          ]
+        },
         "processControl": [],
         "unixStreams": []
       },
