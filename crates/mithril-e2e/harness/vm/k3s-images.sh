@@ -32,15 +32,10 @@ systemctl is-active --quiet k3s || {
 image_dir=/var/lib/rancher/k3s/agent/images
 target=$image_dir/mithril-e2e-$cache.tar
 
-missing=false
-for image in "$@"; do
-  "$k3s" crictl inspecti "$image" >/dev/null || missing=true
-done
-if [[ $missing == false && -f $target ]] && cmp -s -- "$archive" "$target"; then
-  exit 0
-fi
-
 install -d -m 0700 "$image_dir"
+for image in "$@"; do
+  "$k3s" ctr images rm "$image" >/dev/null 2>&1 || true
+done
 "$k3s" ctr images import "$archive" >/dev/null
 for image in "$@"; do
   "$k3s" crictl inspecti "$image" >/dev/null ||
