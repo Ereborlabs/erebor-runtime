@@ -2503,6 +2503,17 @@ setup, production actions, assertions, and focused test.
     - [x] Pass Kubernetes in a separate verified commit. The exact physical
       case passed in 64.55 seconds. Remove only the matching legacy result
       field and shell assertion.
+  - [ ] Replace the incidental application-default file-read result with one
+    explicit platform test. Reuse `runtime_exec.py`, its policy, and its input
+    fixture. Command the application actor to read the file after the evidence
+    marker. Require `APPLICATION_DEFAULT_ALLOW`, File/Read, actor attribution,
+    and zero composite and exact object IDs. Do not add a policy or Platform
+    API.
+    - [x] Pass Host in a separate verified commit. The 43-line test passed in
+      28.47 seconds.
+    - [ ] Pass direct `runc` in a separate verified commit.
+    - [ ] Pass Kubernetes in a separate verified commit, then remove only the
+      matching legacy result field, helper call, and shell assertion.
 - [ ] Kubernetes subpath, bind alias, and wildcard paths: keep the same mount
   order and protected reads as the Kubernetes workload.
 - [ ] Concurrent exec and reader-queue saturation: keep the same containerd
