@@ -2412,7 +2412,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Keep the Rust test below 100 lines. The test has 21 lines.
     - [x] Pass Host and commit it. The exact case passed in 28.15 seconds on
       2026-09-23. No BPF, Node, or platform change was required.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact case passed in 29.44
+      seconds on 2026-09-23 with the same test body, actor, policy, and
+      assertions as Host.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy UDP actions and result field after
       all three platform cases pass.

@@ -24,7 +24,7 @@ fn tcp_dns_exfil_is_denied<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn udp_dns_exfil_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("dns-exfil")?;
