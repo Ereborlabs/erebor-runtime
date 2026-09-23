@@ -24,6 +24,7 @@ def result(name, action):
     else:
         error = 0
     set_name(f"{name}-{error}")
+    return error
 
 
 def nodelay():
@@ -71,7 +72,9 @@ for command in sys.stdin:
     if command == "nodelay\n":
         result("nodelay", nodelay)
     elif command == "roundtrip\n":
-        result("roundtrip", roundtrip)
+        error = result("roundtrip", roundtrip)
+        if error:
+            sys.exit(error)
         break
     elif command == "release\n":
         break

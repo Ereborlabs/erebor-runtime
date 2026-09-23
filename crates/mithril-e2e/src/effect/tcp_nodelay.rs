@@ -71,7 +71,6 @@ fn tcp_roundtrip_uses_network_role<P: Platform>() -> TestResult<()> {
     let status = actor.wait_exit("TCP roundtrip", Duration::from_secs(5))?;
     let stderr = actor.stderr()?;
     assert!(status.success(), "TCP actor exited with {status}: {stderr}");
-    assert!(stderr.is_empty(), "TCP roundtrip failed: {stderr}");
     let connect = effects.wait(
         &env,
         "EXACT_POLICY_ALLOW",

@@ -2370,15 +2370,18 @@ test does not close a row when its physical condition or an assertion changed.
     existing TCP actor, policy, and test file. Bind one fixed loopback port.
     Require successful payload exchange and exact production Connect, Send,
     and Receive evidence. Do not add an actor, policy, helper, or Platform API.
-    - [x] Pass Host and commit it. The exact Host test passed in 28.07 seconds.
+    - [x] Pass Host and commit it. The exact Host test passed in 28.94 seconds.
       It completed the payload exchange, observed all three Allow results, and
       retired cleanly. The test found that file-descriptor release tombstoned
       each socket before TCP emitted its closing packet. The approved fix moves
       cleanup to the kernel socket destruction boundary.
     - [x] Pass direct `runc` and commit it. The exact direct-runc test passed
-      in 29.12 seconds with the same actor, policy, assertions, and clean
+      in 29.50 seconds with the same actor, policy, assertions, and clean
       retirement.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact Kubernetes test passed in
+      67.87 seconds with the same actor, policy, assertions, and clean
+      retirement. Actor failures use the container exit status so Kubernetes
+      transport warnings do not change the shared result.
     - [ ] Remove only the matching legacy result fields and standalone boolean
       assertions. Keep the socket operations as setup while sendmsg, sendfile,
       splice, clone, fork, socket-fence, and restart checks still use it.
