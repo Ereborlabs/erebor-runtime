@@ -2366,7 +2366,7 @@ test does not close a row when its physical condition or an assertion changed.
       socket-fence, and restart checks use its socket and production event.
       Keep those checks and sendmsg, sendfile, splice, receive-authority, and
       peer behavior for later migrations.
-  - [ ] Replace the connected TCP send and receive results by extending the
+  - [x] Replace the connected TCP send and receive results by extending the
     existing TCP actor, policy, and test file. Bind one fixed loopback port.
     Require successful payload exchange and exact production Connect, Send,
     and Receive evidence. Do not add an actor, policy, helper, or Platform API.
@@ -2382,9 +2382,11 @@ test does not close a row when its physical condition or an assertion changed.
       67.87 seconds with the same actor, policy, assertions, and clean
       retirement. Actor failures use the container exit status so Kubernetes
       transport warnings do not change the shared result.
-    - [ ] Remove only the matching legacy result fields and standalone boolean
+    - [x] Remove only the matching legacy result fields and standalone boolean
       assertions. Keep the socket operations as setup while sendmsg, sendfile,
-      splice, clone, fork, socket-fence, and restart checks still use it.
+      splice, clone, fork, socket-fence, and restart checks still use it. The
+      focused legacy network result tests passed: 3 passed and 302 filtered
+      out.
   - [ ] Replace connected `sendmsg`, `sendfile`, and `splice` behaviors. Keep
     each syscall, payload receipt, file-backed input, role, and exact network
     result visible. Use the shared actor and one small test where this remains

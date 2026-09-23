@@ -71,11 +71,9 @@ pub struct NetworkFixtureResultV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct NetworkPhysicalProbeBundleV2 {
     pub schema_version: u32,
-    pub allowed_send_received: bool,
     pub sendmsg_allowed: bool,
     pub sendfile_allowed: bool,
     pub splice_allowed: bool,
-    pub allowed_receive: bool,
     pub whole_socket_fence_installed: bool,
     pub restart_preserved_task_state: bool,
     pub restart_preserved_socket_state: bool,
@@ -443,15 +441,8 @@ impl NetworkTestRunner {
                 }
                 .build()
             })?;
-        let allowed_send_received = fixture.network_send(PAYLOAD)?.allowed;
-        let allowed_receive = fixture.network_receive()?.allowed;
-        ensure!(
-            allowed_send_received && allowed_receive,
-            InvalidInputSnafu {
-                path: Path::new("allowed network socket"),
-                reason: "the signed send or receive failed",
-            }
-        );
+        fixture.network_send(PAYLOAD)?;
+        fixture.network_receive()?;
         fixture.network_clone()?;
         let cloned_socket_allowed = fixture.network_clone_send(DUP_PAYLOAD)?.allowed;
         let inherited_socket_allowed = fixture.network_fork_send(FORK_PAYLOAD)?.allowed;
@@ -1117,7 +1108,7 @@ impl NetworkTestRunner {
         let proof = NetworkFixtureProof {
             delegated_egress: delegated_forbidden_request_absent
                 && delegated_allowed_request_received,
-            hf_result: allowed_send_received && post_fence_send_denied && provider_write_observed,
+            hf_result: post_fence_send_denied && provider_write_observed,
             hf_read_result: read_results_separate,
             hf_network: unsupported_network_families_denied
                 && io_uring_sqpoll_denied
@@ -1127,15 +1118,14 @@ impl NetworkTestRunner {
                 && sendfile_allowed
                 && splice_allowed
                 && post_fence_bypass_packets_absent
-                && peer_network_passed
-                && allowed_send_received,
+                && peer_network_passed,
             local_inet: tcp_ipv6_allowed && accepted_socket_approved_actor_allowed,
             accept_pass: accepted_socket_narrow_actor_denied
                 && accepted_socket_approved_actor_allowed,
             namespace_pass: cross_namespace_narrow_actor_denied
                 && cross_namespace_approved_actor_allowed
                 && cross_namespace_evidence_distinct,
-            receive: allowed_receive && accepted_socket_narrow_actor_denied,
+            receive: accepted_socket_narrow_actor_denied,
             rewrite: rewritten_forbidden_packet_absent && rewritten_allowed_destination_received,
             shared_response: shared_socket_holders_denied,
             socket_life: socket_reference_released
@@ -1172,11 +1162,9 @@ impl NetworkTestRunner {
         resources.stop()?;
         Ok(NetworkPhysicalProbeBundleV2 {
             schema_version: 2,
-            allowed_send_received,
             sendmsg_allowed,
             sendfile_allowed,
             splice_allowed,
-            allowed_receive,
             whole_socket_fence_installed,
             restart_preserved_task_state,
             restart_preserved_socket_state,
