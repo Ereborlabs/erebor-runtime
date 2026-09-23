@@ -2491,7 +2491,7 @@ setup, production actions, assertions, and focused test.
     - [x] Run the required third-scenario gate. Host passed 35 tests in 366.79
       seconds. Direct `runc` passed 30 tests in 359.28 seconds. Kubernetes
       passed 30 tests in 880.29 seconds.
-  - [ ] Retire the duplicate application-entry allow result. Reuse
+  - [x] Retire the duplicate application-entry allow result. Reuse
     `runtime_entries_stay_distinct` and its existing actor and policy. Keep the
     application execution state, runtime-binding lifecycle, declared role, and
     nonzero admission rule explicit. Do not add a test, actor, policy, or
@@ -2500,8 +2500,9 @@ setup, production actions, assertions, and focused test.
       98 lines and passed in 28.13 seconds.
     - [x] Pass direct `runc` in a separate verified commit. The exact case
       passed in 29.44 seconds.
-    - [ ] Pass Kubernetes in a separate verified commit, then remove only the
-      matching legacy result field and shell assertion.
+    - [x] Pass Kubernetes in a separate verified commit. The exact physical
+      case passed in 64.55 seconds. Remove only the matching legacy result
+      field and shell assertion.
 - [ ] Kubernetes subpath, bind alias, and wildcard paths: keep the same mount
   order and protected reads as the Kubernetes workload.
 - [ ] Concurrent exec and reader-queue saturation: keep the same containerd
