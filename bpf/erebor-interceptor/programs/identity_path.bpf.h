@@ -972,6 +972,10 @@ static __always_inline int collect_known_mount_components(
     current_mount = mount_from_vfsmount(vfsmount);
     walk = &scratch->mount_path_walk;
     __builtin_memset(walk, 0, sizeof(*walk));
+    walk->cache_generation =
+        canonical_mount_cache_generation_snapshot(scratch);
+    if (!walk->cache_generation)
+        return -EACCES;
     if (require_mount_attachment) {
         if (!current_mount ||
             BPF_CORE_READ_INTO(&walk->read_address, current_mount,
@@ -1015,7 +1019,9 @@ static __always_inline int collect_known_mount_components(
         return -EACCES;
     if (BPF_CORE_READ_INTO(&checked_namespace_event, mount_namespace, event) ||
         checked_namespace_event != namespace_event ||
-        global_mount_epoch_unchanged(global_epoch))
+        global_mount_epoch_unchanged(global_epoch) ||
+        canonical_mount_cache_generation_unchanged(
+            scratch, walk->cache_generation))
         return -EACCES;
     scratch->mount_topology_generation = global_epoch;
     *count = walk->component_count;

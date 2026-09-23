@@ -1977,16 +1977,22 @@ test does not close a row when its physical condition or an assertion changed.
       false default is omitted from canonical serialization. The focused
       public API test, all 201 Mithril Control tests, the generated Helm CRD,
       and strict Clippy pass on 2026-09-22.
-    - [ ] Make the actor open protected and allowed file descriptors before
-      policy activation and Node startup. Recover the running actor through
-      the production startup path.
-    - [ ] Require `EACCES` for `Read` and `MmapRead` through the retained
+    - [x] Start the actor under the initial policy. Make it retain protected
+      and allowed file descriptors before policy replacement. Keep Node live
+      so the replacement migrates the same admitted actor, as in the baseline
+      policy-lifecycle block.
+    - [x] Require `EACCES` for `Read` and `MmapRead` through the retained
       protected descriptor. Require both operations to succeed through the
       retained allowed descriptor.
-    - [ ] Attribute all four decisions to the recovered actor task and their
+    - [x] Attribute all four decisions to the admitted actor task and their
       exact protected or allowed object. Keep setup, action, assertions, and
       teardown in a test of fewer than 100 lines.
-    - [ ] Pass Host and commit it.
+    - [x] Pass Host and commit it. The 83-line test passed in 34.54 seconds on
+      2026-09-22. It found that the known-mount path did not snapshot the
+      canonical mount-cache generation before exact-object enforcement. The
+      approved correction records and verifies that generation. The unchanged
+      Host mount-alias, late-mount, path, and mount-race lifecycles then passed
+      all 11 tests.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy prepared-descriptor actions, result
