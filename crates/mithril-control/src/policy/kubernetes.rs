@@ -217,6 +217,9 @@ pub enum KubernetesContainerKindV1 {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct KubernetesRolePolicyV1 {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 64))]
+    pub default_actions: Vec<KubernetesDefaultActionV1>,
     #[schemars(length(max = 1024))]
     pub files: Vec<FileRuleV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -301,6 +304,24 @@ pub enum KubernetesExecutionOperationV1 {
 pub enum KubernetesRuleActionV1 {
     Allow,
     Deny,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[schemars(transform = super::source::tagged_union_schema)]
+#[serde(tag = "family")]
+pub enum KubernetesDefaultActionV1 {
+    Network {
+        #[schemars(length(min = 1, max = 1))]
+        operations: Vec<DefaultNetworkOperationV1>,
+        action: KubernetesRuleActionV1,
+    },
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+pub enum DefaultNetworkOperationV1 {
+    Connect,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -1036,6 +1057,19 @@ pub fn lower_kubernetes_policy(
             entry_kinds,
             role.name.clone(),
         );
+        for default in &role.default_actions {
+            match default {
+                KubernetesDefaultActionV1::Network { operations, action } => {
+                    let operations = operations.iter().map(|_| "CONNECT").collect::<Vec<_>>();
+                    effect_family_defaults.push(default_rule(
+                        &role.name,
+                        EffectFamilyV1::Network,
+                        &operations,
+                        *action,
+                    ));
+                }
+            }
+        }
         for file in &role.files {
             let selector_id = path_selector_id(
                 &mut path_selectors,
@@ -1505,7 +1539,29 @@ fn validate_public_policy(spec: &WorkloadProtectionPolicySpec, policy_id: &str) 
     }
     let mut names = BTreeSet::new();
     let mut socket_actions = BTreeMap::new();
+    let mut default_operations = BTreeSet::new();
     for role in &spec.roles {
+        default_operations.clear();
+        for default in &role.default_actions {
+            match default {
+                KubernetesDefaultActionV1::Network { operations, .. } => {
+                    ensure!(
+                        !operations.is_empty()
+                            && operations
+                                .iter()
+                                .all(|operation| default_operations.insert(*operation)),
+                        PolicyValidationSnafu {
+                            policy_id,
+                            code: "CFG_KUBERNETES_DEFAULT_ACTION",
+                            reason: format!(
+                                "role `{}` has empty or duplicate default actions",
+                                role.name
+                            ),
+                        }
+                    );
+                }
+            }
+        }
         for rule in &role.files {
             validate_path_rule(
                 policy_id,

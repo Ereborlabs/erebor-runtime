@@ -336,6 +336,52 @@
                           "maxItems": 1024,
                           "type": "array"
                         },
+                        "defaultActions": {
+                          "items": {
+                            "maxProperties": 4096,
+                            "properties": {
+                              "action": {
+                                "enum": [
+                                  "Allow",
+                                  "Deny"
+                                ],
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "family": {
+                                "enum": [
+                                  "Network"
+                                ],
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "operations": {
+                                "items": {
+                                  "enum": [
+                                    "Connect"
+                                  ],
+                                  "maxLength": 4096,
+                                  "type": "string"
+                                },
+                                "maxItems": 1,
+                                "minItems": 1,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "family"
+                            ],
+                            "type": "object",
+                            "x-kubernetes-validations": [
+                              {
+                                "message": "fields do not match family Network",
+                                "rule": "self.family != 'Network' || (has(self.action) && has(self.operations))"
+                              }
+                            ]
+                          },
+                          "maxItems": 64,
+                          "type": "array"
+                        },
                         "execution": {
                           "items": {
                             "maxProperties": 4096,

@@ -391,6 +391,7 @@ required local, provider, outside-authority, or honest-limit branches.
 | `PreStop` under containment and missing identity | 2, 4-5, 9 |
 | immutable executable identity | 0, 3-4 |
 | same TLS endpoint | 5 local result; 10 provider result |
+| unmatched role effect | 3 compiler default; 4-5 local enforcement; 6.2 public role default |
 | several logical jobs in one process | 2 exact process limit; 7/9 finding and blast-radius disclosure |
 | learning is review-only | 3 candidate generation; 7 finding workflow |
 | production policy sources and deletion | 6.2 policy and exception CRD reconciliation, signed retirement, and last-valid-generation retention |

@@ -2337,18 +2337,26 @@ test does not close a row when its physical condition or an assertion changed.
   - [ ] Replace the unclassified IPv4 connect denial with one standard
     platform test. Use one shared Python actor and one scenario policy. Do not
     add a Platform API.
-    - [ ] Resolve the public-policy network-default gap before implementation.
-      A `WorkloadProtectionPolicy` lowers destination rules but does not lower
-      a default for unmatched `Connect`. The legacy policy adds a deny default
-      directly. Do not replace `UNRESOLVED_OBJECT` and its zero object handle
-      with an exact destination denial.
+    - [x] Implement the approved public role default before the platform test.
+      `defaultActions` is a role-level list. Its first qualified form is
+      `family: Network`, `operations: [Connect]`, and `action: Deny`. Control
+      lowers it to the existing `EffectFamilyDefaultV1`. An exact destination
+      rule wins. A missing exact destination uses the explicit default. A
+      destination allow rule alone must not create an implicit default.
+      - The exact admitted Host actor reached Linux on 2026-09-22 and returned
+        `ECONNREFUSED` for port 9. This proves that the default is absent.
+      - The approved BPF fallback compiles. It cannot deny until Control
+        installs the existing `DENY CONNECT` family default.
+      - [x] Prove public parsing, lowering, compilation, explicit `EACCES`, and
+        absence of an implicit default in focused Control tests.
+      - [x] Regenerate the Helm CRD from the Control schema owner.
     - [ ] Connect to `127.0.0.1:9`. Require actor `EACCES` and one
       `UNRESOLVED_OBJECT` network-connect observation for the exact actor task,
       IPv4 address, TCP protocol, and port. Require no policy object handle.
     - [ ] Keep the test below 100 lines.
     - [ ] Pass Host and commit it.
-    - [x] Pass direct `runc` and commit it. The exact direct-`runc` test passed
-      in 35.75 seconds on 2026-09-21.
+    - [ ] Pass direct `runc` and commit it. The earlier checked item belonged
+      to the terminal-retirement test and did not prove this behavior.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy action and result field after all
       three platforms pass.

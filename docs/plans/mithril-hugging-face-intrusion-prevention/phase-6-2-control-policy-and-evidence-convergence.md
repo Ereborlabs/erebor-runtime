@@ -411,9 +411,9 @@ one declared storage version. Its structural `.spec` contains only:
 - a bounded `additionalEntries` list with a unique name, closed entry kind,
   named execution-rule reference, and role for each entry;
 - one `administrativeEntry` role and one conservative `externalRole`;
-- named roles with canonical-path file rules, execution rules, exact Linux
-  capability rules, explicit-address network rules, process-control rules, and
-  Unix-stream role relationships; and
+- named roles with role-level default actions, canonical-path file rules,
+  execution rules, exact Linux capability rules, explicit-address network
+  rules, process-control rules, and Unix-stream role relationships; and
 - named bounded `exceptionGrants` that refer only to named file rules.
 
 The closed additional-entry kinds are `PostStart`, `PreStop`, `StartupProbe`,
@@ -488,11 +488,39 @@ second public mount rule. Keep generic capability authority denial-only.
 
 Network rules support IPv4 and IPv6 prefixes, TCP and UDP, port ranges,
 final-address enforcement, and the qualified socket operations. Separate
-address-free socket controls from destination rules. Unix-stream rules express
-one role-to-role relationship for connect, send, and receive. Unmatched
-Unix-stream relationships deny. Process-control rules support exact signal
-numbers, including signal zero, against one exact target role and exact ptrace
-denial. Positive general ptrace authority is not part of the API.
+address-free socket controls from destination rules. A role can set an
+explicit default action for qualified operations. Control lowers the default
+to the existing `EffectFamilyDefaultV1`. An exact rule wins. The default
+applies only when no exact object rule matches. The first qualified public
+default is `Network` and `Connect` with action `Deny`:
+
+```yaml
+roles:
+  - name: worker
+    defaultActions:
+      - family: Network
+        operations: [Connect]
+        action: Deny
+    network:
+      socketControls: []
+      destinations:
+        - name: result-service
+          operations: [Connect]
+          protocols: [TCP]
+          cidrs: [192.0.2.10/32]
+          ports:
+            - first: 443
+              last: 443
+          action: Allow
+```
+
+The destination rule allows the exact result service. An unmatched connect
+uses the explicit role default. A destination allow rule does not create an
+implicit default. Unix-stream rules express one role-to-role relationship for
+connect, send, and receive. Unmatched Unix-stream relationships deny.
+Process-control rules support exact signal numbers, including signal zero,
+against one exact target role and exact ptrace denial. Positive general ptrace
+authority is not part of the API.
 
 Add the namespaced `WorkloadProtectionException.mithril.erebor.dev` CRD. Use
 plural `workloadprotectionexceptions`, kind `WorkloadProtectionException`, and

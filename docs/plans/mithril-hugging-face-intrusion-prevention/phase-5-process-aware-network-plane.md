@@ -37,6 +37,12 @@ connected/unconnected send, receive where qualified, inherited/passed socket
 use, and local IPv4/IPv6/Unix relationships. Unsupported raw/packet/TUN/AF_XDP,
 RDMA/vsock/netlink/SCTP/MPTCP or async paths are denied or explicitly scoped.
 
+Evaluate an exact destination rule before a role default. If no destination
+rule matches, evaluate the signed role default for the network operation. An
+absent role default does not turn an address allow rule into an implicit
+allowlist. An explicit `Network` and `Connect` default with action `Deny`
+returns `EACCES` and records `UNRESOLVED_OBJECT` without a destination handle.
+
 ### D5.3 — Final-destination and packet floor
 
 Install actor-authorized socket/flow state and enforce the final post-rewrite

@@ -208,12 +208,15 @@ fn stored_and_offline_policy_specs_lower_to_the_same_compilable_policy() -> Test
             && denial.path == "/srv/**/secrets"
             && denial.operation_ids == ["OPEN_READ"]
     }));
-    assert_eq!(lowered.effect_family_defaults.len(), 2);
+    assert_eq!(lowered.effect_family_defaults.len(), 3);
     assert!(lowered.effect_family_defaults.iter().all(|default| {
         default.effect_family == EffectFamilyV1::Network
             && matches!(
                 default.operations.as_slice(),
-                [operation] if operation == "SOCKET_CREATE" || operation == "SHUTDOWN"
+                [operation]
+                    if operation == "CONNECT"
+                        || operation == "SOCKET_CREATE"
+                        || operation == "SHUTDOWN"
             )
     }));
     let python_selectors = lowered
@@ -432,8 +435,29 @@ fn entry_execution_references_reject_invalid_or_ambiguous_admission() -> TestRes
 }
 
 #[test]
-fn application_policy_lowering_does_not_create_implicit_denials() -> TestResult {
+fn network_default_action_is_explicit() -> TestResult {
     let mut resource = resource()?;
+    let lowered = lower_kubernetes_policy(&resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID)?;
+    assert!(lowered.effect_family_defaults.iter().any(|default| {
+        default.role_ids == ["worker"]
+            && default.effect_family == EffectFamilyV1::Network
+            && default.operations == ["CONNECT"]
+            && default.requested_disposition == mithril_control::PolicyDispositionV1::Deny
+            && default.errno == Some(mithril_control::ErrnoV1::Eacces)
+    }));
+    assert!(PolicyCompiler
+        .compile(&lowered)?
+        .compiled_cells
+        .iter()
+        .any(|cell| {
+            cell.key.role_id == "worker"
+                && cell.key.effect_family == EffectFamilyV1::Network
+                && cell.key.operation_id == "CONNECT"
+                && cell.key.object_selector == "DEFAULT"
+                && cell.physical_result == CompiledPhysicalResultV1::DenyEffect
+        }));
+
+    resource.spec.roles[0].default_actions.clear();
     resource.spec.roles[0].network.socket_controls.clear();
     let lowered = lower_kubernetes_policy(&resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID)?;
     assert!(lowered.effect_family_defaults.is_empty());

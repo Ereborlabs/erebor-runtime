@@ -513,6 +513,8 @@ static __noinline int network_apply_destination(
     profile_generation_descriptor_v1 *creator_generation;
     physical_decision_v1 *current;
     physical_decision_v1 *creator;
+    bool current_default = false;
+    bool creator_default = false;
     struct sock *sock = ipc_socket_sock(socket);
     __u8 *peer_address;
     __u16 *peer_port;
@@ -608,6 +610,31 @@ static __noinline int network_apply_destination(
                         state->creator_binding_lifecycle_state, operation,
                         state->protocol)
                   : NULL;
+    if (!current) {
+        current = network_control_decision(
+            scratch, scratch->process.active_profile_generation_ref_id,
+            scratch->process.active_role_id,
+            scratch->process.process_state_vector_id,
+            binding->lifecycle_state, operation);
+        current_default = current != NULL;
+    }
+    if (!creator) {
+        creator = network_control_decision(
+            scratch, state->creator_profile_generation_ref_id,
+            state->creator_role_id,
+            state->creator_process_state_vector_id,
+            state->creator_binding_lifecycle_state, operation);
+        creator_default = creator != NULL;
+    }
+    if ((current_default && current_generation &&
+         current->decision == physical_decision_kind_v1_deny &&
+         current_generation->mode == policy_generation_mode_v1_protect) ||
+        (creator_default && creator_generation &&
+         creator->decision == physical_decision_kind_v1_deny &&
+         creator_generation->mode == policy_generation_mode_v1_protect))
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_unresolved_object);
     if (!network_decision_allows(creator, creator_generation,
                                  application_default_allow))
         return network_apply_decision(config, scratch, creator_generation,

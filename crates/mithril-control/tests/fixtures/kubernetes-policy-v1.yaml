@@ -17,6 +17,10 @@ containers:
     externalRole: worker
 roles:
   - name: worker
+    defaultActions:
+      - family: Network
+        operations: [Connect]
+        action: Deny
     files:
       - name: allow-python-read
         path: /usr/bin/python
