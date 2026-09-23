@@ -2681,6 +2681,10 @@ setup, production actions, assertions, and focused test.
     mount-object trace, denied-role, errno, and pending-exec cleanup checks in
     the small tests. The success case is 88 lines, or 90 lines with its two
     attributes. The trace case is 98 lines, or 100 lines with its attributes.
+  - [x] Read the terminal approval slot before task inspection. Node can
+    reconcile the consumed slot while the test reads the task. The explicit
+    `Consumed` assertion passed on Host, direct `runc`, and Kubernetes. The
+    shared direct-`runc` order also passed the three administrative cases.
   - [x] Keep ordinary Kubernetes `pods/exec` tasks in the restricted external
     role. Invoke the Control admission webhook only for the trusted Mithril
     approval group. A matching armed slot can then select the approved role.

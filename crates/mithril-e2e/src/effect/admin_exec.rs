@@ -51,12 +51,12 @@ fn approved_exec_consumes_once<P: Platform>() -> TestResult<()> {
     );
 
     let mut actor = env.add_actor("sleep", &["0.5"])?;
+    let consumed = env.approval(&root)?.ok_or("consumed slot is missing")?;
     let task = env.task(actor.id(), "approved administrative actor")?;
     assert_eq!(
         task.snapshot.root_class.as_deref(),
         Some("external_runtime_root")
     );
-    let consumed = env.approval(&root)?.ok_or("consumed slot is missing")?;
     assert_eq!(
         task.snapshot.installed_role_class.as_deref(),
         Some("approved_administrative_role"),
