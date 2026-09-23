@@ -2394,7 +2394,8 @@ test does not close a row when its physical condition or an assertion changed.
       production path.
     - [x] Keep the Rust test below 100 lines. The test has 25 lines. The exact
       Host case passed in 27.99 seconds on 2026-09-23.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact case passed in 28.86
+      seconds on 2026-09-23 with the same actor, policy, and assertions.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the three matching legacy TCP actions after all three
       platform cases pass. Keep the combined result, fixture proof, and shell
