@@ -220,7 +220,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub runtime_topology_uninitialized_at_create_container: bool,
     pub stable_entry_policy_preserved_after_mount_mutation: bool,
     pub stable_canonical_mount_policy_preserved_after_mount_mutation: bool,
-    pub unprotected_initial_exec_allowed: bool,
     pub runc_post_create_mount_mutation_observed: bool,
     pub bpf_runtime_topology_initialized: bool,
     pub held_runtime_admission_reconciled: bool,
@@ -3551,93 +3550,6 @@ impl EffectTestRunner {
                 }));
             }
         }
-        let unprotected_container_id = format!(
-            "{:x}",
-            Sha256::digest(format!("unprotected-{container_id}").as_bytes())
-        );
-        let unprotected_cgroup_name =
-            format!("mithril-unprotected-direct-runc-{}", std::process::id());
-        let unprotected_cgroup_path = PathBuf::from("/sys/fs/cgroup/system.slice")
-            .join(format!("{unprotected_cgroup_name}.scope"));
-        ensure!(
-            !unprotected_cgroup_path.exists(),
-            InvalidInputSnafu {
-                path: &unprotected_cgroup_path,
-                reason: "the unprotected direct runc cgroup already exists",
-            }
-        );
-        let mut unprotected_config = config.clone();
-        unprotected_config["process"]["args"] = json!(["/bin/busybox", "true"]);
-        unprotected_config["hooks"] = json!({});
-        unprotected_config["linux"]["cgroupsPath"] = json!(format!(
-            "system.slice:mithril-unprotected-direct-runc:{}",
-            std::process::id()
-        ));
-        unprotected_config["annotations"][IMAGE_NAME_ANNOTATION] =
-            json!("mithril-control:convergence");
-        unprotected_config["annotations"]
-            .as_object_mut()
-            .context(InvalidInputSnafu {
-                path: &config_path,
-                reason: "the unprotected direct runc annotations are not an object",
-            })?
-            .remove(PROFILE_ID_ANNOTATION);
-        unprotected_config["annotations"]
-            .as_object_mut()
-            .context(InvalidInputSnafu {
-                path: &config_path,
-                reason: "the unprotected direct runc annotations are not an object",
-            })?
-            .remove(POLICY_SOURCE_REVISION_ANNOTATION);
-        fs::write(
-            &config_path,
-            serde_json::to_vec_pretty(&unprotected_config)
-                .context(JsonSnafu { path: &config_path })?,
-        )
-        .context(IoSnafu { path: &config_path })?;
-        let unprotected_output = Command::new(runc_path)
-            .args(["--root", state_root.to_string_lossy().as_ref()])
-            .arg("--systemd-cgroup")
-            .args(["run", "--bundle", bundle.to_string_lossy().as_ref()])
-            .arg(&unprotected_container_id)
-            .stdin(Stdio::null())
-            .output()
-            .context(IoSnafu { path: runc_path })?;
-        fs::write(
-            output_directory.join("runc-unprotected-initial.stdout"),
-            &unprotected_output.stdout,
-        )
-        .context(IoSnafu {
-            path: output_directory,
-        })?;
-        fs::write(
-            output_directory.join("runc-unprotected-initial.stderr"),
-            &unprotected_output.stderr,
-        )
-        .context(IoSnafu {
-            path: output_directory,
-        })?;
-        let _cleanup = Command::new(runc_path)
-            .args(["--root", state_root.to_string_lossy().as_ref()])
-            .args(["delete", "--force", &unprotected_container_id])
-            .output();
-        let unprotected_initial_exec_allowed = unprotected_output.status.success();
-        ensure!(
-            unprotected_initial_exec_allowed && !unprotected_cgroup_path.exists(),
-            CommandSnafu {
-                program: runc_path.display().to_string(),
-                reason: format!(
-                    "unprotected initial exec was not continued: {}",
-                    String::from_utf8_lossy(&unprotected_output.stderr).trim()
-                ),
-            }
-        );
-        fs::write(
-            &config_path,
-            serde_json::to_vec_pretty(&config).context(JsonSnafu { path: &config_path })?,
-        )
-        .context(IoSnafu { path: &config_path })?;
-
         let (boot_id, node_boot_id) = boot_identity()?;
         let retained_bpf_sha256 = DigestV1::of(fs::read(retained_bpf_object).context(IoSnafu {
             path: retained_bpf_object,
@@ -6028,7 +5940,6 @@ impl EffectTestRunner {
             runtime_topology_uninitialized_at_create_container,
             stable_entry_policy_preserved_after_mount_mutation,
             stable_canonical_mount_policy_preserved_after_mount_mutation,
-            unprotected_initial_exec_allowed,
             runc_post_create_mount_mutation_observed,
             bpf_runtime_topology_initialized,
             held_runtime_admission_reconciled: true,
