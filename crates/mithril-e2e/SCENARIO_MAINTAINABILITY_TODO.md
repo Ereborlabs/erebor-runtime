@@ -2415,7 +2415,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The exact case passed in 29.44
       seconds on 2026-09-23 with the same test body, actor, policy, and
       assertions as Host.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact physical case passed in
+      67.17 seconds on 2026-09-23 with the same test body, actor, policy, and
+      assertions as Host and direct `runc`.
     - [ ] Remove only the matching legacy UDP actions and result field after
       all three platform cases pass.
   - [x] Retire `NET-SOCKCTL-001`. Role network policy uses the Cilium
