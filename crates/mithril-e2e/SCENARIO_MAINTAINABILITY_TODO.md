@@ -2421,6 +2421,11 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Remove only the matching legacy UDP actions and result field after
       all three platform cases pass. The shared platform test now owns the
       three UDP denials.
+    - [x] Run the complete platform matrix after the Control validation
+      change. Host passed 75 cases. Direct `runc` passed 66 cases. Kubernetes
+      passed 66 cases. One earlier `runc` identity run had an isolated
+      `setnsProcess` setup failure in the subreaper case. The exact case and a
+      clean 33-case identity rerun passed without a source change.
   - [x] Retire `NET-SOCKCTL-001`. Role network policy uses the Cilium
     boundary. It governs destinations, protocols, ports, and traffic. It does
     not govern socket options.
