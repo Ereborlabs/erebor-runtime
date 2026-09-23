@@ -79,4 +79,6 @@ mod terminal_exec;
 #[cfg(test)]
 mod terminal_retirement;
 #[cfg(test)]
+mod unprotected;
+#[cfg(test)]
 mod workload_recovery;

@@ -2516,6 +2516,15 @@ setup, production actions, assertions, and focused test.
     - [x] Pass Kubernetes in a separate verified commit. The exact physical
       case passed in 64.39 seconds. Remove only the matching legacy result,
       helper, and shell assertion.
+  - [ ] Replace the direct-runc-only unprotected initial-exec block with one
+    standard platform test. Start Control and Node without a policy. Require
+    the shared actor to start, receive its stop command, and exit successfully.
+    Do not add a fixture, policy, or Platform API.
+    - [x] Pass Host in a separate verified commit. The 20-line test passed in
+      21.54 seconds.
+    - [ ] Pass direct `runc` in a separate verified commit.
+    - [ ] Pass Kubernetes in a separate verified commit, then remove the exact
+      legacy action and result field.
 - [ ] Kubernetes subpath, bind alias, and wildcard paths: keep the same mount
   order and protected reads as the Kubernetes workload.
 - [ ] Concurrent exec and reader-queue saturation: keep the same containerd
