@@ -2485,7 +2485,7 @@ setup, production actions, assertions, and focused test.
     inherited role and admission rule, and zero composite and exact keys
     explicit. Do not add another test, actor, policy, or Platform API.
     - [x] Host passed in 35.99 seconds. The strengthened test has 99 lines.
-    - [ ] Pass direct `runc` in a separate verified commit.
+    - [x] Direct `runc` passed in 36.10 seconds.
     - [ ] Pass Kubernetes in a separate verified commit, then remove only the
       matching legacy assertion, result field, and shell assertion.
 - [ ] Kubernetes subpath, bind alias, and wildcard paths: keep the same mount
