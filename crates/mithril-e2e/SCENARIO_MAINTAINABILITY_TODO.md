@@ -2366,6 +2366,10 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Remove only the matching legacy action and result field after all
       three platforms pass. Network physical-probe result schema 2 removes
       this field. Its other actions, fixture rows, and assertions remain.
+    - [x] Run the complete shared lifecycles after the replacement. Host passed
+      32 identity cases. Direct runc passed 27 identity cases. Kubernetes
+      passed 27 identity cases. Ptrace, signal, and workload recovery passed
+      separately on all three platforms.
 - [ ] `NetworkTestRunner::physical_probe` two-node peer scenario: keep the
   same TCP, UDP, and denied-port operations as `two-node-network.sh`.
 

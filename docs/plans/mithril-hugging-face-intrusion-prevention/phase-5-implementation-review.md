@@ -1,7 +1,7 @@
 # Phase 5 Implementation Review Guide
 
-Status: Source-grounded review guide for the current checked source on
-2026-08-19.
+Status: Source-grounded review guide for source commit `372bffb7` on
+2026-09-23.
 
 - Phase: [Process-Aware Network Plane](./phase-5-process-aware-network-plane.md)
 - Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -24,6 +24,9 @@ The advertised path has these properties:
 
 - signed TCP destination policy binds address prefix, port, profile
   generation, actor state, operation, and protocol;
+- an exact destination decision takes precedence over an explicit role
+  default;
+- an unmatched connect uses the signed `Network` and `Connect` role default;
 - a created socket keeps creator authority in kernel socket storage;
 - connect, send, and receive intersect current-actor and retained creator
   decisions;
@@ -68,6 +71,8 @@ Do not infer any of these broader claims:
    [`source.rs`](../../../crates/mithril-control/src/policy/source.rs) and its
    closed validation in
    [`validation/network.rs`](../../../crates/mithril-control/src/policy/validation/network.rs).
+   Review the public role default and its lowering in
+   [`policy/kubernetes.rs`](../../../crates/mithril-control/src/policy/kubernetes.rs).
 5. Review deterministic destination and decision lowering in
    [`policy/network.rs`](../../../crates/mithril-node/src/policy/network.rs).
    Then follow generation staging, readback, publication, fencing, and
@@ -89,6 +94,8 @@ Do not infer any of these broader claims:
    remains the only loader.
 10. Finish with the assertion-bearing runner in
     [`effect/network.rs`](../../../crates/mithril-e2e/src/effect/network.rs),
+    the standard unmatched-connect test in
+    [`effect/network_connect.rs`](../../../crates/mithril-e2e/src/effect/network_connect.rs),
     the managed child operations in
     [`effect/child.rs`](../../../crates/mithril-e2e/src/effect/child.rs), and
     the peer command in
@@ -101,7 +108,7 @@ Do not infer any of these broader claims:
 
 | Owner | Owns | Does not own |
 | --- | --- | --- |
-| `mithril-control` network policy | Closed source fields, canonical prefixes, sorted protocol and port sets, DNS-mode validation, and rejection of unqualified namespace or service selectors. | Kernel maps, socket identity, packet parsing, or response execution. |
+| `mithril-control` network policy | Closed source fields, explicit role defaults, canonical prefixes, sorted protocol and port sets, DNS-mode validation, and rejection of unqualified namespace or service selectors. | Kernel maps, socket identity, packet parsing, or response execution. |
 | `mithril-node::NodePolicyGenerationOwner` | Deterministic lowering, capacity and readback through the shared host, generation publication, socket-reference-aware retirement, and exact whole-socket response-floor installation. | BPF loading, current-task identity, or socket lifecycle callbacks. |
 | `erebor-interceptor::KernelHostOwner` | Exclusive object load, required program selection, LSM and cgroup attachment, map access, pins, lease, capability checks, and cleanup. | Mithril policy meaning or a second decision engine. |
 | Production BPF programs | Current actor lookup, socket storage, creator and current intersection, packet parsing, response-floor enforcement, reference accounting, hard closure, and observation requests. | Durable policy authorship, semantic DNS, TLS meaning, or provider results. |
@@ -118,6 +125,12 @@ calls those production owners and asserts their results.
 destination records. Each destination record has ordered TCP or UDP
 protocols, canonical IPv4 or IPv6 prefixes, up to eight non-overlapping port
 ranges, and a final-address requirement.
+
+`KubernetesRolePolicyV1::default_actions` is a closed public list. Its current
+form accepts only `Network`, `Connect`, and an `Allow` or `Deny` action. Public
+validation rejects an empty operation list and duplicate operations in one
+role. Lowering creates an `EffectFamilyDefaultV1` row. It does not derive a
+default from a destination rule.
 
 Active validation rejects these inputs:
 
@@ -149,6 +162,21 @@ address prefix. One destination decision key then binds:
 This shape prevents an address match from becoming authority by itself. The
 address and port select a destination class. The actor and operation still
 need an exact physical decision.
+
+## Exact And Default Decision Flow
+
+[`KubernetesRolePolicyV1`](../../../crates/mithril-control/src/policy/kubernetes.rs) A role declares an explicit `Network` and `Connect` default
+  -> [`validate_public_policy`](../../../crates/mithril-control/src/policy/kubernetes.rs) Control rejects an empty or duplicate default operation
+  -> [`lower_kubernetes_policy`](../../../crates/mithril-control/src/policy/kubernetes.rs) Control lowers the role default to `EffectFamilyDefaultV1`
+  -> [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs) Node installs and reads back the exact and default rows in one generation
+  -> [`network_apply_destination`](../../../bpf/erebor-interceptor/programs/identity_network.bpf.h) BPF checks the exact destination decision first
+  -> [`network_control_decision`](../../../bpf/erebor-interceptor/programs/identity_network.bpf.h) BPF checks the signed role default only when the exact decision is absent
+  -> [`unclassified_connect_is_denied`](../../../crates/mithril-e2e/src/effect/network_connect.rs) Host, runc, and Kubernetes observe `EACCES` and `UNRESOLVED_OBJECT`
+
+An exact decision remains authoritative. An explicit default denial in
+protect mode returns `EACCES`. An unmatched address has no destination handle,
+so the evidence keeps the destination and exact-object handles at zero. If the
+policy has no role default, an allow destination does not create one.
 
 ## Policy Activation Flow
 
@@ -372,6 +400,7 @@ limit. Per-CPU scratch owns temporary destination and socket buffers.
 | `network_ipv4_destination_classes` | `NetworkIpv4LpmKeyV1` / `NetworkDestinationClassV1` | `NodePolicyGenerationOwner` through `KernelHost` | None | Network LSM helpers and cgroup egress program | Immutable generation row. Installed and read back before publication. Deleted only after generation retirement. |
 | `network_ipv6_destination_classes` | `NetworkIpv6LpmKeyV1` / `NetworkDestinationClassV1` | `NodePolicyGenerationOwner` through `KernelHost` | None | Network LSM helpers and cgroup egress program | Same lifecycle as the IPv4 trie. |
 | `network_destination_decisions` | `NetworkDestinationDecisionKeyV1` / `PhysicalDecisionV1` | `NodePolicyGenerationOwner` through `KernelHost` | None | Network LSM helpers and packet decision path | Immutable generation row. Capacity and exact readback precede publication. |
+| `effect_defaults` | `EffectDefaultKeyV1` / `PhysicalDecisionV1` | `NodePolicyGenerationOwner` through `KernelHost` | None | Network LSM helpers and shared effect helpers | Immutable generation row. The network key binds generation, role, operation, process state, and lifecycle. Node deletes the row after generation retirement. |
 | `network_socket_states` | Implicit kernel socket key / 136-byte `NetworkSocketStateV1` | None | Post-create and accepted-socket paths create or update; flow use updates; release tombstones | Network LSM hooks, cgroup egress, and release | Kernel socket lifetime with clone support. It stores only fields read by policy, evidence, recovery, or cleanup. It is not file descriptor or process lifetime. |
 | `network_response_floors` | `NetworkResponseFloorKeyV1` / 8-byte `NetworkResponseFloorV1` | `NodePolicyGenerationOwner` inserts an exact floor through `KernelHost` | Final socket release deletes the exact floor | Network LSM helpers and cgroup egress program | Row existence plus `WholeSocket` scope is the fence. Insert does not replace an existing row. Release removes it. |
 | `profile_generation_socket_refs` | Native `u64` / native `u64` | Node stages a zero row and deletes it after retirement | Socket creation and accepted-socket paths increment; flow-authorizer changes transfer; release decrements | Node fence validation and retirement; BPF generation validation | One row per policy generation. A nonzero value blocks generation retirement and proves a live socket holder. |
@@ -474,6 +503,15 @@ Only after every assertion passes does the runner return the JSON bundle. The
 fixture array contains 13 unique `PASS` rows. A false physical assertion makes
 the probe fail and prevents a pass result.
 
+The unmatched-connect case no longer runs inside
+`NetworkTestRunner::physical_probe`. The standard 60-line Rust test uses one
+shared Python actor and one policy on Host, direct runc, and Kubernetes. It
+starts Control and Node, installs the signed policy, starts the actor, and
+connects to `127.0.0.1:9`. It requires `EACCES`, the exact peer fields,
+`UNRESOLVED_OBJECT`, and zero destination and exact-object handles. The old
+probe action and result field were removed after all three platform cases
+passed.
+
 The two-node harness starts one peer server inside each peer Pod network
 namespace and invokes the same runner on the opposite host. It requires the
 peer's TCP and UDP receipt and the absence of a denied connection before it
@@ -487,6 +525,7 @@ accepts either direction.
 | Node lifecycle tests | Tests beside [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs) | Capacity, staging, readback, publication, response-floor validation, socket-reference-aware retirement, and row deletion. |
 | ABI and Interceptor tests | [`abi/network.rs`](../../../crates/erebor-interceptor-abi/src/abi/network.rs) and [`bundled.rs`](../../../crates/erebor-interceptor/src/bundled.rs) | Closed enums and layout, required maps and hooks, creator/current intersection, socket lifetime, Unix owner separation, and packet use of retained state. |
 | Rust physical fixture tests | [`effect/network.rs`](../../../crates/mithril-e2e/src/effect/network.rs) | Signed fixture compilation, closed unique result matrix, managed-child protocol, and assertion-bearing physical sequence. |
+| Standard platform test | [`effect/network_connect.rs`](../../../crates/mithril-e2e/src/effect/network_connect.rs) and [`network_connect.py`](../../../crates/mithril-e2e/fixtures/process/network_connect.py) | The same actor, policy, action, and result assertions prove the explicit unmatched-connect denial on Host, direct runc, and Kubernetes. |
 | Manual example | [`mithril-network-manual`](../../../examples/mithril-network-manual/README.md) | A readable single-host command that uses the production runner and does not own VM lifecycle. |
 | Disposable VM harness | [`run.sh`](../../../crates/mithril-e2e/harness/vm/run.sh) and [`two-node-network.sh`](../../../crates/mithril-e2e/harness/vm/two-node-network.sh) | Explicit build, isolated kernel execution, exact two-node and peer-Pod placement, evidence collection, cross-probe compatibility, and cleanup. |
 
@@ -581,13 +620,12 @@ widen the qualified network claim without its own physical proof.
 
 ## Source State And Guide Verification
 
-This guide was checked against the current source on 2026-08-19.
+This guide was checked against source commit `372bffb7` on 2026-09-23.
 The documentation change does not modify Rust, BPF, ABI, build, or test source.
 
-The single-node disposable-VM physical suite and bidirectional two-node K3s
-Flannel suite passed after the last implementation edit. Formatting,
-workspace check, Clippy, and all source-driven workspace tests passed. The
-release-record freshness assertion remains outside this source-only delivery.
-The documentation diff check and local link-target check passed after this
-guide was updated. The guide records no broader result than the closure
-matrix.
+The explicit unmatched-connect test passed on Host, direct runc, and
+Kubernetes. The complete identity lifecycles passed 32 Host cases, 27 runc
+cases, and 27 Kubernetes cases. The separate ptrace, signal, and workload
+recovery lifecycles passed on all three platforms. The required Rust CI script,
+the VM harness behavior test, formatting, and the documentation diff check
+passed. The guide records no broader result than the closure matrix.
