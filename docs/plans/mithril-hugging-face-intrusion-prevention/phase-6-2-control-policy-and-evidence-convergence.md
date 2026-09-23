@@ -486,13 +486,14 @@ credentials. Mithril authorizes its use but does not add it. A successful
 mount needs the role's exact `SysAdmin` authorization. It does not need a
 second public mount rule. Keep generic capability authority denial-only.
 
-Network rules support IPv4 and IPv6 prefixes, TCP and UDP, port ranges,
-final-address enforcement, and the qualified socket operations. Separate
-address-free socket controls from destination rules. A role can set an
-explicit default action for qualified operations. Control lowers the default
-to the existing `EffectFamilyDefaultV1`. An exact rule wins. The default
-applies only when no exact object rule matches. The first qualified public
-default is `Network` and `Connect` with action `Deny`:
+Network rules support IPv4 and IPv6 prefixes, TCP and UDP, port ranges, and
+final-address enforcement. Role network policy follows the Cilium boundary.
+It does not govern socket options. Linux governs `TCP_NODELAY`, `SO_MARK`, and
+other socket options. A role can set an explicit default action for qualified
+traffic operations. Control lowers the default to the existing
+`EffectFamilyDefaultV1`. An exact rule wins. The default applies only when no
+exact object rule matches. The first qualified public default is `Network`
+and `Connect` with action `Deny`:
 
 ```yaml
 roles:
@@ -502,7 +503,6 @@ roles:
         operations: [Connect]
         action: Deny
     network:
-      socketControls: []
       destinations:
         - name: result-service
           operations: [Connect]

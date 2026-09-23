@@ -70,7 +70,6 @@
           }
         ],
         "network": {
-          "socketControls": [],
           "destinations": []
         },
         "processControl": [],
@@ -81,7 +80,6 @@
         "files": [],
         "execution": [],
         "network": {
-          "socketControls": [],
           "destinations": []
         },
         "processControl": [],
@@ -92,7 +90,6 @@
         "files": [],
         "execution": [],
         "network": {
-          "socketControls": [],
           "destinations": []
         },
         "processControl": [],

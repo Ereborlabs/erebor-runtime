@@ -593,49 +593,10 @@
                               },
                               "maxItems": 1024,
                               "type": "array"
-                            },
-                            "socketControls": {
-                              "items": {
-                                "maxProperties": 4096,
-                                "properties": {
-                                  "action": {
-                                    "enum": [
-                                      "Allow",
-                                      "Deny"
-                                    ],
-                                    "maxLength": 4096,
-                                    "type": "string"
-                                  },
-                                  "operations": {
-                                    "items": {
-                                      "enum": [
-                                        "Create",
-                                        "Listen",
-                                        "Accept",
-                                        "Shutdown",
-                                        "SetSocketOption"
-                                      ],
-                                      "maxLength": 4096,
-                                      "type": "string"
-                                    },
-                                    "maxItems": 5,
-                                    "minItems": 1,
-                                    "type": "array"
-                                  }
-                                },
-                                "required": [
-                                  "action",
-                                  "operations"
-                                ],
-                                "type": "object"
-                              },
-                              "maxItems": 256,
-                              "type": "array"
                             }
                           },
                           "required": [
-                            "destinations",
-                            "socketControls"
+                            "destinations"
                           ],
                           "type": "object"
                         },

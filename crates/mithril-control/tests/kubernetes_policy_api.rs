@@ -208,16 +208,9 @@ fn stored_and_offline_policy_specs_lower_to_the_same_compilable_policy() -> Test
             && denial.path == "/srv/**/secrets"
             && denial.operation_ids == ["OPEN_READ"]
     }));
-    assert_eq!(lowered.effect_family_defaults.len(), 3);
+    assert_eq!(lowered.effect_family_defaults.len(), 1);
     assert!(lowered.effect_family_defaults.iter().all(|default| {
-        default.effect_family == EffectFamilyV1::Network
-            && matches!(
-                default.operations.as_slice(),
-                [operation]
-                    if operation == "CONNECT"
-                        || operation == "SOCKET_CREATE"
-                        || operation == "SHUTDOWN"
-            )
+        default.effect_family == EffectFamilyV1::Network && default.operations == ["CONNECT"]
     }));
     let python_selectors = lowered
         .path_selectors
@@ -458,7 +451,6 @@ fn network_default_action_is_explicit() -> TestResult {
         }));
 
     resource.spec.roles[0].default_actions.clear();
-    resource.spec.roles[0].network.socket_controls.clear();
     let lowered = lower_kubernetes_policy(&resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID)?;
     assert!(lowered.effect_family_defaults.is_empty());
     assert!(lowered

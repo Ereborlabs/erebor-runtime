@@ -51,7 +51,6 @@ roles:
         operations: [Execute]
         action: Allow
     network:
-      socketControls: []
       destinations: []
     processControl: []
     unixStreams: []
@@ -70,7 +69,6 @@ roles:
         operations: [Execute]
         action: Allow
     network:
-      socketControls: []
       destinations: []
     processControl: []
     unixStreams: []
@@ -89,7 +87,6 @@ roles:
         operations: [Execute]
         action: Allow
     network:
-      socketControls: []
       destinations: []
     processControl: []
     unixStreams: []
@@ -108,7 +105,6 @@ roles:
         operations: [Execute]
         action: Allow
     network:
-      socketControls: []
       destinations: []
     processControl: []
     unixStreams: []
@@ -127,7 +123,6 @@ roles:
         operations: [Execute]
         action: Allow
     network:
-      socketControls: []
       destinations: []
     processControl: []
     unixStreams: []
@@ -146,7 +141,6 @@ roles:
         operations: [Execute]
         action: Allow
     network:
-      socketControls: []
       destinations: []
     processControl: []
     unixStreams: []
@@ -160,7 +154,6 @@ roles:
         action: Deny
     execution: []
     network:
-      socketControls: []
       destinations: []
     processControl: []
     unixStreams: []
@@ -169,7 +162,6 @@ roles:
     files: []
     execution: []
     network:
-      socketControls: []
       destinations: []
     processControl: []
     unixStreams: []

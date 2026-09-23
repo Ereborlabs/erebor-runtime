@@ -50,9 +50,6 @@ roles:
         capabilities: [SysAdmin]
         action: Allow
     network:
-      socketControls:
-        - operations: [Create, Shutdown]
-          action: Allow
       destinations:
         - name: result-service-addresses
           operations: [Connect, Send, Receive]

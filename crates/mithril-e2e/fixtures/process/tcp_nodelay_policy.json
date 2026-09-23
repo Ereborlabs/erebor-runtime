@@ -2,17 +2,15 @@
   "apiVersion": "mithril.erebor.dev/v1alpha1",
   "kind": "WorkloadProtectionPolicy",
   "metadata": {
-    "name": "retained-descriptor",
+    "name": "tcp-nodelay",
     "namespace": "default",
-    "uid": "10000000-0000-4000-8000-000000000022",
+    "uid": "10000000-0000-4000-8000-000000000024",
     "generation": 1,
     "resourceVersion": "1"
   },
   "spec": {
     "podSelector": {
-      "matchLabels": {
-        "app.kubernetes.io/name": "pid-reuse"
-      },
+      "matchLabels": {"app.kubernetes.io/name": "pid-reuse"},
       "matchExpressions": []
     },
     "mode": "Protect",
@@ -23,38 +21,16 @@
         "images": [
           "fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         ],
-        "applicationEntry": {
-          "executionRule": "python",
-          "role": "worker"
-        },
+        "applicationEntry": {"executionRule": "python", "role": "worker"},
         "additionalEntries": [],
-        "administrativeEntry": {
-          "role": "administrator"
-        },
+        "administrativeEntry": {"role": "administrator"},
         "externalRole": "external"
       }
     ],
     "roles": [
       {
         "name": "worker",
-        "files": [
-          {
-            "name": "deny-secret",
-            "path": "/tmp/mithril-descriptor-secret",
-            "recursive": false,
-            "exact": true,
-            "operations": ["Read", "MmapRead"],
-            "action": "Deny"
-          },
-          {
-            "name": "allow-control",
-            "path": "/tmp/mithril-descriptor-allowed",
-            "recursive": false,
-            "exact": true,
-            "operations": ["OpenRead", "Read", "MmapRead"],
-            "action": "Allow"
-          }
-        ],
+        "files": [],
         "execution": [
           {
             "name": "python",
@@ -64,7 +40,18 @@
             "action": "Allow"
           }
         ],
-        "network": {"destinations": []},
+        "network": {
+          "destinations": [
+            {
+              "name": "loopback-discard",
+              "operations": ["Connect"],
+              "protocols": ["TCP"],
+              "cidrs": ["127.0.0.1/32"],
+              "ports": [{"first": 9, "last": 9}],
+              "action": "Allow"
+            }
+          ]
+        },
         "processControl": [],
         "unixStreams": []
       },

@@ -2011,10 +2011,6 @@ spec:
           action: Allow
 
       network:
-        socketControls:
-          - operations: [Create, Shutdown]
-            action: Allow
-
         destinations:
           - name: result-service-addresses
             operations: [Connect, Send, Receive]
@@ -2051,7 +2047,6 @@ spec:
           operations: [Execute]
           action: Allow
       network:
-        socketControls: []
         destinations: []
       processControl: []
       unixStreams: []
@@ -2065,7 +2060,6 @@ spec:
           action: Deny
       execution: []
       network:
-        socketControls: []
         destinations: []
       processControl: []
       unixStreams: []
@@ -2074,7 +2068,6 @@ spec:
       files: []
       execution: []
       network:
-        socketControls: []
         destinations: []
       processControl: []
       unixStreams: []
@@ -7878,13 +7871,7 @@ FileOperationV1 = OPEN_READ | OPEN_WRITE | READ | WRITE | MMAP_READ |
 ExecutionOperationV1 = EXECUTE | MMAP_EXECUTE | MPROTECT
 
 NetworkRulesV1 {
-  socket_controls[0..256]: SocketControlRuleV1
   destinations[0..1024]: AddressDestinationRuleV1
-}
-
-SocketControlRuleV1 {
-  operations[1..5]: CREATE | LISTEN | ACCEPT | SHUTDOWN | SET_SOCKET_OPTION
-  action: ALLOW | DENY
 }
 
 AddressDestinationRuleV1 {

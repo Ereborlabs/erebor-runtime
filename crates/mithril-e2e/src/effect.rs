@@ -26,6 +26,8 @@ mod privilege;
 mod process_control;
 mod runc;
 mod support;
+#[cfg(test)]
+mod tcp_nodelay;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

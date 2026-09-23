@@ -70,7 +70,6 @@ spec:
           capabilities: [SysAdmin]
           action: Allow
       network:
-        socketControls: []
         destinations: []
       processControl: []
       unixStreams: []
@@ -78,7 +77,6 @@ spec:
       files: []
       execution: []
       network:
-        socketControls: []
         destinations: []
       processControl: []
       unixStreams: []
@@ -96,7 +94,6 @@ spec:
           operations: [Execute]
           action: Allow
       network:
-        socketControls: []
         destinations: []
       processControl: []
       unixStreams: []
@@ -114,7 +111,6 @@ spec:
           operations: [Execute]
           action: Allow
       network:
-        socketControls: []
         destinations: []
       processControl: []
       unixStreams: []
@@ -132,7 +128,6 @@ spec:
           operations: [Execute]
           action: Allow
       network:
-        socketControls: []
         destinations: []
       processControl: []
       unixStreams: []
@@ -150,7 +145,6 @@ spec:
           operations: [Execute]
           action: Allow
       network:
-        socketControls: []
         destinations: []
       processControl: []
       unixStreams: []
@@ -168,7 +162,6 @@ spec:
           operations: [Execute]
           action: Allow
       network:
-        socketControls: []
         destinations: []
       processControl: []
       unixStreams: []
@@ -176,7 +169,6 @@ spec:
       files: []
       execution: []
       network:
-        socketControls: []
         destinations: []
       processControl: []
       unixStreams: []

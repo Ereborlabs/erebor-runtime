@@ -391,29 +391,8 @@ impl LinuxCapabilityV1 {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct KubernetesNetworkRulesV1 {
-    #[schemars(length(max = 256))]
-    pub socket_controls: Vec<SocketControlRuleV1>,
     #[schemars(length(max = 1024))]
     pub destinations: Vec<AddressDestinationRuleV1>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct SocketControlRuleV1 {
-    #[schemars(length(min = 1, max = 5))]
-    pub operations: Vec<KubernetesSocketControlOperationV1>,
-    pub action: KubernetesRuleActionV1,
-}
-
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
-)]
-pub enum KubernetesSocketControlOperationV1 {
-    Create,
-    Listen,
-    Accept,
-    Shutdown,
-    SetSocketOption,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -1160,18 +1139,6 @@ pub fn lower_kubernetes_policy(
                 capability.action,
             ));
         }
-        let socket_actions = role
-            .network
-            .socket_controls
-            .iter()
-            .flat_map(|rule| {
-                rule.operations
-                    .iter()
-                    .copied()
-                    .map(move |operation| (operation, rule.action))
-            })
-            .collect::<BTreeMap<_, _>>();
-        effect_family_defaults.extend(socket_control_defaults(&role.name, &socket_actions));
         for destination in &role.network.destinations {
             let mut ipv4_prefixes = destination
                 .cidrs
@@ -1538,7 +1505,6 @@ fn validate_public_policy(spec: &WorkloadProtectionPolicySpec, policy_id: &str) 
         );
     }
     let mut names = BTreeSet::new();
-    let mut socket_actions = BTreeMap::new();
     let mut default_operations = BTreeSet::new();
     for role in &spec.roles {
         default_operations.clear();
@@ -1637,26 +1603,6 @@ fn validate_public_policy(spec: &WorkloadProtectionPolicySpec, policy_id: &str) 
                     reason: format!(
                         "capability rule `{}` is duplicate, empty, or has duplicate capabilities",
                         rule.name
-                    ),
-                }
-            );
-        }
-        socket_actions.clear();
-        for rule in &role.network.socket_controls {
-            ensure!(
-                !rule.operations.is_empty()
-                    && all_distinct(&rule.operations)
-                    && rule.operations.iter().all(|operation| {
-                        socket_actions
-                            .insert(*operation, rule.action)
-                            .is_none_or(|old| old == rule.action)
-                    }),
-                PolicyValidationSnafu {
-                    policy_id,
-                    code: "CFG_KUBERNETES_SOCKET_CONTROL",
-                    reason: format!(
-                        "role `{}` has empty, duplicate, or conflicting socket controls",
-                        role.name
                     ),
                 }
             );
@@ -1940,23 +1886,6 @@ fn local_rule(
     }
 }
 
-fn socket_control_defaults(
-    role_id: &str,
-    socket_actions: &BTreeMap<KubernetesSocketControlOperationV1, KubernetesRuleActionV1>,
-) -> Vec<EffectFamilyDefaultV1> {
-    socket_actions
-        .iter()
-        .map(|(operation, action)| {
-            default_rule(
-                role_id,
-                EffectFamilyV1::Network,
-                &[operation.internal_name()],
-                *action,
-            )
-        })
-        .collect()
-}
-
 fn default_rule(
     role_id: &str,
     family: EffectFamilyV1,
@@ -2168,18 +2097,6 @@ impl KubernetesNetworkOperationV1 {
             Self::Send => "SEND",
             Self::Receive => "RECEIVE",
             Self::Bind => "BIND",
-        }
-    }
-}
-
-impl KubernetesSocketControlOperationV1 {
-    const fn internal_name(self) -> &'static str {
-        match self {
-            Self::Create => "SOCKET_CREATE",
-            Self::Listen => "LISTEN",
-            Self::Accept => "ACCEPT",
-            Self::Shutdown => "SHUTDOWN",
-            Self::SetSocketOption => "SETSOCKOPT",
         }
     }
 }

@@ -98,7 +98,7 @@ active. The K3s version was v1.35.5+k3s1.
 | Fixture | Result and physical oracle |
 | --- | --- |
 | `IPC-ENDPOINT-RESTART-006` | Pass. Restart preserved the exact task, socket, response floor, mount view, and active generation. A new whole-socket fence denied send and shutdown, no post-fence bytes or bypass packets arrived, and final close released the reference. |
-| `IPC-RELATIONSHIP-LOSS-002` | Pass. An unclassified connect was denied while the declared socket control remained allowed. Denied delegated and rewritten traffic had no peer receipt. |
+| `IPC-RELATIONSHIP-LOSS-002` | Pass. An unclassified connect was denied while the declared destination remained allowed. Denied delegated and rewritten traffic had no peer receipt. |
 | `LSM-DENY-SATURATION-001` | Pass in OBSERVE and PROTECT. Each mode attempted 50,000 saturation opens and reported 42,293 lost ring records. The fixed network denial and benign allow remained correct. |
 | `SOURCE-KA-READER-LOSS-003` | Pass. Reader loss opened a durable gap, blocked the negative claim, and did not change the fixed kernel result. Exact recovery opened a later interval without repairing the old gap. |
 | `SOURCE-KA-CAPACITY-005` | Pass. WAL capacity and ring loss opened separate gaps. The durable batch contained 256 integrity-checked records. No authoritative row was overwritten to allow. |

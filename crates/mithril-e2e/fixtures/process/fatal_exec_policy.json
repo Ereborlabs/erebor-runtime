@@ -91,7 +91,6 @@
           }
         ],
         "network": {
-          "socketControls": [],
           "destinations": []
         },
         "processControl": [],
@@ -116,7 +115,7 @@
             "action": "Allow"
           }
         ],
-        "network": {"socketControls": [], "destinations": []},
+        "network": {"destinations": []},
         "processControl": [],
         "unixStreams": []
       },
@@ -125,7 +124,6 @@
         "files": [],
         "execution": [],
         "network": {
-          "socketControls": [],
           "destinations": []
         },
         "processControl": [],
@@ -136,7 +134,6 @@
         "files": [],
         "execution": [],
         "network": {
-          "socketControls": [],
           "destinations": []
         },
         "processControl": [],

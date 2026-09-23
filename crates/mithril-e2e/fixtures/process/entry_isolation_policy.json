@@ -73,7 +73,7 @@
             "action": "Allow"
           }
         ],
-        "network": {"socketControls": [], "destinations": []},
+        "network": {"destinations": []},
         "processControl": [],
         "unixStreams": []
       },
@@ -97,7 +97,7 @@
             "action": "Allow"
           }
         ],
-        "network": {"socketControls": [], "destinations": []},
+        "network": {"destinations": []},
         "processControl": [],
         "unixStreams": []
       },
@@ -121,7 +121,7 @@
             "action": "Allow"
           }
         ],
-        "network": {"socketControls": [], "destinations": []},
+        "network": {"destinations": []},
         "processControl": [],
         "unixStreams": []
       },
@@ -145,7 +145,7 @@
             "action": "Allow"
           }
         ],
-        "network": {"socketControls": [], "destinations": []},
+        "network": {"destinations": []},
         "processControl": [],
         "unixStreams": []
       },
@@ -153,7 +153,7 @@
         "name": "administrator",
         "files": [],
         "execution": [],
-        "network": {"socketControls": [], "destinations": []},
+        "network": {"destinations": []},
         "processControl": [],
         "unixStreams": []
       },
@@ -161,7 +161,7 @@
         "name": "restricted",
         "files": [],
         "execution": [],
-        "network": {"socketControls": [], "destinations": []},
+        "network": {"destinations": []},
         "processControl": [],
         "unixStreams": []
       }
