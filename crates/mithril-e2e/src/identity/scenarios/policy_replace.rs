@@ -82,6 +82,8 @@ fn running_task_uses_new_policy<P: Platform>() -> TestResult<()> {
                     && event.task_cookie != snap.task_cookie
                     && event.active_role_id == snap.active_role_id
                     && event.admitted_entry_rule_id == snap.admitted_entry_rule_id
+                    && event.composite_atom_id == 0
+                    && event.exact_object_key_id == 0
             });
             actor.ensure_running("replacement effect")?;
             state.set((denied, child));
