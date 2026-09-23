@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use mithril_e2e::{
-    run_effect_child, run_network_peer_server, NetworkPeerTargetV1, NetworkTestRunner, Result,
+    run_effect_child, NetworkPeerServer, NetworkPeerTargetV1, NetworkTestRunner, Result,
     NETWORK_PEER_DENIED_PORT, NETWORK_PEER_TCP_PORT, NETWORK_PEER_UDP_PORT,
 };
 
@@ -108,14 +108,8 @@ fn run() -> Result<()> {
             ready_path,
             output,
         } => {
-            let result = run_network_peer_server(
-                bind_address,
-                tcp_port,
-                udp_port,
-                denied_port,
-                &ready_path,
-            )?;
-            NetworkTestRunner::write_json(&output, &result)?;
+            NetworkPeerServer::bind(bind_address, tcp_port, udp_port, denied_port, &ready_path)?
+                .run_to(&output)?;
             println!("Mithril network peer server passed");
             Ok(())
         }

@@ -2328,8 +2328,10 @@ test does not close a row when its physical condition or an assertion changed.
 
 ### Network
 
-- [ ] `run_network_peer_server`: own ready-file publication, bounded wait,
-  socket lifetime, and result cleanup.
+- [x] Replace `run_network_peer_server` with `NetworkPeerServer`. The owner
+  binds and retains all three sockets, publishes and removes readiness, uses a
+  bounded wait with the last receipt state, and removes a partial result file.
+  Its focused test passed on 2026-09-23.
 - [ ] `NetworkTestRunner::physical_probe` setup and teardown: own fixture,
   transport, cgroup, nftables, pin, lease, and peer-process cleanup.
 - [ ] `NetworkTestRunner::physical_probe` local socket scenarios: keep signed

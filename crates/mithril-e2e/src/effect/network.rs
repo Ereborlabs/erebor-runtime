@@ -41,8 +41,8 @@ const TOKEN_PAYLOAD: &[u8] = b"token";
 pub const NETWORK_PEER_TCP_PORT: u16 = 46_051;
 pub const NETWORK_PEER_UDP_PORT: u16 = 46_052;
 pub const NETWORK_PEER_DENIED_PORT: u16 = 46_053;
-const NETWORK_PEER_TCP_PAYLOAD: &[u8] = b"peer-tcp";
-const NETWORK_PEER_UDP_PAYLOAD: &[u8] = b"peer-udp";
+pub(super) const NETWORK_PEER_TCP_PAYLOAD: &[u8] = b"peer-tcp";
+pub(super) const NETWORK_PEER_UDP_PAYLOAD: &[u8] = b"peer-udp";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NetworkPeerTargetV1 {
@@ -1371,123 +1371,6 @@ impl NetworkTestRunner {
     }
 }
 
-pub fn run_network_peer_server(
-    bind_address: IpAddr,
-    tcp_port: u16,
-    udp_port: u16,
-    denied_port: u16,
-    ready_path: &Path,
-) -> Result<NetworkPeerServerResultV1> {
-    validate_peer_ports(tcp_port, udp_port, denied_port)?;
-    let tcp = tcp_listener(SocketAddr::new(bind_address, tcp_port))?;
-    let denied = tcp_listener(SocketAddr::new(bind_address, denied_port))?;
-    let udp = UdpSocket::bind(SocketAddr::new(bind_address, udp_port)).context(IoSnafu {
-        path: Path::new("two-node UDP peer"),
-    })?;
-    run_network_peer_server_with_sockets(tcp, udp, denied, ready_path)
-}
-
-fn run_network_peer_server_with_sockets(
-    tcp: TcpListener,
-    udp: UdpSocket,
-    denied: TcpListener,
-    ready_path: &Path,
-) -> Result<NetworkPeerServerResultV1> {
-    tcp.set_nonblocking(true).context(IoSnafu {
-        path: Path::new("two-node TCP peer"),
-    })?;
-    denied.set_nonblocking(true).context(IoSnafu {
-        path: Path::new("two-node denied peer"),
-    })?;
-    udp.set_nonblocking(true).context(IoSnafu {
-        path: Path::new("two-node UDP peer"),
-    })?;
-    fs::write(ready_path, b"ready\n").context(IoSnafu { path: ready_path })?;
-
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let mut tcp_payload_received = false;
-    let mut udp_payload_received = false;
-    let mut denied_connection_absent = true;
-    let mut completed_at = None;
-    while Instant::now() < deadline {
-        match denied.accept() {
-            Ok(_) => {
-                denied_connection_absent = false;
-                break;
-            }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-            Err(error) => {
-                return Err(crate::Error::Io {
-                    path: PathBuf::from("two-node denied peer"),
-                    source: error,
-                    location: snafu::Location::default(),
-                });
-            }
-        }
-        if !tcp_payload_received {
-            match tcp.accept() {
-                Ok((mut stream, _)) => {
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(5)))
-                        .context(IoSnafu {
-                            path: Path::new("two-node TCP peer"),
-                        })?;
-                    let mut payload = [0_u8; NETWORK_PEER_TCP_PAYLOAD.len()];
-                    stream.read_exact(&mut payload).context(IoSnafu {
-                        path: Path::new("two-node TCP peer"),
-                    })?;
-                    tcp_payload_received = payload == NETWORK_PEER_TCP_PAYLOAD;
-                }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                Err(error) => {
-                    return Err(crate::Error::Io {
-                        path: PathBuf::from("two-node TCP peer"),
-                        source: error,
-                        location: snafu::Location::default(),
-                    });
-                }
-            }
-        }
-        if !udp_payload_received {
-            let mut payload = [0_u8; NETWORK_PEER_UDP_PAYLOAD.len()];
-            match udp.recv_from(&mut payload) {
-                Ok((length, _)) => {
-                    udp_payload_received =
-                        length == payload.len() && payload == NETWORK_PEER_UDP_PAYLOAD;
-                }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                Err(error) => {
-                    return Err(crate::Error::Io {
-                        path: PathBuf::from("two-node UDP peer"),
-                        source: error,
-                        location: snafu::Location::default(),
-                    });
-                }
-            }
-        }
-        if tcp_payload_received && udp_payload_received {
-            let completed = completed_at.get_or_insert_with(Instant::now);
-            if completed.elapsed() >= Duration::from_millis(500) {
-                break;
-            }
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    ensure!(
-        tcp_payload_received && udp_payload_received && denied_connection_absent,
-        InvalidInputSnafu {
-            path: Path::new("two-node network peer"),
-            reason: "the peer did not receive both controls or accepted a denied connection",
-        }
-    );
-    Ok(NetworkPeerServerResultV1 {
-        schema_version: 1,
-        tcp_payload_received,
-        udp_payload_received,
-        denied_connection_absent,
-    })
-}
-
 fn validate_network_peer(peer: Option<NetworkPeerTargetV1>) -> Result<()> {
     let Some(peer) = peer else {
         return Ok(());
@@ -1501,23 +1384,7 @@ fn validate_network_peer(peer: Option<NetworkPeerTargetV1>) -> Result<()> {
             reason: "the peer address must identify a remote unicast interface",
         }
     );
-    validate_peer_ports(peer.tcp_port, peer.udp_port, peer.denied_port)
-}
-
-fn validate_peer_ports(tcp_port: u16, udp_port: u16, denied_port: u16) -> Result<()> {
-    ensure!(
-        tcp_port != 0
-            && udp_port != 0
-            && denied_port != 0
-            && tcp_port != udp_port
-            && tcp_port != denied_port
-            && udp_port != denied_port,
-        InvalidInputSnafu {
-            path: Path::new("two-node network peer"),
-            reason: "the peer ports must be nonzero and distinct",
-        }
-    );
-    Ok(())
+    super::network_peer::NetworkPeerServer::validate(peer.tcp_port, peer.udp_port, peer.denied_port)
 }
 
 fn build_network_artifact(
@@ -2116,18 +1983,8 @@ impl NetworkFixtureProof {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::io::Write as _;
-    use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
-    use std::thread;
-    use std::time::{Duration, Instant};
 
-    use snafu::ResultExt as _;
-
-    use super::{
-        build_network_artifact, run_network_peer_server_with_sockets, NetworkFixtureProof,
-        NETWORK_PEER_TCP_PAYLOAD, NETWORK_PEER_UDP_PAYLOAD,
-    };
-    use crate::error::IoSnafu;
+    use super::{build_network_artifact, NetworkFixtureProof};
 
     #[test]
     fn network_fixture_matrix_requires_physical_proof() {
@@ -2197,87 +2054,6 @@ mod tests {
             }),
         )?;
         assert!(artifact.is_file());
-        Ok(())
-    }
-
-    #[test]
-    fn network_peer_server_requires_controls_and_denied_absence() -> crate::Result<()> {
-        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
-            path: "temporary network peer".into(),
-            source,
-            location: snafu::Location::default(),
-        })?;
-        let address = SocketAddr::from(([127, 0, 0, 1], 0));
-        let tcp = TcpListener::bind(address).context(IoSnafu {
-            path: "temporary TCP peer port",
-        })?;
-        let udp = UdpSocket::bind(address).context(IoSnafu {
-            path: "temporary UDP peer port",
-        })?;
-        let denied = TcpListener::bind(address).context(IoSnafu {
-            path: "temporary denied peer port",
-        })?;
-        let tcp_port = tcp
-            .local_addr()
-            .context(IoSnafu {
-                path: "temporary TCP peer port",
-            })?
-            .port();
-        let udp_port = udp
-            .local_addr()
-            .context(IoSnafu {
-                path: "temporary UDP peer port",
-            })?
-            .port();
-        let ready = directory.path().join("ready");
-        let ready_for_server = ready.clone();
-        // Transfer the bound listeners to the server. This prevents a port-reuse race.
-        let server = thread::spawn(move || {
-            run_network_peer_server_with_sockets(tcp, udp, denied, &ready_for_server)
-        });
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !ready.is_file() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
-        assert!(ready.is_file());
-        let mut tcp =
-            TcpStream::connect(SocketAddr::from(([127, 0, 0, 1], tcp_port))).map_err(|source| {
-                crate::Error::Io {
-                    path: "temporary TCP peer".into(),
-                    source,
-                    location: snafu::Location::default(),
-                }
-            })?;
-        tcp.write_all(NETWORK_PEER_TCP_PAYLOAD)
-            .map_err(|source| crate::Error::Io {
-                path: "temporary TCP peer".into(),
-                source,
-                location: snafu::Location::default(),
-            })?;
-        let udp = UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0))).map_err(|source| {
-            crate::Error::Io {
-                path: "temporary UDP peer".into(),
-                source,
-                location: snafu::Location::default(),
-            }
-        })?;
-        udp.send_to(
-            NETWORK_PEER_UDP_PAYLOAD,
-            SocketAddr::from(([127, 0, 0, 1], udp_port)),
-        )
-        .map_err(|source| crate::Error::Io {
-            path: "temporary UDP peer".into(),
-            source,
-            location: snafu::Location::default(),
-        })?;
-        let result = server
-            .join()
-            .map_err(|_| super::invalid_probe("the network peer server thread panicked"))??;
-        assert!(
-            result.tcp_payload_received
-                && result.udp_payload_received
-                && result.denied_connection_absent
-        );
         Ok(())
     }
 }

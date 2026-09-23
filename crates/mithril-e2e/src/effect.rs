@@ -18,6 +18,7 @@ mod mailbox;
 mod network;
 #[cfg(test)]
 mod network_connect;
+mod network_peer;
 #[cfg(test)]
 mod node_restart;
 #[cfg(test)]
@@ -74,10 +75,11 @@ use crate::Result;
 
 pub use child::{run_effect_child, run_mount_reconfigure_child, run_mount_setattr_child};
 pub use network::{
-    run_network_peer_server, NetworkFixtureResultV1, NetworkPeerServerResultV1,
-    NetworkPeerTargetV1, NetworkPhysicalProbeBundleV2, NetworkTestRunner, NETWORK_PEER_DENIED_PORT,
+    NetworkFixtureResultV1, NetworkPeerServerResultV1, NetworkPeerTargetV1,
+    NetworkPhysicalProbeBundleV2, NetworkTestRunner, NETWORK_PEER_DENIED_PORT,
     NETWORK_PEER_TCP_PORT, NETWORK_PEER_UDP_PORT,
 };
+pub use network_peer::NetworkPeerServer;
 pub use runc::{
     RecoveredContainerEntryProbeV1, RuncEntryRoleRuntimeProbeV1, RuncRetainedRuntimeGateProbeV1,
 };

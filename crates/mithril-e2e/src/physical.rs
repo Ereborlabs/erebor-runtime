@@ -170,6 +170,10 @@ impl ProbeFile {
         }
         .inspect(|()| self.cleaned = true)
     }
+
+    pub(crate) fn keep(mut self) {
+        self.cleaned = true;
+    }
 }
 
 impl Drop for ProbeFile {
