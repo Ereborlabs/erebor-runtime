@@ -3,6 +3,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use erebor_interceptor_abi::ProcessExecutionStateV1;
+
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
@@ -89,6 +91,17 @@ fn runtime_entries_stay_distinct<P: Platform>() -> TestResult<()> {
     assert_eq!(
         root.snapshot.installed_role_class.as_deref(),
         Some("initial_role")
+    );
+    assert_eq!(
+        root.snapshot.process_execution_state,
+        ProcessExecutionStateV1::Active as u8
+    );
+    assert_eq!(
+        root.snapshot
+            .runtime_binding
+            .as_ref()
+            .map(|binding| binding.lifecycle_state.as_str()),
+        Some("active")
     );
     assert_ne!(root.snapshot.admitted_entry_rule_id, 0);
     for (task, role) in [(&py, 4), (&sh, 7), (&read, 5), (&count, 8), (&cp, 2)] {
