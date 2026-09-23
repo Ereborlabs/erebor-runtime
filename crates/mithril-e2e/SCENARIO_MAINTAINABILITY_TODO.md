@@ -2511,7 +2511,8 @@ setup, production actions, assertions, and focused test.
     API.
     - [x] Pass Host in a separate verified commit. The 43-line test passed in
       28.47 seconds.
-    - [ ] Pass direct `runc` in a separate verified commit.
+    - [x] Pass direct `runc` in a separate verified commit. The exact case
+      passed in 28.48 seconds.
     - [ ] Pass Kubernetes in a separate verified commit, then remove only the
       matching legacy result field, helper call, and shell assertion.
 - [ ] Kubernetes subpath, bind alias, and wildcard paths: keep the same mount
