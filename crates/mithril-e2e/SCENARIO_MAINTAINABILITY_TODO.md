@@ -2360,7 +2360,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The direct-runc case passed on
       2026-09-22 with the same test body, actor, policy, and assertions as the
       Host case.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The Kubernetes case passed on
+      2026-09-22 with the same test body, actor, policy, and assertions after
+      the retained cluster refreshed its CRD and production image tags.
     - [ ] Remove only the matching legacy action and result field after all
       three platforms pass.
 - [ ] `NetworkTestRunner::physical_probe` two-node peer scenario: keep the
