@@ -2522,7 +2522,8 @@ setup, production actions, assertions, and focused test.
     Do not add a fixture, policy, or Platform API.
     - [x] Pass Host in a separate verified commit. The 20-line test passed in
       21.54 seconds.
-    - [ ] Pass direct `runc` in a separate verified commit.
+    - [x] Pass direct `runc` in a separate verified commit. The exact case
+      passed in 22.03 seconds.
     - [ ] Pass Kubernetes in a separate verified commit, then remove the exact
       legacy action and result field.
 - [ ] Kubernetes subpath, bind alias, and wildcard paths: keep the same mount
