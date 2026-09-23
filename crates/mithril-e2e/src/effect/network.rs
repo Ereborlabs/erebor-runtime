@@ -68,9 +68,8 @@ pub struct NetworkFixtureResultV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct NetworkPhysicalProbeBundleV1 {
+pub struct NetworkPhysicalProbeBundleV2 {
     pub schema_version: u32,
-    pub denied_unclassified_connect: bool,
     pub allowed_connect: bool,
     pub allowed_send_received: bool,
     pub sendmsg_allowed: bool,
@@ -172,7 +171,7 @@ impl NetworkTestRunner {
         lease_path: &Path,
         cgroup_path: &Path,
         peer: Option<NetworkPeerTargetV1>,
-    ) -> Result<NetworkPhysicalProbeBundleV1> {
+    ) -> Result<NetworkPhysicalProbeBundleV2> {
         validate_network_peer(peer)?;
         ensure!(
             !pin_root.exists() && !lease_path.exists() && !cgroup_path.exists(),
@@ -525,28 +524,6 @@ impl NetworkTestRunner {
         let governed_mmap = fixture.mmap_prepared()?;
         let governed_read_allowed = governed_read.allowed;
         let governed_mmap_allowed = governed_mmap.allowed;
-
-        let denied_marker = observations.cursor();
-        let denied_unclassified_connect = fixture
-            .network_connect(SocketAddr::from(([127, 0, 0, 1], 9)))?
-            .denied();
-        ensure!(
-            denied_unclassified_connect,
-            InvalidInputSnafu {
-                path: Path::new("127.0.0.1:9"),
-                reason: "the unclassified destination did not deny before connect",
-            }
-        );
-        wait_for_effect(
-            &reader,
-            &observations,
-            denied_marker,
-            "UNRESOLVED_OBJECT",
-            (
-                KernelEffectFamilyV1::Network,
-                KernelEffectOperationV1::Connect,
-            ),
-        )?;
 
         let allowed_marker = observations.cursor();
         let allowed_connect = fixture.network_connect(allowed_address)?.allowed;
@@ -1226,7 +1203,6 @@ impl NetworkTestRunner {
             && read_results.inherited_descriptor
             && governed_read_allowed
             && governed_mmap_allowed
-            && denied_unclassified_connect
             && provider_write_observed;
 
         let rewrite = NetworkRewriteOwner::install(rewrite_address.port())?;
@@ -1279,13 +1255,9 @@ impl NetworkTestRunner {
         let proof = NetworkFixtureProof {
             delegated_egress: delegated_forbidden_request_absent
                 && delegated_allowed_request_received,
-            hf_result: denied_unclassified_connect
-                && allowed_send_received
-                && post_fence_send_denied
-                && provider_write_observed,
+            hf_result: allowed_send_received && post_fence_send_denied && provider_write_observed,
             hf_read_result: read_results_separate,
-            hf_network: denied_unclassified_connect
-                && dns_and_alternate_resolver_denied
+            hf_network: dns_and_alternate_resolver_denied
                 && unsupported_network_families_denied
                 && io_uring_sqpoll_denied
                 && tun_tap_setup_denied
@@ -1350,9 +1322,8 @@ impl NetworkTestRunner {
         cgroup_cleanup.cleanup()?;
         transport_cleanup.cleanup()?;
         fixture_cleanup.cleanup()?;
-        Ok(NetworkPhysicalProbeBundleV1 {
-            schema_version: 1,
-            denied_unclassified_connect,
+        Ok(NetworkPhysicalProbeBundleV2 {
+            schema_version: 2,
             allowed_connect,
             allowed_send_received,
             sendmsg_allowed,

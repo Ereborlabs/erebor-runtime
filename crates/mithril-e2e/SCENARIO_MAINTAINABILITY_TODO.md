@@ -2334,7 +2334,7 @@ test does not close a row when its physical condition or an assertion changed.
   transport, cgroup, nftables, pin, lease, and peer-process cleanup.
 - [ ] `NetworkTestRunner::physical_probe` local socket scenarios: keep signed
   policy compilation, node binding, socket actions, and exact denials visible.
-  - [ ] Replace the unclassified IPv4 connect denial with one standard
+  - [x] Replace the unclassified IPv4 connect denial with one standard
     platform test. Use one shared Python actor and one scenario policy. Do not
     add a Platform API.
     - [x] Implement the approved public role default before the platform test.
@@ -2363,8 +2363,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit it. The Kubernetes case passed on
       2026-09-22 with the same test body, actor, policy, and assertions after
       the retained cluster refreshed its CRD and production image tags.
-    - [ ] Remove only the matching legacy action and result field after all
-      three platforms pass.
+    - [x] Remove only the matching legacy action and result field after all
+      three platforms pass. Network physical-probe result schema 2 removes
+      this field. Its other actions, fixture rows, and assertions remain.
 - [ ] `NetworkTestRunner::physical_probe` two-node peer scenario: keep the
   same TCP, UDP, and denied-port operations as `two-node-network.sh`.
 

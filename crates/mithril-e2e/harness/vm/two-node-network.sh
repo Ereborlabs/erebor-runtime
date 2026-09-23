@@ -293,7 +293,7 @@ run_direction() {
     "$output_directory/$label-probe.json"
   "$provider" get "$peer_node" "$peer_result" "$output_directory/$label-peer.json"
   jq -e '
-    .schema_version == 1 and
+    .schema_version == 2 and
     .peer_tcp_allowed == true and
     .peer_udp_allowed == true and
     .peer_denied_connect == true and

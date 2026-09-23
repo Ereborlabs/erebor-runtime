@@ -73,7 +73,7 @@ use crate::Result;
 pub use child::{run_effect_child, run_mount_reconfigure_child, run_mount_setattr_child};
 pub use network::{
     run_network_peer_server, NetworkFixtureResultV1, NetworkPeerServerResultV1,
-    NetworkPeerTargetV1, NetworkPhysicalProbeBundleV1, NetworkTestRunner, NETWORK_PEER_DENIED_PORT,
+    NetworkPeerTargetV1, NetworkPhysicalProbeBundleV2, NetworkTestRunner, NETWORK_PEER_DENIED_PORT,
     NETWORK_PEER_TCP_PORT, NETWORK_PEER_UDP_PORT,
 };
 pub use runc::{
