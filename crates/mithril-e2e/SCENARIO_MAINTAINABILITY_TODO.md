@@ -2348,6 +2348,19 @@ test does not close a row when its physical condition or an assertion changed.
     governed cgroup and do not use this obsolete setup.
 - [ ] `NetworkTestRunner::physical_probe` local socket scenarios: keep signed
   policy compilation, node binding, socket actions, and exact denials visible.
+  - [ ] Replace the allowed TCP Connect result by strengthening the existing
+    TCP network-role test. Keep the exact address, port, protocol, destination
+    handle, and production Allow evidence. Do not add an actor, policy, test,
+    or Platform API.
+    - [x] Pass Host and commit it. The exact Host case passed in 30.65 seconds
+      with the production Allow decision and exact IPv4, TCP, port, address,
+      destination-handle, and object-key assertions.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy connect action and result field after
+      all three platform cases pass. Keep send, receive, sendmsg, sendfile,
+      splice, clone, fork, socket-fence, receive-authority, and peer behavior
+      for later migrations.
   - [x] Replace the unclassified IPv4 connect denial with one standard
     platform test. Use one shared Python actor and one scenario policy. Do not
     add a Platform API.
