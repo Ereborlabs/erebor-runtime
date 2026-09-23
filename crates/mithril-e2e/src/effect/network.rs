@@ -91,7 +91,6 @@ pub struct NetworkPhysicalProbeBundleV2 {
     pub tcp_ipv6_allowed: bool,
     pub udp_connected_allowed: bool,
     pub udp_unconnected_allowed: bool,
-    pub dns_and_alternate_resolver_denied: bool,
     pub unsupported_network_families_denied: bool,
     pub io_uring_sqpoll_denied: bool,
     pub tun_tap_setup_denied: bool,
@@ -128,7 +127,6 @@ struct NetworkFixtureProof {
     hf_network: bool,
     local_inet: bool,
     accept_pass: bool,
-    dns_exfil: bool,
     namespace_pass: bool,
     receive: bool,
     rewrite: bool,
@@ -714,15 +712,6 @@ impl NetworkTestRunner {
             }
         );
 
-        let dns_and_alternate_resolver_denied = fixture
-            .network_udp_send(SocketAddr::from(([127, 0, 0, 1], 53)), b"dns", false)?
-            .denied()
-            && fixture
-                .network_udp_send(SocketAddr::from(([8, 8, 8, 8], 53)), b"dns", true)?
-                .denied()
-            && fixture
-                .network_udp_send(SocketAddr::from(([127, 0, 0, 53], 5_353)), b"dns", false)?
-                .denied();
         let (peer_tcp_allowed, peer_udp_allowed, peer_denied_connect) = match peer {
             Some(peer) => {
                 let denied = fixture
@@ -796,14 +785,13 @@ impl NetworkTestRunner {
             ),
         )?;
         ensure!(
-            dns_and_alternate_resolver_denied
-                && unsupported_network_families_denied
+            unsupported_network_families_denied
                 && io_uring_sqpoll_denied
                 && tun_tap_setup_denied
                 && bpf_setup_denied,
             InvalidInputSnafu {
                 path: Path::new("closed network paths"),
-                reason: "a DNS, tunnel, delegated setup, or protocol path remained open",
+                reason: "a tunnel, delegated setup, or protocol path remained open",
             }
         );
 
@@ -1139,8 +1127,7 @@ impl NetworkTestRunner {
                 && delegated_allowed_request_received,
             hf_result: allowed_send_received && post_fence_send_denied && provider_write_observed,
             hf_read_result: read_results_separate,
-            hf_network: dns_and_alternate_resolver_denied
-                && unsupported_network_families_denied
+            hf_network: unsupported_network_families_denied
                 && io_uring_sqpoll_denied
                 && tun_tap_setup_denied
                 && bpf_setup_denied
@@ -1155,7 +1142,6 @@ impl NetworkTestRunner {
                 && accepted_socket_approved_actor_allowed,
             accept_pass: accepted_socket_narrow_actor_denied
                 && accepted_socket_approved_actor_allowed,
-            dns_exfil: dns_and_alternate_resolver_denied && allowed_connect,
             namespace_pass: cross_namespace_narrow_actor_denied
                 && cross_namespace_approved_actor_allowed
                 && cross_namespace_evidence_distinct,
@@ -1216,7 +1202,6 @@ impl NetworkTestRunner {
             tcp_ipv6_allowed,
             udp_connected_allowed,
             udp_unconnected_allowed,
-            dns_and_alternate_resolver_denied,
             unsupported_network_families_denied,
             io_uring_sqpoll_denied,
             tun_tap_setup_denied,
@@ -1806,7 +1791,7 @@ impl NetworkFixtureProof {
             (
                 "HF-NET-001",
                 self.hf_network,
-                "NETWORK_FAMILY_PROTOCOL_DNS_DENIAL_AND_ALLOWED_SEND_PROVED",
+                "NETWORK_FAMILY_PROTOCOL_AND_ALLOWED_SEND_PROVED",
             ),
             (
                 "IPC-LOCAL-INET-008",
@@ -1817,11 +1802,6 @@ impl NetworkFixtureProof {
                 "NET-ACCEPT-PASS-001",
                 self.accept_pass,
                 "ACCEPTED_SOCKET_DENIES_NARROW_ACTOR_AND_ALLOWS_APPROVED_ACTOR",
-            ),
-            (
-                "NET-DNS-EXFIL-001",
-                self.dns_exfil,
-                "DNS_ALTERNATE_RESOLVER_AND_ENCRYPTED_ENDPOINTS_DENIED",
             ),
             (
                 "NET-NS-PASS-001",
@@ -1879,7 +1859,6 @@ mod tests {
             hf_network: true,
             local_inet: true,
             accept_pass: true,
-            dns_exfil: true,
             namespace_pass: true,
             receive: true,
             rewrite: true,
@@ -1887,7 +1866,7 @@ mod tests {
             socket_life: true,
         }
         .results();
-        assert_eq!(results.len(), 12);
+        assert_eq!(results.len(), 11);
         assert_eq!(
             results
                 .iter()

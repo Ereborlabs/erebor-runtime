@@ -2401,7 +2401,7 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Remove only the three matching legacy TCP actions after all three
       platform cases pass. Keep the combined result, fixture proof, and shell
       assertion until the UDP replacement passes.
-  - [ ] Replace the UDP part of the DNS-exfil denial block without expanding
+  - [x] Replace the UDP part of the DNS-exfil denial block without expanding
     the public role defaults. Keep unconnected sends to `127.0.0.1:53` and
     `127.0.0.53:5353`, and a connected request to `8.8.8.8:53`. Preserve the
     legacy checks until this separate scenario passes all platforms.
@@ -2418,8 +2418,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit it. The exact physical case passed in
       67.17 seconds on 2026-09-23 with the same test body, actor, policy, and
       assertions as Host and direct `runc`.
-    - [ ] Remove only the matching legacy UDP actions and result field after
-      all three platform cases pass.
+    - [x] Remove only the matching legacy UDP actions and result field after
+      all three platform cases pass. The shared platform test now owns the
+      three UDP denials.
   - [x] Retire `NET-SOCKCTL-001`. Role network policy uses the Cilium
     boundary. It governs destinations, protocols, ports, and traffic. It does
     not govern socket options.
