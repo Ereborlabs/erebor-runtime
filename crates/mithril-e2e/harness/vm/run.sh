@@ -512,7 +512,6 @@ if [[ $entry_role_runtime_only == true ]]; then
     .runtime_topology_uninitialized_at_create_container and
     .stable_entry_policy_preserved_after_mount_mutation and
     .stable_canonical_mount_policy_preserved_after_mount_mutation and
-    .application_default_file_allow_observed and
     .held_runtime_admission_reconciled and
     .runc_post_create_mount_mutation_observed and
     .bpf_runtime_topology_initialized and

@@ -50,8 +50,7 @@ use zerocopy::{IntoBytes as _, TryFromBytes as _};
 use super::support::{
     canonical_mount_cache_generation, effect_binding_with_identity, effect_node_config,
     global_mount_activity_sequence, global_mount_mutation_epoch, global_mount_view_is_dirty,
-    ready_canonical_mount_snapshots_at_generation, wait_for_application_default_effect,
-    wait_for_reason, ExternalMountNamespace,
+    ready_canonical_mount_snapshots_at_generation, wait_for_reason, ExternalMountNamespace,
 };
 use super::{
     sign_generation_artifact, EffectTestRunner, NEXT_PROFILE_GENERATION_REF_ID,
@@ -224,7 +223,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub unprotected_initial_exec_allowed: bool,
     pub runc_post_create_mount_mutation_observed: bool,
     pub bpf_runtime_topology_initialized: bool,
-    pub application_default_file_allow_observed: bool,
     pub held_runtime_admission_reconciled: bool,
     pub application_exec_transition_event_driven: bool,
     pub kubernetes_subpath_alias_path_tree_denied: bool,
@@ -5238,13 +5236,6 @@ impl EffectTestRunner {
                 reason: "the application entry did not commit its literal-path admission rule",
             }
         );
-        wait_for_application_default_effect(
-            &reader,
-            &observations,
-            marker,
-            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
-        )?;
-
         ensure!(
             active.active_role_id == policy.initial_role_id && active.admitted_entry_rule_id > 0,
             InvalidInputSnafu {
@@ -6040,7 +6031,6 @@ impl EffectTestRunner {
             unprotected_initial_exec_allowed,
             runc_post_create_mount_mutation_observed,
             bpf_runtime_topology_initialized,
-            application_default_file_allow_observed: true,
             held_runtime_admission_reconciled: true,
             application_exec_transition_event_driven,
             kubernetes_subpath_alias_path_tree_denied: true,

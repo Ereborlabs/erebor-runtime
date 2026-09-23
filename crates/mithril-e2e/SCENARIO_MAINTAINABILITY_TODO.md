@@ -2503,7 +2503,7 @@ setup, production actions, assertions, and focused test.
     - [x] Pass Kubernetes in a separate verified commit. The exact physical
       case passed in 64.55 seconds. Remove only the matching legacy result
       field and shell assertion.
-  - [ ] Replace the incidental application-default file-read result with one
+  - [x] Replace the incidental application-default file-read result with one
     explicit platform test. Reuse `runtime_exec.py`, its policy, and its input
     fixture. Command the application actor to read the file after the evidence
     marker. Require `APPLICATION_DEFAULT_ALLOW`, File/Read, actor attribution,
@@ -2513,8 +2513,9 @@ setup, production actions, assertions, and focused test.
       28.47 seconds.
     - [x] Pass direct `runc` in a separate verified commit. The exact case
       passed in 28.48 seconds.
-    - [ ] Pass Kubernetes in a separate verified commit, then remove only the
-      matching legacy result field, helper call, and shell assertion.
+    - [x] Pass Kubernetes in a separate verified commit. The exact physical
+      case passed in 64.39 seconds. Remove only the matching legacy result,
+      helper, and shell assertion.
 - [ ] Kubernetes subpath, bind alias, and wildcard paths: keep the same mount
   order and protected reads as the Kubernetes workload.
 - [ ] Concurrent exec and reader-queue saturation: keep the same containerd
