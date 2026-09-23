@@ -2357,7 +2357,9 @@ test does not close a row when its physical condition or an assertion changed.
       destination-handle, and object-key assertions.
     - [x] Pass direct `runc` and commit it. The exact direct-runc case passed
       in 28.74 seconds with the same actor, policy, and assertions.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact Kubernetes case passed in
+      65.79 seconds in the retained K3s cluster with the same actor, policy,
+      and assertions.
     - [ ] Remove only the matching legacy connect action and result field after
       all three platform cases pass. Keep send, receive, sendmsg, sendfile,
       splice, clone, fork, socket-fence, receive-authority, and peer behavior
