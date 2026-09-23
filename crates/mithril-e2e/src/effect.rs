@@ -1582,9 +1582,6 @@ impl EffectTestRunner {
                 ),
             }
         );
-        if protect {
-            fixture.prepare_file(&paths.secret)?;
-        }
         let secret_inode_generation = inode_generation(fixture.pid(), &paths.secret)?;
         let exact_object = ExactFileObjectResolver::resolve(
             fixture.pid(),
@@ -1904,53 +1901,15 @@ impl EffectTestRunner {
                 None,
             )?;
 
-            reconcile_policy_lifecycle(&policy, &mut host)?;
-            let inherited_marker = observations.cursor();
-            ensure!(
-                fixture.read_prepared()?.denied(),
-                InvalidInputSnafu {
-                    path: &paths.secret,
-                    reason: "a descriptor acquired before activation bypassed the read decision",
-                }
-            );
-            wait_for_exact_effect(
-                &reader,
-                &observations,
-                inherited_marker,
-                "EXACT_POLICY_DENY",
-                (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
-                PathSelectorV1::kernel_handle_for_id("manual-secret"),
-                None,
-            )?;
-            let mmap_marker = observations.cursor();
-            ensure!(
-                fixture.mmap_prepared()?.denied(),
-                InvalidInputSnafu {
-                    path: &paths.secret,
-                    reason: "a descriptor acquired before activation bypassed the mmap decision",
-                }
-            );
-            wait_for_exact_effect(
-                &reader,
-                &observations,
-                mmap_marker,
-                "EXACT_POLICY_DENY",
-                (
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::MmapRead,
-                ),
-                PathSelectorV1::kernel_handle_for_id("manual-secret"),
-                None,
-            )?;
-            let main_mapping_identity = observations
-                .recent_since(mmap_marker)
+            let main_identity = observations
+                .recent_since(outside_marker)
                 .iter()
                 .find(|event| {
-                    event.reason == "EXACT_POLICY_DENY"
+                    event.reason == "EXACT_POLICY_ALLOW"
                         && event.effect_family == u32::from(KernelEffectFamilyV1::File as u16)
-                        && event.operation == u32::from(KernelEffectOperationV1::MmapRead as u16)
+                        && event.operation == u32::from(KernelEffectOperationV1::Read as u16)
                         && event.exact_object_key_id
-                            == PathSelectorV1::kernel_handle_for_id("manual-secret")
+                            == PathSelectorV1::kernel_handle_for_id("manual-benign")
                 })
                 .map(|event| {
                     (
@@ -1962,7 +1921,7 @@ impl EffectTestRunner {
                 .ok_or_else(|| {
                     InvalidInputSnafu {
                         path: Path::new("effect_observations"),
-                        reason: "the primary-root mapping decision has no identity",
+                        reason: "the primary-root file decision has no identity",
                     }
                     .build()
                 })?;
@@ -2014,9 +1973,9 @@ impl EffectTestRunner {
                 })?;
             ensure!(
                 independent_mapping_identity.0 > 0
-                    && independent_mapping_identity.0 != main_mapping_identity.0
-                    && independent_mapping_identity.1 != main_mapping_identity.1
-                    && independent_mapping_identity.2 != main_mapping_identity.2,
+                    && independent_mapping_identity.0 != main_identity.0
+                    && independent_mapping_identity.1 != main_identity.1
+                    && independent_mapping_identity.2 != main_identity.2,
                 InvalidInputSnafu {
                     path: Path::new("effect_observations"),
                     reason: "the shared-mapping target did not have an independent process root",

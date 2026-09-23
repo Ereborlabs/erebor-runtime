@@ -1965,7 +1965,7 @@ test does not close a row when its physical condition or an assertion changed.
       baseline as the edited source, so this deletion did not cause that
       failure. The failure reports all 6,000 opens as `EACCES` after the old
       probe moves an unlabeled actor into an active binding.
-  - [ ] Replace the pre-activation descriptor read and mapping block with one
+  - [x] Replace the pre-activation descriptor read and mapping block with one
     small standard platform test. Use one shared Python actor and scenario
     policy. Do not add a Platform API.
     - [x] Resolve the public-policy selector gap before implementation.
@@ -2001,9 +2001,11 @@ test does not close a row when its physical condition or an assertion changed.
       physical run found a stale live CRD that did not contain the committed
       `exact` field, so Kubernetes pruned it. Refreshing that CRD from the
       checked-in Helm manifest preserved the exact selectors.
-    - [ ] Remove only the matching legacy prepared-descriptor actions, result
-      fields, mailbox operations, and fixture owner after all three platforms
-      pass. Keep the independent-process mapping cases.
+    - [x] Remove only the matching legacy prepared-descriptor setup and
+      assertions after all three platforms pass. Keep the independent-process
+      mapping cases. Keep the shared prepare, read, and mmap mailbox operations
+      because the network scenario still uses them. The 29 non-privileged
+      effect regressions pass after the deletion.
   - [x] Replace the protected `PTRACE_ATTACH` block with one small standard
     platform test. Use one shared Python actor and scenario policy. Do not add
     a Platform API.
