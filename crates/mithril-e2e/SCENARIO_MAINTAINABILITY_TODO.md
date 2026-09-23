@@ -2385,7 +2385,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit it. The privileged Host case passed on
       2026-09-23 with the shared actor and the exact production `Connect`
       decision.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The direct-runc case passed on
+      2026-09-23 with the same test body, actor, policy, and assertions as the
+      Host case.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy actions, fields, and fixture row
       after all three platforms pass.
