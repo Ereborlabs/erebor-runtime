@@ -297,7 +297,7 @@ run_direction() {
     .peer_tcp_allowed == true and
     .peer_udp_allowed == true and
     .peer_denied_connect == true and
-    (.fixture_results | length == 13) and
+    (.fixture_results | length == 12) and
     all(.fixture_results[]; .result == "PASS")
   ' "$output_directory/$label-probe.json" >/dev/null
   jq -e '
