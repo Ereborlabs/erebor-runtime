@@ -2355,7 +2355,8 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit it. The exact Host case passed in 30.65 seconds
       with the production Allow decision and exact IPv4, TCP, port, address,
       destination-handle, and object-key assertions.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact direct-runc case passed
+      in 28.74 seconds with the same actor, policy, and assertions.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy connect action and result field after
       all three platform cases pass. Keep send, receive, sendmsg, sendfile,
