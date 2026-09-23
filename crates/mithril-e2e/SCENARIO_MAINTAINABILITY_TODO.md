@@ -2384,6 +2384,25 @@ test does not close a row when its physical condition or an assertion changed.
       32 identity cases. Direct runc passed 27 identity cases. Kubernetes
       passed 27 identity cases. Ptrace, signal, and workload recovery passed
       separately on all three platforms.
+  - [ ] Replace the TCP part of the DNS-exfil denial block with one standard
+    platform test. Use one shared Python actor and one scenario policy. Do not
+    add a Platform API.
+    - [x] Deny TCP connects to `127.0.0.1:53`, `127.0.0.53:853`, and
+      `127.0.0.53:443`.
+    - [x] Use the approved Network `Connect` role default. Do not add
+      socket-option permissions, expand role defaults, or add a test-only
+      production path.
+    - [x] Keep the Rust test below 100 lines. The test has 25 lines. The exact
+      Host case passed in 27.99 seconds on 2026-09-23.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the three matching legacy TCP actions after all three
+      platform cases pass. Keep the combined result, fixture proof, and shell
+      assertion until the UDP replacement passes.
+  - [ ] Replace the UDP part of the DNS-exfil denial block without expanding
+    the public role defaults. Keep unconnected sends to `127.0.0.1:53` and
+    `127.0.0.53:5353`, and a connected request to `8.8.8.8:53`. Preserve the
+    legacy checks until this separate scenario passes all platforms.
   - [x] Retire `NET-SOCKCTL-001`. Role network policy uses the Cilium
     boundary. It governs destinations, protocols, ports, and traffic. It does
     not govern socket options.

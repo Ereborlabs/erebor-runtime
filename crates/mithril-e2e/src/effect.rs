@@ -8,6 +8,8 @@ mod child;
 #[cfg(test)]
 mod descriptor;
 #[cfg(test)]
+mod dns_exfil;
+#[cfg(test)]
 mod exception;
 #[cfg(test)]
 mod file_effect;
