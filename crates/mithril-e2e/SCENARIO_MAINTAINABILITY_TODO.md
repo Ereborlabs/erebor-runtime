@@ -2527,6 +2527,12 @@ setup, production actions, assertions, and focused test.
     - [x] Pass Kubernetes in a separate verified commit. The exact physical
       case passed in 56.68 seconds. Remove the exact legacy action and result
       field.
+    - [x] Run the required third-behavior matrix. Host passed 25 lifecycle
+      groups and 74 tests. Direct `runc` passed 24 lifecycle groups and 65
+      tests. Kubernetes passed 24 lifecycle groups and 65 tests against the
+      retained K3s cluster. The shared identity groups passed 37 Host tests in
+      380.42 seconds, 32 direct-`runc` tests in 364.12 seconds, and 32
+      Kubernetes tests in 951.49 seconds.
 - [ ] Kubernetes subpath, bind alias, and wildcard paths: keep the same mount
   order and protected reads as the Kubernetes workload.
 - [ ] Concurrent exec and reader-queue saturation: keep the same containerd
