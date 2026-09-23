@@ -2465,6 +2465,18 @@ setup, production actions, assertions, and focused test.
   in their real order through public production APIs.
 - [ ] Initial application activation: keep the entry action and `ACTIVE`,
   role, rule, default-effect, and large-argv assertions explicit.
+  - [x] Replace the 1,200-argument `cat` action with one standard platform
+    test. Reuse `runtime_exec.py`, `runtime_entries_policy.json`, and
+    `add_actor`. Do not add a Platform API or another actor program.
+  - [x] Keep the declared cat role and nonzero admission rule explicit. Require
+    successful exit and at least 1,024 recent effects attributed to that actor.
+  - [ ] Keep the test below 100 lines. The implementation has 47 lines.
+    - [x] Host passed in 30.11 seconds. The existing Host entry-role test
+      passed in 28.12 seconds with the shared policy change.
+    - [ ] Pass direct `runc` in a separate commit.
+    - [ ] Pass Kubernetes in a separate commit.
+  - [ ] Remove only the matching legacy action, result field, recent-window
+    churn assertion, and shell assertion after all three platform cases pass.
 - [ ] Kubernetes subpath, bind alias, and wildcard paths: keep the same mount
   order and protected reads as the Kubernetes workload.
 - [ ] Concurrent exec and reader-queue saturation: keep the same containerd

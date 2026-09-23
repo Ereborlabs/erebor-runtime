@@ -124,7 +124,15 @@
       },
       {
         "name": "reader",
-        "files": [],
+        "files": [
+          {
+            "name": "large-argv-input",
+            "path": "/fixtures/runtime_copy.txt",
+            "recursive": false,
+            "operations": ["OpenRead"],
+            "action": "Allow"
+          }
+        ],
         "execution": [
           {
             "name": "reader-entry",
