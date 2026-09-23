@@ -2488,6 +2488,9 @@ setup, production actions, assertions, and focused test.
     - [x] Direct `runc` passed in 36.10 seconds.
     - [x] Kubernetes passed in 71.86 seconds. Remove only the matching legacy
       assertion, result field, and shell assertion.
+    - [x] Run the required third-scenario gate. Host passed 35 tests in 366.79
+      seconds. Direct `runc` passed 30 tests in 359.28 seconds. Kubernetes
+      passed 30 tests in 880.29 seconds.
 - [ ] Kubernetes subpath, bind alias, and wildcard paths: keep the same mount
   order and protected reads as the Kubernetes workload.
 - [ ] Concurrent exec and reader-queue saturation: keep the same containerd
