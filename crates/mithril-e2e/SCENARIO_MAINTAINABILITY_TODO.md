@@ -2399,6 +2399,16 @@ test does not close a row when its physical condition or an assertion changed.
     each syscall, payload receipt, file-backed input, role, and exact network
     result visible. Use the shared actor and one small test where this remains
     clear.
+    - [x] Add one Host test with the existing actor, policy, and Platform API.
+      Use one connected socket. Require exact peer payloads for `sendmsg`,
+      file-backed `sendfile`, and file-backed `splice`, plus three matching
+      production Send results. The test has 39 lines.
+    - [x] Pass Host and commit it. The exact Host case passed in 27.93
+      seconds.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy result fields and allow assertions.
+      Keep the later post-fence calls and their denial assertions.
   - [ ] Replace clone-send and fork-send socket inheritance. Keep distinct
     child execution, payload receipt, creator identity, and allowed result
     assertions. Keep socket-generation non-reuse as a separate lifecycle test.

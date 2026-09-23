@@ -114,3 +114,45 @@ fn tcp_roundtrip_uses_network_role<P: Platform>() -> TestResult<()> {
     actor.stop()?;
     env.stop()
 }
+
+#[platform_test(host)]
+#[lifecycle = identity]
+fn tcp_send_variants_are_allowed<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("tcp-nodelay")?;
+    env.start_control()?;
+    env.start_node()?;
+    env.install_policy("tcp_nodelay_policy.json")?;
+    env.node_ready()?;
+    let mut actor = env.start_actor("tcp_nodelay.py", &[])?;
+    let pid = actor.id();
+    let task = env.task(pid, "TCP actor")?;
+    assert_ne!(task.snapshot.admitted_entry_rule_id, 0);
+
+    actor.send(b"variants\n")?;
+    let status = actor.wait_exit("TCP send variants", Duration::from_secs(5))?;
+    let stderr = actor.stderr()?;
+    assert!(status.success(), "TCP actor exited with {status}: {stderr}");
+
+    let snapshot = env.snapshot()?;
+    let sends = snapshot
+        .recent_effects
+        .iter()
+        .filter(|event| task.matches_effect(event, "EXACT_POLICY_ALLOW", F::Network, O::Send, 0))
+        .collect::<Vec<_>>();
+    assert_eq!(sends.len(), 3, "send evidence: {sends:?}");
+    for event in &sends {
+        assert_eq!(&event.network_peer_address[..4], &[127, 0, 0, 1]);
+        assert_eq!(event.network_peer_port, 19092);
+        assert_eq!(
+            event.network_protocol,
+            u32::from(NetworkProtocolV1::Tcp as u8)
+        );
+        assert_ne!(event.network_destination_policy_handle, 0);
+    }
+    assert!(sends.iter().all(|event| {
+        event.network_destination_policy_handle == sends[0].network_destination_policy_handle
+    }));
+
+    actor.stop()?;
+    env.stop()
+}

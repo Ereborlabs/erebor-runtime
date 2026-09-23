@@ -1,5 +1,6 @@
 import ctypes
 import errno
+import os
 import socket
 import sys
 
@@ -37,11 +38,22 @@ def nodelay():
             pass
 
 
+def receive(peer, size):
+    data = bytearray()
+    while len(data) < size:
+        chunk = peer.recv(size - len(data))
+        if not chunk:
+            raise OSError(errno.EIO, "peer closed before the payload arrived")
+        data.extend(chunk)
+    return bytes(data)
+
+
 def roundtrip():
     stage = "socket setup"
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
             server.settimeout(3)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             stage = "bind"
             server.bind(("127.0.0.1", 19091))
             stage = "listen"
@@ -56,13 +68,66 @@ def roundtrip():
                     stage = "request send"
                     client.sendall(b"request")
                     stage = "request receive"
-                    if peer.recv(7, socket.MSG_WAITALL) != b"request":
+                    if receive(peer, 7) != b"request":
                         raise OSError(errno.EIO, "server received the wrong payload")
                     stage = "response send"
                     peer.sendall(b"response")
                     stage = "response receive"
-                    if client.recv(8, socket.MSG_WAITALL) != b"response":
+                    if receive(client, 8) != b"response":
                         raise OSError(errno.EIO, "client received the wrong payload")
+    except OSError as failure:
+        raise OSError(failure.errno or errno.EIO, f"{stage}: {failure}") from failure
+
+
+def send_variants():
+    stage = "socket setup"
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+            server.settimeout(3)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            stage = "bind"
+            server.bind(("127.0.0.1", 19092))
+            server.listen(1)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                client.settimeout(3)
+                stage = "connect"
+                client.connect(server.getsockname())
+                with server.accept()[0] as peer:
+                    peer.settimeout(3)
+                    stage = "sendmsg"
+                    payload = b"sendmsg"
+                    if client.sendmsg([payload]) != len(payload):
+                        raise OSError(errno.EIO, "sendmsg was short")
+                    if receive(peer, len(payload)) != payload:
+                        raise OSError(errno.EIO, "sendmsg payload changed")
+
+                    with open(__file__, "rb") as source:
+                        payload = source.read(16)
+                        stage = "sendfile"
+                        if os.sendfile(client.fileno(), source.fileno(), 0, len(payload)) != len(payload):
+                            raise OSError(errno.EIO, "sendfile was short")
+                        if receive(peer, len(payload)) != payload:
+                            raise OSError(errno.EIO, "sendfile payload changed")
+
+                    source_fd = os.open(__file__, os.O_RDONLY)
+                    try:
+                        payload = os.pread(source_fd, 16, 0)
+                        read_fd, write_fd = os.pipe()
+                        try:
+                            stage = "splice file"
+                            copied = os.splice(source_fd, write_fd, len(payload))
+                            if copied != len(payload):
+                                raise OSError(errno.EIO, "file splice was short")
+                            stage = "splice socket"
+                            if os.splice(read_fd, client.fileno(), copied) != copied:
+                                raise OSError(errno.EIO, "socket splice was short")
+                        finally:
+                            os.close(read_fd)
+                            os.close(write_fd)
+                        if receive(peer, len(payload)) != payload:
+                            raise OSError(errno.EIO, "splice payload changed")
+                    finally:
+                        os.close(source_fd)
     except OSError as failure:
         raise OSError(failure.errno or errno.EIO, f"{stage}: {failure}") from failure
 
@@ -73,6 +138,11 @@ for command in sys.stdin:
         result("nodelay", nodelay)
     elif command == "roundtrip\n":
         error = result("roundtrip", roundtrip)
+        if error:
+            sys.exit(error)
+        break
+    elif command == "variants\n":
+        error = result("variants", send_variants)
         if error:
             sys.exit(error)
         break
