@@ -2387,6 +2387,14 @@ test does not close a row when its physical condition or an assertion changed.
       splice, clone, fork, socket-fence, and restart checks still use it. The
       focused legacy network result tests passed: 3 passed and 302 filtered
       out.
+    - [x] Run the complete platform matrix after the shared BPF socket cleanup
+      change. Host passed 25 of 25 lifecycle groups. Direct `runc` passed 24
+      of 24 lifecycle groups. Kubernetes passed 24 of 24 lifecycle groups in
+      the retained K3s cluster. The first Host identity run had one missing
+      consumed-slot result. Its exact case, ordered three-case group, and clean
+      39-case identity rerun passed without a source change. The first direct-
+      `runc` identity run had one placement-readiness failure. Its exact case
+      and clean 34-case identity rerun passed without a source change.
   - [ ] Replace connected `sendmsg`, `sendfile`, and `splice` behaviors. Keep
     each syscall, payload receipt, file-backed input, role, and exact network
     result visible. Use the shared actor and one small test where this remains
