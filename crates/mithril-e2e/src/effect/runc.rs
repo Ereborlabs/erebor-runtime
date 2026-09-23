@@ -227,7 +227,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub application_entry_allow_observed: bool,
     pub application_default_file_allow_observed: bool,
     pub application_descendant_default_exec_role_preserved: bool,
-    pub large_exec_argv_allowed: bool,
     pub held_runtime_admission_reconciled: bool,
     pub application_exec_transition_event_driven: bool,
     pub kubernetes_subpath_alias_path_tree_denied: bool,
@@ -5170,48 +5169,6 @@ impl EffectTestRunner {
                 ),
             }
         );
-        let effect_window_churn_marker = observations.cursor();
-        let large_exec_pid = fixture_root.join("large-exec-argv.pid");
-        let large_exec_stdout = output_directory.join("large-exec-argv.stdout");
-        let large_exec_stderr = output_directory.join("large-exec-argv.stderr");
-        let large_exec_arguments =
-            vec!["/var/lib/mithril-convergence/protected.lifecycle-ready"; 1_200];
-        let mut large_exec = container.spawn_exec(
-            "/bin/cat",
-            &large_exec_arguments,
-            &large_exec_pid,
-            &large_exec_stdout,
-            &large_exec_stderr,
-        )?;
-        let large_exec_status = wait_for_child(&mut large_exec)?;
-        let large_exec_argv_allowed = large_exec_status.success();
-        let effect_window_churn_deadline = Instant::now() + WAIT_LIMIT;
-        while observations
-            .cursor()
-            .saturating_sub(effect_window_churn_marker)
-            < 1_024
-            && Instant::now() < effect_window_churn_deadline
-        {
-            reader
-                .poll(Duration::from_millis(25))
-                .context(InterceptorSnafu)?;
-        }
-        ensure!(
-            large_exec_argv_allowed
-                && observations
-                    .cursor()
-                    .saturating_sub(effect_window_churn_marker)
-                    >= 1_024,
-            InvalidInputSnafu {
-                path: &large_exec_stderr,
-                reason: format!(
-                    "one 1,200-argument cat exec did not fill the Node-sized recent effect window: status={large_exec_status}, observed={}",
-                    observations
-                        .cursor()
-                        .saturating_sub(effect_window_churn_marker)
-                ),
-            }
-        );
         let recent_path_tree_effect_count = observations
             .recent_since(marker)
             .iter()
@@ -6113,7 +6070,6 @@ impl EffectTestRunner {
             application_entry_allow_observed: true,
             application_default_file_allow_observed: true,
             application_descendant_default_exec_role_preserved,
-            large_exec_argv_allowed,
             held_runtime_admission_reconciled: true,
             application_exec_transition_event_driven,
             kubernetes_subpath_alias_path_tree_denied: true,

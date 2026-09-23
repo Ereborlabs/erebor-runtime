@@ -515,7 +515,6 @@ if [[ $entry_role_runtime_only == true ]]; then
     .application_entry_allow_observed and
     .application_default_file_allow_observed and
     .application_descendant_default_exec_role_preserved and
-    .large_exec_argv_allowed and
     .held_runtime_admission_reconciled and
     .runc_post_create_mount_mutation_observed and
     .bpf_runtime_topology_initialized and

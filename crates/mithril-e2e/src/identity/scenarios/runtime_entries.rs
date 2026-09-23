@@ -5,7 +5,7 @@ use std::{
 
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn large_argv_fills_effect_window<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("large-argv")?;
