@@ -1993,7 +1993,9 @@ test does not close a row when its physical condition or an assertion changed.
       approved correction records and verifies that generation. The unchanged
       Host mount-alias, late-mount, path, and mount-race lifecycles then passed
       all 11 tests.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The unchanged scenario passed
+      through stock `runc` and the production OCI hook in 38.26 seconds on
+      2026-09-22.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy prepared-descriptor actions, result
       fields, mailbox operations, and fixture owner after all three platforms
