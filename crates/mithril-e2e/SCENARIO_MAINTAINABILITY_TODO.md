@@ -2350,11 +2350,13 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Prove public parsing, lowering, compilation, explicit `EACCES`, and
         absence of an implicit default in focused Control tests.
       - [x] Regenerate the Helm CRD from the Control schema owner.
-    - [ ] Connect to `127.0.0.1:9`. Require actor `EACCES` and one
+    - [x] Connect to `127.0.0.1:9`. Require actor `EACCES` and one
       `UNRESOLVED_OBJECT` network-connect observation for the exact actor task,
       IPv4 address, TCP protocol, and port. Require no policy object handle.
-    - [ ] Keep the test below 100 lines.
-    - [ ] Pass Host and commit it.
+    - [x] Keep the test below 100 lines. The test has 60 lines.
+    - [x] Pass Host and commit it. The Host case passed on 2026-09-22 with
+      the production Control, Node, policy compiler, BPF program, and evidence
+      path.
     - [ ] Pass direct `runc` and commit it. The earlier checked item belonged
       to the terminal-retirement test and did not prove this behavior.
     - [ ] Pass Kubernetes and commit it.

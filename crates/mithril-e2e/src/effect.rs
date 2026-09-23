@@ -17,6 +17,8 @@ mod fixture_syscalls;
 mod mailbox;
 mod network;
 #[cfg(test)]
+mod network_connect;
+#[cfg(test)]
 mod node_restart;
 #[cfg(test)]
 mod privilege;

@@ -1,0 +1,87 @@
+{
+  "apiVersion": "mithril.erebor.dev/v1alpha1",
+  "kind": "WorkloadProtectionPolicy",
+  "metadata": {
+    "name": "network-connect",
+    "namespace": "default",
+    "uid": "10000000-0000-4000-8000-000000000023",
+    "generation": 1,
+    "resourceVersion": "1"
+  },
+  "spec": {
+    "podSelector": {
+      "matchLabels": {"app.kubernetes.io/name": "pid-reuse"},
+      "matchExpressions": []
+    },
+    "mode": "Protect",
+    "containers": [
+      {
+        "names": ["worker"],
+        "kinds": ["Application"],
+        "images": [
+          "fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ],
+        "applicationEntry": {"executionRule": "python", "role": "worker"},
+        "additionalEntries": [],
+        "administrativeEntry": {"role": "administrator"},
+        "externalRole": "external"
+      }
+    ],
+    "roles": [
+      {
+        "name": "worker",
+        "defaultActions": [
+          {
+            "family": "Network",
+            "operations": ["Connect"],
+            "action": "Deny"
+          }
+        ],
+        "files": [],
+        "execution": [
+          {
+            "name": "python",
+            "path": "/usr/bin/python3",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "network": {
+          "socketControls": [
+            {"operations": ["Create"], "action": "Allow"}
+          ],
+          "destinations": [
+            {
+              "name": "allowed-result",
+              "operations": ["Connect"],
+              "protocols": ["TCP"],
+              "cidrs": ["127.0.0.1/32"],
+              "ports": [{"first": 443, "last": 443}],
+              "action": "Allow"
+            }
+          ]
+        },
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "administrator",
+        "files": [],
+        "execution": [],
+        "network": {"socketControls": [], "destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "external",
+        "files": [],
+        "execution": [],
+        "network": {"socketControls": [], "destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      }
+    ],
+    "exceptionGrants": []
+  }
+}
