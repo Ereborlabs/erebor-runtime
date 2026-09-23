@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn tcp_dns_exfil_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("dns-exfil")?;

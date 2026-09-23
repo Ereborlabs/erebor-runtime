@@ -2384,7 +2384,7 @@ test does not close a row when its physical condition or an assertion changed.
       32 identity cases. Direct runc passed 27 identity cases. Kubernetes
       passed 27 identity cases. Ptrace, signal, and workload recovery passed
       separately on all three platforms.
-  - [ ] Replace the TCP part of the DNS-exfil denial block with one standard
+  - [x] Replace the TCP part of the DNS-exfil denial block with one standard
     platform test. Use one shared Python actor and one scenario policy. Do not
     add a Platform API.
     - [x] Deny TCP connects to `127.0.0.1:53`, `127.0.0.53:853`, and
@@ -2396,8 +2396,9 @@ test does not close a row when its physical condition or an assertion changed.
       Host case passed in 27.99 seconds on 2026-09-23.
     - [x] Pass direct `runc` and commit it. The exact case passed in 28.86
       seconds on 2026-09-23 with the same actor, policy, and assertions.
-    - [ ] Pass Kubernetes and commit it.
-    - [ ] Remove only the three matching legacy TCP actions after all three
+    - [x] Pass Kubernetes and commit it. The exact physical case passed in
+      66.08 seconds on 2026-09-23 with the same actor, policy, and assertions.
+    - [x] Remove only the three matching legacy TCP actions after all three
       platform cases pass. Keep the combined result, fixture proof, and shell
       assertion until the UDP replacement passes.
   - [ ] Replace the UDP part of the DNS-exfil denial block without expanding

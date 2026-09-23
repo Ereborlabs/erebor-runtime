@@ -714,19 +714,9 @@ impl NetworkTestRunner {
             }
         );
 
-        let dns_and_alternate_resolver_denied = [
-            SocketAddr::from(([127, 0, 0, 1], 53)),
-            SocketAddr::from(([127, 0, 0, 53], 853)),
-            SocketAddr::from(([127, 0, 0, 53], 443)),
-        ]
-        .into_iter()
-        .map(|address| fixture.network_connect(address))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .all(super::child::IoOutcome::denied)
-            && fixture
-                .network_udp_send(SocketAddr::from(([127, 0, 0, 1], 53)), b"dns", false)?
-                .denied()
+        let dns_and_alternate_resolver_denied = fixture
+            .network_udp_send(SocketAddr::from(([127, 0, 0, 1], 53)), b"dns", false)?
+            .denied()
             && fixture
                 .network_udp_send(SocketAddr::from(([8, 8, 8, 8], 53)), b"dns", true)?
                 .denied()
