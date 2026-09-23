@@ -24,13 +24,14 @@ use snafu::{ensure, ResultExt as _};
 use zerocopy::{FromBytes as _, IntoBytes as _};
 
 use super::child::EffectProcessFixture;
+use super::network_fixture::NetworkProbeFixture;
 use super::support::{
     effect_binding_with_identity, effect_node_config, inode_generation, wait_for_effect,
 };
 use crate::error::{
     InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu, PolicySnafu,
 };
-use crate::physical::{boot_identity, ProbeCgroup, ProbeDirectory, ProbeFile};
+use crate::physical::boot_identity;
 use crate::Result;
 
 const PAYLOAD: &[u8] = b"allowed";
@@ -135,20 +136,6 @@ struct NetworkFixtureProof {
     socket_life: bool,
 }
 
-#[derive(Clone, Copy)]
-struct NetworkActorSpec {
-    name: &'static str,
-    binding_id: &'static str,
-    label: char,
-    initial_role: bool,
-    private_network_namespace: bool,
-}
-
-struct NetworkActor {
-    spec: NetworkActorSpec,
-    cgroup: ProbeCgroup,
-}
-
 pub struct NetworkTestRunner {
     repo_root: PathBuf,
 }
@@ -170,107 +157,12 @@ impl NetworkTestRunner {
         peer: Option<NetworkPeerTargetV1>,
     ) -> Result<NetworkPhysicalProbeBundleV2> {
         validate_network_peer(peer)?;
-        ensure!(
-            !pin_root.exists() && !lease_path.exists() && !cgroup_path.exists(),
-            InvalidInputSnafu {
-                path: output_directory,
-                reason: "network probe paths must not exist before the run",
-            }
-        );
-        fs::create_dir_all(output_directory).context(IoSnafu {
-            path: output_directory,
-        })?;
-        let fixture_root = output_directory.join("network-runtime");
-        fs::create_dir(&fixture_root).context(IoSnafu {
-            path: &fixture_root,
-        })?;
-        let fixture_root = fs::canonicalize(&fixture_root).context(IoSnafu {
-            path: &fixture_root,
-        })?;
-        let fixture_cleanup = ProbeDirectory::new(&fixture_root);
-        let transport_root = PathBuf::from(format!(
-            "/tmp/mithril-net-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|error| invalid_probe(format!("the system clock is invalid: {error}")))?
-                .as_nanos()
-        ));
-        fs::create_dir(&transport_root).context(IoSnafu {
-            path: &transport_root,
-        })?;
-        let transport_cleanup = ProbeDirectory::new(&transport_root);
-        let pin_cleanup = ProbeDirectory::new(pin_root);
-        let lease_cleanup = ProbeFile::new(lease_path);
-        let cgroup_cleanup = ProbeCgroup::create(cgroup_path)?;
-        let cgroup_path = cgroup_cleanup.path().to_path_buf();
-        let actor_specs = [
-            NetworkActorSpec {
-                name: "main",
-                binding_id: "99999999-9999-4999-8999-999999999991",
-                label: 'a',
-                initial_role: true,
-                private_network_namespace: false,
-            },
-            NetworkActorSpec {
-                name: "server",
-                binding_id: "99999999-9999-4999-8999-999999999992",
-                label: 'b',
-                initial_role: true,
-                private_network_namespace: false,
-            },
-            NetworkActorSpec {
-                name: "external-receiver",
-                binding_id: "99999999-9999-4999-8999-999999999993",
-                label: 'c',
-                initial_role: false,
-                private_network_namespace: false,
-            },
-            NetworkActorSpec {
-                name: "converter-receiver",
-                binding_id: "99999999-9999-4999-8999-999999999994",
-                label: 'd',
-                initial_role: true,
-                private_network_namespace: false,
-            },
-            NetworkActorSpec {
-                name: "namespace-external",
-                binding_id: "99999999-9999-4999-8999-999999999995",
-                label: 'e',
-                initial_role: false,
-                private_network_namespace: true,
-            },
-            NetworkActorSpec {
-                name: "namespace-converter",
-                binding_id: "99999999-9999-4999-8999-999999999996",
-                label: 'f',
-                initial_role: true,
-                private_network_namespace: true,
-            },
-            NetworkActorSpec {
-                name: "proxy-requester",
-                binding_id: "99999999-9999-4999-8999-999999999997",
-                label: 'g',
-                initial_role: true,
-                private_network_namespace: false,
-            },
-            NetworkActorSpec {
-                name: "proxy-delegate",
-                binding_id: "99999999-9999-4999-8999-999999999998",
-                label: 'h',
-                initial_role: true,
-                private_network_namespace: false,
-            },
-        ];
-        let mut actors = actor_specs
-            .into_iter()
-            .map(|spec| {
-                Ok(NetworkActor {
-                    cgroup: ProbeCgroup::create(&cgroup_path.join(spec.name))?,
-                    spec,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let resources =
+            NetworkProbeFixture::start(output_directory, pin_root, lease_path, cgroup_path)?;
+        let fixture_root = resources.fixture_root().to_path_buf();
+        let transport_root = resources.transport_root().to_path_buf();
+        let cgroup_path = resources.cgroup_root().to_path_buf();
+        let actors = resources.actors();
         let repo_root = fs::canonicalize(&self.repo_root).context(IoSnafu {
             path: &self.repo_root,
         })?;
@@ -398,7 +290,7 @@ impl NetworkTestRunner {
             actors[7].cgroup.path(),
             actors[7].spec.private_network_namespace,
         )?;
-        for actor in [
+        for (index, actor) in [
             &mut fixture,
             &mut server_fixture,
             &mut external_receiver,
@@ -407,14 +299,20 @@ impl NetworkTestRunner {
             &mut namespace_converter,
             &mut proxy_requester,
             &mut proxy_delegate,
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let outcome =
+                actor.network_socket(libc::AF_INET, libc::SOCK_STREAM, libc::IPPROTO_TCP)?;
             ensure!(
-                actor
-                    .network_socket(libc::AF_INET, libc::SOCK_STREAM, libc::IPPROTO_TCP)?
-                    .allowed,
+                outcome.allowed,
                 InvalidInputSnafu {
                     path: Path::new("network actor classification"),
-                    reason: "an actor could not complete its pre-policy classification operation",
+                    reason: format!(
+                        "actor `{}` could not complete its pre-policy classification operation: {outcome:?}",
+                        actors[index].spec.name
+                    ),
                 }
             );
         }
@@ -1305,14 +1203,7 @@ impl NetworkTestRunner {
         fixture.stop()?;
 
         host.shutdown().context(InterceptorSnafu)?;
-        pin_cleanup.cleanup()?;
-        lease_cleanup.cleanup()?;
-        while let Some(actor) = actors.pop() {
-            actor.cgroup.cleanup()?;
-        }
-        cgroup_cleanup.cleanup()?;
-        transport_cleanup.cleanup()?;
-        fixture_cleanup.cleanup()?;
+        resources.stop()?;
         Ok(NetworkPhysicalProbeBundleV2 {
             schema_version: 2,
             allowed_connect,

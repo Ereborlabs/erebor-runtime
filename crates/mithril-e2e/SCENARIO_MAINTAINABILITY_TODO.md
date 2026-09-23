@@ -2334,6 +2334,18 @@ test does not close a row when its physical condition or an assertion changed.
   Its focused test passed on 2026-09-23.
 - [ ] `NetworkTestRunner::physical_probe` setup and teardown: own fixture,
   transport, cgroup, nftables, pin, lease, and peer-process cleanup.
+  - [x] Add `NetworkProbeFixture::start` and `stop` for the fixture tree,
+    transport tree, actor cgroups, root cgroup, pin root, and lease. A failed
+    privileged run removed these resources on 2026-09-23.
+  - [x] Keep nftables state in `NetworkRewriteOwner` with explicit cleanup and
+    a `Drop` fallback.
+  - [ ] Remove the remaining local server threads and launcher-owned peer
+    process when their scenarios move to shared platform tests.
+  - [ ] Do not repair the legacy child by adding another process launcher. The
+    committed `32f4b0b` binary and the refactored binary both reject the first
+    late-moved actor with `EACCES`. Kernel evidence reports
+    `CORRUPT_IDENTITY_OR_GENERATION`. Shared platform actors start held in the
+    governed cgroup and do not use this obsolete setup.
 - [ ] `NetworkTestRunner::physical_probe` local socket scenarios: keep signed
   policy compilation, node binding, socket actions, and exact denials visible.
   - [x] Replace the unclassified IPv4 connect denial with one standard
