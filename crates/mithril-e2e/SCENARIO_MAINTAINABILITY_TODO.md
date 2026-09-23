@@ -2473,7 +2473,8 @@ setup, production actions, assertions, and focused test.
   - [ ] Keep the test below 100 lines. The implementation has 47 lines.
     - [x] Host passed in 30.11 seconds. The existing Host entry-role test
       passed in 28.12 seconds with the shared policy change.
-    - [ ] Pass direct `runc` in a separate commit.
+    - [x] Direct `runc` passed in 30.49 seconds. The existing direct-`runc`
+      entry-role test passed in 28.21 seconds with the shared policy change.
     - [ ] Pass Kubernetes in a separate commit.
   - [ ] Remove only the matching legacy action, result field, recent-window
     churn assertion, and shell assertion after all three platform cases pass.
