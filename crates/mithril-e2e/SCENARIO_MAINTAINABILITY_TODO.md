@@ -1681,7 +1681,14 @@ test does not close a row when its physical condition or an assertion changed.
       seconds. All four Kubernetes exception tests passed together in 167.97
       seconds on the retained K3s VM.
   - [ ] Preserve the old pre-replacement inactive-grant denial before removing
-    the legacy probe. The new actor-policy start does not prove that condition.
+    the legacy probe. Start `exception.py` under `exception_policy.json`
+    without an exception CRD. Require `EACCES` and an attributed
+    `EXCEPTION_UNAVAILABLE` File/OpenWrite event on the initial generation.
+    Reuse the existing actor and policy; add no Platform API.
+    - [x] Pass Host and commit it. The 41-line test passed in 28.93 seconds.
+      All five Host exception tests passed together in 95.21 seconds.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
 - [ ] `EffectTestRunner::physical_probe` setup and teardown: own its three
   cgroups, child processes, pin root, lease, and diagnostic output.
 - [ ] `EffectTestRunner::physical_probe` observe scenario: keep the public

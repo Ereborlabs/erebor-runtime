@@ -23,6 +23,8 @@ mod file_effect;
 mod file_mutation;
 mod fixture_syscalls;
 #[cfg(test)]
+mod inactive_grant;
+#[cfg(test)]
 mod independent_mmap;
 mod mailbox;
 #[cfg(test)]
