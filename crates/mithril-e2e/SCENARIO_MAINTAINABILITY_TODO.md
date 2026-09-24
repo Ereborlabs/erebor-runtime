@@ -469,11 +469,12 @@ reimplement a production owner operation.
   Kubernetes cases before the next behavior when all three platforms apply.
 - Run related tests, harness checks, formatting, and clippy for each migrated
   behavior.
-- Run the complete Host, direct-`runc`, and Kubernetes suites after every
-  third fully migrated behavior, or after a shared infrastructure, platform,
-  Node, or Control change.
-- Do not run the complete suites for scenario-only changes between these
-  gates. Run only the exact affected platform cases.
+- Run the complete Host, direct-`runc`, and Kubernetes suites only when a
+  shared infrastructure, Platform, Node, Control, or BPF change can affect
+  unrelated scenarios, when focused results show cross-scenario regression
+  risk, or before delivery.
+- For a scenario-only migration, run only its exact Host, direct-`runc`, and
+  Kubernetes cases.
 - Commit each verified behavior separately.
 - Do not stage `.agents/planning.md` or unrelated files.
 
