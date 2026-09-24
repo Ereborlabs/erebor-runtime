@@ -6941,6 +6941,7 @@ mod tests {
 
     fn config(state_directory: &std::path::Path) -> NodeConfig {
         NodeConfig {
+            diagnostics: None,
             node_id: "node-a".to_owned(),
             kubernetes_node_name: None,
             state_directory: state_directory.to_owned(),

@@ -204,7 +204,9 @@ impl DiscoveryOwner {
                         "INDEX_REBUILD_COUNTS",
                     )?;
                 }
-                feed::RevisionPayload::Context(_) | feed::RevisionPayload::Checkpoint(_) => {}
+                feed::RevisionPayload::Context(_)
+                | feed::RevisionPayload::Checkpoint(_)
+                | feed::RevisionPayload::Trace(_, _) => {}
             }
         }
         DiscoveryInputManifestV1::require(

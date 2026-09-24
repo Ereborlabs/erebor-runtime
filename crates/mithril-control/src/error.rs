@@ -8,6 +8,13 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Araphor trace rejected {code:?}: {reason}"))]
+    Observability {
+        code: crate::TraceErrorCodeV1,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Discovery database operation {operation} failed: {source}"))]
     DiscoveryDatabase {
         operation: &'static str,
@@ -129,6 +136,15 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
+            Self::Observability { code, .. } => match code {
+                crate::TraceErrorCodeV1::Denied => StatusCode::PermissionDenied,
+                crate::TraceErrorCodeV1::Conflict => StatusCode::AlreadyExists,
+                crate::TraceErrorCodeV1::Expired => StatusCode::DeadlineExceeded,
+                crate::TraceErrorCodeV1::Missing => StatusCode::NotFound,
+                crate::TraceErrorCodeV1::Capacity => StatusCode::Unavailable,
+                crate::TraceErrorCodeV1::Invalid => StatusCode::InvalidArguments,
+                crate::TraceErrorCodeV1::Integrity => StatusCode::IllegalState,
+            },
             Self::RetainedRangeExpired { .. } => StatusCode::NotFound,
             Self::Discovery { .. }
             | Self::InvalidConfiguration { .. }
@@ -150,6 +166,11 @@ impl ErrorExt for Error {
 
     fn retry_hint(&self) -> RetryHint {
         match self {
+            Self::Observability {
+                code: crate::TraceErrorCodeV1::Capacity,
+                ..
+            } => RetryHint::Retryable,
+            Self::Observability { .. } => RetryHint::NonRetryable,
             Self::DiscoveryDatabase { source, .. } => {
                 if matches!(
                     source.sqlite_error_code(),

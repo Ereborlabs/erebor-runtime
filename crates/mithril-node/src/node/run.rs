@@ -1,5 +1,5 @@
 use std::cmp;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -55,6 +55,9 @@ pub(super) struct NodeRun {
     evidence_tick: tokio::time::Interval,
     policy_tick: tokio::time::Interval,
     policy_work: PolicyControlWorkV1,
+    trace_tick: tokio::time::Interval,
+    trace_cursors: BTreeMap<[u8; 16], u64>,
+    trace_resolution: Option<mithril_control::TraceResolvedV1>,
 
     effect_stop: Arc<AtomicBool>,
     effect_task: Option<tokio::task::JoinHandle<erebor_interceptor::Result<()>>>,
@@ -77,6 +80,13 @@ impl NodeRun {
                 let deadline = state.disconnected + state.node.evidence_control_delay();
 
                 tokio::select! {
+                    _ = state.trace_tick.tick(), if state.connection.is_some() && state.node.trace.is_some() => {
+                        if let Some(connection) = state.connection.as_mut() {
+                            if let Err(error) = state.node.poll_diagnostics(connection, &mut state.trace_cursors, &mut state.trace_resolution).await {
+                                erebor_telemetry::warn!(error; "diagnostic exchange failed; local execution leases remain bounded");
+                            }
+                        }
+                    }
                     result = Self::wait(&mut state.connecting) => {
                         state.connected(result);
                     }
@@ -195,6 +205,9 @@ impl NodeRun {
             evidence_tick: Self::interval(Duration::from_millis(100)),
             policy_tick: Self::interval(Duration::from_millis(250)),
             policy_work: PolicyControlWorkV1::default(),
+            trace_tick: Self::interval(Duration::from_millis(500)),
+            trace_cursors: BTreeMap::new(),
+            trace_resolution: None,
             effect_stop,
             effect_task,
             worker_task,
@@ -329,6 +342,9 @@ impl NodeRun {
                 self.evidence_tick = Self::interval(Duration::from_millis(100));
                 self.policy_tick = Self::interval(Duration::from_millis(250));
                 self.policy_work = PolicyControlWorkV1::default();
+                self.trace_tick = Self::interval(Duration::from_millis(500));
+                self.trace_cursors.clear();
+                self.trace_resolution = None;
                 self.node.policy_delivery.begin_control_session();
                 self.publish_readiness();
                 erebor_telemetry::info!(
@@ -810,6 +826,9 @@ impl NodeRun {
             );
             Self::stop_server(&mut self.local_task, true).await?;
             self.stop_effects().await?;
+            if let Some(trace) = self.node.trace.take() {
+                tokio::task::spawn_blocking(move || drop(trace)).await.context(LocalTaskSnafu)?;
+            }
             self.node
                 .host
                 .take()

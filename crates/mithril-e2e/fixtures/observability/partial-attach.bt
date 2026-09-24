@@ -1,0 +1,2 @@
+interval:ms:10 { @x = count(); }
+kprobe:araphor_missing_hook_5f6d { @y = count(); }

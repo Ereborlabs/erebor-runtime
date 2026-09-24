@@ -24,9 +24,10 @@ const MAX_INDEX_WAL_BYTES: u64 = 64 * 1024 * 1024;
 const INDEX_TRANSACTION_RESERVE: u64 = 32 * 1024 * 1024;
 mod feed;
 mod recovery;
+mod trace;
 pub use feed::*;
 
-const INDEX_SCHEMA_VERSION: i64 = 4;
+const INDEX_SCHEMA_VERSION: i64 = 5;
 
 #[cfg(test)]
 pub(super) mod tests {
@@ -1260,7 +1261,23 @@ impl DiscoveryIndex {
             DROP INDEX IF EXISTS revision_position;
             CREATE TABLE IF NOT EXISTS revision_prefix(id INTEGER PRIMARY KEY CHECK(id=1), commit_index BLOB NOT NULL CHECK(length(commit_index)=8));
             INSERT OR IGNORE INTO revision_prefix VALUES(1,x'0000000000000000');
-            PRAGMA user_version=4; COMMIT;")
+            CREATE TABLE IF NOT EXISTS traces(
+                tenant BLOB NOT NULL CHECK(length(tenant)=16), request BLOB NOT NULL CHECK(length(request)=16),
+                target INTEGER NOT NULL CHECK(target BETWEEN -1 AND 15), head BLOB NOT NULL,
+                PRIMARY KEY(tenant,request,target)) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS trace_output(
+                tenant BLOB NOT NULL, request BLOB NOT NULL, target INTEGER NOT NULL,
+                sequence INTEGER NOT NULL CHECK(sequence BETWEEN 1 AND 4096), frame BLOB NOT NULL,
+                PRIMARY KEY(tenant,request,target,sequence),
+                FOREIGN KEY(tenant,request,target) REFERENCES traces(tenant,request,target)) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS trace_measurements(
+                tenant BLOB NOT NULL, request BLOB NOT NULL, target INTEGER NOT NULL,
+                sequence INTEGER NOT NULL, ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 0 AND 4095),
+                syscall_id INTEGER, errno INTEGER NOT NULL CHECK(errno BETWEEN -4095 AND -1),
+                count BLOB NOT NULL CHECK(length(count)=8), measurement BLOB NOT NULL,
+                PRIMARY KEY(tenant,request,target,sequence,ordinal),
+                FOREIGN KEY(tenant,request,target,sequence) REFERENCES trace_output(tenant,request,target,sequence)) WITHOUT ROWID;
+            PRAGMA user_version=5; COMMIT;")
             .context(DiscoveryDatabaseSnafu { operation: "initialize schema" })?;
         let first = Self::connection(&path, true)?;
         let second = Self::connection(&path, true)?;

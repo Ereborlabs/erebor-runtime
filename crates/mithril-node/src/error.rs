@@ -7,6 +7,12 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Araphor diagnostic contract failed: {source}"))]
+    Trace {
+        source: mithril_control::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Mithril node configuration is invalid: {reason}"))]
     InvalidConfiguration {
         reason: String,
@@ -155,6 +161,7 @@ impl ErrorExt for Error {
             Self::Authorization { .. } => StatusCode::PermissionDenied,
             Self::Interceptor { source, .. } => source.status_code(),
             Self::Policy { source, .. } => source.status_code(),
+            Self::Trace { source, .. } => source.status_code(),
             Self::Io { .. }
             | Self::LocalTransport { .. }
             | Self::ControlTransport { .. }
@@ -171,6 +178,7 @@ impl ErrorExt for Error {
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Interceptor { source, .. } => source.retry_hint(),
             Self::Policy { source, .. } => source.retry_hint(),
+            Self::Trace { source, .. } => source.retry_hint(),
             Self::ControlTransport { .. }
             | Self::LocalTransport { .. }
             | Self::ControlRpc { .. }

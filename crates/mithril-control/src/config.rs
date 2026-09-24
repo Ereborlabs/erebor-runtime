@@ -36,6 +36,16 @@ pub struct ControlConfig {
     pub kubernetes_admission: Option<KubernetesAdmissionHttpConfigV1>,
     #[serde(default)]
     pub discovery: Option<DiscoveryRuntimeConfigV1>,
+    #[serde(default)]
+    pub diagnostics: Option<TraceSignerConfigV1>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceSignerConfigV1 {
+    pub signing_key_id: String,
+    pub signing_key_path: PathBuf,
+    pub issuer_epoch: u64,
 }
 
 pub struct ControlRuntimeParts {
@@ -67,6 +77,13 @@ impl ControlConfig {
             self.trust.clone(),
             store.clone(),
         )?;
+        if let Some(signer) = self.diagnostics {
+            control = control.with_trace_signer(
+                signer.signing_key_id,
+                signer.issuer_epoch,
+                crate::policy::read_signing_key(&signer.signing_key_path)?,
+            )?;
+        }
         if let Some(policy) = self.kubernetes_policy {
             let owner = PolicyDesiredStateOwner::open(policy, store.clone())?;
             let (key_id, public_key, issuer_epoch) = owner.signer_identity();
@@ -100,6 +117,11 @@ impl ControlConfig {
     }
 
     fn validate(&self) -> Result<()> {
+        if let Some(signer) = &self.diagnostics {
+            ensure!(self.discovery.is_some() && signer.signing_key_path.is_absolute()
+                && !signer.signing_key_id.is_empty() && signer.signing_key_id.len() <= 128 && signer.issuer_epoch > 0,
+                InvalidConfigurationSnafu { reason: "diagnostics require Discovery storage and an absolute trusted signing key path" });
+        }
         ensure!(
             !self.allowed_nodes.is_empty(),
             InvalidConfigurationSnafu {

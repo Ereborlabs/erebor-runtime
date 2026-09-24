@@ -8,17 +8,19 @@ use mithril_control::{
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use snafu::{OptionExt as _, ResultExt as _};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::os::fd::AsRawFd as _;
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Component, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 
 use crate::administrative_exec::{
     AdministrativeExecOwner, AdministrativeResolutionV1, AdministrativeResolveRequestV1,
 };
-use crate::error::{EvidenceStateSnafu, IdentityStateSnafu, InterceptorSnafu, JsonSnafu};
+use crate::error::{EvidenceStateSnafu, IdentityStateSnafu, InterceptorSnafu, JsonSnafu, LocalTaskSnafu};
 use crate::runtime_admission::{KubernetesRuntimeIdentityV1, RuntimeAdmissionCall};
 use crate::{
     CoverageGapReasonV1, NativeSecurityStateOwner, NodeConfig, NodeControlConnector,
@@ -304,6 +306,7 @@ enum ReconciliationOutcome {
 }
 
 pub struct NodeChassis {
+    trace: Option<Arc<std::sync::Mutex<crate::NodeTraceOwner>>>,
     base_config: NodeConfig,
     config: NodeConfig,
     effect_reader: Option<EffectObservationReader>,
@@ -961,6 +964,163 @@ impl NodeChassis {
             &node_boot_id,
             self.label_epoch,
         )
+    }
+
+    async fn poll_diagnostics(
+        &mut self,
+        connection: &mut crate::control::ControlConnection,
+        cursors: &mut BTreeMap<[u8; 16], u64>,
+        resolved: &mut Option<mithril_control::TraceResolvedV1>,
+    ) -> Result<()> {
+        let Some(owner) = self.trace.clone() else {
+            return Ok(());
+        };
+        let storage = owner.clone();
+        let offsets = cursors.clone();
+        let pending = resolved.clone();
+        let work =
+            tokio::task::spawn_blocking(move || -> Result<mithril_control::TraceExchangeV1> {
+                let mut owner = storage.lock().map_err(|_| {
+                    IdentityStateSnafu {
+                        reason: "diagnostic owner lock failed",
+                    }
+                    .build()
+                })?;
+                owner.reap()?;
+                let retained = owner.retained()?;
+                let mut exchange = mithril_control::TraceExchangeV1 {
+                    retained: retained.iter().map(|(id, _)| *id).collect(),
+                    resolved: pending,
+                    output: None,
+                };
+                for (id, dispatch) in retained {
+                    if let Some(batch) =
+                        owner.next_batch(id, offsets.get(&id).copied().unwrap_or(0))?
+                    {
+                        exchange.output = Some(mithril_control::TraceUploadV1 {
+                            request_id: dispatch.accepted.request.request_id,
+                            target_index: dispatch.target_index,
+                            original_node_boot_id: dispatch.accepted.request.targets
+                                [dispatch.target_index as usize]
+                                .node_boot_id,
+                            batch,
+                        });
+                        break;
+                    }
+                }
+                Ok(exchange)
+            });
+        let exchange = self
+            .await_control_rpc(async { work.await.context(LocalTaskSnafu)? })
+            .await?;
+        let reply = self
+            .await_control_rpc(connection.exchange_diagnostics(&exchange))
+            .await?;
+        *resolved = None;
+        if reply.cancel.len() > 16
+            || reply
+                .resolve
+                .as_ref()
+                .is_some_and(|request| request.facts.len() > 16)
+        {
+            return IdentityStateSnafu {
+                reason: "diagnostic response exceeds its bounds",
+            }
+            .fail();
+        }
+        if let Some(request) = reply.resolve {
+            let mut participants = Vec::new();
+            for fact in request.facts {
+                let digest = mithril_control::DiscoveryDigestV1::of(&fact)
+                    .context(crate::error::TraceSnafu)?;
+                let target = self
+                    .bindings
+                    .resolve_trace_target(&self.config.node_id, &fact)
+                    .ok()
+                    .map(|lease| lease.target().clone());
+                participants.push(mithril_control::TraceParticipantV1 {
+                    fact_digest: digest,
+                    state: if target.is_some() {
+                        mithril_control::TraceParticipantStateV1::Resolved
+                    } else {
+                        mithril_control::TraceParticipantStateV1::Unsupported
+                    },
+                    target,
+                });
+            }
+            *resolved = Some(mithril_control::TraceResolvedV1 {
+                resolve_id: request.resolve_id,
+                participants,
+            });
+        }
+        let dispatch = reply
+            .dispatch
+            .map(|dispatch| -> Result<_> {
+                let key = self
+                    .trust
+                    .policy_signing_key(&dispatch.signing_key_id, dispatch.issuer_epoch)?;
+                let target = dispatch
+                    .accepted
+                    .request
+                    .targets
+                    .get(dispatch.target_index as usize)
+                    .and_then(|target| {
+                        self.bindings
+                            .resolve_trace_target(&self.config.node_id, &target.fact)
+                            .ok()
+                    });
+                Ok((dispatch, target, key))
+            })
+            .transpose()?;
+        if let Some(ack) = &reply.acknowledgement {
+            let sent = exchange.output.as_ref().ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "unsolicited diagnostic acknowledgement",
+                }
+                .build()
+            })?;
+            snafu::ensure!(
+                sent.batch.execution_id == ack.execution_id
+                    && sent
+                        .batch
+                        .frames
+                        .last()
+                        .is_none_or(|frame| frame.sequence <= ack.last_sequence)
+                    && ack.last_sequence <= 4096,
+                IdentityStateSnafu {
+                    reason: "diagnostic acknowledgement changed its execution or sequence"
+                }
+            );
+        }
+        let acknowledgement = reply.acknowledgement.clone();
+        let work = tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut owner = owner.lock().map_err(|_| {
+                IdentityStateSnafu {
+                    reason: "diagnostic owner lock failed",
+                }
+                .build()
+            })?;
+            for id in reply.cancel {
+                owner.cancel(id);
+            }
+            if let Some(ack) = reply.acknowledgement {
+                if let Some(terminal) = ack.terminal {
+                    owner.acknowledge(ack.execution_id, &terminal)?;
+                }
+            }
+            if let Some((dispatch, target, key)) = dispatch {
+                let now = crate::policy::current_utc_ns()? as u64;
+                owner.admit(dispatch, target, &key, now)?;
+            }
+            Ok(())
+        });
+        self.await_control_rpc(async { work.await.context(LocalTaskSnafu)? })
+            .await?;
+        if let Some(ack) = acknowledgement {
+            cursors.insert(ack.execution_id, ack.last_sequence);
+        }
+        cursors.retain(|id, _| exchange.retained.contains(id));
+        Ok(())
     }
 
     async fn await_control_rpc<T>(&mut self, rpc: impl Future<Output = Result<T>>) -> Result<T> {
@@ -2054,6 +2214,7 @@ mod tests {
                 effect_prevention_claims_enabled: true,
             });
             let node = NodeChassis {
+                trace: None,
                 base_config,
                 config,
                 effect_reader: None,
@@ -2101,6 +2262,7 @@ mod tests {
 
     fn admission_test_config(state_directory: &Path) -> NodeConfig {
         NodeConfig {
+            diagnostics: None,
             node_id: "node-a".to_owned(),
             kubernetes_node_name: None,
             state_directory: state_directory.to_owned(),

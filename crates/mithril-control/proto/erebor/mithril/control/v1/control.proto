@@ -21,6 +21,20 @@ service NodeCoverage {
   rpc Report(CoverageReportRequest) returns (CoverageAck);
 }
 
+// Exchanges bounded diagnostic commands and durable output on the node mTLS session.
+service NodeDiagnostics {
+  rpc Exchange(NodeDiagnosticRequest) returns (NodeDiagnosticReply);
+}
+
+message NodeDiagnosticRequest {
+  NodeSessionContext session = 1;
+  bytes payload_json = 2;
+}
+
+message NodeDiagnosticReply {
+  bytes payload_json = 1;
+}
+
 // Delivers immutable node candidates only after current trust acknowledgement.
 service NodePolicy {
   rpc Inventory(PolicyInventoryRequest) returns (PolicyInventory);

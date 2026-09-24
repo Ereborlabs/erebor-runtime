@@ -29,6 +29,14 @@ fn descriptor_has_the_approved_grpc_inventory() -> Result<(), Box<dyn std::error
         .collect::<BTreeSet<_>>();
     let expected = [
         method(
+            "NodeDiagnostics",
+            "Exchange",
+            "NodeDiagnosticRequest",
+            "NodeDiagnosticReply",
+            false,
+            false,
+        ),
+        method(
             "NodeRegistry",
             "Register",
             "NodeRegistrationRequest",

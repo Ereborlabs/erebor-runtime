@@ -65,6 +65,10 @@ tower.workspace = true
 tonic-build.workspace = true
 
 [[bin]]
+name = "mithril-observability-test"
+path = "src/bin/mithril_observability_test.rs"
+
+[[bin]]
 name = "mithril_discovery_test"
 path = "src/bin/mithril_discovery_test.rs"
 

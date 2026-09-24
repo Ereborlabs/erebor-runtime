@@ -48,6 +48,7 @@ const MAX_STATE_BYTES: usize = 64 * 1_024 * 1_024;
 pub struct ControlStore {
     inner: Arc<ControlStoreLock>,
     discovery_files: Arc<Mutex<discovery::DiscoveryFiles>>,
+    pub(crate) discovery_recovered: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -838,6 +839,7 @@ impl ControlStore {
             commit_index = %state.commit_index
         );
         Ok(Self {
+            discovery_recovered: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             discovery_files: Arc::new(Mutex::new(discovery::DiscoveryFiles::new(&root))),
             inner: Arc::new(ControlStoreLock::new(ControlStoreInner {
                 root,
