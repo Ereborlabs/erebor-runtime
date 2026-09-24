@@ -1,6 +1,5 @@
 use std::fs;
 use std::io::{self, Read as _, Seek as _, Write as _};
-use std::mem::size_of;
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::os::linux::net::SocketAddrExt as _;
@@ -129,7 +128,6 @@ enum ChildRequest {
         socket_type: i32,
         protocol: i32,
     },
-    NetworkTunTap,
     NetworkBpfSetup,
     NetworkPrepareProxy {
         path: PathBuf,
@@ -673,10 +671,6 @@ impl EffectProcessFixture {
             protocol,
         })?
         .try_into()
-    }
-
-    pub(super) fn network_tun_tap(&mut self) -> Result<IoOutcome> {
-        self.request(&ChildRequest::NetworkTunTap)?.try_into()
     }
 
     pub(super) fn network_bpf_setup(&mut self) -> Result<IoOutcome> {
@@ -1237,7 +1231,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 ))),
                 false,
             ),
-            ChildRequest::NetworkTunTap => (Ok(ChildResponse::Outcome(network_tun_tap())), false),
             ChildRequest::NetworkBpfSetup => {
                 (Ok(ChildResponse::Outcome(bpf_map_create_outcome())), false)
             }
@@ -3009,31 +3002,6 @@ fn network_udp_send(address: SocketAddr, payload: &[u8], connected: bool) -> IoO
             errno: None,
         },
         Err(error) => error_outcome(error),
-    }
-}
-
-#[allow(unsafe_code)]
-fn network_tun_tap() -> IoOutcome {
-    let device = match fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/net/tun")
-    {
-        Ok(device) => device,
-        Err(error) => return error_outcome(error),
-    };
-    let mut request = [0_u8; libc::IFNAMSIZ + 24];
-    request[..8].copy_from_slice(b"mithril0");
-    let flags = (libc::IFF_TUN | libc::IFF_NO_PI) as i16;
-    request[libc::IFNAMSIZ..libc::IFNAMSIZ + size_of::<i16>()]
-        .copy_from_slice(&flags.to_ne_bytes());
-    const TUNSETIFF: libc::c_ulong = 0x4004_54ca;
-    // SAFETY: request contains the Linux ifreq name and flags fields.
-    let result = unsafe { libc::ioctl(device.as_raw_fd(), TUNSETIFF, request.as_mut_ptr()) };
-    if result == 0 {
-        allowed_outcome()
-    } else {
-        error_outcome(io::Error::last_os_error())
     }
 }
 

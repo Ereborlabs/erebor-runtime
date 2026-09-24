@@ -2491,7 +2491,7 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Remove only the matching legacy SQPOLL mailbox action and result
         field. Keep the independent `io_uring` syscall fixture and other
         setup denials.
-    - [ ] Qualify TUN/TAP setup and its physical denial.
+    - [x] Qualify TUN/TAP setup and its physical denial.
       - [x] Add a 56-line platform test and one Python actor. Check that
         `/dev/net/tun` is character device 10:200 before Node starts. The
         actor then opens it after recovery. Require `EACCES` and attributed
@@ -2504,8 +2504,9 @@ test does not close a row when its physical condition or an assertion changed.
         The exact case passed in 29.14 seconds with the production OCI hook.
       - [x] Pass Kubernetes with the same actor and policy, then commit it.
         The exact physical case passed in 70.39 seconds in retained K3s.
-      - [ ] Remove only the matching legacy TUN action and result field after
-        all supported platforms pass.
+      - [x] Remove only the matching legacy TUN action and result field after
+        all supported platforms pass. Keep the protected-BPF probe. The three
+        network unit tests and strict clippy passed after this deletion.
     - [x] Qualify every unsupported socket family and protocol in the legacy
       list. Require Mithril denial evidence where the hook supports it.
       - [x] Add one 99-line standard test. Start the extra actor before Node

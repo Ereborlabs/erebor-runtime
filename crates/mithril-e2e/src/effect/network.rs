@@ -79,7 +79,6 @@ pub struct NetworkPhysicalProbeBundleV2 {
     pub post_fence_bytes_absent: bool,
     pub post_fence_bypass_packets_absent: bool,
     pub socket_reference_released: bool,
-    pub tun_tap_setup_denied: bool,
     pub bpf_setup_denied: bool,
     pub accepted_socket_narrow_actor_denied: bool,
     pub accepted_socket_approved_actor_allowed: bool,
@@ -629,7 +628,6 @@ impl NetworkTestRunner {
         let peer_network_passed = peer_tcp_allowed.unwrap_or(true)
             && peer_udp_allowed.unwrap_or(true)
             && peer_denied_connect.unwrap_or(true);
-        let tun_tap_setup_denied = fixture.network_tun_tap()?.denied();
         let bpf_marker = observations.cursor();
         let bpf_setup_denied = fixture.network_bpf_setup()?.denied();
         wait_for_effect(
@@ -643,10 +641,10 @@ impl NetworkTestRunner {
             ),
         )?;
         ensure!(
-            tun_tap_setup_denied && bpf_setup_denied,
+            bpf_setup_denied,
             InvalidInputSnafu {
                 path: Path::new("closed network paths"),
-                reason: "a tunnel, delegated setup, or protocol path remained open",
+                reason: "a delegated setup or protocol path remained open",
             }
         );
 
@@ -982,10 +980,7 @@ impl NetworkTestRunner {
                 && delegated_allowed_request_received,
             hf_result: post_fence_send_denied && provider_write_observed,
             hf_read_result: read_results_separate,
-            hf_network: tun_tap_setup_denied
-                && bpf_setup_denied
-                && post_fence_bypass_packets_absent
-                && peer_network_passed,
+            hf_network: bpf_setup_denied && post_fence_bypass_packets_absent && peer_network_passed,
             local_inet: accepted_socket_approved_actor_allowed,
             accept_pass: accepted_socket_narrow_actor_denied
                 && accepted_socket_approved_actor_allowed,
@@ -1037,7 +1032,6 @@ impl NetworkTestRunner {
             post_fence_bytes_absent,
             post_fence_bypass_packets_absent,
             socket_reference_released,
-            tun_tap_setup_denied,
             bpf_setup_denied,
             accepted_socket_narrow_actor_denied,
             accepted_socket_approved_actor_allowed,
