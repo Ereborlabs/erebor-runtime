@@ -2535,7 +2535,8 @@ test does not close a row when its physical condition or an assertion changed.
       forbidden bytes at the client. Use only ports 19097 and 19098.
       - [x] Host passed. The 87-line test passed in 34.65 seconds with the
         real Control, Node, and BPF path.
-      - [ ] Pass direct `runc` and commit it.
+      - [x] Direct `runc` passed in 42.21 seconds with the same test body,
+        Python actor, policy, and production OCI hook.
       - [ ] Pass Kubernetes and commit it.
     - [ ] Qualify approved-receiver payload delivery and role attribution in
       a separate small test before removing any accepted-socket legacy block.
