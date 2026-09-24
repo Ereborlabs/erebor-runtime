@@ -2982,6 +2982,18 @@ test does not close a row when its physical condition or an assertion changed.
       An explicit destination deny had the same result. A known-good two-entry
       Unix/network policy passed on the same VM in 27.57 seconds. No draft
       action or assertion replaced the legacy runner.
+      - A later Host probe found that two destination records with the same
+        IPv4 prefix and protocol produce one Node class key. That key does
+        not include the port. A policy with distinct prefixes and a Network
+        Connect default activated. The delegate's forbidden Connect returned
+        `EACCES` with `UNRESOLVED_OBJECT` evidence.
+      - The allowed Connect to a governed requester's TCP listener remained
+        `SYN-SENT` while the listener was bound. The result was the same when
+        the requester and delegate exchanged primary and added-entry roles.
+        The legacy probe uses an ungoverned TCP listener. Do not retire it
+        until a shared physical peer preserves the allowed payload receipt
+        on Host, direct `runc`, and Kubernetes. The cause of the stalled TCP
+        handshake is not yet proven. No failed draft is in the source tree.
   - [ ] Replace separate read-result and provider-write behavior. Keep the
     governed file read classes, provider receipt, and network result evidence.
     - [x] Check zero-byte, EOF, partial, inherited-descriptor, mapped, and
