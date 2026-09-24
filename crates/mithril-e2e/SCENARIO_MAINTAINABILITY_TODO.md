@@ -1737,7 +1737,8 @@ test does not close a row when its physical condition or an assertion changed.
       original exact-object key, composite atom, and task cookie. The exact
       Host case passed in 34.28 seconds. Keep the old symlink action until
       direct `runc` and Kubernetes pass.
-    - [ ] Pass the unchanged symlink test under direct `runc` and commit it.
+    - [x] Pass the unchanged symlink test under direct `runc` and commit it.
+      The exact case passed in 40.37 seconds with the production OCI hook.
     - [ ] Pass the unchanged symlink test on Kubernetes and commit it.
     - [ ] Remove only the matching old symlink action after all three pass.
       Keep the original control open for the bind-alias checks.
