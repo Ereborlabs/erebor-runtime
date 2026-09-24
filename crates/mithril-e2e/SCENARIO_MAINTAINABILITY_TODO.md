@@ -2957,6 +2957,9 @@ test does not close a row when its physical condition or an assertion changed.
         and exact Read and MmapRead Allow results. Node logged one transient
         exact-selector reconciliation warning; policy activation, evidence,
         and teardown completed.
+      - [x] Pass direct `runc` and commit it. The same test body, actor, and
+        policy passed in 40.08 seconds through the production OCI hook. Node
+        logged the same transient warning and completed teardown.
     - [ ] Retire the separate provider-write action only after confirming that
       `tcp_roundtrip_uses_network_role` retains its physical payload receipt
       and exact Connect, Send, and Receive results on all three platforms.
