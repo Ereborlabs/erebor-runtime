@@ -2491,8 +2491,8 @@ test does not close a row when its physical condition or an assertion changed.
     require `EACCES` and attributed `CORRUPT_IDENTITY_OR_GENERATION` IPC/Access
     Send evidence. Pass the same Rust test below 100 lines on Host, direct
     `runc`, and Kubernetes before removing the matching old action.
-    The 84-line Host case passed in 28.17 seconds. Direct `runc` and
-    Kubernetes are not yet verified.
+    The 84-line Host case passed in 28.17 seconds. Direct `runc` passed in
+    33.83 seconds with the production OCI hook. Kubernetes is not yet verified.
   - [x] Replace the unmatched file-create block with one small standard
     platform test. Use one shared Python actor and the existing Python policy.
     Start the actor before Node to preserve the original recovered-root
