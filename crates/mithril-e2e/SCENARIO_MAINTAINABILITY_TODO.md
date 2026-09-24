@@ -1786,7 +1786,9 @@ test does not close a row when its physical condition or an assertion changed.
       seconds. Both affected Host symlink cases also passed. A broad symlink
       filter selected unconfigured `runc` and Kubernetes cases; those failed
       during setup, not in the Host behavior.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The four-branch case passed in
+      39.82 seconds. Both affected direct-`runc` symlink cases passed in
+      40.18 and 40.05 seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the four matching legacy opens after all three pass.
   - [x] Replace the `/proc/self/fd/<fd>` exact-file alias denial. Open and
