@@ -3139,6 +3139,22 @@ setup, production actions, assertions, and focused test.
     107.89 seconds on 2026-09-17.
   - [x] Remove the matching legacy restart snapshot, result field, and shell
     assertion after all three platform cases pass.
+  - [ ] Replace the post-restart PostStart `cp` role and file-policy checks.
+    - [x] Add one 88-line direct test. Start the application, restart Node,
+      and hold one declared `cp` entry at a FIFO. Require its PostStart role,
+      its read of an application-denied file, and its own attributed `EACCES`
+      denial. The exact Host test passed in 51.23 seconds. Both Host tests in
+      the `node_restart` lifecycle passed together in 80.62 seconds. The
+      existing `runtime_entries_stay_distinct` Host test passed in 28.48
+      seconds with the extended policy. The repository Rust CI check passed.
+    - [ ] Pass the same test on direct `runc` and commit that platform.
+    - [ ] Pass the same test on Kubernetes and commit that platform.
+    - [ ] Prove that the PostStart admission rule uses the literal path map.
+      Keep this as a separate small direct test if the role test would reach
+      100 lines.
+    - [ ] Remove only the matching legacy PostStart action, result, and shell
+      check after all platform and literal-path checks pass. Keep the PreStop
+      inventory-omission case until its own replacement passes.
   - [x] Retain a declared PreStop entry across the same real Node restart.
     Require the recovered policy generation, external runtime root,
     qualified role, exact PreStop role, and nonzero admission rule.

@@ -69,6 +69,13 @@
       {
         "name": "main",
         "files": [],
+        "pathTreeDenials": [
+          {
+            "name": "deny-application-file",
+            "path": "/work/application.denied",
+            "operations": ["OpenRead"]
+          }
+        ],
         "execution": [
           {
             "name": "main-python",
@@ -85,6 +92,13 @@
       {
         "name": "copy",
         "files": [
+          {
+            "name": "deny-copy-file",
+            "path": "/work/poststart.denied",
+            "recursive": false,
+            "operations": ["OpenRead"],
+            "action": "Deny"
+          },
           {
             "name": "copy-work",
             "path": "/work/runtime_copy.txt",

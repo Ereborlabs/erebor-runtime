@@ -1,3 +1,10 @@
+use std::{cell::RefCell, fs, io::Write as _, time::Duration};
+
+use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
+use rustix::fs::{mkfifoat, Mode, CWD};
+
+use crate::error::InvalidInputSnafu;
+use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
@@ -36,5 +43,96 @@ fn node_restart_keeps_actor<P: Platform>() -> TestResult<()> {
     assert_ne!(task.snapshot.admitted_entry_rule_id, 0);
     prestop.stop()?;
     actor.stop()?;
+    env.stop()
+}
+
+#[platform_test(host)]
+#[lifecycle = node_restart]
+fn poststart_keeps_its_role<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("poststart-role")?;
+    env.start_control()?;
+    env.start_node()?;
+    env.install_policy("runtime_entries_policy.json")?;
+    env.node_ready()?;
+    fs::write(env.work().join("application.denied"), b"application\n")?;
+    fs::write(env.work().join("poststart.denied"), b"poststart\n")?;
+    fs::create_dir(env.work().join("copy-out"))?;
+    let gate = env.work().join("copy-gate");
+    mkfifoat(CWD, &gate, Mode::RUSR | Mode::WUSR)?;
+
+    let mut main = env.start_actor("runtime_exec.py", &[])?;
+    let root = env.task(main.id(), "application before Node restart")?;
+    env.stop_node()?;
+    env.start_node()?;
+    env.node_ready()?;
+    assert_eq!(
+        env.task(main.id(), "application after Node restart")?
+            .snapshot,
+        root.snapshot
+    );
+
+    let args = [
+        "/work/application.denied",
+        "/work/copy-gate",
+        "/work/poststart.denied",
+        "/work/copy-out",
+    ];
+    let mut copy = env.add_actor("cp", &args)?;
+    let mut release = copy.fifo_writer(&gate, "PostStart copy gate", Duration::from_secs(5))?;
+    let task = env.task(copy.id(), "PostStart entry after Node restart")?;
+    let snap = &task.snapshot;
+    assert_eq!(
+        fs::read(env.work().join("copy-out/application.denied"))?,
+        b"application\n"
+    );
+    assert_eq!(snap.root_class.as_deref(), Some("external_runtime_root"));
+    assert_eq!(
+        snap.installed_role_class.as_deref(),
+        Some("qualified_registered_role")
+    );
+    assert_eq!(
+        snap.profile_generation_ref_id,
+        root.snapshot.profile_generation_ref_id
+    );
+    assert_eq!(snap.active_role_id, 2);
+    assert_ne!(snap.active_role_id, root.snapshot.active_role_id);
+    assert_ne!(snap.admitted_entry_rule_id, 0);
+    release.write_all(b"gate\n")?;
+    drop(release);
+    copy.close();
+    assert!(!copy
+        .wait_exit("PostStart denied read", Duration::from_secs(5))?
+        .success());
+    let stderr = copy.stderr()?;
+    assert!(stderr.contains("Permission denied"), "{stderr}");
+    let path = env.maps().0.to_owned();
+    let last = RefCell::new(String::from("<none>"));
+    wait_for(
+        &path,
+        "PostStart policy denial",
+        Duration::from_secs(30),
+        || {
+            let events = env.snapshot().map_err(|source| {
+                InvalidInputSnafu {
+                    path: &path,
+                    reason: source.to_string(),
+                }
+                .build()
+            })?;
+            *last.borrow_mut() = format!("{:?}", events.recent_effects.iter().rev().take(8));
+            Ok(events.recent_effects.into_iter().find(|event| {
+                task.matches_effect(
+                    event,
+                    "EXACT_POLICY_DENY",
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                    -libc::EACCES,
+                )
+            }))
+        },
+        || format!("last effects: {}", last.borrow()),
+    )?;
+    copy.stop()?;
+    main.stop()?;
     env.stop()
 }
