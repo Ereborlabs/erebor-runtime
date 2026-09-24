@@ -2068,7 +2068,8 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Host passed in 28.90 seconds. The shared actor returned two
       executable-protection denials, one executable-mmap denial, and two
       successful read-only controls. The production effect records matched.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Direct `runc` passed in 29.34 seconds with the same actor,
+      test body, policy, and effect assertions.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy actions, fields, and prepared
       resources after all three platforms pass.
