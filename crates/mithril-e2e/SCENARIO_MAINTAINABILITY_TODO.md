@@ -1661,10 +1661,12 @@ test does not close a row when its physical condition or an assertion changed.
 
 ### Effect enforcement
 
-- [ ] `EffectTestRunner::replacement_generation_exception_probe`: own
-  fixture paths and child lifetime. Keep policy installation, exact exception
-  use, exhaustion denial, evidence checks, and shutdown explicit.
-  - [ ] Add one small shared test for a live actor across a policy replacement
+- [x] Replace `EffectTestRunner::replacement_generation_exception_probe` with
+  two small shared tests. Remove the old runner, artifact builder, result
+  type, and CLI command. The shared fixture owns fallible actor and resource
+  cleanup. Keep policy installation, denial, one-use allowance, exhaustion,
+  and attributed evidence explicit.
+  - [x] Add one small shared test for a live actor across a policy replacement
     and one-use exception. Start with `actor_policy.json`, then install
     `exception_policy.json`. Require the same task cookie, a newer effect
     generation, denial before the grant, one allowed open, one exhausted

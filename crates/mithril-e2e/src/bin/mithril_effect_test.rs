@@ -66,16 +66,6 @@ enum Command {
         #[arg(long)]
         protect: bool,
     },
-    ReplacementGenerationExceptionProbe {
-        #[arg(long)]
-        output_directory: PathBuf,
-        #[arg(long)]
-        pin_root: PathBuf,
-        #[arg(long)]
-        lease_path: PathBuf,
-        #[arg(long)]
-        cgroup_path: PathBuf,
-    },
     RuncEntryRoleRuntimeProbe {
         #[arg(long)]
         output_directory: PathBuf,
@@ -830,26 +820,6 @@ fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 &bundle,
             )?;
             println!("Mithril effect physical probe passed");
-            Ok(())
-        }
-        Command::ReplacementGenerationExceptionProbe {
-            output_directory,
-            pin_root,
-            lease_path,
-            cgroup_path,
-        } => {
-            let runner = EffectTestRunner::new(cli.repo_root);
-            let result = runner.replacement_generation_exception_probe(
-                &output_directory,
-                &pin_root,
-                &lease_path,
-                &cgroup_path,
-            )?;
-            runner.write_json(
-                &output_directory.join("replacement-generation-exception-probe.json"),
-                &result,
-            )?;
-            println!("Mithril replacement-generation exception probe passed");
             Ok(())
         }
         Command::RuncEntryRoleRuntimeProbe {
