@@ -2469,6 +2469,21 @@ test does not close a row when its physical condition or an assertion changed.
       case remains.
   - [ ] Replace unsupported network family, `io_uring` SQPOLL, TUN/TAP, and BPF
     setup denials. Keep each syscall and fail-closed result explicit.
+    - [ ] Qualify protected BPF map setup with the existing Python actor and
+      policy. The current platform BPF test covers a recovered actor. Preserve
+      the protected-actor condition from the legacy network probe.
+      - A focused Host attempt on 2026-09-24 admitted the actor and returned
+        `bpf-map-0`: Linux created the map. The public role has no BPF
+        operation rule or Privilege default action. A capability rule would
+        test a different operation. Keep the legacy check until the public
+        policy can express and qualify this denial. The failed test was not
+        committed.
+    - [ ] Qualify `io_uring` SQPOLL setup and its Privilege evidence.
+    - [ ] Qualify TUN/TAP setup and its physical denial.
+    - [ ] Qualify every unsupported socket family and protocol in the legacy
+      list. Require Mithril denial evidence where the hook supports it.
+    - [ ] Remove each matching legacy action only after its platform cases
+      pass. Keep unrelated network setup tests.
   - [ ] Replace accepted-socket transfer authority. Keep the narrow actor
     denial, approved actor success, descriptor transfer, role, and received
     payload assertions.
