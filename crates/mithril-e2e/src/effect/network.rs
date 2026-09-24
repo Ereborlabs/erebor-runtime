@@ -35,8 +35,6 @@ use crate::physical::boot_identity;
 use crate::Result;
 
 const PAYLOAD: &[u8] = b"allowed";
-const DUP_PAYLOAD: &[u8] = b"dup";
-const FORK_PAYLOAD: &[u8] = b"fork";
 const TOKEN_PAYLOAD: &[u8] = b"token";
 pub const NETWORK_PEER_TCP_PORT: u16 = 46_051;
 pub const NETWORK_PEER_UDP_PORT: u16 = 46_052;
@@ -100,8 +98,6 @@ pub struct NetworkPhysicalProbeBundleV2 {
     pub read_results_separate: bool,
     pub provider_write_observed: bool,
     pub shared_socket_holders_denied: bool,
-    pub cloned_socket_allowed: bool,
-    pub inherited_socket_allowed: bool,
     pub socket_generation_not_reused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peer_tcp_allowed: Option<bool>,
@@ -384,9 +380,7 @@ impl NetworkTestRunner {
             }
         );
 
-        let server = thread::spawn(move || {
-            server_exchange(listener, &[PAYLOAD, DUP_PAYLOAD, FORK_PAYLOAD].concat())
-        });
+        let server = thread::spawn(move || server_exchange(listener, PAYLOAD));
         let lifecycle_server = thread::spawn(move || server_receive(lifecycle_listener, b"new"));
         let ipv6_server = thread::spawn(move || server_receive(ipv6_listener, b"ipv6"));
         let rewrite_server = thread::spawn(move || server_receive(rewrite_listener, b"rewrite"));
@@ -429,15 +423,6 @@ impl NetworkTestRunner {
         fixture.network_send(PAYLOAD)?;
         fixture.network_receive()?;
         fixture.network_clone()?;
-        let cloned_socket_allowed = fixture.network_clone_send(DUP_PAYLOAD)?.allowed;
-        let inherited_socket_allowed = fixture.network_fork_send(FORK_PAYLOAD)?.allowed;
-        ensure!(
-            cloned_socket_allowed && inherited_socket_allowed,
-            InvalidInputSnafu {
-                path: Path::new("network socket variants"),
-                reason: "a cloned or inherited socket path failed",
-            }
-        );
 
         let fence_key = NetworkResponseFloorKeyV1 {
             profile_generation_ref_id: allowed_event.network_creator_profile_generation_ref_id,
@@ -1103,10 +1088,7 @@ impl NetworkTestRunner {
             receive: accepted_socket_narrow_actor_denied,
             rewrite: rewritten_forbidden_packet_absent && rewritten_allowed_destination_received,
             shared_response: shared_socket_holders_denied,
-            socket_life: socket_reference_released
-                && cloned_socket_allowed
-                && inherited_socket_allowed
-                && socket_generation_not_reused,
+            socket_life: socket_reference_released && socket_generation_not_reused,
         };
         let fixture_results = proof.results();
         ensure!(
@@ -1167,8 +1149,6 @@ impl NetworkTestRunner {
             read_results_separate,
             provider_write_observed,
             shared_socket_holders_denied,
-            cloned_socket_allowed,
-            inherited_socket_allowed,
             socket_generation_not_reused,
             peer_tcp_allowed,
             peer_udp_allowed,

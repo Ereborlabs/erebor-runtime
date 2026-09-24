@@ -119,9 +119,6 @@ enum ChildRequest {
     NetworkCloneSend {
         payload: Vec<u8>,
     },
-    NetworkForkSend {
-        payload: Vec<u8>,
-    },
     NetworkUdpSend {
         address: SocketAddr,
         payload: Vec<u8>,
@@ -646,13 +643,6 @@ impl EffectProcessFixture {
 
     pub(super) fn network_clone_send(&mut self, payload: &[u8]) -> Result<IoOutcome> {
         self.request(&ChildRequest::NetworkCloneSend {
-            payload: payload.to_vec(),
-        })?
-        .try_into()
-    }
-
-    pub(super) fn network_fork_send(&mut self, payload: &[u8]) -> Result<IoOutcome> {
-        self.request(&ChildRequest::NetworkForkSend {
             payload: payload.to_vec(),
         })?
         .try_into()
@@ -1227,16 +1217,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                         .as_mut()
                         .map_or_else(missing_prepared_network, |stream| {
                             io_outcome(stream.write_all(&payload))
-                        }),
-                )),
-                false,
-            ),
-            ChildRequest::NetworkForkSend { payload } => (
-                Ok(ChildResponse::Outcome(
-                    prepared_network_stream
-                        .as_ref()
-                        .map_or_else(missing_prepared_network, |stream| {
-                            forked_network_send(stream.as_raw_fd(), &payload)
                         }),
                 )),
                 false,
@@ -2897,54 +2877,6 @@ fn bpf_map_create_outcome() -> IoOutcome {
         allowed_outcome()
     } else {
         error_outcome(std::io::Error::last_os_error())
-    }
-}
-
-#[allow(unsafe_code)]
-fn forked_network_send(fd: libc::c_int, payload: &[u8]) -> IoOutcome {
-    // SAFETY: the child uses only the inherited descriptor and payload before _exit.
-    let child = unsafe { libc::fork() };
-    if child < 0 {
-        return error_outcome(io::Error::last_os_error());
-    }
-    if child == 0 {
-        // SAFETY: payload points to initialized bytes for the duration of send.
-        let sent = unsafe {
-            libc::send(
-                fd,
-                payload.as_ptr().cast(),
-                payload.len(),
-                libc::MSG_NOSIGNAL,
-            )
-        };
-        let status = if sent == payload.len() as isize {
-            0
-        } else {
-            io::Error::last_os_error()
-                .raw_os_error()
-                .unwrap_or(libc::EIO)
-                .clamp(1, 255)
-        };
-        // SAFETY: the child exits without running inherited destructors.
-        unsafe { libc::_exit(status) };
-    }
-    let mut status = 0;
-    // SAFETY: child is a live direct child and status points to writable storage.
-    if unsafe { libc::waitpid(child, &mut status, 0) } != child {
-        return error_outcome(io::Error::last_os_error());
-    }
-    if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0 {
-        allowed_outcome()
-    } else if libc::WIFEXITED(status) {
-        IoOutcome {
-            allowed: false,
-            errno: Some(libc::WEXITSTATUS(status)),
-        }
-    } else {
-        IoOutcome {
-            allowed: false,
-            errno: None,
-        }
     }
 }
 

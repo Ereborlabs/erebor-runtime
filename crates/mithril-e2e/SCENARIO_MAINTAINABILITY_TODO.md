@@ -2411,7 +2411,7 @@ test does not close a row when its physical condition or an assertion changed.
       retained K3s cluster with the same actor, policy, and assertions.
     - [x] Remove only the matching legacy result fields and allow assertions.
       Keep the later post-fence calls and their denial assertions.
-  - [ ] Replace clone-send and fork-send socket inheritance. Keep distinct
+  - [x] Replace clone-send and fork-send socket inheritance. Keep distinct
     child execution, payload receipt, creator identity, and allowed result
     assertions. Keep socket-generation non-reuse as a separate lifecycle test.
     - [x] Add one Host test with the existing actor, policy, and Platform API.
@@ -2430,7 +2430,7 @@ test does not close a row when its physical condition or an assertion changed.
         contain the root Send result. The shared actor now separates prepare
         and action. The Host and direct-`runc` cases pass with bounded evidence
         readiness for both tasks. No production or Platform code changed.
-    - [ ] Remove only the matching legacy clone-send and fork-send success
+    - [x] Remove only the matching legacy clone-send and fork-send success
       actions and assertions. Keep the post-fence cloned-socket denial and the
       separate socket-generation non-reuse behavior.
   - [ ] Replace the whole-socket fence and Node restart group. Preserve the
