@@ -2997,6 +2997,13 @@ test does not close a row when its physical condition or an assertion changed.
     until the last close.
   - [ ] Replace rewritten-destination enforcement. Keep the forbidden final
     address packet absent and the allowed final destination payload received.
+    - A Host platform draft reached the denied TCP flow. The final-flow BPF
+      hook emitted a packet-drop observation without a task cookie. Node
+      rejected that observation and marked evidence coverage as gapped. The
+      actor's blocking connect timed out, so the draft did not prove an
+      `EACCES` syscall result. Keep the legacy action until a replacement
+      proves the packet absence, allowed payload, and valid Node evidence on
+      Host, direct `runc`, and Kubernetes. No draft code or BPF change remains.
   - [ ] Replace delegated egress. Keep the request ID, requested and final
     destinations, forbidden request absence, and allowed request receipt.
     - [ ] Keep distinct governed requester and delegate tasks, both request
