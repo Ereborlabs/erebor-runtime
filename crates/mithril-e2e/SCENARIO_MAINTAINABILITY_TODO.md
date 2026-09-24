@@ -2502,7 +2502,8 @@ test does not close a row when its physical condition or an assertion changed.
         exact case passed in 28.33 seconds in the retained VM.
       - [x] Pass direct `runc` with the same actor and policy, then commit it.
         The exact case passed in 29.14 seconds with the production OCI hook.
-      - [ ] Pass Kubernetes with the same actor and policy, then commit it.
+      - [x] Pass Kubernetes with the same actor and policy, then commit it.
+        The exact physical case passed in 70.39 seconds in retained K3s.
       - [ ] Remove only the matching legacy TUN action and result field after
         all supported platforms pass.
     - [x] Qualify every unsupported socket family and protocol in the legacy
