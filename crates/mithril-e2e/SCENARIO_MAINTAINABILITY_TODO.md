@@ -559,15 +559,15 @@ These Rust files exceed 2,000 lines:
 
 | Source | Current lines |
 | --- | ---: |
-| `effect/runc.rs` | 6,923 |
+| `effect/runc.rs` | 6,864 |
 | `identity.rs` | 5,425 |
-| `effect.rs` | 3,802 |
-| `effect/child.rs` | 3,448 |
+| `effect.rs` | 3,327 |
+| `effect/child.rs` | 3,205 |
 | `control_tls.rs` | 2,416 |
 
 Runner retirement is a separate, open check. In particular:
 
-- [ ] Retire `NetworkTestRunner::physical_probe` in `effect/network.rs` (1,611
+- [ ] Retire `NetworkTestRunner::physical_probe` in `effect/network.rs` (1,584
   lines). Replace each remaining local and two-node behavior with the same
   small Rust platform test on each applicable platform. Then remove the old
   `mithril-network-test` probe command and the scenario actions and assertions
@@ -2963,6 +2963,14 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Pass Kubernetes and commit it. The same test body, actor, and
         policy passed in 71.73 seconds against the deployed Node and Control
         in the retained K3s cluster. The test process exited with status 0.
+      - [x] Remove the matching legacy read actions, result field, fixture
+        row, child protocol, and two actor-only tests. Keep the token file and
+        exact object setup for the remaining sendfile, splice, and fence
+        checks. The old shell expected 12 fixture rows while the Rust probe
+        emitted 10 before this deletion; it now expects the 9 rows that the
+        remaining Rust probe emits. The post-deletion Host test, 91
+        non-privileged crate tests, VM harness checks, formatting, and strict
+        Clippy passed. The legacy network runner remains open.
     - [ ] Retire the separate provider-write action only after confirming that
       `tcp_roundtrip_uses_network_role` retains its physical payload receipt
       and exact Connect, Send, and Receive results on all three platforms.

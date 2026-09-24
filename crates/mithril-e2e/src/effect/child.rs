@@ -1,10 +1,10 @@
 use std::fs;
-use std::io::{self, Read as _, Seek as _, Write as _};
+use std::io::{self, Read as _, Write as _};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::os::linux::net::SocketAddrExt as _;
 use std::os::unix::ffi::OsStrExt as _;
-use std::os::unix::fs::{FileExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::os::unix::net::{SocketAddr as UnixSocketAddr, UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, Command, Stdio};
@@ -58,11 +58,6 @@ enum ChildRequest {
         path: PathBuf,
         count: u32,
     },
-    PrepareFile {
-        path: PathBuf,
-    },
-    ReadPrepared,
-    MmapPrepared,
     PreparePropagationPeer {
         shared_mount: PathBuf,
         benign: PathBuf,
@@ -133,9 +128,6 @@ enum ChildRequest {
         address: SocketAddr,
     },
     NetworkProxyOnce,
-    NetworkReadResults {
-        path: PathBuf,
-    },
     PrepareHardClosed {
         exec_path: PathBuf,
         allowed_exec_path: PathBuf,
@@ -206,7 +198,6 @@ enum ChildResponse {
     Descriptor { descriptor: i32 },
     NetworkListen(NetworkListenOutcome),
     Proxy(NetworkProxyOutcome),
-    NetworkReadResults(NetworkReadResultsOutcome),
     Failed { reason: String },
     Exited,
 }
@@ -282,16 +273,6 @@ pub(super) struct NetworkProxyOutcome {
 pub(super) struct NetworkListenOutcome {
     pub(super) address: Option<SocketAddr>,
     pub(super) outcome: IoOutcome,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-pub(super) struct NetworkReadResultsOutcome {
-    pub(super) zero_byte: bool,
-    pub(super) end_of_file: bool,
-    pub(super) io_error: bool,
-    pub(super) partial_positive: bool,
-    pub(super) mapped: bool,
-    pub(super) inherited_descriptor: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -420,35 +401,6 @@ impl EffectProcessFixture {
             ChildResponse::Samples(outcome) => Ok(outcome),
             _ => Err(invalid_state(
                 "effect child returned the wrong sampled-open response",
-            )),
-        }
-    }
-
-    pub(super) fn prepare_file(&mut self, path: &Path) -> Result<()> {
-        match self.request(&ChildRequest::PrepareFile {
-            path: path.to_path_buf(),
-        })? {
-            ChildResponse::Prepared => Ok(()),
-            _ => Err(invalid_state(
-                "effect child returned the wrong prepared-file response",
-            )),
-        }
-    }
-
-    pub(super) fn read_prepared(&mut self) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::ReadPrepared)? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong prepared-read response",
-            )),
-        }
-    }
-
-    pub(super) fn mmap_prepared(&mut self) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::MmapPrepared)? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong prepared-mmap response",
             )),
         }
     }
@@ -691,20 +643,6 @@ impl EffectProcessFixture {
         }
     }
 
-    pub(super) fn network_read_results(
-        &mut self,
-        path: &Path,
-    ) -> Result<NetworkReadResultsOutcome> {
-        match self.request(&ChildRequest::NetworkReadResults {
-            path: path.to_path_buf(),
-        })? {
-            ChildResponse::NetworkReadResults(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong read-result response",
-            )),
-        }
-    }
-
     pub(super) fn prepare_operations(&mut self, paths: &EffectPaths) -> Result<()> {
         match self.request(&ChildRequest::PrepareHardClosed {
             exec_path: paths.exec_target.clone(),
@@ -858,7 +796,6 @@ impl Drop for EffectProcessFixture {
 pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> {
     enter_private_mount_namespace()?;
     let mut mailbox = SharedMailbox::open(mailbox_path)?;
-    let mut prepared_file = None;
     let mut prepared_hard_closed = None;
     let mut prepared_network_clone = None;
     let mut prepared_network_listener = None;
@@ -896,32 +833,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
             }
             ChildRequest::OpenSamples { path, count } => (
                 Ok(ChildResponse::Samples(open_samples(&path, count))),
-                false,
-            ),
-            ChildRequest::PrepareFile { path } => match fs::File::open(path) {
-                Ok(file) => {
-                    prepared_file = Some(file);
-                    (Ok(ChildResponse::Prepared), false)
-                }
-                Err(error) => (
-                    Err(invalid_state(format!("cannot prepare file: {error}"))),
-                    false,
-                ),
-            },
-            ChildRequest::ReadPrepared => (
-                Ok(ChildResponse::Outcome(
-                    prepared_file
-                        .as_mut()
-                        .map_or_else(missing_prepared_file, read_outcome),
-                )),
-                false,
-            ),
-            ChildRequest::MmapPrepared => (
-                Ok(ChildResponse::Outcome(
-                    prepared_file
-                        .as_ref()
-                        .map_or_else(missing_prepared_file, mmap_outcome),
-                )),
                 false,
             ),
             ChildRequest::PreparePropagationPeer {
@@ -1298,10 +1209,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 ),
                 false,
             ),
-            ChildRequest::NetworkReadResults { path } => (
-                network_read_results(&path).map(ChildResponse::NetworkReadResults),
-                false,
-            ),
             ChildRequest::PrepareHardClosed {
                 exec_path,
                 allowed_exec_path,
@@ -1628,26 +1535,6 @@ fn read_outcome(file: &mut fs::File) -> IoOutcome {
     let mut byte = [0_u8; 1];
     match file.read(&mut byte) {
         Ok(1) => IoOutcome {
-            allowed: true,
-            errno: None,
-        },
-        Ok(_) => IoOutcome {
-            allowed: false,
-            errno: Some(rustix::io::Errno::IO.raw_os_error()),
-        },
-        Err(error) => IoOutcome {
-            allowed: false,
-            errno: error.raw_os_error(),
-        },
-    }
-}
-
-#[allow(unsafe_code)]
-fn mmap_outcome(file: &fs::File) -> IoOutcome {
-    // SAFETY: the fixture owns this immutable file until the mapping attempt
-    // finishes; no process truncates or mutates it.
-    match unsafe { memmap2::MmapOptions::new().map(file) } {
-        Ok(map) if !map.is_empty() => IoOutcome {
             allowed: true,
             errno: None,
         },
@@ -2879,75 +2766,6 @@ fn network_socket(address: SocketAddr, flags: rustix::net::SocketFlags) -> io::R
     .map_err(io::Error::from)
 }
 
-#[allow(unsafe_code)]
-fn network_read_results(path: &Path) -> Result<NetworkReadResultsOutcome> {
-    let mut zero_file = fs::File::open(path).context(IoSnafu { path })?;
-    let zero_byte = zero_file.read(&mut []).context(IoSnafu { path })? == 0;
-
-    let mut eof_file = fs::File::open(path).context(IoSnafu { path })?;
-    eof_file
-        .seek(std::io::SeekFrom::End(0))
-        .context(IoSnafu { path })?;
-    let mut byte = [0_u8; 1];
-    let end_of_file = eof_file.read(&mut byte).context(IoSnafu { path })? == 0;
-
-    let mut partial_file = fs::File::open(path).context(IoSnafu { path })?;
-    let mut buffer = [0_u8; 32];
-    let partial = partial_file.read(&mut buffer).context(IoSnafu { path })?;
-    let partial_positive = partial > 0 && partial < buffer.len();
-
-    let mapped_file = fs::File::open(path).context(IoSnafu { path })?;
-    // SAFETY: the fixture retains mapped_file while it checks the private read-only mapping.
-    let mapping = unsafe { memmap2::MmapOptions::new().map_copy_read_only(&mapped_file) }.map_err(
-        |source| crate::Error::Io {
-            path: path.to_path_buf(),
-            source,
-            location: snafu::Location::default(),
-        },
-    )?;
-    let mapped = !mapping.is_empty() && mapping[0] == buffer[0];
-
-    let inherited_file = fs::File::open(path).context(IoSnafu { path })?;
-    let inherited_descriptor = inherited_file_read(inherited_file.as_raw_fd(), buffer[0]);
-
-    let memory = fs::File::open("/proc/self/mem").context(IoSnafu {
-        path: Path::new("/proc/self/mem"),
-    })?;
-    let io_error = memory
-        .read_at(&mut byte, 0)
-        .is_err_and(|error| error.raw_os_error() == Some(libc::EIO));
-
-    Ok(NetworkReadResultsOutcome {
-        zero_byte,
-        end_of_file,
-        io_error,
-        partial_positive,
-        mapped,
-        inherited_descriptor,
-    })
-}
-
-#[allow(unsafe_code)]
-fn inherited_file_read(fd: libc::c_int, expected: u8) -> bool {
-    // SAFETY: the child reads only the inherited descriptor before _exit.
-    let child = unsafe { libc::fork() };
-    if child < 0 {
-        return false;
-    }
-    if child == 0 {
-        let mut byte = 0_u8;
-        // SAFETY: byte points to one writable byte and fd is inherited.
-        let result = unsafe { libc::pread(fd, (&raw mut byte).cast(), 1, 0) };
-        // SAFETY: the child exits without running inherited destructors.
-        unsafe { libc::_exit(i32::from(result != 1 || byte != expected)) };
-    }
-    let mut status = 0;
-    // SAFETY: child is a live direct child and status points to writable storage.
-    (unsafe { libc::waitpid(child, &mut status, 0) == child })
-        && libc::WIFEXITED(status)
-        && libc::WEXITSTATUS(status) == 0
-}
-
 fn allowed_outcome() -> IoOutcome {
     IoOutcome {
         allowed: true,
@@ -3083,15 +2901,14 @@ fn invalid_state(reason: impl Into<String>) -> crate::Error {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+    use std::io::{Read as _, Write as _};
     use std::mem::{offset_of, size_of};
     use std::os::fd::AsRawFd as _;
     use std::os::unix::fs::OpenOptionsExt as _;
 
     use super::{
-        invalid_state, mmap_outcome, network_read_results, ptmx_number_outcome, ptmx_peer_outcome,
-        read_outcome, unlock_ptmx, BatchOutcome, BpfMapCreateAttr, IoOutcome, UnixStreamTarget,
-        BPF_MAP_TYPE_ARRAY,
+        invalid_state, ptmx_number_outcome, ptmx_peer_outcome, read_outcome, unlock_ptmx,
+        BatchOutcome, BpfMapCreateAttr, IoOutcome, UnixStreamTarget, BPF_MAP_TYPE_ARRAY,
     };
     use crate::effect::fixture_syscalls;
     use crate::effect::mailbox::SharedMailbox;
@@ -3108,30 +2925,6 @@ mod tests {
             errno: Some(rustix::io::Errno::NOENT.raw_os_error()),
         }
         .denied());
-    }
-
-    #[test]
-    fn network_chain_keeps_file_read_results_separate() -> crate::Result<()> {
-        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
-            path: "temporary read-result fixture".into(),
-            source,
-            location: snafu::location!(),
-        })?;
-        let path = directory.path().join("token");
-        fs::write(&path, b"token").map_err(|source| crate::Error::Io {
-            path: path.clone(),
-            source,
-            location: snafu::location!(),
-        })?;
-
-        let result = network_read_results(&path)?;
-        assert!(result.zero_byte);
-        assert!(result.end_of_file);
-        assert!(result.io_error);
-        assert!(result.partial_positive);
-        assert!(result.mapped);
-        assert!(result.inherited_descriptor);
-        Ok(())
     }
 
     #[test]
@@ -3177,31 +2970,6 @@ mod tests {
             .average_ns(),
             10
         );
-    }
-
-    #[test]
-    fn prepared_file_fixture_can_read_and_map_before_policy_activation() -> crate::Result<()> {
-        let mut file = tempfile::tempfile().map_err(|source| crate::Error::Io {
-            path: "prepared file fixture".into(),
-            source,
-            location: snafu::location!(),
-        })?;
-        file.write_all(b"secret")
-            .map_err(|source| crate::Error::Io {
-                path: "prepared file fixture".into(),
-                source,
-                location: snafu::location!(),
-            })?;
-        file.seek(SeekFrom::Start(0))
-            .map_err(|source| crate::Error::Io {
-                path: "prepared file fixture".into(),
-                source,
-                location: snafu::location!(),
-            })?;
-
-        assert!(read_outcome(&mut file).allowed);
-        assert!(mmap_outcome(&file).allowed);
-        Ok(())
     }
 
     #[test]

@@ -88,7 +88,6 @@ pub struct NetworkPhysicalProbeBundleV2 {
     pub rewritten_allowed_destination_received: bool,
     pub delegated_forbidden_request_absent: bool,
     pub delegated_allowed_request_received: bool,
-    pub read_results_separate: bool,
     pub provider_write_observed: bool,
     pub shared_socket_holders_denied: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -104,7 +103,6 @@ pub struct NetworkPhysicalProbeBundleV2 {
 struct NetworkFixtureProof {
     delegated_egress: bool,
     hf_result: bool,
-    hf_read_result: bool,
     hf_network: bool,
     local_inet: bool,
     namespace_pass: bool,
@@ -268,8 +266,6 @@ impl NetworkTestRunner {
         }
         let converter_pass = transport_root.join("converter.sock");
         let proxy_path = transport_root.join("proxy.sock");
-        fixture.prepare_file(&token_path)?;
-        let read_results = fixture.network_read_results(&token_path)?;
         let token_object = ExactFileObjectResolver::resolve(
             fixture.pid(),
             &token_path,
@@ -348,11 +344,6 @@ impl NetworkTestRunner {
         let delegated_denied_server =
             thread::spawn(move || server_absent(delegated_denied_listener));
         let provider_server = thread::spawn(move || server_receive(provider_listener, b"provider"));
-        let governed_read = fixture.read_prepared()?;
-        let governed_mmap = fixture.mmap_prepared()?;
-        let governed_read_allowed = governed_read.allowed;
-        let governed_mmap_allowed = governed_mmap.allowed;
-
         let allowed_marker = observations.cursor();
         fixture.network_connect(allowed_address)?;
         wait_for_effect(
@@ -823,16 +814,6 @@ impl NetworkTestRunner {
         let provider_write_observed = provider_connect
             && provider_send
             && join_server(provider_server, "provider-result server")?;
-        let read_results_separate = read_results.zero_byte
-            && read_results.end_of_file
-            && read_results.io_error
-            && read_results.partial_positive
-            && read_results.mapped
-            && read_results.inherited_descriptor
-            && governed_read_allowed
-            && governed_mmap_allowed
-            && provider_write_observed;
-
         let rewrite = NetworkRewriteOwner::install(rewrite_address.port())?;
         let rewritten_marker = observations.cursor();
         let rewritten_denied =
@@ -884,7 +865,6 @@ impl NetworkTestRunner {
             delegated_egress: delegated_forbidden_request_absent
                 && delegated_allowed_request_received,
             hf_result: post_fence_send_denied && provider_write_observed,
-            hf_read_result: read_results_separate,
             hf_network: bpf_setup_denied && post_fence_bypass_packets_absent && peer_network_passed,
             local_inet: accepted_socket_approved_actor_allowed,
             namespace_pass: cross_namespace_narrow_actor_denied
@@ -901,7 +881,7 @@ impl NetworkTestRunner {
             InvalidInputSnafu {
                 path: Path::new("network fixture matrix"),
                 reason: format!(
-                    "one or more required network fixtures did not pass: {:?}; read results: {read_results:?}; governed read={governed_read:?}; governed mmap={governed_mmap:?}",
+                    "one or more required network fixtures did not pass: {:?}",
                     fixture_results
                         .iter()
                         .filter(|result| result.result != "PASS")
@@ -943,7 +923,6 @@ impl NetworkTestRunner {
             rewritten_allowed_destination_received,
             delegated_forbidden_request_absent,
             delegated_allowed_request_received,
-            read_results_separate,
             provider_write_observed,
             shared_socket_holders_denied,
             peer_tcp_allowed,
@@ -1482,11 +1461,6 @@ impl NetworkFixtureProof {
                 "DENIAL_SEND_AND_PROVIDER_RECEIPT_RESULTS_SEPARATED",
             ),
             (
-                "HF-011-READ-RESULT-001",
-                self.hf_read_result,
-                "READ_RETURN_CLASSES_AND_GOVERNED_TOKEN_READ_PROVED",
-            ),
-            (
                 "HF-NET-001",
                 self.hf_network,
                 "NETWORK_FAMILY_PROTOCOL_AND_ALLOWED_SEND_PROVED",
@@ -1548,7 +1522,6 @@ mod tests {
         let results = NetworkFixtureProof {
             delegated_egress: true,
             hf_result: true,
-            hf_read_result: true,
             hf_network: true,
             local_inet: true,
             namespace_pass: true,
@@ -1558,7 +1531,7 @@ mod tests {
             socket_life: true,
         }
         .results();
-        assert_eq!(results.len(), 10);
+        assert_eq!(results.len(), 9);
         assert_eq!(
             results
                 .iter()
