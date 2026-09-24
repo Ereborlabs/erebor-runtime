@@ -43,6 +43,8 @@ mod network_connect;
 mod network_fixture;
 mod network_peer;
 #[cfg(test)]
+mod network_read;
+#[cfg(test)]
 mod network_unsupported;
 #[cfg(test)]
 mod node_restart;

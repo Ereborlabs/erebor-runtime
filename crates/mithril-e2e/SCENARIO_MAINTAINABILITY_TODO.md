@@ -2946,6 +2946,20 @@ test does not close a row when its physical condition or an assertion changed.
     destinations, forbidden request absence, and allowed request receipt.
   - [ ] Replace separate read-result and provider-write behavior. Keep the
     governed file read classes, provider receipt, and network result evidence.
+    - [ ] Check zero-byte, EOF, partial, inherited-descriptor, mapped, and
+      `EIO` reads in one shared actor before policy replacement. Keep its token
+      descriptor open. After replacement, require allowed Read and MmapRead
+      on that descriptor with exact production File results. Pass the same
+      Rust test on Host, direct `runc`, and Kubernetes before removing the
+      legacy read-result action.
+      - [x] Pass Host and commit it. The 64-line Rust test passed in 34.11
+        seconds with all six return classes, a retained token descriptor,
+        and exact Read and MmapRead Allow results. Node logged one transient
+        exact-selector reconciliation warning; policy activation, evidence,
+        and teardown completed.
+    - [ ] Retire the separate provider-write action only after confirming that
+      `tcp_roundtrip_uses_network_role` retains its physical payload receipt
+      and exact Connect, Send, and Receive results on all three platforms.
   - [x] Replace the unclassified IPv4 connect denial with one standard
     platform test. Use one shared Python actor and one scenario policy. Do not
     add a Platform API.
