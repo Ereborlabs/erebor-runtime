@@ -555,12 +555,11 @@ These Rust files exceed 2,000 lines:
 
 | Source | Current lines |
 | --- | ---: |
-| `effect/runc.rs` | 7,231 |
-| `identity.rs` | 5,430 |
-| `effect.rs` | 4,155 |
-| `effect/child.rs` | 3,980 |
+| `effect/runc.rs` | 6,923 |
+| `identity.rs` | 5,425 |
+| `effect.rs` | 3,802 |
+| `effect/child.rs` | 3,448 |
 | `control_tls.rs` | 2,734 |
-| `effect/network.rs` | 2,329 |
 
 The diff from `95775f48` adds or relocates these private test functions with
 more than five name components:
@@ -2073,6 +2072,11 @@ test does not close a row when its physical condition or an assertion changed.
       The recovery setup assigned `fail_closed_unknown`, not the required
       restricted role. Keep the legacy check until a physical setup preserves
       both the role and denial. Do not change BPF for this test.
+    - The old probe prepares the segment before cgroup placement. It then
+      stops and starts `KernelHostOwner`, republishes the binding, installs the
+      policy, and activates security state before `IPC_STAT`. It does not
+      assert an actor role. Do not treat the late-placement draft as an exact
+      reproduction of that sequence.
   - [x] Replace anonymous executable-memory denials and their non-executable
     controls with one small standard platform test. Use one shared Python
     actor as a recovered external process and the public signed Python policy.
@@ -2263,7 +2267,7 @@ test does not close a row when its physical condition or an assertion changed.
       arm, target, assertion block, and result field. It kept every other file
       mutation case. The 12 focused child-fixture tests and strict crate
       Clippy pass.
-  - [ ] Replace the remaining unmatched file mutations with separate small
+  - [x] Replace the remaining unmatched file mutations with separate small
     standard platform tests. Use one shared Python actor and the existing
     Python policy. Start each actor before Node to preserve the recovered-root
     condition. Require the exact actor task, `UNRESOLVED_OBJECT`, the original
