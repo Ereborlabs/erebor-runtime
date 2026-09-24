@@ -1735,13 +1735,18 @@ test does not close a row when its physical condition or an assertion changed.
       The same Python actor reads the original file and its symlink. The
       physical read succeeds, and production `WOULD_DENY` evidence keeps the
       original exact-object key, composite atom, and task cookie. The exact
-      Host case passed in 34.28 seconds. Keep the old symlink action until
-      direct `runc` and Kubernetes pass.
+      Host case passed in 34.28 seconds. Keep the old symlink action until its
+      Protect counterpart also passes.
     - [x] Pass the unchanged symlink test under direct `runc` and commit it.
       The exact case passed in 40.37 seconds with the production OCI hook.
-    - [ ] Pass the unchanged symlink test on Kubernetes and commit it.
-    - [ ] Remove only the matching old symlink action after all three pass.
-      Keep the original control open for the bind-alias checks.
+    - [x] Pass the unchanged symlink test on Kubernetes and commit it. The
+      exact case passed in 73.41 seconds in retained K3s. The API was
+      temporarily unavailable during K3s startup, then the same test process
+      completed without a scenario or production change.
+    - [ ] Qualify the Protect-mode symlink denial on all three platforms with
+      the same actor and explicit exact-object evidence.
+    - [ ] Remove only the matching old symlink action after both Observe and
+      Protect cases pass. Keep the original control open for bind aliases.
     - A focused Host attempt on 2026-09-24 used the public Observe policy and
       the shared Python actor. The symlink read succeeded and kept the exact
       object and composite authority. The hard-link read also succeeded, but
