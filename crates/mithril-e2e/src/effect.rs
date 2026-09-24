@@ -423,7 +423,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub writable_shared_mmap_denied: bool,
     pub executable_mmap_denied: bool,
     pub file_mprotect_exec_denied: bool,
-    pub benign_mmap_allowed: bool,
     pub benign_read_allowed: bool,
     pub execve_denied: bool,
     pub execveat_denied: bool,
@@ -2340,28 +2339,6 @@ impl EffectTestRunner {
                     ),
                 )?;
             }
-            let benign_mmap_marker = observations.cursor();
-            ensure!(
-                fixture
-                    .run_prepared(HardClosedOperation::BenignMmapRead)?
-                    .allowed,
-                InvalidInputSnafu {
-                    path: &paths.benign,
-                    reason: "the signed exact benign mapping control was denied",
-                }
-            );
-            wait_for_exact_effect(
-                &reader,
-                &observations,
-                benign_mmap_marker,
-                "EXACT_POLICY_ALLOW",
-                (
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::MmapRead,
-                ),
-                PathSelectorV1::kernel_handle_for_id("manual-benign"),
-                None,
-            )?;
         }
         require_hard_close(
             &mut fixture,
@@ -3587,7 +3564,6 @@ impl EffectTestRunner {
             writable_shared_mmap_denied: protect,
             executable_mmap_denied: protect,
             file_mprotect_exec_denied: protect,
-            benign_mmap_allowed: protect,
             benign_read_allowed: true,
             execve_denied: protect,
             execveat_denied: protect,

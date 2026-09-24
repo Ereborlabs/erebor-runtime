@@ -2028,6 +2028,14 @@ test does not close a row when its physical condition or an assertion changed.
       The retained main-root mapping and benign-read assertions stay in the
       old probe. The new Host case passed again after deletion. The crate's
       91 non-privileged tests, formatting, and strict Clippy passed.
+  - [x] Remove the remaining main-root benign `MmapRead` control and result.
+    The shared retained-descriptor test already requires an admitted actor,
+    an exact signed allow rule, a successful benign mapping, and attributed
+    `EXACT_POLICY_ALLOW` File/MmapRead evidence on Host, direct `runc`, and
+    Kubernetes. Keep the shared prepared-file mmap helper because the network
+    probe still uses it. The exact shared Host case passed again in 35.53
+    seconds after deletion. The 91 non-privileged tests, formatting, and
+    strict Clippy passed.
   - [x] Replace the protected `PTRACE_ATTACH` block with one small standard
     platform test. Use one shared Python actor and scenario policy. Do not add
     a Platform API.
@@ -2480,6 +2488,13 @@ test does not close a row when its physical condition or an assertion changed.
     installed response floor, retained task, socket, mount, and active-policy
     state, denied send and shutdown, absent bytes and bypass packets, released
     socket reference, and idempotent restart recovery.
+    - The only Rust callers of the production
+      `NodePolicyGenerationOwner::fence_network_socket` operation are in the
+      legacy network probe. The deployed Node has no caller for that action.
+      `FenceSockets` exists in Control's policy source and validation, but it
+      does not invoke the Node operation. Keep the legacy checks until an
+      approved production response path can run in Kubernetes. Do not add a
+      test-only Node endpoint or complete the excluded product work.
   - [x] Replace IPv6 TCP behavior. Keep address family, protocol, destination,
     payload receipt, and policy result explicit.
     - [x] Add one Host test with the existing actor, policy, and Platform API.

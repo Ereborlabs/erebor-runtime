@@ -175,7 +175,6 @@ pub(super) enum PreparedOperation {
     SecretMprotectWriteExec,
     DeletedMprotectExec,
     MemfdMprotectExec,
-    BenignMmapRead,
     PassedSecretRead,
     PassedBenignRead,
     IoUringSecretRead,
@@ -2206,7 +2205,6 @@ impl PreparedOperations {
                             .map_or_else(error_outcome, |_| allowed_outcome())
                     })
             }
-            PreparedOperation::BenignMmapRead => mmap_outcome(&self.benign_file),
             PreparedOperation::PassedSecretRead => read_outcome(&mut self.passed_secret_file),
             PreparedOperation::PassedBenignRead => read_outcome(&mut self.passed_benign_file),
             PreparedOperation::IoUringSecretRead => io_outcome(
