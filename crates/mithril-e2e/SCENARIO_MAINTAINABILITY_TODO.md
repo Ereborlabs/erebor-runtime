@@ -1756,8 +1756,10 @@ test does not close a row when its physical condition or an assertion changed.
         exact case passed in 73.59 seconds in retained K3s. The API was
         temporarily unavailable during K3s startup. The same test process
         completed without a scenario or production change.
-    - [ ] Remove only the matching old symlink action after both Observe and
+    - [x] Remove only the matching old symlink action after both Observe and
       Protect cases pass. Keep the original control open for bind aliases.
+      The old action, result field, and symlink fixture path are removed.
+      The hard-link and bind-alias checks remain.
     - A focused Host attempt on 2026-09-24 used the public Observe policy and
       the shared Python actor. The symlink read succeeded and kept the exact
       object and composite authority. The hard-link read also succeeded, but

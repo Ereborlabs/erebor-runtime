@@ -4,7 +4,7 @@ use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::os::linux::net::SocketAddrExt as _;
 use std::os::unix::ffi::OsStrExt as _;
-use std::os::unix::fs::{symlink, FileExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::os::unix::fs::{FileExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::os::unix::net::{SocketAddr as UnixSocketAddr, UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, Command, Stdio};
@@ -217,7 +217,6 @@ pub(super) struct EffectPaths {
     pub(super) source: PathBuf,
     pub(super) secret: PathBuf,
     pub(super) hard_link: PathBuf,
-    pub(super) symlink_alias: PathBuf,
     pub(super) bind_alias: PathBuf,
     pub(super) second_bind_alias: PathBuf,
     pub(super) benign: PathBuf,
@@ -1463,7 +1462,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     let source = root.join("source");
     let secret = source.join("secret");
     let hard_link = root.join("hard-link");
-    let symlink_alias = root.join("symlink-alias");
     let bind_directory = root.join("bind-alias");
     let bind_alias = bind_directory.join("secret");
     let second_bind_directory = root.join("second-bind-alias");
@@ -1481,9 +1479,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     fs::create_dir(&source).context(IoSnafu { path: &source })?;
     fs::write(&secret, b"restricted\n").context(IoSnafu { path: &secret })?;
     fs::hard_link(&secret, &hard_link).context(IoSnafu { path: &hard_link })?;
-    symlink(&secret, &symlink_alias).context(IoSnafu {
-        path: &symlink_alias,
-    })?;
     fs::write(&benign, b"benign\n").context(IoSnafu { path: &benign })?;
     fs::copy("/bin/sh", &exec_target).context(IoSnafu { path: &exec_target })?;
     fs::set_permissions(&exec_target, fs::Permissions::from_mode(0o755))
@@ -1557,7 +1552,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
         source,
         secret,
         hard_link,
-        symlink_alias,
         bind_alias,
         second_bind_alias,
         benign,
