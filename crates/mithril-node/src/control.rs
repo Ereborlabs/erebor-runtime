@@ -55,6 +55,7 @@ pub struct ControlConnection {
     evidence_input: Streaming<EvidenceAck>,
     coverage: NodeCoverageClient<Channel>,
     policy: NodePolicyClient<Channel>,
+    diagnostics: mithril_control::node_diagnostics_client::NodeDiagnosticsClient<Channel>,
     readiness_updates: mpsc::Sender<ReadinessUpdate>,
     readiness_failure: mpsc::Receiver<crate::Error>,
     readiness_renewal: tokio::task::JoinHandle<()>,
@@ -265,6 +266,11 @@ impl NodeControlConnector {
             coverage: NodeCoverageClient::new(channel.clone())
                 .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
                 .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
+            diagnostics: mithril_control::node_diagnostics_client::NodeDiagnosticsClient::new(
+                channel.clone(),
+            )
+            .max_decoding_message_size(mithril_control::MAX_TRACE_GRPC_MESSAGE_BYTES)
+            .max_encoding_message_size(mithril_control::MAX_TRACE_GRPC_MESSAGE_BYTES),
             policy: NodePolicyClient::new(channel)
                 .max_decoding_message_size(MAX_POLICY_GRPC_MESSAGE_BYTES)
                 .max_encoding_message_size(MAX_POLICY_GRPC_MESSAGE_BYTES),
@@ -300,6 +306,31 @@ impl NodeControlConnector {
 }
 
 impl ControlConnection {
+    pub async fn exchange_diagnostics(
+        &mut self,
+        exchange: &mithril_control::TraceExchangeV1,
+    ) -> Result<mithril_control::TraceExchangeReplyV1> {
+        let payload_json = serde_json::to_vec(exchange).map_err(|error| {
+            ControlProtocolSnafu {
+                reason: format!("diagnostic request cannot be encoded: {error}"),
+            }
+            .build()
+        })?;
+        let reply = bounded_response(self.diagnostics.exchange(bounded_request(
+            mithril_control::NodeDiagnosticRequest {
+                session: Some(self.identity.clone()),
+                payload_json,
+            },
+        )))
+        .await?;
+        serde_json::from_slice(&reply.into_inner().payload_json).map_err(|error| {
+            ControlProtocolSnafu {
+                reason: format!("diagnostic reply schema is invalid: {error}"),
+            }
+            .build()
+        })
+    }
+
     pub async fn report_readiness(&self, kernel_ready: bool, admission_ready: bool) -> Result<()> {
         let (result, accepted) = oneshot::channel();
         self.readiness_updates

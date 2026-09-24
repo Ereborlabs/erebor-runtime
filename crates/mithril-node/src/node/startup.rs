@@ -2,6 +2,7 @@ use erebor_interceptor::{EffectObservationReader, KernelHost, KernelHostConfig, 
 use erebor_interceptor_abi::Id128V1;
 use mithril_control::CapabilityRecord;
 use snafu::{OptionExt as _, ResultExt as _};
+use std::sync::Arc;
 use tokio::sync::watch;
 
 use super::{registration, sample_effect_health, NodeChassis, NodeReadinessV1};
@@ -185,7 +186,28 @@ impl NodeState {
             .map_or((None, None), |(server, notifications)| {
                 (Some(server), Some(notifications))
             });
+        let trace = if let (Some(diagnostics), Some(evidence)) =
+            (&config.diagnostics, &config.evidence)
+        {
+            match crate::NodeTraceOwner::open(
+                &config.state_directory,
+                evidence.identities()?.0.to_be_bytes(),
+                config.node_id.clone(),
+                node_boot_id.to_be_bytes(),
+                diagnostics.clone(),
+                erebor_interceptor::KernelStateReader::new(&config.interceptor.pin_root),
+            ) {
+                Ok(owner) => Some(Arc::new(std::sync::Mutex::new(owner))),
+                Err(error) => {
+                    erebor_telemetry::warn!(error; "diagnostic storage is unavailable; enforcement remains active");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let mut chassis = NodeChassis {
+            trace,
             base_config,
             config,
             effect_reader: evidence.effect_reader,

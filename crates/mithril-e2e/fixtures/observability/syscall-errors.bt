@@ -1,0 +1,6 @@
+tracepoint:raw_syscalls:sys_exit
+/cgroup == $1 && args.ret < 0/
+{
+  @errors[args.id, args.ret] = count();
+}
+interval:s:1 { print(@errors); }

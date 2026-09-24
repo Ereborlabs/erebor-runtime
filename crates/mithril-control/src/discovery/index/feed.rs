@@ -39,6 +39,11 @@ pub enum DiscoveryRevisionKindV1 {
         document_digest: DiscoveryDigestV1,
         trust: DiscoveryContextTrustV1,
     },
+    Trace {
+        request_id: [u8; 16],
+        target_index: Option<u16>,
+        accepted_digest: [u8; 32],
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -63,12 +68,17 @@ pub(super) enum RevisionPayload {
     Profile(DiscoveryProfileV1),
     Context(ContextRevision),
     Checkpoint(StreamCheckpoint),
+    Trace(crate::TraceRevisionV1, Box<crate::TraceAcceptedV1>),
 }
 
 impl RevisionPayload {
     pub(super) fn read(owner: &DiscoveryOwner, head: &DiscoveryHeadV1) -> Result<Self> {
         let live = &owner.live;
         let artifact = live.store.read_discovery_artifact(&head.artifact)?;
+        if rmp_serde::from_slice::<crate::TraceRevisionV1>(&artifact.payload).is_ok() {
+            let (revision, accepted) = crate::TraceRevisionV1::read(&live.store, head)?;
+            return Ok(Self::Trace(revision, Box::new(accepted)));
+        }
         if rmp_serde::from_slice::<DiscoveryExportPageV1>(&artifact.payload).is_ok() {
             let page = live.index.export(head)?;
             page.prepare()?;
@@ -111,6 +121,7 @@ impl RevisionPayload {
         match self {
             Self::Export(page) => page.previous.as_ref(),
             Self::Context(revision) => revision.previous.as_ref(),
+            Self::Trace(revision, _) => revision.previous.as_ref(),
             Self::Profile(_) | Self::Checkpoint(_) => None,
         }
     }
@@ -200,6 +211,14 @@ impl RevisionPayload {
                     trust: revision.document.trust,
                 },
             )),
+            Self::Trace(revision, accepted) => changes.push((
+                0,
+                DiscoveryRevisionKindV1::Trace {
+                    request_id: accepted.request.request_id,
+                    target_index: revision.target_index,
+                    accepted_digest: revision.accepted.sha256,
+                },
+            )),
             Self::Checkpoint(_) => {}
         }
         changes
@@ -262,6 +281,9 @@ impl DiscoveryOwner {
                     }
                     RevisionPayload::Checkpoint(checkpoint) => {
                         self.profile(&checkpoint.snapshot)?;
+                    }
+                    RevisionPayload::Trace(revision, accepted) => {
+                        live.index.project_trace(&head, revision, accepted)?;
                     }
                     RevisionPayload::Export(_) => {}
                 }

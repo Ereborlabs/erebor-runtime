@@ -55,6 +55,11 @@ pub async fn serve(
         .add_service(NodeRegistryServer::new(control.clone()))
         .add_service(NodeTrustServer::new(control.clone()))
         .add_service(
+            crate::node_diagnostics_server::NodeDiagnosticsServer::new(control.clone())
+                .max_decoding_message_size(crate::MAX_TRACE_GRPC_MESSAGE_BYTES)
+                .max_encoding_message_size(crate::MAX_TRACE_GRPC_MESSAGE_BYTES),
+        )
+        .add_service(
             NodeEvidenceServer::new(control.clone())
                 .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
                 .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),

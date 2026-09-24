@@ -1838,19 +1838,39 @@ impl KernelHost {
         drop(self);
 
         ensure!(
-            link_paths
-                .iter()
-                .chain(map_paths.iter())
-                .all(|path| !path.exists())
-                && directories.iter().all(|path| !path.exists())
-                && LinkInfoIter::default().all(|link| !link_ids.contains(&(link.id, link.prog_id)))
-                && MapInfoIter::default().all(|map| !map_ids.contains(&map.id)),
+            Self::decommission_readback(
+                || link_paths
+                    .iter()
+                    .chain(map_paths.iter())
+                    .all(|path| !path.exists())
+                    && directories.iter().all(|path| !path.exists())
+                    && LinkInfoIter::default()
+                        .all(|link| !link_ids.contains(&(link.id, link.prog_id)))
+                    && MapInfoIter::default().all(|map| !map_ids.contains(&map.id)),
+                Duration::from_secs(1)
+            ),
             ManifestMismatchSnafu {
                 path: Path::new("BPF decommission readback"),
                 reason: "decommissioned BPF links, maps, or pins remain present".to_owned(),
             }
         );
         Ok(())
+    }
+
+    fn decommission_readback(mut released: impl FnMut() -> bool, timeout: Duration) -> bool {
+        let start = std::time::Instant::now();
+        loop {
+            if released() {
+                return true;
+            }
+            if start.elapsed() >= timeout {
+                return false;
+            }
+            // Deferred program release can retain map references after the last close.
+            std::thread::sleep(
+                Duration::from_millis(10).min(timeout.saturating_sub(start.elapsed())),
+            );
+        }
     }
 
     fn remove_pins(&mut self) -> Result<()> {
@@ -1937,6 +1957,23 @@ impl Drop for PinRollback {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn observability_backend_decommission_waits_for_deferred_map_release() {
+        let mut reads = 0;
+        assert!(super::KernelHost::decommission_readback(
+            || {
+                reads += 1;
+                reads >= 3
+            },
+            std::time::Duration::from_millis(100)
+        ));
+        assert_eq!(reads, 3);
+        assert!(!super::KernelHost::decommission_readback(
+            || false,
+            std::time::Duration::ZERO
+        ));
+    }
+
     use snafu::{OptionExt as _, ResultExt as _};
     use std::{fs, io};
 
