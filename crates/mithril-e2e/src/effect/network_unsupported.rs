@@ -6,7 +6,7 @@ use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = network_unsupported]
 fn unsupported_sockets_are_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("unsupported-sockets")?;

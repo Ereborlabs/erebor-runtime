@@ -2490,7 +2490,8 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Pass Host and commit it. The exact case passed in 28.22 seconds.
       - [x] Pass direct `runc` and commit it. The exact case passed in 29.70
         seconds with the production OCI hook.
-      - [ ] Pass Kubernetes and commit it.
+      - [x] Pass Kubernetes and commit it. The exact physical case passed in
+        70.08 seconds in the retained K3s cluster.
       - [ ] Remove only the matching seven legacy socket calls and their
         result field after all three platforms pass.
     - [ ] Remove each matching legacy action only after its platform cases
