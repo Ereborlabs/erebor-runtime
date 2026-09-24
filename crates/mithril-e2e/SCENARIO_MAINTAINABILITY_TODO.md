@@ -1792,8 +1792,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit it. The exact case passed in 73.07
       seconds in retained K3s. The two existing Kubernetes symlink cases
       passed together in 99.20 seconds after the shared actor change.
-    - [ ] Remove only the matching old action, result field, and prepared
-      operation after all three platform cases pass.
+    - [x] Remove only the matching old action, result field, and prepared
+      operation after all three platform cases pass. The detached-mount and
+      descriptor-transfer checks remain.
 - [ ] `EffectTestRunner::physical_probe` mount mutation cases: keep each
   production reconciliation call and mount syscall action visible.
   - [x] Replace the pre-existing bind-alias block with one actor-driven

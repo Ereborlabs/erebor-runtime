@@ -446,7 +446,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub zero_device_ioctl_exact_denied: bool,
     pub managed_link_pin_unlink_denied: bool,
     pub hard_link_alias_denied: bool,
-    pub proc_fd_alias_denied: bool,
     pub unattached_mount_fd_access_denied: bool,
     pub passed_fd_read_denied: bool,
     pub passed_benign_fd_read_allowed: bool,
@@ -2384,29 +2383,6 @@ impl EffectTestRunner {
         }
 
         if protect {
-            let proc_fd_marker = observations.cursor();
-            ensure!(
-                fixture
-                    .run_prepared(HardClosedOperation::ProcFdOpen)?
-                    .denied(),
-                InvalidInputSnafu {
-                    path: Path::new("/proc/self/fd"),
-                    reason: "a proc-fd alias bypassed the exact object denial",
-                }
-            );
-            wait_for_exact_effect(
-                &reader,
-                &observations,
-                proc_fd_marker,
-                "EXACT_POLICY_DENY",
-                (
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::OpenRead,
-                ),
-                PathSelectorV1::kernel_handle_for_id("manual-secret"),
-                None,
-            )?;
-
             let detached_mount_marker = observations.cursor();
             ensure!(
                 fixture
@@ -3136,7 +3112,6 @@ impl EffectTestRunner {
             zero_device_ioctl_exact_denied: protect,
             managed_link_pin_unlink_denied: true,
             hard_link_alias_denied: true,
-            proc_fd_alias_denied: protect,
             unattached_mount_fd_access_denied: protect,
             passed_fd_read_denied: protect,
             passed_benign_fd_read_allowed: protect,

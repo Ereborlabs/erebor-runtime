@@ -175,7 +175,6 @@ pub(super) enum PreparedOperation {
     IoUringSecretRead,
     IoUringBenignRead,
     IoUringSqpoll,
-    ProcFdOpen,
     DetachedMountOpen,
     MoveMount,
     MountSetattr,
@@ -2174,10 +2173,6 @@ impl PreparedOperations {
             PreparedOperation::IoUringSqpoll => {
                 io_outcome(fixture_syscalls::io_uring_sqpoll_setup())
             }
-            PreparedOperation::ProcFdOpen => open_outcome(&PathBuf::from(format!(
-                "/proc/self/fd/{}",
-                self.secret_file.as_raw_fd()
-            ))),
             PreparedOperation::DetachedMountOpen => {
                 io_outcome(fixture_syscalls::open_detached_mount_file(
                     self.mount_tree.as_raw_fd(),
