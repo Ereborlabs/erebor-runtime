@@ -3204,7 +3204,7 @@ setup, production actions, assertions, and focused test.
       The lightweight CRI fixture can return an empty list. The current
       Kubernetes fixture uses stock containerd and has no matching input.
       Do not count another Node restart or a test-only guard call as proof.
-    - [ ] Replace the application and PreStop literal-admission checks. The
+    - [x] Replace the application and PreStop literal-admission checks. The
       new 41-line standard test reads both installed rules after Node restart.
       It requires the observed role and rule IDs, zero exact-object keys, and
       default executable objects. The shared task lookup also keeps the
