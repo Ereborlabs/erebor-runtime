@@ -2497,6 +2497,12 @@ test does not close a row when its physical condition or an assertion changed.
     now-unused fork-write wrapper are removed. The Host case passed again
     after deletion in 28.13 seconds. The 91 nonprivileged library tests,
     formatting, and strict crate Clippy pass.
+  - [ ] Replace the unmatched Unix-stream peer denial. After the allowed
+    descriptor transfers finish, start a new peer and require `EACCES` plus
+    attributed `EXACT_POLICY_DENY` IPC/Access evidence. Keep the old action
+    until the same platform test passes on Host, direct `runc`, and Kubernetes.
+    The legacy fixture now closes its completed stream before peer restart.
+    Its focused restart test and the 91 nonprivileged library tests pass.
   - [x] Replace the unmatched file-create block with one small standard
     platform test. Use one shared Python actor and the existing Python policy.
     Start the actor before Node to preserve the original recovered-root
