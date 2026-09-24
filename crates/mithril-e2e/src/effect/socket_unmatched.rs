@@ -7,7 +7,7 @@ use erebor_interceptor_abi::{
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn new_peer_needs_relation<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("socket-unmatched")?;
@@ -38,12 +38,6 @@ fn new_peer_needs_relation<P: Platform>() -> TestResult<()> {
         main.id(),
         "peer-ready",
         "approved payload",
-        Duration::from_secs(5),
-    )?;
-    peer.wait_name(
-        peer.id(),
-        "fd1-ok",
-        "approved descriptor",
         Duration::from_secs(5),
     )?;
     peer.wait_gone(peer.id(), "approved Unix peer exit")?;

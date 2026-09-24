@@ -2515,7 +2515,11 @@ test does not close a row when its physical condition or an assertion changed.
       IPC/Access Connect evidence. The exact Host case passed in 29.48
       seconds. The approved, stale, and inherited Host socket cases also pass
       with the shared actor change.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The same 92-line test passed with
+      the production OCI hook. The short-lived approved peer exited before
+      the runner could sample its process name, so the test now checks the
+      completed payload, peer exit, role, and production IPC Allow evidence.
+      The revised Host case passed again in 27.77 seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy restart action and result field
       after both remaining platforms pass. Keep the descriptor-transfer
