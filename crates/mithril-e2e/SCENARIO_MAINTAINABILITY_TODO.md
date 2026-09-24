@@ -1775,7 +1775,7 @@ test does not close a row when its physical condition or an assertion changed.
     checks and their Protect-mode counterparts pass as platform tests.
 - [ ] `EffectTestRunner::physical_probe` protect scenario: keep every hard
   denial, allow control, loss counter, and evidence assertion.
-  - [ ] Replace the `/proc/self/fd/<fd>` exact-file alias denial. Open and
+  - [x] Replace the `/proc/self/fd/<fd>` exact-file alias denial. Open and
     hold the secret descriptor before the Protect policy is installed. Reopen
     it through `/proc/self/fd` after activation. Use one small standard test,
     the shared Python actor, and the existing Protect policy; add no policy
@@ -1795,6 +1795,25 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Remove only the matching old action, result field, and prepared
       operation after all three platform cases pass. The detached-mount and
       descriptor-transfer checks remain.
+  - [ ] Replace the detached-mount exact-file denial. The shared Python actor
+    must clone and hold a mount descriptor before the Protect policy is
+    installed. It must use `openat` through that descriptor after activation
+    and read one byte if the open succeeds. Require `EACCES` and attributed
+    `EXACT_POLICY_DENY` File/OpenRead evidence with the original exact-object
+    key, composite atom, and task cookie. Use the existing actor and policy
+    inputs. Add no Platform API. Keep the test below 100 lines.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching old action, result field, and prepared
+      operation after all three platform cases pass. Keep descriptor-transfer
+      and mount-change checks.
+    - A focused Host attempt on 2026-09-24 held `open_tree` before policy
+      activation and used `openat` after activation. Direct opens returned
+      `EACCES`, but the detached open returned success. Cloning the secret's
+      own non-mountpoint parent gave the same result. The attempted actor and
+      test were removed. Keep the legacy assertion. Check exact-object mount
+      authority before another replacement attempt; do not accept the read.
 - [ ] `EffectTestRunner::physical_probe` mount mutation cases: keep each
   production reconciliation call and mount syscall action visible.
   - [x] Replace the pre-existing bind-alias block with one actor-driven
