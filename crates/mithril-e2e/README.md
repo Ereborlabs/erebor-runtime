@@ -45,15 +45,26 @@ The test must show the Control, Node, policy, and actor start order. Keep the
 action, production result, security assertions, and stop calls in the test.
 Use `ProcessFixture` for the actor and the existing `Platform` methods for
 physical setup. Do not add a second process wrapper or reproduce Node work
-inside a helper.
+inside a helper. A fixture owns placement, readiness, and cleanup. The test
+owns component order, policy installation, actor actions, and assertions.
 
-For example, the old anonymous-memory checks lived inside the large
-`EffectTestRunner::physical_probe` function. The 69-line
-`src/effect/executable_memory.rs` test uses `executable_memory.py` on all
-three platforms. It checks two denied executable protections, one denied
-executable mapping, two allowed read-only controls, and the attributed kernel
-effects. Its actor creates the first mapping before Node protection. The
-legacy Observe-mode block remains until it has the same shared qualification.
+For example, the old direct-`runc` PreStop probe restarted its own kernel host,
+started `/bin/dd`, scanned the admission map, and returned two literal-path
+result flags for a shell gate. The 41-line
+[`src/effect/prestop_path.rs`](src/effect/prestop_path.rs) test now starts
+Control, Node, policy, and `ready.py`. It restarts Node, starts the declared
+PreStop actor, and checks the observed role and installed admission rule. The
+same test runs on Host, direct `runc`, and Kubernetes. The duplicate flags and
+shell gates are gone. The separate file-denial and runtime-inventory omission
+checks remain in the old probe until their own replacements pass.
+
+For a small in-process check, run the ring-accounting test. It checks health
+arithmetic without a VM. It does not replace a running-actor test:
+
+```bash
+cargo test -p mithril-e2e --lib \
+  effect::support::tests::health_delta_preserves_ring_accounting -- --exact
+```
 
 From the repository root, build and list the standard tests, then check the
 local harness:
@@ -82,7 +93,31 @@ guest, run one exact generated test with the prepared environment:
 sudo -i
 . /var/tmp/mithril-manual.env
 "$MITHRIL_TEST_BIN" \
-  effect::executable_memory::anonymous_exec_is_closed::memory_recovery_kubernetes \
+  effect::prestop_path::prestop_uses_literal_path::node_restart_kubernetes \
+  --exact --ignored --nocapture --test-threads=1
+```
+
+The same VM can run the matching Host and direct-`runc` cases. Use a new
+output, pin, lease, and cgroup path for each run. The manual environment sets
+`MITHRIL_TEST_ROOT`, `MITHRIL_TEST_BIN`, and `MITHRIL_BIN_DIRECTORY`.
+
+```bash
+env MITHRIL_TEST_OUTPUT=/var/tmp/mithril-prestop-host \
+  MITHRIL_TEST_PIN=/sys/fs/bpf/mithril-prestop-host \
+  MITHRIL_TEST_LEASE=/var/tmp/mithril-prestop-host/owner.lock \
+  MITHRIL_TEST_CGROUP=/sys/fs/cgroup/mithril-prestop-host \
+  "$MITHRIL_TEST_BIN" \
+  effect::prestop_path::prestop_uses_literal_path::node_restart_host \
+  --exact --ignored --nocapture --test-threads=1
+
+env MITHRIL_TEST_OUTPUT=/var/tmp/mithril-prestop-runc \
+  MITHRIL_TEST_PIN=/sys/fs/bpf/mithril-prestop-runc \
+  MITHRIL_TEST_LEASE=/var/tmp/mithril-prestop-runc/owner.lock \
+  MITHRIL_TEST_CGROUP=/sys/fs/cgroup/mithril-prestop-runc \
+  MITHRIL_TEST_RUNC=/var/lib/rancher/k3s/data/current/bin/runc \
+  MITHRIL_TEST_OCI_HOOK="$MITHRIL_BIN_DIRECTORY/mithril-oci-hook" \
+  "$MITHRIL_TEST_BIN" \
+  effect::prestop_path::prestop_uses_literal_path::node_restart_runc \
   --exact --ignored --nocapture --test-threads=1
 ```
 
