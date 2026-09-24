@@ -2466,7 +2466,11 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The unchanged case passed in
       29.19 seconds. All five existing direct-`runc` TCP cases passed in
       58.99 seconds with the shared actor and evidence-wait change.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The unchanged case passed in
+      65.24 seconds. The first attempt stopped before actor creation because
+      K3s lacked the pinned Python image. Pulling that exact image restored
+      the fixture; no test or production code changed. All five existing
+      Kubernetes TCP cases passed in 142.86 seconds.
     - [ ] Remove only the matching legacy lifecycle action and result after
       all three platforms pass. Keep the fence and restart checks.
   - [ ] Replace the whole-socket fence and Node restart group. Preserve the
