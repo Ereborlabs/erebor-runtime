@@ -2395,7 +2395,7 @@ test does not close a row when its physical condition or an assertion changed.
       39-case identity rerun passed without a source change. The first direct-
       `runc` identity run had one placement-readiness failure. Its exact case
       and clean 34-case identity rerun passed without a source change.
-  - [ ] Replace connected `sendmsg`, `sendfile`, and `splice` behaviors. Keep
+  - [x] Replace connected `sendmsg`, `sendfile`, and `splice` behaviors. Keep
     each syscall, payload receipt, file-backed input, role, and exact network
     result visible. Use the shared actor and one small test where this remains
     clear.
@@ -2409,7 +2409,7 @@ test does not close a row when its physical condition or an assertion changed.
       in 28.87 seconds with the same actor, policy, and assertions.
     - [x] Pass Kubernetes and commit it. The exact physical case passed in the
       retained K3s cluster with the same actor, policy, and assertions.
-    - [ ] Remove only the matching legacy result fields and allow assertions.
+    - [x] Remove only the matching legacy result fields and allow assertions.
       Keep the later post-fence calls and their denial assertions.
   - [ ] Replace clone-send and fork-send socket inheritance. Keep distinct
     child execution, payload receipt, creator identity, and allowed result

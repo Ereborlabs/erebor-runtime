@@ -37,7 +37,6 @@ use crate::Result;
 const PAYLOAD: &[u8] = b"allowed";
 const DUP_PAYLOAD: &[u8] = b"dup";
 const FORK_PAYLOAD: &[u8] = b"fork";
-const SENDMSG_PAYLOAD: &[u8] = b"sendmsg";
 const TOKEN_PAYLOAD: &[u8] = b"token";
 pub const NETWORK_PEER_TCP_PORT: u16 = 46_051;
 pub const NETWORK_PEER_UDP_PORT: u16 = 46_052;
@@ -71,9 +70,6 @@ pub struct NetworkFixtureResultV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct NetworkPhysicalProbeBundleV2 {
     pub schema_version: u32,
-    pub sendmsg_allowed: bool,
-    pub sendfile_allowed: bool,
-    pub splice_allowed: bool,
     pub whole_socket_fence_installed: bool,
     pub restart_preserved_task_state: bool,
     pub restart_preserved_socket_state: bool,
@@ -389,18 +385,7 @@ impl NetworkTestRunner {
         );
 
         let server = thread::spawn(move || {
-            server_exchange(
-                listener,
-                &[
-                    PAYLOAD,
-                    DUP_PAYLOAD,
-                    FORK_PAYLOAD,
-                    SENDMSG_PAYLOAD,
-                    TOKEN_PAYLOAD,
-                    TOKEN_PAYLOAD,
-                ]
-                .concat(),
-            )
+            server_exchange(listener, &[PAYLOAD, DUP_PAYLOAD, FORK_PAYLOAD].concat())
         });
         let lifecycle_server = thread::spawn(move || server_receive(lifecycle_listener, b"new"));
         let ipv6_server = thread::spawn(move || server_receive(ipv6_listener, b"ipv6"));
@@ -446,18 +431,11 @@ impl NetworkTestRunner {
         fixture.network_clone()?;
         let cloned_socket_allowed = fixture.network_clone_send(DUP_PAYLOAD)?.allowed;
         let inherited_socket_allowed = fixture.network_fork_send(FORK_PAYLOAD)?.allowed;
-        let sendmsg_allowed = fixture.network_sendmsg(SENDMSG_PAYLOAD)?.allowed;
-        let sendfile_allowed = fixture.network_sendfile(&token_path)?.allowed;
-        let splice_allowed = fixture.network_splice(&token_path)?.allowed;
         ensure!(
-            cloned_socket_allowed
-                && inherited_socket_allowed
-                && sendmsg_allowed
-                && sendfile_allowed
-                && splice_allowed,
+            cloned_socket_allowed && inherited_socket_allowed,
             InvalidInputSnafu {
                 path: Path::new("network socket variants"),
-                reason: "a socket transfer or inherited path failed",
+                reason: "a cloned or inherited socket path failed",
             }
         );
 
@@ -1114,9 +1092,6 @@ impl NetworkTestRunner {
                 && io_uring_sqpoll_denied
                 && tun_tap_setup_denied
                 && bpf_setup_denied
-                && sendmsg_allowed
-                && sendfile_allowed
-                && splice_allowed
                 && post_fence_bypass_packets_absent
                 && peer_network_passed,
             local_inet: tcp_ipv6_allowed && accepted_socket_approved_actor_allowed,
@@ -1162,9 +1137,6 @@ impl NetworkTestRunner {
         resources.stop()?;
         Ok(NetworkPhysicalProbeBundleV2 {
             schema_version: 2,
-            sendmsg_allowed,
-            sendfile_allowed,
-            splice_allowed,
             whole_socket_fence_installed,
             restart_preserved_task_state,
             restart_preserved_socket_state,
