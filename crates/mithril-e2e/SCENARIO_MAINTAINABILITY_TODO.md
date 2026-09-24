@@ -3044,7 +3044,10 @@ test does not close a row when its physical condition or an assertion changed.
         The focused case passed in 37.15 seconds through the production OCI
         hook. It used the same ungoverned peer in the actor's network
         namespace and kept all Host assertions.
-      - [ ] Pass the same Rust test, actor, and policy on Kubernetes.
+      - [x] Pass the same Rust test, actor, and policy on Kubernetes.
+        The focused case passed in 69.36 seconds with deployed Control and
+        Node. The test process exited with status 0. No test namespace
+        remained in the retained K3s cluster after teardown.
       - [ ] Remove the matching legacy actions only after all three pass.
   - [ ] Replace separate read-result and provider-write behavior. Keep the
     governed file read classes, provider receipt, and network result evidence.

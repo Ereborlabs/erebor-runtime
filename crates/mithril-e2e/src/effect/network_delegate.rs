@@ -4,7 +4,7 @@ use serde_json::json;
 use super::{check::EffectCheck, network_peer::LocalTcpPeer};
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn delegated_egress_keeps_policy<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("network-delegate")?;
