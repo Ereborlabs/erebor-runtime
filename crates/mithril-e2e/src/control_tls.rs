@@ -759,63 +759,27 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
     let intake = EvidenceIntakeOwner::from_store(store.clone());
     let control = fixture.control_with_store(store, 1)?;
     let server = fixture.start(control.clone()).await?;
-    let observations = EffectObservationStore::durable(
-        4,
-        fixture.path().join("node-wal"),
-        EvidenceWalLimits {
-            maximum_retained_records: 10,
-            maximum_batch_records: 10,
-            ..EvidenceWalLimits::default()
-        },
-        ObservationCanonicalizer::new(
-            EvidenceIdV1::new(1, 2),
-            EvidenceIdV1::new(3, 4),
-            1,
-            EvidenceIdV1::from([7; 16]),
-        )?,
-    )?;
-    observations.record_bytes(
-        erebor_interceptor_abi::EffectObservationV1 {
-            observed_boottime_ns: 1,
-            source_sequence: 1,
-            source_cpu_id: 0,
-            task_cookie: 7,
-            reason: 9,
-            physical_result: 1,
-            effect_family: 1,
-            operation: 1,
-            ..erebor_interceptor_abi::EffectObservationV1::default()
-        }
-        .as_bytes(),
-    );
-    observations.record_bytes(
-        erebor_interceptor_abi::EffectObservationV1 {
-            observed_boottime_ns: 1,
-            source_sequence: 1,
-            source_cpu_id: 1,
-            task_cookie: 8,
-            reason: 9,
-            physical_result: 1,
-            effect_family: 1,
-            operation: 1,
-            ..erebor_interceptor_abi::EffectObservationV1::default()
-        }
-        .as_bytes(),
-    );
-    observations.record_bytes(
-        erebor_interceptor_abi::EffectObservationV1 {
-            observed_boottime_ns: 2,
-            source_sequence: 2,
-            source_cpu_id: 0,
-            task_cookie: 9,
-            reason: 9,
-            physical_result: 1,
-            effect_family: 1,
-            operation: 1,
-            ..erebor_interceptor_abi::EffectObservationV1::default()
-        }
-        .as_bytes(),
-    );
+    let observations = fixture.wal(EvidenceWalLimits {
+        maximum_retained_records: 10,
+        maximum_batch_records: 10,
+        ..EvidenceWalLimits::default()
+    })?;
+    for (sequence, cpu, cookie) in [(1, 0, 7), (1, 1, 8), (2, 0, 9)] {
+        observations.record_bytes(
+            erebor_interceptor_abi::EffectObservationV1 {
+                observed_boottime_ns: sequence,
+                source_sequence: sequence,
+                source_cpu_id: cpu,
+                task_cookie: cookie,
+                reason: 9,
+                physical_result: 1,
+                effect_family: 1,
+                operation: 1,
+                ..erebor_interceptor_abi::EffectObservationV1::default()
+            }
+            .as_bytes(),
+        );
+    }
     let connector = fixture.connector(&server, "node-a", [7; 16]);
     let mut trust = TrustCache::load(fixture.path())?;
     let mut first = connector.connect(registration(), false, &mut trust).await?;
@@ -824,14 +788,7 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
         .ok_or("missing WAL batch")?;
     let first_source = batch_source_id(&first_batch)?;
     first.send_evidence_batch(first_batch.clone()).await?;
-    let first_identity = EvidenceIntakeIdentityV1 {
-        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
-        node_id: "node-a".to_owned(),
-        node_boot_id: [7; 16],
-        label_epoch: 1,
-        source_id: first_source,
-        source_epoch: 1,
-    };
+    let first_identity = fixture.identity(first_source);
     let last_control_cursor = std::cell::Cell::new(0);
     wait_for_async(
         &intake_path,
@@ -876,14 +833,7 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
     assert_eq!(control.registered_nonce_count(), 2);
     assert!(observations.next_evidence_batch().is_none());
     for (source_id, batch) in [(first_source, first_batch), (second_source, second_batch)] {
-        let identity = EvidenceIntakeIdentityV1 {
-            tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
-            node_id: "node-a".to_owned(),
-            node_boot_id: [7; 16],
-            label_epoch: 1,
-            source_id,
-            source_epoch: 1,
-        };
+        let identity = fixture.identity(source_id);
         assert_eq!(intake.contiguous_cursor(&identity)?, batch.last_cursor);
         assert_eq!(
             intake.store().accepted_evidence_records(&identity)?.len(),
