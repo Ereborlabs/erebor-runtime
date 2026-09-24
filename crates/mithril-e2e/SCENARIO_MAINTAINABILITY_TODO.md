@@ -2500,7 +2500,8 @@ test does not close a row when its physical condition or an assertion changed.
         open denial and does not claim that `TUNSETIFF` ran.
       - [x] Pass Host with `/dev/net` in the actor root and commit it. The
         exact case passed in 28.33 seconds in the retained VM.
-      - [ ] Pass direct `runc` with the same actor and policy, then commit it.
+      - [x] Pass direct `runc` with the same actor and policy, then commit it.
+        The exact case passed in 29.14 seconds with the production OCI hook.
       - [ ] Pass Kubernetes with the same actor and policy, then commit it.
       - [ ] Remove only the matching legacy TUN action and result field after
         all supported platforms pass.

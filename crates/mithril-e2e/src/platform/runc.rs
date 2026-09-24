@@ -220,7 +220,7 @@ impl Platform for Runc {
             return Err("the runc actor is already started".into());
         }
         let rootfs = self.bundle_path.join("rootfs");
-        for name in ["usr", "lib", "lib64", "fixtures", "work"] {
+        for name in ["usr", "lib", "lib64", "dev/net", "fixtures", "work"] {
             fs::create_dir_all(rootfs.join(name))?;
         }
         let fixtures = self.shared.source().join(PROCESS_FIXTURES);
@@ -263,6 +263,7 @@ impl Platform for Runc {
                 Self::mount(&mut config, source, path, false)?;
             }
         }
+        Self::mount(&mut config, Path::new("/dev/net"), "/dev/net", true)?;
         Self::mount(&mut config, &fixtures, "/fixtures", false)?;
         Self::mount(&mut config, self.shared.work(), "/work", true)?;
         let config = if self.shared.has_policy() {
