@@ -3159,7 +3159,7 @@ setup, production actions, assertions, and focused test.
       The exact test then passed in 85.30 seconds. Both `node_restart`
       Kubernetes tests passed together in 134.18 seconds. The existing
       `runtime_entries_stay_distinct` Kubernetes test passed in 65.73 seconds.
-    - [ ] Prove that the PostStart admission rule uses the literal path map.
+    - [x] Prove that the PostStart admission rule uses the literal path map.
       The separate 47-line test starts one real `cp` entry after Node restart.
       It reads the installed admission map and requires the observed rule ID,
       role ID, zero exact-object key, and default executable object. It then
@@ -3169,7 +3169,11 @@ setup, production actions, assertions, and focused test.
       - [x] Pass direct `runc` and commit that platform. The exact test passed
         in 57.69 seconds. All three runc `node_restart` tests passed together
         in 129.70 seconds.
-      - [ ] Pass Kubernetes and commit that platform.
+      - [x] Pass Kubernetes and commit that platform. The exact test passed
+        in 91.77 seconds. All three Kubernetes `node_restart` tests passed
+        together in 178.07 seconds. The retained K3s image store again lacked
+        the pinned Python image before this run. The existing preload helper
+        restored the exact digest before the unchanged test started.
     - [ ] Remove only the matching legacy PostStart action, result, and shell
       check after all platform and literal-path checks pass. Keep the PreStop
       inventory-omission case until its own replacement passes.

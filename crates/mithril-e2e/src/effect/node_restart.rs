@@ -141,7 +141,7 @@ fn poststart_keeps_its_role<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = node_restart]
 fn poststart_uses_literal_path<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("poststart-path")?;
