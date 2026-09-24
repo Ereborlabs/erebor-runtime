@@ -1716,8 +1716,8 @@ test does not close a row when its physical condition or an assertion changed.
     succeed and require attributed
     `WOULD_DENY` File/OpenRead evidence with a nonzero exact-object key and
     composite atom. Reuse the existing Python open actor. Use one distinct
-    signed Observe policy and add no Platform API. Keep the old action until
-    all three platforms pass.
+    signed Observe policy and add no Platform API. The old control open also
+    supplies authority for the alias checks below. Do not remove it yet.
     - [x] Pass Host and commit it. The exact Host test passed in 34.19
       seconds. It used the admitted initial actor, a signed Observe policy,
       and a file created in the actor's `/tmp`. The open succeeded. The
@@ -1729,6 +1729,14 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit it. The exact test passed in 73.15
       seconds in the retained K3s cluster with the same actor, signed policy,
       and result assertions as Host and direct `runc`.
+  - [ ] Replace the exact-secret symlink and hard-link alias checks. Keep the
+    symlink's exact decision and the hard link's unresolved-object denial.
+  - [ ] Replace both exact-secret bind-alias checks. Keep each live mount ID,
+    device, inode, inode generation, and the shared composite authority.
+  - [ ] Replace the exact-secret mount-change checks. Keep the first decision
+    after mutation, dirty view, replaced-path denial, and restored decision.
+  - [ ] Remove the old exact control open only after these alias and mount
+    checks and their Protect-mode counterparts pass as platform tests.
 - [ ] `EffectTestRunner::physical_probe` protect scenario: keep every hard
   denial, allow control, loss counter, and evidence assertion.
 - [ ] `EffectTestRunner::physical_probe` mount mutation cases: keep each
