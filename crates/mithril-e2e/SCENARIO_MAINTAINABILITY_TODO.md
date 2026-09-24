@@ -3040,7 +3040,10 @@ test does not close a row when its physical condition or an assertion changed.
         again in 30.47 seconds after the actor stopped copying the Python
         entry that the shared fixture already supplies. No Platform or
         production API changed.
-      - [ ] Pass the same Rust test, actor, and policy on direct `runc`.
+      - [x] Pass the same Rust test, actor, and policy on direct `runc`.
+        The focused case passed in 37.15 seconds through the production OCI
+        hook. It used the same ungoverned peer in the actor's network
+        namespace and kept all Host assertions.
       - [ ] Pass the same Rust test, actor, and policy on Kubernetes.
       - [ ] Remove the matching legacy actions only after all three pass.
   - [ ] Replace separate read-result and provider-write behavior. Keep the
