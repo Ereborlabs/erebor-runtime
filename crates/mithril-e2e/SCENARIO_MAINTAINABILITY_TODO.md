@@ -2479,6 +2479,14 @@ test does not close a row when its physical condition or an assertion changed.
         policy can express and qualify this denial. The failed test was not
         committed.
     - [ ] Qualify `io_uring` SQPOLL setup and its Privilege evidence.
+      - [x] Add one 57-line test and one Python actor that calls
+        `io_uring_setup` with the original disabled, single-issuer, and SQPOLL
+        flags. Require actor `EACCES`, the recovered role, and attributed
+        `UNSUPPORTED_OBJECT` Privilege/IoUringSqpoll evidence.
+      - [x] Pass Host and commit it. The exact case passed in 28.19 seconds.
+      - [ ] Pass direct `runc` and commit it.
+      - [ ] Pass Kubernetes and commit it.
+      - [ ] Remove only the matching legacy SQPOLL action and result field.
     - [ ] Qualify TUN/TAP setup and its physical denial.
     - [x] Qualify every unsupported socket family and protocol in the legacy
       list. Require Mithril denial evidence where the hook supports it.

@@ -33,6 +33,8 @@ mod privilege;
 #[cfg(test)]
 mod process_control;
 mod runc;
+#[cfg(test)]
+mod sqpoll;
 mod support;
 #[cfg(test)]
 mod tcp_nodelay;
