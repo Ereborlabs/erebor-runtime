@@ -1,4 +1,4 @@
-# Phase 6: Qualification And Bounded Release
+# Phase 7.10: Qualification And Bounded Release
 
 Prove the end-to-end review and publication path on the declared platform and
 policy subset. Measure agent investigation quality, resource use, disclosure
@@ -44,12 +44,16 @@ an alternative implementation of those owners.
 
 ### Prerequisites and delivery boundary
 
-Require Discovery 5 and Mithril 7 Done, including valid Mithril 6.2/6.3
-prerequisite results. Follow the [combined order](README.md#combined-implementation-order).
-The first capability set includes discovery, query/follow, assessments,
+Status: **Not done**. Require Phase 7.8 Done and valid Mithril 6.2/6.3 prerequisite results. Follow the [combined order](README.md#combined-implementation-order).
+The first capability set includes discovery, CLI SQL/follow, bounded tracing, assessments,
 deterministic findings, escalation, and exact policy review/publication with
 activation results. It excludes exception requests, cross-node causality,
 response execution, and provider actions. Test their Unsupported states.
+
+Require Observability 3 for the query/trace client and execution contracts.
+Rerun its applicable `OBS-*` cases on the release revision; do not inherit an
+earlier physical pass. The optional Trace CRD is advertised only if
+Observability 4 passes on that revision. Its absence does not block CLI release.
 
 Freeze required capabilities and cases in the fixture manifest before running
 tests. `--case all` must run all cases required by that declared set; it must
@@ -76,15 +80,17 @@ bounded scope before those increments; it cannot claim their physical results.
    only environment identities and timestamps can differ.
 3. Prove valid startup, probes, normal work, restart, shutdown, and approved
    maintenance for the stated fixture. Prove forbidden effects separately.
-4. Measure engine and optional model cost while primary evidence and rollout
-   work runs. Test noisy-neighbor quotas, a slow reader, WAL growth, index
-   rebuild, query/follow replay, worker failure, and count recovery after termination.
-5. Run the operator task study and record failures, not only successful paths.
-   Compare raw-event review, deterministic recipes, context-only AI, specialized
-   read wrappers, SQL, and SQL plus context/runbooks on the same tasks. Report retrieval recall, supported claims,
-   counterevidence found, classification errors, useful suggestions, completion,
-   calls/tokens/cost, time, and wrong approvals. Include missing context and
-   benign positives. Fewer rows or longer summaries do not pass this gate.
+4. Run 7.9 embedded/remote parity and placement transfer if remote mode is
+   advertised. Remote mode cannot pass by reusing an embedded-only result.
+   Then measure engine and optional model cost while primary evidence and rollout
+   work runs. Test noisy-neighbor quotas, a slow reader, native WAL growth, backup/restore, retention reclamation,
+   append/replace follow replay, worker failure, and count recovery after termination.
+5. Run the operator task study with raw-event review and deterministic recipes.
+   Record task time, missing context, benign positives and wrong approvals.
+   If an external-agent capability is advertised, compare that agent's SQL
+   with and without exact context/runbooks on the same tasks. Report retrieval,
+   supported claims, classification, suggestions, cost and failures separately.
+   Specialized-read wrappers are not required. Fewer rows do not prove quality.
 6. Add discovery operation instructions to the existing package/harness
    documentation: enable/disable derivation, query/follow, recover cursor expiry,
    inspect gaps, expire bundles, revoke export, resolve stale writes, and submit
@@ -93,7 +99,7 @@ bounded scope before those increments; it cannot claim their physical results.
 7. Add deterministic discovery checks and UI checks to `.github/workflows/ci.yml`.
    Keep physical qualification in its existing environment-dependent lane.
    Record the supported source/policy/platform matrix and results here.
-8. Run disclosure and indirect-injection cases through HTTP/MCP and a recorded
+8. Run disclosure and indirect-injection cases through CLI/HTTP and a recorded
    external client. Verify exact returned fields, limits, revocation, and
    fail-closed behavior before SQL evaluation. CI must not upload private traces.
    Measure live model quality only with an approved client and corpus.
@@ -109,8 +115,8 @@ bounded scope before those increments; it cannot claim their physical results.
     unfinished dependencies explicitly. This discovery plan cannot inherit the
     master's complete Hugging Face conformance claim.
 
-11. Run the complete local-defender case, not separate component demos. The
-    local agent and console must cite identical subject/finding, assessment,
+11. Run the complete recorded external-client case, not separate component
+    demos. The client and console must cite identical subject/finding, assessment,
     approval, action, and result revisions. Interrupt the agent after submission
     and after an uncertain mutation reply. Resume from committed records; require
     no chat transfer and no duplicate effect.
@@ -120,10 +126,28 @@ bounded scope before those increments; it cannot claim their physical results.
     authorized action, and verified result separately. Keep the configured
     deadlines and failures in the result. AI summary latency cannot hide a missed
     escalation deadline.
-13. Prove that local mode reaches no hosted inference endpoint after model
-    provisioning. Record model/client versions and actual network observations.
-    A stub proves schema behavior, not local inference or useful hostile-evidence
-    analysis. Keep unsupported dependencies explicit in the end-to-end result.
+13. Only when local external-agent compatibility is advertised, prove that the
+    operator-managed client reaches no hosted inference endpoint. Record actual
+    network observations and known client/model versions. A recorded client
+    proves API behavior, not inference location or useful model analysis.
+    Araphor does not provision, host or manage the model.
+14. Run a missing-measurement task through one foreground `araphor trace`
+    command. Verify its source, target, output, limits, cleanup, and console
+    result. SQL remains optional for later correlation. Test agent interruption,
+    a quiet script, missing terminal output, stale target, denied host source,
+    and enforced local expiry during a Control outage. Diagnostic failure must
+    not disable prevention or mandatory escalation. Run optional MCP checks
+    only if that adapter is part of the declared release.
+
+Add `all` to the existing discovery binary. It must enumerate the frozen
+required cases from verification.md, fail on unknown/missing cases, and report
+nonzero assertion counts. Reuse `harness/observability/` for physical trace
+cases; do not duplicate its backend lifecycle runner.
+
+Complete this subphase after the required core Phase 7 gates pass. Phase 7.7
+completion does not depend on a live model. Optional client compatibility
+claims require their separate tests; they cannot replace a missing core gate.
+This result closes Phase 7; it does not require a prior Phase 7 Done result.
 
 ## Acceptance and verification
 
@@ -158,7 +182,7 @@ bash .github/scripts/verify-rust-ci.sh
 
 The first two commands are proposed interfaces. The harness must validate
 environment ownership before mutation and retain `result.json` plus cleanup
-results on failure. Also run the package and UI commands from Phase 5 after
+results on failure. Also run the package and UI commands from Phase 7.8 after
 the final edit. No model adoption is required for the deterministic release.
 
 ## Exclusions and stop point
@@ -166,8 +190,3 @@ the final edit. No model adoption is required for the deterministic release.
 Do not add cloud/IAM mutation, external policy export, Wasm extensions, or new
 agent enforcement to satisfy a release checklist. Each needs its own approved
 implementation and qualification. Stop at the tested native scope.
-
-## Result
-
-**Not done.** No qualification, operator study, performance measurement, or
-release occurred in this planning change.

@@ -30,10 +30,10 @@ Source is empty, unavailable, or unauthorized
 
 ## Scope, owners, and changes
 
-Start after Discovery 1 freezes the shared records, as specified in the
-[combined order](../araphor-discovery-engine/README.md#combined-implementation-order).
+Start after Phase 7.1 freezes the shared records, as specified in the
+[combined order](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/README.md#combined-implementation-order).
 This fixture work can run alongside backend work. It does not require live
-findings or public APIs. Complete console phases 1–4 before Discovery 5 wires
+findings or public APIs. Complete console phases 1–4 before Phase 7.8 wires
 these screens to production owners.
 
 - Update `ui/mithril-console/src/Console.tsx`, `src/App.tsx`,

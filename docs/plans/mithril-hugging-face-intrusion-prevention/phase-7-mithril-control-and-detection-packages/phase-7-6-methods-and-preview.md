@@ -1,6 +1,6 @@
-# Phase 3: Query, Detection Recipes, Suggestions, And Exact Preview
+# Phase 7.6: Detection Recipes, Suggestions, And Exact Preview
 
-Implement isolated query/follow reads, detection recipes, and typed suggestions, including review-only
+Implement detection recipes and typed suggestions, including review-only
 native policy changes. Reuse existing compiler and simulation owners.
 
 ## Intended end state
@@ -14,13 +14,16 @@ active policy or creates an authoritative incident finding.
 ## Implementation flow
 
 ```text
-Caller evaluates a hypothesis against a pinned context
-  -> DiscoveryOwner validates SQL, views, scope, coverage, and limits
-  -> isolated query worker evaluates authorized relation batches
-  -> result records support, counterevidence, coverage, and Unknown reasons
-  -> typed suggestion validator checks the proposed next step
-  -> query returns an authenticated receipt
-  -> ControlStore seals validated suggestions and cited receipts without effects
+Configured discovery method evaluates a pinned context
+  -> DiscoveryOwner validates the reviewed method, parameters and input revision
+  -> QueryOwner evaluates its admitted SQL and returns a receipt without mutation
+  -> DiscoveryOwner checks coverage and records support, counterevidence or Unknown
+  -> AnalysisStore commits the method result and its exact input references
+
+Caller submits a typed suggestion
+  -> DiscoveryOwner checks current draft permission, cited receipts and preconditions
+  -> validator returns Draft, Rejected or Validated with explicit reasons
+  -> AnalysisStore commits the suggestion without an execution effect
 
 Owner submits a scoped requirement set
   -> DiscoveryOwner validates source, cohort, and requirement revision
@@ -30,7 +33,7 @@ Owner submits a scoped requirement set
   -> native compiler validates and expands the proposed source
   -> PolicySimulator evaluates exact reconstructable keys
   -> test planner identifies missing approved cases
-  -> ControlStore seals proposal and preview artifacts
+  -> AnalysisStore commits proposal and preview artifacts
 
 Edit broadens a resource or cannot be simulated
   -> preview shows added authority or Unknown with its reason
@@ -49,23 +52,20 @@ Discovery owns deterministic proposal construction and test requests. Existing
 policy validation, compiler, and `PolicySimulator` own policy meaning. The
 scope starts with qualified exact file/execute rules under declared roles.
 The test planner only references reviewed fixtures; it cannot execute them.
-The planned `GraphAndFindingOwner` retains incident graph ownership. Existing
+`GraphAndFindingOwner` retains incident graph ownership. Existing
 policy finding/disposition source types do not implement this query catalog.
 
 ## Required changes
 
 ### Prerequisites and delivery boundary
 
-Require Discovery 2 and Mithril 7 Done in the
-[combined order](README.md#combined-implementation-order). Reuse their bounded
-reader, derived store, finding revisions, and notification records. Add query
-views over those committed records; do not create another graph or notification
-owner. Complete query, suggestion, and preview owner tests before Discovery 4.
-Public HTTP/MCP exposure remains Discovery 5.
+Require Phase 7.3 query and Phase 7.5 findings. Status: **Not done**.
+Use QueryOwner and AnalysisStore; do not implement another SQL path.
+Observability 3 can already expose query/trace without these algorithms.
 
 1. In `mithril-control/src/discovery/`, add
-   `DiscoveryOwner::{create_requirement_set,build_proposal,preview,request_test}`.
-   In `store.rs`, add revision-checked heads referencing immutable artifacts.
+   `DiscoveryOwner::{evaluate_method,create_requirement_set,build_proposal,preview,request_test}`.
+   In AnalysisStore, add revision-checked immutable proposal records.
    A proposal binds snapshot, requirements, base UID/generation/spec digest,
    target facts, compiler version, and every context digest.
 2. Build typed edits to an existing `WorkloadProtectionPolicy.spec`. Reuse
@@ -100,15 +100,11 @@ Public HTTP/MCP exposure remains Discovery 5.
    observations update one exact review group; new outcomes, resources, entry
    classes, or coverage failures remain visible. Load authoritative artifacts
    for previews, not unchecked SQL query rows or model labels.
-8. Add `src/discovery/query.rs` and `DiscoveryOwner::query`. Use the Phase 1
-   selected binding and isolation contract; do not add a second SQL engine.
-   Implement strict parser/binder admission, scoped/redacted projection,
-   isolated bounded evaluation, result validation, authenticated receipts, and typed
-   errors. Add `catalog` descriptions and the four initial SQL recipes. Normal
-   mode supports admitted joins/aggregates; follow supports only stable event
-   projection/filters. Implement cursor binding, retained-history drain,
-   bounded wait, cancellation, expiry, and replay from the durable positions.
-   Keep store/DB locks out of waits and client I/O.
+8. Register method views and the four reviewed recipes with QueryOwner.
+   Use its isolation, receipts, dependency revisions and append/replace follow.
+   Store method definitions under `src/discovery/investigation.rs`; extend
+   `context.rs` and add a focused proposal module when needed. Load complete
+   pinned inputs through owner reads, not unverified client query rows.
 9. Add qualified recipe evaluation and `DiscoveryOwner::validate_suggestion`.
    A DetectionAssessment binds query/input revisions, coverage preconditions,
    field availability, and expected interpretation. Positive matches can
@@ -147,8 +143,8 @@ The case output must include source/spec digests, old/new dispositions,
 unknown reasons, permission delta, and test-request IDs. Proposed commands:
 
 ```sh
-cargo test -p mithril-control discovery_query_ -- --nocapture
-cargo test -p mithril-control discovery_follow_ -- --nocapture
+cargo test -p mithril-control query_ -- --nocapture
+cargo test -p mithril-control discovery_detection_ -- --nocapture
 cargo test -p mithril-control discovery_proposal_ -- --nocapture
 cargo run -p mithril-e2e --bin mithril_discovery_test -- \
   --case proposal-preview --output-directory /tmp/araphor-discovery-preview
@@ -156,11 +152,10 @@ cargo run -p mithril-e2e --bin mithril_discovery_test -- \
 
 ## Exclusions and stop point
 
+Status becomes Done only after unit tests and the lightweight cases pass with
+nonzero counts and retained result digests. Run the query-follow case again
+when method views change query dependencies.
+
 No model runtime, detector installation, live source mutation, automatic rollback, or external
 network-policy enforcement. Stop with reproducible review artifacts before
 the optional assistance and live review work.
-
-## Result
-
-**Not done.** No proposal generator, permission comparison, or replay adapter
-was implemented in this planning change.

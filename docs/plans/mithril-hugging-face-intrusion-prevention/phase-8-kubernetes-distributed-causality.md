@@ -19,8 +19,8 @@ Chapters 7-8, 23, 25, and 30-31; Appendices A.9-A.10 and A.15.3.
 
 ## Deliverables
 
-In the [combined Araphor order](../araphor-discovery-engine/README.md#combined-implementation-order),
-start after the bounded Discovery 6 release. The existing query, assessment,
+In the [combined Araphor order](phase-7-mithril-control-and-detection-packages/README.md#combined-implementation-order),
+start after the bounded Phase 7.7 release. The existing query, assessment,
 console, and policy workflow are inputs, not work to repeat.
 
 ### D8.1 — Kubernetes source adapters and coverage

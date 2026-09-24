@@ -1,16 +1,16 @@
-# Phase 4: Agent Investigation And Evidence-Backed Classification
+# Phase 7.7: Agent Investigation And Evidence-Backed Classification
 
 Equip existing agents with context, query recipes, assessment validation, and
 governed next steps. Compare simple interfaces on frozen tasks. Do not build a
-Control-owned model runtime or provider gateway. The file path stays stable.
+Control-owned model runtime or provider gateway.
 
 ## Intended end state
 
 An agent can investigate competing explanations, classify activity, and submit
 a supported assessment with useful policy, test, or response suggestions.
-The engine validates references and draft changes. A qualified local defender
-uses a self-hosted model and the shared API; no report transfer is required.
-A separately approved hosted client can use the same contract.
+The engine validates references and draft changes. External agents use the
+shared API; no report transfer is required. Operators own their local or hosted
+models. Araphor does not train, load, host, update or roll back any model.
 Classification is not grouping, authorization, or incident closure.
 
 ## Implementation flow
@@ -22,7 +22,7 @@ Agent receives a scoped investigation
   -> agent follows relevant revision records when new evidence is needed
   -> submit_assessment supplies conclusions, alternatives, citations, and next steps
   -> DiscoveryOwner validates report scope, revisions, references, and typed drafts
-  -> ControlStore retains Suggested assessment and explicit validation errors
+  -> AnalysisStore retains Suggested assessment and explicit validation errors
 
 Required facts or export authority are absent
   -> query returns Unknown, omission, denial, or expiry
@@ -31,7 +31,7 @@ Required facts or export authority are absent
   -> a later query has a new receipt; the old report does not change
 
 Engineer compares interfaces
-  -> frozen tasks run with specialized read wrappers, SQL, and SQL plus context
+  -> optional client evaluations compare SQL with and without exact context
   -> the same model, evidence, and permissions apply to each variant
   -> evaluator records safety, task quality, cost, latency, and variance
   -> failed configurations remain unqualified
@@ -39,8 +39,9 @@ Engineer compares interfaces
 
 ## Scope and owners
 
-DiscoveryOwner owns query/export checks and assessment/suggestion validation.
-ControlStore retains bounded query receipts and reports. External agents own
+Shared Control query code enforces query/export checks. DiscoveryOwner owns
+assessment/suggestion validation. AnalysisStore retains bounded query receipts
+and reports. External agents own
 their loop, provider credentials, budgets, and model choice. Existing policy
 and planned response owners retain execution authority; this phase cannot
 implement their missing runtimes.
@@ -49,14 +50,20 @@ implement their missing runtimes.
 
 ### Prerequisites and delivery boundary
 
-Require Discovery 3 and Mithril 7 Done in the
-[combined order](README.md#combined-implementation-order). Evaluate the local
-client through the test harness and public Rust owner methods. The harness
-must not reproduce query or assessment logic. No production HTTP/MCP listener
-is required here: Discovery 5 connects that transport to the same methods.
-Record real model evaluation separately from recorded-client contract tests.
-Complete shared-record and escalation owner checks here; Discovery 5 and 6
-must prove the supported deployment through the production API.
+Require Phase 7.6. Implement and test assessment owner methods with recorded
+inputs first. Require Observability 3 before client/model evaluation through
+the real SQL/trace CLI. The harness calls supported owner methods; it must not
+reproduce query, capture, or assessment logic.
+
+Status: **Not done**. Observability 3 supplies authenticated query/trace APIs.
+This phase adds `POST /v1/discovery/assessments` to that same listener and a
+thin assessment client operation in the existing CLI/client tree. It must be
+usable by the evaluated agent now. Phase 7.8 adds review/publication transport;
+no second listener, model gateway or MCP dependency is required.
+Mandatory completion covers the API, CLI, recorded-client contract tests,
+disclosure and assessment validation. Real external-agent evaluation is a
+separate compatibility result, not a prerequisite for Phase 7.8 or 7.10.
+A local-defense or model-quality claim requires its actual measured result.
 
 1. Add `src/discovery/assessment.rs` with
    `DiscoveryOwner::submit_assessment` and `AssessmentReport::validate`.
@@ -70,7 +77,7 @@ must prove the supported deployment through the production API.
    credential access and deployment drift. Include exact columns, SQL recipes,
    required/optional checks, alternatives, and a stopping checklist. Use the
    context view for predictable lookups; do not requery unchanged facts.
-3. Implement `DisclosurePolicyV1` at the query/export boundary: approved
+3. Extend the shared query/export enforcement from Phase 7.3 with `DisclosurePolicyV1`: approved
    recipient/purpose, row/field scope, redaction, scoped pseudonyms, and expiry.
    Filter before evaluation so predicates/counts cannot leak hidden data.
    Fail closed. Revoke later reads; do not claim recall of prior exports.
@@ -78,11 +85,13 @@ must prove the supported deployment through the production API.
    checks, tokens, and cost. Bound report size and reject non-finite scores.
    Valid citations do not necessarily support a conclusion; retain reviewer
    errors and evaluate actual support. No hidden chain-of-thought collection.
-5. Add `harness/discovery/evaluate.py` in `mithril-e2e`. Compare deterministic
-   recipes, context-only AI, former specialized-read wrappers, one SQL tool,
-   and SQL plus exact context/runbook. Wrappers are experiment-only adapters.
-   Use identical workload/time splits, evidence budgets, model, and grants.
-   Repeat held-out tasks at least five times; report per-task results/variance.
+5. Add the optional external-client evaluator at
+   `harness/discovery/evaluate.py` in `mithril-e2e`. Compare the deterministic
+   baseline and the same external agent using SQL with and without exact
+   context/runbooks. Use equal workload/time splits, budgets and grants.
+   Repeat held-out tasks at least five times; retain failures and variance.
+   Do not build specialized-read wrappers unless a measured compatibility
+   question requires that separate experiment. They are not a release gate.
 6. Include enforcement-oriented tasks: diagnose a missing active target,
    prepare a narrow credential-access policy, preserve a legitimate controller,
    identify an already-open socket, and request a bounded response with missing
@@ -93,17 +102,17 @@ must prove the supported deployment through the production API.
    calls, bytes, tokens, cost, latency, and variance. Test prompt injection,
    poisoned history, omitted evidence, stale targets, and self-approval attempts.
    An LLM judge cannot be the sole oracle.
-8. Test a simple typed classifier only where a recorded label task needs it.
-   No training, embeddings, or native inference runtime is a prerequisite.
-   Select a candidate only through local-intelligence.md gates. Live hosted
-   experiments require approved public/synthetic data or separate disclosure
-   permission. CI uses recorded client responses and makes no provider calls.
-
-9. Qualify one existing local agent runtime and self-hosted model. Record their
-   versions/artifact digests, endpoint, schema, hardware, and data policy in the
-   existing manifest. Restrict test egress to Araphor and the in-network model
-   endpoint. A local CLI backed by remote inference does not pass local mode.
-   Include startup/unavailability and refusal; do not silently change provider.
+8. Keep inference, model artifacts, training, embeddings and provider access
+   outside Araphor. Optional external classifier comparisons follow
+   local-intelligence.md. Hosted experiments require approved public/synthetic
+   data or separate disclosure permission. CI uses recorded client responses
+   and makes no provider calls.
+9. For an advertised external-agent compatibility claim, test the named client
+   and operator-managed model. Record known versions, endpoint, hardware and
+   data policy in the existing manifest; mark unknown provider facts unknown.
+   A local-inference claim additionally needs restricted egress and observed
+   model placement. Refusal and unavailability remain visible. These tests
+   neither install a model in Araphor nor block the core phase completion.
 10. Add bounded ClientDerived analysis attachments to AssessmentReport for
     static analysis of hostile fixture text. Retain original evidence digest,
     transform/version, output digest, and provenance. Apply size/redaction and
@@ -114,6 +123,14 @@ must prove the supported deployment through the production API.
     the report, missing checks, linked proposal, and owner result without the
     first client's chat. Test a critical finding with a benign model label and
     a refused analysis; neither can discharge mandatory routing or human receipt.
+12. Add a missing-measurement task through the
+    [observability CLI](../../araphor-observability/README.md#cli-contract).
+    The agent reads a reviewed script, runs one `araphor trace` command, and
+    reads its terminal output without SQL or a custom job tool. It can use SQL
+    afterward to compare retained measurements. Test denied arbitrary source,
+    target replacement, incomplete output and a quiet trace. No absence or
+    benign conclusion follows solely from empty stdout. A model cannot approve
+    its own wider tracing authority.
 
 ## Acceptance and verification
 
@@ -129,31 +146,47 @@ must prove the supported deployment through the production API.
   enforcement. Recorded replay makes no model call.
 - Run focused owner/e2e checks and full Rust verification after Rust edits.
 
-Proposed evaluator interface:
+Optional evaluator interface and required owner-test commands:
 
 ```sh
 python3 crates/mithril-e2e/harness/discovery/evaluate.py \
   --manifest crates/mithril-e2e/fixtures/discovery/manifest.json \
-  --methods deterministic,context-only,specialized-reads,sql,sql-context \
+  --methods deterministic,sql,sql-context \
   --provider recorded --repetitions 5 \
   --output-directory /tmp/araphor-discovery-investigation
 cargo test -p mithril-control discovery_assessment_ -- --nocapture
 cargo test -p mithril-control discovery_disclosure_ -- --nocapture
 ```
 
-Require nonzero tests, metrics, split manifest, query/report artifacts, and an
+Core tests require nonzero assertions and retained query/report artifacts.
+An optional client experiment also requires metrics, a split manifest and an
 explicit Adopt/Keep unqualified result. Recorded responses prove contracts,
-not live model quality or local deployment. Record the self-hosted run, network
-policy evidence, model behavior, and exact shared record IDs separately here.
-A recorded-only test cannot complete the local defender acceptance.
+not live model quality or local inference. When a real-client capability is
+advertised, record its run, network observations and shared record IDs separately.
+A recorded-only test cannot establish live agent quality or local inference.
+It can complete the mandatory Araphor client/assessment contract.
+
+### End-to-end deliverable
+
+Add `assessment-loop` to the existing discovery e2e binary. A recorded agent
+uses production HTTP and query/trace CLI, cites server receipts, submits a report,
+then exits. Another client reads the same report and missing checks. Test forged
+citations, irrelevant support, stale targets, indirect injection, export
+revocation, model refusal and unsupported response. Do not replace owner
+validation with an evaluator helper. UI/API approval stays unavailable to
+investigator credentials.
+
+```sh
+cargo run -p mithril-e2e --bin mithril_discovery_test -- --case assessment-loop --output-directory /tmp/araphor-assessment
+```
+
+Recorded-client contract tests are mandatory and determine this phase's Done
+status. Real client/model measurements have separate compatibility results;
+deterministic tests must not call a provider. A failed optional client result
+does not block Phase 7.8 or 7.10 and cannot be reported as completed local defense.
 
 ## Exclusions and stop point
 
 No server agent loop, provider gateway, automatic closure, model self-approval,
 new response actuator, or production test execution. Stop with a measured client
-contract; authenticated API exposure and mutation adapters require Phase 5.
-
-## Result
-
-**Not done.** No client experiment, report validator, model call, or capability
-integration was implemented or run in this planning change.
+contract; review/publication adapters belong to Phase 7.8.

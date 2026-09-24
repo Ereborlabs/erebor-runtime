@@ -4,7 +4,8 @@ This design gives agents bounded SQL reads, relevant context,
 evidence-backed classification, and typed next steps. Local and hosted models
 are both eligible. The path remains unchanged to preserve existing links.
 It does not ask a model to determine which operations are authorized. The
-deterministic engine remains useful when no model is installed.
+deterministic engine remains useful without an external agent. Araphor owns no
+model artifacts, inference runtime, training pipeline or provider credentials.
 
 ## Problems to solve
 
@@ -25,6 +26,11 @@ The product contract is useful evidence-backed assistance, not local inference.
 
 ## Compare methods in increasing cost order
 
+The deterministic baseline is Araphor implementation scope. Model-based rows
+are optional external-client experiments, not components to build in Control
+or the remote deployment. Operators own model selection, training and inference.
+Araphor records attributed results through the same assessment API.
+
 | Method | Proposed use | Adoption gate |
 | --- | --- | --- |
 | Exact grouping, ordered set differences, and fixed typed rules | Required baseline: operation, resource kind, declared lifecycle, cohort, result, guardrail conflict | Always available. No model required. |
@@ -39,16 +45,12 @@ The product contract is useful evidence-backed assistance, not local inference.
 [fastText](https://fasttext.cc/docs/en/supervised-tutorial.html),
 [SetFit](https://huggingface.co/docs/setfit/index), and
 [River](https://riverml.xyz/latest/api/overview/) are method references, not
-selected production dependencies. The first experiment should use an isolated
-offline training tool. A runtime dependency is selected only after the
-experiment succeeds. Do not introduce Python into the Rust service to run a
-benchmark that might reject the model.
-
-If the selected model is a small linear model, a reviewed bounded feature
-schema and weight artifact can be sufficient for Rust inference. Do not build
-a general ML runtime for it. If a compact encoder wins, evaluate a pinned CPU
-runtime such as ONNX Runtime. Include its native code, supported operators,
-threads, and model deserialization in the security and license review.
+selected production dependencies. External-client experiments use an
+operator-managed tool outside Araphor.
+They can compare a simple typed classifier with an existing agent. Do not add
+model weights, ONNX, Python inference, embedding storage or training code to
+Control or the remote data process. Keep measured compatibility results in the
+existing evaluation manifest. No model candidate is a core release dependency.
 
 ### Determinism contract
 
@@ -192,8 +194,9 @@ Test injection that asks for secret retrieval, foreign scope, false benign
 verdicts, fabricated citations, or unauthorized actuation. Schema validity
 does not prove a claim; human review and labeled evaluation remain required.
 
-Qualify one local agent/model configuration as part of the first assisted
-delivery. Record the agent runtime/version, MCP schema, model artifact/runtime,
+Qualify a local agent/model configuration only when that external-client
+compatibility is advertised. It is not a core product completion gate.
+Record the agent runtime/version, CLI/API schema, model artifact/runtime,
 endpoint location, resource needs, and disclosure profile in the existing
 qualification manifest. Deny all network egress except Araphor and the approved
 in-network inference endpoint during the local qualification. Provision model
@@ -249,67 +252,24 @@ unresolved. A human can confirm the first without approving the second.
 Rejected proposals are not automatically malicious examples. Accepted
 proposals are not proof of benign activity.
 
-## Optional training and evaluation lifecycle
+## Optional external-client evaluation
 
-```text
-Authorized owner labels a behavior group
-  -> Control records label, scope, reviewer, revision, and evidence references
-  -> training export applies the tenant's data and retention policy
-  -> offline trainer fits a candidate on the approved training partition
-  -> evaluator tests a frozen held-out partition and adversarial cases
-  -> model review records accuracy, abstention, cost, and known limits
-  -> operator explicitly promotes the model artifact for that tenant/scope
+The operator owns any training, artifact storage, model deployment and rollback
+outside Araphor. Export requires the same scoped disclosure grant as other
+client reads. A local model does not create permission to use private evidence.
+Araphor records reviewed labels and attributed assessments; it neither trains
+from them nor promotes model artifacts.
 
-External model assesses a sealed context packet
-  -> bounded export excludes unsupported and sensitive fields
-  -> classifier returns a schema-limited annotation
-  -> output validator rejects bad references, sizes, and numeric values
-  -> console separates suggested disposition, hypotheses, and next steps
-  -> no policy, evidence, role, or guardrail field changes
+For an optional model comparison, freeze workload/time partitions before
+tuning. Keep replicas and overlapping traces in one partition. Retain task
+labels, supporting/refuting evidence, missing facts and adversarial cases.
+Evaluate confusion by severity, abstention, citation support, useful suggestions
+and operator corrections. If scores are supplied, state their meaning and
+calibration limits; a score cannot authorize a policy change.
 
-Data shifts or the model exceeds its limit
-  -> report records drift, timeout, failure, or out-of-distribution status
-  -> classifier abstains or is disabled for the affected scope
-  -> deterministic review continues
-  -> retraining requires a new dataset and explicit model promotion
-```
-
-Use tenant-local labeled data by default. Cross-tenant training requires
-explicit data permission and an evaluation for leakage. Do not train from
-private raw events merely because a model is local. Deletion and retention
-rules must cover exported examples, features, checkpoints, and model artifacts;
-record when deletion requires retraining rather than asserting erasure from
-weights. Use scoped reviewed history as context before adding training. Reuse
-only decisions available before the investigation cutoff; keep rejected and
-contradictory reviews visible. Do not automatically turn a closure reason into
-a global rule or an approved runbook instruction. Training is not a prerequisite
-for the context-and-tool workflow; implement it only for a measured classifier
-need. Do not build training merely because reviewed labels exist.
-
-Partition by workload family, release, and time, not random event rows. Events
-from one trace or replica group cannot occur in both training and test sets.
-Include a cold-start workload and an unseen application version. Keep attack
-examples and policy guardrail tests outside the training stream. Limit repeated
-examples so one noisy or compromised workload cannot dominate the model.
-
-Report class support, per-class precision/recall, macro averages, confusion
-matrix, coverage of non-abstained predictions, and calibration on the stated
-validation set. A displayed score names its meaning and model version. Do not
-display it as the probability that an action is safe.
-
-Also report Brier score, calibration error and reliability bins, risk versus
-abstention coverage, and support by workload family. Freeze calibration and
-thresholds before held-out evaluation. Report confidence intervals and mark
-rare classes inconclusive rather than hiding them in a high aggregate score.
-Test changed class frequencies, label-order changes, unrelated labels, empty
-descriptions, missing evidence, and prompt-like resource names. A confident
-answer on absent evidence is an error, not a reason to relax abstention.
-
-Choose abstention thresholds on a validation partition, then freeze them before
-the held-out test. Abstain for missing required features, unseen schema, an
-unsupported cohort, close competing classes, or detected distribution shift.
-Do not claim calibration or conformal guarantees continue under arbitrary
-production drift.
+A changed external client/model needs a new compatibility result before an
+updated quality claim. Recorded replies prove the API contract, not model
+accuracy. No live inference is required for deterministic CI or release.
 
 ## Review selection and feedback
 
@@ -317,10 +277,10 @@ The deterministic queue orders guardrail conflicts and privilege increases
 before ordinary repeated observations. Model ranking can order items within
 an eligible group, but cannot hide a conflict or change mandatory review.
 
-For active learning, request a small daily label budget. Prefer uncertain and
-representative examples, with a cap per cohort. Include some random examples
-to reveal selection bias. Batch exact duplicates, not semantically similar
-permissions. The reviewer can split a group and see the original members.
+An external training tool may request reviewed labels under an export grant.
+It cannot create review obligations, silently promote labels or train inside
+Araphor. Batch exact duplicates, not similar-looking permissions. The reviewer
+can split a group and inspect the original members.
 
 Feedback records the reason: wrong grouping, wrong class, missing context,
 incorrect requirement, or incorrect policy transform. These are different
@@ -359,26 +319,17 @@ unresolved. Recommend the existing shutdown fixture, not additional hours of
 steady-state observation. A passing fixture supports this case and revision;
 it does not prove every shutdown path is safe.
 
-## Artifact and runtime security
+## External-client and report security
 
-- Bind model bytes, feature schema, label schema, training manifest digest,
-  validation report, runtime version, license, and promotion decision.
-- For local inference, load only approved artifacts. No runtime downloads, remote custom
-  code, arbitrary pickle loading, custom executable model operators, or
-  automatic package installation.
-- Bound model bytes, input rows, input text, tensor shapes, CPU, threads, memory,
-  and execution time. Reject malformed and non-finite scores.
-- If local native model parsing/inference is introduced, run it in an unprivileged,
-  resource-limited local worker with no network and no production credentials.
-  This worker is optional computation, not another durable policy service.
-- Use a bounded request/result interface. Worker termination must not terminate
-  Control or delay policy reconciliation. Restart has a retry budget.
-- Store explanation references and final annotations. Do not store hidden
-  chain-of-thought or portray generated prose as independent evidence.
-- Treat all model outputs as untrusted. A candidate may reference only the
-  supplied tenant-scoped rows and allowed label fields.
-- Keep a kill switch and the prior approved model. Model rollback does not
-  roll back or modify a workload policy.
+- Keep model execution and provider credentials outside Araphor.
+- Enforce evidence-read and disclosure grants before returning any model input.
+- Validate bounded reports, finite scores, exact revisions and citations.
+- Treat supplied model versions and costs as client claims unless independently
+  verified. Do not require hidden provider weight digests.
+- Reject fabricated references and preserve missing evidence. Existing citations
+  do not by themselves prove a conclusion.
+- Treat client failure or model rollback as external state; neither changes
+  active policy, deterministic findings, mandatory review or notification rules.
 
 ## Experiments and stop rules
 
@@ -393,48 +344,24 @@ it does not prove every shutdown path is safe.
 | Runtime and disclosure | No-model engine | Enforce query CPU/byte/scope limits; no unapproved export or actuation; no primary intake/rollout regression. Client cost limits are evaluator controls, not a Control guarantee. |
 
 These numbers are proposed pilot gates, not measured performance or statistical
-security guarantees. Phase 1 fixes the corpus and review protocol before model
+security guarantees. Phase 7.1 fixes the corpus and review protocol before model
 selection. If a gate fails, ship the deterministic function and retain the
 experiment report. A model is not a release requirement.
 
-Run bounded comparisons after the deterministic baseline:
-
-1. Fit one regularized linear model on typed features. Test a small tree only
-   if a recorded feature interaction explains a material linear-model error.
-2. If approved text exists, test one semantic classifier: GLiClass for the
-   label-conditioned case or SetFit when reviewed few-shot training is the
-   actual requirement. Hold the input task and evaluation split fixed.
-3. Test one approved external agent with context-only and query-tool modes.
-   It can be local, self-hosted, or hosted. Use synthetic/public permitted data
-   for a hosted experiment unless a separate data disclosure is approved.
-   A fixed-choice Jev-like method is useful for a finite classification task,
-   but cannot replace investigation, counterevidence, or suggestion validation.
-
-The isolated compact-classifier experiment may use up to 8 GiB RAM, four CPU threads,
-1,024 input tokens, and 60 seconds per request, with no network after artifact
-provisioning. These limits do not replace the production limits of 128 MiB
-model bytes, 512 MiB worker memory, and the batch deadline. A candidate that
-only fits the offline tier is not eligible for deployment. If distillation or
-quantization is tested, treat its output as a new model and rerun all gates.
-Teacher labels are proposed labels, not ground truth or policy requirements.
-These compact-worker limits do not restrict a separately approved self-hosted
-or hosted investigation endpoint; its request and cost limits still apply.
-
-Select one self-hosted client/model configuration for local-defense qualification;
-add a second client for protocol compatibility. Hosted quality comparison is
-optional and uses its own approved disclosure profile. A cheap typed classifier is optional, not another required tier.
-Prefer the simpler candidate when the
-operator benefit is indistinguishable. Store rejected-candidate measurements
-in the evaluator result, not additional planning or gap-review documents.
-
+External-client comparisons are optional. Use the same approved corpus, grants,
+agent configuration and task budget. A selected client can use local or hosted
+inference under its disclosure policy. Araphor does not supply or supervise
+that inference runtime. Do not add model download or provisioning to product
+installation or CI. Keep failed experiments in the evaluator result, not
+additional planning or gap-review files.
 
 ### Experiment for simple tools and complete protection
 
-Run the same held-out tasks with (a) the former specialized read-method wrappers,
-(b) one query over documented raw views, and (c) one query plus the exact context
-view and inline runbook. The wrappers are evaluator adapters, not production
-APIs. Keep evidence, export permissions, model, and safety validators equal.
-Repeat each task at least five times and report per-task errors and variance.
+Compare the deterministic baseline with an external agent using documented SQL,
+then the same agent with exact context and runbooks. Keep evidence, permissions,
+model and validators equal. Repeat held-out tasks at least five times and retain
+errors and variance. Specialized-read wrappers are an optional experiment only
+when a measured question requires them; do not build them for phase completion.
 
 Then test the permitted draft, policy-publication, and response workflows as
 separate tasks. A fast investigation that cannot request a valid protection
