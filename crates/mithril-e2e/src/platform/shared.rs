@@ -16,7 +16,7 @@ use k8s_cri::v1::ContainerState;
 use mithril_control::{
     lower_kubernetes_policy, workload_target_fact_digest, AdministrativeApprovalConfigV1,
     AdministrativeApprovalOwner, AdministrativeExecRequestV1, AllowedNodeIdentity,
-    ContainerKindV1 as ControlContainerKind, ControlPlane, ControlStore,
+    ContainerKindV1 as ControlContainerKind, ControlPlane, ControlStore, KubernetesPolicyModeV1,
     KubernetesWorkloadIdentityV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
     PolicySignerConfigV1, PolicySignerTrustV1, PolicySourceRevisionV1, PolicySourceStateV1,
     TrustGenerationV1, WorkloadProtectionException, WorkloadProtectionExceptionStateV1,
@@ -1004,6 +1004,10 @@ impl Shared {
     pub(super) fn node_ready(&mut self) -> TestResult<()> {
         let ready = self.ready.as_ref().ok_or("Node is not running")?;
         let task = self.node_task.as_ref().ok_or("Node is not running")?;
+        let prevention = self
+            .resource
+            .as_ref()
+            .is_none_or(|policy| policy.spec.mode != KubernetesPolicyModeV1::Observe);
         let last = RefCell::new(String::from("<absent>"));
         Ok(wait_stable(
             &self.pin_path,
@@ -1024,13 +1028,13 @@ impl Shared {
                     && value.identity_ready
                     && value.control_ready
                     && value.admission_ready
-                    && value.effect_prevention_claims_enabled)
+                    && value.effect_prevention_claims_enabled == prevention)
             },
             || {
                 let delivery = mithril_node::policy_delivery_status(&self.state_path)
                     .map_or_else(|error| error.to_string(), |status| format!("{status:?}"));
                 format!(
-                    "last readiness: {}; policy delivery: {delivery}",
+                    "expected prevention claims {prevention}; last readiness: {}; policy delivery: {delivery}",
                     last.borrow()
                 )
             },
