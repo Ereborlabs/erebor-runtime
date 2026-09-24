@@ -25,6 +25,8 @@ mod file_mutation;
 mod file_observe;
 #[cfg(test)]
 mod file_symlink;
+#[cfg(test)]
+mod file_symlink_protect;
 mod fixture_syscalls;
 #[cfg(test)]
 mod inactive_grant;

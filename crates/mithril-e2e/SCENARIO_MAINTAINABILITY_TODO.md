@@ -1745,6 +1745,13 @@ test does not close a row when its physical condition or an assertion changed.
       completed without a scenario or production change.
     - [ ] Qualify the Protect-mode symlink denial on all three platforms with
       the same actor and explicit exact-object evidence.
+      - [x] Pass Host and commit it. The 75-line test passed in 34.61 seconds.
+        The original and symlink reads both returned `EACCES`. Their
+        attributed `EXACT_POLICY_DENY` results share the exact-object key,
+        composite atom, and task cookie. The policy is a distinct Protect
+        input and needs no result-file allowance.
+      - [ ] Pass the unchanged Protect case under direct `runc` and commit it.
+      - [ ] Pass the unchanged Protect case on Kubernetes and commit it.
     - [ ] Remove only the matching old symlink action after both Observe and
       Protect cases pass. Keep the original control open for bind aliases.
     - A focused Host attempt on 2026-09-24 used the public Observe policy and
