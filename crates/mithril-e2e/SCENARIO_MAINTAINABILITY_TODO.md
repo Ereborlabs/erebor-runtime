@@ -2527,7 +2527,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [ ] Replace accepted-socket transfer authority. Keep the narrow actor
     denial, approved actor success, descriptor transfer, role, and received
     payload assertions.
-    - [ ] Qualify the restricted receiver as one small shared test. Start the
+    - [x] Qualify the restricted receiver as one small shared test. Start the
       listener and receiver before Node. Create the Unix endpoint after Node
       recovers them, then pass one accepted TCP descriptor with `SCM_RIGHTS`.
       Require distinct application and external roles, one passed descriptor,
@@ -2537,7 +2537,8 @@ test does not close a row when its physical condition or an assertion changed.
         real Control, Node, and BPF path.
       - [x] Direct `runc` passed in 42.21 seconds with the same test body,
         Python actor, policy, and production OCI hook.
-      - [ ] Pass Kubernetes and commit it.
+      - [x] Kubernetes passed in 83.67 seconds in retained K3s with the same
+        physical transfer and result assertions.
     - [ ] Qualify approved-receiver payload delivery and role attribution in
       a separate small test before removing any accepted-socket legacy block.
   - [ ] Replace cross-network-namespace socket transfer. Keep narrow denial,

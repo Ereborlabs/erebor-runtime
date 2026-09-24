@@ -5,7 +5,7 @@ use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = socket_pass_recovery]
 fn passed_socket_stays_restricted<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("socket-pass")?;
