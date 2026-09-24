@@ -552,18 +552,23 @@ owners are:
 ## Current compliance audit
 
 The current tree does not meet the size, naming, or runner-retirement gates.
-Do not mark the work complete while these entries remain. The table below is
-only a size audit. It is not the list of files to refactor.
+Do not mark the work complete while these entries remain. File size does not
+decide whether a runner still needs replacement.
 
-These Rust files exceed 2,000 lines:
+This table lists the files above 2,000 lines and the below-limit network
+runner that still needs replacement:
 
-| Source | Current lines |
-| --- | ---: |
-| `effect/runc.rs` | 6,864 |
-| `identity.rs` | 5,425 |
-| `effect.rs` | 3,327 |
-| `effect/child.rs` | 3,205 |
-| `control_tls.rs` | 2,416 |
+| Source | Current lines | Open work |
+| --- | ---: | --- |
+| `effect/runc.rs` | 6,864 | Size and runner retirement |
+| `identity.rs` | 5,425 | Size and runner retirement |
+| `effect.rs` | 3,288 | Size and runner retirement |
+| `effect/child.rs` | 3,188 | Size and runner retirement |
+| `control_tls.rs` | 2,416 | Size and runner retirement |
+| `effect/network.rs` | 1,584 | Runner retirement; size limit met |
+
+The behavior sections below are the runner-retirement inventory. This size
+table does not close any runner or shell action.
 
 Runner retirement is a separate, open check. In particular:
 
