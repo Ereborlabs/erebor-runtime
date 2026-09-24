@@ -1726,7 +1726,9 @@ test does not close a row when its physical condition or an assertion changed.
       because policy replacement changes its role ID on the next BPF call.
     - [x] Pass direct `runc` and commit it. The exact test passed in 35.60
       seconds with the same actor, signed policy, and assertions as Host.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact test passed in 73.15
+      seconds in the retained K3s cluster with the same actor, signed policy,
+      and result assertions as Host and direct `runc`.
 - [ ] `EffectTestRunner::physical_probe` protect scenario: keep every hard
   denial, allow control, loss counter, and evidence assertion.
 - [ ] `EffectTestRunner::physical_probe` mount mutation cases: keep each
