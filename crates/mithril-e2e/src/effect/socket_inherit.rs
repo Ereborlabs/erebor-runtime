@@ -7,7 +7,7 @@ use erebor_interceptor_abi::{
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn fork_child_cannot_borrow_socket<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("socket-pass-allowed")?;
