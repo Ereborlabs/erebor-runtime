@@ -2076,6 +2076,11 @@ test does not close a row when its physical condition or an assertion changed.
       allocates its first writable anonymous map before it reports ready.
       Host passed again in 28.56 seconds, direct `runc` in 29.52 seconds,
       and Kubernetes in 77.02 seconds.
+    - [ ] Preserve the old Observe-mode case before deletion. The legacy
+      probe runs these five actions for both values of `protect`. The shared
+      test now uses only the Protect-mode Python policy. Require the same
+      anonymous-memory denials and read-only controls under Observe mode on
+      Host, direct `runc`, and Kubernetes. Keep the legacy block until then.
     - [ ] Remove only the matching legacy actions, fields, and prepared
       resources after all three platforms pass.
   - [x] Replace the protected `PTRACE_ATTACH` block with one small standard
