@@ -46,7 +46,7 @@
               "name": "loopback-services",
               "operations": ["Connect", "Send", "Receive"],
               "protocols": ["TCP"],
-              "cidrs": ["127.0.0.1/32"],
+              "cidrs": ["127.0.0.1/32", "::1/128"],
               "ports": [
                 {"first": 9, "last": 9},
                 {"first": 1024, "last": 65535}

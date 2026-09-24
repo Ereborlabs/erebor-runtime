@@ -115,6 +115,63 @@ fn tcp_roundtrip_uses_network_role<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
+#[platform_test(host)]
+#[lifecycle = identity]
+fn tcp_ipv6_is_allowed<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("tcp-nodelay")?;
+    env.start_control()?;
+    env.start_node()?;
+    env.install_policy("tcp_nodelay_policy.json")?;
+    env.node_ready()?;
+    let mut actor = env.start_actor("tcp_nodelay.py", &[])?;
+    let pid = actor.id();
+    let task = env.task(pid, "IPv6 TCP actor")?;
+    assert_ne!(task.snapshot.admitted_entry_rule_id, 0);
+    let effects = EffectCheck::new(&env, task)?;
+
+    actor.send(b"ipv6\n")?;
+    let status = actor.wait_exit("IPv6 TCP", Duration::from_secs(5))?;
+    let stderr = actor.stderr()?;
+    assert!(status.success(), "TCP actor exited with {status}: {stderr}");
+    let connect = effects.wait(
+        &env,
+        "EXACT_POLICY_ALLOW",
+        F::Network,
+        O::Connect,
+        0,
+        "IPv6 TCP connect",
+    )?;
+    let send = effects.wait(
+        &env,
+        "EXACT_POLICY_ALLOW",
+        F::Network,
+        O::Send,
+        0,
+        "IPv6 TCP send",
+    )?;
+    for event in [&connect, &send] {
+        assert_eq!(&event.network_peer_address[..15], &[0; 15]);
+        assert_eq!(event.network_peer_address[15], 1);
+        assert_eq!(event.network_peer_port, 19094);
+        assert_eq!(
+            event.network_address_family,
+            u32::from(NetworkAddressFamilyV1::Ipv6 as u8)
+        );
+        assert_eq!(
+            event.network_protocol,
+            u32::from(NetworkProtocolV1::Tcp as u8)
+        );
+        assert_ne!(event.network_destination_policy_handle, 0);
+    }
+    assert_eq!(
+        connect.network_destination_policy_handle,
+        send.network_destination_policy_handle
+    );
+
+    actor.stop()?;
+    env.stop()
+}
+
 #[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn tcp_send_variants_are_allowed<P: Platform>() -> TestResult<()> {

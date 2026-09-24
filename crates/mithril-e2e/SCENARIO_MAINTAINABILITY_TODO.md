@@ -2437,7 +2437,18 @@ test does not close a row when its physical condition or an assertion changed.
     installed response floor, retained task, socket, mount, and active-policy
     state, denied send and shutdown, absent bytes and bypass packets, released
     socket reference, and idempotent restart recovery.
-  - [ ] Replace IPv6 TCP, connected UDP, and unconnected UDP behavior. Keep
+  - [ ] Replace IPv6 TCP behavior. Keep address family, protocol, destination,
+    payload receipt, and policy result explicit.
+    - [x] Add one Host test with the existing actor, policy, and Platform API.
+      Require the `::1` payload plus exact IPv6 TCP Connect and Send results.
+      The test has 54 lines.
+    - [x] Pass Host and commit it. The exact Host case passed in 28.64
+      seconds.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy IPv6 TCP action, result field, and
+      assertion.
+  - [ ] Replace connected and unconnected UDP behavior. Keep IPv4 and IPv6
     address family, protocol, destination, payload receipt, and policy result
     explicit in each small test.
   - [ ] Replace unsupported network family, `io_uring` SQPOLL, TUN/TAP, and BPF

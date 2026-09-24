@@ -80,6 +80,30 @@ def roundtrip():
         raise OSError(failure.errno or errno.EIO, f"{stage}: {failure}") from failure
 
 
+def ipv6_tcp():
+    stage = "socket setup"
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as server:
+            server.settimeout(3)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            stage = "bind"
+            server.bind(("::1", 19094))
+            server.listen(1)
+            with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as client:
+                client.settimeout(3)
+                stage = "connect"
+                client.connect(server.getsockname())
+                with server.accept()[0] as peer:
+                    peer.settimeout(3)
+                    stage = "send"
+                    client.sendall(b"ipv6")
+                    stage = "receive"
+                    if receive(peer, 4) != b"ipv6":
+                        raise OSError(errno.EIO, "IPv6 payload changed")
+    except OSError as failure:
+        raise OSError(failure.errno or errno.EIO, f"{stage}: {failure}") from failure
+
+
 def send_variants():
     stage = "socket setup"
     try:
@@ -197,6 +221,11 @@ for command in sys.stdin:
         result("nodelay", nodelay)
     elif command == "roundtrip\n":
         error = result("roundtrip", roundtrip)
+        if error:
+            sys.exit(error)
+        break
+    elif command == "ipv6\n":
+        error = result("ipv6", ipv6_tcp)
         if error:
             sys.exit(error)
         break
