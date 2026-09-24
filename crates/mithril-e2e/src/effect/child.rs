@@ -2282,6 +2282,7 @@ impl UnixStreamTarget {
                 .ok_or_else(|| io::Error::other("Unix-stream fixture is not connected"))?
                 .write_all(&[3])?;
             self.wait()?;
+            self.connected_stream = None;
         }
         Ok(DescriptorTransferOutcome {
             payload_received: received.payload_received,
@@ -3000,7 +3001,7 @@ mod tests {
     }
 
     #[test]
-    fn abstract_unix_stream_control_does_not_create_a_file() -> crate::Result<()> {
+    fn abstract_stream_restarts_after_transfer() -> crate::Result<()> {
         let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
             path: "Unix-stream control fixture".into(),
             source,
@@ -3008,14 +3009,19 @@ mod tests {
         })?;
         let signal_path = directory.path().join("signal");
         let signal = SharedMailbox::create(&signal_path)?;
+        let file = fs::File::open("/dev/null").map_err(|source| crate::Error::Io {
+            path: "/dev/null".into(),
+            source,
+            location: snafu::location!(),
+        })?;
         let mut target =
-            UnixStreamTarget::spawn_with_files(signal, signal_path, -1, -1).map_err(|source| {
-                crate::Error::Io {
+            UnixStreamTarget::spawn_with_files(signal, signal_path, file.as_raw_fd(), -1).map_err(
+                |source| crate::Error::Io {
                     path: "Unix-stream control fixture".into(),
                     source,
                     location: snafu::location!(),
-                }
-            })?;
+                },
+            )?;
 
         let outcome = target.roundtrip();
         if outcome.errno == Some(rustix::io::Errno::PERM.raw_os_error()) {
@@ -3023,7 +3029,12 @@ mod tests {
             return Ok(());
         }
         assert!(outcome.allowed, "{outcome:?}");
-        target.connected_stream = None;
+        let transfer = target.receive_file().map_err(|source| crate::Error::Io {
+            path: "Unix-stream transfer fixture".into(),
+            source,
+            location: snafu::location!(),
+        })?;
+        assert_eq!(transfer.installed_descriptors, 1);
         target.restart().map_err(|source| crate::Error::Io {
             path: "restarted Unix-stream control fixture".into(),
             source,
