@@ -23,6 +23,8 @@ mod fixture_syscalls;
 #[cfg(test)]
 mod independent_mmap;
 mod mailbox;
+#[cfg(test)]
+mod memory_observe;
 mod network;
 #[cfg(test)]
 mod network_connect;

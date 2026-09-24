@@ -2081,6 +2081,17 @@ test does not close a row when its physical condition or an assertion changed.
       test now uses only the Protect-mode Python policy. Require the same
       anonymous-memory denials and read-only controls under Observe mode on
       Host, direct `runc`, and Kubernetes. Keep the legacy block until then.
+      Use one Observe-mode CRD with only the required application and
+      restricted external roles. Reuse `executable_memory.py`, the existing
+      `Platform` operations, and the exact effect assertions. Do not add a
+      Platform method or copy unused Protect-policy roles and rules.
+      - [x] Host passed in 28.25 seconds with real Observe-mode Control,
+        Node, and BPF. Its first run reached active policy delivery but timed
+        out because the fixture expected Protect-mode prevention claims.
+        `node_ready` now requires the claim value that matches the installed
+        policy mode. The unchanged Protect case passed in 28.85 seconds.
+      - [ ] Pass direct `runc` and commit it.
+      - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy actions, fields, and prepared
       resources after all three platforms pass.
   - [x] Replace the protected `PTRACE_ATTACH` block with one small standard
