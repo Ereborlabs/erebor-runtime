@@ -2405,7 +2405,8 @@ test does not close a row when its physical condition or an assertion changed.
       production Send results. The test has 39 lines.
     - [x] Pass Host and commit it. The exact Host case passed in 27.93
       seconds.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact direct-runc case passed
+      in 28.87 seconds with the same actor, policy, and assertions.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy result fields and allow assertions.
       Keep the later post-fence calls and their denial assertions.
