@@ -1687,7 +1687,9 @@ test does not close a row when its physical condition or an assertion changed.
     Reuse the existing actor and policy; add no Platform API.
     - [x] Pass Host and commit it. The 41-line test passed in 28.93 seconds.
       All five Host exception tests passed together in 95.21 seconds.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact case passed in 29.68
+      seconds. All five direct-`runc` exception tests passed together in
+      97.69 seconds with the production OCI hook.
     - [ ] Pass Kubernetes and commit it.
 - [ ] `EffectTestRunner::physical_probe` setup and teardown: own its three
   cgroups, child processes, pin root, lease, and diagnostic output.
