@@ -128,6 +128,7 @@ fn control_evidence_queue_reclaims_only_durably_consumed_segments() -> Result<()
 {
     let directory = tempfile::tempdir()?;
     let store_path = directory.path().join("control-store");
+    let segments = store_path.join("evidence/segments-v2");
     let limits = EvidenceStoreLimitsV1 {
         maximum_retained_bytes: mithril_control::MAX_EVIDENCE_SEGMENT_BYTES as u64,
         maximum_retained_records: 2,
@@ -185,10 +186,7 @@ fn control_evidence_queue_reclaims_only_durably_consumed_segments() -> Result<()
     };
     let intake = EvidenceIntakeOwner::from_store(store.clone());
     assert!(intake.receive(&authenticated, third.clone()).is_err());
-    assert_eq!(
-        fs::read_dir(store_path.join("evidence/segments-v2"))?.count(),
-        1
-    );
+    assert_eq!(fs::read_dir(&segments)?.count(), 1);
 
     let retention = EvidenceRetentionOwner::from_store(store.clone());
     retention.acknowledge(EvidenceConsumptionWatermarkV1 {
@@ -196,10 +194,7 @@ fn control_evidence_queue_reclaims_only_durably_consumed_segments() -> Result<()
         evidence_cursor: 1,
         coverage_revision: 0,
     })?;
-    assert_eq!(
-        fs::read_dir(store_path.join("evidence/segments-v2"))?.count(),
-        1
-    );
+    assert_eq!(fs::read_dir(&segments)?.count(), 1);
     assert_eq!(retention.watermark(&identity)?.evidence_cursor, 1);
     assert!(intake.receive(&authenticated, third.clone()).is_err());
     retention.acknowledge(EvidenceConsumptionWatermarkV1 {
@@ -207,16 +202,10 @@ fn control_evidence_queue_reclaims_only_durably_consumed_segments() -> Result<()
         evidence_cursor: 2,
         coverage_revision: 0,
     })?;
-    assert_eq!(
-        fs::read_dir(store_path.join("evidence/segments-v2"))?.count(),
-        0
-    );
+    assert_eq!(fs::read_dir(&segments)?.count(), 0);
     intake.receive(&authenticated, third)?;
     assert_eq!(store.accepted_evidence_records(&identity)?.len(), 1);
-    assert_eq!(
-        fs::read_dir(store_path.join("evidence/segments-v2"))?.count(),
-        1
-    );
+    assert_eq!(fs::read_dir(&segments)?.count(), 1);
 
     drop(retention);
     drop(intake);

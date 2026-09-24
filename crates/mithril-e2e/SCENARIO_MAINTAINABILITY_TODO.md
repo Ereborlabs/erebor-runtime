@@ -559,7 +559,7 @@ These Rust files exceed 2,000 lines:
 | `identity.rs` | 5,425 |
 | `effect.rs` | 3,802 |
 | `effect/child.rs` | 3,448 |
-| `control_tls.rs` | 2,501 |
+| `control_tls.rs` | 2,490 |
 
 The diff from `95775f48` adds or relocates these private test functions with
 more than five name components:
@@ -1075,6 +1075,10 @@ regressions and verify them with every Control migration:
 - `kubernetes_outage_pending_policy_transfer_preempts_evidence_ack_backlog`
 - `kubernetes_outage_retained_control_store_starts_from_latest_state`
 - `control_evidence_queue_reclaims_only_durably_consumed_segments`
+
+The evidence-queue test keeps its four segment-count checks and durable
+watermark checks. It now uses one segment path and is 99 lines. Its exact
+regression passed.
 
 ### Effect child and observation support
 
