@@ -2461,7 +2461,8 @@ test does not close a row when its physical condition or an assertion changed.
       seconds. It retained the role, descriptor, and payload assertions and
       observed exactly the three allowed IPC operation classes. Formatting,
       strict crate Clippy, and whitespace checks passed.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The unchanged test passed in
+      33.64 seconds with stock `runc` and the production OCI hook.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy relationship assertions after all
       three pass. Keep its roundtrip setup while inherited, stale, and
