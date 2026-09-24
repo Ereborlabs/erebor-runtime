@@ -76,9 +76,9 @@ use std::time::{Duration, Instant};
 
 use erebor_interceptor::{EffectObservationReader, KernelHost, KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::{
-    BindingActivationTargetKeyV1, Id128V1, IpcOperationV1, KernelEffectFamilyV1,
-    KernelEffectOperationV1, PolicyGenerationStateV1, ProfileGenerationDescriptorV1,
-    QualificationResultV1, MAX_CANONICAL_PATH_COMPONENTS_V1,
+    BindingActivationTargetKeyV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
+    PolicyGenerationStateV1, ProfileGenerationDescriptorV1, QualificationResultV1,
+    MAX_CANONICAL_PATH_COMPONENTS_V1,
 };
 use mithril_control::{
     PathSelectorV1, PathTreeDenyFloorV1, PolicyArtifactOwner, PolicyDocumentV1,
@@ -1955,37 +1955,6 @@ impl EffectTestRunner {
             }
         );
         if protect {
-            wait_for_effect(
-                &reader,
-                &observations,
-                unix_stream_marker,
-                "EXACT_POLICY_ALLOW",
-                (
-                    KernelEffectFamilyV1::Ipc,
-                    KernelEffectOperationV1::IpcAccess,
-                ),
-            )?;
-            let relationship_operations = observations
-                .recent_since(unix_stream_marker)
-                .into_iter()
-                .filter(|event| event.reason == "EXACT_POLICY_ALLOW")
-                .map(|event| event.operation_argument)
-                .collect::<std::collections::BTreeSet<_>>();
-            ensure!(
-                relationship_operations
-                    == [
-                        IpcOperationV1::Connect as u32,
-                        IpcOperationV1::Send as u32,
-                        IpcOperationV1::Receive as u32,
-                    ]
-                    .into_iter()
-                    .collect(),
-                InvalidInputSnafu {
-                    path: Path::new("effect_observations"),
-                    reason: "the exact Unix-stream allow did not cover connect, send, and receive",
-                }
-            );
-
             let inherited_stream_marker = observations.cursor();
             ensure!(
                 fixture

@@ -2450,7 +2450,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace the exact Unix-stream allow relationship. Reuse the approved
+  - [x] Replace the exact Unix-stream allow relationship. Reuse the approved
     socket-pass actor and signed worker-to-worker policy. Require a completed
     descriptor transfer and payload, distinct admitted worker tasks, and
     attributed `EXACT_POLICY_ALLOW` IPC/Access evidence for Connect, Send,
@@ -2465,9 +2465,11 @@ test does not close a row when its physical condition or an assertion changed.
       33.64 seconds with stock `runc` and the production OCI hook.
     - [x] Pass Kubernetes and commit it. The unchanged test passed in
       65.53 seconds in the retained real K3s cluster.
-    - [ ] Remove only the matching legacy relationship assertions after all
+    - [x] Remove only the matching legacy relationship assertions after all
       three pass. Keep its roundtrip setup while inherited, stale, and
-      unmatched Unix-stream checks depend on the same endpoint.
+      unmatched Unix-stream checks depend on the same endpoint. The shared
+      Host case passed again after deletion in 27.52 seconds. The 93
+      non-privileged library tests, formatting, and strict crate Clippy pass.
   - [x] Replace the unmatched file-create block with one small standard
     platform test. Use one shared Python actor and the existing Python policy.
     Start the actor before Node to preserve the original recovered-root
