@@ -2971,9 +2971,11 @@ test does not close a row when its physical condition or an assertion changed.
         remaining Rust probe emits. The post-deletion Host test, 91
         non-privileged crate tests, VM harness checks, formatting, and strict
         Clippy passed. The legacy network runner remains open.
-    - [ ] Retire the separate provider-write action only after confirming that
-      `tcp_roundtrip_uses_network_role` retains its physical payload receipt
-      and exact Connect, Send, and Receive results on all three platforms.
+    - [ ] Keep the provider-write action until a shared platform test sends
+      its payload after the separate socket is fenced. The existing TCP
+      round-trip proves ordinary payload delivery, but it does not prove that
+      an independent allowed provider flow survives the fence. Require the
+      provider receipt and exact Network results on all three platforms.
   - [x] Replace the unclassified IPv4 connect denial with one standard
     platform test. Use one shared Python actor and one scenario policy. Do not
     add a Platform API.
