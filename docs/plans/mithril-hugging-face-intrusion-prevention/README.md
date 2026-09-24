@@ -1,12 +1,7 @@
 # Mithril Hugging Face Intrusion Prevention Master Plan
 
-Status: Rewritten from the validated architecture on 2026-08-08, amended for
-Control policy and evidence convergence on 2026-08-19, and amended for gRPC
-service and IPC convergence on 2026-08-21. The capability-grounded Kubernetes
-policy API amendment was approved on 2026-08-23. Proposed; this document does
-not authorize implementation until the user approves one phase by name. The
-stock-runtime bootstrap amendment was approved for Phase 6.2 on 2026-08-23.
-The known-path route with oldest-mount fallback was approved on 2026-08-31.
+Implementation requires approval of the named phase. Each phase must pass its
+owner, compatibility, physical-effect, and recovery gates.
 
 Design authority:
 
@@ -19,38 +14,25 @@ Design authority:
 - [Shared manual-test environment setup](./manual-testing/environment-setup.md)
 - [Implemented outcome review guide](./implemented-phase-review.md)
 
-The [previous architecture](./policy-and-protection-algorithm-architecture.md)
-is a superseded historical record. It may explain rejected ideas but cannot
-define implementation behavior.
+Phase 6.2 preserves the frozen BPF ABI and qualifies Control RPC/schema
+compatibility with Node. Phase 6.1 supplies typed operation-specific gRPC
+services while retaining domain generations, cursors, digests, and replay rules.
 
-The 2026-08-19 architecture amendment is additive to completed local phases.
-Do not rewrite a historical phase result or change the frozen BPF ABI because
-of this plan. Phase 6.2 updates the affected exact-type closure and Control
-RPC and schema goldens, proves compatibility with the final Phase 6 node
-contract, and records the amended architecture digest for Phase 6.2 and later
-work.
-
-The 2026-08-21 amendment inserts Phase 6.1 before that work. Phase 6.1 removes
-the obsolete ptrace IPC constraint, replaces supported custom-framed IPC with
-typed gRPC services, and splits node-control operations by service family.
-It removes redundant transport versions and envelopes. It keeps domain
-generations, cursors, digests, and replay rules that gRPC does not replace.
-
-The 2026-08-23 amendment replaces the flattened public policy CRD with a
-capability-grounded `WorkloadProtectionPolicy` and a separate bounded
+The Kubernetes policy API uses a capability-grounded `WorkloadProtectionPolicy`
+and a separate bounded
 `WorkloadProtectionException`. Control lowers the base policy into the wider
 internal signed policy. An exception activates one precompiled grant without
-migrating the base generation. The amendment does not expose unqualified
+migrating the base generation. The API does not expose unqualified
 internal fields or change the frozen BPF ABI.
 
-The approved stock-runtime amendment adds one internal `RuntimeBootstrap`
+The stock-runtime contract uses one internal `RuntimeBootstrap`
 transition to the node binding and BPF decision ABI. The node can arm it only
 for the exact held initial task after it verifies the scheduled binding and
 active signed policy. BPF restricts it to a fixed qualified operation set,
 one entry lineage, owned anonymous objects, one deadline, and one application
 handoff. It is not a CRD field, a policy rule, or a runtime-selected bypass.
 
-The known-path routing amendment separates Kubernetes baseline mounts from
+Known-path routing separates Kubernetes baseline mounts from
 later bind mounts. Node records the compiled path prefix for a known mount
 root in the authenticated initial container mount snapshot. BPF uses that
 route without mount-age selection. If no route exists on the source dentry
@@ -122,22 +104,11 @@ proof vocabulary in architecture Chapters 4, 22-25, 31, and 37.
 
 ## What Already Exists And Is Reused
 
-At this rewrite the workspace has eighteen `erebor-runtime-*` crates and no
-Mithril, BPF interceptor, or Mithril Control crate. Existing reusable work is:
-
-- `crates/erebor-runtime-core/src/interception.rs` and its module family:
-  portable process/file/socket request and decision concepts;
-- `crates/erebor-runtime-session/src/runtime_interception_broker.rs` and its
-  module family: the Session-owned broker/client/handler implementation;
-- `crates/erebor-runtime-session/src/interception_backend.rs`: the current
-  Linux ptrace backend owner; and
-- `crates/erebor-runtime-e2e/`: existing cross-crate Runtime acceptance.
-
-Those types are useful inputs, not the Mithril kernel ABI. Phase 0 must decide
-which portable concepts move into the shared Interceptor family, which remain
-Session-specific, and how compatibility is migrated without two policy owners.
-The existing
-[Linux kernel-native enforcement plan](../linux-kernel-native-enforcement/README.md)
+Reuse Control intake, policy reconciliation, immutable artifact persistence,
+and bounded evidence reads. Reuse Node identity, policy activation, evidence
+WAL, and the shared Interceptor. Keep portable Runtime interception concepts
+inside their existing owner boundaries; they are not a replacement kernel ABI.
+The [Linux kernel-native enforcement plan](../linux-kernel-native-enforcement/README.md)
 must consume the same Interceptor owner before either plan implements an
 overlapping loader.
 
@@ -232,6 +203,9 @@ computable local deny into allow.
 | `CoverageHealthOwner` | 6 local source; 7-10 merged source views |
 | `LocalEvidenceOwner` | 6 canonical observation/WAL/upload |
 | `EvidenceIntakeOwner` | 6 durable append and acknowledgement; 6.2 production Control transaction and source cursor |
+| `ControlStore` / `AnalysisStore` | ControlStore keeps policy/trust/rollout authority; 7.2 introduces authoritative DuckDB event/context/analysis storage, recovery and retained-data reads |
+| `EvidenceRetentionOwner` | 6.2 retained intake; 7 consumer-progress and evidence-reference rules before reclamation |
+| `DiscoveryOwner` / `QueryOwner` | 7.3 query/follow; 7.4 profiles/context; 7.6 methods/preview; 7.7 assessments; 7.8 review/publication through existing policy authority |
 | `GraphAndFindingOwner` | 7 local; 8 Kubernetes; 10 provider/artifact branches |
 | `NotificationRouter` | 7 |
 | `ResponseCoordinator` | 9 local/Kubernetes; 10 provider plans |
@@ -245,6 +219,13 @@ The phase result must name any owner it changes. A phase cannot create another
 writer under a different type or process name.
 
 ## Not In Scope For The Core Release
+
+The [Control observability plan](../araphor-observability/README.md) defines
+one exception to the loader restriction below: Interceptor-supervised upstream
+bpftrace children for bounded diagnostics. Production enablement requires
+backend, physical lifecycle, interference, and shared recovery proof. It does
+not change the current enforcement owner, permit a second node daemon, or
+claim that arbitrary scripts are confined by a pod selector.
 
 - Patching or rebuilding the OCI runtime, kubelet, kernel, CI runner, or
   protected workload.
@@ -274,7 +255,7 @@ writer under a different type or process name.
 | 6.1 | Typed gRPC services for all supported IPC, removal of the ptrace protocol exception, and node-control service separation | Ch. 5, 22, 30, 32-35; A.3-A.7, A.15.1 |
 | 6.2 | Kubernetes policy desired state, Control reconciliation/signing/rollout, secure node delivery, and durable Control evidence intake | Ch. 5, 11-12, 22, 30, 32, 34-37; A.8.1, A.11, A.15.1 |
 | 6.3 | Product-neutral shared telemetry and structured Mithril operational logs with component-specific verbosity | Ch. 32-35 operational visibility; no authority or evidence change |
-| 7 | Accepted-evidence indexes, deterministic graph/finding packages, policy provenance, notifications, and provider-neutral authority leases | Ch. 8, 22-25, 30, 32, 34-35; A.10, A.15 |
+| 7 | Shared evidence processing/recovery/retention, graph/finding packages, discovery methods, agent tools and console publication, policy provenance, notifications, authority leases, and bounded qualification | Ch. 8, 22-25, 30, 32, 34-35; A.10, A.15; linked Discovery backend work lists |
 | 8 | Kubernetes/runtime/audit multi-node causality and conservative purpose classification | Ch. 7-8, 23, 25, 30-31; A.9-A.10, A.15.3 |
 | 9 | Authorized local and distributed response with blast-radius disclosure and verified postconditions | Ch. 24-25, 32, 34; A.15.4-A.15.6 |
 | 10 | Qualified AWS/Google/GitHub/mesh/connector/artifact evidence, leases, and typed provider actuators | Ch. 23-26; A.10, A.15-A.16 |
@@ -286,23 +267,40 @@ between Phases 6 and 7. Phase 12 allocation decisions may begin after Phase 0, b
 physical evaluation must wait for the owning prerequisite named in Phase 12.
 Phase 12 cannot satisfy a Phase 11 core gate.
 
-The [combined Araphor implementation order](../araphor-discovery-engine/README.md#combined-implementation-order)
-inserts discovery and console work without changing this Mithril order.
-Discovery 1 and 2 can proceed against the existing Control owners while 6.2
-qualification closes; 6.3 is already recorded Done. In this combined delivery,
-7 consumes Discovery 2's bounded reader and derived store. Then Discovery 3–6
-deliver and qualify the first investigation and policy workflow before 8.
-Phases 8, 9, and 10 each own the adapter and console work for their new
-exception, response, or provider capabilities. Phase 11 proves the combined
-release. No later capability is required to close the first bounded discovery
-release, and that release does not complete this master plan.
+The [Phase 7 subplan](phase-7-mithril-control-and-detection-packages/README.md#combined-implementation-order)
+contains the complete implementation order for data, discovery and observability.
+Implement 7.1 contracts/DuckDB proof, 7.2 data storage, 7.3 query/follow, 7.4
+profiles/context, 7.5 findings/notifications, 7.6 methods/preview, 7.7 agent
+classification, 7.8 console/publication, optional 7.9 remote placement, then
+7.10 qualification for the advertised capability set.
 
-Phase 6 owns the node WAL, upload client, replay behavior, and protocol-facing
-acknowledgement cursor. Phase 6.1 moves that behavior to typed gRPC services
-without changing its durable meaning. Phase 6.2 owns the production Control
-transaction that makes an acknowledgement durable and the source cursor that
-Phase 7 may read. This boundary lets Phase 6 close without assigning graph or
-Control-store ownership to the node.
+The default Control deployment embeds data, query, discovery, graph and notification
+owners as one data component.
+DuckDB owns retained events, context, trace output and analysis. Its native WAL
+provides crash recovery. ControlStore keeps policy/control-state persistence;
+Node keeps its delivery WAL. Optional remote placement runs the same data
+component with one authoritative database, not a duplicate raw store. CLI and
+console can connect directly to either deployment with the same API. Remote
+trace and policy commands retain Control authorization and execution ownership.
+Optional discovery does not pin raw history or block intake. Araphor owns no
+AI model; external-client measurements do not block its core release.
+
+Observability 1 qualifies the delegated bpftrace backend. Observability 2 uses
+7.2 shared storage. Observability 3 needs 7.3 and Observability 2; it supplies
+SQL/trace APIs, CLI and console before discovery algorithms are complete.
+Storage, query and trace must work with discovery disabled. Optional
+Observability 4 adds the finite Trace CRD after Observability 3.
+
+Mithril 8 starts after 7.10 closes the bounded Phase 7 release. Phases 8–10
+each add their qualified exception, response or provider adapters and console
+proof. Phase 11 proves the combined release. Phase 7 cannot claim those later
+physical results.
+
+Phase 6 owns Node WAL, upload replay and authenticated source/coverage contracts.
+Phase 6.2 establishes production durable ACK and policy delivery. Phase 7.2
+changes the retained-data destination while preserving that ACK meaning:
+source receipt and events commit before acknowledgement. Do not add a public
+generic producer API or migrate policy/control state as part of that change.
 
 ## Complete Design-To-Phase Coverage Ledger
 
@@ -329,6 +327,7 @@ the named phase file contains a matching deliverable and proof.
 | Ch. 19 network/DNS/TLS limits | 3, 5, 7, 10 | socket lifetime, rewrite, DNS exfiltration, same-TLS honest-result tests |
 | Ch. 20 devices and derived authority | 0, 3, 4 | device/ioctl/derived-fd fixtures |
 | Ch. 21 privilege, self-protection, Landlock, deferred Seccomp | 0, 3, 4, 11, 12 | escape matrix; self-protection oracle; optional-layer records |
+| Discovery backend and shared query | 7 | 7.2 DuckDB; 7.3 query/follow; 7.4 profiles/context; 7.5 findings; 7.6 methods/preview; 7.7 assessment; 7.8 publication; 7.9 optional placement; 7.10 proof |
 | Ch. 22 evidence, coverage, proof quality, findings | 0, 6, 6.1, 6.2, 7 | typed evidence service; source epoch/gap tests; durable intake acknowledgement; deterministic replay |
 | Ch. 23 cross-node/provider causality | 7, 8, 10 | one Control graph owner; registered edge contracts; fan-out/contradiction/shared-principal tests |
 | Ch. 24 response transaction and blast radius | 9, 10 | authorization, simulation, exact re-resolution, physical readback |
@@ -662,7 +661,7 @@ the registry artifact, criterion mapping, and this allocation in one review.
 - [Phase 6.1: gRPC Service And IPC Convergence](./phase-6-1-grpc-service-and-ipc-convergence.md)
 - [Phase 6.2: Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
 - [Phase 6.3: Shared Telemetry And Operational Logging](./phase-6-3-shared-telemetry-and-operational-logging.md)
-- [Phase 7: Mithril Control And Detection Packages](./phase-7-mithril-control-and-detection-packages.md)
+- [Phase 7: Mithril Control And Detection Packages](phase-7-mithril-control-and-detection-packages/README.md)
 - [Phase 8: Kubernetes Distributed Causality](./phase-8-kubernetes-distributed-causality.md)
 - [Phase 9: Local And Distributed Response](./phase-9-local-and-distributed-response.md)
 - [Phase 10: Provider Connectors And Recovery](./phase-10-provider-connectors-and-recovery.md)

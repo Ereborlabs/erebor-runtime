@@ -21,11 +21,18 @@ master plan invented for them.
 
 ## Proposed Master Plans
 
-- [Araphor discovery engine](araphor-discovery-engine/README.md) — source-grounded
+- [Araphor observability](araphor-observability/README.md) — CLI-first SQL and
+  bpftrace capture, shared console APIs, and optional finite Trace CRD. Reuses
+  shared DuckDB data/query facilities and existing execution owners.
+  Capture does not require discovery enablement. The plan requires unit,
+  mithril-e2e and paired physical proof before production enablement.
+- [Mithril 7: Control, discovery, and detection](mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/README.md) — source-grounded
   evidence and context for agents, simple SQL query/follow, classification,
   and governed policy tools. Response tools retain the master plan's owner and
   physical-proof gates. Local or hosted clients need explicit export permission.
-  One implementation document per phase defines owners, limits, and proof.
+  Ten subphases cover contracts, DuckDB storage, query/follow, profiles,
+  findings, methods/preview, agent classification, publication, optional remote
+  placement and qualification.
 - [Araphor console](araphor-console/README.md) — one interface for agent and
   workload protection, policy review, action evidence, and recorded platform
   verification. Araphor is the new product name for Erebor and Mithril. The

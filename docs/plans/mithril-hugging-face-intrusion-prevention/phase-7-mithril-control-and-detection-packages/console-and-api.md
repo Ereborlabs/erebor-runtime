@@ -1,9 +1,7 @@
 # Console And API Contract
 
-This record extends the [Araphor console](../araphor-console/README.md) within
-its planned five workspaces. The current UI still has eight fixture routes.
-It defines proposed contracts, not deployed
-endpoints. Sample data remains visibly marked until the live connection passes
+This record extends the [Araphor console](../../araphor-console/README.md) within
+its planned five workspaces. It defines target contracts, not deployed endpoints. Sample data remains visibly marked until the live connection passes
 authentication, authorization, and failure tests.
 
 ## Operator journeys
@@ -26,8 +24,9 @@ reports link to server query receipts and evidence. Mark client-reported model,
 cost, and checks as unverified until checked. Missing checks keep the assessment
 incomplete. Do not display hidden chain-of-thought.
 
-A local defender is a first-class client. Its runtime/model run in the approved
-deployment and submit assessments directly through the same API as the console.
+A local defender is a first-class external client. The operator manages its
+runtime/model outside Araphor. It submits assessments through the same API as
+the console.
 Report import is for offline work, not the normal integration. Show model
 location, approved data scope, current assessment, mandatory priority, and
 delivery/human-acknowledgement state. No new chat workspace is required.
@@ -143,26 +142,46 @@ It is not a global exception or a detector-disable action.
 Separate comparison filters for new behavior, changed outcome, changed
 coverage, and changed workload revision. Rate charts use retained intake-time
 buckets labeled Observations received. Unknown source multiplicity stays
-unknown. Show `Indexing`, `IndexUnavailable`, and query-data revision apart from
+unknown. Show processor Pending/Unavailable and query-data revision apart from
 source health. No partial query result can appear as Nothing to review.
 
 ## Proposed API operations
 
-Use one optional Control HTTPS listener for assets and scoped requests.
-These are proposed contracts, not deployed endpoints.
+### CLI-first reads and diagnostic capture
+
+The [observability contract](../../araphor-observability/README.md) owns
+`araphor sql`, `araphor trace`, their CLI behavior, trace routes, target
+resolution, source inspection, limits, and optional Trace CRD. Agents use
+their existing terminal tool. Trace prints its own output; SQL is not a
+required monitoring step. The CLI receives a single response stream and resumes only after transport loss.
+Console code uses the same API directly, never a shell or server-side CLI.
+
+Observability 3 delivers authentication and the query/trace API foundation
+before Phase 7.7. Phase 7.7 adds assessment submission. Phase 7.8 adds review/publication
+to that same owner.
+There is no extra listener, read-job registry, or transport-specific authority.
+MCP remains optional. Trace cancellation does not change installed protection.
+
+Use the shared optional HTTPS listener for assets and scoped requests in
+Control or the remote deployment. CLI --endpoint/profile selection uses the
+same API routes. Remote authority operations forward to Control under the
+[placement contract](engine-design.md#optional-remote-placement), not a broader
+service grant. These are proposed contracts, not deployed endpoints.
 
 ### One investigation read
 
 `POST /v1/discovery/query` accepts the same strict schema as the query tool:
 
 ```text
-query(sql, follow=false, cursor?)
+query(sql, follow=false, cursor?, parameters?, scope?)
 ```
 
 This simplifies reads; it is not the complete Araphor tool surface. Normal SQL
 retrieves context, evidence, differences, counts, and owner state. Follow
-returns retained event/revision batches, waits at most 20 seconds when caught
-up, and returns a cursor. Repeat the same request to continue.
+returns one JSONL response. QueryOwner appends retained immutable rows or
+replaces a complete bounded result on relevant commits. Metadata declares
+the operation, schema, scope and time-window resolution. Checkpoint frames
+support reconnect; no client polling loop is required.
 
 Examples use proposed columns and fixture IDs:
 
@@ -172,16 +191,19 @@ Examples use proposed columns and fixture IDs:
 {"sql":"SELECT event_id, record_kind, entity_id, revision FROM events WHERE subject_id = 'workload-123'","follow":true}
 ```
 
-Resume the third request with its returned cursor. Stopping calls stops waiting,
-not collection. COUNT counts records, not physical actions. Coverage, omissions,
-and projection state accompany every result.
+Resume a broken stream with its last complete checkpoint. Closing the read
+stops waiting, not collection. COUNT counts records, not physical actions.
+Coverage, omissions and owner lag accompany every result. An aggregate with
+follow=true uses replace frames; never add successive counts together.
 
 Use the [query contract](engine-design.md#one-query-contract) for retention,
-cursor expiry, late input, supported SQL, and isolation. No query jobs,
-subscription registry, WebSocket requirement, or separate streaming service.
+cursor expiry, late input, supported SQL, and isolation. SQL-derived bounds use sqlparser-rs DuckDbDialect and the proven-safe AST
+subset in that contract. A window in SQL needs no duplicate flag. Parsing
+alone does not prove safe extraction. No query jobs, subscription registry,
+WebSocket requirement, or separate streaming service.
 
-Console tables use fixed parameterized queries. A Live switch follows revision
-records and refreshes affected views. Cancel stale requests on scope change;
+Console tables use fixed parameterized queries. A Live switch follows that
+query and applies append or replace frames. Cancel stale streams on scope change;
 their replies cannot update the new scope. An SQL editor has no extra authority.
 Show lag, gaps, expiry, and limited output instead of an empty healthy view.
 
@@ -193,8 +215,8 @@ parent finding/proposal/response IDs. The service resolves and validates those
 references; the browser or model cannot declare their authority.
 
 Use the same request/response types, grants, idempotency keys, errors, and owner
-methods for console and MCP. Execution results append owner revisions to the
-shared projection. A lost reply is resolved by the original request ID before
+methods for CLI, console, and optional MCP. Execution results commit owner revisions to the
+shared data store. A lost reply is resolved by the original request ID before
 retry. Revocation applies to subsequent reads and mutations, not just login.
 
 Notification delivery and human acknowledgement use NotificationRouter's
@@ -231,13 +253,15 @@ and is not advertised as an executable tool.
 
 ### Agent tool contract
 
-Use a thin stdio MCP adapter over authenticated owner APIs. Generate schemas
-from the same Rust types as HTTP. Tool count follows authority boundaries, not
-a fixed minimum. Do not hide a large operation switch inside `query`.
+Use the CLI over authenticated owner APIs for terminal-based agents. An
+optional thin stdio MCP adapter can expose the same contracts when a client
+needs it. Generate schemas from the same Rust types as HTTP. Operation count
+follows authority boundaries, not a fixed minimum. Do not hide a large
+operation switch inside `query` or add tracing side effects to SQL.
 
 | Proposed tool | Owning behavior | Release gate |
 | --- | --- | --- |
-| `query(sql, follow=false, cursor?)` | DiscoveryOwner reads authorized views, including capability and protection state. | Query isolation, scope, replay, and follow tests. |
+| `query(sql, follow=false, cursor?)` | Shared Control query code reads authorized views, including capability and protection state. | Query isolation, scope, replay, and follow tests. |
 | `submit_assessment(report)` | DiscoveryOwner validates classifications, counterevidence, and typed suggestions as drafts. | Draft grant; cited evidence and revision validation. |
 | `propose_policy(requirements, base_revision, targets)` | DiscoveryOwner builds and previews; native policy owners validate/compile. | Qualified exact policy subset; no publication side effect. |
 | `publish_policy(proposal_id, approval_id)` | Publication adapter submits the exact approved source. | Separate publish grant, valid independent approval, stale-target checks, durable intent. Not in default investigator credentials. |
@@ -251,8 +275,9 @@ self-approval, or guessed graph-to-PID actuation. Test execution remains a
 separate qualified owner capability, not implicit in a TestRequest.
 
 The [combined implementation order](README.md#combined-implementation-order)
-assigns delivery: Discovery 5 owns the first four tools and notification
-reads/human acknowledgement. Mithril 8 owns the bounded-exception request
+assigns delivery: Observability 3 owns query/trace CLI and API access.
+Phase 7.7 adds assessment submission. Phase 7.8 adds policy and
+notification/human-acknowledgement adapters on the same foundation. Mithril 8 owns the bounded-exception request
 adapter. Mithril 9 owns local/Kubernetes response planning and execution;
 Mithril 10 extends those tools for each qualified provider action. Each phase
 includes its console integration and tests. Later adapters do not block the
@@ -310,6 +335,14 @@ HumanConfirmed classifications and reusable reviewed-case context require
 Context approval also needs `discovery.context.manage`. Neither operation
 creates a policy approval without the separate exact proposal review.
 
+## Streaming result contract
+
+Use the canonical [stream contract](engine-design.md#commit-driven-follow)
+and [trace payloads](../../araphor-observability/README.md#shared-apis-and-output).
+Clients replace a displayed result only after the complete replacement arrives.
+Deduplicate append frames and save only complete checkpoints. A trace result
+reports its actual cleanup state; HTTP EOF is not execution proof.
+
 ## Errors, concurrency, and audit
 
 - `400`: malformed schema or unsupported input fields.
@@ -346,14 +379,14 @@ other tenant's object details in the audit visible to the requester.
 | Expired replay evidence | Audit retained; full replay unavailable |
 | Foreign-tenant artifact reference | Generic authorization failure; no leaked metadata |
 | Repeated controller work plus one forbidden new action | One stable repeated group; the forbidden action remains separately visible |
-| Index rebuild or lag | Indexing/Unavailable, not an empty list or a complete count |
+| Database recovery or processor lag | Unavailable/Pending, not an empty list or a complete count |
 | Late evidence after review | New snapshot comparison; old reviewed revision is unchanged |
 | Suspicious credential access with absent provider audit | Supported observations, alternatives, and a precise evidence request; no invented exfiltration claim |
 | Benign positive after deployment | Separate predicate match, suggested disposition, release context, and human confirmation |
 | Malicious context or forged citation | Rejected request or unsupported claim; no authority change |
 | Export denied or external agent unavailable | Evidence review remains usable; no automatic provider fallback |
 | Imported hosted-model report | Export recipient, query receipts, and unverified client model/cost fields |
-| Quiet followed stream or expired cursor | Empty batch with health state, or explicit expiry; never automatic incident closure |
+| Quiet followed stream or expired cursor | Health/checkpoint frames or explicit expiry; never automatic incident closure |
 | Local model refuses a critical investigation | Failed check remains visible; deterministic priority and on-call route continue |
 | Agent submits an assessment, then exits | Console and replacement agent reopen the same report and outstanding obligations |
 | Notification delivered but not acknowledged by a human | Delivery receipt and acknowledgement deadline stay separate; configured escalation continues |
