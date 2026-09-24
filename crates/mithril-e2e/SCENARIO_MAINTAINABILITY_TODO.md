@@ -2551,6 +2551,17 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Kubernetes passed in 83.07 seconds in retained K3s with the
         same actor, policy, and result assertions. The restricted case passed
         with the one-range policy in 79.26 seconds.
+    - [ ] Retire the matching legacy actions without removing the shared
+      socket fence or namespace transfer.
+      - [x] Remove the narrow receiver actor, transfer, denial actions, and
+        duplicate fixture result. Keep the signed connected Receive result
+        explicit. The new shared test owns the narrow denial. Its focused Host
+        case passed in 29.16 seconds. Three network fixture tests, formatting,
+        and strict all-target Mithril E2E Clippy passed.
+      - [ ] Keep the approved legacy transfer until the shared-fence and
+        namespace checks have independent platform replacements. The old
+        physical probe fails before these actions at its documented
+        late-moved-actor classification step; do not repair that setup.
   - [ ] Replace cross-network-namespace socket transfer. Keep narrow denial,
     approved success, descriptor transfer, payload receipt, and distinct
     creator and current namespace evidence.

@@ -80,7 +80,6 @@ pub struct NetworkPhysicalProbeBundleV2 {
     pub post_fence_bypass_packets_absent: bool,
     pub socket_reference_released: bool,
     pub bpf_setup_denied: bool,
-    pub accepted_socket_narrow_actor_denied: bool,
     pub accepted_socket_approved_actor_allowed: bool,
     pub cross_namespace_narrow_actor_denied: bool,
     pub cross_namespace_approved_actor_allowed: bool,
@@ -109,7 +108,6 @@ struct NetworkFixtureProof {
     hf_read_result: bool,
     hf_network: bool,
     local_inet: bool,
-    accept_pass: bool,
     namespace_pass: bool,
     receive: bool,
     rewrite: bool,
@@ -218,46 +216,39 @@ impl NetworkTestRunner {
             actors[1].cgroup.path(),
             actors[1].spec.private_network_namespace,
         )?;
-        let mut external_receiver = start_actor(
+        let mut converter_receiver = start_actor(
             &fixture_root,
             actors[2].spec.name,
             actors[2].cgroup.path(),
             actors[2].spec.private_network_namespace,
         )?;
-        let mut converter_receiver = start_actor(
+        let mut namespace_external = start_actor(
             &fixture_root,
             actors[3].spec.name,
             actors[3].cgroup.path(),
             actors[3].spec.private_network_namespace,
         )?;
-        let mut namespace_external = start_actor(
+        let mut namespace_converter = start_actor(
             &fixture_root,
             actors[4].spec.name,
             actors[4].cgroup.path(),
             actors[4].spec.private_network_namespace,
         )?;
-        let mut namespace_converter = start_actor(
+        let mut proxy_requester = start_actor(
             &fixture_root,
             actors[5].spec.name,
             actors[5].cgroup.path(),
             actors[5].spec.private_network_namespace,
         )?;
-        let mut proxy_requester = start_actor(
+        let mut proxy_delegate = start_actor(
             &fixture_root,
             actors[6].spec.name,
             actors[6].cgroup.path(),
             actors[6].spec.private_network_namespace,
         )?;
-        let mut proxy_delegate = start_actor(
-            &fixture_root,
-            actors[7].spec.name,
-            actors[7].cgroup.path(),
-            actors[7].spec.private_network_namespace,
-        )?;
         for (index, actor) in [
             &mut fixture,
             &mut server_fixture,
-            &mut external_receiver,
             &mut converter_receiver,
             &mut namespace_external,
             &mut namespace_converter,
@@ -280,7 +271,6 @@ impl NetworkTestRunner {
                 }
             );
         }
-        let external_pass = transport_root.join("external.sock");
         let converter_pass = transport_root.join("converter.sock");
         let proxy_path = transport_root.join("proxy.sock");
         fixture.prepare_file(&token_path)?;
@@ -329,7 +319,6 @@ impl NetworkTestRunner {
             .context(InterceptorSnafu)?;
         let transport_marker = observations.cursor();
         let transport_prepared = [
-            external_receiver.network_prepare_pass_receiver(&external_pass)?,
             converter_receiver.network_prepare_pass_receiver(&converter_pass)?,
             proxy_delegate.network_prepare_proxy(&proxy_path)?,
         ];
@@ -397,7 +386,7 @@ impl NetworkTestRunner {
                 .build()
             })?;
         fixture.network_send(PAYLOAD)?;
-        fixture.network_receive()?;
+        let receive_allowed = fixture.network_receive()?.allowed;
         fixture.network_clone()?;
 
         let fence_key = NetworkResponseFloorKeyV1 {
@@ -677,47 +666,6 @@ impl NetworkTestRunner {
             .address
             .ok_or_else(|| invalid_probe("the approved listener returned no address"))?;
 
-        let mut external_client = TcpStream::connect(server_address).context(IoSnafu {
-            path: Path::new("external accepted-socket client"),
-        })?;
-        let external_marker = observations.cursor();
-        let external_accept = server_fixture.network_accept()?.allowed;
-        let external_passed =
-            external_accept && server_fixture.network_pass(&external_pass)?.allowed;
-        reader
-            .poll(Duration::from_millis(100))
-            .context(InterceptorSnafu)?;
-        ensure!(
-            external_accept && external_passed,
-            InvalidInputSnafu {
-                path: &external_pass,
-                reason: format!(
-                    "the accepted socket did not reach the narrow receiver; accept={external_accept}, pass={external_passed}, observations={:?}",
-                    observations
-                        .recent_since(external_marker)
-                        .into_iter()
-                        .map(|event| (
-                            event.reason,
-                            event.effect_family,
-                            event.operation,
-                            event.operation_argument,
-                            event.active_role_id,
-                            event.target_role_id,
-                        ))
-                        .collect::<Vec<_>>()
-                ),
-            }
-        );
-        let external_transfer = external_receiver.network_receive_passed()?;
-        external_client.write_all(b"q").context(IoSnafu {
-            path: Path::new("external accepted-socket client"),
-        })?;
-        let accepted_socket_narrow_actor_denied = external_transfer.installed_descriptors == 1
-            && external_receiver.network_send(b"blocked")?.denied()
-            && external_receiver.network_receive()?.denied();
-        external_receiver.network_close()?;
-        server_fixture.network_close()?;
-
         let mut converter_client = TcpStream::connect(server_address).context(IoSnafu {
             path: Path::new("converter accepted-socket client"),
         })?;
@@ -877,8 +825,7 @@ impl NetworkTestRunner {
         server_fixture.network_close()?;
 
         ensure!(
-            accepted_socket_narrow_actor_denied
-                && accepted_socket_approved_actor_allowed
+            accepted_socket_approved_actor_allowed
                 && shared_socket_holders_denied
                 && cross_namespace_narrow_actor_denied
                 && cross_namespace_approved_actor_allowed
@@ -886,7 +833,7 @@ impl NetworkTestRunner {
             InvalidInputSnafu {
                 path: Path::new("accepted and namespace socket transfer"),
                 reason: format!(
-                    "a transferred socket widened authority or lost namespace evidence: accepted_narrow={accepted_socket_narrow_actor_denied}, accepted_approved={accepted_socket_approved_actor_allowed}, shared_fence={shared_socket_holders_denied} (inserted={}, receiver_denied={receiver_fenced}, accepter_denied={accepter_fenced}, bytes_absent={shared_bytes_absent}), namespace_narrow={cross_namespace_narrow_actor_denied}, namespace_approved={cross_namespace_approved_actor_allowed}, namespace_evidence={cross_namespace_evidence_distinct}",
+                    "a transferred socket widened authority or lost namespace evidence: accepted_approved={accepted_socket_approved_actor_allowed}, shared_fence={shared_socket_holders_denied} (inserted={}, receiver_denied={receiver_fenced}, accepter_denied={accepter_fenced}, bytes_absent={shared_bytes_absent}), namespace_narrow={cross_namespace_narrow_actor_denied}, namespace_approved={cross_namespace_approved_actor_allowed}, namespace_evidence={cross_namespace_evidence_distinct}",
                     shared_floor,
                 ),
             }
@@ -982,12 +929,10 @@ impl NetworkTestRunner {
             hf_read_result: read_results_separate,
             hf_network: bpf_setup_denied && post_fence_bypass_packets_absent && peer_network_passed,
             local_inet: accepted_socket_approved_actor_allowed,
-            accept_pass: accepted_socket_narrow_actor_denied
-                && accepted_socket_approved_actor_allowed,
             namespace_pass: cross_namespace_narrow_actor_denied
                 && cross_namespace_approved_actor_allowed
                 && cross_namespace_evidence_distinct,
-            receive: accepted_socket_narrow_actor_denied,
+            receive: receive_allowed,
             rewrite: rewritten_forbidden_packet_absent && rewritten_allowed_destination_received,
             shared_response: shared_socket_holders_denied,
             socket_life: socket_reference_released && socket_generation_not_reused,
@@ -1013,7 +958,6 @@ impl NetworkTestRunner {
         namespace_converter.stop()?;
         namespace_external.stop()?;
         converter_receiver.stop()?;
-        external_receiver.stop()?;
         server_fixture.stop()?;
         fixture.stop()?;
 
@@ -1033,7 +977,6 @@ impl NetworkTestRunner {
             post_fence_bypass_packets_absent,
             socket_reference_released,
             bpf_setup_denied,
-            accepted_socket_narrow_actor_denied,
             accepted_socket_approved_actor_allowed,
             cross_namespace_narrow_actor_denied,
             cross_namespace_approved_actor_allowed,
@@ -1133,10 +1076,7 @@ fn build_network_artifact(
     converter_relationship.operations = vec!["IPC_ACCESS".to_owned()];
     converter_relationship.requested_disposition = PolicyDispositionV1::Allow;
     converter_relationship.errno = None;
-    let mut external_relationship = converter_relationship.clone();
-    external_relationship.relationship_rule_id = "converter-runtime-stream".to_owned();
-    external_relationship.peer_role_ids = vec!["runtime-external".to_owned()];
-    document.ipc_relationship_rules = vec![converter_relationship, external_relationship];
+    document.ipc_relationship_rules = vec![converter_relationship];
     document.effect_family_defaults.clear();
     document.file_exception_grants.clear();
     document.exceptions.clear();
@@ -1600,11 +1540,6 @@ impl NetworkFixtureProof {
                 "IPV4_IPV6_LOOPBACK_AND_UNIX_RELATIONSHIPS_REMAIN_SEPARATE",
             ),
             (
-                "NET-ACCEPT-PASS-001",
-                self.accept_pass,
-                "ACCEPTED_SOCKET_DENIES_NARROW_ACTOR_AND_ALLOWS_APPROVED_ACTOR",
-            ),
-            (
                 "NET-NS-PASS-001",
                 self.namespace_pass,
                 "CROSS_NAMESPACE_AUTHORITY_INTERSECTION_AND_EVIDENCE_PROVED",
@@ -1612,7 +1547,7 @@ impl NetworkFixtureProof {
             (
                 "NET-RECV-001",
                 self.receive,
-                "APPROVED_RECEIVE_SUCCEEDED_AND_NARROW_RECEIVE_DENIED",
+                "SIGNED_CONNECTED_RECEIVE_SUCCEEDED",
             ),
             (
                 "NET-REWRITE-001",
@@ -1659,7 +1594,6 @@ mod tests {
             hf_read_result: true,
             hf_network: true,
             local_inet: true,
-            accept_pass: true,
             namespace_pass: true,
             receive: true,
             rewrite: true,
@@ -1667,7 +1601,7 @@ mod tests {
             socket_life: true,
         }
         .results();
-        assert_eq!(results.len(), 11);
+        assert_eq!(results.len(), 10);
         assert_eq!(
             results
                 .iter()
