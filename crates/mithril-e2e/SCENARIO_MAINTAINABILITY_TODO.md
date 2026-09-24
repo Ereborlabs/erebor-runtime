@@ -438,6 +438,8 @@ reimplement a production owner operation.
 
 - Keep every Rust source file under `crates/mithril-e2e` below 2,000 lines at
   delivery.
+- Treat this limit as a size check, not as proof that a legacy test runner is
+  retired. Replace each old runner scenario with a verified platform test.
 - Prefer small test files and small responsibility-focused scenario files.
 - Keep changed private function names to four or five underscore-separated
   components at most.
@@ -496,7 +498,8 @@ reimplement a production owner operation.
 - Use direct ASD-STE100 text in documents and changed comments.
 - Do not complete the excluded product phase.
 - Do not claim completion until every Rust source file is below 2,000 lines
-  and all required lightweight and Kubernetes checks pass.
+  and all required lightweight and Kubernetes checks pass. Also require every
+  old scenario runner and shell-owned scenario assertion to be retired.
 
 ## Baseline measured suite
 
@@ -550,6 +553,13 @@ owners are:
 
 The current tree does not meet the size or naming gates. Do not mark the work
 complete while these entries remain.
+
+The runner-retirement gate is separate from the size gate. In particular,
+`effect/network.rs` now has 1,611 lines but still contains the active
+`NetworkTestRunner::physical_probe`. Its local socket and two-node checks
+remain unfinished below. Keep it in the migration inventory until the shared
+platform tests replace those checks, the old probe command is removed, and
+`two-node-network.sh` no longer owns scenario actions or assertions.
 
 These Rust files exceed 2,000 lines:
 
@@ -1699,6 +1709,16 @@ test does not close a row when its physical condition or an assertion changed.
   cgroups, child processes, pin root, lease, and diagnostic output.
 - [ ] `EffectTestRunner::physical_probe` observe scenario: keep the public
   node policy, binding, reader, action, and evidence operations explicit.
+  - [ ] Replace the exact secret `OpenRead` in Observe mode with one small
+    shared test. Start the actor before Node, as in the old physical probe.
+    Require the actor's open to succeed and require attributed
+    `WOULD_DENY` File/OpenRead evidence with a nonzero exact-object key and
+    composite atom. Reuse the existing Python open actor. Use one distinct
+    signed Observe policy and add no Platform API. Keep the old action until
+    all three platforms pass.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
 - [ ] `EffectTestRunner::physical_probe` protect scenario: keep every hard
   denial, allow control, loss counter, and evidence assertion.
 - [ ] `EffectTestRunner::physical_probe` mount mutation cases: keep each
@@ -2888,6 +2908,10 @@ test does not close a row when its physical condition or an assertion changed.
       after all three platforms pass. The other 12 network fixture rows remain.
 - [ ] `NetworkTestRunner::physical_probe` two-node peer scenario: keep the
   same TCP, UDP, and denied-port operations as `two-node-network.sh`.
+- [ ] Remove `NetworkTestRunner::physical_probe`, its old CLI path, and its
+  remaining fixture code only after every local and two-node behavior above
+  passes as a shared platform test. Keep the network file on this list even
+  while it stays below 2,000 lines.
 
 ### Direct runtime
 
