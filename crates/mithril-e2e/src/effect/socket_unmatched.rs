@@ -7,7 +7,7 @@ use erebor_interceptor_abi::{
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn new_peer_needs_relation<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("socket-unmatched")?;
