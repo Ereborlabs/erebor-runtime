@@ -2541,6 +2541,12 @@ test does not close a row when its physical condition or an assertion changed.
         physical transfer and result assertions.
     - [ ] Qualify approved-receiver payload delivery and role attribution in
       a separate small test before removing any accepted-socket legacy block.
+      - [x] Host passed in 37.10 seconds. One approved entry received the
+        accepted descriptor and sent `ok`. The test checks its role and
+        production Send result. The restricted Host case also passed with
+        one inclusive port range in 36.25 seconds.
+      - [ ] Qualify the same test in direct `runc`.
+      - [ ] Qualify the same test in Kubernetes.
   - [ ] Replace cross-network-namespace socket transfer. Keep narrow denial,
     approved success, descriptor transfer, payload receipt, and distinct
     creator and current namespace evidence.

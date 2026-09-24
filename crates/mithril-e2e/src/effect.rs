@@ -36,6 +36,8 @@ mod runc;
 #[cfg(test)]
 mod socket_pass;
 #[cfg(test)]
+mod socket_pass_allowed;
+#[cfg(test)]
 mod sqpoll;
 mod support;
 #[cfg(test)]

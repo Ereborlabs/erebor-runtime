@@ -12,6 +12,7 @@ libc = ctypes.CDLL(None, use_errno=True)
 libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
 work = sys.argv[1]
 endpoint = "\0mithril-pass"
+mode = sys.argv[2]
 
 
 def named(value):
@@ -25,7 +26,7 @@ def hold():
         time.sleep(0.01)
 
 
-if sys.argv[2] == "receiver":
+if mode in ("receiver", "approved"):
     print("native-fixture-ready", flush=True)
     sys.stdin.buffer.readline()
     named("rx-create")
@@ -49,6 +50,17 @@ if sys.argv[2] == "receiver":
             if len(fds) != 1:
                 raise RuntimeError(f"expected one passed socket, got {len(fds)}")
             with socket.socket(fileno=fds[0]) as passed:
+                if mode == "approved":
+                    try:
+                        passed.sendall(b"ok")
+                    except OSError as failure:
+                        sent = failure.errno or errno.EIO
+                    else:
+                        sent = 0
+                    control.sendall(b"done")
+                    named("fd1-ok" if sent == 0 else f"fd1-{sent}")
+                    hold()
+                    sys.exit(sent)
                 try:
                     passed.sendall(b"blocked")
                 except OSError as failure:
@@ -103,7 +115,15 @@ else:
                             raise RuntimeError("receiver did not finish")
                         stage = "read"
                         named(stage)
-                        if select.select([client], [], [], 0.5)[0]:
+                        if mode == "main-approved":
+                            payload = bytearray()
+                            while len(payload) < 2 and select.select([client], [], [], 3)[0]:
+                                chunk = client.recv(2 - len(payload))
+                                if not chunk:
+                                    break
+                                payload.extend(chunk)
+                            named("peer-ok" if payload == b"ok" else "peer-missing")
+                        elif select.select([client], [], [], 0.5)[0]:
                             payload = client.recv(1)
                             named("peer-bytes" if payload else "peer-closed")
                         else:

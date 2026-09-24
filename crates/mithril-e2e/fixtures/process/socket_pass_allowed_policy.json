@@ -2,9 +2,9 @@
   "apiVersion": "mithril.erebor.dev/v1alpha1",
   "kind": "WorkloadProtectionPolicy",
   "metadata": {
-    "name": "socket-pass",
+    "name": "socket-pass-allowed",
     "namespace": "default",
-    "uid": "10000000-0000-4000-8000-000000000025",
+    "uid": "10000000-0000-4000-8000-000000000026",
     "generation": 1,
     "resourceVersion": "1"
   },
@@ -19,7 +19,10 @@
       "kinds": ["Application"],
       "images": ["fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
       "applicationEntry": {"executionRule": "python", "role": "worker"},
-      "additionalEntries": [],
+      "additionalEntries": [{
+        "name": "approved-receiver", "kind": "PreStop",
+        "executionRule": "python-entry", "role": "worker"
+      }],
       "administrativeEntry": {"role": "administrator"},
       "externalRole": "restricted"
     }],
@@ -27,10 +30,12 @@
       {
         "name": "worker",
         "files": [],
-        "execution": [{
-          "name": "python", "path": "/usr/bin/python3", "recursive": false,
-          "operations": ["Execute"], "action": "Allow"
-        }],
+        "execution": [
+          {"name": "python", "path": "/usr/bin/python3", "recursive": false,
+           "operations": ["Execute"], "action": "Allow"},
+          {"name": "python-entry", "path": "/work/bin/python", "recursive": false,
+           "operations": ["Execute"], "action": "Allow"}
+        ],
         "network": {"destinations": [{
           "name": "loopback-pass", "operations": ["Bind", "Connect", "Send", "Receive"],
           "protocols": ["TCP"], "cidrs": ["127.0.0.1/32"],
@@ -38,7 +43,7 @@
         }]},
         "processControl": [],
         "unixStreams": [{
-          "name": "worker-restricted", "peerRoles": ["restricted"], "action": "Allow"
+          "name": "worker-worker", "peerRoles": ["worker"], "action": "Allow"
         }]
       },
       {
@@ -47,10 +52,7 @@
       },
       {
         "name": "restricted", "files": [], "execution": [],
-        "network": {"destinations": []}, "processControl": [],
-        "unixStreams": [{
-          "name": "restricted-worker", "peerRoles": ["worker"], "action": "Allow"
-        }]
+        "network": {"destinations": []}, "processControl": [], "unixStreams": []
       }
     ],
     "exceptionGrants": []
