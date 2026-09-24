@@ -2437,7 +2437,7 @@ test does not close a row when its physical condition or an assertion changed.
     installed response floor, retained task, socket, mount, and active-policy
     state, denied send and shutdown, absent bytes and bypass packets, released
     socket reference, and idempotent restart recovery.
-  - [ ] Replace IPv6 TCP behavior. Keep address family, protocol, destination,
+  - [x] Replace IPv6 TCP behavior. Keep address family, protocol, destination,
     payload receipt, and policy result explicit.
     - [x] Add one Host test with the existing actor, policy, and Platform API.
       Require the `::1` payload plus exact IPv6 TCP Connect and Send results.
@@ -2449,7 +2449,7 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit it. The exact physical case passed in
       67.51 seconds in the retained K3s cluster with the same actor, policy,
       and assertions.
-    - [ ] Remove only the matching legacy IPv6 TCP action, result field, and
+    - [x] Remove only the matching legacy IPv6 TCP action, result field, and
       assertion.
   - [ ] Replace connected and unconnected UDP behavior. Keep IPv4 and IPv6
     address family, protocol, destination, payload receipt, and policy result

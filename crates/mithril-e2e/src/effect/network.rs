@@ -79,7 +79,6 @@ pub struct NetworkPhysicalProbeBundleV2 {
     pub post_fence_bytes_absent: bool,
     pub post_fence_bypass_packets_absent: bool,
     pub socket_reference_released: bool,
-    pub tcp_ipv6_allowed: bool,
     pub udp_connected_allowed: bool,
     pub udp_unconnected_allowed: bool,
     pub unsupported_network_families_denied: bool,
@@ -162,10 +161,6 @@ impl NetworkTestRunner {
         let lifecycle_listener = tcp_listener(SocketAddr::from(([127, 0, 0, 1], 0)))?;
         let lifecycle_address = lifecycle_listener.local_addr().context(IoSnafu {
             path: Path::new("lifecycle network listener"),
-        })?;
-        let ipv6_listener = tcp_listener(SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 0)))?;
-        let ipv6_address = ipv6_listener.local_addr().context(IoSnafu {
-            path: Path::new("IPv6 network listener"),
         })?;
         let rewrite_listener = tcp_listener(SocketAddr::from(([127, 0, 0, 4], 0)))?;
         let rewrite_address = rewrite_listener.local_addr().context(IoSnafu {
@@ -382,7 +377,6 @@ impl NetworkTestRunner {
 
         let server = thread::spawn(move || server_exchange(listener, PAYLOAD));
         let lifecycle_server = thread::spawn(move || server_receive(lifecycle_listener, b"new"));
-        let ipv6_server = thread::spawn(move || server_receive(ipv6_listener, b"ipv6"));
         let rewrite_server = thread::spawn(move || server_receive(rewrite_listener, b"rewrite"));
         let delegated_server =
             thread::spawn(move || server_receive(delegated_listener, b"delegated"));
@@ -621,16 +615,6 @@ impl NetworkTestRunner {
             }
         );
 
-        let tcp_ipv6_allowed = fixture.network_connect(ipv6_address)?.allowed
-            && fixture.network_send(b"ipv6")?.allowed;
-        fixture.network_close()?;
-        ensure!(
-            tcp_ipv6_allowed && join_server(ipv6_server, "IPv6 server")?,
-            InvalidInputSnafu {
-                path: Path::new("IPv6 network path"),
-                reason: "the signed IPv6 TCP control failed",
-            }
-        );
         let udp_ipv4_server =
             thread::spawn(move || udp_receive(udp_ipv4, [b"u4".as_slice(), b"c4".as_slice()]));
         let udp_ipv6_server =
@@ -1079,7 +1063,7 @@ impl NetworkTestRunner {
                 && bpf_setup_denied
                 && post_fence_bypass_packets_absent
                 && peer_network_passed,
-            local_inet: tcp_ipv6_allowed && accepted_socket_approved_actor_allowed,
+            local_inet: accepted_socket_approved_actor_allowed,
             accept_pass: accepted_socket_narrow_actor_denied
                 && accepted_socket_approved_actor_allowed,
             namespace_pass: cross_namespace_narrow_actor_denied
@@ -1130,7 +1114,6 @@ impl NetworkTestRunner {
             post_fence_bytes_absent,
             post_fence_bypass_packets_absent,
             socket_reference_released,
-            tcp_ipv6_allowed,
             udp_connected_allowed,
             udp_unconnected_allowed,
             unsupported_network_families_denied,
