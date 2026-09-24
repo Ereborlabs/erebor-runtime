@@ -2492,6 +2492,18 @@ test does not close a row when its physical condition or an assertion changed.
         field. Keep the independent `io_uring` syscall fixture and other
         setup denials.
     - [ ] Qualify TUN/TAP setup and its physical denial.
+      - [x] Add a 56-line platform test and one Python actor. Check that
+        `/dev/net/tun` is character device 10:200 before Node starts. The
+        actor then opens it after recovery. Require `EACCES` and attributed
+        `UNRESOLVED_OBJECT` File/OpenRead evidence. The legacy probe accepted
+        either an open or ioctl denial; the new check names the observed
+        open denial and does not claim that `TUNSETIFF` ran.
+      - [x] Pass Host with `/dev/net` in the actor root and commit it. The
+        exact case passed in 28.33 seconds in the retained VM.
+      - [ ] Pass direct `runc` with the same actor and policy, then commit it.
+      - [ ] Pass Kubernetes with the same actor and policy, then commit it.
+      - [ ] Remove only the matching legacy TUN action and result field after
+        all supported platforms pass.
     - [x] Qualify every unsupported socket family and protocol in the legacy
       list. Require Mithril denial evidence where the hook supports it.
       - [x] Add one 99-line standard test. Start the extra actor before Node

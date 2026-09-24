@@ -48,6 +48,7 @@ impl Host {
                 self.bind(source, &rootfs.join(path.trim_start_matches('/')))?;
             }
         }
+        self.bind(Path::new("/dev/net"), &rootfs.join("dev/net"))?;
         let fixtures = self.shared.source().join(PROCESS_FIXTURES);
         self.bind(&fixtures, &rootfs.join("fixtures"))?;
         let work = self.shared.work().to_owned();
