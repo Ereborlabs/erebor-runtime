@@ -66,6 +66,8 @@ mod socket_pass_allowed;
 #[cfg(test)]
 mod socket_stale;
 #[cfg(test)]
+mod socket_unmatched;
+#[cfg(test)]
 mod sqpoll;
 mod support;
 #[cfg(test)]

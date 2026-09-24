@@ -3,6 +3,7 @@ import ctypes
 import errno
 import os
 import select
+import shutil
 import socket
 import sys
 import time
@@ -13,6 +14,10 @@ libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ul
 work = sys.argv[1]
 endpoint = "\0mithril-pass"
 mode = sys.argv[2]
+
+if mode == "main-unmatched":
+    os.makedirs(os.path.join(work, "bin"), exist_ok=True)
+    shutil.copy2(sys.executable, os.path.join(work, "bin/python-external"))
 
 
 def named(value):
@@ -26,7 +31,15 @@ def hold():
         time.sleep(0.01)
 
 
-if mode in ("receiver", "approved", "stale"):
+if mode == "unmatched":
+    print("native-fixture-ready", flush=True)
+    sys.stdin.buffer.readline()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        listener.bind(endpoint)
+        listener.listen(1)
+        named("pass-listening")
+        hold()
+elif mode in ("receiver", "approved", "stale"):
     print("native-fixture-ready", flush=True)
     sys.stdin.buffer.readline()
     named("rx-create")
@@ -116,7 +129,7 @@ else:
                             raise RuntimeError("receiver did not finish")
                         stage = "read"
                         named(stage)
-                        if mode in ("main-approved", "main-stale", "main-inherit"):
+                        if mode in ("main-approved", "main-stale", "main-inherit", "main-unmatched"):
                             payload = bytearray()
                             while len(payload) < 2 and select.select([client], [], [], 3)[0]:
                                 chunk = client.recv(2 - len(payload))
@@ -125,7 +138,7 @@ else:
                                 payload.extend(chunk)
                             if payload != b"ok":
                                 named("peer-missing")
-                            elif mode == "main-stale":
+                            elif mode in ("main-stale", "main-unmatched"):
                                 named("peer-ready")
                             else:
                                 named("peer-ok")
@@ -138,6 +151,17 @@ else:
                                     named(f"stale-{failure.errno or errno.EIO}")
                                 else:
                                     named("stale-0")
+                            if mode == "main-unmatched":
+                                if sys.stdin.buffer.readline() != b"probe\n":
+                                    raise RuntimeError("expected unmatched-peer probe")
+                                try:
+                                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as other:
+                                        other.connect(endpoint)
+                                        other.sendall(b"probe")
+                                except OSError as failure:
+                                    named(f"unmatch-{failure.errno or errno.EIO}")
+                                else:
+                                    named("unmatch-0")
                             if mode == "main-inherit":
                                 if sys.stdin.buffer.readline() != b"fork\n":
                                     raise RuntimeError("expected fork action")

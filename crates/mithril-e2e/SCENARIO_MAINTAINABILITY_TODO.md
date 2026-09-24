@@ -2503,6 +2503,18 @@ test does not close a row when its physical condition or an assertion changed.
     until the same platform test passes on Host, direct `runc`, and Kubernetes.
     The legacy fixture now closes its completed stream before peer restart.
     Its focused restart test and the 91 nonprivileged library tests pass.
+    - [x] Pass Host and commit it. The 98-line standard test uses one shared
+      Python actor and one signed policy. It completes an approved descriptor
+      transfer, starts a second peer with a different role on the same Unix
+      endpoint, and requires `EACCES` with attributed `EXACT_POLICY_DENY`
+      IPC/Access Connect evidence. The exact Host case passed in 29.48
+      seconds. The approved, stale, and inherited Host socket cases also pass
+      with the shared actor change.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy restart action and result field
+      after both remaining platforms pass. Keep the descriptor-transfer
+      actions until their separate platform test passes.
   - [x] Replace the unmatched file-create block with one small standard
     platform test. Use one shared Python actor and the existing Python policy.
     Start the actor before Node to preserve the original recovered-root

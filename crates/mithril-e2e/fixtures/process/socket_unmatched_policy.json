@@ -1,0 +1,54 @@
+{
+  "apiVersion": "mithril.erebor.dev/v1alpha1",
+  "kind": "WorkloadProtectionPolicy",
+  "metadata": {
+    "name": "socket-unmatched", "namespace": "default",
+    "uid": "10000000-0000-4000-8000-000000000059",
+    "generation": 1, "resourceVersion": "1"
+  },
+  "spec": {
+    "podSelector": {"matchLabels": {"app.kubernetes.io/name": "pid-reuse"}},
+    "mode": "Protect",
+    "containers": [{
+      "names": ["worker"], "kinds": ["Application"],
+      "images": ["fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+      "applicationEntry": {"executionRule": "python", "role": "worker"},
+      "additionalEntries": [
+        {"name": "approved-peer", "kind": "PreStop",
+         "executionRule": "python-entry", "role": "worker"},
+        {"name": "unmatched-peer", "kind": "PostStart",
+         "executionRule": "python-external", "role": "restricted"}
+      ],
+      "administrativeEntry": {"role": "administrator"},
+      "externalRole": "restricted"
+    }],
+    "roles": [
+      {
+        "name": "worker", "files": [],
+        "execution": [
+          {"name": "python", "path": "/usr/bin/python3", "recursive": false,
+           "operations": ["Execute"], "action": "Allow"},
+          {"name": "python-entry", "path": "/work/bin/python", "recursive": false,
+           "operations": ["Execute"], "action": "Allow"}
+        ],
+        "network": {"destinations": [{
+          "name": "loopback-pass", "operations": ["Bind", "Connect", "Send", "Receive"],
+          "protocols": ["TCP"], "cidrs": ["127.0.0.1/32"],
+          "ports": [{"first": 19097, "last": 19098}], "action": "Allow"
+        }]},
+        "processControl": [],
+        "unixStreams": [
+          {"name": "approved-peer", "peerRoles": ["worker"], "action": "Allow"},
+          {"name": "unmatched-peer", "peerRoles": ["restricted"], "action": "Deny"}
+        ]
+      },
+      {"name": "administrator", "files": [], "execution": [],
+       "network": {"destinations": []}, "processControl": [], "unixStreams": []},
+      {"name": "restricted", "files": [],
+       "execution": [{"name": "python-external", "path": "/work/bin/python-external",
+                      "recursive": false, "operations": ["Execute"], "action": "Allow"}],
+       "network": {"destinations": []}, "processControl": [], "unixStreams": []}
+    ],
+    "exceptionGrants": []
+  }
+}
