@@ -1789,7 +1789,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The four-branch case passed in
       39.82 seconds. Both affected direct-`runc` symlink cases passed in
       40.18 and 40.05 seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact case passed in 74.41
+      seconds. The affected Observe and Protect symlink cases passed in
+      71.22 and 101.93 seconds in the retained K3s cluster.
     - [ ] Remove only the four matching legacy opens after all three pass.
   - [x] Replace the `/proc/self/fd/<fd>` exact-file alias denial. Open and
     hold the secret descriptor before the Protect policy is installed. Reopen
