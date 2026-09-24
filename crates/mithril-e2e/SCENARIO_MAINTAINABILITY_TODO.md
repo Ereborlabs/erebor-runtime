@@ -1750,7 +1750,8 @@ test does not close a row when its physical condition or an assertion changed.
         attributed `EXACT_POLICY_DENY` results share the exact-object key,
         composite atom, and task cookie. The policy is a distinct Protect
         input and needs no result-file allowance.
-      - [ ] Pass the unchanged Protect case under direct `runc` and commit it.
+      - [x] Pass the unchanged Protect case under direct `runc` and commit it.
+        The exact case passed in 40.26 seconds with the production OCI hook.
       - [ ] Pass the unchanged Protect case on Kubernetes and commit it.
     - [ ] Remove only the matching old symlink action after both Observe and
       Protect cases pass. Keep the original control open for bind aliases.
