@@ -2539,7 +2539,7 @@ test does not close a row when its physical condition or an assertion changed.
         Python actor, policy, and production OCI hook.
       - [x] Kubernetes passed in 83.67 seconds in retained K3s with the same
         physical transfer and result assertions.
-    - [ ] Qualify approved-receiver payload delivery and role attribution in
+    - [x] Qualify approved-receiver payload delivery and role attribution in
       a separate small test before removing any accepted-socket legacy block.
       - [x] Host passed in 37.10 seconds. One approved entry received the
         accepted descriptor and sent `ok`. The test checks its role and
@@ -2548,7 +2548,9 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Direct `runc` passed in 45.77 seconds with the same test body,
         Python actor, policy, and production OCI hook. The restricted case
         passed with the one-range policy in 37.37 seconds.
-      - [ ] Qualify the same test in Kubernetes.
+      - [x] Kubernetes passed in 83.07 seconds in retained K3s with the
+        same actor, policy, and result assertions. The restricted case passed
+        with the one-range policy in 79.26 seconds.
   - [ ] Replace cross-network-namespace socket transfer. Keep narrow denial,
     approved success, descriptor transfer, payload receipt, and distinct
     creator and current namespace evidence.
