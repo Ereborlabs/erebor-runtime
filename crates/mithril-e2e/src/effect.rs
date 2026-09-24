@@ -34,6 +34,8 @@ mod privilege;
 mod process_control;
 mod runc;
 #[cfg(test)]
+mod socket_pass;
+#[cfg(test)]
 mod sqpoll;
 mod support;
 #[cfg(test)]

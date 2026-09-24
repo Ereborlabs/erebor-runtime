@@ -2527,6 +2527,18 @@ test does not close a row when its physical condition or an assertion changed.
   - [ ] Replace accepted-socket transfer authority. Keep the narrow actor
     denial, approved actor success, descriptor transfer, role, and received
     payload assertions.
+    - [ ] Qualify the restricted receiver as one small shared test. Start the
+      listener and receiver before Node. Create the Unix endpoint after Node
+      recovers them, then pass one accepted TCP descriptor with `SCM_RIGHTS`.
+      Require distinct application and external roles, one passed descriptor,
+      denied Send and Receive, matching attributed socket evidence, and no
+      forbidden bytes at the client. Use only ports 19097 and 19098.
+      - [x] Host passed. The 87-line test passed in 34.65 seconds with the
+        real Control, Node, and BPF path.
+      - [ ] Pass direct `runc` and commit it.
+      - [ ] Pass Kubernetes and commit it.
+    - [ ] Qualify approved-receiver payload delivery and role attribution in
+      a separate small test before removing any accepted-socket legacy block.
   - [ ] Replace cross-network-namespace socket transfer. Keep narrow denial,
     approved success, descriptor transfer, payload receipt, and distinct
     creator and current namespace evidence.
