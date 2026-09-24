@@ -2484,7 +2484,8 @@ test does not close a row when its physical condition or an assertion changed.
         flags. Require actor `EACCES`, the recovered role, and attributed
         `UNSUPPORTED_OBJECT` Privilege/IoUringSqpoll evidence.
       - [x] Pass Host and commit it. The exact case passed in 28.19 seconds.
-      - [ ] Pass direct `runc` and commit it.
+      - [x] Pass direct `runc` and commit it. The exact case passed in 28.87
+        seconds with the production OCI hook.
       - [ ] Pass Kubernetes and commit it.
       - [ ] Remove only the matching legacy SQPOLL action and result field.
     - [ ] Qualify TUN/TAP setup and its physical denial.
