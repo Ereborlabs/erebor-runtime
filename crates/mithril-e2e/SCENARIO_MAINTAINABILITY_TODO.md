@@ -559,7 +559,7 @@ These Rust files exceed 2,000 lines:
 | `identity.rs` | 5,425 |
 | `effect.rs` | 3,802 |
 | `effect/child.rs` | 3,448 |
-| `control_tls.rs` | 2,608 |
+| `control_tls.rs` | 2,568 |
 
 The diff from `95775f48` adds or relocates these private test functions with
 more than five name components:
@@ -898,6 +898,10 @@ count as maintainability migrations.
     keeps first-batch receipt, disconnect, exact replay, two acknowledgements,
     and both durable-source checks visible. The focused production Control
     and Node test passed.
+  - [x] Use the same WAL fixture before and after the retained-evidence reopen.
+    The 91-line test still checks all 303 records, one commit group, the
+    cumulative acknowledgement, durable Control receipt, and the empty Node
+    backlog. Its focused test passed.
 - [x] Keep one synchronous readiness function with an exact timeout, resource
   path, operation name, and caller-supplied last-state diagnostic.
 - [x] Put the repeated effect-attribution comparison on the existing `Task`

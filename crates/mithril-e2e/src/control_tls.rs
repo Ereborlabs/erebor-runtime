@@ -1756,39 +1756,25 @@ async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_th
     let intake = EvidenceIntakeOwner::from_store(store.clone());
     let control = fixture.control_with_store(store, 1)?;
     let server = fixture.start(control.clone()).await?;
-    let wal_root = fixture.path().join("node-wal");
     let wal_limits = EvidenceWalLimits {
         maximum_retained_records: 3,
         maximum_batch_records: 4_096,
         capacity_policy: EvidenceWalCapacityPolicyV1::Retain,
         ..EvidenceWalLimits::default()
     };
-    let observations = EffectObservationStore::durable(
-        4,
-        wal_root.clone(),
-        wal_limits,
-        ObservationCanonicalizer::new(
-            EvidenceIdV1::new(1, 2),
-            EvidenceIdV1::new(3, 4),
-            1,
-            EvidenceIdV1::from([7; 16]),
-        )?,
-    )?;
+    let observations = fixture.wal(wal_limits)?;
+    let mut sample = erebor_interceptor_abi::EffectObservationV1 {
+        reason: 9,
+        physical_result: 1,
+        effect_family: 1,
+        operation: 1,
+        ..erebor_interceptor_abi::EffectObservationV1::default()
+    };
     for source_sequence in 1..=2 {
-        observations.record_bytes(
-            erebor_interceptor_abi::EffectObservationV1 {
-                observed_boottime_ns: source_sequence,
-                source_sequence,
-                source_cpu_id: 0,
-                task_cookie: source_sequence,
-                reason: 9,
-                physical_result: 1,
-                effect_family: 1,
-                operation: 1,
-                ..erebor_interceptor_abi::EffectObservationV1::default()
-            }
-            .as_bytes(),
-        );
+        sample.observed_boottime_ns = source_sequence;
+        sample.source_sequence = source_sequence;
+        sample.task_cookie = source_sequence;
+        observations.record_bytes(sample.as_bytes());
     }
     let before_restart = observations
         .next_evidence_batch()
@@ -1797,33 +1783,13 @@ async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_th
     assert_eq!(observations.pending_evidence_records(), 2);
     drop(observations);
 
-    let observations = EffectObservationStore::durable(
-        4,
-        wal_root,
-        wal_limits,
-        ObservationCanonicalizer::new(
-            EvidenceIdV1::new(1, 2),
-            EvidenceIdV1::new(3, 4),
-            1,
-            EvidenceIdV1::from([7; 16]),
-        )?,
-    )?;
+    let observations = fixture.wal(wal_limits)?;
     assert_eq!(observations.pending_evidence_records(), 2);
     for source_sequence in 3..=303 {
-        observations.record_bytes(
-            erebor_interceptor_abi::EffectObservationV1 {
-                observed_boottime_ns: source_sequence,
-                source_sequence,
-                source_cpu_id: 0,
-                task_cookie: source_sequence,
-                reason: 9,
-                physical_result: 1,
-                effect_family: 1,
-                operation: 1,
-                ..erebor_interceptor_abi::EffectObservationV1::default()
-            }
-            .as_bytes(),
-        );
+        sample.observed_boottime_ns = source_sequence;
+        sample.source_sequence = source_sequence;
+        sample.task_cookie = source_sequence;
+        observations.record_bytes(sample.as_bytes());
     }
     assert_eq!(observations.pending_evidence_records(), 303);
     let connector = fixture.connector(&server, "node-a", [7; 16]);
@@ -1859,14 +1825,8 @@ async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_th
     assert_eq!(observations.pending_evidence_records(), 0);
     assert_eq!(control.registered_nonce_count(), 1);
 
-    let identity = EvidenceIntakeIdentityV1 {
-        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
-        node_id: "node-a".to_owned(),
-        node_boot_id: [7; 16],
-        label_epoch: 1,
-        source_id: delivered_source.ok_or("the evidence stream had no source identity")?,
-        source_epoch: 1,
-    };
+    let identity =
+        fixture.identity(delivered_source.ok_or("the evidence stream had no source identity")?);
     assert_eq!(intake.contiguous_cursor(&identity)?, 303);
     assert_eq!(
         intake.store().accepted_evidence_records(&identity)?.len(),
