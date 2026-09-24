@@ -3220,9 +3220,11 @@ setup, production actions, assertions, and focused test.
       - [x] Pass Kubernetes and commit that platform. The exact case passed
         in 91.94 seconds. All four Kubernetes restart tests passed together
         in 220.50 seconds on 2026-09-24.
-      - [ ] Remove only the matching old literal-path result and shell gate
-        after all three platform cases pass. Keep the separate PreStop role,
-        file-denial, and inventory-omission checks.
+      - [x] Remove the matching old literal-path result fields and shell
+        gates. Keep the separate PreStop role, file-denial, and
+        inventory-omission checks. The direct-`runc` probe passed in the VM.
+        The complete launcher JSON predicate returned true. The probe
+        removed its BPF pin root and lease lock.
   - [ ] Remove the reconstructed binding, policy, and identity owners after
     their remaining PreStop, administrative recovery, mount retention, and
     generation retirement consumers move to small tests.

@@ -534,7 +534,6 @@ if [[ $entry_role_runtime_only == true ]]; then
       .active_role_id > 0 and
       .profile_generation_ref_id == 2 and
       .admitted_entry_rule_id > 0 and
-      .literal_path_admission_enforced and
       .own_policy_deny_observed and
       .application_policy_not_inherited
     )) and
@@ -543,7 +542,6 @@ if [[ $entry_role_runtime_only == true ]]; then
     .kernel_upgrade_preserved_map_ids and
     .kernel_upgrade_preserved_link_pins and
     .kernel_upgrade_replaced_changed_programs and
-    .entry_literal_paths_enforced and
     (.dynamic_loader_paths | length) > 0 and
     .dynamic_loader_paths_absent_from_policy and
     .container_exit_success and

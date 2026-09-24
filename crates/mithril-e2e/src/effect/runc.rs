@@ -242,7 +242,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub kernel_upgrade_preserved_map_ids: bool,
     pub kernel_upgrade_preserved_link_pins: bool,
     pub kernel_upgrade_replaced_changed_programs: bool,
-    pub entry_literal_paths_enforced: bool,
     pub dynamic_loader_paths: Vec<String>,
     pub dynamic_loader_paths_absent_from_policy: bool,
     pub container_exit_success: bool,
@@ -263,7 +262,6 @@ pub struct RuncEntryRoleProbeV1 {
     pub profile_generation_ref_id: u64,
     pub active_role_id: u32,
     pub admitted_entry_rule_id: u32,
-    pub literal_path_admission_enforced: bool,
     pub own_policy_deny_observed: bool,
     pub application_policy_not_inherited: bool,
 }
@@ -5140,19 +5138,6 @@ impl EffectTestRunner {
             }
         );
 
-        let application_literal_path_admission_enforced =
-            entry_admission_proofs.iter().any(|rule| {
-                rule.admitted_entry_rule_id == active.admitted_entry_rule_id
-                    && rule.exact_object_key_id == 0
-                    && rule.executable_object == ExactFileObjectKeyV1::default()
-            });
-        ensure!(
-            application_literal_path_admission_enforced,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the application entry did not commit its literal-path admission rule",
-            }
-        );
         ensure!(
             active.active_role_id == policy.initial_role_id && active.admitted_entry_rule_id > 0,
             InvalidInputSnafu {
@@ -5482,19 +5467,12 @@ impl EffectTestRunner {
             expected_role_id,
             snapshot.admitted_entry_rule_id,
         )?;
-        let literal_path_admission_enforced = replacement_entry_rules.iter().any(|(key, rule)| {
-            key.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
-                && rule.admitted_entry_rule_id == snapshot.admitted_entry_rule_id
-                && rule.exact_object_key_id == 0
-                && rule.executable_object == ExactFileObjectKeyV1::default()
-        });
         ensure!(
             status.success()
                 && !denied_status.success()
                 && snapshot.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
                 && snapshot.active_role_id == expected_role_id
                 && snapshot.admitted_entry_rule_id > 0
-                && literal_path_admission_enforced
                 && own_policy_deny_observed,
             InvalidInputSnafu {
                 path: &entry_stderr,
@@ -5514,12 +5492,9 @@ impl EffectTestRunner {
             profile_generation_ref_id: snapshot.profile_generation_ref_id,
             active_role_id: snapshot.active_role_id,
             admitted_entry_rule_id: snapshot.admitted_entry_rule_id,
-            literal_path_admission_enforced,
             own_policy_deny_observed,
             application_policy_not_inherited: true,
         }];
-        let entry_literal_paths_enforced =
-            application_literal_path_admission_enforced && literal_path_admission_enforced;
         let mut administrative_runtime =
             container
                 .containerd
@@ -5929,7 +5904,6 @@ impl EffectTestRunner {
             kernel_upgrade_preserved_map_ids,
             kernel_upgrade_preserved_link_pins,
             kernel_upgrade_replaced_changed_programs,
-            entry_literal_paths_enforced,
             dynamic_loader_paths,
             dynamic_loader_paths_absent_from_policy: true,
             container_exit_success: true,
