@@ -1710,13 +1710,20 @@ test does not close a row when its physical condition or an assertion changed.
 - [ ] `EffectTestRunner::physical_probe` observe scenario: keep the public
   node policy, binding, reader, action, and evidence operations explicit.
   - [ ] Replace the exact secret `OpenRead` in Observe mode with one small
-    shared test. Start the actor before Node, as in the old physical probe.
-    Require the actor's open to succeed and require attributed
+    shared test. Give the actor the normal admitted worker role before the
+    exact Observe policy replaces the initial policy. The old probe checked
+    file classification, not Node recovery. Require the actor's open to
+    succeed and require attributed
     `WOULD_DENY` File/OpenRead evidence with a nonzero exact-object key and
     composite atom. Reuse the existing Python open actor. Use one distinct
     signed Observe policy and add no Platform API. Keep the old action until
     all three platforms pass.
-    - [ ] Pass Host and commit it.
+    - [x] Pass Host and commit it. The exact Host test passed in 34.19
+      seconds. It used the admitted initial actor, a signed Observe policy,
+      and a file created in the actor's `/tmp`. The open succeeded. The
+      attributed `WOULD_DENY` event had nonzero exact-object and composite
+      IDs. The test matches the actor's stable task cookie and entry ID
+      because policy replacement changes its role ID on the next BPF call.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
 - [ ] `EffectTestRunner::physical_probe` protect scenario: keep every hard

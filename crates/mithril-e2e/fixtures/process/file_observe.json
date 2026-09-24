@@ -1,0 +1,70 @@
+{
+  "apiVersion": "mithril.erebor.dev/v1alpha1",
+  "kind": "WorkloadProtectionPolicy",
+  "metadata": {
+    "name": "file-observe",
+    "namespace": "default",
+    "uid": "10000000-0000-4000-8000-000000000050",
+    "generation": 1,
+    "resourceVersion": "1"
+  },
+  "spec": {
+    "podSelector": {
+      "matchLabels": {"app.kubernetes.io/name": "pid-reuse"}
+    },
+    "mode": "Observe",
+    "containers": [
+      {
+        "names": ["worker"],
+        "kinds": ["Application"],
+        "images": ["fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+        "applicationEntry": {"executionRule": "python", "role": "worker"},
+        "additionalEntries": [],
+        "administrativeEntry": {"role": "external"},
+        "externalRole": "external"
+      }
+    ],
+    "roles": [
+      {
+        "name": "worker",
+        "files": [
+          {
+            "name": "secret-read",
+            "path": "/tmp/mithril-observe-secret",
+            "recursive": false,
+            "exact": true,
+            "operations": ["OpenRead"],
+            "action": "Deny"
+          },
+          {
+            "name": "open-result",
+            "path": "/work/expired-result",
+            "recursive": false,
+            "operations": ["OpenWrite", "Write"],
+            "action": "Allow"
+          }
+        ],
+        "execution": [
+          {
+            "name": "python",
+            "path": "/usr/bin/python3",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "network": {"destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "external",
+        "files": [],
+        "execution": [],
+        "network": {"destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      }
+    ]
+  }
+}

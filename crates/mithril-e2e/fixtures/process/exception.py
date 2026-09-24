@@ -9,9 +9,9 @@ work = Path(sys.argv[1])
 mode = sys.argv[2]
 
 
-def open_errno(path):
+def open_errno(path, flags=os.O_WRONLY):
     try:
-        descriptor = os.open(path, os.O_WRONLY)
+        descriptor = os.open(path, flags)
         os.close(descriptor)
         return 0
     except OSError as error:
@@ -33,6 +33,14 @@ if mode == "single":
         if sys.stdin.readline() != f"{command}\n":
             raise RuntimeError(f"expected {command}")
         write(name, str(open_errno(work / "expired-secret")))
+elif mode == "read":
+    secret = Path("/tmp/mithril-observe-secret")
+    secret.parent.mkdir(parents=True, exist_ok=True)
+    secret.write_bytes(b"secret")
+    print("native-fixture-ready", flush=True)
+    if sys.stdin.readline() != "read\n":
+        raise RuntimeError("expected read")
+    write("expired-result", str(open_errno(secret, os.O_RDONLY)))
 elif mode == "race":
     started = threading.Barrier(9)
     release = threading.Event()

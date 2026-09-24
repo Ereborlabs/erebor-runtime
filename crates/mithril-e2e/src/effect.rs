@@ -21,6 +21,8 @@ mod executable_memory;
 mod file_effect;
 #[cfg(test)]
 mod file_mutation;
+#[cfg(test)]
+mod file_observe;
 mod fixture_syscalls;
 #[cfg(test)]
 mod inactive_grant;
