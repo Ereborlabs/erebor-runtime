@@ -2,7 +2,11 @@ use std::cell::RefCell;
 use std::fs;
 use std::io::{self, Read as _};
 use std::net::{IpAddr, SocketAddr, TcpListener, UdpSocket};
+#[cfg(test)]
+use std::os::fd::AsFd as _;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::thread;
 use std::time::{Duration, Instant};
 
 use snafu::{ensure, ResultExt as _};
@@ -203,6 +207,96 @@ impl NetworkPeerServer {
             "tcp_received={}, udp_received={}, denied_connection_absent=true",
             self.tcp_seen, self.udp_seen
         )
+    }
+}
+
+#[cfg(test)]
+pub(super) struct LocalTcpPeer {
+    allowed: TcpListener,
+    denied: TcpListener,
+    namespace: PathBuf,
+}
+
+#[cfg(test)]
+impl LocalTcpPeer {
+    pub(super) fn bind(pid: u32) -> Result<Self> {
+        let namespace = PathBuf::from(format!("/proc/{pid}/ns/net"));
+        let link = fs::File::open(&namespace).context(IoSnafu { path: &namespace })?;
+        let (allowed, denied) = thread::spawn(move || -> io::Result<_> {
+            rustix::thread::move_into_link_name_space(
+                link.as_fd(),
+                Some(rustix::thread::LinkNameSpaceType::Network),
+            )
+            .map_err(io::Error::from)?;
+            Ok((
+                TcpListener::bind("127.0.0.1:19120")?,
+                TcpListener::bind("127.0.0.53:19120")?,
+            ))
+        })
+        .join()
+        .map_err(|_| {
+            InvalidInputSnafu {
+                path: &namespace,
+                reason: "network peer setup thread panicked",
+            }
+            .build()
+        })?
+        .context(IoSnafu { path: &namespace })?;
+        allowed
+            .set_nonblocking(true)
+            .context(IoSnafu { path: &namespace })?;
+        denied
+            .set_nonblocking(true)
+            .context(IoSnafu { path: &namespace })?;
+        Ok(Self {
+            allowed,
+            denied,
+            namespace,
+        })
+    }
+
+    pub(super) fn receive(&self, size: usize) -> Result<Vec<u8>> {
+        let stream = wait_for(
+            &self.namespace,
+            "allowed TCP peer connection",
+            Duration::from_secs(5),
+            || match self.allowed.accept() {
+                Ok((stream, _)) => Ok(Some(stream)),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
+                Err(source) => Err(source).context(IoSnafu {
+                    path: &self.namespace,
+                }),
+            },
+            || "no connection accepted".to_owned(),
+        )?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .context(IoSnafu {
+                path: &self.namespace,
+            })?;
+        let mut payload = vec![0; size];
+        (&stream).read_exact(&mut payload).context(IoSnafu {
+            path: &self.namespace,
+        })?;
+        Ok(payload)
+    }
+
+    pub(super) fn denied_absent(&self) -> Result<bool> {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(3) {
+            match self.denied.accept() {
+                Ok(_) => return Ok(false),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(source) => {
+                    return Err(source).context(IoSnafu {
+                        path: &self.namespace,
+                    })
+                }
+            }
+        }
+        Ok(true)
     }
 }
 

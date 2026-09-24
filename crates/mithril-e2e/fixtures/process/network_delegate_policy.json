@@ -1,0 +1,59 @@
+{
+  "apiVersion": "mithril.erebor.dev/v1alpha1",
+  "kind": "WorkloadProtectionPolicy",
+  "metadata": {
+    "name": "network-delegate",
+    "namespace": "default",
+    "uid": "10000000-0000-4000-8000-000000000060",
+    "generation": 1,
+    "resourceVersion": "1"
+  },
+  "spec": {
+    "podSelector": {
+      "matchLabels": {"app.kubernetes.io/name": "pid-reuse"},
+      "matchExpressions": []
+    },
+    "mode": "Protect",
+    "containers": [{
+      "names": ["worker"],
+      "kinds": ["Application"],
+      "images": ["fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+      "applicationEntry": {"executionRule": "python", "role": "worker"},
+      "additionalEntries": [{
+        "name": "delegate", "kind": "PostStart",
+        "executionRule": "python-entry", "role": "worker"
+      }],
+      "administrativeEntry": {"role": "administrator"},
+      "externalRole": "restricted"
+    }],
+    "roles": [{
+      "name": "worker",
+      "defaultActions": [{
+        "family": "Network", "operations": ["Connect"], "action": "Deny"
+      }],
+      "files": [],
+      "execution": [
+        {"name": "python", "path": "/usr/bin/python3", "recursive": false,
+         "operations": ["Execute"], "action": "Allow"},
+        {"name": "python-entry", "path": "/work/bin/python", "recursive": false,
+         "operations": ["Execute"], "action": "Allow"}
+      ],
+      "network": {"destinations": [{
+        "name": "allowed-peer", "operations": ["Connect", "Send", "Receive"],
+        "protocols": ["TCP"], "cidrs": ["127.0.0.1/32"],
+        "ports": [{"first": 19120, "last": 19120}], "action": "Allow"
+      }]},
+      "processControl": [],
+      "unixStreams": [{
+        "name": "requester-delegate", "peerRoles": ["worker"], "action": "Allow"
+      }]
+    }, {
+      "name": "administrator", "files": [], "execution": [],
+      "network": {"destinations": []}, "processControl": [], "unixStreams": []
+    }, {
+      "name": "restricted", "files": [], "execution": [],
+      "network": {"destinations": []}, "processControl": [], "unixStreams": []
+    }],
+    "exceptionGrants": []
+  }
+}

@@ -3033,6 +3033,16 @@ test does not close a row when its physical condition or an assertion changed.
         until a shared physical peer preserves the allowed payload receipt
         on Host, direct `runc`, and Kubernetes. The cause of the stalled TCP
         handshake is not yet proven. No failed draft is in the source tree.
+      - [x] Pass Host with an ungoverned TCP peer bound in the actor's network
+        namespace. The 98-line Rust test kept two governed tasks, both request
+        IDs, the denied Connect, no forbidden peer connection, the allowed
+        Connect and Send, and the received payload. The focused case passed
+        again in 30.47 seconds after the actor stopped copying the Python
+        entry that the shared fixture already supplies. No Platform or
+        production API changed.
+      - [ ] Pass the same Rust test, actor, and policy on direct `runc`.
+      - [ ] Pass the same Rust test, actor, and policy on Kubernetes.
+      - [ ] Remove the matching legacy actions only after all three pass.
   - [ ] Replace separate read-result and provider-write behavior. Keep the
     governed file read classes, provider receipt, and network result evidence.
     - [x] Check zero-byte, EOF, partial, inherited-descriptor, mapped, and

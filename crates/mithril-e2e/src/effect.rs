@@ -40,6 +40,8 @@ mod memory_observe;
 mod network;
 #[cfg(test)]
 mod network_connect;
+#[cfg(test)]
+mod network_delegate;
 mod network_fixture;
 mod network_peer;
 #[cfg(test)]
