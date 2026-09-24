@@ -2452,7 +2452,7 @@ test does not close a row when its physical condition or an assertion changed.
       and assertions.
     - [x] Remove only the matching legacy IPv6 TCP action, result field, and
       assertion.
-  - [ ] Replace connected and unconnected UDP behavior. Keep IPv4 and IPv6
+  - [x] Replace connected and unconnected UDP behavior. Keep IPv4 and IPv6
     address family, protocol, destination, payload receipt, and policy result
     explicit in each small test.
     - [x] Add one standard test with four explicit UDP cases. Reuse the
@@ -2464,9 +2464,9 @@ test does not close a row when its physical condition or an assertion changed.
       seconds with the production OCI hook.
     - [x] Pass Kubernetes and commit it. The exact physical case passed in
       65.51 seconds in the retained K3s cluster.
-    - [ ] Remove only the matching legacy UDP actions, result fields, and
-      local listeners after all three platforms pass. Keep the two-node UDP
-      peer case.
+    - [x] Remove only the matching legacy UDP actions, result fields, and
+      local listeners after all three platforms pass. The two-node UDP peer
+      case remains.
   - [ ] Replace unsupported network family, `io_uring` SQPOLL, TUN/TAP, and BPF
     setup denials. Keep each syscall and fail-closed result explicit.
   - [ ] Replace accepted-socket transfer authority. Keep the narrow actor

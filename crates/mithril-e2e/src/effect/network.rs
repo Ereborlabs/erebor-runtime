@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{self, Read as _, Write as _};
-use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -79,8 +79,6 @@ pub struct NetworkPhysicalProbeBundleV2 {
     pub post_fence_bytes_absent: bool,
     pub post_fence_bypass_packets_absent: bool,
     pub socket_reference_released: bool,
-    pub udp_connected_allowed: bool,
-    pub udp_unconnected_allowed: bool,
     pub unsupported_network_families_denied: bool,
     pub io_uring_sqpoll_denied: bool,
     pub tun_tap_setup_denied: bool,
@@ -177,19 +175,6 @@ impl NetworkTestRunner {
         let provider_listener = tcp_listener(SocketAddr::from(([127, 0, 0, 1], 0)))?;
         let provider_address = provider_listener.local_addr().context(IoSnafu {
             path: Path::new("provider-result listener"),
-        })?;
-        let udp_ipv4 = UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0))).context(IoSnafu {
-            path: Path::new("IPv4 UDP listener"),
-        })?;
-        let udp_ipv4_address = udp_ipv4.local_addr().context(IoSnafu {
-            path: Path::new("IPv4 UDP listener"),
-        })?;
-        let udp_ipv6 =
-            UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 0))).context(IoSnafu {
-                path: Path::new("IPv6 UDP listener"),
-            })?;
-        let udp_ipv6_address = udp_ipv6.local_addr().context(IoSnafu {
-            path: Path::new("IPv6 UDP listener"),
         })?;
         let accepted_address = available_tcp_address([127, 0, 0, 2])?;
 
@@ -612,33 +597,6 @@ impl NetworkTestRunner {
             InvalidInputSnafu {
                 path: Path::new("socket lifecycle"),
                 reason: "a new socket reused authority or failed its positive lifecycle",
-            }
-        );
-
-        let udp_ipv4_server =
-            thread::spawn(move || udp_receive(udp_ipv4, [b"u4".as_slice(), b"c4".as_slice()]));
-        let udp_ipv6_server =
-            thread::spawn(move || udp_receive(udp_ipv6, [b"u6".as_slice(), b"c6".as_slice()]));
-        let udp_unconnected_allowed = fixture
-            .network_udp_send(udp_ipv4_address, b"u4", false)?
-            .allowed
-            && fixture
-                .network_udp_send(udp_ipv6_address, b"u6", false)?
-                .allowed;
-        let udp_connected_allowed = fixture
-            .network_udp_send(udp_ipv4_address, b"c4", true)?
-            .allowed
-            && fixture
-                .network_udp_send(udp_ipv6_address, b"c6", true)?
-                .allowed;
-        ensure!(
-            udp_unconnected_allowed
-                && udp_connected_allowed
-                && join_server(udp_ipv4_server, "IPv4 UDP server")?
-                && join_server(udp_ipv6_server, "IPv6 UDP server")?,
-            InvalidInputSnafu {
-                path: Path::new("UDP network paths"),
-                reason: "a connected or unconnected IPv4/IPv6 UDP control failed",
             }
         );
 
@@ -1114,8 +1072,6 @@ impl NetworkTestRunner {
             post_fence_bytes_absent,
             post_fence_bypass_packets_absent,
             socket_reference_released,
-            udp_connected_allowed,
-            udp_unconnected_allowed,
             unsupported_network_families_denied,
             io_uring_sqpoll_denied,
             tun_tap_setup_denied,
@@ -1543,30 +1499,6 @@ fn server_absent(listener: TcpListener) -> io::Result<bool> {
             }
             Err(error) => return Err(error),
         }
-    }
-    Ok(true)
-}
-
-fn udp_receive<const N: usize>(socket: UdpSocket, expected: [&[u8]; N]) -> io::Result<bool> {
-    socket.set_read_timeout(Some(Duration::from_secs(5)))?;
-    let mut buffer = [0_u8; 64];
-    let mut received_messages = Vec::with_capacity(expected.len());
-    for expected_payload in expected {
-        let received = socket.recv(&mut buffer).map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!(
-                    "received UDP payloads {received_messages:?} before receive failed: {error}"
-                ),
-            )
-        })?;
-        if received == 0 {
-            return Ok(false);
-        }
-        if buffer.get(..received) != Some(expected_payload) {
-            return Ok(false);
-        }
-        received_messages.push(buffer[..received].to_vec());
     }
     Ok(true)
 }
