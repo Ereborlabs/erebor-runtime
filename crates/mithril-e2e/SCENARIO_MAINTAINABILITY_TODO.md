@@ -3197,7 +3197,28 @@ setup, production actions, assertions, and focused test.
       inventory. It does not prove that a populated cgroup retains its binding
       when one CRI scan omits it. Keep the result field, shell gate, test-only
       probe, `/bin/dd` role assertion, and exact file-denial assertion until a
-      small replacement proves all of them.
+      small replacement proves all of them. The old probe calls
+      `runtime_inventory_absence_proves_retirement_for_test` directly. It does
+      not omit a CRI row or run deployed Node reconciliation. The replacement
+      must make Node observe a missing row while the actor cgroup is populated.
+      The lightweight CRI fixture can return an empty list. The current
+      Kubernetes fixture uses stock containerd and has no matching input.
+      Do not count another Node restart or a test-only guard call as proof.
+    - [ ] Replace the application and PreStop literal-admission checks. The
+      new 41-line standard test reads both installed rules after Node restart.
+      It requires the observed role and rule IDs, zero exact-object keys, and
+      default executable objects. The shared task lookup also keeps the
+      existing PostStart rule check short.
+      - [x] Pass Host. The exact test passed in 51.31 seconds. All four Host
+        restart tests passed together in 138.15 seconds. The unchanged
+        PostStart literal-path case passed on direct `runc` in 51.15 seconds
+        and Kubernetes in 91.22 seconds with the shared lookup. Repository
+        Rust CI passed after the source change.
+      - [ ] Pass direct `runc` and commit that platform.
+      - [ ] Pass Kubernetes and commit that platform.
+      - [ ] Remove only the matching old literal-path result and shell gate
+        after all three platform cases pass. Keep the separate PreStop role,
+        file-denial, and inventory-omission checks.
   - [ ] Remove the reconstructed binding, policy, and identity owners after
     their remaining PreStop, administrative recovery, mount retention, and
     generation retirement consumers move to small tests.

@@ -4,10 +4,11 @@ use std::time::Duration;
 
 use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{
-    CreatedByEdgeV1, ExecutionApprovalSlotKeyV1, ExecutionApprovalSlotV1, Id128V1,
-    IdentityRuntimeConfigV1, KernelEffectFamilyV1, KernelEffectOperationV1, PendingExecV1,
-    ProcessExecutionInstanceV1, ProcessSecurityStateV1, ReferenceTombstoneStateV1,
-    TaskCoordinateStateV1, TaskCoordinateV1, TaskReferenceTombstoneV1, TASK_REFERENCE_ALL_V1,
+    CreatedByEdgeV1, EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExecutionApprovalSlotKeyV1,
+    ExecutionApprovalSlotV1, Id128V1, IdentityRuntimeConfigV1, KernelEffectFamilyV1,
+    KernelEffectOperationV1, PendingExecV1, ProcessExecutionInstanceV1, ProcessSecurityStateV1,
+    ReferenceTombstoneStateV1, TaskCoordinateStateV1, TaskCoordinateV1, TaskReferenceTombstoneV1,
+    TASK_REFERENCE_ALL_V1,
 };
 use erebor_runtime_ipc::v1::{MithrilEffectObservation, MithrilObservationSnapshot};
 use mithril_node::{NativeTaskSnapshotV1, ReconciliationReportV1};
@@ -72,6 +73,30 @@ pub(crate) struct Task {
 }
 
 impl Task {
+    pub(crate) fn entry_rule<P: Platform>(&self, env: &P) -> TestResult<EntryAdmissionRuleV1> {
+        let (path, reader) = env.maps();
+        for bytes in reader.keys("entry_admission_rules")? {
+            let key = EntryAdmissionRuleKeyV1::try_read_from_bytes(&bytes)
+                .map_err(|error| format!("{}: invalid admission key: {error}", path.display()))?;
+            if key.profile_generation_ref_id != self.snapshot.profile_generation_ref_id {
+                continue;
+            }
+            let rule = env
+                .state::<EntryAdmissionRuleV1>("entry_admission_rules", &bytes, "admission rule")?
+                .ok_or("the admission rule disappeared")?;
+            if rule.admitted_entry_rule_id == self.snapshot.admitted_entry_rule_id {
+                return Ok(rule);
+            }
+        }
+        Err(format!(
+            "{}: missing admission rule {} in generation {}",
+            path.display(),
+            self.snapshot.admitted_entry_rule_id,
+            self.snapshot.profile_generation_ref_id
+        )
+        .into())
+    }
+
     pub(crate) fn matches_effect(
         &self,
         event: &MithrilEffectObservation,

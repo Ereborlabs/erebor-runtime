@@ -1,11 +1,7 @@
 use std::{cell::RefCell, fs, io::Write as _, time::Duration};
 
-use erebor_interceptor_abi::{
-    EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExactFileObjectKeyV1, KernelEffectFamilyV1,
-    KernelEffectOperationV1,
-};
+use erebor_interceptor_abi::{ExactFileObjectKeyV1, KernelEffectFamilyV1, KernelEffectOperationV1};
 use rustix::fs::{mkfifoat, Mode, CWD};
-use zerocopy::TryFromBytes as _;
 
 use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
@@ -156,25 +152,7 @@ fn poststart_uses_literal_path<P: Platform>() -> TestResult<()> {
 
     let mut copy = env.add_actor("cp", &["/proc/self/fd/0", "/work/literal.txt"])?;
     let task = env.task(copy.id(), "PostStart literal admission")?;
-    let reader = env.maps().1;
-    let mut matched = None;
-    for key in reader.keys("entry_admission_rules")? {
-        let entry = EntryAdmissionRuleKeyV1::try_read_from_bytes(&key)
-            .map_err(|error| format!("invalid admission key: {error}"))?;
-        if entry.profile_generation_ref_id != task.snapshot.profile_generation_ref_id {
-            continue;
-        }
-        let bytes = reader
-            .lookup("entry_admission_rules", &key)?
-            .ok_or("the PostStart admission rule disappeared")?;
-        let rule = EntryAdmissionRuleV1::try_read_from_bytes(&bytes)
-            .map_err(|error| format!("invalid admission rule: {error}"))?;
-        if rule.admitted_entry_rule_id == task.snapshot.admitted_entry_rule_id {
-            matched = Some(rule);
-            break;
-        }
-    }
-    let rule = matched.ok_or("the PostStart admission rule is missing")?;
+    let rule = task.entry_rule(&env)?;
     assert_eq!(rule.target_role_id, task.snapshot.active_role_id);
     assert_ne!(rule.admitted_entry_rule_id, 0);
     assert_eq!(rule.exact_object_key_id, 0);
