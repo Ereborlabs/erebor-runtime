@@ -20,6 +20,17 @@ The current Session interception broker, ptrace backend, shim mediation, routing
 
 An independent Runtime BPF loader after this shared owner exists is a rejected contract. A second lease acquisition is an admission failure, never a fallback to two map generations.
 
+### Diagnostic loader amendment
+
+The user approved Observability 1 and 2 on 2026-09-21. The
+[observability contract](../../araphor-observability/README.md) permits
+Interceptor to supervise a pinned upstream bpftrace child for a bounded
+diagnostic execution. Stock bpftrace loads its own diagnostic objects. This
+exception does not transfer the enforcement lease, maps, links, policy, or
+response authority. Node remains the only privileged product process.
+Interceptor owns the child lifetime and cleanup. Control owns authorization.
+Production enablement requires physical cleanup and interference proof.
+
 ## Compatibility proof
 
 Existing consumers keep importing `erebor_runtime_core::interception`; those names denote the portable types from `erebor-interceptor-abi`. Existing Session broker/backend tests therefore exercise the same type identity and behavior without a duplicate representation. The feasibility object compiles against the checked-in x86, arm64, arm, and riscv kernel headers. Only the physically proved x86 file-open slice is frozen as supported; every other effect remains explicitly unsupported.

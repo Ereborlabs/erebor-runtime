@@ -69,7 +69,7 @@ adapters remain a Phase 12 allocation decision.
 
 ## Agent and console integration
 
-Follow the [combined Araphor order](../araphor-discovery-engine/README.md#combined-implementation-order).
+Follow the [combined Araphor order](phase-7-mithril-control-and-detection-packages/README.md#combined-implementation-order).
 For each provider, implement its source/actuator and qualification first.
 Then extend existing query/context views, response plan types, tool capability
 descriptions, and investigation screens. This phase owns those changes and

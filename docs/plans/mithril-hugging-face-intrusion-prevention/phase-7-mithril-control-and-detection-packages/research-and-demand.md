@@ -226,7 +226,7 @@ small study is a product gate, not a statistically representative survey.
 KubeArmor, Tetragon, Cilium/Hubble, Falco, NeuVector, and OpenShell remain
 relevant enforcement, observation, or review references. Their specific
 capabilities and the incident sources are recorded in the
-[console research](../araphor-console/research-and-design-inputs.md).
+[console research](../../araphor-console/research-and-design-inputs.md).
 The case for Araphor is the combined review and proof workflow. It is not the
 claim that these projects have no enforcement or no policy learning.
 
@@ -234,12 +234,12 @@ claim that these projects have no enforcement or no policy learning.
 
 | Project or method | Inspected mechanism | Decision for Araphor |
 | --- | --- | --- |
-| [Kubescape storage](https://github.com/kubescape/storage) | SQLite holds metadata; filesystem payloads hold larger resources. List operations can omit payloads. | Use an embedded query database with separate immutable evidence artifacts. Do not put full event history in the Control state image. |
+| [Kubescape storage](https://github.com/kubescape/storage) | SQLite holds metadata; filesystem payloads hold larger resources. List operations can omit payloads. | Use one embedded data store for retained evidence and analysis. Keep policy/control state separate; do not duplicate full raw history. |
 | [Security Profiles Operator](https://github.com/kubernetes-sigs/security-profiles-operator/blob/main/installation-usage.md) | Recording, profile, and binding resources have separate contracts. | Keep observation scope, derived profile, and applied policy separate. Profile output is not activation evidence. |
 | [Tetragon aggregator at the local revision](https://github.com/cilium/tetragon/blob/dbb59576f9ce504c044f8d9a0cd7a0f91c71ae2c/pkg/aggregator/aggregator.go) | In this inspected file, `handleEvent` has only a default branch that forwards events. The cache/window structure alone does not prove effective aggregation. | Inspect the executable path, not only an API option named aggregation. This finding is limited to the pinned revision and file. |
 | [Cilium monitor aggregation](https://docs.cilium.io/en/latest/operations/performance/tuning/) | The inspected development documentation describes connection/flag and periodic emission controls. | Source records need sampling and reduction metadata. Emitted observations are not packet counts or proven physical-effect counts. |
-| [SQLite WAL](https://www.sqlite.org/wal.html) | Concurrent readers share one writer; WAL requires a same-host filesystem. Long reads can delay checkpoints. The WAL-reset fix is in 3.51.3 and documented backports. | Transactional baseline for the storage experiment. Bound readers and WAL growth; reject network-filesystem deployment. |
-| [DuckDB workload guidance](https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads) | Designed for analytical workloads, not many small concurrent requests. | First-class candidate for batched events, context joins, and investigation queries. Measure the actual mixed workload before selecting it or SQLite. |
+| [SQLite WAL](https://www.sqlite.org/wal.html) | Concurrent readers share one writer; WAL requires a same-host filesystem. Long reads can delay checkpoints. The WAL-reset fix is in 3.51.3 and documented backports. | Comparison reference, not the selected production store. Keep bounded transactions and qualified local filesystems. |
+| [DuckDB workload guidance](https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads) | Designed for analytical workloads, not many small concurrent requests. | Selected embedded engine for batched retained events, context and analysis. Qualify the actual mixed workload and durable ACK contract. |
 | [ClickHouse incremental views](https://clickhouse.com/docs/concepts/features/materialized-views/incremental-materialized-view) | An insert transforms an input block. Changes to joined reference tables do not update previous results automatically. | Consider later for measured fleet-scale analytics. It does not remove input deduplication, revision, or replay requirements. |
 
 No inspected project establishes Araphor's capacity. The embedded choice must
@@ -355,8 +355,8 @@ as an automatic allow-list entry.
 | [Elastic: specialized versus general agents](https://www.elastic.co/security-labs/blog/agentic-soc-token-budget-architecture) | Reports lower token use with inline methodology. Fleet totals cover 36,822 conversations, but the tighter comparison used four matched alerts, one run per architecture. Route costs combine agent medians; the unified-agent sample was five runs. | Counterevidence to “fewer agents/tools always wins.” Test an inline checklist with the same client before building orchestration. Do not present the fleet total as a controlled trial of that size. |
 | [Elastic: reducing repeated model calls](https://www.elastic.co/security-labs/blog/ai-agent-optimization-production-scale) | Reports 14–19 calls reduced to 7–9 for the studied alert class after concrete stopping checks. It identifies repeated enrichment/schema queries and overly broad retrieval as waste. | Supply required fields and exact context once; query only missing facts. Measure completion, omissions, errors, and run variance, not merely tool count. A stopping rule must allow an Unknown result. |
 | [Anthropic: effective tools](https://www.anthropic.com/engineering/writing-tools-for-agents) | Recommends task-oriented tools, useful response content, and evaluation rather than wrapping every API operation. | One investigation query can coexist with separate policy and response tools. Distinct effects and authority justify separate contracts. |
-| [osquery result logging](https://osquery.readthedocs.io/en/stable/deployment/logging/) | Distinguishes full snapshots from added/removed differences across scheduled query results. Reconstructing current state from differences needs history. | Do not pretend arbitrary aggregate SQL is an append-only event stream. Follow durable record revisions; run ordinary SQL for current state and analysis. No per-client scheduled-query cache. |
-| [DuckDB untrusted-SQL guidance](https://duckdb.org/docs/current/operations_manual/securing_duckdb/overview) | Treats untrusted SQL as untrusted code; engine settings are not an OS security boundary. | Qualify an isolated query worker with authorized input only. SELECT-only parsing and final-output redaction are insufficient. Include isolation cost in store selection. |
+| [osquery result logging](https://osquery.readthedocs.io/en/stable/deployment/logging/) | Distinguishes full snapshots from added/removed differences across scheduled query results. Reconstructing current state from differences needs history. | Do not pretend arbitrary aggregate SQL is an append-only event stream. Use append frames for immutable rows and complete replace frames for bounded aggregates/current state. Recompute on relevant commits; no per-client durable query cache. |
+| [DuckDB untrusted-SQL guidance](https://duckdb.org/docs/current/operations_manual/securing_duckdb/overview) | Treats untrusted SQL as untrusted code; engine settings are not an OS security boundary. | Qualify an isolated query worker with authorized input only. SELECT-only parsing and final-output redaction are insufficient. Include isolation cost in query qualification. |
 
 These reports justify an experiment, not a guaranteed improvement. Compare
 specialized read wrappers, documented SQL, and SQL plus exact context/runbooks
@@ -394,10 +394,20 @@ joins, and paged review during ingestion.
 does not make every SQLite indexing assumption portable. Its
 [non-determinism guidance](https://duckdb.org/docs/current/operations_manual/non-deterministic_behavior)
 also requires explicit ordering and care with parallel floating-point results.
-Benchmark query plans and memory as well as OLAP throughput. Select one store
-before durable implementation; keep immutable evidence and approved policy
-outside the derived database. No second DB or generic driver framework is
-needed to run a one-time comparison.
+Benchmark query plans and memory as well as OLAP throughput. DuckDB owns
+retained events, context and analysis. Policy/control-state persistence stays
+with its existing owner. Durable output survives raw-input expiry; backup and
+restore are required. No second raw store or generic driver is selected.
+
+The local Mangroves file
+`/home/navid/go/src/github.com/mangrovesdb/mangroves/src/sql/src/execution/subscribe.rs`
+shows dependency notification followed by SQL evaluation and streamed batches.
+Use that interaction pattern, not its implementation as a correctness oracle.
+Araphor's contract is defined in [commit-driven follow](engine-design.md#commit-driven-follow):
+durable positions, initial-snapshot race checks, bounded append/replace results,
+error propagation, auth revocation and time-window expiry. No DataFusion runtime
+is needed around DuckDB. [DataFusion](https://datafusion.apache.org/user-guide/faq.html)
+is a query-engine building block, not a required extra storage layer.
 
 ## Ideas selected beyond the reference projects
 

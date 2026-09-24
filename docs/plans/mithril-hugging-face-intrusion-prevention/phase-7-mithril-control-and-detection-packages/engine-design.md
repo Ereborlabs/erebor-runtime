@@ -1,32 +1,42 @@
 # Engine Design
 
-This design defines the proposed discovery domain inside Mithril Control.
-Symbols with a `Discovery`, `Behavior`, or `Requirement` prefix below are new
-contracts, not claims about existing APIs. Product text uses Araphor.
+This design defines discovery inside Mithril Control. Mithril 7 owns shared
+processing and the discovery backend. Discovery methods produce review artifacts;
+they do not own evidence intake, physical enforcement, or response execution.
 
-## Current source constraints
+## Input and persistence contracts
 
-Read these source owners before implementation:
+Use accepted `ObservationEnvelopeV1` records and their exact source, epoch,
+CPU, coverage, durable cursor, and optional kernel sequence. Node-owned context
+supplies qualified role, state, entry, binding, object, and selector facts.
+Control supplies versioned workload and policy facts. Missing context remains
+unresolved. Do not recover historical identity from a current PID, path, or Pod
+name. Do not infer application verbs from opaque network effects.
 
-| Source | Existing behavior | Design consequence |
-| --- | --- | --- |
-| [Evidence model](../../../crates/mithril-control/src/evidence/model.rs) | `ObservationEnvelopeV1` carries source, epoch, sequence, coverage, generation, and typed effects. Kernel effects include exact object/destination IDs and operation/result fields. | Preserve these identities. The envelope does not supply general path, image, argv, or HTTP semantics. |
-| [Evidence owners](../../../crates/mithril-control/src/evidence.rs) | Intake and retention have durable cursor and coverage contracts. `EvidenceConsumptionWatermarkV1` has no independent discovery consumer ID. | Do not reuse a watermark as if multiple independent readers were already safe. |
-| [Control store](../../../crates/mithril-control/src/store.rs) | One owner lock, checked state format, atomic persistence, separate immutable evidence segments, and a 64 MiB state-file limit. | Keep authority and small heads here. Add a rebuildable embedded query database under the same persistence owner, not another policy store. |
-| [Policy modules](../../../crates/mithril-control/src/policy/mod.rs) | Source validation, compilation, signing, reconciliation, and simulation already exist. | Discovery produces typed source proposals, not a second policy evaluator. |
-| [PolicySimulator](../../../crates/mithril-control/src/policy/simulation.rs) | Evaluates exact `StaticDecisionKeyV1` cells. Missing cells are unresolved. Simulation does not attempt physical effects. | Historical preview needs retained exact compile inputs and attribution. Unsupported reconstruction stays Unknown. |
-| [Workload policy types](../../../crates/mithril-control/src/policy/kubernetes.rs) | File, execution, network, capability, process, and other rule families have explicit operations and roles. | Preserve operation and role boundaries. Start with a qualified subset, not every serializable field. |
+AnalysisStore owns retained events, context, diagnostic output, and analysis
+records in DuckDB. Its native WAL provides crash recovery. A durable commit
+precedes each source acknowledgement. ControlStore keeps policy, trust, rollout,
+and approval authority in its existing format. Node keeps its existing delivery
+WAL. Neither store replaces the other's authority.
 
-The input gap is a trustworthy join from an observed object ID to the policy
-resource expression. The ABI already emits role, state, binding, entry, and
-exact object fields; the current durable normalization drops some of them.
-Preserve them with bounded Node-owned context in the existing evidence record.
-Reuse `NodePolicyGenerationOwner` maps and Control `WorkloadTargetFactV1`.
-Keep the original kernel sequence separate from the durable transport cursor.
-Do not recover an old path from a current PID, mount table, or matching Pod
-name. An unknown selector remains unresolved. No parallel probe is needed.
+The default deployment embeds the data component in Control: AnalysisStore,
+EvidenceRetentionOwner, QueryOwner, DiscoveryOwner, GraphAndFindingOwner and
+NotificationRouter. Discovery can be disabled without disabling intake, query,
+or tracing. Optional remote placement moves this complete component and its
+one database. CLI and console can use either deployment's authenticated API.
+Policy authority, publication and trace dispatch remain in Control.
+No generic public producer or Ingest API is part of this plan.
 
 ## Owner boundary
+
+The [CLI and observability plan](../../araphor-observability/README.md) extends
+this design with new measurements. It does not recover missing historical
+facts. `araphor sql` calls the query owner below; `araphor trace` calls a
+separate diagnostic execution owner and prints its own output. Both use the
+console's authenticated API. Trace results use the same storage and disclosure
+owners. Arbitrary scripts do not inherit pod confinement from target selection.
+Interceptor supervises the delegated diagnostic loader; capture requires its
+qualified lifecycle and interference limits.
 
 ```text
 Installed policy -> Node pre-effect decision
@@ -39,12 +49,16 @@ Installed policy -> Node pre-effect decision
   -> activation/readback/watch -> same evidence and owner views
 ```
 
-Proposed implementation home: `crates/mithril-control/src/discovery/`. Create
+Discovery implementation home: `crates/mithril-control/src/discovery/`. Create
 modules only as an approved slice needs them. Keep policy compilation in
-`policy/` and persistence in `ControlStore`. The query credential has no source-write,
+`policy/`. Put AnalysisStore in proposed `src/analysis/` and QueryOwner in
+proposed `src/query/`. Mithril 7 owns data recovery, query admission, and retention.
+Discovery analysis and TraceOwner use those facilities independently. The
+query credential has no source-write,
 signing, Kubernetes, response, or model-provider authority. The external agent
 owns model execution. Control applies export policy before query evaluation.
-No Control-owned model loop, provider gateway, or agent-job registry is required.
+Araphor has no model runtime, provider gateway, training pipeline, or agent-job
+registry. The optional remote data process has the same restriction.
 Query is one read tool, not a product-wide tool limit. Policy and response retain
 their distinct typed mutation and authorization contracts.
 
@@ -63,9 +77,12 @@ A name, timestamp, model conversation ID, or new universal case ID cannot
 replace them. A routine workload review starts without a finding; a later
 finding links to it only through qualified evidence.
 
-One Control API applies current grants and invokes the responsible owner.
-Console and MCP are clients of that API, not parallel business implementations.
-Use one ControlStore for durable heads/artifacts and the one derived SQL store.
+One shared API implementation applies current grants and invokes the responsible
+owner. Control and the optional remote deployment expose the same routes.
+CLI, console and an optional MCP adapter use these routes, not parallel business
+implementations. Remote access follows the delegation contract below.
+Use one AnalysisStore for durable data and analysis. Keep control authority in
+ControlStore; export versioned policy facts through the policy owner's read API.
 The graph owner reuses the accepted-evidence read/projection contract; it does
 not add another intake path or duplicate raw-event database.
 
@@ -89,9 +106,11 @@ approval; approval is not an applied effect; a model conclusion is not closure.
 
 ### Local defender and mandatory escalation
 
-A local defender runs an existing agent runtime against a self-hosted model and
-the same scoped MCP/HTTP contracts. It receives no direct DB, node, Kubernetes,
-or provider credentials. Model placement changes the disclosure profile, not
+A local defender runs an existing agent runtime against an operator-managed
+model and the same scoped CLI/HTTP contracts. The external client owns model
+credentials and inference. It receives no direct DB or Node credentials.
+Araphor does not train, load, host, select, update or roll back models.
+Model placement changes the disclosure profile, not
 the evidence, action schemas, or authorization rules. A hosted client can replace
 it without transferring private conversation state; committed records suffice.
 
@@ -118,12 +137,12 @@ can proceed independently of model inference, within its exact authority.
 
 ## Protection boundary and master-plan integration
 
-The [Hugging Face master plan](../mithril-hugging-face-intrusion-prevention/README.md)
+The [Hugging Face master plan](../README.md)
 owns prevention, causal findings, and verified response. Discovery supplies
 qualified context and review artifacts; it does not replace those capabilities
-with query access or AI classification. The master's historical initial-source
-description is not current implementation status. Its detection, distributed
-response, and provider phase results remain Not done in this worktree.
+with query access or AI classification. Mithril 7 implements discovery methods and assessment validation alongside
+graph/finding processing. Mithril 8–10 supply their qualified source and response
+extensions; clients expose only operations whose owners pass their gates.
 
 The attacking workload need not use Araphor tools. Giving a defender agent
 query access does not constrain the attacker. Prevention must run at the
@@ -140,16 +159,16 @@ it cannot retroactively prevent an already completed effect.
 | Stolen cloud, mesh, connector, or source-control authority | One qualified provider actuator per capability, never generic HTTP or shell. | HF-PROV-001: distinguish key deletion from enrolled-device removal, exact token revoke from wider suspension, and audit identity from a usable revocation handle. |
 | Recovery and continuing risk | Existing graph/finding/response owners; query/follow exposes their revisions. | Healthy watch and every required postcondition; Partial or Unknown for missing authority, coverage, or open branches. |
 
-Use the [standing acceptance](../mithril-hugging-face-intrusion-prevention/hugging-face-adversarial-acceptance.md)
+Use the [standing acceptance](../hugging-face-adversarial-acceptance.md)
 as the oracle, including unchanged workloads and legitimate controls. Do not
 claim that discovery's exact file/execute preview completes this matrix.
 
-The [response plan](../mithril-hugging-face-intrusion-prevention/phase-9-local-and-distributed-response.md)
+The [response plan](../phase-9-local-and-distributed-response.md)
 owns ResponseCoordinator, target revalidation, authorization, durable
 transitions, readback, and watch. Use the same lifecycle as Chapter 24 and
 Appendix A.15.4 of the validated architecture; do not create a console or
 discovery-specific response state machine.
-The [provider plan](../mithril-hugging-face-intrusion-prevention/phase-10-provider-connectors-and-recovery.md)
+The [provider plan](../phase-10-provider-connectors-and-recovery.md)
 owns capability-specific evidence and actuators. These are dependencies, not
 permission to implement them within a discovery phase.
 
@@ -183,7 +202,7 @@ IDs, logs, metrics, and classifier features.
 
 | Record | Required content |
 | --- | --- |
-| `DiscoveryCheckpoint` | Configured scope and sources; bounded interval/build ID; export and aggregation positions; inventory/coverage revisions; limits; status and partial reason. Internal progress, not an agent-created job. |
+| `DiscoveryCheckpoint` | Configured scope and sources; interval/build ID; processed store position and source cursor vector; context/coverage revisions; method version; limits and partial reason. Internal progress, not an agent-created job. |
 | `BehaviorCohort` | Runtime family; environment; controller UID where available; container kind and declared role; image digest and platform; relevant configuration/mount identity; policy generation; attribution quality. Missing fields are explicit. |
 | `ResourceBinding` | Evidence source and lifetime; exact resource ID; policy expression; object/mount or destination context; validity interval; owner/proof kind; catalog revision. |
 | `BehaviorAtom` | Cohort; source lifetime; actor/entry identity; declared role/state; operation; exact resource binding; source decision; physical/result class; proof kind; evidence references; first/last source position; count; coverage; source attribution quality. |
@@ -485,249 +504,441 @@ the first noise controls; optional classification is not a release dependency.
 
 ## Embedded database and query contract
 
-Select one embedded working/query database in the offline feasibility phase.
-DuckDB is the analytical candidate; SQLite is the transactional baseline.
-The current Rust dependency set has no SQL binding. Add only the selected
-pinned Rust binding and reviewed native library after the measured decision.
-Do not add an ORM, two production databases, or a generic storage-driver layer.
+Use the pinned DuckDB Rust binding. Use no ORM, storage-driver framework,
+DataFusion layer, external database service, or second raw-event store.
+Qualify the version in 7.1. The [concurrency contract](https://duckdb.org/docs/current/connect/concurrency)
+permits the embedded design; it is not a multi-process writer protocol.
 
-| Option | Decision |
+### Storage owner and schema
+
+The default layout is:
+
+```text
+data/control/             existing policy, trust, rollout, and authority state
+data/analysis/
+  analysis.duckdb         authoritative retained data
+  analysis.duckdb.wal     managed only by DuckDB
+  tmp/                   bounded query and maintenance spill
+```
+
+AnalysisStore owns one writer queue and at most two trusted extraction readers.
+Only that owner opens the persistent database. All blocking engine work runs
+outside Tokio executor threads and outside the ControlStore lock. Expensive
+derivation runs outside write transactions. Query workers receive bounded
+authorized data; they cannot open the persistent file.
+
+Every table key includes tenant where the record is tenant-owned. Validate
+cross-table tenant/reference consistency before commit. Use explicit primary
+keys, checked integer values, schema versions, and canonical digests. The first
+schema contains these logical relations; do not create unused indexes.
+
+| Relation | Key and content |
 | --- | --- |
-| Existing state image and artifact scans only | Keep them for authority and immutable payloads. Repeated full scans do not meet bounded filtered console reads. |
-| SQLite | Baseline for transactional progress, point lookup, and filtered pages. Measure analytical joins and revision comparisons. |
-| DuckDB | Candidate for batched ingestion, context joins, comparison, and aggregation. Measure small reads, transaction conflicts, memory, spill, and recovery; OLAP speed alone does not select it. |
-| ClickHouse or a database service | Defer until measured fleet volume or multi-writer requirements justify a separate service and ownership design. |
+| `store_meta`, `relation_revisions` | Store UUID, schema version, recovery epoch, monotonically increasing commit revision; last changed revision for each exposed relation. |
+| `events` | Stable source identity, epoch, stream/CPU and source cursor; immutable canonical payload and digest; commit/ordinal position; retained intake time; target lifetime; kind and result. Derived revisions have distinct kinds and are not sensor actions. |
+| `source_receipts`, `coverage` | Authenticated source/session binding, contiguous acknowledged position, bounded pending ranges, retained floor, gaps and coverage revisions. Kernel sequence stays separate. |
+| `context_versions` | Exact owner, entity/lifetime, revision, validity, sensitivity, bounded body and digest. Policy projections retain the authoritative owner's revision. |
+| `processor_progress`, `evidence_refs` | Processor/version/scope, consumed position, coverage/context positions, required input retention; exact witness/context dependencies, reason and expiry. |
+| `profiles`, `behavior_atoms`, `behavior_buckets` | Sealed manifests, full exact atom keys, checked counts, outcomes, lifecycle matrix and method version. Mutable working rows are separate from sealed revisions. |
+| `relationships`, `findings`, `notifications` | Qualified graph/finding revisions and notification attempts/deadlines. Only their named owners can write these records. |
+| `assessments`, `requirements`, `proposals`, `reviews`, `publications` | Bounded immutable content, parent references, expected revision, request digest and owner state. A query row cannot authorize a mutation. |
+| `traces`, `trace_output`, `trace_measurements` | Accepted source/grant/target digests, execution state, deduplicated output and reviewed typed measurements. Host-sensitive output keeps its wider read restriction. |
 
-The [research comparison](research-and-demand.md#storage-and-aggregation-comparison)
-states the upstream evidence and limits. A database is needed here for indexed
-aggregates and transactional progress, not because AI needs a vector database.
+Store canonical manifests and bounded bodies in DuckDB, not parallel
+authoritative artifact files. Export bundles are optional portable copies.
+A retained summary cannot reproduce arbitrary queries over expired raw input.
+A restored database, not a rebuild from incomplete raw history, recovers
+retained findings, profiles and reviews.
 
-Initial tables use explicit schema versions, composite tenant keys, foreign
-keys, and checked values. Keep raw payloads in immutable bundles:
+Policy/control facts cross the store boundary by owner-qualified revision and
+digest. A reconciler reads committed ControlStore facts and inserts them
+idempotently into context_versions. Report pending or missing context. Do not
+claim an atomic transaction across the two stores or infer activation from a
+projection. Recheck the authoritative policy owner before a policy mutation.
 
-| Table | Key and stored fields |
-| --- | --- |
-| `source_progress` | Tenant, build, source lifetime, stream; next expected cursor, durable page reference/digest, coverage revision. |
-| `input_record` | Tenant, build, accepted-record key; payload digest, bundle offset, atom ID or unresolved/excluded reason. Enforce uniqueness. |
-| `behavior_atom` | Tenant, profile/build ID, atom ID; full exact key, checked count, first/last source positions, retained intake-time buckets, evidence references. |
-| `profile_index` | Tenant, snapshot ID; committed manifest digest, cohort, source/coverage revision, summary counts, transformation version, build state. |
+### Commit and acknowledgement
 
-Use relational bucket rows if needed; never grow an unbounded JSON array in an
-atom row. Annotations and proposal lists refer to existing artifact/head IDs;
-add a derived index only for an implemented query. Full raw events and approved
-policy sources do not move into the query database. Add `context_document`
-metadata and subject/revision lookup rows when context retrieval is implemented;
-keep document bodies and submitted reports in bounded immutable artifacts.
+```text
+Authenticated Node submits an evidence batch
+  -> EvidenceIntakeOwner validates source identity, schema, sizes and continuity
+  -> AnalysisStore reserves capacity and checks retained duplicate digests
+  -> one transaction inserts new events, context, coverage and receipt progress
+  -> the same transaction assigns commit positions and relation revisions
+  -> durable commit completes
+  -> writer publishes the latest revision to an in-process watch channel
+  -> EvidenceIntakeOwner returns only the durable contiguous source position
 
-Qualify physical layout for tenant/profile/atom lookup and the actual recipes.
-Do not assume SQLite B-tree plans transfer to DuckDB ART indexes. Check the
-committed manifest before returning a profile. Report `Indexing` or
-`IndexUnavailable` when projection and authoritative digests differ.
+Processor reads a bounded committed interval
+  -> processor freezes input, context, method and coverage revisions
+  -> processor computes outside a write transaction
+  -> one transaction checks expected progress and commits outputs, references,
+     revision records and new progress
+  -> commit notification wakes dependent readers
+```
+
+Start intake batches at 4,096 records, 4 MiB encoded input, or 50 ms, whichever
+comes first. These are tuning defaults, not measured capacity. Keep decoded
+input and queue limits from verification.md. Return retryable backpressure
+before ACK if the writer cannot accept a batch. Node keeps unacknowledged input
+under its bounded delivery contract; exhaustion produces explicit source loss.
+
+A retained duplicate with equal identity and bytes has no second effect.
+Conflicting bytes reject the batch. Below the retained digest floor, return
+AlreadyAcceptedExpired for an already acknowledged position; do not insert it
+or claim to compare unavailable bytes. A new unproven gap cannot advance ACK.
+Preserve the existing authenticated coverage/gap acknowledgement rules.
+
+Rollback changes neither receipt nor processor progress. A crash after commit
+but before ACK causes a safe duplicate retry. A processor retries from its
+committed progress; counts cannot double. Commit order is delivery order, not
+cross-node causal order. Restart reads durable revisions before publishing
+readiness. Every mutation, including expiry and deletion, updates dependencies.
+
+### Retention, capacity, backup and restore
+
+Use independent age and byte budgets: initial raw retention 24 hours, profile
+windows 30 days, finding/review records 90 days, and pending-review witnesses
+7 days. These are configurable pilot defaults. Charge exact witness/context
+pins to their own bounded quota; do not pin an entire raw stream for one finding.
+
+EvidenceRetentionOwner checks age, capacity, required processing and exact
+witness references in one transaction. It advances retained floors with the
+deletion. Keep context while retained output references it.
+
+There are two fixed processor classes, not a user-defined processor framework:
+
+- Optional: discovery profiles, context enrichment and advisory methods.
+  Their progress does not pin raw input or stop intake. Disablement preserves
+  committed results and progress. On restart, process the retained backlog.
+  If the retained floor passed progress, commit an explicit missing range and
+  a new incomplete interval before resuming. Never mark skipped input processed.
+- Required: enabled deterministic security packages in GraphAndFindingOwner.
+  Record each package's source scope and starting floor before intake depends
+  on it. Failure raises an unhealthy state immediately. Unprocessed accepted
+  input remains protected within the configured raw age/byte budget.
+  NotificationRouter retains pending finding/route records and their exact
+  witnesses; it does not pin unrelated raw input.
+
+Lag alone raises health warnings; it does not stop intake at an arbitrary
+one-hour threshold. Stop affected intake when required unprocessed input
+reaches its protected age bound or exhausts its byte reservation. Retain that
+existing input until processing or authorized retirement. Raw age is a
+reclamation target, not permission to delete protected input. A shared physical
+capacity failure can stop all data intake. Keep installed enforcement and
+policy/control-state commits independent. Disabling discovery does not disable
+security packages. Retiring a required package requires an authorized explicit
+change with its cutoff and missing coverage; do not auto-retire it on failure.
+No bounded store guarantees both unlimited intake and unlimited recovery.
+
+Review/finding witness pins have their own age and byte budgets. Admission
+reserves exact dependencies, not the whole source stream. Optional computation
+uses bounded work leases while it commits result references; cancel or restart
+expired work instead of keeping an indefinite pin. External readers have no
+retention pins or processor ACKs. Required package dependencies must not include
+an optional profile processor.
+
+Example: with 24-hour raw retention, discovery can resume an eight-hour backlog.
+After two days disabled, it records the expired range and resumes at the retained
+floor. In both cases intake continues unless a separate required obligation or
+physical capacity limit blocks it. Full replay of expired raw input stays
+unavailable even when a retained profile is readable.
+
+Account for database, native WAL, temporary files, backup/maintenance space,
+queued writes and terminal trace reserve. Reserve separate filesystem capacity
+for policy/control-state commits before admitting data work. At the high-water
+mark, remove
+eligible data, checkpoint, and check actual free bytes. SQL DELETE alone is
+not a disk-space guarantee. [DuckDB checkpoint behavior](https://duckdb.org/docs/current/sql/statements/checkpoint)
+requires measured reclamation. If capacity is still insufficient, stop new
+diagnostic work first and backpressure uncommitted intake. Keep local Node
+enforcement and Control policy authority independent. A corrupt authoritative
+data store blocks data ACK and dependent reads; it is not a disposable index.
+
+Use a maintenance window for a consistent backup: pause new data writes,
+drain bounded accepted work, checkpoint, close connections, copy the database,
+sync the copy and its manifest, reopen, then resume. Never copy only a live DB
+file while omitting its WAL. Restore into an empty owned directory; validate
+schema, digests, references, receipts and processor progress before activation.
+A restore uses a new recovery epoch so pre-restore query cursors fail explicitly.
+Keep the previous valid copy until the restored store passes checks.
+
+After restore, a source may already have discarded input acknowledged after
+the backup. The Node's retained floor and the restored receipt expose that gap.
+Do not invent those records or rewind Node ACK state. Record backup revision,
+known missing ranges, and Partial recovery. Qualify this case before release.
 
 ### One query contract
 
-Use `query(sql, follow=false, cursor?)` for investigation reads. HTTP, MCP, and
-console reads call `DiscoveryOwner::query`. No action enum, start, stop,
-subscribe, get-job, or separate schema tool. Initial tool documentation names
-the common views and a catalog query.
+Use `query(sql, follow=false, cursor?, parameters?, scope?)`. CLI and console
+call the same Control API. Caller scope only narrows authenticated scope.
+No read-job, subscription-registration, start/status/stop protocol is required.
 
-| View | Purpose and contract |
+| View | Contract |
 | --- | --- |
-| `catalog` | Authorized tables, columns, join keys, units, null meanings, SQL examples, runbooks, stopping criteria, and owner/tool availability with reasons. No internal catalog exposure. |
-| `events` | Append-only retained observation and derived-revision records: event ID, record kind, subject lifetime, entity/revision, source positions, result/proof class, and evidence references. Derived changes are not additional observed actions. |
-| `context` | A bounded packet per subject/method/revision: identity, policy, source health, exact rule guide, reviewed history, conflicts, omissions, and references. Fetch common context in one query. |
-| `behaviors`, `coverage` | Exact atoms and separate coverage intervals. Counts retain their denominator and source contract. |
-| `policies`, `assessments`, `suggestions` | Committed policy/review records and submitted reports, linked by exact subject/finding/input references. Keep current and historical revisions distinct. |
+| `catalog` | Authorized relations, columns, units, join keys, null meanings, recipes, runbooks, target kinds and owner readiness. |
+| `events`, `coverage` | Immutable observation/revision rows and explicit source/retention gaps. Record counts are not physical-action counts. |
+| `context`, `behaviors` | Versioned context packets and exact profiles. Discovery-disabled state is explicit. |
+| `policies`, `findings`, `assessments`, `suggestions`, `notifications` | Qualified owner revisions. Unavailable owners are not empty healthy tables. |
+| `traces`, `trace_output`, `trace_measurements` | Capture state, bounded raw frames, and measurements with units, reset epoch and coverage. SQL cannot attach a probe. |
 
-Add columns and recipes only for a named consumer. No semantic-layer service,
-vector store, hidden model summary, or duplicate graph. Context selection is
-deterministic; token reduction cannot conceal counterevidence.
+Normal mode evaluates one admitted SELECT against a committed snapshot.
+Support projection/filter, nonrecursive CTEs, qualified equijoins, aggregates
+and bounded window functions used by the reviewed recipes. Require explicit
+stable ordering where output order matters. Reject writes, multiple statements,
+recursion, unapproved catalogs/functions, extensions and table functions.
+LIMIT limits output, not work. Freeze the authorized relation set before binding.
 
-Normal mode evaluates one bounded read-only SELECT at a committed read
-revision. Support projections, filters, nonrecursive CTEs, qualified equijoins,
-grouping, and bounded window functions required by the recipes. Pin the engine
-dialect; do not implement another language or promise all SQL. Reject multiple
-statements, writes, recursion, volatile functions, arbitrary table functions,
-and unapproved relations/functions. Use explicit stable ordering. LIMIT bounds
-output, not scan cost.
+Return schema, rows, read revision, receipt, coverage, owner lag and limits.
+Normal results above 200 rows or 1 MiB have an explicit limited state. Never
+truncate aggregate or join input to make a query fit. A receipt binds principal,
+disclosure revision, SQL/parameters, target snapshot, schema, store identity,
+input revision and result digest. Retain cited receipts with assessments,
+not a durable per-reader job. Expired evidence limits replay.
 
-Return columns/rows, read revision, query receipt, evidence references, coverage,
-projection freshness, omissions, and output-limit state. Authenticate the bounded
-receipt; do not allocate a durable Control head for every read or empty follow.
-Assessment submission validates and retains cited receipts with their input
-references under existing quotas. An expired input is not replayable proof. Normal mode has no
-server-held result session or generic pagination cursor. Above 200 rows/1 MiB,
-mark output limited and require a narrower query. An aggregate evaluates all
-selected admitted input or fails. Historical pages use stable keys and pinned
-artifact revisions, not OFFSET over changing data.
+### SQL-derived input bounds
 
-Follow accepts only projection/filter SELECTs over `events` with stable
-predicates. Reject joins, aggregation, DISTINCT, windows, caller ORDER BY/LIMIT,
-and relative-time functions with `UnsupportedFollowShape`. Use normal queries
-for analysis and follow revision records to know when to query again. Do not
-build continuous aggregate maintenance or a per-client SQL result cache.
+Use [sqlparser-rs](https://docs.rs/sqlparser/0.63.0/sqlparser/) with
+[DuckDbDialect](https://docs.rs/sqlparser/0.63.0/sqlparser/dialect/struct.DuckDbDialect.html).
+Phase 7.1 pins a compatible parser/engine pair and tests the admitted subset.
+The parser supplies an AST, not authorization, name binding or a sandbox.
+Use the existing closed binder to resolve permitted columns and aliases.
+Do not build a second SQL parser or a general query optimizer.
 
-The first follow call reads matching retained events from the retained floor.
-It captures the committed projection high-water mark and returns batches in publication
-order. After draining retained input, wait at most 20 seconds for new commits,
-then return rows or an empty batch and an opaque cursor. Absolute-time and
-subject filters limit history. Coverage states what predates retention.
+The SQL predicate is the source of the time bound. No duplicate window flag
+or separate time argument is required. The optional target scope still narrows
+the caller's grant. For the first extraction optimization, accept one direct
+time-bearing base relation with an optional alias and top-level WHERE
+conjunctions. Match direct received_at comparisons against typed UTC timestamp
+literals/parameters, BETWEEN, or CURRENT_TIMESTAMP minus a literal integer
+second interval. Preserve inclusive/exclusive endpoints and SQL null behavior.
+Convert only checked bound values into fixed parameterized extraction statements.
+Keep the complete predicate in the worker query.
 
-The authenticated cursor binds principal scope, export-policy revision, SQL
-digest, schema/view version, projection epoch, and last scanned publication
-position. Use a reviewed encoding library. Recheck authorization per call and
-before returning a waited result. Changed query/scope requires a fresh cursor;
-expiry returns 410, never a silent reset. A cursor neither grants access nor
-pins history.
+Do not infer a global window from a branch of OR, NOT, HAVING, an outer join,
+a computed/renamed timestamp, or a nested/CTE predicate. Multiple references
+to the same relation need separate proof; do not filter all aliases from one
+alias's predicate. For these unoptimized shapes, extract the complete authorized
+input within budget or return InputTooLarge. Unsupported SQL still rejects.
+A missing bound does not imply an undocumented default window. A narrower
+range is an optimization only when it cannot change the SQL result.
 
-Reuse Control's commit index plus a stable artifact-record ordinal for feed
-positions. Retain this mapping in immutable exported manifests and committed
-derived artifacts; rebuild preserves it. This is delivery order, not kernel
-action order. Late evidence and corrected context/coverage append revisions
-with replacement links where applicable; do not edit old feed records.
-Advance the projection high-water mark only through a contiguous processed
-prefix of eligible committed artifacts. Never skip an artifact that will become
-visible later. Index lag must not advance a follow cursor past that artifact.
+Example:
 
-Advance through scanned nonmatching rows, including empty batches. When output
-is full, stop before the next unreturned match. Retrying a cursor can repeat
-rows; deduplicate by event ID. Do not promise exactly-once delivery. Retention
-past the cursor returns expiry. A rebuild that cannot preserve positions
-invalidates its projection epoch.
+```sql
+SELECT operation, COUNT(*)
+FROM events
+WHERE received_at >= CURRENT_TIMESTAMP - INTERVAL '600 seconds'
+GROUP BY operation;
+```
 
-Release transactions and store locks before waiting or client I/O. A bounded
-notification can wake a waiter; committed positions make lost notifications
-recoverable. Recheck after wait registration to avoid a lost wake-up.
-Disconnect cancels only this read; ingestion continues. No per-client queue,
-durable subscription, or job registry.
+Extract permitted columns and rows in that recognized lower range, not the
+tenant's complete history. Freeze one UTC evaluation instant for both extraction
+and the worker AST parameter. Bind the original SQL, parameters, inferred bounds,
+binder version and read revision to the receipt. Report any unavailable history.
+Do not apply an event-time filter to the creation date of a referenced policy
+or context record; preserve its exact identity and validity.
+
+The proposed 64-MiB extraction budget applies after safe scope/column/range
+selection. Qualify it with measurements; it is not a DuckDB capacity claim. Reject
+overflow before returning any aggregate. Use existing exact behavior buckets
+for supported historical summaries; do not claim raw-query equivalence for
+dimensions those buckets do not retain.
+
+### Commit-driven follow
+
+Follow is one long-lived HTTP response with typed JSONL frames. QueryOwner
+selects the result operation and declares it in the opening metadata:
+
+- `append`: projections and fixed predicates over immutable `events` or
+  `trace_output`. Scan by commit/ordinal, not event time. No mutable joins,
+  aggregate, DISTINCT, relative time, or caller LIMIT in this mode.
+- `replace`: other admitted bounded SELECTs, including aggregates, joins and
+  mutable finding/status views. Recompute the complete bounded result when a
+  dependency changes. A replace frame replaces the prior table; it is not a
+  count increment. Intermediate database revisions can be coalesced.
+
+The user still supplies one SQL statement and `--follow`; no mode choice or
+second query is required. Unsupported SQL returns UnsupportedFollowShape.
+No general incremental SQL engine or persistent result cache is required.
+
+```text
+Client requests follow
+  -> QueryOwner validates grants, SQL and dependencies, then registers watch
+  -> trusted reader captures one database snapshot and its revision
+  -> worker evaluates the initial retained range or complete bounded snapshot
+  -> QueryOwner emits metadata, result frames and a committed checkpoint
+  -> all DB readers and workers close before waiting or network backpressure
+  -> relevant commit or supported time-window expiry marks the query dirty
+  -> one evaluation runs; concurrent changes set one coalesced dirty flag
+  -> QueryOwner rechecks dependencies after evaluation and before waiting
+
+Client disconnects
+  -> current read/evaluation is cancelled within its deadline
+  -> collection and trace execution continue
+  -> reconnect validates the last completely received checkpoint
+  -> append replays later retained positions; replace emits a fresh snapshot
+```
+
+Use Tokio watch for the latest committed revision, not a queue of raw rows.
+Bind actual table dependencies, including CTEs, joins, context and coverage.
+After registration and each evaluation, compare durable relation revisions
+before sleeping. A missed/coalesced wake-up cannot skip committed input.
+An unrelated relation change does not rerun the query. A heartbeat checks
+current auth, storage health and revisions; it does not rerun unchanged SQL.
+
+Use a 15-second maximum heartbeat and a 500-ms minimum replacement interval.
+Admission also limits active evaluations; continuous writes cannot create an
+unbounded task queue. An authorization-change signal stops affected readers
+immediately; expiry deadlines also wake them. Check grants before each frame.
+When authorization state is unavailable, do not disclose data.
+
+Support moving windows only in replace mode. Initially accept the proven
+single-relation lower bound from the SQL AST on received_at using
+`CURRENT_TIMESTAMP - INTERVAL '<N> seconds'`,
+with integer N from 1 to 86,400. Bind CURRENT_TIMESTAMP to one server evaluation
+instant. Compute the earliest admitted row expiry and wake there, rounded up
+to the one-second window resolution. State that resolution in metadata.
+Reject other volatile expressions and unsupported moving predicates, including
+a moving range whose extraction proof fails. SQL parsing does not make every
+time expression a supported subscription. Normal fixed-range queries can use
+the complete-input fallback above.
+No traffic is needed for an old row to leave a window.
+
+Each frame has schema version, operation, store epoch, read revision, frame ID,
+coverage and bounded payload. Append checkpoints carry the last scanned
+position, including nonmatching rows. A full frame stops before the next
+unreturned match. Replacement output must fit 200 rows and 1 MiB in one
+complete frame or fail ResultTooLarge; do not send a partial replacement.
+Use stable frame IDs for append retries. Consumers can deduplicate repeats;
+delivery is at least once, not exactly once.
+
+A cursor binds SQL/parameters, target snapshot, current scope, disclosure,
+view version, store UUID/epoch and position. It grants no permission and pins
+no history. Changed bindings reject. A lost retained append range returns
+410 with authorized missing bounds. Replacement resumption promises current
+state, not all intermediate states; metadata states this contract. Query errors
+are error frames followed by stream close, never empty successful results.
+Keep at most one outgoing frame per reader; on a 10-second blocked write,
+close with the last completed checkpoint when transport permits.
+
+This uses the useful pattern in the local Mangroves
+`src/sql/src/execution/subscribe.rs`: dependency notification, evaluation,
+then batches on the same stream. Durable positions, bounded replacement
+semantics, failure propagation and access checks are Araphor contracts.
+DuckDB executes SQL; Mangroves and DataFusion are not runtime dependencies.
+
+The shared JSONL envelope uses application/x-ndjson. Each complete JSON object
+is one frame; metadata precedes data. Frame operations are append, replace,
+checkpoint, health, error and terminal. Trace-specific payloads follow the
+observability contract. HTTP EOF does not prove trace cleanup.
 
 ### Query isolation
 
-Read-only SQL is not a sandbox. DuckDB's
-[security guidance](https://duckdb.org/docs/current/operations_manual/securing_duckdb/overview)
-requires isolation for untrusted SQL. SELECT-capable functions can access files,
-extensions, and network resources.
+Read-only SQL is not a sandbox. Follow [DuckDB security guidance](https://duckdb.org/docs/current/operations_manual/securing_duckdb/overview).
+QueryOwner uses a maintained parser plus a closed relation/function binder.
+Resolve aliases, nested expressions, CTEs and star expansion against authorized
+schemas. Reject unsupported syntax; do not use regex or a SELECT-prefix test.
 
-The trusted Control adapter resolves approved view/column references and applies
-row scope, field grants, and disclosure redaction before evaluation. Filtering
-only final output would leak through predicates, counts, joins, and errors.
-Use a maintained parser/binder, not regex or a SQL-prefix check.
+Trusted prepared extraction statements apply tenant, lifetime, row scope and
+field disclosure before evaluation. Hidden fields cannot be used in predicates,
+joins, aggregates or errors. Add only the proven SQL-derived time bounds above.
+Export complete bounded authorized relation batches and needed columns from one
+snapshot. Over-limit extraction fails and requests a narrower SQL predicate or
+target scope; do not execute arbitrary client expressions in the persistent DB.
 
-Run admitted SQL in a disposable unprivileged worker with only bounded authorized
-relation batches. Use the selected engine in memory, without opening Control's
-live DB or adding a durable database. Give it no Control credentials, production
-mounts, inherited sensitive descriptors, or network. Enforce OS memory/CPU/process
-limits, a deadline, and restricted filesystem/syscall access. Engine external
-access, extension, and configuration locks are additional safeguards.
+A disposable unprivileged worker evaluates those batches in an in-memory
+DuckDB instance. It has no production credentials, mounts, persistent database
+handle, inherited sensitive descriptors or network. Apply OS memory/CPU/process
+limits and a deadline. Disable engine external access, extension installation/
+autoload and configuration changes. These settings supplement OS isolation.
+Worker failure cannot terminate Control or change a receipt/progress record.
+No SQL worker remains alive merely to wait for a follow notification.
 
-Control uses fixed prepared statements to extract the referenced authorized
-columns and required rows. If the complete projection exceeds admission limits,
-reject and request a narrower scope; never truncate COUNT or join inputs.
-The worker compiles/evaluates SQL. Validate bounded output and attach server-known
-coverage/provenance. Query results cannot authorize publication.
-
-Phase 1 must prove parser/binder support, interruption, sandbox compatibility,
-and projection cost. No qualifying isolation means no agent-SQL release, not
-permission to execute it in credentialed Control. Reuse a qualified isolation
-helper if available at implementation time; none was found in the inspected
-Control/core paths. No shell or general code-execution tool is exposed.
-
-Use one writer and at most two reader connections in one Control process.
-Run blocking SQL outside the async runtime and ControlStore lock. Use a
-qualified local filesystem, not NFS or a shared multi-node PVC. SQLite requires
-verified WAL/FULL settings, foreign-key checks, and a maintained WAL-reset-fixed
-build. DuckDB requires a pinned stable embedded release, explicit transaction
-and checkpoint tests, bounded threads/memory/temp space, and no remote extension
-autoload. Neither option requires a multi-process writer protocol.
-
-Keep export pages at 256 records/1 MiB. Allow one apply transaction to combine
-durably exported pages up to 4,096 records/8 MiB, within the working budget.
-Tune this bound from the experiment, not from the engine name. Prepare context
-before the transaction. A batch commits uniqueness, counts, and all affected
-progress together. Retry the same batch on a classified transient conflict;
-never retry indefinitely. Readers materialize one API page and close before
-client I/O. Enforce read deadlines, disk reservations, and checkpoint limits.
-
-Use explicit ORDER BY and canonical ordering inside nested aggregates. Counts
-use checked integers. Floating-point reductions and model scores never enter
-the deterministic fact digest. DuckDB memory settings are not a process RSS
-limit; measure total native allocation and spill. A candidate that cannot meet
-the admission, interruption, or recovery contract fails selection.
+Pin the engine dialect, explicit ordering and canonical integer reductions.
+Floating-point/model scores do not enter deterministic fact digests.
+Measure native RSS and spill; engine memory settings are not an RSS limit.
+If isolation or full authorized-input extraction cannot meet the limits,
+reject that query shape. Do not fall back to credentialed in-process SQL.
 
 ## Durable lifecycle and recovery
 
-Configured derivation runs continuously over bounded input intervals. Internal
-build states are Reading, Sealing, Complete, Partial, or Failed. Checkpoints
-resume after restart; no caller creates or cancels a build. Disablement stops
-new derivation and retains artifacts. A sealed snapshot never returns to
-Reading. The next interval or corrected context creates a new revision.
+Configured derivation uses Reading, Sealing, Complete, Partial or Failed
+intervals. Sealed snapshots are immutable. Corrections create a new revision.
+One data transaction commits checked outputs, exact references and progress.
+No transaction spans model execution, network I/O or a client wait.
 
-Proposal states: `Draft -> Validated -> InReview -> Approved | Rejected`.
-Approved can become `Publishing -> Published | PublishFailed | Stale`.
-Expiry produces `Expired`. A source or target change produces Stale before
-publication. A published proposal retains its receipt; later drift creates a
-new proposal rather than changing its history.
+Proposal states are Draft, Validated, InReview, Approved or Rejected.
+Approved proposals can enter Publishing, Published, PublishFailed or Stale.
+Expiry produces Expired. Any semantic edit needs a new preview and approval.
+Publication intent and result are durable data records; exact source and
+authority are checked through their existing Control owners.
 
-Use bounded immutable discovery artifact files under the existing Control
-store owner. Store small heads, references, and transaction state in its
-versioned state. Specify migration and maximum retained heads before adding
-fields; an append-only list in the 64 MiB state image is not acceptable.
+Schema changes require a validated backup and bounded maintenance. Reject an
+unsupported newer schema without modifying it. No automatic destructive repair
+or empty-database fallback is permitted. Policy/control-state bytes and Node
+WAL formats remain governed by their existing owners. Portable replay uses
+an explicitly retained manifest and records; it never fetches current facts
+to fill a historical gap.
 
-Commit order is artifact write, checksum, file sync, durable installation,
-then reference/checkpoint commit under ControlStore. Notify readers only after
-the reference is durable. Crash tests cover each boundary. Unreferenced files
-can be reclaimed after recovery; a referenced missing file yields an integrity
-failure. Never acknowledge a checkpoint whose artifact is not durable.
+### Optional remote placement
 
-The SQL and Control state commits are not one transaction. Use this protocol:
+Move AnalysisStore, EvidenceRetentionOwner, QueryOwner, DiscoveryOwner,
+GraphAndFindingOwner and NotificationRouter together into the optional data
+process. Reuse their embedded implementations and local database transactions.
+Graph/finding/progress commits and notification recovery do not cross RPC.
+Control retains policy/trust/approval authority, source publication, TraceOwner,
+Node authentication and dispatch. External agents retain model execution.
 
-1. Copy and durably install an input page. Commit its reference and export
-   progress in the build manifest through ControlStore before aggregation.
-2. In one SQL transaction, check `source_progress`, insert unseen input keys,
-   apply checked count increments, and advance aggregation progress. Native
-   UPSERT applies only to validated distinct input. A repeated record must
-   match its retained digest before it is skipped. Reject cursor jumps unless
-   the manifest contains the explicit source gap. Export progress and
-   aggregation progress are separate fields.
-3. After a crash, apply committed exported pages that are not yet aggregated.
-   A SQL progress value ahead of the exported manifest is an integrity error.
-   If SQL is lost, rebuild from the exported pages. A build with unavailable
-   input cannot pretend to resume successfully.
-4. Seal canonical atoms and manifest into immutable artifacts. Sync and install
-   them, then commit the snapshot head in ControlStore. Only this head makes
-   the snapshot authoritative. SQL working rows are not a completed snapshot.
-5. Mark the index visible only for that committed snapshot/digest. A crash
-   before this step requires projection repair, not another policy revision.
-   Rebuild completed indexes from sealed snapshots; rebuild unfinished builds
-   from their retained exported input. Review and publication load authoritative
-   artifacts and exact heads, not unchecked query rows.
+Both Control and the remote deployment can expose the same ConsoleHttpOwner
+routes. The CLI selects one HTTPS endpoint through --endpoint or its configured
+profile. SQL, trace, assessment, publication and later qualified operations
+keep the same schema, result, idempotency and permission contract. The console
+can use either endpoint. No redirect, second user command, remote-specific
+tool set or privileged generic execute route is required.
 
-Version the derived SQL schema separately. Build a replacement index within
-reserved quota and check counts and digests against artifacts. Quiesce readers
-and writers, use the selected engine's checkpoint procedure, then close all
-connections before durable installation. Never replace a live DB file or omit
-its uncheckpointed WAL. Preserve the prior
-index until validation succeeds. Do not migrate policy/trust state through SQL.
-Keep query service unavailable during replacement; no HA claim is made.
-Corruption, disk full, or rebuild failure disables affected discovery work,
-not primary evidence intake, policy reconciliation, or the entire Control
-process. Rebuild only retained data; expired history remains explicitly expired.
+The remote endpoint validates TLS and the client's service token or browser
+session through shared authentication code. Control owns grants: require a
+current Control authorization check for each request and before each emitted
+stream frame. Unavailable authorization stops disclosure. Bind internal mTLS
+delegation to principal, tenant, operation, request digest, grant revision,
+expiry and permitted scope. An internal service identity alone is not caller
+authority. Never forward a client-supplied identity header as proof.
 
-Use bounded immutable exports for both offline and live derivation. Discovery never
-acknowledges the current shared consumption watermark. Freeze a retained range
-and copy bounded pages; a reclaimed range makes the snapshot Partial. After
-copying, replay depends on the discovery bundle, not source-segment retention.
-A permanent independent retention consumer is outside this slice.
+Queries, discovery drafts and notification acknowledgements run at their data
+owners. Trace submit/cancel, publication, and later exception/response commands
+go to the existing Control owner. That owner rechecks current grants, exact
+targets and approvals. Preserve the original request key and bytes across both
+routes. Trace reads/output come from the shared store. The CLI follows them
+automatically at the selected endpoint. No Node credential, signing key or
+general Kubernetes mutation credential moves to the data process. Only
+NotificationRouter receives its configured, scoped sink credentials; SQL workers
+receive none.
 
-Review and replay references have byte and age limits. Pin the bounded evidence
-bundle needed by a pending review. If the pin cannot be retained, reject the
-new review or expire the old one with an explicit reason. Do not stop primary
-evidence intake to preserve unlimited discovery history. An expired evidence
-bundle leaves the review audit record, but disables a claim of full replay.
+Node evidence and output still enter authenticated Control intake. Forward
+bounded batches; acknowledge only the remote durable receipt. Use private
+domain operations for accepted evidence, owner-qualified context, trace
+intent/output/result, and shared query/discovery requests. These operations
+validate schema, scope and owner before one local transaction. Do not export
+table CRUD, SQL writes or begin/commit RPCs. TraceOwner waits for durable intent
+before dispatch. A lost reply is reconciled by request key and content digest;
+retry cannot duplicate a capture or source write.
 
-Query/follow reads durable revisions without retaining a transaction during
-client I/O. A slow reader must resume within retention or receive expiry. It
-cannot block evidence or policy work.
+During a partition there is no local raw mirror or extra delivery log. Node
+retains bounded unacknowledged data. New trace/publication operations fail
+closed when the Control owner or data store is unavailable. Active traces
+expire locally. A reachable data endpoint does not bypass unavailable
+authorization or invent a successful action. Pending notification attempts keep
+their original obligations and deadlines.
+
+External read-only consumers use query/follow at either endpoint. They require
+no broker, retention ACK or deployment change. Expired cursors report a gap.
+
+Placement change uses planned downtime: stop new work, finish or expire traces,
+drain, checkpoint and close the sole writer, transfer and validate the complete
+store, fence the former deployment, then start the new writer. Preserve store
+identity and committed positions for a lossless move. Backup rollback changes
+the recovery epoch. Do not support live dual writers or automatic split-brain
+failover. Policy authority and installed Node enforcement remain in place.
 
 ## Publication and rollback
 

@@ -93,8 +93,8 @@ capacity evidence, install/upgrade proofs, and the limited release claim.
 
 ## Required Tests And Fixtures
 
-For the [combined Araphor release](../araphor-discovery-engine/README.md#combined-implementation-order),
-require the bounded Discovery 6 result and the adapter/console results owned
+For the [combined Araphor release](phase-7-mithril-control-and-detection-packages/README.md#combined-implementation-order),
+require the bounded Phase 7.7 result and the adapter/console results owned
 by Mithril 8–10. Rerun their required cases on the exact release revision;
 earlier passes do not transfer. Include SQL isolation, disclosure, tenant
 scope, policy approval/publication, critical escalation, response readback,

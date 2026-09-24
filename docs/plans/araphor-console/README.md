@@ -145,10 +145,10 @@ current backend has no complete contract. No new connector is authorized.
 
 ## Discovery engine dependency
 
-The [Araphor discovery engine plan](../araphor-discovery-engine/README.md)
+The [Araphor discovery engine plan](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/README.md)
 defines agent-ready context, bounded detection methods, security assessments,
 review-only suggestions, native policy proposals, and missing-test requests. Its
-[console contract](../araphor-discovery-engine/console-and-api.md) adds Behavior
+[console contract](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/console-and-api.md) adds Behavior
 detail, investigation review, and Suggestions within the same five workspaces.
 Local defenders and the console share query/follow reads, scoped tools, and
 exact subject/finding references. Submitted assessments, approvals, action
@@ -230,17 +230,17 @@ For example: `Preview protection` and `Save local draft`. It must not show
 
 ## Implementation order
 
-Follow the [combined implementation order](../araphor-discovery-engine/README.md#combined-implementation-order).
-Start these fixture phases after Discovery 1 freezes the shared records.
-Complete them in order alongside Discovery 2–4 and Mithril 7. Discovery 5 then
-connects the same screens to HTTP/MCP owner contracts; it does not repeat this
-shell implementation. Discovery 6 qualifies the first live workflow.
+Follow the [combined implementation order](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/README.md#combined-implementation-order).
+Start these fixture phases after Phase 7.1 freezes the shared records.
+Complete them in order alongside the Phase 7 backend subphases. Phase 7.8 then
+connects the same screens to shared HTTP owner contracts; it does not repeat this
+shell implementation. Phase 7.10 qualifies the first live workflow.
 Mithril 8–10 own later exception, response, and provider UI integration and
 their tests. Fixture controls cannot enable those capabilities early.
 
 | Phase | Deliverable | Dependency | Result |
 | --- | --- | --- | --- |
-| [1: Araphor shell and protection](phase-1-araphor-shell-and-protection.md) | Brand, navigation, shared view state, agent and workload inventory | Discovery 1 record contracts | Not done |
+| [1: Araphor shell and protection](phase-1-araphor-shell-and-protection.md) | Brand, navigation, shared view state, agent and workload inventory | Phase 7.1 record contracts | Not done |
 | [2: Policy review and activation](phase-2-policy-review-and-activation.md) | Suggestions, typed policy review, target activation, bounded exception review | Phase 1 | Not done |
 | [3: Activity and evidence](phase-3-activity-and-evidence.md) | Action result detail, agent context, causal replay, evidence health | Phases 1 and 2 | Not done |
 | [4: Verification and acceptance](phase-4-verification-and-acceptance.md) | Source-bound verification views, System detail, complete journey checks | Phases 1 through 3 | Not done |

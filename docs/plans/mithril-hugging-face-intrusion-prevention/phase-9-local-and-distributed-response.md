@@ -87,11 +87,11 @@ damaging unrelated controls. Provider-specific completion remains Phase 10.
 
 ## Agent and console integration
 
-Follow the [combined Araphor order](../araphor-discovery-engine/README.md#combined-implementation-order).
+Follow the [combined Araphor order](phase-7-mithril-control-and-detection-packages/README.md#combined-implementation-order).
 Implement and test ResponseCoordinator and local/Kubernetes actuators before
 exposing `plan_response` and `execute_response` through the existing
 ConsoleHttpOwner and stdio MCP adapter. This phase owns that wiring; it is not
-unfinished Discovery 5 work. Reuse the shared types, principal/grant checks,
+unfinished Phase 7.6 work. Reuse the shared types, principal/grant checks,
 finding references, and read projection.
 
 Extend the existing investigation view with frozen targets, blast radius,
@@ -100,7 +100,7 @@ Query/follow returns the same committed revisions to agents and the console.
 No additional job-query API or client-owned response state is required.
 Keep provider actions Unsupported until their Phase 10 qualification.
 
-Run the Discovery 6 query/authorization/local-defender cases with real response
+Run the Phase 7.7 query/authorization/local-defender cases with real response
 owners. Add revoked grants, stale findings, lost execution replies, concurrent
 approval, PID/UID reuse, Control/client restart, and late replacement branches.
 Require matching lightweight and physical state transitions, postconditions,

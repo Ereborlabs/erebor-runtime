@@ -1,4 +1,4 @@
-# Phase 5: Agent Tools, Console Review, And Governed Changes
+# Phase 7.8: Agent Tools, Console Review, And Governed Changes
 
 Connect discovery to the planned five-workspace console with scoped authorization and
 explicit policy, exception, and response authority boundaries. Query is one
@@ -31,7 +31,7 @@ External agent calls a discovery tool
 Reviewer approves a revision and publisher submits it
   -> review checks digest, expiry, scope, and required independence
   -> publisher rechecks current source and target preconditions
-  -> ControlStore records publication intent
+  -> AnalysisStore records publication intent
   -> publication adapter conditionally updates the existing Kubernetes source
   -> existing reconciliation owner reads the accepted source
   -> receipt records source acceptance or failure
@@ -56,50 +56,53 @@ authority. Read [console-and-api.md](console-and-api.md) before implementation.
 
 ### Prerequisites and delivery boundary
 
-Require Discovery 4, Mithril 7, and console fixture phases 1–4 Done in the
-[combined order](README.md#combined-implementation-order). This phase delivers
-the first four tools: query, submit_assessment, propose_policy, and separately
-granted publish_policy. It also connects NotificationRouter reads and human
+Require Phase 7.7's core client/assessment contract, Observability 3, and console fixture phases 1–4 Done in the
+[combined order](README.md#combined-implementation-order). This phase reuses assessment submission and delivers
+propose_policy and separately granted publish_policy. Status: **Not done**.
+Query transport and the SQL/trace CLI already belong to Observability 3 and
+must be reused. It also connects NotificationRouter reads and human
 acknowledgement. Complete items 1–7 and 11, capability reporting in item 9,
-and policy/unsupported-response display in item 10 before Discovery 6.
+and policy/unsupported-response display in item 10 before Phase 7.10.
 
 Item 8 is an integration contract for Mithril 9 and 10, not an execution
 adapter to implement here. Mithril 8 owns the bounded-exception request adapter
 in item 9. Mithril 9 owns the response display in item 10; Mithril 10 extends
-it for providers. Those owner phases include HTTP/MCP, console, and physical
+it for providers. Those owner phases include shared APIs, console, and physical
 tests in their own deliverables. Their absence must pass explicit Unsupported
 tests here, not keep this phase open until Mithril 10.
 
-1. **Authentication — Control `src/console_http.rs` (new),
-   `src/administrative_http.rs`, `src/config.rs`, `src/main.rs`.** Add
-   `ConsoleHttpOwner`. Reuse extracted OIDC issuer/audience/nonce/PKCE
+1. **Authentication — Control `src/console_http.rs`,
+   `src/administrative_http.rs`, `src/config.rs`, `src/main.rs`.** Do not add
+   another HTTP owner. Reuse Observability 3's `ConsoleHttpOwner` and extend
+   it for these mutations. Reuse extracted OIDC issuer/audience/nonce/PKCE
    validation; do not reuse administrative-exec activation tokens. Existing
    auth is an exec workflow, not console membership. Use server-side sessions,
    Secure/HttpOnly/SameSite cookies, CSRF tokens, and exact origin checks.
    Cap sessions at 256/process and 15 minutes; restart/logout invalidates them.
-2. **Permissions — same owner.** Add configured grants keyed by issuer and
+2. **Permissions — same owner.** Extend configured grants keyed by issuer and
    subject, bound to tenant, cluster, namespace UID, and named operations from
    the API design. No grant means deny. Check every object lookup, evidence
    link, and mutation; recheck grants at publication. Raw evidence requires
    separate permission. No browser tenant claim or exec role creates a grant.
-3. **API — `ConsoleHttpOwner` and `DiscoveryOwner`.** Implement the bounded
-   query and mutation routes in [console-and-api.md](console-and-api.md).
+3. **API — `ConsoleHttpOwner` and `DiscoveryOwner`.** Reuse the bounded query
+   route and add mutation routes in [console-and-api.md](console-and-api.md).
    No read-job API. Limit results to 200 rows/1 MiB; normal overflow is explicit,
    and follow cursors bind SQL, scope, schema, export policy, and position.
    Use the qualified isolated query worker and committed digest checks. Return
-   Indexing/Unavailable on projection lag, not an empty list. Close DB readers
-   before HTTP output; verify cursors remain stable after index rebuild.
+   Pending/Unavailable on owner lag, not an empty list. Close DB readers
+   before HTTP output; verify cursors survive ordinary database restart.
    Serve assets and API on one optional Control HTTPS listener, disabled by
    default. Do not expose Node credentials or administrative endpoints there.
-   Add service-principal bearer validation with a dedicated API audience and
+   Reuse service-principal bearer validation with a dedicated API audience and
    export-scoped grants. Reuse OIDC validation, not browser session cookies.
-   Add a thin `src/bin/mithril_discovery_mcp.rs` stdio adapter to the same HTTP
-   contracts and generated schemas. Expose query, submit_assessment,
-   propose_policy, and separately granted publish_policy. Proposal construction
+   An optional `src/bin/mithril_discovery_mcp.rs` stdio adapter can use the
+   same HTTP contracts and generated schemas; it is not required for CLI
+   agents or phase completion. Expose submit_assessment, propose_policy, and
+   separately granted publish_policy through the shared API. Proposal construction
    includes native validation/preview; query reads pending/result revisions.
-   Pin one maintained MCP SDK only after its
-   schema/transport review; no new remote MCP auth service or business owner.
-4. **Review — discovery and `store.rs`.** Bind approval to proposal, preview,
+   If MCP is later selected, pin one maintained SDK after schema/transport
+   review; no new remote MCP auth service or business owner.
+4. **Review — discovery and AnalysisStore.** Bind approval to proposal, preview,
    base source, target facts, guardrails, reviewer, and expiry. Require an
    independent reviewer for every widening in this slice. Any semantic change
    requires a new preview/review. Commit publication intent before network I/O.
@@ -125,7 +128,7 @@ tests here, not keep this phase open until Mithril 10.
    typed next steps. Show counterevidence, missing checks, disclosure destination,
    query receipts, incomplete checks, and unverified client model/cost fields.
    Classification confirmation is separate
-   from policy review. UI and MCP calls must produce the same owner artifacts.
+   from policy review. UI and agent calls must produce the same owner artifacts.
 7. **Package — `packaging/mithril/Dockerfile`, Helm `values.yaml`,
    `templates/control-deployment.yaml`, `templates/control-rbac.yaml`.** Build
    the UI with its lockfile and copy static output into the existing Control
@@ -135,10 +138,11 @@ tests here, not keep this phase open until Mithril 10.
    and existing admission/Node mTLS services. Test discovery-disabled rendering.
    Put the embedded DB on the existing single-owner persistent store with a
    qualified local filesystem. Reject an unsupported shared/network filesystem;
-   reserve index, WAL, and rebuild space. No external DB Service is added.
+   reserve database, native WAL, temporary and backup space. No external DB Service is added.
    Package the query worker with qualified OS isolation and no production
    credentials/mounts/network. No inference-provider secret is required.
-   Package the stdio adapter as a CLI artifact, not another service.
+   If an optional stdio adapter is delivered, package it as a CLI artifact,
+   not another service.
 
 8. **Later integration contract — Mithril 9 and 10.** Before
    adding response endpoints, require the master response/graph owner's qualified
@@ -173,7 +177,7 @@ tests here, not keep this phase open until Mithril 10.
 Response and exception execution work remains with the named Mithril phases.
 Record those capabilities as Unsupported with the owner phase and missing
 qualification. They are not unfinished deliverables of this first API phase.
-Notification integration is mandatory here because Mithril 7 is a prerequisite.
+Notification integration is mandatory here because Phase 7.5 is a prerequisite.
 Do not substitute a fixture for a missing notification owner or action result.
 Do not implement later backend owners to finish this phase without approval.
 
@@ -186,8 +190,9 @@ Do not implement later backend owners to finish this phase without approval.
 - The UI cannot approve a revision whose semantic fields changed after preview.
 - An external model outage does not disable review or local enforcement.
   A source/actuator outage is unavailable, not an empty healthy result.
-- Pass `DE-AGENT`, `DE-ASSESS`, and `DE-DISCLOSE` through both HTTP and the MCP
-  adapter. Tool annotations cannot bypass grants. An investigator cannot
+- Pass `DE-AGENT`, `DE-ASSESS`, and `DE-DISCLOSE` through HTTP and the client
+  path used by the defender. Run MCP adapter checks only if that optional
+  adapter is delivered. Tool annotations cannot bypass grants. An investigator cannot
   publish or act; a defender requires exact separate authority. Neither can
   retrieve forbidden fields or use foreign evidence/approval handles.
 - Pass `DE-QUERY`, `DE-FOLLOW`, `DE-DEFENDER`, `DE-ESCALATION`, `DE-LOOP`,
@@ -202,17 +207,30 @@ Add `discovery_http_` and `discovery_publish_` owner tests, plus the lightweight
 `review-publish` case. Test bad OIDC audience, CSRF, grant removal, foreign
 evidence IDs, UID replacement, lost replies, and retained old generations.
 Require existing administrative-exec tests to pass after auth extraction.
-Add MCP protocol tests and a local-defender task against the production
-HTTP owner. Use recorded model responses for deterministic integration tests.
+Add protocol tests for each delivered adapter and a recorded external-client
+task against the production HTTP owner. These tests require no model runtime.
 
 ```sh
 cargo test -p mithril-control discovery_ -- --nocapture
 bash packaging/mithril/helm/tests/verify.sh
 ```
 
+Implement `review-publish` in `crates/mithril-e2e/src/discovery/` and register
+it in `src/bin/mithril_discovery_test.rs`. Use production HTTP, proposal,
+approval, publication and rollout owner APIs. The Kubernetes API double can
+lose a reply or change resourceVersion; it cannot make the approval decision.
+Require one conditional source change, the exact reviewed digest, and distinct
+source-accepted versus per-target-active states. Test denied self-approval,
+source UID replacement, stale preview, lost reply and partial activation.
+Run this lightweight case before the paired physical publication test.
+
+```sh
+cargo run -p mithril-e2e --bin mithril_discovery_test -- --case review-publish --output-directory /tmp/araphor-publication
+```
+
 From `ui/mithril-console`, run `npm run check`, `npm test`, `npm run build`,
 and `npm run test:e2e`. Browser tests must cover keyboard-only review, a scope
-change during polling, stale approval, and partial activation. Test the built
+change during streaming, stale approval, and partial activation. Test the built
 assets through Control, not only through the Vite development server.
 
 ## Exclusions and stop point
@@ -220,8 +238,3 @@ assets through Control, not only through the Vite development server.
 No new top-level workspace, arbitrary test execution, general data-source connector,
 model-authorized response, or blanket approve-all operation. Stop before a
 production release until matched physical and operator qualification passes.
-
-## Result
-
-**Not done.** Existing console controls remain sample-only. No live API,
-permission, source write, or UI implementation was added in this change.
