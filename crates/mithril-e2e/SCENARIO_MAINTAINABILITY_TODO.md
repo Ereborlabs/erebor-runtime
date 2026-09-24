@@ -2463,7 +2463,8 @@ test does not close a row when its physical condition or an assertion changed.
       strict crate Clippy, and whitespace checks passed.
     - [x] Pass direct `runc` and commit it. The unchanged test passed in
       33.64 seconds with stock `runc` and the production OCI hook.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The unchanged test passed in
+      65.53 seconds in the retained real K3s cluster.
     - [ ] Remove only the matching legacy relationship assertions after all
       three pass. Keep its roundtrip setup while inherited, stale, and
       unmatched Unix-stream checks depend on the same endpoint.
