@@ -1664,6 +1664,20 @@ test does not close a row when its physical condition or an assertion changed.
 - [ ] `EffectTestRunner::replacement_generation_exception_probe`: own
   fixture paths and child lifetime. Keep policy installation, exact exception
   use, exhaustion denial, evidence checks, and shutdown explicit.
+  - [ ] Add one small shared test for a live actor across a policy replacement
+    and one-use exception. Start with `actor_policy.json`, then install
+    `exception_policy.json`. Require the same task cookie, a newer effect
+    generation, denial before the grant, one allowed open, one exhausted
+    denial, and exact File/OpenWrite evidence. Reuse `exception.py` and add
+    only one CRD for the one-use grant. Add no Platform API.
+    - [x] Pass Host and commit it. The 94-line test passed in 35.11 seconds.
+      All four Host exception tests passed together in 88.17 seconds. The
+      production File/OpenWrite events used the new generation and one
+      composite atom for the denied, allowed, and exhausted secret opens.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+  - [ ] Preserve the old pre-replacement inactive-grant denial before removing
+    the legacy probe. The new actor-policy start does not prove that condition.
 - [ ] `EffectTestRunner::physical_probe` setup and teardown: own its three
   cgroups, child processes, pin root, lease, and diagnostic output.
 - [ ] `EffectTestRunner::physical_probe` observe scenario: keep the public

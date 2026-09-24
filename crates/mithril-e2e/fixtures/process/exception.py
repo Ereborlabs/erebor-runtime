@@ -23,7 +23,17 @@ def write(name, value):
         output.write(value)
 
 
-if mode == "race":
+if mode == "single":
+    print("native-fixture-ready", flush=True)
+    for command, name in [
+        ("before", "expired-result"),
+        ("first", "again-result"),
+        ("second", "race-result"),
+    ]:
+        if sys.stdin.readline() != f"{command}\n":
+            raise RuntimeError(f"expected {command}")
+        write(name, str(open_errno(work / "expired-secret")))
+elif mode == "race":
     started = threading.Barrier(9)
     release = threading.Event()
     tids = [0] * 8
