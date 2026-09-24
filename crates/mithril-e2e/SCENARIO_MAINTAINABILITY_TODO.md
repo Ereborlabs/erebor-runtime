@@ -2072,6 +2072,10 @@ test does not close a row when its physical condition or an assertion changed.
       test body, policy, and effect assertions.
     - [x] Kubernetes passed in 70.40 seconds with the same actor,
       test body, policy, and effect assertions.
+    - [x] Preserve the old pre-protection mapping condition. The actor now
+      allocates its first writable anonymous map before it reports ready.
+      Host passed again in 28.56 seconds, direct `runc` in 29.52 seconds,
+      and Kubernetes in 77.02 seconds.
     - [ ] Remove only the matching legacy actions, fields, and prepared
       resources after all three platforms pass.
   - [x] Replace the protected `PTRACE_ATTACH` block with one small standard

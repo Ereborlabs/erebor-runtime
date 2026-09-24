@@ -26,8 +26,10 @@ def map_page(protection):
 
 
 def protect(protection, key=False):
-    with mmap.mmap(-1, mmap.PAGESIZE, flags=mmap.MAP_PRIVATE,
-                   prot=mmap.PROT_READ | mmap.PROT_WRITE) as region:
+    region = (mmap.mmap(-1, mmap.PAGESIZE, flags=mmap.MAP_PRIVATE,
+                       prot=mmap.PROT_READ | mmap.PROT_WRITE)
+              if key else prepared)
+    with region:
         address = ctypes.addressof(ctypes.c_char.from_buffer(region))
         if key:
             status = libc.pkey_mprotect(address, mmap.PAGESIZE, protection, 0)
@@ -43,6 +45,8 @@ def name(value):
         raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
 
 
+prepared = mmap.mmap(-1, mmap.PAGESIZE, flags=mmap.MAP_PRIVATE,
+                     prot=mmap.PROT_READ | mmap.PROT_WRITE)
 print("native-fixture-ready", flush=True)
 if sys.stdin.readline() != "run\n":
     sys.exit(2)
