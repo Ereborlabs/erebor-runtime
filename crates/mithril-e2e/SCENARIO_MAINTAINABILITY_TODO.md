@@ -1731,6 +1731,23 @@ test does not close a row when its physical condition or an assertion changed.
       and result assertions as Host and direct `runc`.
   - [ ] Replace the exact-secret symlink and hard-link alias checks. Keep the
     symlink's exact decision and the hard link's unresolved-object denial.
+    - [x] Qualify the symlink on Host with a 65-line standard platform test.
+      The same Python actor reads the original file and its symlink. The
+      physical read succeeds, and production `WOULD_DENY` evidence keeps the
+      original exact-object key, composite atom, and task cookie. The exact
+      Host case passed in 34.28 seconds. Keep the old symlink action until
+      direct `runc` and Kubernetes pass.
+    - [ ] Pass the unchanged symlink test under direct `runc` and commit it.
+    - [ ] Pass the unchanged symlink test on Kubernetes and commit it.
+    - [ ] Remove only the matching old symlink action after all three pass.
+      Keep the original control open for the bind-alias checks.
+    - A focused Host attempt on 2026-09-24 used the public Observe policy and
+      the shared Python actor. The symlink read succeeded and kept the exact
+      object and composite authority. The hard-link read also succeeded, but
+      the old probe requires `EACCES`. Putting the secret in a separate
+      `source` directory did not change that result. The attempted test was
+      removed. Do not retire the old assertion or accept the allowed read.
+      Check the public policy boundary before another replacement attempt.
   - [ ] Replace both exact-secret bind-alias checks. Keep each live mount ID,
     device, inode, inode generation, and the shared composite authority.
   - [ ] Replace the exact-secret mount-change checks. Keep the first decision

@@ -1,3 +1,4 @@
+import ctypes
 import json
 import os
 from pathlib import Path
@@ -41,6 +42,22 @@ elif mode == "read":
     if sys.stdin.readline() != "read\n":
         raise RuntimeError("expected read")
     write("expired-result", str(open_errno(secret, os.O_RDONLY)))
+elif mode == "symlink":
+    secret = Path("/tmp/mithril-observe-secret")
+    secret.parent.mkdir(parents=True, exist_ok=True)
+    secret.write_bytes(b"secret")
+    alias = Path("/tmp/mithril-observe-link")
+    alias.symlink_to(secret)
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+    print("native-fixture-ready", flush=True)
+    for command, path in [("base", secret), ("confirm", secret), ("link", alias)]:
+        if sys.stdin.readline() != f"{command}\n":
+            raise RuntimeError(f"expected {command}")
+        error = open_errno(path, os.O_RDONLY)
+        name = ctypes.create_string_buffer(f"link-{command}-{error}".encode("ascii"))
+        if libc.prctl(15, ctypes.addressof(name), 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
 elif mode == "race":
     started = threading.Barrier(9)
     release = threading.Event()

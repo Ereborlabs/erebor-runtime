@@ -23,6 +23,8 @@ mod file_effect;
 mod file_mutation;
 #[cfg(test)]
 mod file_observe;
+#[cfg(test)]
+mod file_symlink;
 mod fixture_syscalls;
 #[cfg(test)]
 mod inactive_grant;
