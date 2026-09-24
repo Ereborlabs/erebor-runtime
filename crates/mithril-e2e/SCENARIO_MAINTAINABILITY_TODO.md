@@ -562,8 +562,8 @@ runner that still needs replacement:
 | --- | ---: | --- |
 | `effect/runc.rs` | 6,864 | Size and runner retirement |
 | `identity.rs` | 5,425 | Size and runner retirement |
-| `effect.rs` | 3,288 | Size and runner retirement |
-| `effect/child.rs` | 3,188 | Size and runner retirement |
+| `effect.rs` | 3,265 | Size and runner retirement |
+| `effect/child.rs` | 3,153 | Size and runner retirement |
 | `control_tls.rs` | 2,416 | Size and runner retirement |
 | `effect/network.rs` | 1,584 | Runner retirement; size limit met |
 
@@ -2502,7 +2502,7 @@ test does not close a row when its physical condition or an assertion changed.
     now-unused fork-write wrapper are removed. The Host case passed again
     after deletion in 28.13 seconds. The 91 nonprivileged library tests,
     formatting, and strict crate Clippy pass.
-  - [ ] Replace the unmatched Unix-stream peer denial. After the allowed
+  - [x] Replace the unmatched Unix-stream peer denial. After the allowed
     descriptor transfers finish, start a new peer and require `EACCES` plus
     attributed `EXACT_POLICY_DENY` IPC/Access evidence. Keep the old action
     until the same platform test passes on Host, direct `runc`, and Kubernetes.
@@ -2523,9 +2523,12 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit it. The exact shared Rust test passed in
       65.42 seconds in the retained K3s cluster. Its test namespace was
       removed; the K3s cluster remains ready for the next case.
-    - [ ] Remove only the matching legacy restart action and result field
-      after both remaining platforms pass. Keep the descriptor-transfer
-      actions until their separate platform test passes.
+    - [x] Remove only the matching legacy restart action and result field.
+      Keep the descriptor-transfer actions until their separate platform
+      tests pass. The obsolete restart method and saved socket address are
+      gone. The focused fixture test now checks stream closure after transfer.
+      The revised physical Host case passed in 28.11 seconds. The 91
+      nonprivileged library tests, formatting, and strict crate Clippy pass.
   - [x] Replace the unmatched file-create block with one small standard
     platform test. Use one shared Python actor and the existing Python policy.
     Start the actor before Node to preserve the original recovered-root

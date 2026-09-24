@@ -445,7 +445,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub memfd_exec_failed_closed: bool,
     pub sysv_ipc_access_hard_closed: bool,
     pub unix_stream_relationship_allowed: bool,
-    pub unix_stream_unmatched_denied: bool,
     pub ptmx_ioctl_exact_allowed: bool,
     pub ptmx_derived_peer_hard_closed: bool,
     pub ptmx_derived_peer_installed_nothing: bool,
@@ -2043,27 +2042,6 @@ impl EffectTestRunner {
                     KernelEffectOperationV1::OpenRead,
                 ),
             )?;
-
-            let unmatched_marker = observations.cursor();
-            let unmatched_outcome =
-                fixture.run_prepared(HardClosedOperation::UnixStreamUnmatched)?;
-            ensure!(
-                unmatched_outcome.denied(),
-                InvalidInputSnafu {
-                    path: Path::new("effect Unix-stream peer"),
-                    reason: "an unmatched Unix-stream peer bypassed the configured denial",
-                }
-            );
-            wait_for_effect(
-                &reader,
-                &observations,
-                unmatched_marker,
-                "EXACT_POLICY_DENY",
-                (
-                    KernelEffectFamilyV1::Ipc,
-                    KernelEffectOperationV1::IpcAccess,
-                ),
-            )?;
         } else {
             wait_for_effect(
                 &reader,
@@ -3010,7 +2988,6 @@ impl EffectTestRunner {
             memfd_exec_failed_closed: protect,
             sysv_ipc_access_hard_closed: true,
             unix_stream_relationship_allowed: protect,
-            unix_stream_unmatched_denied: protect,
             ptmx_ioctl_exact_allowed: protect,
             ptmx_derived_peer_hard_closed: protect,
             ptmx_derived_peer_installed_nothing: protect,

@@ -176,7 +176,6 @@ pub(super) enum PreparedOperation {
     IoctlUnsupported,
     Ipc,
     UnixStream,
-    UnixStreamUnmatched,
     SelfProtect { path: PathBuf },
 }
 
@@ -2100,15 +2099,6 @@ impl PreparedOperations {
                 .unix_stream_target
                 .as_mut()
                 .map_or_else(missing_process_target, UnixStreamTarget::roundtrip),
-            PreparedOperation::UnixStreamUnmatched => {
-                self.unix_stream_target
-                    .as_mut()
-                    .map_or_else(missing_process_target, |target| {
-                        target
-                            .restart()
-                            .map_or_else(error_outcome, |()| target.roundtrip())
-                    })
-            }
             PreparedOperation::SelfProtect { path } => match fs::remove_file(path) {
                 Ok(()) => allowed_outcome(),
                 Err(error) => error_outcome(error),
@@ -2134,8 +2124,6 @@ struct UnixStreamTarget {
     signal: SharedMailbox,
     signal_path: PathBuf,
     abstract_name: Vec<u8>,
-    address: libc::sockaddr_un,
-    address_length: libc::socklen_t,
     connected_stream: Option<UnixStream>,
     pending_transfers: u8,
     received_files: Vec<fs::File>,
@@ -2177,8 +2165,6 @@ impl UnixStreamTarget {
             signal,
             signal_path,
             abstract_name,
-            address,
-            address_length,
             connected_stream: None,
             pending_transfers: u8::from(first_file >= 0) + u8::from(second_file >= 0),
             received_files: Vec::new(),
@@ -2290,22 +2276,6 @@ impl UnixStreamTarget {
             installed_descriptors,
             read_allowed,
         })
-    }
-
-    fn restart(&mut self) -> io::Result<()> {
-        if self.pid.is_some() || self.connected_stream.is_some() {
-            return Err(io::Error::other("Unix-stream target is still active"));
-        }
-        self.signal.reset();
-        self.pid = Some(spawn_unix_stream_server(
-            &self.signal,
-            &self.address,
-            self.address_length,
-            -1,
-            -1,
-        )?);
-        self.pending_transfers = 0;
-        Ok(())
     }
 
     fn wait(&mut self) -> io::Result<()> {
@@ -3001,7 +2971,7 @@ mod tests {
     }
 
     #[test]
-    fn abstract_stream_restarts_after_transfer() -> crate::Result<()> {
+    fn abstract_stream_closes_after_transfer() -> crate::Result<()> {
         let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
             path: "Unix-stream control fixture".into(),
             source,
@@ -3035,12 +3005,7 @@ mod tests {
             location: snafu::location!(),
         })?;
         assert_eq!(transfer.installed_descriptors, 1);
-        target.restart().map_err(|source| crate::Error::Io {
-            path: "restarted Unix-stream control fixture".into(),
-            source,
-            location: snafu::location!(),
-        })?;
-        assert!(target.roundtrip().allowed);
+        assert!(target.connected_stream.is_none());
         Ok(())
     }
 
