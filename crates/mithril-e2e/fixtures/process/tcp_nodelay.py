@@ -1,6 +1,7 @@
 import ctypes
 import errno
 import os
+import signal
 import socket
 import sys
 
@@ -132,6 +133,48 @@ def send_variants():
         raise OSError(failure.errno or errno.EIO, f"{stage}: {failure}") from failure
 
 
+def socket_inheritance():
+    stage = "socket setup"
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+            server.settimeout(3)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            stage = "bind"
+            server.bind(("127.0.0.1", 19093))
+            server.listen(1)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                client.settimeout(3)
+                stage = "connect"
+                client.connect(server.getsockname())
+                with server.accept()[0] as peer:
+                    peer.settimeout(3)
+                    stage = "duplicate send"
+                    with client.dup() as duplicate:
+                        duplicate.sendall(b"dup")
+                    if receive(peer, 3) != b"dup":
+                        raise OSError(errno.EIO, "duplicate payload changed")
+
+                    stage = "fork"
+                    child = os.fork()
+                    if child == 0:
+                        try:
+                            client.sendall(b"fork")
+                            set_name("fork-send")
+                            os.kill(os.getpid(), signal.SIGSTOP)
+                            os._exit(0)
+                        except OSError as failure:
+                            os._exit((failure.errno or errno.EIO) & 0xFF)
+                    if receive(peer, 4) != b"fork":
+                        raise OSError(errno.EIO, "fork payload changed")
+                    waited, status = os.waitpid(child, os.WUNTRACED)
+                    if waited != child or not os.WIFSTOPPED(status):
+                        raise OSError(errno.EIO, "fork child did not stop")
+                    return child
+    except OSError as failure:
+        raise OSError(failure.errno or errno.EIO, f"{stage}: {failure}") from failure
+
+
+held_child = None
 print("native-fixture-ready", flush=True)
 for command in sys.stdin:
     if command == "nodelay\n":
@@ -146,5 +189,20 @@ for command in sys.stdin:
         if error:
             sys.exit(error)
         break
+    elif command == "inherit\n":
+        try:
+            held_child = socket_inheritance()
+            error = 0
+        except OSError as failure:
+            error = failure.errno or errno.EIO
+            print(f"inherit: {failure}", file=sys.stderr, flush=True)
+        set_name(f"inherit-{error}")
+        if error:
+            sys.exit(error)
     elif command == "release\n":
+        if held_child is not None:
+            os.kill(held_child, signal.SIGCONT)
+            _, status = os.waitpid(held_child, 0)
+            if os.waitstatus_to_exitcode(status) != 0:
+                sys.exit(errno.EIO)
         break

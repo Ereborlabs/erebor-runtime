@@ -156,3 +156,67 @@ fn tcp_send_variants_are_allowed<P: Platform>() -> TestResult<()> {
     actor.stop()?;
     env.stop()
 }
+
+#[platform_test(host)]
+#[lifecycle = identity]
+fn tcp_inherited_socket_is_allowed<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("tcp-nodelay")?;
+    env.start_control()?;
+    env.start_node()?;
+    env.install_policy("tcp_nodelay_policy.json")?;
+    env.node_ready()?;
+    let mut actor = env.start_actor("tcp_nodelay.py", &[])?;
+    let pid = actor.id();
+    let root = env.task(pid, "TCP actor")?;
+    assert_ne!(root.snapshot.admitted_entry_rule_id, 0);
+
+    actor.send(b"inherit\n")?;
+    actor.wait_name(
+        pid,
+        "inherit-0",
+        "socket inheritance",
+        Duration::from_secs(5),
+    )?;
+    let child_pid = actor.wait_child(pid, "forked TCP sender")?;
+    actor.track(child_pid)?;
+    let child = env.task(child_pid, "forked TCP sender")?;
+    assert_ne!(child.snapshot.task_cookie, root.snapshot.task_cookie);
+    assert_eq!(
+        child.snapshot.creator_task_cookie,
+        Some(root.snapshot.task_cookie)
+    );
+    assert_eq!(child.snapshot.active_role_id, root.snapshot.active_role_id);
+
+    let snapshot = env.snapshot()?;
+    let find_send = |task: &crate::platform::Task| {
+        snapshot
+            .recent_effects
+            .iter()
+            .find(|event| task.matches_effect(event, "EXACT_POLICY_ALLOW", F::Network, O::Send, 0))
+    };
+    let root_send = find_send(&root).expect("duplicate socket has no Send result");
+    let child_send = find_send(&child).expect("forked socket has no Send result");
+    for event in [root_send, child_send] {
+        assert_eq!(&event.network_peer_address[..4], &[127, 0, 0, 1]);
+        assert_eq!(event.network_peer_port, 19093);
+        assert_ne!(event.network_destination_policy_handle, 0);
+        assert_eq!(
+            event.network_creator_profile_generation_ref_id,
+            root.snapshot.profile_generation_ref_id
+        );
+    }
+    assert_eq!(
+        root_send.network_socket_key_id,
+        child_send.network_socket_key_id
+    );
+    assert_eq!(
+        root_send.network_socket_generation,
+        child_send.network_socket_generation
+    );
+
+    actor.send(b"release\n")?;
+    let status = actor.wait_exit("TCP inheritance", Duration::from_secs(5))?;
+    assert!(status.success(), "TCP actor exited with {status}");
+    actor.stop()?;
+    env.stop()
+}

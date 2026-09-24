@@ -2414,6 +2414,18 @@ test does not close a row when its physical condition or an assertion changed.
   - [ ] Replace clone-send and fork-send socket inheritance. Keep distinct
     child execution, payload receipt, creator identity, and allowed result
     assertions. Keep socket-generation non-reuse as a separate lifecycle test.
+    - [x] Add one Host test with the existing actor, policy, and Platform API.
+      Duplicate one connected socket and fork one child with the same socket.
+      Require both peer payloads, distinct child identity, root creator
+      identity, two production Send results, and one shared socket generation.
+      The test has 61 lines.
+    - [x] Pass Host and commit it. The exact Host case passed in 28.46
+      seconds.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy clone-send and fork-send success
+      actions and assertions. Keep the post-fence cloned-socket denial and the
+      separate socket-generation non-reuse behavior.
   - [ ] Replace the whole-socket fence and Node restart group. Preserve the
     installed response floor, retained task, socket, mount, and active-policy
     state, denied send and shutdown, absent bytes and bypass packets, released
