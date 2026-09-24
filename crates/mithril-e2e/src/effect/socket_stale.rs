@@ -7,7 +7,7 @@ use erebor_interceptor_abi::{
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn exited_peer_loses_authority<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("socket-pass-allowed")?;
