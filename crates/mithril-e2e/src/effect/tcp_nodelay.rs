@@ -157,7 +157,7 @@ fn tcp_send_variants_are_allowed<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn tcp_inherited_socket_is_allowed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("tcp-nodelay")?;

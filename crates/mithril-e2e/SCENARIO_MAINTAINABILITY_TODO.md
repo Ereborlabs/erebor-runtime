@@ -2423,7 +2423,8 @@ test does not close a row when its physical condition or an assertion changed.
       seconds.
     - [x] Pass direct `runc` and commit it. The exact direct-runc case passed
       in 28.99 seconds with the same actor, policy, and assertions.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The corrected physical case passed in
+      64.73 seconds in the retained K3s cluster.
       - The first physical run found an evidence-readiness gap. The actor and
         child identities were ready, but the immediate snapshot did not yet
         contain the root Send result. The shared actor now separates prepare
