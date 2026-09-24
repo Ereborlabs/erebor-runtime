@@ -26,7 +26,7 @@ def hold():
         time.sleep(0.01)
 
 
-if mode in ("receiver", "approved"):
+if mode in ("receiver", "approved", "stale"):
     print("native-fixture-ready", flush=True)
     sys.stdin.buffer.readline()
     named("rx-create")
@@ -50,7 +50,7 @@ if mode in ("receiver", "approved"):
             if len(fds) != 1:
                 raise RuntimeError(f"expected one passed socket, got {len(fds)}")
             with socket.socket(fileno=fds[0]) as passed:
-                if mode == "approved":
+                if mode in ("approved", "stale"):
                     try:
                         passed.sendall(b"ok")
                     except OSError as failure:
@@ -59,7 +59,8 @@ if mode in ("receiver", "approved"):
                         sent = 0
                     control.sendall(b"done")
                     named("fd1-ok" if sent == 0 else f"fd1-{sent}")
-                    hold()
+                    if mode != "stale":
+                        hold()
                     sys.exit(sent)
                 try:
                     passed.sendall(b"blocked")
@@ -115,14 +116,28 @@ else:
                             raise RuntimeError("receiver did not finish")
                         stage = "read"
                         named(stage)
-                        if mode == "main-approved":
+                        if mode in ("main-approved", "main-stale"):
                             payload = bytearray()
                             while len(payload) < 2 and select.select([client], [], [], 3)[0]:
                                 chunk = client.recv(2 - len(payload))
                                 if not chunk:
                                     break
                                 payload.extend(chunk)
-                            named("peer-ok" if payload == b"ok" else "peer-missing")
+                            if payload != b"ok":
+                                named("peer-missing")
+                            elif mode == "main-stale":
+                                named("peer-ready")
+                            else:
+                                named("peer-ok")
+                            if mode == "main-stale":
+                                if sys.stdin.buffer.readline() != b"probe\n":
+                                    raise RuntimeError("expected stale-peer probe")
+                                try:
+                                    control.sendall(b"stale")
+                                except OSError as failure:
+                                    named(f"stale-{failure.errno or errno.EIO}")
+                                else:
+                                    named("stale-0")
                         elif select.select([client], [], [], 0.5)[0]:
                             payload = client.recv(1)
                             named("peer-bytes" if payload else "peer-closed")
