@@ -4,7 +4,7 @@ use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::{
@@ -86,8 +86,6 @@ pub struct NetworkPhysicalProbeBundleV2 {
     pub cross_namespace_evidence_distinct: bool,
     pub rewritten_forbidden_packet_absent: bool,
     pub rewritten_allowed_destination_received: bool,
-    pub delegated_forbidden_request_absent: bool,
-    pub delegated_allowed_request_received: bool,
     pub provider_write_observed: bool,
     pub shared_socket_holders_denied: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -101,7 +99,6 @@ pub struct NetworkPhysicalProbeBundleV2 {
 
 #[derive(Default)]
 struct NetworkFixtureProof {
-    delegated_egress: bool,
     hf_result: bool,
     hf_network: bool,
     local_inet: bool,
@@ -151,14 +148,6 @@ impl NetworkTestRunner {
         let rewrite_listener = tcp_listener(SocketAddr::from(([127, 0, 0, 4], 0)))?;
         let rewrite_address = rewrite_listener.local_addr().context(IoSnafu {
             path: Path::new("rewrite network listener"),
-        })?;
-        let delegated_listener = tcp_listener(SocketAddr::from(([127, 0, 0, 1], 0)))?;
-        let delegated_address = delegated_listener.local_addr().context(IoSnafu {
-            path: Path::new("delegated network listener"),
-        })?;
-        let delegated_denied_listener = tcp_listener(SocketAddr::from(([127, 0, 0, 53], 0)))?;
-        let delegated_denied_address = delegated_denied_listener.local_addr().context(IoSnafu {
-            path: Path::new("denied delegated network listener"),
         })?;
         let provider_listener = tcp_listener(SocketAddr::from(([127, 0, 0, 1], 0)))?;
         let provider_address = provider_listener.local_addr().context(IoSnafu {
@@ -227,26 +216,12 @@ impl NetworkTestRunner {
             actors[4].cgroup.path(),
             actors[4].spec.private_network_namespace,
         )?;
-        let mut proxy_requester = start_actor(
-            &fixture_root,
-            actors[5].spec.name,
-            actors[5].cgroup.path(),
-            actors[5].spec.private_network_namespace,
-        )?;
-        let mut proxy_delegate = start_actor(
-            &fixture_root,
-            actors[6].spec.name,
-            actors[6].cgroup.path(),
-            actors[6].spec.private_network_namespace,
-        )?;
         for (index, actor) in [
             &mut fixture,
             &mut server_fixture,
             &mut converter_receiver,
             &mut namespace_external,
             &mut namespace_converter,
-            &mut proxy_requester,
-            &mut proxy_delegate,
         ]
         .into_iter()
         .enumerate()
@@ -265,7 +240,6 @@ impl NetworkTestRunner {
             );
         }
         let converter_pass = transport_root.join("converter.sock");
-        let proxy_path = transport_root.join("proxy.sock");
         let token_object = ExactFileObjectResolver::resolve(
             fixture.pid(),
             &token_path,
@@ -309,15 +283,13 @@ impl NetworkTestRunner {
             })
             .context(InterceptorSnafu)?;
         let transport_marker = observations.cursor();
-        let transport_prepared = [
-            converter_receiver.network_prepare_pass_receiver(&converter_pass)?,
-            proxy_delegate.network_prepare_proxy(&proxy_path)?,
-        ];
+        let transport_prepared =
+            converter_receiver.network_prepare_pass_receiver(&converter_pass)?;
         reader
             .poll(Duration::from_millis(100))
             .context(InterceptorSnafu)?;
         ensure!(
-            transport_prepared.iter().all(|outcome| outcome.allowed),
+            transport_prepared.allowed,
             InvalidInputSnafu {
                 path: &transport_root,
                 reason: format!(
@@ -339,10 +311,6 @@ impl NetworkTestRunner {
 
         let server = thread::spawn(move || server_exchange(listener, PAYLOAD));
         let rewrite_server = thread::spawn(move || server_receive(rewrite_listener, b"rewrite"));
-        let delegated_server =
-            thread::spawn(move || server_receive(delegated_listener, b"delegated"));
-        let delegated_denied_server =
-            thread::spawn(move || server_absent(delegated_denied_listener));
         let provider_server = thread::spawn(move || server_receive(provider_listener, b"provider"));
         let allowed_marker = observations.cursor();
         fixture.network_connect(allowed_address)?;
@@ -582,7 +550,7 @@ impl NetworkTestRunner {
             bpf_setup_denied,
             InvalidInputSnafu {
                 path: Path::new("closed network paths"),
-                reason: "a delegated setup or protocol path remained open",
+                reason: "BPF map setup was not denied",
             }
         );
 
@@ -788,26 +756,6 @@ impl NetworkTestRunner {
             }
         );
 
-        let denied_request_sent = proxy_requester
-            .network_proxy_request(&proxy_path, "deny-1", delegated_denied_address)?
-            .allowed;
-        let denied_delegate = proxy_delegate.network_proxy_once()?;
-        let allowed_request_sent = proxy_requester
-            .network_proxy_request(&proxy_path, "allow-1", delegated_address)?
-            .allowed;
-        let allowed_delegate = proxy_delegate.network_proxy_once()?;
-        let delegated_send = proxy_delegate.network_send(b"delegated")?.allowed;
-        proxy_delegate.network_close()?;
-        let delegated_allowed_request_received = allowed_request_sent
-            && allowed_delegate.request_id == "allow-1"
-            && allowed_delegate.connect.allowed
-            && delegated_send
-            && join_server(delegated_server, "delegated server")?;
-        let delegated_forbidden_request_absent = denied_request_sent
-            && denied_delegate.request_id == "deny-1"
-            && denied_delegate.connect.denied()
-            && join_server(delegated_denied_server, "denied delegated server")?;
-
         let provider_connect = fixture.network_connect(provider_address)?.allowed;
         let provider_send = fixture.network_send(b"provider")?.allowed;
         fixture.network_close()?;
@@ -862,8 +810,6 @@ impl NetworkTestRunner {
         rewrite.cleanup()?;
 
         let proof = NetworkFixtureProof {
-            delegated_egress: delegated_forbidden_request_absent
-                && delegated_allowed_request_received,
             hf_result: post_fence_send_denied && provider_write_observed,
             hf_network: bpf_setup_denied && post_fence_bypass_packets_absent && peer_network_passed,
             local_inet: accepted_socket_approved_actor_allowed,
@@ -891,8 +837,6 @@ impl NetworkTestRunner {
             }
         );
 
-        proxy_delegate.stop()?;
-        proxy_requester.stop()?;
         namespace_converter.stop()?;
         namespace_external.stop()?;
         converter_receiver.stop()?;
@@ -921,8 +865,6 @@ impl NetworkTestRunner {
             cross_namespace_evidence_distinct,
             rewritten_forbidden_packet_absent,
             rewritten_allowed_destination_received,
-            delegated_forbidden_request_absent,
-            delegated_allowed_request_received,
             provider_write_observed,
             shared_socket_holders_denied,
             peer_tcp_allowed,
@@ -1321,21 +1263,6 @@ fn server_receive(listener: TcpListener, expected: &[u8]) -> io::Result<bool> {
     Ok(payload == expected)
 }
 
-fn server_absent(listener: TcpListener) -> io::Result<bool> {
-    listener.set_nonblocking(true)?;
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(3) {
-        match listener.accept() {
-            Ok(_) => return Ok(false),
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(true)
-}
-
 fn read_is_absent(stream: &mut TcpStream) -> io::Result<bool> {
     let mut byte = [0_u8; 1];
     match stream.read(&mut byte) {
@@ -1451,11 +1378,6 @@ impl NetworkFixtureProof {
     fn results(&self) -> Vec<NetworkFixtureResultV1> {
         [
             (
-                "FILE-DELEGATED-EGRESS-001",
-                self.delegated_egress,
-                "DELEGATE_REQUEST_ID_AND_FINAL_DESTINATION_ENFORCED",
-            ),
-            (
                 "HF-004-RESULT-001",
                 self.hf_result,
                 "DENIAL_SEND_AND_PROVIDER_RECEIPT_RESULTS_SEPARATED",
@@ -1520,7 +1442,6 @@ mod tests {
         assert!(failed.iter().all(|fixture| fixture.result == "FAIL"));
 
         let results = NetworkFixtureProof {
-            delegated_egress: true,
             hf_result: true,
             hf_network: true,
             local_inet: true,
@@ -1531,7 +1452,7 @@ mod tests {
             socket_life: true,
         }
         .results();
-        assert_eq!(results.len(), 9);
+        assert_eq!(results.len(), 8);
         assert_eq!(
             results
                 .iter()

@@ -545,7 +545,7 @@ owners are:
 | --- | ---: | --- |
 | `EffectTestRunner::runc_entry_role_runtime_probe` | 3,992 | `two-node-convergence.sh` protected start, concurrent exec, replacement, administrative entry, and upgrade checks |
 | `EffectTestRunner::physical_probe` | 3,466 | `run.sh` observe and protect effect lanes |
-| `NetworkTestRunner::physical_probe` | 1,237 | `two-node-network.sh` in both node directions |
+| `NetworkTestRunner::physical_probe` | 753 | `two-node-network.sh` in both node directions |
 | `EffectTestRunner::recovered_container_entry_probe` | 1,028 | `two-node-convergence.sh` recovered-container entry lane |
 | `IdentityTestRunner::physical_kubernetes_probe` and its private cases | 4,900 combined | `run.sh --with-k3s` identity lane |
 
@@ -562,17 +562,17 @@ runner that still needs replacement:
 | --- | ---: | --- |
 | `effect/runc.rs` | 6,864 | Size and runner retirement |
 | `identity.rs` | 5,425 | Size and runner retirement |
-| `effect.rs` | 3,265 | Size and runner retirement |
-| `effect/child.rs` | 3,153 | Size and runner retirement |
+| `effect.rs` | 3,267 | Size and runner retirement |
+| `effect/child.rs` | 2,991 | Size and runner retirement |
 | `control_tls.rs` | 2,416 | Size and runner retirement |
-| `effect/network.rs` | 1,584 | Runner retirement; size limit met |
+| `effect/network.rs` | 1,505 | Runner retirement; size limit met |
 
 The behavior sections below are the runner-retirement inventory. This size
 table does not close any runner or shell action.
 
 Runner retirement is a separate, open check. In particular:
 
-- [ ] Retire `NetworkTestRunner::physical_probe` in `effect/network.rs` (1,584
+- [ ] Retire `NetworkTestRunner::physical_probe` in `effect/network.rs` (1,505
   lines). Replace each remaining local and two-node behavior with the same
   small Rust platform test on each applicable platform. Then remove the old
   `mithril-network-test` probe command and the scenario actions and assertions
@@ -3010,9 +3010,9 @@ test does not close a row when its physical condition or an assertion changed.
       exact-policy result to make this test pass. The durable evidence model
       needs a separate approved attribution decision before this action can
       replace the legacy raw-event check.
-  - [ ] Replace delegated egress. Keep the request ID, requested and final
+  - [x] Replace delegated egress. Keep the request ID, requested and final
     destinations, forbidden request absence, and allowed request receipt.
-    - [ ] Keep distinct governed requester and delegate tasks, both request
+    - [x] Keep distinct governed requester and delegate tasks, both request
       IDs, the delegate's denied and allowed Connect results, its allowed Send
       result, the allowed TCP payload, and no forbidden connection. Use one
       shared actor and one Rust test below 100 lines on all three platforms.
@@ -3048,7 +3048,13 @@ test does not close a row when its physical condition or an assertion changed.
         The focused case passed in 69.36 seconds with deployed Control and
         Node. The test process exited with status 0. No test namespace
         remained in the retained K3s cluster after teardown.
-      - [ ] Remove the matching legacy actions only after all three pass.
+      - [x] Remove the matching legacy actions after all three passed. The
+        runner no longer starts two proxy actors or listener threads. Its
+        child mailbox no longer has proxy commands or a proxy result. The
+        test bundle no longer claims the duplicate delegated fixture result.
+        The two-node shell now expects eight remaining fixture results.
+        Three network runner tests, nine child tests, the VM harness checks,
+        formatting, and strict Clippy passed. Other network actions remain.
   - [ ] Replace separate read-result and provider-write behavior. Keep the
     governed file read classes, provider receipt, and network result evidence.
     - [x] Check zero-byte, EOF, partial, inherited-descriptor, mapped, and

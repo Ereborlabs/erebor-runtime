@@ -22,7 +22,7 @@ pub(super) struct NetworkActor {
     pub(super) cgroup: ProbeCgroup,
 }
 
-const ACTORS: [NetworkActorSpec; 7] = [
+const ACTORS: [NetworkActorSpec; 5] = [
     NetworkActorSpec {
         name: "main",
         binding_id: "99999999-9999-4999-8999-999999999991",
@@ -57,20 +57,6 @@ const ACTORS: [NetworkActorSpec; 7] = [
         label: 'f',
         initial_role: true,
         private_network_namespace: true,
-    },
-    NetworkActorSpec {
-        name: "proxy-requester",
-        binding_id: "99999999-9999-4999-8999-999999999997",
-        label: 'g',
-        initial_role: true,
-        private_network_namespace: false,
-    },
-    NetworkActorSpec {
-        name: "proxy-delegate",
-        binding_id: "99999999-9999-4999-8999-999999999998",
-        label: 'h',
-        initial_role: true,
-        private_network_namespace: false,
     },
 ];
 

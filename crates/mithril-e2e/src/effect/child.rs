@@ -119,15 +119,6 @@ enum ChildRequest {
         protocol: i32,
     },
     NetworkBpfSetup,
-    NetworkPrepareProxy {
-        path: PathBuf,
-    },
-    NetworkProxyRequest {
-        path: PathBuf,
-        request_id: String,
-        address: SocketAddr,
-    },
-    NetworkProxyOnce,
     PrepareHardClosed {
         exec_path: PathBuf,
         allowed_exec_path: PathBuf,
@@ -194,7 +185,6 @@ enum ChildResponse {
     DescriptorTransfer(DescriptorTransferOutcome),
     Descriptor { descriptor: i32 },
     NetworkListen(NetworkListenOutcome),
-    Proxy(NetworkProxyOutcome),
     Failed { reason: String },
     Exited,
 }
@@ -258,12 +248,6 @@ pub(super) struct DescriptorTransferOutcome {
     pub(super) control_truncated: bool,
     pub(super) installed_descriptors: u32,
     pub(super) read_allowed: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct NetworkProxyOutcome {
-    pub(super) request_id: String,
-    pub(super) connect: IoOutcome,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -610,36 +594,6 @@ impl EffectProcessFixture {
         self.request(&ChildRequest::NetworkBpfSetup)?.try_into()
     }
 
-    pub(super) fn network_prepare_proxy(&mut self, path: &Path) -> Result<IoOutcome> {
-        self.request(&ChildRequest::NetworkPrepareProxy {
-            path: path.to_path_buf(),
-        })?
-        .try_into()
-    }
-
-    pub(super) fn network_proxy_request(
-        &mut self,
-        path: &Path,
-        request_id: &str,
-        address: SocketAddr,
-    ) -> Result<IoOutcome> {
-        self.request(&ChildRequest::NetworkProxyRequest {
-            path: path.to_path_buf(),
-            request_id: request_id.to_owned(),
-            address,
-        })?
-        .try_into()
-    }
-
-    pub(super) fn network_proxy_once(&mut self) -> Result<NetworkProxyOutcome> {
-        match self.request(&ChildRequest::NetworkProxyOnce)? {
-            ChildResponse::Proxy(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong delegated-connect response",
-            )),
-        }
-    }
-
     pub(super) fn prepare_operations(&mut self, paths: &EffectPaths) -> Result<()> {
         match self.request(&ChildRequest::PrepareHardClosed {
             exec_path: paths.exec_target.clone(),
@@ -798,8 +752,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
     let mut prepared_network_listener = None;
     let mut prepared_network_pass_listener = None;
     let mut prepared_network_pass_path = None;
-    let mut prepared_network_proxy_listener = None;
-    let mut prepared_network_proxy_path = None;
     let mut prepared_network_stream = None;
     let mut propagation_peer = None;
     mailbox.publish(
@@ -1117,95 +1069,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
             ChildRequest::NetworkBpfSetup => {
                 (Ok(ChildResponse::Outcome(bpf_map_create_outcome())), false)
             }
-            ChildRequest::NetworkPrepareProxy { path } => (
-                Ok(ChildResponse::Outcome(
-                    match network_unix_address(&path)
-                        .and_then(|address| UnixListener::bind_addr(&address))
-                    {
-                        Ok(listener) => {
-                            prepared_network_proxy_listener = Some(listener);
-                            prepared_network_proxy_path = Some(path);
-                            allowed_outcome()
-                        }
-                        Err(error) => error_outcome(error),
-                    },
-                )),
-                false,
-            ),
-            ChildRequest::NetworkProxyRequest {
-                path,
-                request_id,
-                address,
-            } => (
-                Ok(ChildResponse::Outcome(network_proxy_request(
-                    &path,
-                    &request_id,
-                    address,
-                ))),
-                false,
-            ),
-            ChildRequest::NetworkProxyOnce => (
-                prepared_network_proxy_listener.as_ref().map_or_else(
-                    || Err(invalid_state("network proxy is not prepared")),
-                    |listener| {
-                        let (mut request, _) = listener.accept().context(IoSnafu {
-                            path: Path::new("network proxy"),
-                        })?;
-                        let mut bytes = Vec::new();
-                        std::io::Read::by_ref(&mut request)
-                            .take(513)
-                            .read_to_end(&mut bytes)
-                            .context(IoSnafu {
-                                path: Path::new("network proxy request"),
-                            })?;
-                        ensure!(
-                            bytes.len() <= 512,
-                            InvalidInputSnafu {
-                                path: Path::new("network proxy request"),
-                                reason: "delegated request exceeds 512 bytes",
-                            }
-                        );
-                        let request = std::str::from_utf8(&bytes).map_err(|error| {
-                            invalid_state(format!("delegated request is not UTF-8: {error}"))
-                        })?;
-                        let mut fields = request.lines();
-                        let request_id = fields.next().unwrap_or_default();
-                        let address = fields.next().unwrap_or_default();
-                        ensure!(
-                            !request_id.is_empty()
-                                && request_id
-                                    .chars()
-                                    .all(|value| value.is_ascii_alphanumeric() || value == '-'),
-                            InvalidInputSnafu {
-                                path: Path::new("network proxy request"),
-                                reason: "delegated request ID is invalid",
-                            }
-                        );
-                        ensure!(
-                            fields.next().is_none(),
-                            InvalidInputSnafu {
-                                path: Path::new("network proxy request"),
-                                reason: "delegated request has extra fields",
-                            }
-                        );
-                        let address = address.parse::<SocketAddr>().map_err(|error| {
-                            invalid_state(format!("delegated network address is invalid: {error}"))
-                        })?;
-                        let connect = match network_connect(address) {
-                            Ok(stream) => {
-                                prepared_network_stream = Some(stream);
-                                allowed_outcome()
-                            }
-                            Err(error) => error_outcome(error),
-                        };
-                        Ok(ChildResponse::Proxy(NetworkProxyOutcome {
-                            request_id: request_id.to_owned(),
-                            connect,
-                        }))
-                    },
-                ),
-                false,
-            ),
             ChildRequest::PrepareHardClosed {
                 exec_path,
                 allowed_exec_path,
@@ -1286,9 +1149,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 prepared_hard_closed.take();
                 propagation_peer.take();
                 if let Some(path) = prepared_network_pass_path.take() {
-                    let _result = fs::remove_file(path);
-                }
-                if let Some(path) = prepared_network_proxy_path.take() {
                     let _result = fs::remove_file(path);
                 }
                 (Ok(ChildResponse::Exited), true)
@@ -2625,28 +2485,6 @@ fn duplicate_process_descriptor(pid: u32, descriptor: i32) -> io::Result<OwnedFd
     } else {
         // SAFETY: duplicated is a new owned descriptor.
         Ok(unsafe { OwnedFd::from_raw_fd(duplicated) })
-    }
-}
-
-fn network_proxy_request(path: &Path, request_id: &str, address: SocketAddr) -> IoOutcome {
-    if request_id.is_empty()
-        || !request_id
-            .chars()
-            .all(|value| value.is_ascii_alphanumeric() || value == '-')
-    {
-        return IoOutcome {
-            allowed: false,
-            errno: Some(rustix::io::Errno::INVAL.raw_os_error()),
-        };
-    }
-    match network_unix_address(path)
-        .and_then(|address| UnixStream::connect_addr(&address))
-        .and_then(|mut stream| {
-            writeln!(stream, "{request_id}")?;
-            writeln!(stream, "{address}")
-        }) {
-        Ok(()) => allowed_outcome(),
-        Err(error) => error_outcome(error),
     }
 }
 
