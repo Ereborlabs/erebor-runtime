@@ -8,7 +8,7 @@ use erebor_interceptor_abi::{
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn udp_paths_are_allowed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("udp-paths")?;
