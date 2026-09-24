@@ -2,7 +2,7 @@ use erebor_interceptor_abi::ExactFileObjectKeyV1;
 
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = node_restart]
 fn prestop_uses_literal_path<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("prestop-path")?;

@@ -3214,7 +3214,9 @@ setup, production actions, assertions, and focused test.
         PostStart literal-path case passed on direct `runc` in 51.15 seconds
         and Kubernetes in 91.22 seconds with the shared lookup. Repository
         Rust CI passed after the source change.
-      - [ ] Pass direct `runc` and commit that platform.
+      - [x] Pass direct `runc` and commit that platform. The exact case passed
+        in 51.59 seconds. All four direct-`runc` restart tests passed together
+        in 140.54 seconds.
       - [ ] Pass Kubernetes and commit that platform.
       - [ ] Remove only the matching old literal-path result and shell gate
         after all three platform cases pass. Keep the separate PreStop role,
