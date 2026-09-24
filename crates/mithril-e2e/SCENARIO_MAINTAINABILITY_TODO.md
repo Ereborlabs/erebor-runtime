@@ -2946,7 +2946,7 @@ test does not close a row when its physical condition or an assertion changed.
     destinations, forbidden request absence, and allowed request receipt.
   - [ ] Replace separate read-result and provider-write behavior. Keep the
     governed file read classes, provider receipt, and network result evidence.
-    - [ ] Check zero-byte, EOF, partial, inherited-descriptor, mapped, and
+    - [x] Check zero-byte, EOF, partial, inherited-descriptor, mapped, and
       `EIO` reads in one shared actor before policy replacement. Keep its token
       descriptor open. After replacement, require allowed Read and MmapRead
       on that descriptor with exact production File results. Pass the same
@@ -2960,6 +2960,9 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Pass direct `runc` and commit it. The same test body, actor, and
         policy passed in 40.08 seconds through the production OCI hook. Node
         logged the same transient warning and completed teardown.
+      - [x] Pass Kubernetes and commit it. The same test body, actor, and
+        policy passed in 71.73 seconds against the deployed Node and Control
+        in the retained K3s cluster. The test process exited with status 0.
     - [ ] Retire the separate provider-write action only after confirming that
       `tcp_roundtrip_uses_network_role` retains its physical payload receipt
       and exact Connect, Send, and Receive results on all three platforms.
