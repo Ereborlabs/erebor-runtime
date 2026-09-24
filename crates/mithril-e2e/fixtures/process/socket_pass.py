@@ -116,7 +116,7 @@ else:
                             raise RuntimeError("receiver did not finish")
                         stage = "read"
                         named(stage)
-                        if mode in ("main-approved", "main-stale"):
+                        if mode in ("main-approved", "main-stale", "main-inherit"):
                             payload = bytearray()
                             while len(payload) < 2 and select.select([client], [], [], 3)[0]:
                                 chunk = client.recv(2 - len(payload))
@@ -138,6 +138,33 @@ else:
                                     named(f"stale-{failure.errno or errno.EIO}")
                                 else:
                                     named("stale-0")
+                            if mode == "main-inherit":
+                                if sys.stdin.buffer.readline() != b"fork\n":
+                                    raise RuntimeError("expected fork action")
+                                start_read, start_write = os.pipe()
+                                result_read, result_write = os.pipe()
+                                child = os.fork()
+                                if child == 0:
+                                    os.close(start_write)
+                                    os.close(result_read)
+                                    os.read(start_read, 1)
+                                    try:
+                                        control.sendall(b"fork")
+                                    except OSError as failure:
+                                        result = failure.errno or errno.EIO
+                                    else:
+                                        result = 0
+                                    os.write(result_write, bytes([result]))
+                                    os._exit(0)
+                                os.close(start_read)
+                                os.close(result_write)
+                                named("fork-ready")
+                                if sys.stdin.buffer.readline() != b"probe\n":
+                                    raise RuntimeError("expected child probe")
+                                os.write(start_write, b"x")
+                                result = os.read(result_read, 1)
+                                os.waitpid(child, 0)
+                                named(f"fork-{result[0] if result else errno.EIO}")
                         elif select.select([client], [], [], 0.5)[0]:
                             payload = client.recv(1)
                             named("peer-bytes" if payload else "peer-closed")

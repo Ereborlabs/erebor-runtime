@@ -2485,6 +2485,14 @@ test does not close a row when its physical condition or an assertion changed.
     runner action, result field, and now-unused helper are removed. The Host
     case passed again after deletion in 28.03 seconds. The 91 nonprivileged
     library tests, formatting, and strict crate Clippy pass.
+  - [ ] Replace the inherited Unix-stream send denial. Reuse the admitted
+    parent/receiver policy and shared actor. Fork after the parent receives an
+    allowed payload. Hold the child until its exact task is observed, then
+    require `EACCES` and attributed `CORRUPT_IDENTITY_OR_GENERATION` IPC/Access
+    Send evidence. Pass the same Rust test below 100 lines on Host, direct
+    `runc`, and Kubernetes before removing the matching old action.
+    The 84-line Host case passed in 28.17 seconds. Direct `runc` and
+    Kubernetes are not yet verified.
   - [x] Replace the unmatched file-create block with one small standard
     platform test. Use one shared Python actor and the existing Python policy.
     Start the actor before Node to preserve the original recovered-root
@@ -2955,6 +2963,15 @@ test does not close a row when its physical condition or an assertion changed.
     address packet absent and the allowed final destination payload received.
   - [ ] Replace delegated egress. Keep the request ID, requested and final
     destinations, forbidden request absence, and allowed request receipt.
+    - [ ] Keep distinct governed requester and delegate tasks, both request
+      IDs, the delegate's denied and allowed Connect results, its allowed Send
+      result, the allowed TCP payload, and no forbidden connection. Use one
+      shared actor and one Rust test below 100 lines on all three platforms.
+      A draft with a two-destination policy did not activate on Host: Node
+      staged the candidate, then remained `activation_pending` for 30 seconds.
+      An explicit destination deny had the same result. A known-good two-entry
+      Unix/network policy passed on the same VM in 27.57 seconds. No draft
+      action or assertion replaced the legacy runner.
   - [ ] Replace separate read-result and provider-write behavior. Keep the
     governed file read classes, provider receipt, and network result evidence.
     - [x] Check zero-byte, EOF, partial, inherited-descriptor, mapped, and
