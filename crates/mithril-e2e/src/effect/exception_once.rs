@@ -7,7 +7,7 @@ use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = exception]
 fn one_use_after_replace<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("exception-once")?;

@@ -1677,7 +1677,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The exact case passed in 42.10
       seconds. All four direct-`runc` exception tests passed together in
       113.45 seconds with the production OCI hook.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact case passed in 76.40
+      seconds. All four Kubernetes exception tests passed together in 167.97
+      seconds on the retained K3s VM.
   - [ ] Preserve the old pre-replacement inactive-grant denial before removing
     the legacy probe. The new actor-policy start does not prove that condition.
 - [ ] `EffectTestRunner::physical_probe` setup and teardown: own its three
