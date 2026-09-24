@@ -1,7 +1,11 @@
 use std::{cell::RefCell, fs, io::Write as _, time::Duration};
 
-use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
+use erebor_interceptor_abi::{
+    EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExactFileObjectKeyV1, KernelEffectFamilyV1,
+    KernelEffectOperationV1,
+};
 use rustix::fs::{mkfifoat, Mode, CWD};
+use zerocopy::TryFromBytes as _;
 
 use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
@@ -132,6 +136,56 @@ fn poststart_keeps_its_role<P: Platform>() -> TestResult<()> {
         },
         || format!("last effects: {}", last.borrow()),
     )?;
+    copy.stop()?;
+    main.stop()?;
+    env.stop()
+}
+
+#[platform_test(host)]
+#[lifecycle = node_restart]
+fn poststart_uses_literal_path<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("poststart-path")?;
+    env.start_control()?;
+    env.start_node()?;
+    env.install_policy("runtime_entries_policy.json")?;
+    env.node_ready()?;
+    let mut main = env.start_actor("ready.py", &[])?;
+    env.stop_node()?;
+    env.start_node()?;
+    env.node_ready()?;
+
+    let mut copy = env.add_actor("cp", &["/proc/self/fd/0", "/work/literal.txt"])?;
+    let task = env.task(copy.id(), "PostStart literal admission")?;
+    let reader = env.maps().1;
+    let mut matched = None;
+    for key in reader.keys("entry_admission_rules")? {
+        let entry = EntryAdmissionRuleKeyV1::try_read_from_bytes(&key)
+            .map_err(|error| format!("invalid admission key: {error}"))?;
+        if entry.profile_generation_ref_id != task.snapshot.profile_generation_ref_id {
+            continue;
+        }
+        let bytes = reader
+            .lookup("entry_admission_rules", &key)?
+            .ok_or("the PostStart admission rule disappeared")?;
+        let rule = EntryAdmissionRuleV1::try_read_from_bytes(&bytes)
+            .map_err(|error| format!("invalid admission rule: {error}"))?;
+        if rule.admitted_entry_rule_id == task.snapshot.admitted_entry_rule_id {
+            matched = Some(rule);
+            break;
+        }
+    }
+    let rule = matched.ok_or("the PostStart admission rule is missing")?;
+    assert_eq!(rule.target_role_id, task.snapshot.active_role_id);
+    assert_ne!(rule.admitted_entry_rule_id, 0);
+    assert_eq!(rule.exact_object_key_id, 0);
+    assert_eq!(rule.executable_object, ExactFileObjectKeyV1::default());
+
+    copy.send(b"literal\n")?;
+    copy.close();
+    assert!(copy
+        .wait_exit("PostStart literal copy", Duration::from_secs(5))?
+        .success());
+    assert_eq!(fs::read(env.work().join("literal.txt"))?, b"literal\n");
     copy.stop()?;
     main.stop()?;
     env.stop()

@@ -3160,8 +3160,14 @@ setup, production actions, assertions, and focused test.
       Kubernetes tests passed together in 134.18 seconds. The existing
       `runtime_entries_stay_distinct` Kubernetes test passed in 65.73 seconds.
     - [ ] Prove that the PostStart admission rule uses the literal path map.
-      Keep this as a separate small direct test if the role test would reach
-      100 lines.
+      The separate 47-line test starts one real `cp` entry after Node restart.
+      It reads the installed admission map and requires the observed rule ID,
+      role ID, zero exact-object key, and default executable object. It then
+      copies stdin and checks the physical output file.
+      - [x] Pass Host. The exact test passed in 50.72 seconds. All three Host
+        `node_restart` tests passed together in 109.74 seconds.
+      - [ ] Pass direct `runc` and commit that platform.
+      - [ ] Pass Kubernetes and commit that platform.
     - [ ] Remove only the matching legacy PostStart action, result, and shell
       check after all platform and literal-path checks pass. Keep the PreStop
       inventory-omission case until its own replacement passes.
