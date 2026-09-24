@@ -3166,7 +3166,9 @@ setup, production actions, assertions, and focused test.
       copies stdin and checks the physical output file.
       - [x] Pass Host. The exact test passed in 50.72 seconds. All three Host
         `node_restart` tests passed together in 109.74 seconds.
-      - [ ] Pass direct `runc` and commit that platform.
+      - [x] Pass direct `runc` and commit that platform. The exact test passed
+        in 57.69 seconds. All three runc `node_restart` tests passed together
+        in 129.70 seconds.
       - [ ] Pass Kubernetes and commit that platform.
     - [ ] Remove only the matching legacy PostStart action, result, and shell
       check after all platform and literal-path checks pass. Keep the PreStop
