@@ -3151,7 +3151,14 @@ setup, production actions, assertions, and focused test.
       exact test passed in 57.90 seconds. Both `node_restart` runc tests
       passed together in 92.83 seconds. The existing
       `runtime_entries_stay_distinct` runc test passed in 34.94 seconds.
-    - [ ] Pass the same test on Kubernetes and commit that platform.
+    - [x] Pass the same test on Kubernetes and commit that platform. The first
+      preflight found that the retained K3s store lacked the pinned Python
+      image. The existing image helper imported the retained archive and
+      made that exact digest available. No test or production code changed
+      for this condition.
+      The exact test then passed in 85.30 seconds. Both `node_restart`
+      Kubernetes tests passed together in 134.18 seconds. The existing
+      `runtime_entries_stay_distinct` Kubernetes test passed in 65.73 seconds.
     - [ ] Prove that the PostStart admission rule uses the literal path map.
       Keep this as a separate small direct test if the role test would reach
       100 lines.
