@@ -890,9 +890,12 @@ count as maintainability migrations.
     connector, and Node WAL. The test is now 98 lines. Its focused production
     Control and Node test passed. Keep the capacity failure, replay, and
     durable acknowledgement assertions in the test.
-  - [ ] Apply the same setup to the evidence-gap and disconnect-replay tests.
-    Keep their message order and assertions visible. Commit each test after
-    its focused check.
+  - [x] Use the same fixture for the cursor-gap test. The 99-line test keeps
+    the Control restart, cumulative acknowledgement, exact retry, and durable
+    record assertions visible. Its focused production Control and Node test
+    passed.
+  - [ ] Apply the same setup to the disconnect-replay test. Keep its message
+    order and assertions visible. Commit it after its focused check.
 - [x] Keep one synchronous readiness function with an exact timeout, resource
   path, operation name, and caller-supplied last-state diagnostic.
 - [x] Put the repeated effect-attribution comparison on the existing `Task`

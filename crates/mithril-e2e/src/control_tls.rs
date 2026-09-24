@@ -899,41 +899,13 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
 #[tokio::test]
 async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
 ) -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let certificates = Certificates::issue(false)?;
-    let files = certificates.write(directory.path())?;
-    let store_path = directory.path().join("control-evidence");
-    let control = |store| {
-        ControlPlane::with_control_store(
-            vec![AllowedNodeIdentity {
-                node_id: "node-a".to_owned(),
-                certificate_sha256: certificates.node_digest(),
-                tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
-            }],
-            TrustGenerationV1 {
-                generation: 1,
-                bundle_digest: "d".repeat(64),
-                policy_issuer_sequence_epoch: 0,
-                policy_signers: Vec::new(),
-            },
-            store,
-        )
-    };
-    let observations = EffectObservationStore::durable(
-        4,
-        directory.path().join("node-wal"),
-        EvidenceWalLimits {
-            maximum_retained_records: 10,
-            maximum_batch_records: 1,
-            ..EvidenceWalLimits::default()
-        },
-        ObservationCanonicalizer::new(
-            EvidenceIdV1::new(1, 2),
-            EvidenceIdV1::new(3, 4),
-            1,
-            EvidenceIdV1::from([7; 16]),
-        )?,
-    )?;
+    let fixture = MtlsFixture::new(false)?;
+    let store_path = fixture.path().join("control-evidence");
+    let observations = fixture.wal(EvidenceWalLimits {
+        maximum_retained_records: 10,
+        maximum_batch_records: 1,
+        ..EvidenceWalLimits::default()
+    })?;
     for source_sequence in 1..=3 {
         observations.record_bytes(
             erebor_interceptor_abi::EffectObservationV1 {
@@ -951,32 +923,21 @@ async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
         );
     }
     let batches = observations.next_evidence_batches();
-    assert_eq!(
-        batches
-            .iter()
-            .map(|batch| (batch.first_cursor, batch.last_cursor))
-            .collect::<Vec<_>>(),
-        vec![(1, 1), (2, 2), (3, 3)]
-    );
+    let cursors: Vec<_> = batches
+        .iter()
+        .map(|batch| (batch.first_cursor, batch.last_cursor))
+        .collect();
+    assert_eq!(cursors, [(1, 1), (2, 2), (3, 3)]);
     let source_id = batch_source_id(&batches[0])?;
-    let identity = EvidenceIntakeIdentityV1 {
-        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
-        node_id: "node-a".to_owned(),
-        node_boot_id: [7; 16],
-        label_epoch: 1,
-        source_id,
-        source_epoch: 1,
-    };
-    let connector = |address| {
-        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16])
-    };
+    let identity = fixture.identity(source_id);
 
     let initial_store = ControlStore::open(&store_path)?;
     let initial_intake = EvidenceIntakeOwner::from_store(initial_store.clone());
-    let initial_control = control(initial_store.clone())?;
-    let initial_server = ControlServerFixture::start(&files, initial_control).await?;
-    let mut trust = TrustCache::load(directory.path())?;
-    let mut connection = connector(initial_server.address())
+    let initial_control = fixture.control_with_store(initial_store.clone(), 1)?;
+    let initial_server = fixture.start(initial_control).await?;
+    let mut trust = TrustCache::load(fixture.path())?;
+    let mut connection = fixture
+        .connector(&initial_server, "node-a", [7; 16])
         .connect(registration(), false, &mut trust)
         .await?;
     connection.send_evidence_batch(batches[2].clone()).await?;
@@ -1002,9 +963,10 @@ async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
     let reopened_intake = EvidenceIntakeOwner::from_store(reopened_store.clone());
     assert_eq!(reopened_intake.contiguous_cursor(&identity)?, 0);
     assert_eq!(reopened_store.health()?.pending_evidence_records, 1);
-    let reopened_control = control(reopened_store.clone())?;
-    let reopened_server = ControlServerFixture::start(&files, reopened_control).await?;
-    let mut connection = connector(reopened_server.address())
+    let reopened_control = fixture.control_with_store(reopened_store.clone(), 1)?;
+    let reopened_server = fixture.start(reopened_control).await?;
+    let mut connection = fixture
+        .connector(&reopened_server, "node-a", [7; 16])
         .connect(registration(), false, &mut trust)
         .await?;
     connection
@@ -1026,13 +988,9 @@ async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
     assert_eq!(duplicate_acknowledgement, acknowledgement);
     assert!(observations.acknowledge_evidence(acknowledgement)?);
     assert_eq!(observations.pending_evidence_records(), 0);
-    assert_eq!(
-        reopened_intake
-            .store()
-            .accepted_evidence_records(&identity)?
-            .len(),
-        3
-    );
+    let store = reopened_intake.store();
+    let accepted = store.accepted_evidence_records(&identity)?;
+    assert_eq!(accepted.len(), 3);
     drop(connection);
     reopened_server.shutdown().await?;
     Ok(())

@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use mithril_control::{
-    serve, AllowedNodeIdentity, ControlPlane, ControlServerTls, ControlStore, TrustGenerationV1,
+    serve, AllowedNodeIdentity, ControlPlane, ControlServerTls, ControlStore,
+    EvidenceIntakeIdentityV1, TrustGenerationV1,
 };
 use mithril_node::{
     EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, NodeControlConfig,
@@ -74,6 +75,17 @@ impl MtlsFixture {
                 EvidenceIdV1::from([7; 16]),
             )?,
         )
+    }
+
+    pub(crate) fn identity(&self, source_id: [u8; 16]) -> EvidenceIntakeIdentityV1 {
+        EvidenceIntakeIdentityV1 {
+            tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+            node_id: "node-a".to_owned(),
+            node_boot_id: [7; 16],
+            label_epoch: 1,
+            source_id,
+            source_epoch: 1,
+        }
     }
 
     pub(crate) fn node_digest(&self) -> String {
