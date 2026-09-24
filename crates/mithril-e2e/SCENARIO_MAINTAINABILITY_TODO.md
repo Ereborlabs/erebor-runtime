@@ -2090,7 +2090,9 @@ test does not close a row when its physical condition or an assertion changed.
         out because the fixture expected Protect-mode prevention claims.
         `node_ready` now requires the claim value that matches the installed
         policy mode. The unchanged Protect case passed in 28.85 seconds.
-      - [ ] Pass direct `runc` and commit it.
+      - [x] Direct `runc` passed in 29.91 seconds with the same actor,
+        Observe policy, and effects. The unchanged Protect case passed in
+        28.90 seconds.
       - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy actions, fields, and prepared
       resources after all three platforms pass.
