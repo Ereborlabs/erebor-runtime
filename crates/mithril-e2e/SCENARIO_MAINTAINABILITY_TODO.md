@@ -551,15 +551,9 @@ owners are:
 
 ## Current compliance audit
 
-The current tree does not meet the size or naming gates. Do not mark the work
-complete while these entries remain.
-
-The runner-retirement gate is separate from the size gate. In particular,
-`effect/network.rs` now has 1,611 lines but still contains the active
-`NetworkTestRunner::physical_probe`. Its local socket and two-node checks
-remain unfinished below. Keep it in the migration inventory until the shared
-platform tests replace those checks, the old probe command is removed, and
-`two-node-network.sh` no longer owns scenario actions or assertions.
+The current tree does not meet the size, naming, or runner-retirement gates.
+Do not mark the work complete while these entries remain. The table below is
+only a size audit. It is not the list of files to refactor.
 
 These Rust files exceed 2,000 lines:
 
@@ -570,6 +564,16 @@ These Rust files exceed 2,000 lines:
 | `effect.rs` | 3,802 |
 | `effect/child.rs` | 3,448 |
 | `control_tls.rs` | 2,416 |
+
+Runner retirement is a separate, open check. In particular:
+
+- [ ] Retire `NetworkTestRunner::physical_probe` in `effect/network.rs` (1,611
+  lines). Replace each remaining local and two-node behavior with the same
+  small Rust platform test on each applicable platform. Then remove the old
+  `mithril-network-test` probe command and the scenario actions and assertions
+  in `run.sh` and `two-node-network.sh`. Keep this item open even though the
+  source file is below 2,000 lines. The detailed behavior list is in
+  [Network](#network).
 
 The diff from `95775f48` adds or relocates these private test functions with
 more than five name components:
