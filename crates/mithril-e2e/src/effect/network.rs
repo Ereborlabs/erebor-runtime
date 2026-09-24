@@ -91,7 +91,6 @@ pub struct NetworkPhysicalProbeBundleV2 {
     pub read_results_separate: bool,
     pub provider_write_observed: bool,
     pub shared_socket_holders_denied: bool,
-    pub socket_generation_not_reused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peer_tcp_allowed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -150,10 +149,6 @@ impl NetworkTestRunner {
         let listener = tcp_listener(SocketAddr::from(([127, 0, 0, 1], 0)))?;
         let allowed_address = listener.local_addr().context(IoSnafu {
             path: Path::new("allowed network listener"),
-        })?;
-        let lifecycle_listener = tcp_listener(SocketAddr::from(([127, 0, 0, 1], 0)))?;
-        let lifecycle_address = lifecycle_listener.local_addr().context(IoSnafu {
-            path: Path::new("lifecycle network listener"),
         })?;
         let rewrite_listener = tcp_listener(SocketAddr::from(([127, 0, 0, 4], 0)))?;
         let rewrite_address = rewrite_listener.local_addr().context(IoSnafu {
@@ -347,7 +342,6 @@ impl NetworkTestRunner {
         );
 
         let server = thread::spawn(move || server_exchange(listener, PAYLOAD));
-        let lifecycle_server = thread::spawn(move || server_receive(lifecycle_listener, b"new"));
         let rewrite_server = thread::spawn(move || server_receive(rewrite_listener, b"rewrite"));
         let delegated_server =
             thread::spawn(move || server_receive(delegated_listener, b"delegated"));
@@ -549,42 +543,6 @@ impl NetworkTestRunner {
             }
         );
         let post_fence_bypass_packets_absent = post_fence_bytes_absent;
-
-        let reuse_marker = observations.cursor();
-        let lifecycle_connect = fixture.network_connect(lifecycle_address)?.allowed;
-        wait_for_effect(
-            &reader,
-            &observations,
-            reuse_marker,
-            "EXACT_POLICY_AUDIT_ALLOW",
-            (
-                KernelEffectFamilyV1::Network,
-                KernelEffectOperationV1::Connect,
-            ),
-        )?;
-        let reused_event = observations
-            .recent_since(reuse_marker)
-            .into_iter()
-            .rev()
-            .find(|event| event.operation == KernelEffectOperationV1::Connect as u32)
-            .ok_or_else(|| invalid_probe("the reused socket has no connect observation"))?;
-        let socket_generation_not_reused =
-            reused_event.network_socket_generation != allowed_event.network_socket_generation;
-        let lifecycle_send = fixture.network_send(b"new")?.allowed;
-        let lifecycle_shutdown = fixture.network_shutdown()?.allowed;
-        fixture.network_close()?;
-        let lifecycle_received = join_server(lifecycle_server, "lifecycle server")?;
-        ensure!(
-            lifecycle_connect
-                && lifecycle_send
-                && lifecycle_shutdown
-                && lifecycle_received
-                && socket_generation_not_reused,
-            InvalidInputSnafu {
-                path: Path::new("socket lifecycle"),
-                reason: "a new socket reused authority or failed its positive lifecycle",
-            }
-        );
 
         let (peer_tcp_allowed, peer_udp_allowed, peer_denied_connect) = match peer {
             Some(peer) => {
@@ -935,7 +893,7 @@ impl NetworkTestRunner {
             receive: receive_allowed,
             rewrite: rewritten_forbidden_packet_absent && rewritten_allowed_destination_received,
             shared_response: shared_socket_holders_denied,
-            socket_life: socket_reference_released && socket_generation_not_reused,
+            socket_life: socket_reference_released,
         };
         let fixture_results = proof.results();
         ensure!(
@@ -988,7 +946,6 @@ impl NetworkTestRunner {
             read_results_separate,
             provider_write_observed,
             shared_socket_holders_denied,
-            socket_generation_not_reused,
             peer_tcp_allowed,
             peer_udp_allowed,
             peer_denied_connect,
@@ -1562,7 +1519,7 @@ impl NetworkFixtureProof {
             (
                 "NET-SOCKET-LIFE-001",
                 self.socket_life,
-                "CLONE_FORK_CLOSE_AND_NEW_GENERATION_LIFECYCLE_PROVED",
+                "SOCKET_REFERENCE_RELEASED_AFTER_FENCE",
             ),
         ]
         .into_iter()

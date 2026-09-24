@@ -2455,7 +2455,7 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Remove only the matching legacy clone-send and fork-send success
       actions and assertions. Keep the post-fence cloned-socket denial and the
       separate socket-generation non-reuse behavior.
-  - [ ] Replace socket-generation non-reuse with one small standard platform
+  - [x] Replace socket-generation non-reuse with one small standard platform
     test. Reuse the TCP actor and signed policy. Close one connected socket,
     then connect and send on a new socket. Require both payloads, two allowed
     Connect and Send results for the admitted actor, and distinct socket
@@ -2471,8 +2471,11 @@ test does not close a row when its physical condition or an assertion changed.
       K3s lacked the pinned Python image. Pulling that exact image restored
       the fixture; no test or production code changed. All five existing
       Kubernetes TCP cases passed in 142.86 seconds.
-    - [ ] Remove only the matching legacy lifecycle action and result after
-      all three platforms pass. Keep the fence and restart checks.
+    - [x] Remove only the matching legacy lifecycle action and result after
+      all three platforms pass. The deletion removed the extra listener,
+      server thread, lifecycle action, and result field. It kept the fence,
+      restart, and socket-reference checks. The new Host case passed again;
+      91 non-privileged tests, formatting, and strict Clippy passed.
   - [ ] Replace the whole-socket fence and Node restart group. Preserve the
     installed response floor, retained task, socket, mount, and active-policy
     state, denied send and shutdown, absent bytes and bypass packets, released
