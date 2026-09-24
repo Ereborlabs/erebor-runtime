@@ -57,6 +57,8 @@ use crate::control_fixture::{
 };
 use crate::physical::{wait_for, wait_for_async};
 
+mod rejection;
+
 const OUTAGE_POLICY: &[u8] = include_bytes!("../fixtures/convergence/outage-policy-v1.json");
 const OUTAGE_TENANT_ID: &str = "00000000-0000-0001-0000-000000000002";
 const OUTAGE_CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
@@ -695,14 +697,6 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
     drop(connection);
     server.shutdown().await?;
     Ok(())
-}
-
-#[tokio::test]
-async fn mtls_rejects_wrong_node_binding_and_expired_client_identity(
-) -> Result<(), Box<dyn StdError>> {
-    assert_rejected_identity(false, "node-b").await?;
-    assert_rejected_identity(true, "node-a").await?;
-    assert_wrong_ca_rejected().await
 }
 
 #[tokio::test]
@@ -2139,74 +2133,6 @@ async fn mtls_administrative_services_route_matching_results_and_cancel_waiters(
     );
 
     drop(connection);
-    server.shutdown().await?;
-    Ok(())
-}
-
-async fn assert_wrong_ca_rejected() -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let server_certificates = Certificates::issue(false)?;
-    let files = server_certificates.write(directory.path())?;
-    let wrong_ca_directory = directory.path().join("wrong-ca");
-    fs::create_dir(&wrong_ca_directory)?;
-    let wrong_ca = Certificates::issue(false)?.write(&wrong_ca_directory)?;
-    let control = ControlPlane::new(
-        vec![AllowedNodeIdentity {
-            node_id: "node-a".to_owned(),
-            certificate_sha256: server_certificates.node_digest(),
-            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
-        }],
-        TrustGenerationV1 {
-            generation: 1,
-            bundle_digest: "f".repeat(64),
-            policy_issuer_sequence_epoch: 0,
-            policy_signers: Vec::new(),
-        },
-    );
-    let server = ControlServerFixture::start(&files, control).await?;
-    let mut config = files.node_config(server.address());
-    config.ca_path = wrong_ca.ca;
-    let connector = NodeControlConnector::new(config, "node-a".to_owned(), [9; 16]);
-    let mut trust = TrustCache::load(directory.path())?;
-    assert!(connector
-        .connect(registration(), true, &mut trust)
-        .await
-        .is_err());
-    server.shutdown().await?;
-    Ok(())
-}
-
-async fn assert_rejected_identity(
-    expired: bool,
-    registered_node_id: &str,
-) -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let certificates = Certificates::issue(expired)?;
-    let files = certificates.write(directory.path())?;
-    let control = ControlPlane::new(
-        vec![AllowedNodeIdentity {
-            node_id: "node-a".to_owned(),
-            certificate_sha256: certificates.node_digest(),
-            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
-        }],
-        TrustGenerationV1 {
-            generation: 1,
-            bundle_digest: "e".repeat(64),
-            policy_issuer_sequence_epoch: 0,
-            policy_signers: Vec::new(),
-        },
-    );
-    let server = ControlServerFixture::start(&files, control).await?;
-    let connector = NodeControlConnector::new(
-        files.node_config(server.address()),
-        registered_node_id.to_owned(),
-        [8; 16],
-    );
-    let mut trust = TrustCache::load(directory.path())?;
-    assert!(connector
-        .connect(registration(), true, &mut trust)
-        .await
-        .is_err());
     server.shutdown().await?;
     Ok(())
 }
