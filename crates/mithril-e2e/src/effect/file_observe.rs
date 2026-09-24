@@ -6,7 +6,7 @@ use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn denied_read_is_observed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("file-observe")?;

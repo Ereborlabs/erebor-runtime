@@ -1724,7 +1724,8 @@ test does not close a row when its physical condition or an assertion changed.
       attributed `WOULD_DENY` event had nonzero exact-object and composite
       IDs. The test matches the actor's stable task cookie and entry ID
       because policy replacement changes its role ID on the next BPF call.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact test passed in 35.60
+      seconds with the same actor, signed policy, and assertions as Host.
     - [ ] Pass Kubernetes and commit it.
 - [ ] `EffectTestRunner::physical_probe` protect scenario: keep every hard
   denial, allow control, loss counter, and evidence assertion.
