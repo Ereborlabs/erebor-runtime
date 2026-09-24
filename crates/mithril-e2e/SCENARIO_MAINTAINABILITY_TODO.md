@@ -3147,7 +3147,10 @@ setup, production actions, assertions, and focused test.
       the `node_restart` lifecycle passed together in 80.62 seconds. The
       existing `runtime_entries_stay_distinct` Host test passed in 28.48
       seconds with the extended policy. The repository Rust CI check passed.
-    - [ ] Pass the same test on direct `runc` and commit that platform.
+    - [x] Pass the same test on direct `runc` and commit that platform. The
+      exact test passed in 57.90 seconds. Both `node_restart` runc tests
+      passed together in 92.83 seconds. The existing
+      `runtime_entries_stay_distinct` runc test passed in 34.94 seconds.
     - [ ] Pass the same test on Kubernetes and commit that platform.
     - [ ] Prove that the PostStart admission rule uses the literal path map.
       Keep this as a separate small direct test if the role test would reach

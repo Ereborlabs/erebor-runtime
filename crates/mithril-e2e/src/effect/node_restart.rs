@@ -46,7 +46,7 @@ fn node_restart_keeps_actor<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = node_restart]
 fn poststart_keeps_its_role<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("poststart-role")?;
