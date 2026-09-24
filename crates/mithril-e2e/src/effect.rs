@@ -18,6 +18,8 @@ mod file_effect;
 #[cfg(test)]
 mod file_mutation;
 mod fixture_syscalls;
+#[cfg(test)]
+mod independent_mmap;
 mod mailbox;
 mod network;
 #[cfg(test)]

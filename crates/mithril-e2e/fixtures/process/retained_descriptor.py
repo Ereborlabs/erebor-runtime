@@ -10,12 +10,6 @@ libc = ctypes.CDLL(None, use_errno=True)
 libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
 secret_path = "/tmp/mithril-descriptor-secret"
 allowed_path = "/tmp/mithril-descriptor-allowed"
-os.makedirs("/tmp", exist_ok=True)
-for path, content in [(secret_path, b"secret\n"), (allowed_path, b"allowed\n")]:
-    with open(path, "wb") as output:
-        output.write(content)
-secret = os.open(secret_path, os.O_RDONLY)
-allowed = os.open(allowed_path, os.O_RDONLY)
 
 
 def result(action):
@@ -24,6 +18,33 @@ def result(action):
     except OSError as failure:
         return failure.errno
     return 0
+
+
+if sys.argv[-1] == "independent":
+    secret = os.open(secret_path, os.O_RDWR)
+    allowed = os.open(allowed_path, os.O_RDONLY)
+    print("native-fixture-ready", flush=True)
+    if sys.stdin.buffer.readline() != b"act\n":
+        sys.exit(2)
+    results = [
+        result(lambda: mmap.mmap(secret, 1, flags=mmap.MAP_SHARED, prot=mmap.PROT_WRITE).close()),
+        result(lambda: mmap.mmap(allowed, 1, access=mmap.ACCESS_READ).close()),
+    ]
+    name = ctypes.create_string_buffer(("map-" + "-".join(map(str, results))).encode("ascii"))
+    if libc.prctl(PR_SET_NAME, ctypes.addressof(name), 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
+    released = sys.stdin.buffer.readline() == b"release\n"
+    if results != [errno.EACCES, 0] or not released:
+        sys.exit(3)
+    sys.exit(0)
+
+
+os.makedirs("/tmp", exist_ok=True)
+for path, content in [(secret_path, b"secret\n"), (allowed_path, b"allowed\n")]:
+    with open(path, "wb") as output:
+        output.write(content)
+secret = os.open(secret_path, os.O_RDONLY)
+allowed = os.open(allowed_path, os.O_RDONLY)
 
 
 def read(descriptor):

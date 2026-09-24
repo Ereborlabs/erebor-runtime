@@ -2007,6 +2007,20 @@ test does not close a row when its physical condition or an assertion changed.
       mapping cases. Keep the shared prepare, read, and mmap mailbox operations
       because the network scenario still uses them. The 29 non-privileged
       effect regressions pass after the deletion.
+  - [ ] Replace the independent-root shared mapping block. Reuse the retained
+    descriptor actor and its exact-file policy. Keep a live primary actor and
+    start one declared additional actor as a separate process root. Require
+    shared writable mapping denial, benign mapping success, exact File effect
+    evidence, and distinct task, lineage, and process identities. Keep the
+    standard test below 100 lines. Do not add a Platform API.
+    - [x] Host passed in 35.29 seconds. The 93-line test kept the independent
+      process identity, exact shared mapping denial, and benign control. The
+      existing descriptor Host case passed in 34.54 seconds with the shared
+      actor and policy change. Commit the Host leaf separately.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy independent-mapping actions and
+      result fields after all three platform cases pass.
   - [x] Replace the protected `PTRACE_ATTACH` block with one small standard
     platform test. Use one shared Python actor and scenario policy. Do not add
     a Platform API.

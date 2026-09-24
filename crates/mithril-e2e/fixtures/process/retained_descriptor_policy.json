@@ -27,7 +27,12 @@
           "executionRule": "python",
           "role": "worker"
         },
-        "additionalEntries": [],
+        "additionalEntries": [{
+          "name": "independent-mapper",
+          "kind": "PreStop",
+          "executionRule": "python-entry",
+          "role": "worker"
+        }],
         "administrativeEntry": {
           "role": "administrator"
         },
@@ -43,7 +48,7 @@
             "path": "/tmp/mithril-descriptor-secret",
             "recursive": false,
             "exact": true,
-            "operations": ["Read", "MmapRead"],
+            "operations": ["Read", "MmapRead", "MmapWrite"],
             "action": "Deny"
           },
           {
@@ -59,6 +64,13 @@
           {
             "name": "python",
             "path": "/usr/bin/python3",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          },
+          {
+            "name": "python-entry",
+            "path": "/work/bin/python",
             "recursive": false,
             "operations": ["Execute"],
             "action": "Allow"
