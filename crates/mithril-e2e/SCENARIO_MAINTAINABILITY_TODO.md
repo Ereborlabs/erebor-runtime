@@ -2480,8 +2480,8 @@ test does not close a row when its physical condition or an assertion changed.
     `EACCES` send, and attributed `CORRUPT_IDENTITY_OR_GENERATION` IPC/Access
     evidence. Keep the same test below 100 lines on Host, direct `runc`, and
     Kubernetes. Remove only the matching old action after all three pass.
-    The shared Host case passed in 27.58 seconds. Direct `runc` and Kubernetes
-    are not yet verified.
+    The shared Host case passed in 27.58 seconds, and direct `runc` passed in
+    33.92 seconds. Kubernetes is not yet verified.
   - [x] Replace the unmatched file-create block with one small standard
     platform test. Use one shared Python actor and the existing Python policy.
     Start the actor before Node to preserve the original recovered-root
