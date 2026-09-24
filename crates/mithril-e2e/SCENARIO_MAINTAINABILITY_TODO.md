@@ -2450,6 +2450,22 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace the exact Unix-stream allow relationship. Reuse the approved
+    socket-pass actor and signed worker-to-worker policy. Require a completed
+    descriptor transfer and payload, distinct admitted worker tasks, and
+    attributed `EXACT_POLICY_ALLOW` IPC/Access evidence for Connect, Send,
+    and Receive. Extend the existing approved socket-pass test and keep it
+    below 100 lines. Add no actor, policy, Platform API, or production
+    operation.
+    - [x] Pass Host and commit it. The extended 98-line test passed in 27.37
+      seconds. It retained the role, descriptor, and payload assertions and
+      observed exactly the three allowed IPC operation classes. Formatting,
+      strict crate Clippy, and whitespace checks passed.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy relationship assertions after all
+      three pass. Keep its roundtrip setup while inherited, stale, and
+      unmatched Unix-stream checks depend on the same endpoint.
   - [x] Replace the unmatched file-create block with one small standard
     platform test. Use one shared Python actor and the existing Python policy.
     Start the actor before Node to preserve the original recovered-root
