@@ -115,7 +115,7 @@ fn tcp_roundtrip_uses_network_role<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn tcp_ipv6_is_allowed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("tcp-nodelay")?;
