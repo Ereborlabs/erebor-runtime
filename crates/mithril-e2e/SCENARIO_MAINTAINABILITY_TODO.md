@@ -1775,7 +1775,7 @@ test does not close a row when its physical condition or an assertion changed.
     checks and their Protect-mode counterparts pass as platform tests.
 - [ ] `EffectTestRunner::physical_probe` protect scenario: keep every hard
   denial, allow control, loss counter, and evidence assertion.
-  - [ ] Replace the four consecutive `HF-006`, `HF-008`, `HF-009`, and
+  - [x] Replace the four consecutive `HF-006`, `HF-008`, `HF-009`, and
     `HF-010` exact-secret opens. They use the same path and operation with no
     state change between them. Extend the existing proc-fd platform test and
     shared Python actor. Require a separate `EACCES` and attributed
@@ -1792,7 +1792,12 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit it. The exact case passed in 74.41
       seconds. The affected Observe and Protect symlink cases passed in
       71.22 and 101.93 seconds in the retained K3s cluster.
-    - [ ] Remove only the four matching legacy opens after all three pass.
+    - [x] Remove only the four matching legacy opens after all three pass.
+      Keep the separate incident classification table, original exact open,
+      detached-mount denial, and descriptor-transfer checks. The replacement
+      Host case passed again after deletion in 34.03 seconds. The 93
+      non-privileged library tests, formatting, strict crate Clippy, and
+      whitespace check passed.
   - [x] Replace the `/proc/self/fd/<fd>` exact-file alias denial. Open and
     hold the secret descriptor before the Protect policy is installed. Reopen
     it through `/proc/self/fd` after activation. Use one small standard test,

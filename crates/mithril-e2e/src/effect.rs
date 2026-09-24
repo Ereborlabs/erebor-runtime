@@ -2356,33 +2356,6 @@ impl EffectTestRunner {
             })?;
 
         if protect {
-            for branch in ["HF-006", "HF-008", "HF-009", "HF-010"] {
-                let marker = observations.cursor();
-                ensure!(
-                    fixture.open(&paths.secret)?.denied(),
-                    InvalidInputSnafu {
-                        path: &paths.secret,
-                        reason: format!(
-                            "{branch} exact protected-file branch returned a file descriptor"
-                        ),
-                    }
-                );
-                wait_for_exact_effect(
-                    &reader,
-                    &observations,
-                    marker,
-                    "EXACT_POLICY_DENY",
-                    (
-                        KernelEffectFamilyV1::File,
-                        KernelEffectOperationV1::OpenRead,
-                    ),
-                    PathSelectorV1::kernel_handle_for_id("manual-secret"),
-                    None,
-                )?;
-            }
-        }
-
-        if protect {
             let detached_mount_marker = observations.cursor();
             ensure!(
                 fixture
