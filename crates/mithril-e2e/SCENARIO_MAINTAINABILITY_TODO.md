@@ -1680,7 +1680,7 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit it. The exact case passed in 76.40
       seconds. All four Kubernetes exception tests passed together in 167.97
       seconds on the retained K3s VM.
-  - [ ] Preserve the old pre-replacement inactive-grant denial before removing
+  - [x] Preserve the old pre-replacement inactive-grant denial before removing
     the legacy probe. Start `exception.py` under `exception_policy.json`
     without an exception CRD. Require `EACCES` and an attributed
     `EXCEPTION_UNAVAILABLE` File/OpenWrite event on the initial generation.
@@ -1690,7 +1690,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The exact case passed in 29.68
       seconds. All five direct-`runc` exception tests passed together in
       97.69 seconds with the production OCI hook.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact case passed in 64.85
+      seconds. All five Kubernetes exception tests passed together in 192.26
+      seconds on the retained K3s VM.
 - [ ] `EffectTestRunner::physical_probe` setup and teardown: own its three
   cgroups, child processes, pin root, lease, and diagnostic output.
 - [ ] `EffectTestRunner::physical_probe` observe scenario: keep the public
