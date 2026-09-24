@@ -1789,7 +1789,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The exact case passed in 40.04
       seconds with the production OCI hook. The two existing direct-`runc`
       symlink cases passed together in 60.27 seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact case passed in 73.07
+      seconds in retained K3s. The two existing Kubernetes symlink cases
+      passed together in 99.20 seconds after the shared actor change.
     - [ ] Remove only the matching old action, result field, and prepared
       operation after all three platform cases pass.
 - [ ] `EffectTestRunner::physical_probe` mount mutation cases: keep each
