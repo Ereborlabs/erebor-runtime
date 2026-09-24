@@ -2474,7 +2474,7 @@ test does not close a row when its physical condition or an assertion changed.
       unmatched Unix-stream checks depend on the same endpoint. The shared
       Host case passed again after deletion in 27.52 seconds. The 93
       non-privileged library tests, formatting, and strict crate Clippy pass.
-  - [ ] Replace the stale Unix-stream peer denial. Reuse `socket_pass.py` and
+  - [x] Replace the stale Unix-stream peer denial. Reuse `socket_pass.py` and
     the signed worker-to-worker policy. Keep one connected stream open after
     its admitted receiver exits. Require the received control payload, an
     `EACCES` send, and attributed `CORRUPT_IDENTITY_OR_GENERATION` IPC/Access
@@ -2482,7 +2482,9 @@ test does not close a row when its physical condition or an assertion changed.
     Kubernetes. Remove only the matching old action after all three pass.
     The shared Host case passed in 27.58 seconds, direct `runc` passed in
     33.92 seconds, and Kubernetes passed in 66.09 seconds. The matching old
-    runner action remains until its deletion is checked.
+    runner action, result field, and now-unused helper are removed. The Host
+    case passed again after deletion in 28.03 seconds. The 91 nonprivileged
+    library tests, formatting, and strict crate Clippy pass.
   - [x] Replace the unmatched file-create block with one small standard
     platform test. Use one shared Python actor and the existing Python policy.
     Start the actor before Node to preserve the original recovered-root

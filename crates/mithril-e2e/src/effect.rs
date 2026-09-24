@@ -442,7 +442,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub sysv_ipc_access_hard_closed: bool,
     pub unix_stream_relationship_allowed: bool,
     pub inherited_unix_stream_send_denied: bool,
-    pub unix_stream_stale_peer_denied: bool,
     pub unix_stream_unmatched_denied: bool,
     pub ptmx_ioctl_exact_allowed: bool,
     pub ptmx_derived_peer_hard_closed: bool,
@@ -2063,26 +2062,6 @@ impl EffectTestRunner {
                 ),
             )?;
 
-            let stale_marker = observations.cursor();
-            let stale_outcome = fixture.run_prepared(HardClosedOperation::UnixStreamStalePeer)?;
-            ensure!(
-                stale_outcome.denied(),
-                InvalidInputSnafu {
-                    path: Path::new("effect Unix-stream peer"),
-                    reason: "a connected socket retained positive authority after its peer exited",
-                }
-            );
-            wait_for_effect(
-                &reader,
-                &observations,
-                stale_marker,
-                "CORRUPT_IDENTITY_OR_GENERATION",
-                (
-                    KernelEffectFamilyV1::Ipc,
-                    KernelEffectOperationV1::IpcAccess,
-                ),
-            )?;
-
             let unmatched_marker = observations.cursor();
             let unmatched_outcome =
                 fixture.run_prepared(HardClosedOperation::UnixStreamUnmatched)?;
@@ -3050,7 +3029,6 @@ impl EffectTestRunner {
             sysv_ipc_access_hard_closed: true,
             unix_stream_relationship_allowed: protect,
             inherited_unix_stream_send_denied: protect,
-            unix_stream_stale_peer_denied: protect,
             unix_stream_unmatched_denied: protect,
             ptmx_ioctl_exact_allowed: protect,
             ptmx_derived_peer_hard_closed: protect,

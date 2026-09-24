@@ -177,7 +177,6 @@ pub(super) enum PreparedOperation {
     Ipc,
     UnixStream,
     InheritedUnixStreamSend,
-    UnixStreamStalePeer,
     UnixStreamUnmatched,
     SelfProtect { path: PathBuf },
 }
@@ -2106,10 +2105,6 @@ impl PreparedOperations {
                 .unix_stream_target
                 .as_ref()
                 .map_or_else(missing_process_target, UnixStreamTarget::forked_send),
-            PreparedOperation::UnixStreamStalePeer => self
-                .unix_stream_target
-                .as_mut()
-                .map_or_else(missing_process_target, UnixStreamTarget::stale_send),
             PreparedOperation::UnixStreamUnmatched => {
                 self.unix_stream_target
                     .as_mut()
@@ -2265,16 +2260,6 @@ impl UnixStreamTarget {
                 error_outcome(error)
             }
         }
-    }
-
-    fn stale_send(&mut self) -> IoOutcome {
-        self.connected_stream
-            .take()
-            .map_or_else(missing_process_target, |mut stream| {
-                stream
-                    .write_all(&[3])
-                    .map_or_else(error_outcome, |()| allowed_outcome())
-            })
     }
 
     fn forked_send(&self) -> IoOutcome {
@@ -3051,7 +3036,7 @@ mod tests {
             return Ok(());
         }
         assert!(outcome.allowed, "{outcome:?}");
-        let _stale_outcome = target.stale_send();
+        target.connected_stream = None;
         target.restart().map_err(|source| crate::Error::Io {
             path: "restarted Unix-stream control fixture".into(),
             source,
