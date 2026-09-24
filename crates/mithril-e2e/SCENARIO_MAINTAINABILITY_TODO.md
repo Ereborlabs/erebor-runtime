@@ -2007,7 +2007,7 @@ test does not close a row when its physical condition or an assertion changed.
       mapping cases. Keep the shared prepare, read, and mmap mailbox operations
       because the network scenario still uses them. The 29 non-privileged
       effect regressions pass after the deletion.
-  - [ ] Replace the independent-root shared mapping block. Reuse the retained
+  - [x] Replace the independent-root shared mapping block. Reuse the retained
     descriptor actor and its exact-file policy. Keep a live primary actor and
     start one declared additional actor as a separate process root. Require
     shared writable mapping denial, benign mapping success, exact File effect
