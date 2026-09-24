@@ -1786,7 +1786,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit it. The 75-line exact case passed in 34.94
       seconds. The two existing Host symlink cases passed together in 47.12
       seconds after the shared actor change.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact case passed in 40.04
+      seconds with the production OCI hook. The two existing direct-`runc`
+      symlink cases passed together in 60.27 seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching old action, result field, and prepared
       operation after all three platform cases pass.
