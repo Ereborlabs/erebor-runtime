@@ -2054,6 +2054,25 @@ test does not close a row when its physical condition or an assertion changed.
     - [ ] Remove only the matching legacy transfer actions and private child
       machinery after all three platforms pass. Keep unrelated Unix-stream
       and exact-file checks.
+  - [ ] Replace the SysV shared-memory permission check with one small
+    standard platform test. The shared Python actor must create and attach a
+    private segment outside the protected cgroup. It must mark the segment
+    for deletion before readiness, then move into the active binding and call
+    `shmctl(IPC_STAT)`. Require `EACCES`, the restricted external role, attributed
+    `UNSUPPORTED_OBJECT` IPC/Access evidence, and no exact policy object.
+    Reuse the signed Python policies and existing Platform operations. Keep
+    the Rust test below 100 lines and add no Platform API.
+    - [ ] Pass Protect on Host and commit it.
+    - [ ] Pass Protect on direct `runc` and commit it.
+    - [ ] Pass Protect on Kubernetes and commit it.
+    - [ ] Preserve the same legacy check under Observe mode on all three
+      platforms before deleting the old action, result, and prepared segment.
+    - Host draft failed: after placement in the active cgroup,
+      `shmctl(IPC_STAT)` returned success. The only IPC effect was
+      `RUNTIME_ENTRY_INFRASTRUCTURE`; there was no `UNSUPPORTED_OBJECT` denial.
+      The recovery setup assigned `fail_closed_unknown`, not the required
+      restricted role. Keep the legacy check until a physical setup preserves
+      both the role and denial. Do not change BPF for this test.
   - [x] Replace anonymous executable-memory denials and their non-executable
     controls with one small standard platform test. Use one shared Python
     actor as a recovered external process and the public signed Python policy.
