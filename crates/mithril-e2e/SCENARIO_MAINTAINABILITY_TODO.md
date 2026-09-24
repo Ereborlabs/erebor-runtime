@@ -2446,7 +2446,9 @@ test does not close a row when its physical condition or an assertion changed.
       seconds.
     - [x] Pass direct `runc` and commit it. The exact direct-runc case passed
       in 29.61 seconds with the same actor, policy, and assertions.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact physical case passed in
+      67.51 seconds in the retained K3s cluster with the same actor, policy,
+      and assertions.
     - [ ] Remove only the matching legacy IPv6 TCP action, result field, and
       assertion.
   - [ ] Replace connected and unconnected UDP behavior. Keep IPv4 and IPv6
