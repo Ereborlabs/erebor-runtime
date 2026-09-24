@@ -1519,44 +1519,31 @@ async fn kubernetes_outage_retained_evidence_allows_protected_pod_admission(
 ) -> Result<(), Box<dyn StdError>> {
     let tls = MtlsFixture::new(false)?;
     let store = ControlStore::open(tls.path().join("control-store"))?;
-    let observations = EffectObservationStore::durable(
-        4,
-        tls.path().join("node-wal"),
-        EvidenceWalLimits::default(),
-        ObservationCanonicalizer::new(
-            EvidenceIdV1::new(1, 2),
-            EvidenceIdV1::new(3, 4),
-            1,
-            EvidenceIdV1::from([7; 16]),
-        )?,
-    )?;
-    observations.record_bytes(
-        erebor_interceptor_abi::EffectObservationV1 {
-            observed_boottime_ns: 1,
-            source_sequence: 1,
-            source_cpu_id: 0,
-            task_cookie: 7,
-            reason: 9,
-            physical_result: 1,
-            effect_family: 1,
-            operation: 1,
-            ..erebor_interceptor_abi::EffectObservationV1::default()
-        }
-        .as_bytes(),
-    );
+    let observations = tls.wal(EvidenceWalLimits::default())?;
+    let record = erebor_interceptor_abi::EffectObservationV1 {
+        observed_boottime_ns: 1,
+        source_sequence: 1,
+        source_cpu_id: 0,
+        task_cookie: 7,
+        reason: 9,
+        physical_result: 1,
+        effect_family: 1,
+        operation: 1,
+        ..erebor_interceptor_abi::EffectObservationV1::default()
+    };
+    observations.record_bytes(record.as_bytes());
     let retained = observations
         .next_evidence_batch()
         .ok_or("missing retained admission evidence")?;
     let retained: mithril_control::EvidenceBatch = retained.into();
-    EvidenceIntakeOwner::from_store(store.clone()).receive(
-        &AuthenticatedEvidenceNodeV1 {
-            tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
-            node_id: "node-a".to_owned(),
-            node_boot_id: [7; 16],
-            label_epoch: 1,
-        },
-        retained,
-    )?;
+    let node = AuthenticatedEvidenceNodeV1 {
+        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+        node_id: "node-a".to_owned(),
+        node_boot_id: [7; 16],
+        label_epoch: 1,
+    };
+    let intake = EvidenceIntakeOwner::from_store(store.clone());
+    intake.receive(&node, retained)?;
 
     let fixture = OutagePolicyFixture::new(store.clone());
     let resource = fixture.resource(1)?;
@@ -1618,10 +1605,9 @@ async fn kubernetes_outage_retained_evidence_allows_protected_pod_admission(
     let review: serde_json::Value = response.json().await?;
     assert_eq!(review["response"]["uid"], "outage-admission-1");
     assert_eq!(review["response"]["allowed"], true);
+    let patch = review["response"]["patch"].as_array();
     assert!(
-        review["response"]["patch"]
-            .as_array()
-            .is_some_and(|patch| !patch.is_empty()),
+        patch.is_some_and(|patch| !patch.is_empty()),
         "protected Pod admission did not return a scheduler patch: {review}"
     );
 

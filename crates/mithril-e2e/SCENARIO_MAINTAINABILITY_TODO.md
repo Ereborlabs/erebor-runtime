@@ -559,7 +559,7 @@ These Rust files exceed 2,000 lines:
 | `identity.rs` | 5,425 |
 | `effect.rs` | 3,802 |
 | `effect/child.rs` | 3,448 |
-| `control_tls.rs` | 2,568 |
+| `control_tls.rs` | 2,554 |
 
 The diff from `95775f48` adds or relocates these private test functions with
 more than five name components:
@@ -902,6 +902,10 @@ count as maintainability migrations.
     The 91-line test still checks all 303 records, one commit group, the
     cumulative acknowledgement, durable Control receipt, and the empty Node
     backlog. Its focused test passed.
+  - [x] Use the same WAL fixture for the protected-Pod admission test. The
+    99-line test keeps the retained evidence intake, admission request,
+    allowed response, and nonempty scheduler patch checks visible. Its focused
+    test passed.
 - [x] Keep one synchronous readiness function with an exact timeout, resource
   path, operation name, and caller-supplied last-state diagnostic.
 - [x] Put the repeated effect-attribution comparison on the existing `Task`
