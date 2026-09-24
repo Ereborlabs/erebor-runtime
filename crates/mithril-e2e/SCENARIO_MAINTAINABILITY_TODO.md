@@ -3217,7 +3217,9 @@ setup, production actions, assertions, and focused test.
       - [x] Pass direct `runc` and commit that platform. The exact case passed
         in 51.59 seconds. All four direct-`runc` restart tests passed together
         in 140.54 seconds.
-      - [ ] Pass Kubernetes and commit that platform.
+      - [x] Pass Kubernetes and commit that platform. The exact case passed
+        in 91.94 seconds. All four Kubernetes restart tests passed together
+        in 220.50 seconds on 2026-09-24.
       - [ ] Remove only the matching old literal-path result and shell gate
         after all three platform cases pass. Keep the separate PreStop role,
         file-denial, and inventory-omission checks.
