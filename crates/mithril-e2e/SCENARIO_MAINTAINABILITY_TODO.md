@@ -3139,7 +3139,7 @@ setup, production actions, assertions, and focused test.
     107.89 seconds on 2026-09-17.
   - [x] Remove the matching legacy restart snapshot, result field, and shell
     assertion after all three platform cases pass.
-  - [ ] Replace the post-restart PostStart `cp` role and file-policy checks.
+  - [x] Replace the post-restart PostStart `cp` role and file-policy checks.
     - [x] Add one 88-line direct test. Start the application, restart Node,
       and hold one declared `cp` entry at a FIFO. Require its PostStart role,
       its read of an application-denied file, and its own attributed `EACCES`
@@ -3174,9 +3174,15 @@ setup, production actions, assertions, and focused test.
         together in 178.07 seconds. The retained K3s image store again lacked
         the pinned Python image before this run. The existing preload helper
         restored the exact digest before the unchanged test started.
-    - [ ] Remove only the matching legacy PostStart action, result, and shell
-      check after all platform and literal-path checks pass. Keep the PreStop
-      inventory-omission case until its own replacement passes.
+    - [x] Remove only the matching legacy PostStart action, result, and shell
+      check. Keep the PreStop inventory-omission case until its own replacement
+      passes. The old direct-`runc` fixture had changed its OCI spec only in
+      memory. It now writes the spec before containerd reads it. The unchanged
+      default spec had `terminal: true` and no test hooks. The repaired
+      privileged probe passed in the retained VM. Its complete launcher
+      result predicate passed with one PreStop entry and all remaining
+      security and cleanup fields. The VM harness checks and repository Rust
+      CI check passed after the change.
   - [x] Retain a declared PreStop entry across the same real Node restart.
     Require the recovered policy generation, external runtime root,
     qualified role, exact PreStop role, and nonzero admission rule.

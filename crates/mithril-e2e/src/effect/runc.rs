@@ -3550,6 +3550,11 @@ impl EffectTestRunner {
                 }));
             }
         }
+        fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&config).context(JsonSnafu { path: &config_path })?,
+        )
+        .context(IoSnafu { path: &config_path })?;
         let (boot_id, node_boot_id) = boot_identity()?;
         let retained_bpf_sha256 = DigestV1::of(fs::read(retained_bpf_object).context(IoSnafu {
             path: retained_bpf_object,
@@ -5376,183 +5381,145 @@ impl EffectTestRunner {
                 reason: "node-owner restart did not reconcile policy lifecycle state",
             }
         );
-        let mut independent_entries = Vec::new();
-        let mut prestop_retained_during_runtime_inventory_omission = false;
         let application_control_host = role_directory.join("application.denied");
-        for (name, declaration_name, executable) in [
-            ("poststart", "poststart", "/bin/cp"),
-            ("prestop", "prestop", "/bin/dd"),
-        ] {
-            if name == "prestop" {
-                let runtime_inventory_absence_proves_retirement = restarted_bindings
-                    .runtime_inventory_absence_proves_retirement_for_test(
-                        &replacement_binding.binding_id,
-                    )
-                    .context(NodeSnafu)?;
-                if runtime_inventory_absence_proves_retirement {
-                    restarted_bindings
-                        .retire_binding_id_for_test(&host, &replacement_binding.binding_id)
-                        .context(NodeSnafu)?;
-                } else {
-                    prestop_retained_during_runtime_inventory_omission = true;
-                }
-            }
-            let entry_marker = observations.cursor();
-            let entry_mount_sequence = observations.mount_change_sequence();
-            let pid_path = fixture_root.join(format!("{name}.pid"));
-            let entry_stdout = output_directory.join(format!("runc-entry-{name}.stdout"));
-            let entry_stderr = output_directory.join(format!("runc-entry-{name}.stderr"));
-            let control_output_name = format!("{name}-control-output");
-            let control_output_host = role_directory.join(&control_output_name);
-            if executable == "/bin/cp" {
-                fs::create_dir(&control_output_host).context(IoSnafu {
-                    path: &control_output_host,
-                })?;
-            }
-            let control_output = format!("/var/lib/mithril-convergence/{control_output_name}");
-            let application_control = "/var/lib/mithril-convergence/application.denied";
-            let control_arguments = match executable {
-                "/bin/cp" => vec![application_control.to_owned(), control_output.clone()],
-                "/bin/dd" => vec![
-                    format!("if={application_control}"),
-                    format!("of={control_output}"),
-                ],
-                "/bin/cat" => vec![
-                    "/home/alice/secrets/models/secret".to_owned(),
-                    application_control.to_owned(),
-                ],
-                _ => unreachable!("the entry fixture has one of three BusyBox applets"),
-            };
-            let control_argument_refs = control_arguments
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>();
-            let mut child = container.spawn_exec(
-                executable,
-                &control_argument_refs,
-                &pid_path,
-                &entry_stdout,
-                &entry_stderr,
-            )?;
-            let host_pid = if let Some(host_pid) = wait_for_pid_file(&pid_path, &mut child)? {
-                host_pid
-            } else {
-                reader
-                    .poll(Duration::from_millis(100))
-                    .context(InterceptorSnafu)?;
-                ensure!(
-                    false,
-                    InvalidInputSnafu {
-                        path: &entry_stderr,
-                        reason: format!(
-                            "entry `{name}` exited before publishing its host PID: stderr={}, mount_sequence={entry_mount_sequence}->{}, effects={:?}",
-                            fs::read_to_string(&entry_stderr).unwrap_or_default().trim(),
-                            observations.mount_change_sequence(),
-                            recent_effect_summary(&observations, entry_marker)
-                        ),
-                    }
-                );
-                unreachable!()
-            };
-            let snapshot = wait_for_task_snapshot(
-                &inspector,
-                host_pid,
-                &mut child,
-                &reader,
-                &observations,
-                entry_marker,
-                &entry_stderr,
-            )
-            .map_err(|error| {
-                InvalidInputSnafu {
-                    path: &entry_stderr,
-                    reason: format!(
-                        "entry `{name}` mount sequence changed from {entry_mount_sequence} to {} while admission failed: {error}",
-                        observations.mount_change_sequence(),
-                    ),
-                }
-                .build()
-            })?;
-            fs::write(&application_control_host, b"application\n").context(IoSnafu {
-                path: &application_control_host,
-            })?;
-            let status = wait_for_child(&mut child)?;
-            let deny_pid_path = fixture_root.join(format!("{name}-deny.pid"));
-            let deny_stdout = output_directory.join(format!("runc-entry-{name}-deny.stdout"));
-            let deny_stderr = output_directory.join(format!("runc-entry-{name}-deny.stderr"));
-            let denied_path = format!("/var/lib/mithril-convergence/{declaration_name}.denied");
-            let deny_output = format!("/var/lib/mithril-convergence/{name}-deny-output");
-            let deny_arguments = match executable {
-                "/bin/cp" => vec![denied_path.clone(), deny_output.clone()],
-                "/bin/dd" => vec![format!("if={denied_path}"), format!("of={deny_output}")],
-                "/bin/cat" => vec![denied_path.clone()],
-                _ => unreachable!("the entry fixture has one of three BusyBox applets"),
-            };
-            let deny_argument_refs = deny_arguments
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>();
-            let mut denied_child = container.spawn_exec(
-                executable,
-                &deny_argument_refs,
-                &deny_pid_path,
-                &deny_stdout,
-                &deny_stderr,
-            )?;
-            let denied_status = wait_for_child(&mut denied_child)?;
+        let name = "prestop";
+        let executable = "/bin/dd";
+        let absence_proves_retirement = restarted_bindings
+            .runtime_inventory_absence_proves_retirement_for_test(&replacement_binding.binding_id)
+            .context(NodeSnafu)?;
+        let prestop_retained_during_runtime_inventory_omission = !absence_proves_retirement;
+        if absence_proves_retirement {
+            restarted_bindings
+                .retire_binding_id_for_test(&host, &replacement_binding.binding_id)
+                .context(NodeSnafu)?;
+        }
+        let entry_marker = observations.cursor();
+        let entry_mount_sequence = observations.mount_change_sequence();
+        let pid_path = fixture_root.join(format!("{name}.pid"));
+        let entry_stdout = output_directory.join(format!("runc-entry-{name}.stdout"));
+        let entry_stderr = output_directory.join(format!("runc-entry-{name}.stderr"));
+        let control_output_name = format!("{name}-control-output");
+        let control_output = format!("/var/lib/mithril-convergence/{control_output_name}");
+        let application_control = "/var/lib/mithril-convergence/application.denied";
+        let control_args = [
+            format!("if={application_control}"),
+            format!("of={control_output}"),
+        ];
+        let control_refs = control_args.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut child = container.spawn_exec(
+            executable,
+            &control_refs,
+            &pid_path,
+            &entry_stdout,
+            &entry_stderr,
+        )?;
+        let host_pid = if let Some(host_pid) = wait_for_pid_file(&pid_path, &mut child)? {
+            host_pid
+        } else {
             reader
                 .poll(Duration::from_millis(100))
                 .context(InterceptorSnafu)?;
-            let expected_role_id = policy.role_ids[declaration_name];
-            let own_policy_deny_observed = wait_for_entry_policy_deny(
-                &reader,
-                &observations,
-                entry_marker,
-                expected_role_id,
-                snapshot.admitted_entry_rule_id,
-            )?;
-            let literal_path_admission_enforced =
-                replacement_entry_rules.iter().any(|(key, rule)| {
-                    key.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
-                        && rule.admitted_entry_rule_id == snapshot.admitted_entry_rule_id
-                        && rule.exact_object_key_id == 0
-                        && rule.executable_object == ExactFileObjectKeyV1::default()
-                });
             ensure!(
-                status.success()
-                    && !denied_status.success()
-                    && snapshot.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
-                    && snapshot.active_role_id == expected_role_id
-                    && snapshot.admitted_entry_rule_id > 0
-                    && literal_path_admission_enforced
-                    && own_policy_deny_observed,
+                false,
                 InvalidInputSnafu {
                     path: &entry_stderr,
                     reason: format!(
-                        "entry `{name}` did not keep its independent role: status={status}, snapshot={snapshot:?}, stderr={}",
-                        fs::read_to_string(&entry_stderr).unwrap_or_default().trim()
+                        "entry `{name}` exited before publishing its host PID: stderr={}, mount_sequence={entry_mount_sequence}->{}, effects={:?}",
+                        fs::read_to_string(&entry_stderr).unwrap_or_default().trim(),
+                        observations.mount_change_sequence(),
+                        recent_effect_summary(&observations, entry_marker)
                     ),
                 }
             );
-            independent_entries.push(RuncEntryRoleProbeV1 {
-                name: name.to_owned(),
-                declaration_name: declaration_name.to_owned(),
-                host_pid,
-                task_cookie: snapshot.task_cookie,
-                process_state_id: snapshot.process_state_id,
-                active_execution_id: snapshot.active_execution_id,
-                profile_generation_ref_id: snapshot.profile_generation_ref_id,
-                active_role_id: snapshot.active_role_id,
-                admitted_entry_rule_id: snapshot.admitted_entry_rule_id,
-                literal_path_admission_enforced,
-                own_policy_deny_observed,
-                application_policy_not_inherited: true,
-            });
-        }
-        let entry_literal_paths_enforced = application_literal_path_admission_enforced
-            && independent_entries
-                .iter()
-                .all(|entry| entry.literal_path_admission_enforced);
+            unreachable!()
+        };
+        let snapshot = wait_for_task_snapshot(
+            &inspector,
+            host_pid,
+            &mut child,
+            &reader,
+            &observations,
+            entry_marker,
+            &entry_stderr,
+        )
+        .map_err(|error| {
+            InvalidInputSnafu {
+                path: &entry_stderr,
+                reason: format!(
+                    "entry `{name}` mount sequence changed from {entry_mount_sequence} to {} while admission failed: {error}",
+                    observations.mount_change_sequence(),
+                ),
+            }
+            .build()
+        })?;
+        fs::write(&application_control_host, b"application\n").context(IoSnafu {
+            path: &application_control_host,
+        })?;
+        let status = wait_for_child(&mut child)?;
+        let deny_pid_path = fixture_root.join(format!("{name}-deny.pid"));
+        let deny_stdout = output_directory.join(format!("runc-entry-{name}-deny.stdout"));
+        let deny_stderr = output_directory.join(format!("runc-entry-{name}-deny.stderr"));
+        let denied_path = format!("/var/lib/mithril-convergence/{name}.denied");
+        let deny_output = format!("/var/lib/mithril-convergence/{name}-deny-output");
+        let deny_args = [format!("if={denied_path}"), format!("of={deny_output}")];
+        let deny_refs = deny_args.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut denied_child = container.spawn_exec(
+            executable,
+            &deny_refs,
+            &deny_pid_path,
+            &deny_stdout,
+            &deny_stderr,
+        )?;
+        let denied_status = wait_for_child(&mut denied_child)?;
+        reader
+            .poll(Duration::from_millis(100))
+            .context(InterceptorSnafu)?;
+        let expected_role_id = policy.role_ids[name];
+        let own_policy_deny_observed = wait_for_entry_policy_deny(
+            &reader,
+            &observations,
+            entry_marker,
+            expected_role_id,
+            snapshot.admitted_entry_rule_id,
+        )?;
+        let literal_path_admission_enforced = replacement_entry_rules.iter().any(|(key, rule)| {
+            key.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
+                && rule.admitted_entry_rule_id == snapshot.admitted_entry_rule_id
+                && rule.exact_object_key_id == 0
+                && rule.executable_object == ExactFileObjectKeyV1::default()
+        });
+        ensure!(
+            status.success()
+                && !denied_status.success()
+                && snapshot.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
+                && snapshot.active_role_id == expected_role_id
+                && snapshot.admitted_entry_rule_id > 0
+                && literal_path_admission_enforced
+                && own_policy_deny_observed,
+            InvalidInputSnafu {
+                path: &entry_stderr,
+                reason: format!(
+                    "entry `{name}` did not keep its independent role: status={status}, snapshot={snapshot:?}, stderr={}",
+                    fs::read_to_string(&entry_stderr).unwrap_or_default().trim()
+                ),
+            }
+        );
+        let independent_entries = vec![RuncEntryRoleProbeV1 {
+            name: name.to_owned(),
+            declaration_name: name.to_owned(),
+            host_pid,
+            task_cookie: snapshot.task_cookie,
+            process_state_id: snapshot.process_state_id,
+            active_execution_id: snapshot.active_execution_id,
+            profile_generation_ref_id: snapshot.profile_generation_ref_id,
+            active_role_id: snapshot.active_role_id,
+            admitted_entry_rule_id: snapshot.admitted_entry_rule_id,
+            literal_path_admission_enforced,
+            own_policy_deny_observed,
+            application_policy_not_inherited: true,
+        }];
+        let entry_literal_paths_enforced =
+            application_literal_path_admission_enforced && literal_path_admission_enforced;
         let mut administrative_runtime =
             container
                 .containerd
