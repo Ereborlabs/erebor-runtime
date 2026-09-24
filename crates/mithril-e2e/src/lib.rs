@@ -30,7 +30,6 @@ pub use capability::{CompileRecordV1, PlatformProbeV1};
 pub use closure::ClosureLedgerV1;
 pub use digest::DigestV1;
 pub use discovery::{run_discovery_offline, DiscoveryQualificationRunner};
-pub use effect::run_network_peer_server;
 pub use effect::{
     run_effect_child, run_mount_reconfigure_child, run_mount_setattr_child, EffectHealthV1,
     EffectPhysicalProbeBundleV1, EffectTestRunner, HfStaticEffectClassificationCaseV1,
