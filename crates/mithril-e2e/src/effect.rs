@@ -443,7 +443,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub memfd_exec_failed_closed: bool,
     pub sysv_ipc_access_hard_closed: bool,
     pub unix_stream_relationship_allowed: bool,
-    pub inherited_unix_stream_send_denied: bool,
     pub unix_stream_unmatched_denied: bool,
     pub ptmx_ioctl_exact_allowed: bool,
     pub ptmx_derived_peer_hard_closed: bool,
@@ -1960,27 +1959,6 @@ impl EffectTestRunner {
             }
         );
         if protect {
-            let inherited_stream_marker = observations.cursor();
-            ensure!(
-                fixture
-                    .run_prepared(HardClosedOperation::InheritedUnixStreamSend)?
-                    .denied(),
-                InvalidInputSnafu {
-                    path: Path::new("inherited Unix-stream endpoint"),
-                    reason: "a fork child borrowed its parent's exact Unix-stream endpoint",
-                }
-            );
-            wait_for_effect(
-                &reader,
-                &observations,
-                inherited_stream_marker,
-                "CORRUPT_IDENTITY_OR_GENERATION",
-                (
-                    KernelEffectFamilyV1::Ipc,
-                    KernelEffectOperationV1::IpcAccess,
-                ),
-            )?;
-
             let passed_secret_control_marker = observations.cursor();
             ensure!(
                 fixture.open(&paths.secret)?.denied(),
@@ -3030,7 +3008,6 @@ impl EffectTestRunner {
             memfd_exec_failed_closed: protect,
             sysv_ipc_access_hard_closed: true,
             unix_stream_relationship_allowed: protect,
-            inherited_unix_stream_send_denied: protect,
             unix_stream_unmatched_denied: protect,
             ptmx_ioctl_exact_allowed: protect,
             ptmx_derived_peer_hard_closed: protect,

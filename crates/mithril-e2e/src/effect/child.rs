@@ -176,7 +176,6 @@ pub(super) enum PreparedOperation {
     IoctlUnsupported,
     Ipc,
     UnixStream,
-    InheritedUnixStreamSend,
     UnixStreamUnmatched,
     SelfProtect { path: PathBuf },
 }
@@ -2101,10 +2100,6 @@ impl PreparedOperations {
                 .unix_stream_target
                 .as_mut()
                 .map_or_else(missing_process_target, UnixStreamTarget::roundtrip),
-            PreparedOperation::InheritedUnixStreamSend => self
-                .unix_stream_target
-                .as_ref()
-                .map_or_else(missing_process_target, UnixStreamTarget::forked_send),
             PreparedOperation::UnixStreamUnmatched => {
                 self.unix_stream_target
                     .as_mut()
@@ -2260,14 +2255,6 @@ impl UnixStreamTarget {
                 error_outcome(error)
             }
         }
-    }
-
-    fn forked_send(&self) -> IoOutcome {
-        self.connected_stream
-            .as_ref()
-            .map_or_else(missing_process_target, |stream| {
-                io_outcome(fixture_syscalls::forked_write_one(stream.as_raw_fd(), 4))
-            })
     }
 
     fn receive_file(&mut self) -> io::Result<DescriptorTransferOutcome> {

@@ -2485,7 +2485,7 @@ test does not close a row when its physical condition or an assertion changed.
     runner action, result field, and now-unused helper are removed. The Host
     case passed again after deletion in 28.03 seconds. The 91 nonprivileged
     library tests, formatting, and strict crate Clippy pass.
-  - [ ] Replace the inherited Unix-stream send denial. Reuse the admitted
+  - [x] Replace the inherited Unix-stream send denial. Reuse the admitted
     parent/receiver policy and shared actor. Fork after the parent receives an
     allowed payload. Hold the child until its exact task is observed, then
     require `EACCES` and attributed `CORRUPT_IDENTITY_OR_GENERATION` IPC/Access
@@ -2493,8 +2493,10 @@ test does not close a row when its physical condition or an assertion changed.
     `runc`, and Kubernetes before removing the matching old action.
     The 84-line Host case passed in 28.17 seconds. Direct `runc` passed in
     33.83 seconds with the production OCI hook. Kubernetes passed in 64.78
-    seconds in retained K3s. The matching old action remains until its deletion
-    is checked.
+    seconds in retained K3s. The matching old action, result field, and
+    now-unused fork-write wrapper are removed. The Host case passed again
+    after deletion in 28.13 seconds. The 91 nonprivileged library tests,
+    formatting, and strict crate Clippy pass.
   - [x] Replace the unmatched file-create block with one small standard
     platform test. Use one shared Python actor and the existing Python policy.
     Start the actor before Node to preserve the original recovered-root
