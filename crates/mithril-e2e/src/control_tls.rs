@@ -1041,46 +1041,18 @@ async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
 #[tokio::test]
 async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
 ) -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let certificates = Certificates::issue(false)?;
-    let files = certificates.write(directory.path())?;
-    let store_path = directory.path().join("control-evidence");
+    let fixture = MtlsFixture::new(false)?;
+    let store_path = fixture.path().join("control-evidence");
     let limits = |maximum_retained_records| EvidenceStoreLimitsV1 {
         maximum_retained_bytes: mithril_control::MAX_EVIDENCE_SEGMENT_BYTES as u64,
         maximum_retained_records,
         capacity_policy: EvidenceStoreCapacityPolicyV1::Block,
     };
-    let control = |store| {
-        ControlPlane::with_control_store(
-            vec![AllowedNodeIdentity {
-                node_id: "node-a".to_owned(),
-                certificate_sha256: certificates.node_digest(),
-                tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
-            }],
-            TrustGenerationV1 {
-                generation: 1,
-                bundle_digest: "d".repeat(64),
-                policy_issuer_sequence_epoch: 0,
-                policy_signers: Vec::new(),
-            },
-            store,
-        )
-    };
-    let observations = EffectObservationStore::durable(
-        4,
-        directory.path().join("node-wal"),
-        EvidenceWalLimits {
-            maximum_retained_records: 10,
-            maximum_batch_records: 10,
-            ..EvidenceWalLimits::default()
-        },
-        ObservationCanonicalizer::new(
-            EvidenceIdV1::new(1, 2),
-            EvidenceIdV1::new(3, 4),
-            1,
-            EvidenceIdV1::from([7; 16]),
-        )?,
-    )?;
+    let observations = fixture.wal(EvidenceWalLimits {
+        maximum_retained_records: 10,
+        maximum_batch_records: 10,
+        ..EvidenceWalLimits::default()
+    })?;
     for source_sequence in 1..=2 {
         observations.record_bytes(
             erebor_interceptor_abi::EffectObservationV1 {
@@ -1101,7 +1073,7 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
     let initial_store = ControlStore::open_with_evidence_limits(&store_path, limits(10))
         .map_err(|source| format!("initial Control store open failed: {source}"))?;
     drop(initial_store);
-    let retained_store_path = directory.path().join("retained-control-evidence");
+    let retained_store_path = fixture.path().join("retained-control-evidence");
     fs::rename(&store_path, &retained_store_path)?;
     fs::write(&store_path, [])?;
     assert!(ControlStore::open_with_evidence_limits(&store_path, limits(10)).is_err());
@@ -1109,19 +1081,16 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
     fs::remove_file(&store_path)?;
     fs::rename(retained_store_path, &store_path)?;
 
-    let mut trust = TrustCache::load(directory.path())?;
+    let mut trust = TrustCache::load(fixture.path())?;
     {
         let blocked_store = ControlStore::open_with_evidence_limits(&store_path, limits(1))
             .map_err(|source| format!("blocked Control store open failed: {source}"))?;
-        let blocked_control = control(blocked_store.clone())?;
-        let blocked_server = ControlServerFixture::start(&files, blocked_control).await?;
-        let mut connection = NodeControlConnector::new(
-            files.node_config(blocked_server.address()),
-            "node-a".to_owned(),
-            [7; 16],
-        )
-        .connect(registration(), false, &mut trust)
-        .await?;
+        let blocked_control = fixture.control_with_store(blocked_store.clone(), 1)?;
+        let blocked_server = fixture.start(blocked_control).await?;
+        let mut connection = fixture
+            .connector(&blocked_server, "node-a", [7; 16])
+            .connect(registration(), false, &mut trust)
+            .await?;
         connection
             .send_evidence_group(observations.next_evidence_batches())
             .await?;
@@ -1147,15 +1116,12 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
         || "the stopped server still owns `owner.lock`".to_owned(),
     )
     .await?;
-    let restored_control = control(restored_store.clone())?;
-    let restored_server = ControlServerFixture::start(&files, restored_control).await?;
-    let mut connection = NodeControlConnector::new(
-        files.node_config(restored_server.address()),
-        "node-a".to_owned(),
-        [7; 16],
-    )
-    .connect(registration(), false, &mut trust)
-    .await?;
+    let restored_control = fixture.control_with_store(restored_store.clone(), 1)?;
+    let restored_server = fixture.start(restored_control).await?;
+    let mut connection = fixture
+        .connector(&restored_server, "node-a", [7; 16])
+        .connect(registration(), false, &mut trust)
+        .await?;
     connection
         .send_evidence_group(observations.next_evidence_batches())
         .await?;

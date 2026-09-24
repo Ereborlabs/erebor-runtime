@@ -886,6 +886,13 @@ count as maintainability migrations.
   scenario-neutral operation name in the common platform owner.
 - [x] Put the existing Control TLS lifecycle owner in one small shared module.
   Reuse it for production Control and Node connections.
+  - [x] Use that owner for the storage-failure test's certificates, Control,
+    connector, and Node WAL. The test is now 98 lines. Its focused production
+    Control and Node test passed. Keep the capacity failure, replay, and
+    durable acknowledgement assertions in the test.
+  - [ ] Apply the same setup to the evidence-gap and disconnect-replay tests.
+    Keep their message order and assertions visible. Commit each test after
+    its focused check.
 - [x] Keep one synchronous readiness function with an exact timeout, resource
   path, operation name, and caller-supplied last-state diagnostic.
 - [x] Put the repeated effect-attribution comparison on the existing `Task`

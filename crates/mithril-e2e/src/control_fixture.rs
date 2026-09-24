@@ -7,7 +7,10 @@ use std::time::Duration;
 use mithril_control::{
     serve, AllowedNodeIdentity, ControlPlane, ControlServerTls, ControlStore, TrustGenerationV1,
 };
-use mithril_node::{NodeControlConfig, NodeControlConnector};
+use mithril_node::{
+    EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, NodeControlConfig,
+    NodeControlConnector, ObservationCanonicalizer,
+};
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa,
     KeyPair,
@@ -54,6 +57,23 @@ impl MtlsFixture {
 
     pub(crate) fn path(&self) -> &Path {
         self.directory.path()
+    }
+
+    pub(crate) fn wal(
+        &self,
+        limits: EvidenceWalLimits,
+    ) -> mithril_node::Result<EffectObservationStore> {
+        EffectObservationStore::durable(
+            4,
+            self.path().join("node-wal"),
+            limits,
+            ObservationCanonicalizer::new(
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(3, 4),
+                1,
+                EvidenceIdV1::from([7; 16]),
+            )?,
+        )
     }
 
     pub(crate) fn node_digest(&self) -> String {
