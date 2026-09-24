@@ -2036,6 +2036,42 @@ test does not close a row when its physical condition or an assertion changed.
     probe still uses it. The exact shared Host case passed again in 35.53
     seconds after deletion. The 91 non-privileged tests, formatting, and
     strict Clippy passed.
+  - [ ] Replace the SCM_RIGHTS file-acquisition pair with one small standard
+    platform test. Reuse a shared Python actor and public signed policy. Open
+    both files before protection. Transfer each descriptor from a peer in a
+    separate protected cgroup and binding, then receive after activation.
+    Require payload receipt, no installed secret descriptor, one installed
+    and readable benign descriptor, exact File/OpenRead denial and allow
+    evidence, unchanged descriptor state after the denied transfer, and
+    cleanup. Keep the test below 100 lines and do not add a Platform API.
+    The old probe places its Unix-stream sender in a separate peer binding.
+    A fork of the main actor or `add_actor` inside its container does not
+    preserve that condition. Keep the legacy transfer assertions until the
+    common physical setup can create that peer on all three platforms.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy transfer actions and private child
+      machinery after all three platforms pass. Keep unrelated Unix-stream
+      and exact-file checks.
+  - [ ] Replace anonymous executable-memory denials and their non-executable
+    controls with one small standard platform test. Use one shared Python
+    actor as a recovered external process and the public signed Python policy.
+    Make real `mmap`, `mprotect`, and `pkey_mprotect` calls. Check the exact
+    attributed production effects. Require
+    `EACCES` for executable mappings and protections, success for read-only
+    controls, and no policy object for unsupported anonymous execution.
+    Keep the test below 100 lines. Do not add a Platform API.
+    An admitted PID 1 returned success for executable `mprotect` on Host.
+    That result follows the production application default and does not match
+    the old late-moved actor. Keep the recovered external-root condition.
+    - [x] Host passed in 28.90 seconds. The shared actor returned two
+      executable-protection denials, one executable-mmap denial, and two
+      successful read-only controls. The production effect records matched.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy actions, fields, and prepared
+      resources after all three platforms pass.
   - [x] Replace the protected `PTRACE_ATTACH` block with one small standard
     platform test. Use one shared Python actor and scenario policy. Do not add
     a Platform API.

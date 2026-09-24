@@ -14,6 +14,8 @@ mod dns_exfil;
 #[cfg(test)]
 mod exception;
 #[cfg(test)]
+mod executable_memory;
+#[cfg(test)]
 mod file_effect;
 #[cfg(test)]
 mod file_mutation;
