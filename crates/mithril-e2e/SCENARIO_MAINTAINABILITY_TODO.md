@@ -1775,6 +1775,21 @@ test does not close a row when its physical condition or an assertion changed.
     checks and their Protect-mode counterparts pass as platform tests.
 - [ ] `EffectTestRunner::physical_probe` protect scenario: keep every hard
   denial, allow control, loss counter, and evidence assertion.
+  - [ ] Replace the `/proc/self/fd/<fd>` exact-file alias denial. Open and
+    hold the secret descriptor before the Protect policy is installed. Reopen
+    it through `/proc/self/fd` after activation. Use one small standard test,
+    the shared Python actor, and the existing Protect policy; add no policy
+    or Platform API.
+    Require `EACCES` and attributed `EXACT_POLICY_DENY` File/OpenRead evidence
+    with the original exact-object key, composite atom, and task cookie.
+    Keep the test below 100 lines.
+    - [x] Pass Host and commit it. The 75-line exact case passed in 34.94
+      seconds. The two existing Host symlink cases passed together in 47.12
+      seconds after the shared actor change.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching old action, result field, and prepared
+      operation after all three platform cases pass.
 - [ ] `EffectTestRunner::physical_probe` mount mutation cases: keep each
   production reconciliation call and mount syscall action visible.
   - [x] Replace the pre-existing bind-alias block with one actor-driven

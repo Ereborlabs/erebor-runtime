@@ -24,6 +24,8 @@ mod file_mutation;
 #[cfg(test)]
 mod file_observe;
 #[cfg(test)]
+mod file_procfd;
+#[cfg(test)]
 mod file_symlink;
 #[cfg(test)]
 mod file_symlink_protect;

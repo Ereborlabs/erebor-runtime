@@ -42,20 +42,26 @@ elif mode == "read":
     if sys.stdin.readline() != "read\n":
         raise RuntimeError("expected read")
     write("expired-result", str(open_errno(secret, os.O_RDONLY)))
-elif mode == "symlink":
+elif mode in ("symlink", "procfd"):
     secret = Path("/tmp/mithril-observe-secret")
     secret.parent.mkdir(parents=True, exist_ok=True)
     secret.write_bytes(b"secret")
-    alias = Path("/tmp/mithril-observe-link")
-    alias.symlink_to(secret)
+    if mode == "symlink":
+        alias = Path("/tmp/mithril-observe-link")
+        alias.symlink_to(secret)
+        command = "link"
+    else:
+        held = os.open(secret, os.O_RDWR)
+        alias = Path(f"/proc/self/fd/{held}")
+        command = "fd"
     libc = ctypes.CDLL(None, use_errno=True)
     libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
     print("native-fixture-ready", flush=True)
-    for command, path in [("base", secret), ("confirm", secret), ("link", alias)]:
-        if sys.stdin.readline() != f"{command}\n":
-            raise RuntimeError(f"expected {command}")
+    for action, path in [("base", secret), ("confirm", secret), (command, alias)]:
+        if sys.stdin.readline() != f"{action}\n":
+            raise RuntimeError(f"expected {action}")
         error = open_errno(path, os.O_RDONLY)
-        name = ctypes.create_string_buffer(f"link-{command}-{error}".encode("ascii"))
+        name = ctypes.create_string_buffer(f"link-{action}-{error}".encode("ascii"))
         if libc.prctl(15, ctypes.addressof(name), 0, 0, 0) != 0:
             raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
 elif mode == "race":
