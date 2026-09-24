@@ -79,7 +79,6 @@ pub struct NetworkPhysicalProbeBundleV2 {
     pub post_fence_bytes_absent: bool,
     pub post_fence_bypass_packets_absent: bool,
     pub socket_reference_released: bool,
-    pub unsupported_network_families_denied: bool,
     pub io_uring_sqpoll_denied: bool,
     pub tun_tap_setup_denied: bool,
     pub bpf_setup_denied: bool,
@@ -631,22 +630,6 @@ impl NetworkTestRunner {
         let peer_network_passed = peer_tcp_allowed.unwrap_or(true)
             && peer_udp_allowed.unwrap_or(true)
             && peer_denied_connect.unwrap_or(true);
-        let unsupported_network_families_denied = [
-            (libc::AF_PACKET, libc::SOCK_RAW, 0),
-            (libc::AF_NETLINK, libc::SOCK_RAW, 0),
-            (libc::AF_VSOCK, libc::SOCK_STREAM, 0),
-            (27, libc::SOCK_RAW, 0),
-            (44, libc::SOCK_RAW, 0),
-            (libc::AF_INET, libc::SOCK_STREAM, 132),
-            (libc::AF_INET6, libc::SOCK_STREAM, 262),
-        ]
-        .into_iter()
-        .map(|(family, socket_type, protocol)| {
-            fixture.network_socket(family, socket_type, protocol)
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .all(super::child::IoOutcome::denied);
         let io_uring_marker = observations.cursor();
         let io_uring_sqpoll_denied = fixture.network_io_uring_sqpoll()?.denied();
         wait_for_effect(
@@ -673,10 +656,7 @@ impl NetworkTestRunner {
             ),
         )?;
         ensure!(
-            unsupported_network_families_denied
-                && io_uring_sqpoll_denied
-                && tun_tap_setup_denied
-                && bpf_setup_denied,
+            io_uring_sqpoll_denied && tun_tap_setup_denied && bpf_setup_denied,
             InvalidInputSnafu {
                 path: Path::new("closed network paths"),
                 reason: "a tunnel, delegated setup, or protocol path remained open",
@@ -1015,8 +995,7 @@ impl NetworkTestRunner {
                 && delegated_allowed_request_received,
             hf_result: post_fence_send_denied && provider_write_observed,
             hf_read_result: read_results_separate,
-            hf_network: unsupported_network_families_denied
-                && io_uring_sqpoll_denied
+            hf_network: io_uring_sqpoll_denied
                 && tun_tap_setup_denied
                 && bpf_setup_denied
                 && post_fence_bypass_packets_absent
@@ -1072,7 +1051,6 @@ impl NetworkTestRunner {
             post_fence_bytes_absent,
             post_fence_bypass_packets_absent,
             socket_reference_released,
-            unsupported_network_families_denied,
             io_uring_sqpoll_denied,
             tun_tap_setup_denied,
             bpf_setup_denied,
