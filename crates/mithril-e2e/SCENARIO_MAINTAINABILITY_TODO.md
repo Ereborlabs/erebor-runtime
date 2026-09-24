@@ -2463,7 +2463,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit it. The 63-line test passed in 28.52 seconds.
       All five existing Host TCP cases passed together in 55.92 seconds with
       the shared actor and evidence-wait change.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The unchanged case passed in
+      29.19 seconds. All five existing direct-`runc` TCP cases passed in
+      58.99 seconds with the shared actor and evidence-wait change.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy lifecycle action and result after
       all three platforms pass. Keep the fence and restart checks.
