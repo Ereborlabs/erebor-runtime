@@ -1674,7 +1674,9 @@ test does not close a row when its physical condition or an assertion changed.
       All four Host exception tests passed together in 88.17 seconds. The
       production File/OpenWrite events used the new generation and one
       composite atom for the denied, allowed, and exhausted secret opens.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact case passed in 42.10
+      seconds. All four direct-`runc` exception tests passed together in
+      113.45 seconds with the production OCI hook.
     - [ ] Pass Kubernetes and commit it.
   - [ ] Preserve the old pre-replacement inactive-grant denial before removing
     the legacy probe. The new actor-policy start does not prove that condition.
