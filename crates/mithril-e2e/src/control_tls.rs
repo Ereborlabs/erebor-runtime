@@ -613,32 +613,11 @@ async fn mtls_connection_reports_local_readiness_transitions_without_reconnect(
 #[tokio::test]
 async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes(
 ) -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let certificates = Certificates::issue(false)?;
-    let files = certificates.write(directory.path())?;
-    let store = ControlStore::open(directory.path().join("control-store"))?;
-    let control = ControlPlane::with_control_store(
-        vec![AllowedNodeIdentity {
-            node_id: "node-a".to_owned(),
-            certificate_sha256: certificates.node_digest(),
-            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
-        }],
-        TrustGenerationV1 {
-            generation: 4,
-            bundle_digest: "d".repeat(64),
-            policy_issuer_sequence_epoch: 0,
-            policy_signers: Vec::new(),
-        },
-        store,
-    )?;
-    let server = ControlServerFixture::start(&files, control.clone()).await?;
-
-    let connector = NodeControlConnector::new(
-        files.node_config(server.address()),
-        "node-a".to_owned(),
-        [7; 16],
-    );
-    let mut trust = TrustCache::load(&directory.path().join("node-trust"))?;
+    let fixture = MtlsFixture::new(false)?;
+    let control = fixture.control(4)?;
+    let server = fixture.start(control.clone()).await?;
+    let connector = fixture.connector(&server, "node-a", [7; 16]);
+    let mut trust = TrustCache::load(fixture.path())?;
     let mut node = registration();
     node.kubernetes_node_name = "worker-a.example".to_owned();
     let mut connection = connector.connect(node, true, &mut trust).await?;
@@ -651,7 +630,7 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
         .ok_or("registered node has no ready Kubernetes session")?;
 
     let signing_key = SigningKey::from_bytes(&[9; 32]);
-    let public_key = directory.path().join("decommission-public-key");
+    let public_key = fixture.path().join("decommission-public-key");
     fs::write(&public_key, signing_key.verifying_key().to_bytes())?;
     let artifact = SignedNodeDecommissionV1::sign(
         &NodeDecommissionAuthorizationV1::new(
@@ -666,6 +645,7 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
     )?
     .to_bytes()?;
     let submitted = control.submit_node_decommission(artifact.clone()).await?;
+    let hash = &submitted.artifact_sha256;
     let NodeControlMessage::Decommission(prepare) = connection.next_message().await? else {
         return Err("Control did not deliver decommission preparation".into());
     };
@@ -678,12 +658,12 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
             signing_key_id: "offline-decommission-v1".to_owned(),
             public_key_path: public_key,
             runtime_integration_owner: "mithril-system/mithril".to_owned(),
-            runtime_hook_directory: directory.path().join("host-hook-bin"),
-            containerd_config_directory: directory.path().join("host-containerd"),
+            runtime_hook_directory: fixture.path().join("host-hook-bin"),
+            containerd_config_directory: fixture.path().join("host-containerd"),
             containerd_drop_in_directory: "conf.d".to_owned(),
             runtime_services: vec!["containerd".to_owned()],
         },
-        &directory.path().join("node-state"),
+        &fixture.path().join("node-state"),
         "node-a".to_owned(),
         erebor_interceptor_abi::Id128V1::from([7; 16]),
     )?;
@@ -695,23 +675,14 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
     connection
         .send_decommission_result(digest, "ACCEPTED", String::new())
         .await?;
-    wait_for_decommission_state(
-        &control,
-        &submitted.artifact_sha256,
-        NodeDecommissionStateV1::Accepted,
-    )
-    .await?;
-    let last_ready = std::cell::RefCell::new(Vec::new());
+    wait_for_decommission_state(&control, hash, NodeDecommissionStateV1::Accepted).await?;
+    let ready = || control.ready_kubernetes_node_sessions(Duration::from_secs(2));
     wait_for_async(
-        directory.path(),
+        fixture.path(),
         "the accepted node session to leave the ready set",
         Duration::from_secs(2),
-        || {
-            *last_ready.borrow_mut() =
-                control.ready_kubernetes_node_sessions(Duration::from_secs(2));
-            Ok(last_ready.borrow().is_empty().then_some(()))
-        },
-        || format!("last ready sessions: {:?}", last_ready.borrow()),
+        || Ok(ready().is_empty().then_some(())),
+        || format!("last ready sessions: {:?}", ready()),
     )
     .await?;
 
@@ -730,12 +701,7 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
     connection
         .send_decommission_result(digest, "COMPLETED", String::new())
         .await?;
-    wait_for_decommission_state(
-        &control,
-        &submitted.artifact_sha256,
-        NodeDecommissionStateV1::Completed,
-    )
-    .await?;
+    wait_for_decommission_state(&control, hash, NodeDecommissionStateV1::Completed).await?;
 
     drop(connection);
     server.shutdown().await?;

@@ -559,7 +559,7 @@ These Rust files exceed 2,000 lines:
 | `identity.rs` | 5,425 |
 | `effect.rs` | 3,802 |
 | `effect/child.rs` | 3,448 |
-| `control_tls.rs` | 2,535 |
+| `control_tls.rs` | 2,501 |
 
 The diff from `95775f48` adds or relocates these private test functions with
 more than five name components:
@@ -1055,7 +1055,7 @@ acknowledgement, or decommission operations directly.
 - [ ] `mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce`
 - [ ] `mtls_connection_renews_the_ready_session_while_its_owner_is_idle`
 - [ ] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
-- [ ] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`
+- [x] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`: use `MtlsFixture` for certificate, Control, server, and connector setup. Keep the signed artifact, Node acceptance, quarantine, completion, and ready-session checks in the test. The test is 96 lines. Its focused run and the full Rust CI procedure passed.
 - [ ] `mtls_rejects_wrong_node_binding_and_expired_client_identity`
 - [ ] `mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered_session`
 - [ ] `mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack`
