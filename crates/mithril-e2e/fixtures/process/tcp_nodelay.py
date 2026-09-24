@@ -133,8 +133,10 @@ def send_variants():
         raise OSError(failure.errno or errno.EIO, f"{stage}: {failure}") from failure
 
 
-def socket_inheritance():
+def prepare_inheritance():
     stage = "socket setup"
+    client = None
+    peer = None
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
             server.settimeout(3)
@@ -142,39 +144,53 @@ def socket_inheritance():
             stage = "bind"
             server.bind(("127.0.0.1", 19093))
             server.listen(1)
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-                client.settimeout(3)
-                stage = "connect"
-                client.connect(server.getsockname())
-                with server.accept()[0] as peer:
-                    peer.settimeout(3)
-                    stage = "duplicate send"
-                    with client.dup() as duplicate:
-                        duplicate.sendall(b"dup")
-                    if receive(peer, 3) != b"dup":
-                        raise OSError(errno.EIO, "duplicate payload changed")
-
-                    stage = "fork"
-                    child = os.fork()
-                    if child == 0:
-                        try:
-                            client.sendall(b"fork")
-                            set_name("fork-send")
-                            os.kill(os.getpid(), signal.SIGSTOP)
-                            os._exit(0)
-                        except OSError as failure:
-                            os._exit((failure.errno or errno.EIO) & 0xFF)
-                    if receive(peer, 4) != b"fork":
-                        raise OSError(errno.EIO, "fork payload changed")
-                    waited, status = os.waitpid(child, os.WUNTRACED)
-                    if waited != child or not os.WIFSTOPPED(status):
-                        raise OSError(errno.EIO, "fork child did not stop")
-                    return child
+            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client.settimeout(3)
+            stage = "connect"
+            client.connect(server.getsockname())
+            peer = server.accept()[0]
+            peer.settimeout(3)
+            stage = "fork"
+            child = os.fork()
+            if child == 0:
+                try:
+                    server.close()
+                    peer.close()
+                    set_name("fork-ready")
+                    os.kill(os.getpid(), signal.SIGSTOP)
+                    client.sendall(b"fork")
+                    set_name("fork-send")
+                    os.kill(os.getpid(), signal.SIGSTOP)
+                    os._exit(0)
+                except OSError as failure:
+                    os._exit((failure.errno or errno.EIO) & 0xFF)
+            waited, status = os.waitpid(child, os.WUNTRACED)
+            if waited != child or not os.WIFSTOPPED(status):
+                raise OSError(errno.EIO, "fork child did not prepare")
+            return client, peer, child
     except OSError as failure:
+        if peer is not None:
+            peer.close()
+        if client is not None:
+            client.close()
         raise OSError(failure.errno or errno.EIO, f"{stage}: {failure}") from failure
 
 
-held_child = None
+def send_inheritance(state):
+    client, peer, child = state
+    with client.dup() as duplicate:
+        duplicate.sendall(b"dup")
+    if receive(peer, 3) != b"dup":
+        raise OSError(errno.EIO, "duplicate payload changed")
+    os.kill(child, signal.SIGCONT)
+    if receive(peer, 4) != b"fork":
+        raise OSError(errno.EIO, "fork payload changed")
+    waited, status = os.waitpid(child, os.WUNTRACED)
+    if waited != child or not os.WIFSTOPPED(status):
+        raise OSError(errno.EIO, "fork child did not stop")
+
+
+held = None
 print("native-fixture-ready", flush=True)
 for command in sys.stdin:
     if command == "nodelay\n":
@@ -191,18 +207,25 @@ for command in sys.stdin:
         break
     elif command == "inherit\n":
         try:
-            held_child = socket_inheritance()
+            held = prepare_inheritance()
             error = 0
         except OSError as failure:
             error = failure.errno or errno.EIO
             print(f"inherit: {failure}", file=sys.stderr, flush=True)
-        set_name(f"inherit-{error}")
+        set_name("inherit-ready" if error == 0 else f"inherit-{error}")
+        if error:
+            sys.exit(error)
+    elif command == "send\n":
+        error = result("inherit", lambda: send_inheritance(held))
         if error:
             sys.exit(error)
     elif command == "release\n":
-        if held_child is not None:
-            os.kill(held_child, signal.SIGCONT)
-            _, status = os.waitpid(held_child, 0)
+        if held is not None:
+            client, peer, child = held
+            os.kill(child, signal.SIGCONT)
+            _, status = os.waitpid(child, 0)
+            client.close()
+            peer.close()
             if os.waitstatus_to_exitcode(status) != 0:
                 sys.exit(errno.EIO)
         break

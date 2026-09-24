@@ -173,8 +173,8 @@ fn tcp_inherited_socket_is_allowed<P: Platform>() -> TestResult<()> {
     actor.send(b"inherit\n")?;
     actor.wait_name(
         pid,
-        "inherit-0",
-        "socket inheritance",
+        "inherit-ready",
+        "socket preparation",
         Duration::from_secs(5),
     )?;
     let child_pid = actor.wait_child(pid, "forked TCP sender")?;
@@ -186,23 +186,35 @@ fn tcp_inherited_socket_is_allowed<P: Platform>() -> TestResult<()> {
         Some(root.snapshot.task_cookie)
     );
     assert_eq!(child.snapshot.active_role_id, root.snapshot.active_role_id);
+    let root_generation = root.snapshot.profile_generation_ref_id;
+    let root_effects = EffectCheck::new(&env, root)?;
+    let child_effects = EffectCheck::new(&env, child)?;
 
-    let snapshot = env.snapshot()?;
-    let find_send = |task: &crate::platform::Task| {
-        snapshot
-            .recent_effects
-            .iter()
-            .find(|event| task.matches_effect(event, "EXACT_POLICY_ALLOW", F::Network, O::Send, 0))
-    };
-    let root_send = find_send(&root).expect("duplicate socket has no Send result");
-    let child_send = find_send(&child).expect("forked socket has no Send result");
-    for event in [root_send, child_send] {
+    actor.send(b"send\n")?;
+    actor.wait_name(pid, "inherit-0", "socket sends", Duration::from_secs(5))?;
+    let root_send = root_effects.wait(
+        &env,
+        "EXACT_POLICY_ALLOW",
+        F::Network,
+        O::Send,
+        0,
+        "duplicate socket Send",
+    )?;
+    let child_send = child_effects.wait(
+        &env,
+        "EXACT_POLICY_ALLOW",
+        F::Network,
+        O::Send,
+        0,
+        "forked socket Send",
+    )?;
+    for event in [&root_send, &child_send] {
         assert_eq!(&event.network_peer_address[..4], &[127, 0, 0, 1]);
         assert_eq!(event.network_peer_port, 19093);
         assert_ne!(event.network_destination_policy_handle, 0);
         assert_eq!(
             event.network_creator_profile_generation_ref_id,
-            root.snapshot.profile_generation_ref_id
+            root_generation
         );
     }
     assert_eq!(

@@ -2418,12 +2418,17 @@ test does not close a row when its physical condition or an assertion changed.
       Duplicate one connected socket and fork one child with the same socket.
       Require both peer payloads, distinct child identity, root creator
       identity, two production Send results, and one shared socket generation.
-      The test has 61 lines.
+      The test has 73 lines.
     - [x] Pass Host and commit it. The exact Host case passed in 28.46
       seconds.
     - [x] Pass direct `runc` and commit it. The exact direct-runc case passed
       in 28.99 seconds with the same actor, policy, and assertions.
     - [ ] Pass Kubernetes and commit it.
+      - The first physical run found an evidence-readiness gap. The actor and
+        child identities were ready, but the immediate snapshot did not yet
+        contain the root Send result. The shared actor now separates prepare
+        and action. The Host and direct-`runc` cases pass with bounded evidence
+        readiness for both tasks. No production or Platform code changed.
     - [ ] Remove only the matching legacy clone-send and fork-send success
       actions and assertions. Keep the post-fence cloned-socket denial and the
       separate socket-generation non-reuse behavior.
