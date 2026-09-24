@@ -2545,7 +2545,9 @@ test does not close a row when its physical condition or an assertion changed.
         accepted descriptor and sent `ok`. The test checks its role and
         production Send result. The restricted Host case also passed with
         one inclusive port range in 36.25 seconds.
-      - [ ] Qualify the same test in direct `runc`.
+      - [x] Direct `runc` passed in 45.77 seconds with the same test body,
+        Python actor, policy, and production OCI hook. The restricted case
+        passed with the one-range policy in 37.37 seconds.
       - [ ] Qualify the same test in Kubernetes.
   - [ ] Replace cross-network-namespace socket transfer. Keep narrow denial,
     approved success, descriptor transfer, payload receipt, and distinct
