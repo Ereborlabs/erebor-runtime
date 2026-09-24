@@ -3415,12 +3415,18 @@ coverage:
 
 ## Documentation deliverable
 
-- [ ] Add a short scenario recipe to `crates/mithril-e2e/README.md`.
+- [x] Add a short shared-scenario recipe to `crates/mithril-e2e/README.md`.
+  It names the actor, policy, Rust test, platform attribute, lifecycle, action,
+  assertion, and stop owners. It corrects the old claim that shell owns all
+  scenario assertions. Test discovery and the local VM harness check passed.
 - [ ] Show one small in-process test and one small running-container scenario.
 - [ ] State which code belongs in a fixture and which production calls must
   stay in the scenario.
 - [ ] Document focused unit, local harness, lightweight VM, paired Kubernetes,
   and full repository commands.
+  The README now has local harness, disposable VM, exact retained-Kubernetes,
+  and repository CI commands. Add an exact focused Host and direct-`runc`
+  command when the thin launcher supplies their required environment.
 
 ## Verification order
 
