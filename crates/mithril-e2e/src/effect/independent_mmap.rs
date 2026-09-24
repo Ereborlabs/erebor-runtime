@@ -5,7 +5,7 @@ use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn independent_mapping_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("independent-mmap")?;

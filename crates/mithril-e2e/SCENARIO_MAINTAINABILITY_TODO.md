@@ -2017,7 +2017,9 @@ test does not close a row when its physical condition or an assertion changed.
       process identity, exact shared mapping denial, and benign control. The
       existing descriptor Host case passed in 34.54 seconds with the shared
       actor and policy change. Commit the Host leaf separately.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Direct `runc` passed in 35.86 seconds with the same actor, policy,
+      and assertions. The existing descriptor case passed in 35.49 seconds
+      with the shared policy change.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching legacy independent-mapping actions and
       result fields after all three platform cases pass.
