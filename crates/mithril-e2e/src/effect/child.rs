@@ -129,7 +129,6 @@ enum ChildRequest {
         socket_type: i32,
         protocol: i32,
     },
-    NetworkIoUringSqpoll,
     NetworkTunTap,
     NetworkBpfSetup,
     NetworkPrepareProxy {
@@ -674,11 +673,6 @@ impl EffectProcessFixture {
             protocol,
         })?
         .try_into()
-    }
-
-    pub(super) fn network_io_uring_sqpoll(&mut self) -> Result<IoOutcome> {
-        self.request(&ChildRequest::NetworkIoUringSqpoll)?
-            .try_into()
     }
 
     pub(super) fn network_tun_tap(&mut self) -> Result<IoOutcome> {
@@ -1240,12 +1234,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                     family,
                     socket_type,
                     protocol,
-                ))),
-                false,
-            ),
-            ChildRequest::NetworkIoUringSqpoll => (
-                Ok(ChildResponse::Outcome(io_outcome(
-                    fixture_syscalls::io_uring_sqpoll_setup(),
                 ))),
                 false,
             ),

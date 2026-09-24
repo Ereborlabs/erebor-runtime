@@ -2478,7 +2478,7 @@ test does not close a row when its physical condition or an assertion changed.
         test a different operation. Keep the legacy check until the public
         policy can express and qualify this denial. The failed test was not
         committed.
-    - [ ] Qualify `io_uring` SQPOLL setup and its Privilege evidence.
+    - [x] Qualify `io_uring` SQPOLL setup and its Privilege evidence.
       - [x] Add one 57-line test and one Python actor that calls
         `io_uring_setup` with the original disabled, single-issuer, and SQPOLL
         flags. Require actor `EACCES`, the recovered role, and attributed
@@ -2488,7 +2488,9 @@ test does not close a row when its physical condition or an assertion changed.
         seconds with the production OCI hook.
       - [x] Pass Kubernetes and commit it. The exact physical case passed in
         70.61 seconds in the retained K3s cluster.
-      - [ ] Remove only the matching legacy SQPOLL action and result field.
+      - [x] Remove only the matching legacy SQPOLL mailbox action and result
+        field. Keep the independent `io_uring` syscall fixture and other
+        setup denials.
     - [ ] Qualify TUN/TAP setup and its physical denial.
     - [x] Qualify every unsupported socket family and protocol in the legacy
       list. Require Mithril denial evidence where the hook supports it.
