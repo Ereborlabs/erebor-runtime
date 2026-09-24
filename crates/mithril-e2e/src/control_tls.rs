@@ -1618,34 +1618,15 @@ async fn kubernetes_outage_retained_evidence_allows_protected_pod_admission(
 #[tokio::test]
 async fn node_decommission_https_accepts_the_same_signed_artifact_as_control(
 ) -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let certificates = Certificates::issue(false)?;
-    let files = certificates.write(directory.path())?;
-    let store = ControlStore::open(directory.path().join("control-store"))?;
+    let tls = MtlsFixture::new(false)?;
+    let store = ControlStore::open(tls.path().join("control-store"))?;
     let fixture = OutagePolicyFixture::new(store.clone());
     let resource = fixture.resource(1)?;
     let kube = fixture.kubernetes_client(&resource)?;
-    let control = ControlPlane::with_control_store(
-        vec![AllowedNodeIdentity {
-            node_id: "node-a".to_owned(),
-            certificate_sha256: certificates.node_digest(),
-            tenant_id: OUTAGE_TENANT_ID.to_owned(),
-        }],
-        TrustGenerationV1 {
-            generation: 1,
-            bundle_digest: "d".repeat(64),
-            policy_issuer_sequence_epoch: 0,
-            policy_signers: Vec::new(),
-        },
-        store,
-    )?;
-    let grpc_server = ControlServerFixture::start(&files, control.clone()).await?;
-    let connector = NodeControlConnector::new(
-        files.node_config(grpc_server.address()),
-        "node-a".to_owned(),
-        [1; 16],
-    );
-    let mut trust = TrustCache::load(&directory.path().join("node-trust"))?;
+    let control = tls.control_with_store(store, 1)?;
+    let grpc_server = tls.start(control.clone()).await?;
+    let connector = tls.connector(&grpc_server, "node-a", [1; 16]);
+    let mut trust = TrustCache::load(&tls.path().join("node-trust"))?;
     let connection = connector
         .connect(
             OutagePolicyFixture::registration([1; 16], false),
@@ -1662,8 +1643,8 @@ async fn node_decommission_https_accepts_the_same_signed_artifact_as_control(
     let address = free_address()?;
     let config = KubernetesAdmissionHttpConfigV1 {
         listen: address,
-        tls_certificate_path: files.server_certificate.clone(),
-        tls_private_key_path: files.server_key.clone(),
+        tls_certificate_path: tls.files.server_certificate.clone(),
+        tls_private_key_path: tls.files.server_key.clone(),
         maximum_request_bytes: 1024 * 1024,
         request_timeout_ms: 1_000,
     };
@@ -1696,7 +1677,7 @@ async fn node_decommission_https_accepts_the_same_signed_artifact_as_control(
     )?
     .to_bytes()?;
     let client = reqwest::Client::builder()
-        .add_root_certificate(reqwest::Certificate::from_pem(&fs::read(&files.ca)?)?)
+        .add_root_certificate(reqwest::Certificate::from_pem(&fs::read(&tls.files.ca)?)?)
         .timeout(Duration::from_secs(2))
         .build()?;
     let response = client
