@@ -2020,7 +2020,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Direct `runc` passed in 35.86 seconds with the same actor, policy,
       and assertions. The existing descriptor case passed in 35.49 seconds
       with the shared policy change.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Kubernetes passed in 72.59 seconds in retained K3s with the same
+      actor, policy, and assertions. The existing descriptor case passed in
+      76.45 seconds with the shared policy change.
     - [ ] Remove only the matching legacy independent-mapping actions and
       result fields after all three platform cases pass.
   - [x] Replace the protected `PTRACE_ATTACH` block with one small standard
