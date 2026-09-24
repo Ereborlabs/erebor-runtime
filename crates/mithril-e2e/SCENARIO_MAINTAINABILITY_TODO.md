@@ -2462,7 +2462,8 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit it. The exact case passed in 27.94 seconds.
     - [x] Pass direct `runc` and commit it. The exact case passed in 29.10
       seconds with the production OCI hook.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact physical case passed in
+      65.51 seconds in the retained K3s cluster.
     - [ ] Remove only the matching legacy UDP actions, result fields, and
       local listeners after all three platforms pass. Keep the two-node UDP
       peer case.
