@@ -104,6 +104,29 @@ def ipv6_tcp():
         raise OSError(failure.errno or errno.EIO, f"{stage}: {failure}") from failure
 
 
+def udp(family, address, port, connected, payload):
+    stage = "socket setup"
+    try:
+        with socket.socket(family, socket.SOCK_DGRAM) as server:
+            server.settimeout(3)
+            stage = "bind"
+            server.bind((address, port))
+            with socket.socket(family, socket.SOCK_DGRAM) as client:
+                stage = "connect" if connected else "sendto"
+                if connected:
+                    client.connect(server.getsockname())
+                    sent = client.send(payload)
+                else:
+                    sent = client.sendto(payload, server.getsockname())
+                if sent != len(payload):
+                    raise OSError(errno.EIO, "UDP send was short")
+                stage = "receive"
+                if server.recv(16) != payload:
+                    raise OSError(errno.EIO, "UDP payload changed")
+    except OSError as failure:
+        raise OSError(failure.errno or errno.EIO, f"{stage}: {failure}") from failure
+
+
 def send_variants():
     stage = "socket setup"
     try:
@@ -229,6 +252,12 @@ for command in sys.stdin:
         if error:
             sys.exit(error)
         break
+    elif command in ("u4\n", "c4\n", "u6\n", "c6\n"):
+        name = command.strip()
+        family = socket.AF_INET6 if name.endswith("6") else socket.AF_INET
+        address = "::1" if family == socket.AF_INET6 else "127.0.0.1"
+        port = 19096 if family == socket.AF_INET6 else 19095
+        result(name, lambda: udp(family, address, port, name.startswith("c"), name.encode()))
     elif command == "variants\n":
         error = result("variants", send_variants)
         if error:

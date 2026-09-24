@@ -34,6 +34,8 @@ mod runc;
 mod support;
 #[cfg(test)]
 mod tcp_nodelay;
+#[cfg(test)]
+mod udp;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

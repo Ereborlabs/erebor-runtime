@@ -2455,6 +2455,16 @@ test does not close a row when its physical condition or an assertion changed.
   - [ ] Replace connected and unconnected UDP behavior. Keep IPv4 and IPv6
     address family, protocol, destination, payload receipt, and policy result
     explicit in each small test.
+    - [x] Add one standard test with four explicit UDP cases. Reuse the
+      network actor and signed policy. Check each received payload and exact
+      Send result. Check the Connect result for connected sends. The test has
+      fewer than 100 lines.
+    - [x] Pass Host and commit it. The exact case passed in 27.94 seconds.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching legacy UDP actions, result fields, and
+      local listeners after all three platforms pass. Keep the two-node UDP
+      peer case.
   - [ ] Replace unsupported network family, `io_uring` SQPOLL, TUN/TAP, and BPF
     setup denials. Keep each syscall and fail-closed result explicit.
   - [ ] Replace accepted-socket transfer authority. Keep the narrow actor
