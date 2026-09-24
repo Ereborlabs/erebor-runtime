@@ -4,6 +4,7 @@ import os
 import signal
 import socket
 import sys
+import time
 
 
 PR_SET_NAME = 15
@@ -258,6 +259,19 @@ for command in sys.stdin:
         address = "::1" if family == socket.AF_INET6 else "127.0.0.1"
         port = 19096 if family == socket.AF_INET6 else 19095
         result(name, lambda: udp(family, address, port, name.startswith("c"), name.encode()))
+    elif command.startswith("socket "):
+        _, index, family, kind, protocol = command.split()
+        try:
+            socket.socket(int(family), int(kind), int(protocol)).close()
+        except OSError as failure:
+            error = failure.errno or errno.EIO
+        else:
+            error = 0
+        set_name(f"socket-{index}-{error}")
+        if index == "6" or error != errno.EACCES:
+            while not os.path.exists(os.path.join(sys.argv[1], "release")):
+                time.sleep(0.01)
+            break
     elif command == "variants\n":
         error = result("variants", send_variants)
         if error:

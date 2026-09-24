@@ -2482,6 +2482,16 @@ test does not close a row when its physical condition or an assertion changed.
     - [ ] Qualify TUN/TAP setup and its physical denial.
     - [ ] Qualify every unsupported socket family and protocol in the legacy
       list. Require Mithril denial evidence where the hook supports it.
+      - [x] Add one 99-line standard test. Start the extra actor before Node
+        and recover it with entry rule zero. Send all seven original socket
+        requests in one actor action. Require seven attributed
+        `UNSUPPORTED_OBJECT` SocketCreate results with `EACCES` and no
+        destination or exact-object policy handle.
+      - [x] Pass Host and commit it. The exact case passed in 28.22 seconds.
+      - [ ] Pass direct `runc` and commit it.
+      - [ ] Pass Kubernetes and commit it.
+      - [ ] Remove only the matching seven legacy socket calls and their
+        result field after all three platforms pass.
     - [ ] Remove each matching legacy action only after its platform cases
       pass. Keep unrelated network setup tests.
   - [ ] Replace accepted-socket transfer authority. Keep the narrow actor
