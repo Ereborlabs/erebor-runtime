@@ -2070,7 +2070,8 @@ test does not close a row when its physical condition or an assertion changed.
       successful read-only controls. The production effect records matched.
     - [x] Direct `runc` passed in 29.34 seconds with the same actor,
       test body, policy, and effect assertions.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Kubernetes passed in 70.40 seconds with the same actor,
+      test body, policy, and effect assertions.
     - [ ] Remove only the matching legacy actions, fields, and prepared
       resources after all three platforms pass.
   - [x] Replace the protected `PTRACE_ATTACH` block with one small standard

@@ -5,7 +5,7 @@ use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = memory_recovery]
 fn anonymous_exec_is_closed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("executable-memory")?;
