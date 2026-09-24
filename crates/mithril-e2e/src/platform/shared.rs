@@ -50,7 +50,7 @@ use crate::runtime_input::runtime_observation;
 const READY_LIMIT: Duration = Duration::from_secs(30);
 // Node startup includes BPF verification. Operation deadlines remain separate.
 const NODE_START_LIMIT: Duration = Duration::from_secs(60);
-const TENANT_ID: &str = "00000000-0000-0001-0000-000000000002";
+pub(super) const TENANT_ID: &str = "00000000-0000-0001-0000-000000000002";
 const CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
 const NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
 const POD_UID: &str = "99999999-9999-4999-8999-999999999999";
@@ -96,6 +96,11 @@ pub(super) struct SharedState {
     reader: KernelStateReader,
     runtime: tokio::runtime::Runtime,
     hook_path: PathBuf,
+    diagnostics: Option<mithril_node::NodeTraceConfigV1>,
+    diagnostic_proxy: Option<(
+        tokio::runtime::Runtime,
+        crate::control_tls::TcpBlackholeOwner,
+    )>,
 }
 
 pub(super) struct Shared {
@@ -390,6 +395,9 @@ impl SharedState {
     fn tear_down(&mut self) -> TestResult<()> {
         self.clean_test()?;
         self.stop_node()?;
+        if let Some((runtime, proxy)) = self.diagnostic_proxy.take() {
+            runtime.block_on(proxy.stop())?;
+        }
         if let Some(control) = self.control.take() {
             self.runtime.block_on(control.shutdown())?;
         }
@@ -546,6 +554,8 @@ impl Shared {
             reader,
             runtime,
             hook_path: env::current_exe()?,
+            diagnostics: None,
+            diagnostic_proxy: None,
         });
         Ok(Self {
             lifecycle: Some(lifecycle),
@@ -584,7 +594,10 @@ impl Shared {
             }],
         }
         .with_computed_bundle_digest();
-        let control = ControlPlane::with_control_store(
+        if self.diagnostics.is_some() {
+            let _discovery = mithril_control::DiscoveryOwner::open(store.clone())?;
+        }
+        let mut control = ControlPlane::with_control_store(
             vec![AllowedNodeIdentity {
                 node_id: NODE_ID.to_owned(),
                 certificate_sha256: self.tls.node_digest(),
@@ -594,6 +607,15 @@ impl Shared {
             store,
         )?
         .with_policy_desired_state(policy.clone());
+        if self.diagnostics.is_some() {
+            let bytes = hex::decode(fs::read_to_string(root.join("test-signing-key.hex"))?.trim())?;
+            let bytes: [u8; 32] = bytes.try_into().map_err(|_| "invalid trace signing key")?;
+            control = control.with_trace_signer(
+                "effect-observation-test-key".into(),
+                1,
+                ed25519_dalek::SigningKey::from_bytes(&bytes),
+            )?;
+        }
         self.control = Some(self.runtime.block_on(self.tls.start(control.clone()))?);
         self.plane = Some(control);
         self.policy = Some(policy);
@@ -661,12 +683,16 @@ impl Shared {
     }
 
     fn node_config(&self) -> TestResult<NodeConfig> {
-        let address = self
+        let mut address = self
             .control
             .as_ref()
             .ok_or("Control is not running")?
             .address();
+        if let Some((_, proxy)) = &self.diagnostic_proxy {
+            address = proxy.address();
+        }
         Ok(NodeConfig {
+            diagnostics: self.diagnostics.clone(),
             node_id: NODE_ID.to_owned(),
             kubernetes_node_name: Some("node-a".to_owned()),
             state_directory: self.state_path.clone(),
@@ -1257,6 +1283,64 @@ impl Shared {
 
     pub(super) fn output(&self) -> &Path {
         &self.out
+    }
+
+    pub(super) fn configure_diagnostics(
+        &mut self,
+        config: mithril_node::NodeTraceConfigV1,
+    ) -> TestResult<()> {
+        if self.control.is_some() || self.node_task.is_some() {
+            return Err("configure diagnostics before Node and Control start".into());
+        }
+        self.diagnostics = Some(config);
+        Ok(())
+    }
+
+    pub(super) fn diagnostic_context(&self) -> TestResult<(ControlPlane, WorkloadTargetFactV1)> {
+        Ok((
+            self.plane.clone().ok_or("Control is not running")?,
+            self.target.clone().ok_or("the target is not installed")?,
+        ))
+    }
+
+    pub(super) fn enable_diagnostic_partition(&mut self) -> TestResult<()> {
+        if self.node_task.is_some() || self.diagnostic_proxy.is_some() {
+            return Err("install one diagnostic proxy before Node startup".into());
+        }
+        let address = self
+            .control
+            .as_ref()
+            .ok_or("Control is not running")?
+            .address();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()?;
+        let proxy = runtime.block_on(crate::control_tls::TcpBlackholeOwner::start(address))?;
+        self.diagnostic_proxy = Some((runtime, proxy));
+        Ok(())
+    }
+
+    pub(super) fn partition_diagnostics(&self, blocked: bool) -> TestResult<()> {
+        let (_, proxy) = self
+            .diagnostic_proxy
+            .as_ref()
+            .ok_or("the diagnostic proxy is absent")?;
+        if blocked {
+            proxy.block()?;
+        } else {
+            proxy.unblock()?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn retire_diagnostic_runtime(&mut self) -> TestResult<()> {
+        self.observe_state(0, ContainerState::ContainerExited)?;
+        Ok(())
+    }
+
+    pub(super) fn diagnostic_spool(&self, id: [u8; 16]) -> PathBuf {
+        self.state_path.join("diagnostics").join(hex::encode(id))
     }
 
     pub(super) fn stop(&mut self) -> TestResult<()> {

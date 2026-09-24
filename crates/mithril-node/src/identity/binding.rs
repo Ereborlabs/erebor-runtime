@@ -58,6 +58,69 @@ struct PublishedBinding {
     held_initial_pid: Option<u32>,
 }
 
+pub struct TraceTargetLeaseV1 {
+    target: mithril_control::TraceTargetV1,
+    root_path: PathBuf,
+    root_handle: File,
+}
+
+impl TraceTargetLeaseV1 {
+    pub fn target(&self) -> &mithril_control::TraceTargetV1 {
+        &self.target
+    }
+
+    pub fn validate(&self, reader: &erebor_interceptor::KernelStateReader) -> Result<()> {
+        self.validate_path()?;
+        let bytes = reader
+            .lookup(
+                "execution_set_bindings",
+                &self.target.cgroup_id.to_ne_bytes(),
+            )
+            .context(InterceptorSnafu)?
+            .context(IdentityStateSnafu {
+                reason: "trace binding disappeared",
+            })?;
+        self.validate_state(&execution_set_binding_state(&bytes)?)
+    }
+
+    fn validate_path(&self) -> Result<()> {
+        let path = fs::metadata(&self.root_path).context(IoSnafu {
+            path: &self.root_path,
+        })?;
+        let held = self.root_handle.metadata().context(IoSnafu {
+            path: &self.root_path,
+        })?;
+        ensure!(
+            path.dev() == held.dev()
+                && path.ino() == held.ino()
+                && held.ino() == self.target.cgroup_id,
+            IdentityStateSnafu {
+                reason: "trace cgroup lifetime changed"
+            }
+        );
+        Ok(())
+    }
+
+    fn validate_state(&self, state: &ExecutionSetBindingStateV1) -> Result<()> {
+        ensure!(
+            binding_lifecycle_allows_effects(state.lifecycle_state)
+                && state.transition_guard == 0
+                && state.node_boot_id.to_be_bytes() == self.target.node_boot_id
+                && state.binding_id.to_be_bytes() == self.target.binding_id
+                && state.binding_nonce.to_be_bytes() == self.target.binding_nonce
+                && state.root_cgroup_live_interval_id.to_be_bytes()
+                    == self.target.root_cgroup_live_interval_id
+                && state.root_cgroup_id == self.target.cgroup_id
+                && state.label_epoch == self.target.label_epoch
+                && state.container_generation == self.target.container_generation,
+            IdentityStateSnafu {
+                reason: "trace binding was retired or replaced"
+            }
+        );
+        Ok(())
+    }
+}
+
 enum InitialRootPreparationV1<'a> {
     Unarmed,
     Held(u32),
@@ -613,6 +676,118 @@ impl WorkloadBindingOwner {
         )?;
         self.retain_only_configured(host)?;
         Ok(RuntimeReconciliationResultV1::default())
+    }
+
+    pub fn resolve_trace_target(
+        &self,
+        node_id: &str,
+        fact: &mithril_control::WorkloadTargetFactV1,
+    ) -> Result<TraceTargetLeaseV1> {
+        ensure!(
+            fact.node_id == node_id,
+            IdentityStateSnafu {
+                reason: "trace fact names another node"
+            }
+        );
+        let mut matches = self.bindings.values().filter(|binding| {
+            let spec = &binding.spec;
+            binding_lifecycle_allows_effects(binding.state.lifecycle_state)
+                && spec.cluster_uid == fact.cluster_uid
+                && spec.namespace_uid == fact.namespace_uid
+                && spec.controller_uid == fact.controller_uid
+                && spec.service_account_uid == fact.service_account_uid
+                && spec.pod_uid == fact.pod_uid
+                && spec.container_name == fact.container_name
+                && spec.image_digest == fact.image_digest
+                && spec.execution_set_id == fact.execution_set_id
+                && spec.pod_labels == fact.pod_labels
+                && matches!(
+                    (spec.container_kind, fact.container_kind),
+                    (
+                        crate::ContainerKindV1::Init,
+                        mithril_control::ContainerKindV1::Init
+                    ) | (
+                        crate::ContainerKindV1::Sidecar,
+                        mithril_control::ContainerKindV1::Sidecar
+                    ) | (
+                        crate::ContainerKindV1::Application,
+                        mithril_control::ContainerKindV1::Application
+                    ) | (
+                        crate::ContainerKindV1::Ephemeral,
+                        mithril_control::ContainerKindV1::Ephemeral
+                    )
+                )
+                && match &fact.kubernetes {
+                    Some(identity) => {
+                        spec.scheduled_target_digest.as_deref()
+                            == Some(&fact.workload_binding_generation_digest)
+                            && spec.scheduled_binding_authority_id.as_deref()
+                                == Some(&identity.binding_id)
+                            && spec.namespace == identity.namespace_name
+                            && spec.profile_id == identity.profile_id
+                            && identity.node_boot_id == hex::encode(self.node_boot_id.to_be_bytes())
+                            && identity.label_epoch == self.label_epoch
+                    }
+                    None => {
+                        spec.container_id == fact.container_id
+                            && crate::node::workload_binding_generation_digest(spec).is_ok_and(
+                                |digest| digest == fact.workload_binding_generation_digest,
+                            )
+                    }
+                }
+        });
+        let binding = matches.next().context(IdentityStateSnafu {
+            reason: "trace target has no qualified live binding",
+        })?;
+        ensure!(
+            matches.next().is_none(),
+            IdentityStateSnafu {
+                reason: "trace target is ambiguous"
+            }
+        );
+        binding.validate_live_cgroup()?;
+        let runtime = binding
+            .runtime_identity
+            .as_ref()
+            .context(IdentityStateSnafu {
+                reason: "trace target requires authenticated CRI identity",
+            })?;
+        ensure!(
+            runtime.full_container_id == binding.spec.container_id
+                && runtime.namespace == binding.spec.namespace
+                && runtime.pod_uid == binding.spec.pod_uid
+                && runtime.container_name == binding.spec.container_name
+                && runtime.image_digest == binding.spec.image_digest
+                && runtime.sandbox_id == binding.spec.sandbox_id
+                && runtime.cgroup_path == binding.root_cgroup_path
+                && runtime.generation == binding.state.container_generation
+                && runtime.state == super::runtime::RuntimeContainerState::Running
+                && runtime.init_pid > 0,
+            IdentityStateSnafu {
+                reason: "trace CRI lifetime changed"
+            }
+        );
+        let target = mithril_control::TraceTargetV1 {
+            fact: fact.clone(),
+            fact_digest: mithril_control::DiscoveryDigestV1::of(fact)
+                .context(crate::error::PolicySnafu)?,
+            runtime_container_id: runtime.full_container_id.clone(),
+            node_boot_id: binding.state.node_boot_id.to_be_bytes(),
+            cgroup_id: binding.root_cgroup_id,
+            binding_id: binding.state.binding_id.to_be_bytes(),
+            binding_nonce: binding.state.binding_nonce.to_be_bytes(),
+            root_cgroup_live_interval_id: binding.state.root_cgroup_live_interval_id.to_be_bytes(),
+            container_generation: binding.state.container_generation,
+            label_epoch: binding.state.label_epoch,
+        };
+        target.validate().context(crate::error::PolicySnafu)?;
+        Ok(TraceTargetLeaseV1 {
+            target,
+            root_path: binding.root_cgroup_path.clone(),
+            root_handle: binding.root_handle.try_clone().context(IoSnafu {
+                path: &binding.root_cgroup_path,
+            })?,
+        })
     }
 
     pub fn administrative_target(
@@ -2854,6 +3029,75 @@ mod tests {
         assert!(declared_entry_request_is_present(&[1]));
         assert!(!declared_entry_request_is_present(&[0]));
         assert!(!declared_entry_request_is_present(&1_u64.to_ne_bytes()));
+    }
+
+    #[test]
+    fn observability_target_freezes_cri_and_rejects_binding_or_cgroup_replacement(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let root = temporary.path().join("workload");
+        fs::create_dir(&root)?;
+        fs::write(root.join("cgroup.procs"), "")?;
+        let mut owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        let mut spec = spec(&root);
+        spec.cluster_uid = "cluster".into();
+        spec.namespace_uid = "namespace".into();
+        spec.controller_uid = "controller".into();
+        spec.service_account_uid = "account".into();
+        let fact = mithril_control::WorkloadTargetFactV1 {
+            node_id: "node".into(),
+            workload_binding_generation_digest: crate::node::workload_binding_generation_digest(
+                &spec,
+            )?,
+            execution_set_id: spec.execution_set_id.clone(),
+            cluster_uid: spec.cluster_uid.clone(),
+            namespace_uid: spec.namespace_uid.clone(),
+            controller_uid: spec.controller_uid.clone(),
+            service_account_uid: spec.service_account_uid.clone(),
+            pod_uid: spec.pod_uid.clone(),
+            container_id: spec.container_id.clone(),
+            container_name: spec.container_name.clone(),
+            container_kind: mithril_control::ContainerKindV1::Application,
+            image_digest: spec.image_digest.clone(),
+            pod_labels: spec.pod_labels.clone(),
+            kubernetes: None,
+        };
+        let mut binding = owner.prepare(&spec)?;
+        binding.state.lifecycle_state = BindingLifecycleStateV1::Active;
+        binding.runtime_identity = Some(RuntimeContainerIdentity {
+            full_container_id: spec.container_id.clone(),
+            namespace: spec.namespace.clone(),
+            pod_uid: spec.pod_uid.clone(),
+            sandbox_id: spec.sandbox_id.clone(),
+            container_name: spec.container_name.clone(),
+            image_digest: spec.image_digest.clone(),
+            generation: spec.container_generation,
+            cgroup_path: root.clone(),
+            init_pid: 42,
+            working_directory: PathBuf::from("/"),
+            path_entries: vec![PathBuf::from("/bin")],
+            state: RuntimeContainerState::Running,
+        });
+        let state = binding.state;
+        owner.bindings.insert(binding.root_cgroup_id, binding);
+        assert!(owner.resolve_trace_target("other", &fact).is_err());
+        let lease = owner.resolve_trace_target("node", &fact)?;
+        assert_eq!(lease.target().runtime_container_id, spec.container_id);
+        lease.validate_path()?;
+        lease.validate_state(&state)?;
+        let mut replacement = state;
+        replacement.binding_nonce = Id128V1::new(9, 9);
+        assert!(lease.validate_state(&replacement).is_err());
+        replacement = state;
+        replacement.container_generation += 1;
+        assert!(lease.validate_state(&replacement).is_err());
+        replacement = state;
+        replacement.label_epoch += 1;
+        assert!(lease.validate_state(&replacement).is_err());
+        fs::rename(&root, temporary.path().join("retired"))?;
+        fs::create_dir(&root)?;
+        assert!(lease.validate_path().is_err());
+        Ok(())
     }
 
     fn authorization_request(_cgroup_path: &Path) -> RuntimeAdmissionRequestV1 {

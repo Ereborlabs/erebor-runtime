@@ -32,6 +32,7 @@ pub(super) fn effect_node_config(
     bindings: Vec<WorkloadBindingConfig>,
 ) -> NodeConfig {
     NodeConfig {
+        diagnostics: None,
         node_id: "mithril-effect-test".to_owned(),
         kubernetes_node_name: None,
         state_directory: state_directory.to_path_buf(),

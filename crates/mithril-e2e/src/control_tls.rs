@@ -60,6 +60,174 @@ const GRPC_THROUGHPUT_MESSAGE_BYTES: usize = 4 * 1_024 * 1_024;
 const GRPC_THROUGHPUT_WINDOW_BYTES: u32 = 16 * 1_024 * 1_024;
 
 #[tokio::test]
+async fn observability_recovery_mtls_reconnect_preserves_dispatch_and_output(
+) -> Result<(), Box<dyn StdError>> {
+    use mithril_control::{
+        DiscoveryDigestV1, DiscoveryOwner, PolicySignerTrustV1, TraceBatchV1, TraceCleanupV1,
+        TraceExchangeV1, TraceExecutionGrantV1, TraceFrameKindV1, TraceFrameV1, TraceRecipeV1,
+        TraceRequestV1, TraceTargetV1, TraceTerminalReasonV1, TraceTerminalV1, TraceUploadV1,
+    };
+    let tls = MtlsFixture::new(false)?;
+    let store = ControlStore::open(tls.path().join("control-store"))?;
+    let _discovery = DiscoveryOwner::open(store.clone())?;
+    let fixture = OutagePolicyFixture::new(store.clone());
+    let facts = fixture.inventory(&fixture.resource(1)?)?;
+    let fact = facts.first().ok_or("missing workload fact")?.clone();
+    let key = SigningKey::from_bytes(&[23; 32]);
+    let trust = TrustGenerationV1 {
+        generation: 1,
+        bundle_digest: String::new(),
+        policy_issuer_sequence_epoch: 1,
+        policy_signers: vec![PolicySignerTrustV1 {
+            signing_key_id: "trace-key".into(),
+            ed25519_public_key_hex: hex::encode(key.verifying_key().as_bytes()),
+            revoked: false,
+        }],
+    }
+    .with_computed_bundle_digest();
+    let control = ControlPlane::with_control_store(
+        vec![AllowedNodeIdentity {
+            node_id: "node-a".into(),
+            certificate_sha256: tls.node_digest(),
+            tenant_id: OUTAGE_TENANT_ID.into(),
+        }],
+        trust,
+        store,
+    )?
+    .with_trace_signer("trace-key".into(), 1, key.clone())?;
+    control.replace_kubernetes_workload_inventory(facts)?;
+    let server = tls.start(control.clone()).await?;
+    let connector = tls.connector(&server, "node-a", [7; 16]);
+    let mut cache = TrustCache::load(&tls.path().join("trace-trust"))?;
+    let mut connection = connector.connect(registration(), true, &mut cache).await?;
+    let now = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos(),
+    )?;
+    let tenant = *uuid::Uuid::parse_str(OUTAGE_TENANT_ID)?.as_bytes();
+    let target = TraceTargetV1 {
+        fact_digest: DiscoveryDigestV1::of(&fact)?,
+        fact,
+        runtime_container_id: "1".repeat(64),
+        node_boot_id: [7; 16],
+        cgroup_id: 17,
+        binding_id: [3; 16],
+        binding_nonce: [4; 16],
+        root_cgroup_live_interval_id: [5; 16],
+        container_generation: 1,
+        label_epoch: 1,
+    };
+    let grant = TraceExecutionGrantV1 {
+        tenant_id: tenant,
+        grant_id: [7; 16],
+        principal: "operator".into(),
+        namespace_uids: [target.fact.namespace_uid.clone()].into(),
+        node_ids: ["node-a".into()].into(),
+        recipe_digests: [TraceRecipeV1::FailedOpens.digest()?].into(),
+        host_diagnostic: false,
+        valid_until_unix_ns: now + 120_000_000_000,
+    };
+    let request = TraceRequestV1 {
+        tenant_id: tenant,
+        request_id: [6; 16],
+        source: TraceRecipeV1::FailedOpens.manifest()?.source,
+        targets: vec![target],
+        unresolved: Vec::new(),
+        collection_seconds: 30,
+    };
+    connection.report_readiness(true, false).await?;
+    assert_eq!(
+        control
+            .accept_trace(request.clone(), grant.clone(), None)
+            .err()
+            .ok_or("an unready node must reject new capture")?
+            .code(),
+        tonic::Code::Unavailable
+    );
+    connection.report_readiness(true, true).await?;
+    control.accept_trace(request.clone(), grant, None)?;
+    let dispatch = connection
+        .exchange_diagnostics(&TraceExchangeV1::default())
+        .await?
+        .dispatch
+        .ok_or("missing signed dispatch")?;
+    dispatch.verify(
+        &key.verifying_key(),
+        tenant,
+        "node-a",
+        [7; 16],
+        dispatch.accepted.accepted_unix_ns,
+    )?;
+    let id = dispatch.accepted.execution_id(0)?;
+    let frame = TraceFrameV1 {
+        execution_id: id,
+        sequence: 1,
+        kind: TraceFrameKindV1::Data,
+        bytes: br#"{"type":"map","data":{"@errors":{"-2":7}}}"#.to_vec(),
+    };
+    let mut exchange = TraceExchangeV1 {
+        retained: vec![id],
+        resolved: None,
+        output: Some(TraceUploadV1 {
+            request_id: request.request_id,
+            target_index: 0,
+            original_node_boot_id: [7; 16],
+            batch: TraceBatchV1 {
+                execution_id: id,
+                frames: vec![frame.clone()],
+                terminal: None,
+            },
+        }),
+    };
+    let first = connection.exchange_diagnostics(&exchange).await?;
+    assert_eq!(
+        first
+            .acknowledgement
+            .as_ref()
+            .ok_or("missing ack")?
+            .last_sequence,
+        1
+    );
+    assert!(first.dispatch.is_none());
+    let mut replacement = connector.connect(registration(), true, &mut cache).await?;
+    assert!(connection.exchange_diagnostics(&exchange).await.is_err());
+    assert_eq!(replacement.exchange_diagnostics(&exchange).await?, first);
+    let terminal = TraceTerminalV1 {
+        execution_id: id,
+        reason: TraceTerminalReasonV1::Deadline,
+        last_sequence: 1,
+        output_bytes: frame.bytes.len() as u64,
+        output_incomplete: false,
+        kernel_lost_events: None,
+        ready_at_unix_ns: None,
+        exit_code: Some(0),
+        forced_kill: false,
+        cleanup: TraceCleanupV1::Verified,
+    };
+    let upload = exchange.output.as_mut().ok_or("missing upload")?;
+    upload.batch.frames.clear();
+    upload.batch.terminal = Some(terminal.clone());
+    let reply = replacement.exchange_diagnostics(&exchange).await?;
+    assert_eq!(
+        reply
+            .acknowledgement
+            .ok_or("missing terminal ack")?
+            .terminal,
+        Some(terminal)
+    );
+    assert!(replacement
+        .exchange_diagnostics(&exchange)
+        .await?
+        .dispatch
+        .is_none());
+    drop(connection);
+    drop(replacement);
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn kubernetes_outage_pending_policy_transfer_preempts_evidence_ack_backlog(
 ) -> Result<(), Box<dyn StdError>> {
     let mut pacing = PolicyControlPacingOwner::default();
@@ -2506,7 +2674,7 @@ async fn measure_grpc_file_transfer(
     Ok((elapsed, mib_per_second))
 }
 
-struct TcpBlackholeOwner {
+pub(crate) struct TcpBlackholeOwner {
     address: SocketAddr,
     blocked: watch::Sender<bool>,
     shutdown: oneshot::Sender<()>,
@@ -2514,7 +2682,7 @@ struct TcpBlackholeOwner {
 }
 
 impl TcpBlackholeOwner {
-    async fn start(upstream: SocketAddr) -> std::io::Result<Self> {
+    pub(crate) async fn start(upstream: SocketAddr) -> std::io::Result<Self> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
         let (blocked, blocked_input) = watch::channel(false);
@@ -2546,19 +2714,19 @@ impl TcpBlackholeOwner {
         })
     }
 
-    fn address(&self) -> SocketAddr {
+    pub(crate) fn address(&self) -> SocketAddr {
         self.address
     }
 
-    fn block(&self) -> Result<(), watch::error::SendError<bool>> {
+    pub(crate) fn block(&self) -> Result<(), watch::error::SendError<bool>> {
         self.blocked.send(true)
     }
 
-    fn unblock(&self) -> Result<(), watch::error::SendError<bool>> {
+    pub(crate) fn unblock(&self) -> Result<(), watch::error::SendError<bool>> {
         self.blocked.send(false)
     }
 
-    async fn stop(self) -> Result<(), Box<dyn StdError>> {
+    pub(crate) async fn stop(self) -> Result<(), Box<dyn StdError>> {
         let _result = self.shutdown.send(());
         self.task.await??;
         Ok(())

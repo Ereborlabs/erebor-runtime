@@ -256,6 +256,8 @@ pub struct NodeConfig {
     #[serde(default)]
     pub evidence: Option<EvidenceConfig>,
     #[serde(default)]
+    pub diagnostics: Option<crate::NodeTraceConfigV1>,
+    #[serde(default)]
     pub runtime_observation: Option<RuntimeObservationConfig>,
     #[serde(default)]
     pub runtime_admission: Option<RuntimeAdmissionConfig>,
@@ -318,6 +320,21 @@ impl NodeConfig {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if let Some(diagnostics) = &self.diagnostics {
+            diagnostics.validate()?;
+            ensure!(
+                self.evidence
+                    .as_ref()
+                    .is_some_and(|evidence| diagnostics.storage_reserve_bytes
+                        >= evidence
+                            .maximum_retained_bytes
+                            .saturating_add(16 * 1024 * 1024)),
+                InvalidConfigurationSnafu {
+                    reason:
+                        "diagnostics must reserve the evidence WAL limit and 16 MiB for metadata"
+                }
+            );
+        }
         ensure!(
             mithril_control::node_id_is_valid(&self.node_id),
             InvalidConfigurationSnafu {
@@ -742,6 +759,7 @@ mod tests {
 
     fn config() -> NodeConfig {
         NodeConfig {
+            diagnostics: None,
             node_id: "node-a".to_owned(),
             kubernetes_node_name: None,
             state_directory: PathBuf::from("/tmp/mithril-node-test"),

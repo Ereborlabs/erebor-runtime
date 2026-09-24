@@ -94,6 +94,13 @@ struct ControlState {
     pending: BTreeMap<Vec<u8>, PendingAdministrativeResponse>,
     kubernetes_workload_targets: BTreeMap<String, crate::WorkloadTargetFactV1>,
     kubernetes_workload_inventory_complete: bool,
+    trace_resolutions: BTreeMap<
+        String,
+        (
+            crate::TraceResolveV1,
+            oneshot::Sender<crate::TraceResolvedV1>,
+        ),
+    >,
 }
 
 struct NodeSession {
@@ -143,6 +150,8 @@ pub struct ControlPlane {
     policy_store: Option<crate::ControlStore>,
     policy_rollout: Option<crate::PolicyRolloutOwner>,
     policy_desired_state: Option<crate::PolicyDesiredStateOwner>,
+    trace_signer: Option<Arc<(String, u64, ed25519_dalek::SigningKey)>>,
+    trace_admission: Arc<tokio::sync::Semaphore>,
 }
 
 impl ControlPlane {
@@ -161,6 +170,8 @@ impl ControlPlane {
             policy_store: None,
             policy_rollout: None,
             policy_desired_state: None,
+            trace_signer: None,
+            trace_admission: Arc::new(tokio::sync::Semaphore::new(2)),
         }
     }
 
@@ -191,6 +202,8 @@ impl ControlPlane {
             policy_store: Some(store),
             policy_rollout: None,
             policy_desired_state: None,
+            trace_signer: None,
+            trace_admission: Arc::new(tokio::sync::Semaphore::new(2)),
         })
     }
 
@@ -1485,6 +1498,351 @@ impl ControlPlane {
     }
 }
 
+impl ControlPlane {
+    pub fn with_trace_signer(
+        mut self,
+        key_id: String,
+        epoch: u64,
+        key: ed25519_dalek::SigningKey,
+    ) -> crate::Result<Self> {
+        let trust = self.trust.current()?;
+        crate::TraceErrorCodeV1::Denied.require(
+            self.policy_store.is_some()
+                && epoch == trust.policy_issuer_sequence_epoch
+                && trust.policy_signers.iter().any(|signer| {
+                    signer.signing_key_id == key_id
+                        && !signer.revoked
+                        && signer.ed25519_public_key_hex
+                            == hex::encode(key.verifying_key().as_bytes())
+                }),
+            "diagnostic signer is absent, revoked, or outside the trust epoch",
+        )?;
+        self.trace_signer = Some(Arc::new((key_id, epoch, key)));
+        Ok(self)
+    }
+
+    fn trace_owner(&self) -> Result<crate::TraceOwner, Status> {
+        if self.trace_signer.is_none() {
+            return Err(Status::failed_precondition("diagnostics are disabled"));
+        }
+        let store = self.decommission_store()?;
+        if !store
+            .discovery_recovered
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(Status::unavailable(
+                "diagnostics wait for Discovery artifact recovery",
+            ));
+        }
+        Ok(crate::TraceOwner::new(store.clone()))
+    }
+
+    pub fn accept_trace(
+        &self,
+        request: crate::TraceRequestV1,
+        grant: crate::TraceExecutionGrantV1,
+        approval: Option<crate::TraceApprovalV1>,
+    ) -> Result<crate::DiscoveryHeadV1, Status> {
+        let owner = self.trace_owner()?;
+        // Retried acceptance uses its frozen inputs even if the live inventory changed.
+        if owner
+            .request_head(request.tenant_id, request.request_id)
+            .is_err()
+        {
+            let inventory = self.workload_inventory();
+            let state = self.lock_state()?;
+            for target in &request.targets {
+                if self.evidence_tenant(&target.fact.node_id)? != request.tenant_id
+                    || !inventory.contains(&target.fact)
+                    || !state
+                        .sessions
+                        .get(&target.fact.node_id)
+                        .is_some_and(|session| {
+                            session.identity.node_boot_id == target.node_boot_id
+                                && session.label_epoch == target.label_epoch
+                                && !session.decommissioning
+                        })
+                {
+                    return Err(Status::permission_denied(
+                        "diagnostic target is not a current enrolled workload",
+                    ));
+                }
+                if !state
+                    .sessions
+                    .get(&target.fact.node_id)
+                    .is_some_and(|session| session.admission_ready)
+                {
+                    return Err(Status::unavailable("diagnostic target node is not ready"));
+                }
+            }
+        }
+        owner
+            .accept(request, grant, approval, utc_now_ns()? as u64)
+            .map_err(trace_status)
+    }
+
+    pub async fn resolve_trace_targets(
+        &self,
+        facts: Vec<crate::WorkloadTargetFactV1>,
+        grant: &crate::TraceExecutionGrantV1,
+    ) -> Result<Vec<crate::TraceParticipantV1>, Status> {
+        self.trace_owner()?;
+        if facts.is_empty() || facts.len() > 16 || grant.valid_until_unix_ns <= utc_now_ns()? as u64
+        {
+            return Err(Status::invalid_argument(
+                "diagnostic resolution requires 1..16 targets and a current grant",
+            ));
+        }
+        let inventory = self.workload_inventory();
+        let mut groups = BTreeMap::<String, Vec<crate::WorkloadTargetFactV1>>::new();
+        let mut participants = Vec::new();
+        for fact in facts {
+            let digest = crate::DiscoveryDigestV1::of(&fact).map_err(trace_status)?;
+            let status = if !grant.node_ids.contains(&fact.node_id)
+                || !(grant.host_diagnostic || grant.namespace_uids.contains(&fact.namespace_uid))
+                || self.evidence_tenant(&fact.node_id).ok() != Some(grant.tenant_id)
+            {
+                Some(crate::TraceParticipantStateV1::Denied)
+            } else if !inventory.contains(&fact) {
+                Some(crate::TraceParticipantStateV1::Disappeared)
+            } else {
+                None
+            };
+            if let Some(state) = status {
+                participants.push(crate::TraceParticipantV1 {
+                    fact_digest: digest,
+                    state,
+                    target: None,
+                });
+            } else {
+                groups.entry(fact.node_id.clone()).or_default().push(fact);
+            }
+        }
+        for (node, facts) in groups {
+            let request = crate::TraceResolveV1 {
+                resolve_id: *uuid::Uuid::new_v4().as_bytes(),
+                facts,
+            };
+            let (send, receive) = oneshot::channel();
+            {
+                let mut state = self.lock_state()?;
+                state
+                    .trace_resolutions
+                    .retain(|_, (_, sender)| !sender.is_closed());
+                if state.trace_resolutions.len() >= 16
+                    || state.trace_resolutions.contains_key(&node)
+                {
+                    return Err(Status::resource_exhausted(
+                        "diagnostic target resolution is busy",
+                    ));
+                }
+                state
+                    .trace_resolutions
+                    .insert(node.clone(), (request.clone(), send));
+            }
+            let result = tokio::time::timeout(std::time::Duration::from_secs(5), receive).await;
+            {
+                let mut state = self.lock_state()?;
+                if state
+                    .trace_resolutions
+                    .get(&node)
+                    .is_some_and(|(pending, _)| pending.resolve_id == request.resolve_id)
+                {
+                    state.trace_resolutions.remove(&node);
+                }
+            }
+            match result {
+                Ok(Ok(result)) => participants.extend(result.participants),
+                _ => {
+                    for fact in request.facts {
+                        participants.push(crate::TraceParticipantV1 {
+                            fact_digest: crate::DiscoveryDigestV1::of(&fact)
+                                .map_err(trace_status)?,
+                            state: crate::TraceParticipantStateV1::Failed,
+                            target: None,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(participants)
+    }
+
+    fn exchange_trace(
+        &self,
+        node: &str,
+        context: &NodeSessionContext,
+        exchange: crate::TraceExchangeV1,
+    ) -> Result<crate::TraceExchangeReplyV1, Status> {
+        self.require_session(node, context)?;
+        self.require_current_trust(node, context)?;
+        if exchange.retained.len() > 128 {
+            return Err(Status::invalid_argument("too many retained diagnostics"));
+        }
+        let owner = self.trace_owner()?;
+        let tenant = self.evidence_tenant(node)?;
+        let boot: [u8; 16] = context
+            .node_boot_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::invalid_argument("invalid diagnostic node boot"))?;
+        let mut reply = crate::TraceExchangeReplyV1::default();
+        if let Some(upload) = exchange.output {
+            // The current enrolled node can return its retained output from an earlier boot.
+            let head = owner
+                .append(
+                    tenant,
+                    upload.request_id,
+                    upload.target_index,
+                    node,
+                    upload.original_node_boot_id,
+                    upload.batch.clone(),
+                )
+                .map_err(trace_status)?;
+            let (revision, _) = crate::TraceRevisionV1::read(self.decommission_store()?, &head)
+                .map_err(trace_status)?;
+            reply.acknowledgement = Some(crate::TraceAcknowledgementV1 {
+                execution_id: upload.batch.execution_id,
+                last_sequence: revision.last_sequence,
+                terminal: revision.terminal,
+            });
+        }
+        if let Some(resolved) = exchange.resolved {
+            let mut state = self.lock_state()?;
+            if let Some((pending, _)) = state.trace_resolutions.get(node) {
+                if pending.resolve_id == resolved.resolve_id {
+                    if resolved.participants.len() != pending.facts.len() {
+                        return Err(Status::invalid_argument(
+                            "diagnostic resolution changed the cohort",
+                        ));
+                    }
+                    for (participant, fact) in resolved.participants.iter().zip(&pending.facts) {
+                        if participant.fact_digest
+                            != crate::DiscoveryDigestV1::of(fact).map_err(trace_status)?
+                            || (participant.state == crate::TraceParticipantStateV1::Resolved)
+                                != participant.target.is_some()
+                        {
+                            return Err(Status::invalid_argument(
+                                "diagnostic resolution changed its fact",
+                            ));
+                        }
+                        if let Some(target) = &participant.target {
+                            target.validate().map_err(trace_status)?;
+                            if target.fact != *fact
+                                || target.node_boot_id != boot
+                                || target.fact.node_id != node
+                            {
+                                return Err(Status::permission_denied(
+                                    "diagnostic resolution changed its node lifetime",
+                                ));
+                            }
+                        }
+                    }
+                    if let Some((_, sender)) = state.trace_resolutions.remove(node) {
+                        let _result = sender.send(resolved);
+                    }
+                }
+            }
+        }
+        reply.resolve = self
+            .lock_state()?
+            .trace_resolutions
+            .get(node)
+            .map(|(request, _)| request.clone());
+        let now = utc_now_ns()? as u64;
+        let work = owner
+            .node_work(tenant, node, boot, now, &exchange.retained)
+            .map_err(trace_status)?;
+        reply.cancel = work.cancel;
+        if let Some((accepted, index)) = work.pending {
+            self.require_ready_session(node, context)?;
+            let signer = self
+                .trace_signer
+                .as_ref()
+                .ok_or_else(|| Status::failed_precondition("diagnostics are disabled"))?;
+            let trust = self.trust.current().map_err(trace_status)?;
+            if signer.1 != trust.policy_issuer_sequence_epoch
+                || !trust.policy_signers.iter().any(|key| {
+                    key.signing_key_id == signer.0
+                        && !key.revoked
+                        && key.ed25519_public_key_hex
+                            == hex::encode(signer.2.verifying_key().as_bytes())
+                })
+            {
+                return Err(Status::permission_denied("diagnostic signer was revoked"));
+            }
+            reply.dispatch = Some(
+                crate::TraceDispatchV1::sign(
+                    accepted,
+                    index,
+                    signer.0.clone(),
+                    signer.1,
+                    &signer.2,
+                )
+                .map_err(trace_status)?,
+            );
+        }
+        Ok(reply)
+    }
+}
+
+fn trace_status(error: crate::Error) -> Status {
+    let code = match &error {
+        crate::Error::Observability { code, .. } => match code {
+            crate::TraceErrorCodeV1::Denied => tonic::Code::PermissionDenied,
+            crate::TraceErrorCodeV1::Conflict => tonic::Code::AlreadyExists,
+            crate::TraceErrorCodeV1::Expired => tonic::Code::DeadlineExceeded,
+            crate::TraceErrorCodeV1::Missing => tonic::Code::NotFound,
+            crate::TraceErrorCodeV1::Capacity => tonic::Code::ResourceExhausted,
+            crate::TraceErrorCodeV1::Invalid => tonic::Code::InvalidArgument,
+            crate::TraceErrorCodeV1::Integrity => tonic::Code::DataLoss,
+        },
+        _ => tonic::Code::FailedPrecondition,
+    };
+    Status::new(code, error.to_string())
+}
+
+#[tonic::async_trait]
+impl crate::node_diagnostics_server::NodeDiagnostics for ControlPlane {
+    async fn exchange(
+        &self,
+        request: Request<crate::NodeDiagnosticRequest>,
+    ) -> Result<Response<crate::NodeDiagnosticReply>, Status> {
+        let node = self.authenticated_node(&request)?;
+        let admission = self
+            .trace_admission
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("diagnostic exchange is busy"))?;
+        let request = request.into_inner();
+        if request.payload_json.len() > crate::MAX_TRACE_GRPC_MESSAGE_BYTES - 4096 {
+            return Err(Status::resource_exhausted(
+                "diagnostic request exceeds its bound",
+            ));
+        }
+        let context = request
+            .session
+            .ok_or_else(|| Status::invalid_argument("node session is required"))?;
+        let exchange: crate::TraceExchangeV1 = serde_json::from_slice(&request.payload_json)
+            .map_err(|_| Status::invalid_argument("diagnostic request schema is invalid"))?;
+        let control = self.clone();
+        let reply = tokio::task::spawn_blocking(move || {
+            let _admission = admission;
+            control.exchange_trace(&node, &context, exchange)
+        })
+        .await
+        .map_err(|_| Status::internal("diagnostic exchange worker failed"))??;
+        let payload_json = serde_json::to_vec(&reply)
+            .map_err(|_| Status::internal("diagnostic reply cannot be encoded"))?;
+        if payload_json.len() > crate::MAX_TRACE_GRPC_MESSAGE_BYTES - 4096 {
+            return Err(Status::resource_exhausted(
+                "diagnostic reply exceeds its bound",
+            ));
+        }
+        Ok(Response::new(crate::NodeDiagnosticReply { payload_json }))
+    }
+}
+
 #[tonic::async_trait]
 impl NodePolicy for ControlPlane {
     async fn inventory(
@@ -2312,6 +2670,153 @@ mod tests {
     use tonic::Request;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    #[tokio::test]
+    async fn observability_recovery_session_dispatch_ack_and_revocation() -> TestResult {
+        use crate::observability::owner::tests::{grant, request};
+        use crate::{
+            DiscoveryOwner, TraceBatchV1, TraceExchangeV1, TraceFrameKindV1, TraceFrameV1,
+            TraceUploadV1,
+        };
+        let directory = TempDir::new()?;
+        let store = crate::ControlStore::open(directory.path())?;
+        let key = SigningKey::from_bytes(&[23; 32]);
+        let trust = TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: String::new(),
+            policy_issuer_sequence_epoch: 1,
+            policy_signers: vec![crate::PolicySignerTrustV1 {
+                signing_key_id: "trace-key".into(),
+                ed25519_public_key_hex: hex::encode(key.verifying_key().as_bytes()),
+                revoked: false,
+            }],
+        }
+        .with_computed_bundle_digest();
+        let control = ControlPlane::with_control_store(
+            vec![AllowedNodeIdentity {
+                node_id: "node-a".into(),
+                certificate_sha256: "a".repeat(64),
+                tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+            }],
+            trust.clone(),
+            store.clone(),
+        )?
+        .with_trace_signer("trace-key".into(), 1, key.clone())?;
+        assert!(control.trace_owner().is_err());
+        let _discovery = DiscoveryOwner::open(store.clone())?;
+        let context = NodeSessionContext {
+            node_id: "node-a".into(),
+            node_boot_id: vec![2; 16],
+            connection_nonce: vec![3; 16],
+        };
+        control.register(
+            "node-a".into(),
+            &context,
+            &registration_for(&context, 2, true, true),
+        )?;
+        control
+            .trust
+            .acknowledge("node-a", [2; 16], 2, trust.generation, &trust.bundle_digest)?;
+        control.set_session_readiness(
+            "node-a",
+            &context,
+            &NodeReadinessReport {
+                kernel_ready: true,
+                control_ready: true,
+                admission_ready: true,
+            },
+        )?;
+        let now = super::utc_now_ns()? as u64;
+        let request = request()?;
+        let mut grant = grant()?;
+        grant.valid_until_unix_ns = now + 60_000_000_000;
+        control
+            .lock_state()?
+            .sessions
+            .get_mut("node-a")
+            .ok_or("missing session")?
+            .workload_targets = vec![request.targets[0].fact.clone()];
+        control.accept_trace(request.clone(), grant, None)?;
+        let reply = control.exchange_trace("node-a", &context, TraceExchangeV1::default())?;
+        let dispatch = reply.dispatch.ok_or("missing dispatch")?;
+        dispatch.verify(
+            &key.verifying_key(),
+            [1; 16],
+            "node-a",
+            [2; 16],
+            super::utc_now_ns()? as u64,
+        )?;
+        let id = dispatch.accepted.execution_id(0)?;
+        let mut changed = context.clone();
+        changed.connection_nonce = vec![9; 16];
+        assert!(control
+            .exchange_trace("node-a", &changed, TraceExchangeV1::default())
+            .is_err());
+        let exchange = TraceExchangeV1 {
+            retained: vec![id],
+            resolved: None,
+            output: Some(TraceUploadV1 {
+                request_id: request.request_id,
+                target_index: 0,
+                original_node_boot_id: [2; 16],
+                batch: TraceBatchV1 {
+                    execution_id: id,
+                    frames: vec![TraceFrameV1 {
+                        execution_id: id,
+                        sequence: 1,
+                        kind: TraceFrameKindV1::Data,
+                        bytes: b"raw\n".to_vec(),
+                    }],
+                    terminal: None,
+                },
+            }),
+        };
+        let reply = control.exchange_trace("node-a", &context, exchange.clone())?;
+        assert!(reply.dispatch.is_none());
+        assert_eq!(
+            reply
+                .acknowledgement
+                .as_ref()
+                .ok_or("missing ack")?
+                .last_sequence,
+            1
+        );
+        assert_eq!(
+            reply,
+            control.exchange_trace("node-a", &context, exchange.clone())?
+        );
+        let mut changed = exchange;
+        changed
+            .output
+            .as_mut()
+            .ok_or("missing upload")?
+            .original_node_boot_id = [9; 16];
+        assert!(control.exchange_trace("node-a", &context, changed).is_err());
+        control
+            .trace_owner()?
+            .cancel([1; 16], request.request_id, "operator", true)?;
+        assert_eq!(
+            control
+                .exchange_trace("node-a", &context, TraceExchangeV1::default())?
+                .cancel,
+            vec![id]
+        );
+        use crate::node_diagnostics_server::NodeDiagnostics as _;
+        let unauthenticated = control
+            .exchange(Request::new(crate::NodeDiagnosticRequest {
+                session: Some(context),
+                payload_json: b"{}".to_vec(),
+            }))
+            .await;
+        assert_eq!(
+            unauthenticated
+                .err()
+                .ok_or("expected mTLS rejection")?
+                .code(),
+            tonic::Code::Unauthenticated
+        );
+        Ok(())
+    }
 
     fn control() -> ControlPlane {
         ControlPlane::new(

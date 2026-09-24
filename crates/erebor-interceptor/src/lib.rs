@@ -1,4 +1,5 @@
 mod bundled;
+pub mod diagnostic;
 mod error;
 mod host;
 mod lease;

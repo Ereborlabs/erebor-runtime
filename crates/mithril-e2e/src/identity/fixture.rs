@@ -156,6 +156,7 @@ impl IdentityFixture {
         scheduled.container_generation = 0;
         scheduled.root_cgroup_path = None;
         NodeConfig {
+            diagnostics: None,
             node_id: "mithril-identity-test".to_owned(),
             kubernetes_node_name: None,
             state_directory: state.to_path_buf(),
