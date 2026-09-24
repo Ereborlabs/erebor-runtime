@@ -2407,7 +2407,8 @@ test does not close a row when its physical condition or an assertion changed.
       seconds.
     - [x] Pass direct `runc` and commit it. The exact direct-runc case passed
       in 28.87 seconds with the same actor, policy, and assertions.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact physical case passed in the
+      retained K3s cluster with the same actor, policy, and assertions.
     - [ ] Remove only the matching legacy result fields and allow assertions.
       Keep the later post-fence calls and their denial assertions.
   - [ ] Replace clone-send and fork-send socket inheritance. Keep distinct
