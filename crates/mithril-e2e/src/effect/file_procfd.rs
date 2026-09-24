@@ -19,24 +19,16 @@ fn proc_fd_keeps_exact_deny<P: Platform>() -> TestResult<()> {
     env.node_ready()?;
 
     actor.send(b"base\n")?;
-    actor.wait_name(
-        pid,
-        &format!("link-base-{}", libc::EACCES),
-        "base denial",
-        Duration::from_secs(5),
-    )?;
+    let name = format!("link-base-{}", libc::EACCES);
+    actor.wait_name(pid, &name, "base denial", Duration::from_secs(5))?;
     let task = env.task(pid, "proc-fd actor")?;
     assert_ne!(task.snapshot.active_role_id, 0);
     assert_ne!(task.snapshot.admitted_entry_rule_id, 0);
     let first = EffectCheck::new(&env, task)?;
 
     actor.send(b"confirm\n")?;
-    actor.wait_name(
-        pid,
-        &format!("link-confirm-{}", libc::EACCES),
-        "exact file denial",
-        Duration::from_secs(5),
-    )?;
+    let name = format!("link-confirm-{}", libc::EACCES);
+    actor.wait_name(pid, &name, "exact file denial", Duration::from_secs(5))?;
     let original = first.wait(
         &env,
         "EXACT_POLICY_DENY",
@@ -47,6 +39,29 @@ fn proc_fd_keeps_exact_deny<P: Platform>() -> TestResult<()> {
     )?;
     assert_ne!(original.exact_object_key_id, 0);
     assert_ne!(original.composite_atom_id, 0);
+    for (branch, action) in [
+        ("HF-006", "hf6"),
+        ("HF-008", "hf8"),
+        ("HF-009", "hf9"),
+        ("HF-010", "hf10"),
+    ] {
+        let task = env.task(pid, "proc-fd actor")?;
+        let effects = EffectCheck::new(&env, task)?;
+        actor.send(format!("{action}\n").as_bytes())?;
+        let name = format!("link-{action}-{}", libc::EACCES);
+        actor.wait_name(pid, &name, branch, Duration::from_secs(5))?;
+        let denied = effects.wait(
+            &env,
+            "EXACT_POLICY_DENY",
+            F::File,
+            O::OpenRead,
+            -libc::EACCES,
+            branch,
+        )?;
+        assert_eq!(denied.exact_object_key_id, original.exact_object_key_id);
+        assert_eq!(denied.composite_atom_id, original.composite_atom_id);
+        assert_eq!(denied.task_cookie, original.task_cookie);
+    }
     let task = env.task(pid, "proc-fd actor")?;
     let effects = EffectCheck::new(&env, task)?;
 

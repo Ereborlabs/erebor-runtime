@@ -57,7 +57,11 @@ elif mode in ("symlink", "procfd"):
     libc = ctypes.CDLL(None, use_errno=True)
     libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
     print("native-fixture-ready", flush=True)
-    for action, path in [("base", secret), ("confirm", secret), (command, alias)]:
+    actions = [("base", secret), ("confirm", secret)]
+    if mode == "procfd":
+        actions.extend((f"hf{number}", secret) for number in (6, 8, 9, 10))
+    actions.append((command, alias))
+    for action, path in actions:
         if sys.stdin.readline() != f"{action}\n":
             raise RuntimeError(f"expected {action}")
         error = open_errno(path, os.O_RDONLY)
