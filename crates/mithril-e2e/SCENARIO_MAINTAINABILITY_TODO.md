@@ -2023,8 +2023,11 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Kubernetes passed in 72.59 seconds in retained K3s with the same
       actor, policy, and assertions. The existing descriptor case passed in
       76.45 seconds with the shared policy change.
-    - [ ] Remove only the matching legacy independent-mapping actions and
-      result fields after all three platform cases pass.
+    - [x] Remove the matching legacy independent-mapping actions, result
+      fields, and private forked target after all three platform cases pass.
+      The retained main-root mapping and benign-read assertions stay in the
+      old probe. The new Host case passed again after deletion. The crate's
+      91 non-privileged tests, formatting, and strict Clippy passed.
   - [x] Replace the protected `PTRACE_ATTACH` block with one small standard
     platform test. Use one shared Python actor and scenario policy. Do not add
     a Platform API.

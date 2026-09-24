@@ -24,11 +24,6 @@ use super::mailbox::{SharedMailbox, EMPTY, READY, REQUEST, RESPONSE};
 
 const CHILD_WAIT_LIMIT: Duration = Duration::from_secs(120);
 const UNIX_STREAM_FAILURE_BASE: u32 = 1 << 16;
-const SHARED_MMAP_PROTECTED_REQUEST: u32 = 10;
-const SHARED_MMAP_BENIGN_REQUEST: u32 = 11;
-const SHARED_MMAP_EXIT_REQUEST: u32 = 12;
-const SHARED_MMAP_ALLOWED: u32 = 20;
-const SHARED_MMAP_FAILURE_BASE: u32 = 1 << 16;
 const BPF_MAP_CREATE: libc::c_uint = 0;
 const BPF_MAP_TYPE_ARRAY: u32 = 2;
 const QUALIFIED_TIOCGPTN_IOCTL: libc::c_ulong = 2_147_767_344;
@@ -152,7 +147,6 @@ enum ChildRequest {
         move_mount_target: PathBuf,
     },
     PrepareUnixStreamTarget,
-    SharedMmapTargetPid,
     ReceivePassedSecret,
     ReceivePassedBenign,
     Prepared(PreparedOperation),
@@ -176,14 +170,12 @@ pub(super) enum PreparedOperation {
     PkeyExecutableMprotect,
     PkeyReadMprotect,
     SecretMmapWrite,
-    IndependentSecretMmapWrite,
     SecretMmapExec,
     SecretMprotectReadExec,
     SecretMprotectWriteExec,
     DeletedMprotectExec,
     MemfdMprotectExec,
     BenignMmapRead,
-    IndependentBenignMmapRead,
     PassedSecretRead,
     PassedBenignRead,
     IoUringSecretRead,
@@ -753,15 +745,6 @@ impl EffectProcessFixture {
             ChildResponse::PreparedProcess { pid } => Ok(pid),
             _ => Err(invalid_state(
                 "effect child returned the wrong Unix-stream target response",
-            )),
-        }
-    }
-
-    pub(super) fn shared_mmap_target_pid(&mut self) -> Result<u32> {
-        match self.request(&ChildRequest::SharedMmapTargetPid)? {
-            ChildResponse::PreparedProcess { pid } => Ok(pid),
-            _ => Err(invalid_state(
-                "effect child returned the wrong shared-mmap target response",
             )),
         }
     }
@@ -1364,20 +1347,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                     false,
                 ),
             },
-            ChildRequest::SharedMmapTargetPid => match prepared_hard_closed.as_ref() {
-                Some(prepared) => (
-                    Ok(ChildResponse::PreparedProcess {
-                        pid: prepared.shared_mmap_target.pid(),
-                    }),
-                    false,
-                ),
-                None => (
-                    Err(invalid_state(
-                        "effect-operation resources were not prepared",
-                    )),
-                    false,
-                ),
-            },
             ChildRequest::ReceivePassedSecret => match prepared_hard_closed.as_mut() {
                 Some(prepared) => (
                     prepared
@@ -1914,7 +1883,6 @@ struct PreparedOperations {
     unix_stream_target: Option<UnixStreamTarget>,
     shared_memory_id: libc::c_int,
     shared_memory: *mut libc::c_void,
-    shared_mmap_target: SharedMmapTarget,
 }
 
 #[allow(unsafe_code)]
@@ -2073,21 +2041,6 @@ impl PreparedOperations {
                 std::io::Error::last_os_error()
             )));
         }
-        let shared_mmap_signal_path = secret_path
-            .parent()
-            .unwrap_or_else(|| Path::new("/tmp"))
-            .join(".mithril-shared-mmap-state");
-        let shared_mmap_signal = SharedMailbox::create(&shared_mmap_signal_path)?;
-        let shared_mmap_target = SharedMmapTarget::spawn(
-            shared_mmap_signal,
-            shared_mmap_signal_path,
-            secret_file.as_raw_fd(),
-            benign_file.as_raw_fd(),
-        )
-        .context(IoSnafu {
-            path: Path::new("shared-mmap target"),
-        })?;
-
         Ok(Self {
             anonymous_exec: Some(anonymous_exec),
             exec_path: exec_path.to_path_buf(),
@@ -2115,7 +2068,6 @@ impl PreparedOperations {
             unix_stream_target: None,
             shared_memory_id,
             shared_memory,
-            shared_mmap_target,
         })
     }
 
@@ -2220,9 +2172,6 @@ impl PreparedOperations {
             PreparedOperation::SecretMmapWrite => {
                 mmap_protection_outcome(&self.secret_file, libc::PROT_WRITE, libc::MAP_SHARED, None)
             }
-            PreparedOperation::IndependentSecretMmapWrite => {
-                self.shared_mmap_target.mmap_protected()
-            }
             PreparedOperation::SecretMmapExec => {
                 mmap_protection_outcome(&self.secret_file, libc::PROT_EXEC, libc::MAP_PRIVATE, None)
             }
@@ -2258,7 +2207,6 @@ impl PreparedOperations {
                     })
             }
             PreparedOperation::BenignMmapRead => mmap_outcome(&self.benign_file),
-            PreparedOperation::IndependentBenignMmapRead => self.shared_mmap_target.mmap_benign(),
             PreparedOperation::PassedSecretRead => read_outcome(&mut self.passed_secret_file),
             PreparedOperation::PassedBenignRead => read_outcome(&mut self.passed_benign_file),
             PreparedOperation::IoUringSecretRead => io_outcome(
@@ -2350,157 +2298,6 @@ impl Drop for PreparedOperations {
         }
         self.unix_stream_target.take();
         let _cleanup = fs::remove_file(&self.unix_stream_signal_path);
-    }
-}
-
-struct SharedMmapTarget {
-    pid: libc::pid_t,
-    signal: SharedMailbox,
-    signal_path: PathBuf,
-}
-
-#[allow(unsafe_code)]
-impl SharedMmapTarget {
-    fn spawn(
-        signal: SharedMailbox,
-        signal_path: PathBuf,
-        protected_file: libc::c_int,
-        benign_file: libc::c_int,
-    ) -> io::Result<Self> {
-        // SAFETY: the child uses inherited mappings and async-signal-safe calls.
-        let pid = unsafe { libc::fork() };
-        if pid < 0 {
-            let error = io::Error::last_os_error();
-            drop(signal);
-            let _cleanup = fs::remove_file(&signal_path);
-            return Err(error);
-        }
-        if pid == 0 {
-            // SAFETY: the child owns the inherited signal mapping and file descriptors.
-            unsafe { shared_mmap_target_child(&signal, protected_file, benign_file) };
-        }
-        Ok(Self {
-            pid,
-            signal,
-            signal_path,
-        })
-    }
-
-    fn pid(&self) -> u32 {
-        self.pid as u32
-    }
-
-    fn mmap_protected(&mut self) -> IoOutcome {
-        self.request(SHARED_MMAP_PROTECTED_REQUEST)
-    }
-
-    fn mmap_benign(&mut self) -> IoOutcome {
-        self.request(SHARED_MMAP_BENIGN_REQUEST)
-    }
-
-    fn request(&mut self, request: u32) -> IoOutcome {
-        self.signal.set_state(request);
-        let last_state = std::cell::Cell::new(request);
-        let state = match wait_for(
-            &self.signal_path,
-            "the shared-mmap target response",
-            Duration::from_secs(2),
-            || {
-                let state = self.signal.state();
-                last_state.set(state);
-                Ok(
-                    (state == SHARED_MMAP_ALLOWED || state >= SHARED_MMAP_FAILURE_BASE)
-                        .then_some(state),
-                )
-            },
-            || {
-                format!(
-                    "last mailbox state: {}; target PID: {}",
-                    last_state.get(),
-                    self.pid
-                )
-            },
-        ) {
-            Ok(state) => state,
-            Err(error) => return error_outcome(io::Error::other(error.to_string())),
-        };
-        self.signal.reset();
-        if state == SHARED_MMAP_ALLOWED {
-            allowed_outcome()
-        } else {
-            error_outcome(io::Error::from_raw_os_error(
-                (state - SHARED_MMAP_FAILURE_BASE) as i32,
-            ))
-        }
-    }
-}
-
-#[allow(unsafe_code)]
-impl Drop for SharedMmapTarget {
-    fn drop(&mut self) {
-        self.signal.set_state(SHARED_MMAP_EXIT_REQUEST);
-        let mut status = 0;
-        // SAFETY: pid is this process's live fork child and status is writable.
-        unsafe {
-            libc::waitpid(self.pid, &mut status, 0);
-        }
-        let _cleanup = fs::remove_file(&self.signal_path);
-    }
-}
-
-#[allow(unsafe_code)]
-unsafe fn shared_mmap_target_child(
-    signal: &SharedMailbox,
-    protected_file: libc::c_int,
-    benign_file: libc::c_int,
-) -> ! {
-    loop {
-        let request = signal.state();
-        if request == SHARED_MMAP_EXIT_REQUEST {
-            // SAFETY: this terminates only the fork child.
-            unsafe { libc::_exit(0) };
-        }
-        let (file, protection) = match request {
-            SHARED_MMAP_PROTECTED_REQUEST => (protected_file, libc::PROT_WRITE),
-            SHARED_MMAP_BENIGN_REQUEST => (benign_file, libc::PROT_READ),
-            _ => {
-                std::hint::spin_loop();
-                continue;
-            }
-        };
-        // SAFETY: the inherited descriptor remains open for the life of this child.
-        let address = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                4096,
-                protection,
-                libc::MAP_SHARED,
-                file,
-                0,
-            )
-        };
-        if address == libc::MAP_FAILED {
-            // SAFETY: errno is thread-local to this single-threaded fork child.
-            let errno = unsafe { *libc::__errno_location() } as u32;
-            signal.set_state(SHARED_MMAP_FAILURE_BASE.saturating_add(errno));
-        } else {
-            // SAFETY: address and length describe the live mapping above.
-            unsafe {
-                libc::munmap(address, 4096);
-            }
-            signal.set_state(SHARED_MMAP_ALLOWED);
-        }
-        loop {
-            let state = signal.state();
-            if state == SHARED_MMAP_EXIT_REQUEST {
-                // SAFETY: this terminates only the fork child.
-                unsafe { libc::_exit(0) };
-            }
-            if state != SHARED_MMAP_ALLOWED && state < SHARED_MMAP_FAILURE_BASE {
-                break;
-            }
-            std::hint::spin_loop();
-        }
     }
 }
 
@@ -3342,8 +3139,8 @@ mod tests {
 
     use super::{
         invalid_state, mmap_outcome, network_read_results, ptmx_number_outcome, ptmx_peer_outcome,
-        read_outcome, unlock_ptmx, BatchOutcome, BpfMapCreateAttr, IoOutcome, SharedMmapTarget,
-        UnixStreamTarget, BPF_MAP_TYPE_ARRAY,
+        read_outcome, unlock_ptmx, BatchOutcome, BpfMapCreateAttr, IoOutcome, UnixStreamTarget,
+        BPF_MAP_TYPE_ARRAY,
     };
     use crate::effect::fixture_syscalls;
     use crate::effect::mailbox::SharedMailbox;
@@ -3508,61 +3305,6 @@ mod tests {
         assert!(!path.exists());
         assert_eq!(descriptor_len.len(), 7);
         assert_eq!(&mapping[..], b"fixture");
-        Ok(())
-    }
-
-    #[test]
-    fn shared_mmap_target_reports_both_unrestricted_controls() -> crate::Result<()> {
-        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
-            path: "shared-mmap target fixture".into(),
-            source,
-            location: snafu::location!(),
-        })?;
-        let protected_path = directory.path().join("protected");
-        let benign_path = directory.path().join("benign");
-        fs::write(&protected_path, vec![0_u8; 4096]).map_err(|source| crate::Error::Io {
-            path: protected_path.clone(),
-            source,
-            location: snafu::location!(),
-        })?;
-        fs::write(&benign_path, vec![0_u8; 4096]).map_err(|source| crate::Error::Io {
-            path: benign_path.clone(),
-            source,
-            location: snafu::location!(),
-        })?;
-        let protected = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&protected_path)
-            .map_err(|source| crate::Error::Io {
-                path: protected_path,
-                source,
-                location: snafu::location!(),
-            })?;
-        let benign = fs::File::open(&benign_path).map_err(|source| crate::Error::Io {
-            path: benign_path,
-            source,
-            location: snafu::location!(),
-        })?;
-        let signal_path = directory.path().join("signal");
-        let signal = SharedMailbox::create(&signal_path)?;
-        let mut target = SharedMmapTarget::spawn(
-            signal,
-            signal_path,
-            protected.as_raw_fd(),
-            benign.as_raw_fd(),
-        )
-        .map_err(|source| crate::Error::Io {
-            path: "shared-mmap target fixture".into(),
-            source,
-            location: snafu::location!(),
-        })?;
-
-        assert!(target.pid() > 0);
-        for _ in 0..32 {
-            assert!(target.mmap_protected().allowed);
-            assert!(target.mmap_benign().allowed);
-        }
         Ok(())
     }
 
