@@ -2486,7 +2486,8 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Pass Host and commit it. The exact case passed in 28.19 seconds.
       - [x] Pass direct `runc` and commit it. The exact case passed in 28.87
         seconds with the production OCI hook.
-      - [ ] Pass Kubernetes and commit it.
+      - [x] Pass Kubernetes and commit it. The exact physical case passed in
+        70.61 seconds in the retained K3s cluster.
       - [ ] Remove only the matching legacy SQPOLL action and result field.
     - [ ] Qualify TUN/TAP setup and its physical denial.
     - [x] Qualify every unsupported socket family and protocol in the legacy
