@@ -164,11 +164,6 @@ pub(super) enum PreparedOperation {
     MemfdExec,
     NonLeaderExec,
     AllowedExec,
-    AnonymousExec,
-    AnonymousExecutableMmap,
-    AnonymousReadMmap,
-    PkeyExecutableMprotect,
-    PkeyReadMprotect,
     SecretMmapWrite,
     SecretMmapExec,
     SecretMprotectReadExec,
@@ -1856,7 +1851,6 @@ fn propagation_peer_loop(
 }
 
 struct PreparedOperations {
-    anonymous_exec: Option<memmap2::MmapMut>,
     exec_path: PathBuf,
     script_path: PathBuf,
     exec_file: fs::File,
@@ -1897,15 +1891,6 @@ impl PreparedOperations {
         mount_source: &Path,
         move_mount_target: &Path,
     ) -> Result<Self> {
-        let anonymous_exec =
-            memmap2::MmapOptions::new()
-                .len(4096)
-                .map_anon()
-                .map_err(|source| crate::Error::Io {
-                    path: "anonymous executable-memory fixture".into(),
-                    source,
-                    location: snafu::location!(),
-                })?;
         let ioctl_file = fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -2041,7 +2026,6 @@ impl PreparedOperations {
             )));
         }
         Ok(Self {
-            anonymous_exec: Some(anonymous_exec),
             exec_path: exec_path.to_path_buf(),
             script_path: script_path.to_path_buf(),
             exec_file,
@@ -2148,26 +2132,6 @@ impl PreparedOperations {
                 self.allowed_exec_file.as_raw_fd(),
                 false,
             )),
-            PreparedOperation::AnonymousExec => {
-                self.anonymous_exec
-                    .take()
-                    .map_or_else(missing_prepared_file, |mapping| match mapping.make_exec() {
-                        Ok(_) => allowed_outcome(),
-                        Err(error) => error_outcome(error),
-                    })
-            }
-            PreparedOperation::AnonymousExecutableMmap => {
-                io_outcome(fixture_syscalls::map_anonymous(libc::PROT_EXEC))
-            }
-            PreparedOperation::AnonymousReadMmap => {
-                io_outcome(fixture_syscalls::map_anonymous(libc::PROT_READ))
-            }
-            PreparedOperation::PkeyExecutableMprotect => io_outcome(
-                fixture_syscalls::pkey_mprotect_anonymous(libc::PROT_READ | libc::PROT_EXEC),
-            ),
-            PreparedOperation::PkeyReadMprotect => {
-                io_outcome(fixture_syscalls::pkey_mprotect_anonymous(libc::PROT_READ))
-            }
             PreparedOperation::SecretMmapWrite => {
                 mmap_protection_outcome(&self.secret_file, libc::PROT_WRITE, libc::MAP_SHARED, None)
             }

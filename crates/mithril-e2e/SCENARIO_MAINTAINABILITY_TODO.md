@@ -2054,7 +2054,7 @@ test does not close a row when its physical condition or an assertion changed.
     - [ ] Remove only the matching legacy transfer actions and private child
       machinery after all three platforms pass. Keep unrelated Unix-stream
       and exact-file checks.
-  - [ ] Replace anonymous executable-memory denials and their non-executable
+  - [x] Replace anonymous executable-memory denials and their non-executable
     controls with one small standard platform test. Use one shared Python
     actor as a recovered external process and the public signed Python policy.
     Make real `mmap`, `mprotect`, and `pkey_mprotect` calls. Check the exact
@@ -2076,7 +2076,7 @@ test does not close a row when its physical condition or an assertion changed.
       allocates its first writable anonymous map before it reports ready.
       Host passed again in 28.56 seconds, direct `runc` in 29.52 seconds,
       and Kubernetes in 77.02 seconds.
-    - [ ] Preserve the old Observe-mode case before deletion. The legacy
+    - [x] Preserve the old Observe-mode case before deletion. The legacy
       probe runs these five actions for both values of `protect`. The shared
       test now uses only the Protect-mode Python policy. Require the same
       anonymous-memory denials and read-only controls under Observe mode on
@@ -2096,8 +2096,13 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Kubernetes passed in 69.54 seconds with the same actor, Observe
         policy, and effects. The unchanged Protect case passed in 73.94
         seconds in the retained K3s cluster.
-    - [ ] Remove only the matching legacy actions, fields, and prepared
-      resources after all three platforms pass.
+    - [x] Remove only the matching legacy actions, fields, and prepared
+      resources after all three platforms pass. The current binary passed
+      Protect and Observe on Host (28.40 and 28.98 seconds), direct `runc`
+      (28.82 and 29.96 seconds), and Kubernetes (70.34 and 71.87 seconds).
+      Keep the independent no-policy anonymous-mapping control test. Compile
+      its two syscall helpers only for tests. The unprivileged suite passed
+      with 91 tests; strict Clippy and formatting passed.
   - [x] Replace the protected `PTRACE_ATTACH` block with one small standard
     platform test. Use one shared Python actor and scenario policy. Do not add
     a Platform API.

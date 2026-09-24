@@ -436,11 +436,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub non_leader_exec_denied: bool,
     pub external_exec_allow_cannot_admit: bool,
     pub memfd_exec_failed_closed: bool,
-    pub anonymous_exec_hard_closed: bool,
-    pub anonymous_executable_mmap_hard_closed: bool,
-    pub anonymous_read_mmap_allowed: bool,
-    pub pkey_executable_mprotect_hard_closed: bool,
-    pub pkey_read_mprotect_allowed: bool,
     pub sysv_ipc_access_hard_closed: bool,
     pub unix_stream_relationship_allowed: bool,
     pub inherited_unix_stream_send_denied: bool,
@@ -2197,60 +2192,6 @@ impl EffectTestRunner {
                 KernelEffectOperationV1::Execute,
             )?;
         }
-        require_hard_close(
-            &mut fixture,
-            &reader,
-            &observations,
-            HardClosedOperation::AnonymousExec,
-            "UNSUPPORTED_OBJECT",
-            (
-                KernelEffectFamilyV1::Exec,
-                KernelEffectOperationV1::Mprotect,
-            ),
-            "anonymous executable memory",
-        )?;
-        require_hard_close(
-            &mut fixture,
-            &reader,
-            &observations,
-            HardClosedOperation::AnonymousExecutableMmap,
-            "UNSUPPORTED_OBJECT",
-            (
-                KernelEffectFamilyV1::Exec,
-                KernelEffectOperationV1::MmapExec,
-            ),
-            "anonymous executable mmap",
-        )?;
-        ensure!(
-            fixture
-                .run_prepared(HardClosedOperation::AnonymousReadMmap)?
-                .allowed,
-            InvalidInputSnafu {
-                path: Path::new("anonymous read mmap"),
-                reason: "the anonymous non-executable mmap control was denied",
-            }
-        );
-        require_hard_close(
-            &mut fixture,
-            &reader,
-            &observations,
-            HardClosedOperation::PkeyExecutableMprotect,
-            "UNSUPPORTED_OBJECT",
-            (
-                KernelEffectFamilyV1::Exec,
-                KernelEffectOperationV1::Mprotect,
-            ),
-            "pkey_mprotect executable memory",
-        )?;
-        ensure!(
-            fixture
-                .run_prepared(HardClosedOperation::PkeyReadMprotect)?
-                .allowed,
-            InvalidInputSnafu {
-                path: Path::new("pkey_mprotect read control"),
-                reason: "the pkey_mprotect non-executable control was denied",
-            }
-        );
         if protect {
             for (operation, family, kernel_operation, label) in [
                 (
@@ -3577,11 +3518,6 @@ impl EffectTestRunner {
             non_leader_exec_denied: protect,
             external_exec_allow_cannot_admit: protect,
             memfd_exec_failed_closed: protect,
-            anonymous_exec_hard_closed: true,
-            anonymous_executable_mmap_hard_closed: true,
-            anonymous_read_mmap_allowed: true,
-            pkey_executable_mprotect_hard_closed: true,
-            pkey_read_mprotect_allowed: true,
             sysv_ipc_access_hard_closed: true,
             unix_stream_relationship_allowed: protect,
             inherited_unix_stream_send_denied: protect,

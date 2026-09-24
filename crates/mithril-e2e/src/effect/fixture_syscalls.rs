@@ -335,6 +335,7 @@ pub(super) fn make_mapping_exec(mapping: &memmap2::Mmap) -> io::Result<()> {
     })
 }
 
+#[cfg(test)]
 pub(super) fn map_anonymous(protection: libc::c_int) -> io::Result<()> {
     // SAFETY: mmap receives no user pointer or file descriptor, and returns a new mapping.
     let address = unsafe {
@@ -354,6 +355,7 @@ pub(super) fn map_anonymous(protection: libc::c_int) -> io::Result<()> {
     syscall_result(unsafe { libc::munmap(address, 1) }.into())
 }
 
+#[cfg(test)]
 pub(super) fn pkey_mprotect_anonymous(protection: libc::c_int) -> io::Result<()> {
     let mut mapping = memmap2::MmapMut::map_anon(1)?;
     // SAFETY: mapping owns the aligned range, and protection key zero is always allocated.
