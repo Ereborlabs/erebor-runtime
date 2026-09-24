@@ -81,6 +81,33 @@ def roundtrip():
         raise OSError(failure.errno or errno.EIO, f"{stage}: {failure}") from failure
 
 
+def socket_lifecycle():
+    stage = "socket setup"
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+            server.settimeout(3)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind(("127.0.0.1", 19091))
+            server.listen(1)
+            for payload in (b"old", b"new"):
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                    client.settimeout(3)
+                    stage = "connect"
+                    client.connect(server.getsockname())
+                    with server.accept()[0] as peer:
+                        peer.settimeout(3)
+                        stage = "send"
+                        client.sendall(payload)
+                        if receive(peer, len(payload)) != payload:
+                            raise OSError(errno.EIO, "TCP payload changed")
+                        stage = "shutdown"
+                        client.shutdown(socket.SHUT_WR)
+                        if peer.recv(1) != b"":
+                            raise OSError(errno.EIO, "TCP shutdown left bytes")
+    except OSError as failure:
+        raise OSError(failure.errno or errno.EIO, f"{stage}: {failure}") from failure
+
+
 def ipv6_tcp():
     stage = "socket setup"
     try:
@@ -245,6 +272,11 @@ for command in sys.stdin:
         result("nodelay", nodelay)
     elif command == "roundtrip\n":
         error = result("roundtrip", roundtrip)
+        if error:
+            sys.exit(error)
+        break
+    elif command == "lifecycle\n":
+        error = result("lifecycle", socket_lifecycle)
         if error:
             sys.exit(error)
         break

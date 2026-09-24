@@ -32,6 +32,21 @@ impl EffectCheck {
         result: i32,
         name: &str,
     ) -> TestResult<MithrilEffectObservation> {
+        Ok(self
+            .wait_many(env, reason, (family, operation), result, 1, name)?
+            .remove(0))
+    }
+
+    pub(super) fn wait_many<P: Platform>(
+        &self,
+        env: &P,
+        reason: &str,
+        effect: (KernelEffectFamilyV1, KernelEffectOperationV1),
+        result: i32,
+        count: usize,
+        name: &str,
+    ) -> TestResult<Vec<MithrilEffectObservation>> {
+        assert!(count > 0);
         let path = env.maps().0.to_owned();
         let last = RefCell::new(Vec::new());
         Ok(wait_for(
@@ -72,10 +87,14 @@ impl EffectCheck {
                         )
                     })
                     .collect();
-                Ok(fresh.into_iter().find(|event| {
-                    self.task
-                        .matches_effect(event, reason, family, operation, result)
-                }))
+                let matched = fresh
+                    .into_iter()
+                    .filter(|event| {
+                        self.task
+                            .matches_effect(event, reason, effect.0, effect.1, result)
+                    })
+                    .collect::<Vec<_>>();
+                Ok((matched.len() >= count).then_some(matched))
             },
             || format!("last new effects: {:?}", last.borrow()),
         )?)

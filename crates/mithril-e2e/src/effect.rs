@@ -36,6 +36,8 @@ mod privilege;
 mod process_control;
 mod runc;
 #[cfg(test)]
+mod socket_lifecycle;
+#[cfg(test)]
 mod socket_pass;
 #[cfg(test)]
 mod socket_pass_allowed;
