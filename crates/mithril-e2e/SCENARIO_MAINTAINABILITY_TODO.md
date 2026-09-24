@@ -1743,7 +1743,7 @@ test does not close a row when its physical condition or an assertion changed.
       exact case passed in 73.41 seconds in retained K3s. The API was
       temporarily unavailable during K3s startup, then the same test process
       completed without a scenario or production change.
-    - [ ] Qualify the Protect-mode symlink denial on all three platforms with
+    - [x] Qualify the Protect-mode symlink denial on all three platforms with
       the same actor and explicit exact-object evidence.
       - [x] Pass Host and commit it. The 75-line test passed in 34.61 seconds.
         The original and symlink reads both returned `EACCES`. Their
@@ -1752,7 +1752,10 @@ test does not close a row when its physical condition or an assertion changed.
         input and needs no result-file allowance.
       - [x] Pass the unchanged Protect case under direct `runc` and commit it.
         The exact case passed in 40.26 seconds with the production OCI hook.
-      - [ ] Pass the unchanged Protect case on Kubernetes and commit it.
+      - [x] Pass the unchanged Protect case on Kubernetes and commit it. The
+        exact case passed in 73.59 seconds in retained K3s. The API was
+        temporarily unavailable during K3s startup. The same test process
+        completed without a scenario or production change.
     - [ ] Remove only the matching old symlink action after both Observe and
       Protect cases pass. Keep the original control open for bind aliases.
     - A focused Host attempt on 2026-09-24 used the public Observe policy and
