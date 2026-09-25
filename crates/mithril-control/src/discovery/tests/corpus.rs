@@ -9,6 +9,7 @@ use super::*;
 struct Corpus {
     version: u32,
     proof_kind: DiscoveryProofKindV1,
+    recorded_oracle: serde_json::Value,
     operator_protocol: Vec<String>,
     cases: Vec<Case>,
     capabilities: Vec<Capability>,
@@ -175,6 +176,7 @@ fn discovery_pilot_preserves_exact_counts_risk_and_replay() -> TestResult<()> {
     ))?;
     assert_eq!(corpus.version, 1);
     assert_eq!(corpus.proof_kind, DiscoveryProofKindV1::Synthetic);
+    assert!(corpus.recorded_oracle.is_object());
     assert_eq!(corpus.operator_protocol.len(), 6);
     assert_eq!(corpus.cases.len(), 21);
     let mut ids = BTreeSet::new();

@@ -65,6 +65,34 @@ pub fn run_discovery_offline(output: &Path) -> Result<()> {
             reason: "native preview differs or claims a physical result"
         }
     );
+    let pilot: serde_json::Value =
+        serde_json::from_slice(include_bytes!("../fixtures/discovery/pilot.json"))
+            .context(JsonSnafu { path: output })?;
+    let observed_oracle = serde_json::json!({
+        "source_revision": input.source_revision,
+        "manifest_sha256": crate::DigestV1::of(input_bytes).to_hex(),
+        "candidate_sha256": crate::DigestV1::of(policy_bytes).to_hex(),
+        "input_digest": hex::encode(snapshot.input_digest.0),
+        "snapshot_digest": hex::encode(snapshot.content_digest.0),
+        "atom_digests": snapshot.atoms.iter().map(|atom| hex::encode(atom.id.0)).collect::<Vec<_>>(),
+        "accepted": snapshot.accepted_records,
+        "included": snapshot.included_records,
+        "unresolved": snapshot.unresolved_records,
+        "excluded": snapshot.excluded_records,
+        "duplicate_deliveries": result.duplicate_deliveries,
+        "coverage_revision": snapshot.coverage[0].coverage_revision,
+        "coverage_state": snapshot.coverage[0].state,
+        "preview_policy_digest": preview.source_policy_digest,
+        "preview_disposition": preview.simulations[0].disposition,
+        "preview_physical_result": preview.simulations[0].physical_result,
+    });
+    ensure!(
+        pilot["recorded_oracle"] == observed_oracle,
+        InvalidInputSnafu {
+            path: output,
+            reason: "recorded owner output differs from the frozen fixture oracle"
+        }
+    );
     fs::create_dir(output).context(IoSnafu { path: output })?;
     write_json(&output.join("input-manifest.json"), &input)?;
     write_json(&output.join("snapshot.json"), snapshot)?;
@@ -78,6 +106,7 @@ pub fn run_discovery_offline(output: &Path) -> Result<()> {
             "fixture_digest": crate::DigestV1::of(input_bytes),
             "candidate_bytes_digest": crate::DigestV1::of(policy_bytes),
             "preview": preview,
+            "recorded_oracle": observed_oracle,
             "production_authority": false,
             "live_lookups": 0
         }),

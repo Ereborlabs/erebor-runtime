@@ -1,6 +1,24 @@
 {
   "version": 1,
   "proof_kind": "SYNTHETIC",
+  "recorded_oracle": {
+    "source_revision": "synthetic-discovery-corpus-v1",
+    "manifest_sha256": "cf13990f749a6d880054a48741cadc053b8688996d9520214b11ece08e6ad4ad",
+    "candidate_sha256": "0ae19807aaaf8c3c4017382064cd03b4635b2b34a320e05bc73b55baa9343fc9",
+    "input_digest": "d42c083a6bf269f08cb8e17d3deb80bd9ad7c5594a971a472c9a38d338ed8133",
+    "snapshot_digest": "19d1346d81b83dda00248a6672759c89919b66819938fb6de93c556082c8f4dd",
+    "atom_digests": ["89f4327cfd4916385fa31afd79413f96197f0385bf56a9b6fe549e747487b78c"],
+    "accepted": 3,
+    "included": 2,
+    "unresolved": 1,
+    "excluded": 0,
+    "duplicate_deliveries": 1,
+    "coverage_revision": 1,
+    "coverage_state": "HEALTHY",
+    "preview_policy_digest": "f38b10237472da1dcc868c228b4fab2b4a09df86a1d7d79048c19c8bcdbc032c",
+    "preview_disposition": "WOULD_DENY",
+    "preview_physical_result": "NOT_ATTEMPTED"
+  },
   "operator_protocol": [
     "Freeze corpus version and workload/time partitions before tuning. These are synthetic labels, not incident traces.",
     "Give the operator the question, pinned input, and cutoff. Withhold labels and later reviews.",
