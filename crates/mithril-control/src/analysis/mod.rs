@@ -945,4 +945,51 @@ mod tests {
         assert_eq!(receipt.contiguous_cursor, 0);
         Ok(())
     }
+
+    #[test]
+    fn analysis_store_commit_before_ack_survives_process_exit(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let input = DiscoveryInputManifestV1::from_json(include_bytes!(
+            "../../../mithril-e2e/fixtures/discovery/manifest.json"
+        ))?;
+        let identity = input.records[0].id.stream.clone();
+        if let Some(root) = std::env::var_os("ARAPHOR_ANALYSIS_CRASH_PROOF_ROOT") {
+            let store = AnalysisStore::open(PathBuf::from(root))?;
+            let record = input.records[0].observation.to_wire_record()?;
+            assert_eq!(
+                store.accept_validated_batch(
+                    identity,
+                    EvidenceBatchInputV1::encode(1, vec![record])?
+                )?,
+                EvidenceStoreOutcomeV1::Accepted
+            );
+            std::process::exit(73);
+        }
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let status = std::process::Command::new(std::env::current_exe()?)
+            .arg("--exact")
+            .arg("analysis::tests::analysis_store_commit_before_ack_survives_process_exit")
+            .env("ARAPHOR_ANALYSIS_CRASH_PROOF_ROOT", &root)
+            .status()?;
+        assert_eq!(status.code(), Some(73));
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(store.meta()?.commit_revision, 1);
+        assert_eq!(
+            store
+                .source_receipt(&identity)?
+                .ok_or("receipt absent after crash")?
+                .contiguous_cursor,
+            1
+        );
+        let record = input.records[0].observation.to_wire_record()?;
+        assert_eq!(
+            store
+                .accept_validated_batch(identity, EvidenceBatchInputV1::encode(1, vec![record])?)?,
+            EvidenceStoreOutcomeV1::Accepted
+        );
+        assert_eq!(store.meta()?.commit_revision, 1);
+        Ok(())
+    }
 }
