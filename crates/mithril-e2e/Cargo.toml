@@ -7,8 +7,10 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+araphor-data = { path = "../araphor-data" }
 clap.workspace = true
 containerd-client.workspace = true
+crc32c.workspace = true
 ed25519-dalek.workspace = true
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-interceptor = { path = "../erebor-interceptor" }
@@ -49,7 +51,6 @@ zerocopy.workspace = true
 rmp-serde.workspace = true
 rusqlite.workspace = true
 axum.workspace = true
-crc32c.workspace = true
 erebor-runtime-client = { path = "../erebor-runtime-client" }
 erebor-telemetry = { path = "../erebor-telemetry" }
 mithril-e2e-macros = { path = "../mithril-e2e-macros" }

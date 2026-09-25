@@ -50,6 +50,13 @@ pub struct AnalysisSourceReceiptV1 {
     pub retained_floor: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnalysisSourceStatusV1 {
+    pub receipt: AnalysisSourceReceiptV1,
+    pub retained_event_count: u64,
+    pub latest_coverage_report: Option<Vec<u8>>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedEvidenceBatchV1 {
     pub cpu_id: u32,
@@ -262,6 +269,57 @@ impl AnalysisStore {
         let key = source_key(identity);
         let writer = self.writer()?;
         Self::read_receipt_from(&writer, &self.root, identity, &key)
+    }
+
+    pub fn source_status(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+    ) -> Result<Option<AnalysisSourceStatusV1>> {
+        let key = source_key(identity);
+        let writer = self.writer()?;
+        let Some(receipt) = Self::read_receipt_from(&writer, &self.root, identity, &key)? else {
+            return Ok(None);
+        };
+        let retained_event_count = writer
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE stream_key = ? AND tenant_id = ?",
+                params![key.as_slice(), identity.tenant_id.as_slice()],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "count retained source events",
+            })?;
+        let latest_coverage_report = if receipt.coverage_revision == 0 {
+            None
+        } else {
+            let stored: Option<(Vec<u8>, Vec<u8>)> = writer
+                .query_row(
+                    "SELECT report, report_sha256 FROM coverage
+                     WHERE stream_key = ? AND tenant_id = ? AND revision = ?",
+                    params![
+                        key.as_slice(),
+                        identity.tenant_id.as_slice(),
+                        receipt.coverage_revision
+                    ],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read retained coverage",
+                })?;
+            let Some((report, digest)) = stored else {
+                return self.reject("the source coverage receipt has no retained report");
+            };
+            if Sha256::digest(&report).as_slice() != digest {
+                return self.reject("the retained coverage digest does not match its report");
+            }
+            Some(report)
+        };
+        Ok(Some(AnalysisSourceStatusV1 {
+            receipt,
+            retained_event_count,
+            latest_coverage_report,
+        }))
     }
 
     #[allow(dead_code, reason = "offline proof precedes live intake cutover")]
@@ -940,12 +998,17 @@ mod tests {
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
         let identity = identity();
+        assert_eq!(store.source_status(&identity)?, None);
         let accepted = coverage(&identity, 1, b"coverage-1");
         assert_eq!(store.accept_validated_coverage(accepted.clone())?, 1);
         assert_eq!(store.meta()?.commit_revision, 1);
         let receipt = store.source_receipt(&identity)?.ok_or("receipt absent")?;
         assert_eq!(receipt.contiguous_cursor, 0);
         assert_eq!(receipt.coverage_revision, 1);
+        let status = store.source_status(&identity)?.ok_or("status absent")?;
+        assert_eq!(status.receipt, receipt);
+        assert_eq!(status.retained_event_count, 0);
+        assert_eq!(status.latest_coverage_report, Some(b"coverage-1".to_vec()));
         assert_eq!(store.accept_validated_coverage(accepted.clone())?, 1);
         assert_eq!(store.meta()?.commit_revision, 1);
 
@@ -967,6 +1030,17 @@ mod tests {
             .ok_or("receipt absent")?;
         assert_eq!(receipt.coverage_revision, 3);
         assert_eq!(receipt.contiguous_cursor, 0);
+        let status = reopened.source_status(&identity)?.ok_or("status absent")?;
+        assert_eq!(status.receipt, receipt);
+        assert_eq!(status.latest_coverage_report, Some(b"coverage-3".to_vec()));
+        {
+            let writer = reopened.writer()?;
+            writer.execute(
+                "UPDATE coverage SET report_sha256 = ? WHERE revision = 3",
+                params![vec![0_u8; 32]],
+            )?;
+        }
+        assert!(reopened.source_status(&identity).is_err());
         Ok(())
     }
 

@@ -5,6 +5,7 @@ use clap::{Parser, ValueEnum};
 #[derive(Clone, ValueEnum)]
 enum Case {
     OfflineExact,
+    StorageContract,
     ProfileRestart,
     ContextRoundtrip,
 }
@@ -24,6 +25,7 @@ async fn main() {
     let result = match cli.case {
         Case::OfflineExact => mithril_e2e::run_discovery_offline(&cli.output_directory)
             .map_err(Box::<dyn std::error::Error>::from),
+        Case::StorageContract => mithril_e2e::run_discovery_storage_contract(&cli.output_directory),
         Case::ProfileRestart => {
             mithril_e2e::DiscoveryQualificationRunner::new(cli.output_directory)
                 .profile_restart()
