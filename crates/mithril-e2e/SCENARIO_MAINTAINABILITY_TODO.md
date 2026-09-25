@@ -3091,7 +3091,9 @@ test does not close a row when its physical condition or an assertion changed.
         existing same-namespace restricted case passed in 33.75 seconds.
         Formatting, strict Clippy, 91 non-privileged tests, and JSON syntax
         passed.
-      - [ ] Pass the unchanged case under direct `runc`, then commit it.
+      - [x] Direct `runc` passed in 36.74 seconds with the same actor, policy,
+        and assertions through stock `runc` and the production OCI hook. The
+        existing same-namespace restricted case passed in 34.36 seconds.
       - [ ] Pass the unchanged case on Kubernetes, then commit it.
     - [ ] Qualify the approved receiver with the same physical transfer and
       distinct namespace evidence. Require the allowed Send, payload receipt,

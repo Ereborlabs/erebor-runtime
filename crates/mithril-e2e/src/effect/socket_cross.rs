@@ -5,7 +5,7 @@ use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = socket_cross_recovery]
 fn cross_namespace_socket_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("socket-cross")?;
