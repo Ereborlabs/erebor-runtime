@@ -3002,6 +3002,16 @@ test does not close a row when its physical condition or an assertion changed.
         socket-pass actor and policy. It observed both denied operations on
         one transferred socket and no forbidden payload.
       - [ ] Pass direct `runc` and commit it.
+        The exact direct-`runc` case returned `EPERM` from `pidfd_getfd`.
+        The live sender and receiver had the same UID and capability sets;
+        neither had a seccomp filter. The old lower-level probe allows
+        `PTRACE_ACCESS_18` for this transfer. The public policy rejects the
+        matching `Ptrace` `Allow` rule with `CFG_KUBERNETES_PROCESS_CONTROL`.
+        The source of `EPERM` is not yet proven. The Host result does not
+        qualify direct-`runc` or replace the old network probe.
+        Keep the old after-policy transfer check. Do not move the transfer
+        before policy activation or count another descriptor-transfer method
+        as this case without an approved policy decision.
       - [ ] Pass Kubernetes and commit it.
     - [ ] Qualify the approved receiver with the same physical transfer and
       distinct namespace evidence. Require the allowed Send, payload receipt,
