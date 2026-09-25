@@ -18,6 +18,8 @@ mod exception_once;
 #[cfg(test)]
 mod executable_memory;
 #[cfg(test)]
+mod file_bind;
+#[cfg(test)]
 mod file_effect;
 #[cfg(test)]
 mod file_mutation;

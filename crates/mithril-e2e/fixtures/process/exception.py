@@ -42,11 +42,34 @@ elif mode == "read":
     if sys.stdin.readline() != "read\n":
         raise RuntimeError("expected read")
     write("expired-result", str(open_errno(secret, os.O_RDONLY)))
-elif mode in ("symlink", "procfd"):
+elif mode in ("symlink", "procfd", "bind"):
     secret = Path("/tmp/mithril-observe-secret")
     secret.parent.mkdir(parents=True, exist_ok=True)
     secret.write_bytes(b"secret")
-    if mode == "symlink":
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+    if mode == "bind":
+        aliases = [work / f"bind-{index}" for index in (1, 2)]
+        for alias in aliases:
+            alias.mkdir()
+        libc.unshare.argtypes = [ctypes.c_int]
+        libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_void_p]
+        if libc.unshare(0x00020000) != 0:
+            raise OSError(ctypes.get_errno(), "unshare mount namespace")
+        if libc.mount(None, b"/", None, 16384 | 1 << 18, None) != 0:
+            raise OSError(ctypes.get_errno(), "make mounts private")
+        if libc.mount(os.fsencode(secret.parent), os.fsencode(secret.parent), None, 4096, None) != 0:
+            raise OSError(ctypes.get_errno(), "self-bind source")
+        for alias in aliases:
+            if libc.mount(os.fsencode(secret.parent), os.fsencode(alias), None, 4096, None) != 0:
+                raise OSError(ctypes.get_errno(), f"bind {alias}")
+        actions = [
+            ("base", secret),
+            ("confirm", secret),
+            ("first", aliases[0] / secret.name),
+            ("second", aliases[1] / secret.name),
+        ]
+    elif mode == "symlink":
         alias = Path("/tmp/mithril-observe-link")
         alias.symlink_to(secret)
         command = "link"
@@ -54,13 +77,12 @@ elif mode in ("symlink", "procfd"):
         held = os.open(secret, os.O_RDWR)
         alias = Path(f"/proc/self/fd/{held}")
         command = "fd"
-    libc = ctypes.CDLL(None, use_errno=True)
-    libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
     print("native-fixture-ready", flush=True)
-    actions = [("base", secret), ("confirm", secret)]
-    if mode == "procfd":
-        actions.extend((f"hf{number}", secret) for number in (6, 8, 9, 10))
-    actions.append((command, alias))
+    if mode != "bind":
+        actions = [("base", secret), ("confirm", secret)]
+        if mode == "procfd":
+            actions.extend((f"hf{number}", secret) for number in (6, 8, 9, 10))
+        actions.append((command, alias))
     for action, path in actions:
         if sys.stdin.readline() != f"{action}\n":
             raise RuntimeError(f"expected {action}")

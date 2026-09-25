@@ -1778,6 +1778,22 @@ test does not close a row when its physical condition or an assertion changed.
       Check the public policy boundary before another replacement attempt.
   - [ ] Replace both exact-secret bind-alias checks. Keep each live mount ID,
     device, inode, inode generation, and the shared composite authority.
+    - [ ] Start with Protect mode. Let the shared actor create two directory bind
+      mounts before Node starts. Let production Node recover the running actor
+      under the signed mount policy, then install the signed exact policy.
+      Require `EACCES` for the original and both aliases, three distinct
+      mount IDs, and equal device, inode, inode generation, exact-object key,
+      composite atom, and actor task cookie. Pass Host, direct `runc`, and
+      Kubernetes in order before deleting any legacy action.
+      - [x] Host passed in 34.75 seconds. The 72-line standard test used the
+        old self-bind plus two directory binds. The original and both aliases
+        returned `EACCES`; all three attributed exact results kept the same
+        file and composite authority. The three-test Host mount-alias
+        lifecycle passed together in 47.89 seconds.
+      - [ ] Pass direct `runc` and commit it.
+      - [ ] Pass Kubernetes and commit it.
+    - [ ] Repeat the alias check in Observe mode. Require successful opens
+      and attributed `WOULD_DENY` evidence before deleting the old block.
   - [ ] Replace the exact-secret mount-change checks. Keep the first decision
     after mutation, dirty view, replaced-path denial, and restored decision.
   - [ ] Remove the old exact control open only after these alias and mount
