@@ -9,10 +9,18 @@ use super::*;
 struct Corpus {
     version: u32,
     proof_kind: DiscoveryProofKindV1,
+    storage_binding: StorageBinding,
     recorded_oracle: serde_json::Value,
     operator_protocol: Vec<String>,
     cases: Vec<Case>,
     capabilities: Vec<Capability>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StorageBinding {
+    duckdb: String,
+    sqlparser: String,
 }
 
 #[derive(Deserialize)]
@@ -176,6 +184,14 @@ fn discovery_pilot_preserves_exact_counts_risk_and_replay() -> TestResult<()> {
     ))?;
     assert_eq!(corpus.version, 1);
     assert_eq!(corpus.proof_kind, DiscoveryProofKindV1::Synthetic);
+    assert_eq!(
+        corpus.storage_binding.duckdb,
+        crate::ANALYSIS_DUCKDB_BINDING_VERSION
+    );
+    assert_eq!(
+        corpus.storage_binding.sqlparser,
+        crate::ANALYSIS_SQLPARSER_VERSION
+    );
     assert!(corpus.recorded_oracle.is_object());
     assert_eq!(corpus.operator_protocol.len(), 6);
     assert_eq!(corpus.cases.len(), 21);
