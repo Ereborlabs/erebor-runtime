@@ -106,7 +106,7 @@ models; client compatibility measurements do not block the core release.
 
 Entry: qualified Mithril 6.2 intake/policy delivery and 6.3 telemetry contracts.
 Use their result records; this documentation change does not rerun their proof.
-Each row is a bounded deliverable with unit and mithril-e2e tests.
+Each row is a bounded deliverable. The required test level appears below.
 
 | Order | Phase | Deliverable and entry gate |
 | --- | --- | --- |
@@ -114,7 +114,7 @@ Each row is a bounded deliverable with unit and mithril-e2e tests.
 | 2 | [7.2 Data store](phase-7-2-data-store.md) | Durable intake, context records, commit revisions, retention, backup and upgrade; needs 7.1. |
 | 3 | [7.3 Query and follow](phase-7-3-query-and-follow.md) | Isolated SQL and commit-driven append/replace streams; needs 7.2. |
 | 4 | [Observability 1](../../araphor-observability/phase-1-contracts-and-backend.md), then [2](../../araphor-observability/phase-2-owned-capture.md) | Backend proof can run alongside 7.1–7.3. Capture integration requires 7.2 and backend proof. |
-| 5 | [Observability 3](../../araphor-observability/phase-3-cli-api-and-console.md) | Shared HTTPS, SQL/trace CLI and console views; needs 7.3 and Observability 2. |
+| 5 | [Observability 3](../../araphor-observability/phase-3-cli-api-and-console.md) | Shared protobuf gRPC, SQL/trace CLI, gRPC-Web console views, and old client-route retirement; needs 7.3 and Observability 2. |
 | 6 | [7.4 Profiles and context](phase-7-4-profiles-and-context.md) | Exact discovery, baseline differences and context; start after 7.2, close view/e2e work after 7.3. Can run alongside trace work. |
 | 7 | [7.5 Graphs and notifications](phase-7-5-graphs-findings-and-notifications.md) | Local packages, provenance, mandatory routes and authority records; needs 7.4. |
 | 8 | [7.6 Methods and preview](phase-7-6-methods-and-preview.md) | Deterministic recipes, typed suggestions, requirements and exact native preview; needs 7.3 and 7.5. |
@@ -133,6 +133,24 @@ and exception tools. Mithril 9 adds verified local/distributed response.
 Mithril 10 adds provider evidence/actions. Mithril 11 qualifies the complete
 release. Missing later owners remain Unsupported in Phase 7.
 
+## Test level by phase
+
+Component tests check each changed owner. Lightweight end-to-end tests call
+production owners without Kubernetes; run a physical case only where listed.
+
+| Phase | Component tests | End-to-end and physical tests |
+| --- | --- | --- |
+| 7.1 | Check schema bounds, exact derivation, DuckDB recovery and SQL isolation. | Run `offline-exact` and `storage-contract` through production owners; no physical case is required. |
+| 7.2 | Check transactions, receipts, retention, backup and upgrade failures. | Run `data-store-recovery` through Node mTLS, `data-store-upgrade` on fixtures and the paired physical storage/partition case. |
+| 7.3 | Check SQL admission, scope, worker isolation, follow frames and cursor limits. | Run `query-follow` against AnalysisStore and QueryOwner; physical qualification follows in 7.10. |
+| 7.4 | Check exact atoms, context selection, comparison and deterministic replay. | Run `context-roundtrip` and `profile-restart` from Node WAL through mTLS and DiscoveryOwner; physical qualification follows in 7.10. |
+| 7.5 | Check graph, finding, provenance and routing decisions under gaps and retries. | Run `graph-notification` through intake, graph and router owners, then run the paired physical incident case. |
+| 7.6 | Check method matches, suggestion validation and exact preview counterexamples. | Run `detection-context`, `proposal-preview` and `poisoned-window` through production owners; physical policy proof follows in 7.8 and 7.10. |
+| 7.7 | Check assessment citations, disclosure, abstention and grant rejection. | Run `assessment-loop` with a recorded agent through CLI and gRPC; no live model or physical effect is required. |
+| 7.8 | Check gRPC authorization, approval, publication and accessible UI states. | Run `review-publish` through production owners, browser gRPC-Web tests on built assets and the paired physical publication case. |
+| 7.9, if selected | Check placement, delegation, cursor and retry rules. | Run `remote-placement` with separate Control and data processes, then run its paired two-node physical case. |
+| 7.10 | Rerun component tests for every advertised capability. | Run the linked lightweight release case and its paired physical case; compare transitions and physical effects. |
+
 ## Acceptance and implementation status
 
 Status: **Not done** for this target design. Reuse source and tests that meet
@@ -150,7 +168,7 @@ replace a production transaction, authorization decision or execution owner.
 
 - [Engine design](engine-design.md): data, subscriptions, algorithms and failure behavior.
 - [Intelligence](local-intelligence.md): classification, model experiments and test selection.
-- [Console and API](console-and-api.md): shared routes, grants and review behavior.
+- [Console and API](console-and-api.md): shared RPCs, grants and review behavior.
 - [Verification](verification.md): case matrix, resource limits and release gates.
 - [Research](research-and-demand.md): source studies and demand.
 - [Manual acceptance](../manual-testing/phase-7-manual-acceptance.md): operator checks.

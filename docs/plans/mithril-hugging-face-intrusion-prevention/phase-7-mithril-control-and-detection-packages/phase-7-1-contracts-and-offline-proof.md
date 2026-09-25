@@ -41,13 +41,13 @@ Engineer runs storage proof
 3. Specify how existing `EvidenceIntakeOwner::receive_group` and
    `receive_coverage` map to one data transaction. Preserve authenticated
    identity, contiguous ACK, gap and retransmission rules. No generic public
-   Ingest route or producer SDK is added. The input is the existing Node
+   Ingest RPC or producer SDK is added. The input is the existing Node
    contract; only its durable destination changes in 7.2.
 4. Freeze `StorePosition(commit_revision, ordinal)`, store UUID/recovery epoch,
    relation revisions, processor progress and retained floors. Keep source
    cursors distinct. Freeze query `append`, `replace`, checkpoint, health,
    terminal and error frame schemas. A trace terminal result remains separate
-   from HTTP stream completion.
+   from gRPC stream closure.
 5. Qualify sqlparser-rs with DuckDbDialect and the closed binder. Pin the
    parser/engine pair; parsing alone is not semantic validation. Compare
    optimized extraction with full authorized-input evaluation in DuckDB.

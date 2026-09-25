@@ -49,10 +49,13 @@ Operator changes placement
 2. Add Embedded/Remote placement configuration. Remote mode must not open a
    local analysis DB. Keep policy/trust/approval, publication and TraceOwner
    dispatch in Control. Give NotificationRouter only its scoped sink credentials.
-3. Reuse ConsoleHttpOwner at the remote HTTPS endpoint. Reuse and qualify the
+3. Reuse `ClientGrpcOwner` at the remote TLS gRPC endpoint, with gRPC-Web for
+   browser clients. Reuse and qualify the
    --endpoint/profile selection from Observability 3; do not add another CLI
    selection mechanism or command tree. Both endpoints
-   accept the same SQL, trace, assessment and qualified mutation routes.
+   accept the same SQL, trace, assessment and qualified mutation RPCs.
+   `AraphorAdministrativeService` remains Control-only; the remote data
+   endpoint must not register administrative-exec or decommission methods.
    Direct SQL/analysis reads run locally; trace submit/cancel and authority
    mutations forward to Control without a user redirect or second command.
 4. Implement the canonical mTLS delegation contract in engine-design.md.
@@ -62,7 +65,7 @@ Operator changes placement
    Fail closed when authorization is unavailable. Control rechecks targets and
    approvals before effects. Internal domain operations accept evidence batches,
    context and trace transitions; no generic table CRUD or transaction RPC.
-   The data process must never call its public trace route to record a trace
+   The data process must never call its public trace RPC to record a trace
    result; use the private owner-qualified commit operation to avoid a loop.
 5. Preserve transaction request keys and exact payload digests across retries.
    Lost commit replies reconcile through receipts before ACK. Do not retry
@@ -74,7 +77,7 @@ Operator changes placement
    Reject deployments that configure both local and remote writers.
    Configure TLS, API audience, allowed origins and Control delegation peer for
    the remote listener. Reuse shared browser-session/CSRF checks. Do not expose
-   internal intake or delegation routes on the public listener.
+   internal intake or delegation RPCs on the public listener.
 7. Implement the stopped-writer transfer command in the data owner. Validate
    manifest, store UUID, schema, references and receipt/progress positions.
    Keep a recoverable source backup. An orchestration gate must stop the old
@@ -98,7 +101,7 @@ deduplication state with the original deadline. Notification delivery itself
 can repeat if the external sink lacks idempotency. Verify no local raw mirror.
 Revoke grants during a quiet stream, forge delegation, use a foreign tenant,
 and make Control authorization unavailable while data remains reachable.
-No remote route may grant wider access or conceal an unavailable action owner.
+No remote RPC may grant wider access or conceal an unavailable action owner.
 
 Test stopped-writer transfer, refusal while old writer remains active, schema
 mismatch, interrupted copy and older-backup restore with source loss. Require

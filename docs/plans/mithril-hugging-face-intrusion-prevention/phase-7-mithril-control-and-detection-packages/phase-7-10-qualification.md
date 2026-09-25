@@ -99,8 +99,8 @@ bounded scope before those increments; it cannot claim their physical results.
 7. Add deterministic discovery checks and UI checks to `.github/workflows/ci.yml`.
    Keep physical qualification in its existing environment-dependent lane.
    Record the supported source/policy/platform matrix and results here.
-8. Run disclosure and indirect-injection cases through CLI/HTTP and a recorded
-   external client. Verify exact returned fields, limits, revocation, and
+8. Run disclosure and indirect-injection cases through CLI/native gRPC, browser
+   gRPC-Web, and a recorded external client. Verify exact returned fields, limits, revocation, and
    fail-closed behavior before SQL evaluation. CI must not upload private traces.
    Measure live model quality only with an approved client and corpus.
 9. Map every advertised protection/response tool to the master standing
