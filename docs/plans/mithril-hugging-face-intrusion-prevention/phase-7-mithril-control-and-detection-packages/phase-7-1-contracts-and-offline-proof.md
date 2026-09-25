@@ -115,17 +115,20 @@ limits. The store has atomic event, coverage and receipt commits, and a
 separate-process post-commit crash test. The offline SQL proof covers admitted
 read shapes, safe fixed lower bounds and a manually run isolated worker.
 The durable position, progress and follow-frame fields are frozen in
-engine-design.md.
+engine-design.md. The pilot fixture freezes distinct workload IDs and
+non-overlapping time windows for its train, tune, held-out and forbidden cases.
 Control still uses its existing live evidence store; no Node ACK path changed.
 
-At code revision `a386393`, the workspace gate passed 11 `araphor-data` tests
+At code revision `ce5f672`, the workspace gate passed 11 `araphor-data` tests
 with 2 ignored. The tests reject schema versions 0 and 2 for the version-1
 store and cancel a long-running in-memory DuckDB query. This proves binding
 cancellation, not QueryOwner deadline wiring. The isolated worker test passed
-with `--ignored`. The `offline-exact` e2e case passed at
-`/tmp/araphor-offline.quxcRq/final/result.json`. The repository Rust CI script
-passed formatting, workspace check, strict lint and workspace all-targets
-tests on that code revision.
+with `--ignored`. The pilot corpus test passed with distinct workload/time
+splits. The `offline-exact` e2e case passed at
+`/tmp/araphor-corpus.2xySiD/offline-exact/result.json`; it reports zero live
+lookups and no production authority. The repository Rust CI script passed
+formatting, workspace check, strict lint and workspace all-targets tests on
+that code revision.
 
 The `storage-contract` e2e case, a production intake-path proof, bounded
 extraction measurements and executable schema/stream contract checks are not
