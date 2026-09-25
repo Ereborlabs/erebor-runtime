@@ -3007,8 +3007,12 @@ test does not close a row when its physical condition or an assertion changed.
         neither had a seccomp filter. The old lower-level probe allows
         `PTRACE_ACCESS_18` for this transfer. The public policy rejects the
         matching `Ptrace` `Allow` rule with `CFG_KUBERNETES_PROCESS_CONTROL`.
-        The source of `EPERM` is not yet proven. The Host result does not
-        qualify direct-`runc` or replace the old network probe.
+        A focused rerun observed `Privilege/Ptrace`,
+        `UNSUPPORTED_OBJECT`, and `-EACCES` in runc. The same Host action
+        observed `RUNTIME_ENTRY_INFRASTRUCTURE` and succeeded. Host used
+        the runtime bootstrap exception, not an explicit policy allowance.
+        The Host result does not qualify direct-`runc` or replace the old
+        network probe.
         Keep the old after-policy transfer check. Do not move the transfer
         before policy activation or count another descriptor-transfer method
         as this case without an approved policy decision.
