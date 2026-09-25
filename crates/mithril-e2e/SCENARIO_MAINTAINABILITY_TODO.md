@@ -3124,7 +3124,13 @@ test does not close a row when its physical condition or an assertion changed.
         The existing same-namespace approved case passed in 31.43 seconds.
         The cross-namespace denied case passed in 31.52 seconds. Formatting,
         strict Mithril E2E Clippy, JSON syntax, and whitespace checks passed.
-      - [ ] Pass direct `runc` and commit it.
+      - [x] Pass direct `runc` and commit it. The unchanged test passed in
+        31.29 seconds with stock `runc` and the production OCI hook. Move this
+        recovery case into the existing socket-recovery lifecycle. The exact
+        Host and direct-`runc` cases passed again in 29.93 and 30.12 seconds.
+        Both socket-recovery tests then passed together on Host in 53.10
+        seconds and direct `runc` in 54.88 seconds. This lifecycle does not
+        stop the Node shared by unrelated identity tests.
       - [ ] Pass Kubernetes and commit it.
   - [ ] Replace shared-socket-holder fencing. Keep both holders denied after
     the response floor, no received bytes, and the shared reference alive
