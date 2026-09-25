@@ -106,3 +106,24 @@ for this recorded slice with nonzero test counts and result digests. A binding
 that fails durability or isolation blocks live integration. Do not substitute
 another backend without approval. No production intake cutover, public API,
 model runtime, or policy publication is part of this phase.
+
+## Implementation result
+
+**Not done.** The current code puts AnalysisStore and SQL admission in
+`araphor-data`. Control re-exports the unchanged source identity and intake
+limits. The store has atomic event, coverage and receipt commits, and a
+separate-process post-commit crash test. The offline SQL proof covers admitted
+read shapes, safe fixed lower bounds and a manually run isolated worker.
+Control still uses its existing live evidence store; no Node ACK path changed.
+
+At code revision `8dea79e7`, `cargo test -p araphor-data` passed 9 tests with
+2 ignored. `cargo test -p mithril-control` passed 276 tests with 2 ignored.
+The isolated worker test passed with `--ignored`. The `offline-exact` e2e case
+passed at `/tmp/araphor-offline.quxcRq/result/result.json`. The repository
+Rust CI script passed formatting, workspace check, strict lint and workspace
+all-targets tests on that code revision.
+
+The `storage-contract` e2e case, a production intake-path proof, bounded
+extraction measurements and the remaining schema/stream contract checks are
+not complete. Resolve whether that e2e case belongs before or with the live
+intake cutover before changing the intake owner or the completion gate.
