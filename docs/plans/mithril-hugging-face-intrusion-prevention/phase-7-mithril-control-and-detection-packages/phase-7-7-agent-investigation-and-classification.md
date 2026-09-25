@@ -55,8 +55,8 @@ inputs first. Require Observability 3 before client/model evaluation through
 the real SQL/trace CLI. The harness calls supported owner methods; it must not
 reproduce query, capture, or assessment logic.
 
-Status: **Not done**. Observability 3 supplies authenticated query/trace APIs.
-This phase adds `POST /v1/discovery/assessments` to that same listener and a
+Status: **Not done**. Observability 3 supplies authenticated query/trace gRPC.
+This phase adds `AraphorClientService.SubmitAssessment` to that same service and a
 thin assessment client operation in the existing CLI/client tree. It must be
 usable by the evaluated agent now. Phase 7.8 adds review/publication transport;
 no second listener, model gateway or MCP dependency is required.
@@ -169,7 +169,7 @@ It can complete the mandatory Araphor client/assessment contract.
 ### End-to-end deliverable
 
 Add `assessment-loop` to the existing discovery e2e binary. A recorded agent
-uses production HTTP and query/trace CLI, cites server receipts, submits a report,
+uses production gRPC and query/trace CLI, cites server receipts, submits a report,
 then exits. Another client reads the same report and missing checks. Test forged
 citations, irrelevant support, stale targets, indirect injection, export
 revocation, model refusal and unsupported response. Do not replace owner

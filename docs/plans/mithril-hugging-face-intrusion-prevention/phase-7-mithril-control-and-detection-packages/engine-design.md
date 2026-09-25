@@ -78,8 +78,8 @@ replace them. A routine workload review starts without a finding; a later
 finding links to it only through qualified evidence.
 
 One shared API implementation applies current grants and invokes the responsible
-owner. Control and the optional remote deployment expose the same routes.
-CLI, console and an optional MCP adapter use these routes, not parallel business
+owner. Control and the optional remote deployment expose the same protobuf RPCs.
+CLI, console and an optional MCP adapter use these RPCs, not parallel business
 implementations. Remote access follows the delegation contract below.
 Use one AnalysisStore for durable data and analysis. Keep control authority in
 ControlStore; export versioned policy facts through the policy owner's read API.
@@ -107,7 +107,7 @@ approval; approval is not an applied effect; a model conclusion is not closure.
 ### Local defender and mandatory escalation
 
 A local defender runs an existing agent runtime against an operator-managed
-model and the same scoped CLI/HTTP contracts. The external client owns model
+model and the same scoped CLI/gRPC contracts. The external client owns model
 credentials and inference. It receives no direct DB or Node credentials.
 Araphor does not train, load, host, select, update or roll back models.
 Model placement changes the disclosure profile, not
@@ -746,7 +746,7 @@ dimensions those buckets do not retain.
 
 ### Commit-driven follow
 
-Follow is one long-lived HTTP response with typed JSONL frames. QueryOwner
+Follow is one server-streaming gRPC call with typed protobuf frames. QueryOwner
 selects the result operation and declares it in the opening metadata:
 
 - `append`: projections and fixed predicates over immutable `events` or
@@ -815,7 +815,7 @@ delivery is at least once, not exactly once.
 A cursor binds SQL/parameters, target snapshot, current scope, disclosure,
 view version, store UUID/epoch and position. It grants no permission and pins
 no history. Changed bindings reject. A lost retained append range returns
-410 with authorized missing bounds. Replacement resumption promises current
+gRPC `OUT_OF_RANGE` with authorized missing bounds. Replacement resumption promises current
 state, not all intermediate states; metadata states this contract. Query errors
 are error frames followed by stream close, never empty successful results.
 Keep at most one outgoing frame per reader; on a 10-second blocked write,
@@ -827,10 +827,11 @@ then batches on the same stream. Durable positions, bounded replacement
 semantics, failure propagation and access checks are Araphor contracts.
 DuckDB executes SQL; Mangroves and DataFusion are not runtime dependencies.
 
-The shared JSONL envelope uses application/x-ndjson. Each complete JSON object
-is one frame; metadata precedes data. Frame operations are append, replace,
-checkpoint, health, error and terminal. Trace-specific payloads follow the
-observability contract. HTTP EOF does not prove trace cleanup.
+The shared protobuf stream envelope has one typed message per frame. Metadata
+precedes data. Frame operations are append, replace, checkpoint, health, error
+and terminal. Trace-specific payloads follow the observability contract.
+The CLI can render these frames as JSONL on stdout. A closed gRPC stream does
+not prove trace cleanup.
 
 ### Query isolation
 
@@ -889,11 +890,11 @@ Graph/finding/progress commits and notification recovery do not cross RPC.
 Control retains policy/trust/approval authority, source publication, TraceOwner,
 Node authentication and dispatch. External agents retain model execution.
 
-Both Control and the remote deployment can expose the same ConsoleHttpOwner
-routes. The CLI selects one HTTPS endpoint through --endpoint or its configured
+Both Control and the remote deployment can expose the same `ClientGrpcOwner`
+service. The CLI selects one TLS gRPC endpoint through --endpoint or its configured
 profile. SQL, trace, assessment, publication and later qualified operations
 keep the same schema, result, idempotency and permission contract. The console
-can use either endpoint. No redirect, second user command, remote-specific
+can use either endpoint through gRPC-Web. No redirect, second user command, remote-specific
 tool set or privileged generic execute route is required.
 
 The remote endpoint validates TLS and the client's service token or browser
@@ -908,7 +909,7 @@ Queries, discovery drafts and notification acknowledgements run at their data
 owners. Trace submit/cancel, publication, and later exception/response commands
 go to the existing Control owner. That owner rechecks current grants, exact
 targets and approvals. Preserve the original request key and bytes across both
-routes. Trace reads/output come from the shared store. The CLI follows them
+placements. Trace reads/output come from the shared store. The CLI follows them
 automatically at the selected endpoint. No Node credential, signing key or
 general Kubernetes mutation credential moves to the data process. Only
 NotificationRouter receives its configured, scoped sink credentials; SQL workers
@@ -916,7 +917,7 @@ receive none.
 
 Node evidence and output still enter authenticated Control intake. Forward
 bounded batches; acknowledge only the remote durable receipt. Use private
-domain operations for accepted evidence, owner-qualified context, trace
+protobuf gRPC domain operations for accepted evidence, owner-qualified context, trace
 intent/output/result, and shared query/discovery requests. These operations
 validate schema, scope and owner before one local transaction. Do not export
 table CRUD, SQL writes or begin/commit RPCs. TraceOwner waits for durable intent

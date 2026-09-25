@@ -22,8 +22,9 @@ changes or physical reruns. Automated harnesses must not read `examples/`.
 
 The [observability phases](../../araphor-observability/README.md#implementation-order-and-ownership)
 own `OBS-*` CLI, capture, API, and optional CRD cases. The combined release
-reruns applicable cases on its source revision. HTTP and the foreground CLI
-are required client paths; MCP is optional and has checks only when delivered.
+reruns applicable cases on its source revision. Native gRPC, browser
+gRPC-Web, and the foreground CLI are required client paths. MCP is optional
+and has checks only when delivered.
 
 | ID | Cases | Required result |
 | --- | --- | --- |
@@ -52,7 +53,7 @@ are required client paths; MCP is optional and has checks only when delivered.
 | `DE-PACKET` | Stale owner document; conflicting context; missing source; future review; wrong lifetime; foreign handle; oversized text; omitted counterevidence; expired evidence; changed runbook | Deterministic selection, explicit omissions/conflicts, scoped provenance, and frozen revisions. No future-label leakage or current-state repair of history. |
 | `DE-DETECT` | Exact predicate; partial positive; incomplete negative; count threshold; changed revision; same-name different lifetime; unsupported ordering; four-step sequence; invalid model-drafted spec | Matched/NotMatched/Unknown with field-level reasons and replayable evidence. No negative claim without required coverage, no temporal match reported as causality, and no detector auto-install. |
 | `DE-ASSESS` | Benign positive; configuration fault; attack; insufficient context; valid-but-irrelevant citation; fabricated evidence; conflicting hypotheses; unsupported response; stale policy draft | Separate match, classification, impact, requirements, and suggestion validation. Preserve counterevidence. No automatic closure, exception, approval, or effect. |
-| `DE-AGENT` | CLI/HTTP equivalent reads; HTTP drafts; optional MCP parity; service audience; repeated calls; role escalation; injection; revoked grant; cancelled follow; scope change; client-reported model/cost; request quota N/N+1 | Same owner results, current grants, bounded reads/reports, no self-approval or unauthorized effects. External client state is not a Control-owned run or verified model trace. |
+| `DE-AGENT` | CLI/native gRPC/gRPC-Web equivalent reads; gRPC drafts; optional MCP parity; service audience; repeated calls; role escalation; injection; revoked grant; cancelled follow; scope change; client-reported model/cost; request quota N/N+1 | Same owner results, current grants, bounded reads/reports, no self-approval or unauthorized effects. External client state is not a Control-owned run or verified model trace. |
 | `DE-DISCLOSE` | Unapproved recipient/purpose; secret-bearing path; hidden-column predicate; foreign-row count; pseudonym join; redaction failure; revoked export during wait; changed export policy; external-client onward disclosure | Only authorized/redacted data enters query evaluation and leaves Araphor. Failure sends no original payload. Revocation stops later reads; onward use and past-copy deletion are not claimed enforceable. |
 | `DE-QUERY` | Read-only syntax escape; nested forbidden function; catalog/field leak; file/network/extension access; recursive query; expensive join; worker crash/hang; projection overflow; output limit; incomplete negative; stale view; sqlparser/DuckDB agreement; SQL-derived window; OR/CTE/self-join counterexamples; exact timestamps and nulls | Isolated bounded execution or explicit rejection. Scope applies before evaluation. Proven AST bounds return the same result as full authorized-input evaluation; unsafe narrowing is not applied. Aggregate input is never silently truncated. No SQL result becomes policy authority or a complete absence claim. |
 | `DE-FOLLOW` | Initial-snapshot race; empty predicate; full frame; retry; lost/coalesced wake; unrelated commit; late correction; restart; expiry; scope/schema change; slow client; aggregate replacement; time-window expiry without traffic | No skipped retained append row. Complete replace equals a normal query at that revision. One active evaluation, bounded frames, explicit errors and revocation. No polling job API or summed replacement counts. |
@@ -181,7 +182,7 @@ Queries that time out return a typed failure, not an incomplete count.
 
 Proposed interactive gate: a 10,000-atom supported preview completes within
 5 seconds at p95 on the declared host. The API returns the proposal's Pending revision and
-does not hold an HTTP request open for all work. Query reads the result. This is a pilot target only.
+does not hold a gRPC call open for all work. Query reads the result. This is a pilot target only.
 Record cold and warm runs separately; do not exclude failures or model startup.
 
 Run primary evidence and rollout workloads concurrently. Compare their latency
@@ -248,7 +249,7 @@ acknowledgement, watch interval, and late branches. Agent and console must
 resolve the same references through the same API. These are linked existing
 owner records, not another durable workflow database.
 
-Core acceptance uses a recorded external client through production CLI/HTTP.
+Core acceptance uses a recorded external client through production CLI/gRPC.
 No model, provider credential or inference runtime is installed in Araphor.
 Only an advertised local-agent compatibility claim requires the operator's
 actual self-hosted configuration, restricted egress and recorded observations.
@@ -325,13 +326,13 @@ Use external clock/runtime/network doubles only; call production owner APIs.
 | 7.4 | discovery_derivation_, discovery_context_, discovery_comparison_ | context-roundtrip; profile-restart |
 | 7.5 | control_graph_, control_notification_, control_authority_ | graph-notification |
 | 7.6 | discovery_detection_, discovery_proposal_, discovery_suggestion_ | detection-context; proposal-preview; poisoned-window |
-| 7.7 | discovery_assessment_, discovery_disclosure_, assessment HTTP validation | assessment-loop |
-| 7.8 | discovery_http_, discovery_publish_, UI review tests | review-publish |
+| 7.7 | discovery_assessment_, discovery_disclosure_, assessment gRPC validation | assessment-loop |
+| 7.8 | discovery_grpc_, discovery_publish_, UI review tests | review-publish |
 | 7.9 | remote delegation, request identity, placement/transfer tests | remote-placement |
 | 7.10 | full relevant crate suites | all for the frozen capability set; paired physical harness |
 | Observability 1 | observability_backend_ | backend-lifecycle; real backend pair |
 | Observability 2 | observability_target_, observability_recovery_, measurement validation | owned-capture; existing owned/pods/disk-full physical pairs |
-| Observability 3 | observability_cli_, observability_http_, UI stream tests | query-trace-client |
+| Observability 3 | observability_cli_, observability_grpc_, UI stream tests | query-trace-client |
 | Observability 4 | observability_crd_ | trace-crd; physical Kubernetes pair |
 
 Keep discovery cases in `src/discovery/` and their entry point in

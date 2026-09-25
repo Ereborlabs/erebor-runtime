@@ -97,6 +97,11 @@ proof vocabulary in architecture Chapters 4, 22-25, 31, and 37.
 - Tetragon, KubeArmor, Meta BpfJailer, and the independent Jailer are pinned
   learning/source inputs, not hidden product daemons or automatic dependencies.
 - Direct TLS remains direct. Optional L7 mediation is separately allocated.
+- Araphor-owned client and service operations use typed protobuf gRPC. Native
+  clients use gRPC over TLS; the browser uses gRPC-Web on the same owner.
+  Do not add or retain JSON/HTTP business routes as a parallel API. Browser
+  assets, OIDC redirects, and Kubernetes webhooks remain HTTPS because those
+  external protocols require it. They do not form a parallel client API.
 - Seccomp is not a Version-1 dependency. It is evaluated only in Phase 12 and
   is added only after its compatibility and performance gate passes.
 - Every unsupported hook, identity, source gap, overflow, or unverified result

@@ -233,8 +233,10 @@ For example: `Preview protection` and `Save local draft`. It must not show
 Follow the [combined implementation order](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/README.md#combined-implementation-order).
 Start these fixture phases after Phase 7.1 freezes the shared records.
 Complete them in order alongside the Phase 7 backend subphases. Phase 7.8 then
-connects the same screens to shared HTTP owner contracts; it does not repeat this
-shell implementation. Phase 7.10 qualifies the first live workflow.
+connects the same screens to shared protobuf gRPC-Web owner contracts; it does
+not repeat this shell implementation. Browser data reads and mutations do not
+use JSON/HTTP routes. Static assets and login redirects still use HTTPS.
+Phase 7.10 qualifies the first live workflow.
 Mithril 8–10 own later exception, response, and provider UI integration and
 their tests. Fixture controls cannot enable those capabilities early.
 
