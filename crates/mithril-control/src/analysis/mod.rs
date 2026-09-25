@@ -4,15 +4,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use duckdb::{params, Config, Connection, OptionalExt as _};
+use prost::Message as _;
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 use uuid::Uuid;
 
 use crate::error::{AnalysisDatabaseSnafu, AnalysisStateSnafu, IoSnafu, JsonSnafu};
 use crate::{
-    DiscoveryDigestV1, EvidenceBatchInputV1, EvidenceIntakeIdentityV1, EvidenceStoreOutcomeV1,
-    Result, MAX_EVIDENCE_BATCH_RECORDS, MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES,
-    MAX_PENDING_EVIDENCE_RECORDS,
+    CoverageReportInputV1, DiscoveryDigestV1, EvidenceBatchInputV1, EvidenceIntakeIdentityV1,
+    EvidenceStoreOutcomeV1, Result, MAX_EVIDENCE_BATCH_RECORDS, MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES,
+    MAX_EVIDENCE_GRPC_MESSAGE_BYTES, MAX_PENDING_EVIDENCE_RECORDS,
 };
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.4.4";
@@ -182,6 +183,16 @@ impl AnalysisStore {
                     commit_revision UBIGINT NOT NULL,
                     ordinal UINTEGER NOT NULL,
                     PRIMARY KEY (stream_key, durable_cursor)
+                );
+                CREATE TABLE IF NOT EXISTS coverage (
+                    stream_key BLOB NOT NULL,
+                    tenant_id BLOB NOT NULL,
+                    revision UBIGINT NOT NULL,
+                    report BLOB NOT NULL,
+                    report_sha256 BLOB NOT NULL,
+                    commit_revision UBIGINT NOT NULL,
+                    ordinal UINTEGER NOT NULL,
+                    PRIMARY KEY (stream_key, revision)
                 );",
             )
             .context(AnalysisDatabaseSnafu {
@@ -400,6 +411,124 @@ impl AnalysisStore {
     }
 
     #[allow(dead_code, reason = "offline proof precedes live intake cutover")]
+    pub(crate) fn accept_validated_coverage(&self, input: CoverageReportInputV1) -> Result<u64> {
+        let identity = &input.identity;
+        let report = &input.report;
+        if report.source_id.as_slice() != identity.source_id
+            || report.source_epoch != identity.source_epoch
+            || report.revision == 0
+            || report.encoded_len() > MAX_EVIDENCE_GRPC_MESSAGE_BYTES
+        {
+            return self.reject("the validated coverage identity or bounds are invalid");
+        }
+        let bytes = report.encode_to_vec();
+        let key = DiscoveryDigestV1::of(identity)?.0;
+        let mut writer = self.writer()?;
+        let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
+            operation: "begin coverage",
+        })?;
+        let previous = Self::read_receipt_from(&transaction, &self.root, identity, &key)?;
+        if previous
+            .as_ref()
+            .is_some_and(|receipt| receipt.cpu_id != report.cpu_id)
+        {
+            return self.reject("coverage changed the bound evidence CPU identity");
+        }
+        let current_revision = previous
+            .as_ref()
+            .map_or(0, |receipt| receipt.coverage_revision);
+        if report.revision <= current_revision {
+            if report.revision == current_revision {
+                let existing: Option<Vec<u8>> = transaction
+                    .query_row(
+                        "SELECT report FROM coverage WHERE stream_key = ? AND revision = ?",
+                        params![key.as_slice(), report.revision],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read duplicate coverage",
+                    })?;
+                if existing.as_deref() == Some(bytes.as_slice()) {
+                    return Ok(current_revision);
+                }
+            }
+            return self.reject("coverage evidence is stale or has conflicting content");
+        }
+        let revision = Self::read_meta_from(&transaction, &self.root.join("analysis.duckdb"))?
+            .commit_revision
+            .checked_add(1)
+            .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
+        let digest: [u8; 32] = Sha256::digest(&bytes).into();
+        transaction
+            .execute(
+                "INSERT INTO coverage VALUES (?, ?, ?, ?, ?, ?, 0)",
+                params![
+                    key.as_slice(),
+                    identity.tenant_id.as_slice(),
+                    report.revision,
+                    bytes.as_slice(),
+                    digest.as_slice(),
+                    revision,
+                ],
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "insert coverage",
+            })?;
+        if previous.is_some() {
+            transaction
+                .execute(
+                    "UPDATE source_receipts SET coverage_revision = ? WHERE stream_key = ?",
+                    params![report.revision, key.as_slice()],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "advance coverage receipt",
+                })?;
+        } else {
+            let identity_json = serde_json::to_string(identity).context(JsonSnafu {
+                path: self.root.join("analysis.duckdb"),
+            })?;
+            transaction
+                .execute(
+                    "INSERT INTO source_receipts VALUES (?, ?, ?, ?, 0, ?, 0)",
+                    params![
+                        key.as_slice(),
+                        identity_json,
+                        identity.tenant_id.as_slice(),
+                        report.cpu_id,
+                        report.revision,
+                    ],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "insert coverage receipt",
+                })?;
+        }
+        for relation in ["coverage", "source_receipts"] {
+            transaction
+                .execute(
+                    "INSERT INTO relation_revisions VALUES (?, ?)
+                     ON CONFLICT (relation_name) DO UPDATE SET last_changed_revision = EXCLUDED.last_changed_revision",
+                    params![relation, revision],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "advance relation revision",
+                })?;
+        }
+        transaction
+            .execute(
+                "UPDATE store_meta SET commit_revision = ? WHERE singleton = true",
+                params![revision],
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "advance store revision",
+            })?;
+        transaction.commit().context(AnalysisDatabaseSnafu {
+            operation: "commit coverage",
+        })?;
+        Ok(report.revision)
+    }
+
+    #[allow(dead_code, reason = "offline proof precedes live intake cutover")]
     fn validate_batch(
         &self,
         identity: &EvidenceIntakeIdentityV1,
@@ -561,7 +690,7 @@ impl AnalysisStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DiscoveryInputManifestV1;
+    use crate::{CoverageCounters, CoverageInterval, CoverageReport, DiscoveryInputManifestV1};
 
     #[test]
     fn analysis_store_identity_and_rollback_survive_reopen(
@@ -742,6 +871,78 @@ mod tests {
                 .contiguous_cursor,
             4
         );
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_store_coverage_receipt_is_atomic_and_idempotent(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let input = DiscoveryInputManifestV1::from_json(include_bytes!(
+            "../../../mithril-e2e/fixtures/discovery/manifest.json"
+        ))?;
+        let identity = input.records[0].id.stream.clone();
+        let report = CoverageReport {
+            source_id: identity.source_id.to_vec(),
+            source_epoch: identity.source_epoch,
+            revision: 1,
+            intervals: vec![CoverageInterval {
+                interval_id: vec![1; 16],
+                source_epoch: identity.source_epoch,
+                revision: 1,
+                state: "COMPLETE".to_owned(),
+                first_sequence: 1,
+                last_sequence: Some(3),
+                opening_counters: Some(CoverageCounters::default()),
+                closing_counters: Some(CoverageCounters {
+                    attempted: 3,
+                    requested: 3,
+                    emitted: 3,
+                    next_sequence: 4,
+                    ..CoverageCounters::default()
+                }),
+                current: true,
+                ..CoverageInterval::default()
+            }],
+            ..CoverageReport::default()
+        };
+        let accepted = CoverageReportInputV1 {
+            identity: identity.clone(),
+            report: report.clone(),
+        };
+        assert_eq!(store.accept_validated_coverage(accepted.clone())?, 1);
+        assert_eq!(store.meta()?.commit_revision, 1);
+        let receipt = store.source_receipt(&identity)?.ok_or("receipt absent")?;
+        assert_eq!(receipt.contiguous_cursor, 0);
+        assert_eq!(receipt.coverage_revision, 1);
+        assert_eq!(store.accept_validated_coverage(accepted.clone())?, 1);
+        assert_eq!(store.meta()?.commit_revision, 1);
+
+        let mut conflicting = accepted.clone();
+        conflicting.report.intervals[0].state = "GAPPED".to_owned();
+        assert!(store.accept_validated_coverage(conflicting).is_err());
+        assert_eq!(store.meta()?.commit_revision, 1);
+
+        let mut newer = accepted.clone();
+        newer.report.revision = 3;
+        newer.report.intervals[0].revision = 3;
+        assert_eq!(store.accept_validated_coverage(newer)?, 3);
+        assert_eq!(store.meta()?.commit_revision, 2);
+        let mut stale = accepted;
+        stale.report.revision = 2;
+        stale.report.intervals[0].revision = 2;
+        assert!(store.accept_validated_coverage(stale).is_err());
+        assert_eq!(store.meta()?.commit_revision, 2);
+        drop(store);
+        let reopened = AnalysisStore::open(&root)?;
+        assert_eq!(reopened.meta()?.commit_revision, 2);
+        let receipt = reopened
+            .source_receipt(&identity)?
+            .ok_or("receipt absent")?;
+        assert_eq!(receipt.coverage_revision, 3);
+        assert_eq!(receipt.contiguous_cursor, 0);
         Ok(())
     }
 }
