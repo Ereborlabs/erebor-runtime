@@ -21,5 +21,6 @@ fn runtime_gate_fails_closed<P: Platform>() -> TestResult<()> {
     let message = denied.to_string();
     assert!(message.contains("DENY_NODE_UNAVAILABLE"), "{message}");
     assert!(message.contains("runtime.sock"), "{message}");
+    assert!(!env.work().join("ready").exists(), "the actor ran");
     env.stop()
 }
