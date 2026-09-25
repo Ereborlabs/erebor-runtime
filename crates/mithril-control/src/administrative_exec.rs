@@ -1203,8 +1203,14 @@ fn approval_error(reason: impl Into<String>) -> crate::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{credential_authentication_is_open, valid_request, ApprovalRecordState};
-    use crate::AdministrativeExecRequestV1;
+    use super::{
+        credential_authentication_is_open, valid_request, AdministrativeApprovalConfigV1,
+        AdministrativeApprovalOwner, ApprovalRecord, ApprovalRecordState,
+    };
+    use crate::{
+        AdministrativeExecRequestV1, AdministrativeExecResolution, ControlPlane, TrustGenerationV1,
+    };
+    use erebor_interceptor_abi::Id128V1;
 
     #[test]
     fn administrative_credential_stays_open_for_the_committed_admission() {
@@ -1223,6 +1229,74 @@ mod tests {
         assert!(!credential_authentication_is_open(
             &ApprovalRecordState::Closed
         ));
+    }
+
+    #[tokio::test]
+    async fn mismatch_waits_for_admission() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let key = dir.path().join("key.hex");
+        std::fs::write(&key, "07".repeat(32))?;
+        let config = AdministrativeApprovalConfigV1 {
+            state_directory: dir.path().join("state"),
+            tenant_id: "11111111-1111-4111-8111-111111111111".into(),
+            cluster_uid: "22222222-2222-4222-8222-222222222222".into(),
+            trust_domain_id: "33333333-3333-4333-8333-333333333333".into(),
+            issuer_id: "44444444-4444-4444-8444-444444444444".into(),
+            key_id: "test-key".into(),
+            private_key_path: key,
+            sequence_epoch: 1,
+            authorization_lifetime_seconds: 120,
+        };
+        let trust = TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: "0".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
+        };
+        let owner = AdministrativeApprovalOwner::load(&config, ControlPlane::new(vec![], trust))?;
+        let id = Id128V1::new(1, 2);
+        let argv = vec![b"sleep".to_vec(), b"0.5".to_vec()];
+        let resolution = AdministrativeExecResolution {
+            namespace: b"test".to_vec(),
+            pod_uid: b"pod".to_vec(),
+            container_name: b"worker".to_vec(),
+            full_container_id: b"container".to_vec(),
+            argv: argv.clone(),
+            approved_role_id: "admin".into(),
+            ..Default::default()
+        };
+        owner.state.lock().unwrap().approvals.insert(
+            id,
+            ApprovalRecord {
+                requester_principal_id: id,
+                node_id: "node".into(),
+                expires_at_utc_ns: i64::MAX,
+                proof_id: id,
+                claim_slot_id: id,
+                body_sha256: [0; 32],
+                signed_intent: Vec::new(),
+                resolution,
+                state: ApprovalRecordState::Authenticated,
+            },
+        );
+        let target = owner.admission_target(
+            id,
+            id,
+            vec![1],
+            b"test".to_vec(),
+            b"pod".to_vec(),
+            b"worker".to_vec(),
+            b"container".to_vec(),
+            vec![b"sleep".to_vec(), b"1".to_vec()],
+            0,
+        )?;
+        let error = owner.admit(id, target).await.unwrap_err();
+        assert!(error.to_string().contains("admission request differs"));
+        assert!(matches!(
+            owner.state.lock().unwrap().approvals[&id].state,
+            ApprovalRecordState::Authenticated
+        ));
+        Ok(())
     }
 
     #[test]

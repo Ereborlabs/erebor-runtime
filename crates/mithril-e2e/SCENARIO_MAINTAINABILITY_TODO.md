@@ -3641,6 +3641,14 @@ setup, production actions, assertions, and focused test.
     reconcile the consumed slot while the test reads the task. The explicit
     `Consumed` assertion passed on Host, direct `runc`, and Kubernetes. The
     shared direct-`runc` order also passed the three administrative cases.
+  - [ ] Replace the transient slot read with the durable approved-task
+    classification. Node can retire a consumed slot before the test reads it.
+    Kubernetes issues a credential at approval time and arms Node only after
+    an exact CONNECT admission. A mismatched CONNECT must leave no slot to
+    consume. Keep the approved role, nonzero proof and claim IDs, argv-chunk
+    cleanup, and replay denial. The Control owner mismatch test and the exact
+    Host and stock-`runc` cases pass. Recheck Kubernetes and the complete
+    platform lanes before marking this item done.
   - [x] Keep ordinary Kubernetes `pods/exec` tasks in the restricted external
     role. Invoke the Control admission webhook only for the trusted Mithril
     approval group. A matching armed slot can then select the approved role.
