@@ -1794,7 +1794,11 @@ test does not close a row when its physical condition or an assertion changed.
         and assertions through stock `runc` and the production OCI hook. All
         three direct-`runc` mount-alias lifecycle tests passed in 58.99
         seconds together.
-      - [ ] Pass Kubernetes and commit it.
+      - [x] Kubernetes passed in 77.79 seconds with the same actor, policy,
+        and assertions. All three Kubernetes mount-alias lifecycle tests
+        passed together in 121.25 seconds. The first exact attempt stopped
+        at the image preflight; the retained K3s actor image was restored
+        from its verified archive before rerunning the unchanged test.
     - [ ] Repeat the alias check in Observe mode. Require successful opens
       and attributed `WOULD_DENY` evidence before deleting the old block.
   - [ ] Replace the exact-secret mount-change checks. Keep the first decision
