@@ -829,8 +829,12 @@ count as maintainability migrations.
     2026-09-15.
 - [ ] Change each platform launcher to invoke one lifecycle-platform suffix
   per process with `--test-threads=1`. Do not list scenarios in the launcher.
-  - [x] The Host VM launcher invokes `identity_host` once. It does not list PID
-    reuse and TID reuse as separate processes.
+  - [x] The Host VM launcher reads lifecycle suffixes from the standard Rust
+    test binary and runs each suffix in one process. The current binary has
+    33 Host lifecycle names. The 32 groups outside `identity_host` passed in
+    the retained VM; `identity_host` passed earlier with the same Rust source.
+    Shell syntax and the VM harness self-test pass. A complete `run.sh` run
+    with the new loop is still open.
   - [x] The Kubernetes VM launcher reads lifecycle suffixes from the standard
     Rust test binary and runs each suffix in one process. The current binary
     reports 32 Kubernetes lifecycle names. Shell syntax and the VM harness

@@ -80,6 +80,10 @@ grep -Fq '"$test_bin" "$remote_bin/mithril-e2e-tests"' "$directory/run.sh"
 grep -Fq 'fixtures/process/$fixture' "$directory/run.sh"
 grep -Fq 'fixtures/process/"*; do' "$directory/run.sh"
 grep -Fq '"$test_bin" --list --ignored' "$directory/run.sh"
+grep -Fq '_host: test$' "$directory/run.sh"
+grep -Fq 'host-$lifecycle.txt.partial' "$directory/run.sh"
+grep -Fq '"${lifecycle}_host" --ignored --nocapture --test-threads=1' \
+  "$directory/run.sh"
 grep -Fq '_kubernetes: test$' "$directory/run.sh"
 grep -Fq 'k3s-$lifecycle.txt.partial' "$directory/run.sh"
 grep -Fq '"${lifecycle}_kubernetes" --ignored --nocapture --test-threads=1' \
