@@ -13,7 +13,7 @@ libc = ctypes.CDLL(None, use_errno=True)
 libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
 work = sys.argv[1]
 mode = sys.argv[2]
-endpoint = os.path.join(work, "cross-pass.sock") if mode in ("main-net", "receiver-net") else "\0mithril-pass"
+endpoint = os.path.join(work, "cross-pass.sock") if mode.endswith("-net") else "\0mithril-pass"
 
 if mode == "main-unmatched":
     os.makedirs(os.path.join(work, "bin"), exist_ok=True)
@@ -39,10 +39,26 @@ if mode == "unmatched":
         listener.listen(1)
         named("pass-listening")
         hold()
-elif mode in ("receiver", "approved", "stale", "receiver-net"):
+elif mode in ("receiver", "approved", "stale", "receiver-net", "approved-net"):
     if mode == "receiver-net":
         if libc.unshare(0x40000000) != 0:
             raise OSError(ctypes.get_errno(), "unshare network namespace")
+    if mode == "approved-net":
+        host, local, inode = sys.argv[3].split(":")
+        expected = int(inode)
+        for pid in (host, local):
+            path = f"/proc/{pid}/ns/net"
+            try:
+                if os.stat(path).st_ino != expected:
+                    continue
+                with open(path, "rb") as namespace:
+                    if libc.setns(namespace.fileno(), 0x40000000) != 0:
+                        raise OSError(ctypes.get_errno(), "join network namespace")
+                break
+            except FileNotFoundError:
+                continue
+        else:
+            raise RuntimeError("the namespace holder is unavailable")
     print("native-fixture-ready", flush=True)
     sys.stdin.buffer.readline()
     named("rx-create")
@@ -66,7 +82,7 @@ elif mode in ("receiver", "approved", "stale", "receiver-net"):
             if len(fds) != 1:
                 raise RuntimeError(f"expected one passed socket, got {len(fds)}")
             with socket.socket(fileno=fds[0]) as passed:
-                if mode in ("approved", "stale"):
+                if mode in ("approved", "approved-net", "stale"):
                     try:
                         passed.sendall(b"ok")
                     except OSError as failure:
@@ -94,6 +110,11 @@ elif mode in ("receiver", "approved", "stale", "receiver-net"):
                 named(f"fd1-{sent}-{received}")
                 hold()
                 sys.exit(0 if (sent, received) == (errno.EACCES, errno.EACCES) else 1)
+elif mode == "namespace-holder":
+    if libc.unshare(0x40000000) != 0:
+        raise OSError(ctypes.get_errno(), "unshare network namespace")
+    print("native-fixture-ready", flush=True)
+    hold()
 else:
     print("native-fixture-ready", flush=True)
     sys.stdin.buffer.readline()
@@ -132,7 +153,7 @@ else:
                             raise RuntimeError("receiver did not finish")
                         stage = "read"
                         named(stage)
-                        if mode in ("main-approved", "main-stale", "main-inherit", "main-unmatched"):
+                        if mode in ("main-approved", "main-approved-net", "main-stale", "main-inherit", "main-unmatched"):
                             payload = bytearray()
                             while len(payload) < 2 and select.select([client], [], [], 3)[0]:
                                 chunk = client.recv(2 - len(payload))

@@ -3107,6 +3107,25 @@ test does not close a row when its physical condition or an assertion changed.
       distinct namespace evidence. Require the allowed Send, payload receipt,
       and exact production role and effect result on all three platforms.
       Remove the matching legacy transfer only after both tests pass.
+      - [x] Start Control, the main actor, and a namespace holder before Node.
+        Let the holder create a second network namespace. Place both processes,
+        install the signed policy, and let Node recover the main actor. Add one
+        declared worker entry through the runtime. That entry joins the held
+        namespace with `setns` and receives one accepted TCP descriptor over
+        the filesystem Unix control socket. The signed policy permits the
+        exact control-socket Create and namespace-setup capability. Require
+        the worker role and admission rule, received `ok` payload, attributed
+        Network/Send Allow result, and distinct creator and current namespace
+        in that result. The Rust test has 94 lines. A Node-first draft and a
+        PID1-before-Node draft both got `ENOMEM` from `unshare(CLONE_NEWNET)`.
+        The Node-first attempt recorded an exact SysAdmin Allow decision, then
+        Linux failed before the socket action. No production code changed.
+      - [x] Pass Host and commit it. The exact test passed in 37.12 seconds.
+        The existing same-namespace approved case passed in 31.43 seconds.
+        The cross-namespace denied case passed in 31.52 seconds. Formatting,
+        strict Mithril E2E Clippy, JSON syntax, and whitespace checks passed.
+      - [ ] Pass direct `runc` and commit it.
+      - [ ] Pass Kubernetes and commit it.
   - [ ] Replace shared-socket-holder fencing. Keep both holders denied after
     the response floor, no received bytes, and the shared reference alive
     until the last close.

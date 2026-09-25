@@ -64,6 +64,8 @@ mod runc;
 #[cfg(test)]
 mod socket_cross;
 #[cfg(test)]
+mod socket_cross_allowed;
+#[cfg(test)]
 mod socket_inherit;
 #[cfg(test)]
 mod socket_lifecycle;
