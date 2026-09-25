@@ -1790,7 +1790,10 @@ test does not close a row when its physical condition or an assertion changed.
         returned `EACCES`; all three attributed exact results kept the same
         file and composite authority. The three-test Host mount-alias
         lifecycle passed together in 47.89 seconds.
-      - [ ] Pass direct `runc` and commit it.
+      - [x] Direct `runc` passed in 61.39 seconds with the same actor, policy,
+        and assertions through stock `runc` and the production OCI hook. All
+        three direct-`runc` mount-alias lifecycle tests passed in 58.99
+        seconds together.
       - [ ] Pass Kubernetes and commit it.
     - [ ] Repeat the alias check in Observe mode. Require successful opens
       and attributed `WOULD_DENY` evidence before deleting the old block.
