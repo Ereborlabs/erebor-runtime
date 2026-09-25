@@ -73,6 +73,8 @@ mod runtime_entries;
 #[cfg(test)]
 mod runtime_exec;
 #[cfg(test)]
+mod runtime_outage;
+#[cfg(test)]
 mod subreaper;
 #[cfg(test)]
 mod terminal_exec;

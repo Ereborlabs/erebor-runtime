@@ -579,6 +579,26 @@ Runner retirement is a separate, open check. In particular:
   in `run.sh` and `two-node-network.sh`. Keep this item open even though the
   source file is below 2,000 lines. The detailed behavior list is in
   [Network](#network).
+- [ ] Diagnose the intermittent direct-`runc` entry startup denial. On
+  2026-09-25, the first `identity_runc` run passed 49 of 50 tests. In
+  `entry_roles_are_isolated`, `runc exec grep` exited before it wrote its PID.
+  Its stderr said `read init: permission denied`; Node recorded one
+  `MISSING_IDENTITY` Unix-stream IPC denial. The exact test then passed five
+  isolated runs, and the full 50-test lifecycle passed on a repeat run.
+  Keep the entry identity and denial assertions. Do not add an automatic
+  retry. Identify why an exec child can reach IPC without an identity before
+  this gate is called stable.
+- [ ] Reproduce a live but unresponsive Node admission endpoint in lightweight
+  qualification. On 2026-09-25, `identity_kubernetes` passed 49 of 50 tests.
+  `tcp_send_variants_are_allowed` failed before its actor started: the OCI
+  hook returned `DENY_NODE_UNAVAILABLE` after its five-second admission
+  timeout. The last captured Node logs showed `POLICY_CONVERGENCE_PENDING` for
+  the prior container. K3s recorded the hook failure, and the kernel log
+  showed no OOM kill in that interval. A direct-`runc` test proved the
+  missing-socket fail-closed case. A separate 32-cycle direct-`runc` policy
+  and actor churn check passed in 265.57 seconds, so it did not reproduce the
+  live-endpoint timeout. Do not change admission code or rerun Kubernetes
+  until a lightweight case reproduces that timeout.
 
 The diff from `95775f48` adds or relocates these private test functions with
 more than five name components:
