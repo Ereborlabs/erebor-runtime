@@ -118,9 +118,8 @@ The durable position, progress and follow-frame fields are frozen in
 engine-design.md.
 Control still uses its existing live evidence store; no Node ACK path changed.
 
-At code revision `7a776428`, `cargo test -p araphor-data` passed 10 tests with
-2 ignored. `cargo test -p mithril-control` passed 276 tests with 2 ignored
-before the final data-test-only edit; the final workspace gate reran Control.
+At code revision `cc37cee`, `cargo test -p araphor-data` passed 10 tests with
+2 ignored. The tests reject schema versions 0 and 2 for the version-1 store.
 The isolated worker test passed with `--ignored`. The `offline-exact` e2e case
 passed at `/tmp/araphor-offline.quxcRq/final/result.json`. The repository
 Rust CI script passed formatting, workspace check, strict lint and workspace
