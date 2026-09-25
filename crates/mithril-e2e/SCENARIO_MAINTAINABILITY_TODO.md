@@ -2992,31 +2992,19 @@ test does not close a row when its physical condition or an assertion changed.
   - [ ] Replace cross-network-namespace socket transfer. Keep narrow denial,
     approved success, descriptor transfer, payload receipt, and distinct
     creator and current namespace evidence.
-    - [ ] Qualify the restricted receiver first. Reuse the socket-pass actor,
-      policy, and effect checks. Enter a new network namespace before Node
-      recovers the receiver. Transfer the accepted TCP descriptor with
-      `pidfd_getfd`. Require the physical transfer, denied Send and Receive,
-      no forbidden payload, and distinct socket creator and current network
-      namespaces on Host, direct `runc`, and Kubernetes.
-      - [x] Host passed in 27.77 seconds. The 97-line test uses the existing
-        socket-pass actor and policy. It observed both denied operations on
-        one transferred socket and no forbidden payload.
-      - [ ] Pass direct `runc` and commit it.
-        The exact direct-`runc` case returned `EPERM` from `pidfd_getfd`.
-        The live sender and receiver had the same UID and capability sets;
-        neither had a seccomp filter. The old lower-level probe allows
-        `PTRACE_ACCESS_18` for this transfer. The public policy rejects the
-        matching `Ptrace` `Allow` rule with `CFG_KUBERNETES_PROCESS_CONTROL`.
-        A focused rerun observed `Privilege/Ptrace`,
-        `UNSUPPORTED_OBJECT`, and `-EACCES` in runc. The same Host action
-        observed `RUNTIME_ENTRY_INFRASTRUCTURE` and succeeded. Host used
-        the runtime bootstrap exception, not an explicit policy allowance.
-        The Host result does not qualify direct-`runc` or replace the old
-        network probe.
-        Keep the old after-policy transfer check. Do not move the transfer
-        before policy activation or count another descriptor-transfer method
-        as this case without an approved policy decision.
-      - [ ] Pass Kubernetes and commit it.
+    - [ ] Qualify the restricted receiver on Host, direct `runc`, and
+      Kubernetes. Reuse the socket-pass actor, signed policy, and effect
+      checks. Require an accepted TCP descriptor transferred after policy
+      activation, denied Send and Receive, no forbidden payload, and distinct
+      socket creator and current network namespaces.
+      - The rejected Host-only draft used `pidfd_getfd`. Host passed through
+        `RUNTIME_ENTRY_INFRASTRUCTURE`. Direct `runc` returned `EPERM` and
+        recorded `UNSUPPORTED_OBJECT` Privilege/Ptrace with `-EACCES`.
+        The old lower-level probe allows `PTRACE_ACCESS_18`, but the public
+        policy rejects a matching `Ptrace` `Allow` rule with
+        `CFG_KUBERNETES_PROCESS_CONTROL`. The draft test and actor modes were
+        removed. No platform is qualified by that draft. Keep the legacy
+        after-policy transfer check until a shared test preserves it.
     - [ ] Qualify the approved receiver with the same physical transfer and
       distinct namespace evidence. Require the allowed Send, payload receipt,
       and exact production role and effect result on all three platforms.

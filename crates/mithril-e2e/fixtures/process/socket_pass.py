@@ -9,13 +9,8 @@ import sys
 import time
 
 
-CLONE_NEWNET = 0x40000000
-PR_SET_PTRACER = 0x59616D61
-SYS_PIDFD_GETFD = 438
 libc = ctypes.CDLL(None, use_errno=True)
 libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
-libc.unshare.argtypes = [ctypes.c_int]
-libc.syscall.restype = ctypes.c_long
 work = sys.argv[1]
 endpoint = "\0mithril-pass"
 mode = sys.argv[2]
@@ -44,37 +39,6 @@ if mode == "unmatched":
         listener.listen(1)
         named("pass-listening")
         hold()
-elif mode == "ns-receiver":
-    print("native-fixture-ready", flush=True)
-    if sys.stdin.buffer.readline() != b"unshare\n":
-        raise RuntimeError("expected network namespace setup")
-    if libc.unshare(CLONE_NEWNET) != 0:
-        raise OSError(ctypes.get_errno(), "unshare(CLONE_NEWNET)")
-    named("ns-ready")
-    pid, descriptor = map(int, sys.stdin.buffer.readline().split())
-    pidfd = os.pidfd_open(pid)
-    try:
-        fd = libc.syscall(SYS_PIDFD_GETFD, pidfd, descriptor, 0)
-        if fd < 0:
-            raise OSError(ctypes.get_errno(), "pidfd_getfd")
-    finally:
-        os.close(pidfd)
-    with socket.socket(fileno=fd) as passed:
-        try:
-            passed.sendall(b"blocked")
-        except OSError as failure:
-            sent = failure.errno or errno.EIO
-        else:
-            sent = 0
-        try:
-            passed.recv(1)
-        except OSError as failure:
-            received = failure.errno or errno.EIO
-        else:
-            received = 0
-    named(f"fd1-{sent}-{received}")
-    hold()
-    sys.exit(0 if (sent, received) == (errno.EACCES, errno.EACCES) else 1)
 elif mode in ("receiver", "approved", "stale"):
     print("native-fixture-ready", flush=True)
     sys.stdin.buffer.readline()
@@ -129,7 +93,7 @@ elif mode in ("receiver", "approved", "stale"):
                 sys.exit(0 if (sent, received) == (errno.EACCES, errno.EACCES) else 1)
 else:
     print("native-fixture-ready", flush=True)
-    command = sys.stdin.buffer.readline()
+    sys.stdin.buffer.readline()
     stage = "bind"
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -148,21 +112,6 @@ else:
                 if not select.select([listener], [], [], 3)[0]:
                     raise TimeoutError(errno.ETIMEDOUT, "TCP accept did not become ready")
                 with listener.accept()[0] as passed:
-                    if mode == "main-namespace":
-                        receiver = int(command.split()[1])
-                        if libc.prctl(PR_SET_PTRACER, receiver, 0, 0, 0) != 0:
-                            raise OSError(ctypes.get_errno(), "prctl(PR_SET_PTRACER)")
-                        named(f"sock-{passed.fileno()}")
-                        client.sendall(b"q")
-                        if sys.stdin.buffer.readline() != b"check\n":
-                            raise RuntimeError("expected peer result check")
-                        if select.select([client], [], [], 0.5)[0]:
-                            payload = client.recv(1)
-                            named("peer-bytes" if payload else "peer-closed")
-                        else:
-                            named("peer-empty")
-                        hold()
-                        sys.exit(0)
                     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as control:
                         stage = "unix"
                         named(stage)
