@@ -40,12 +40,10 @@ Operator changes placement
 
 ## Changes in implementation order
 
-1. Extract construction of the full data component from Control startup:
-   AnalysisStore, EvidenceRetentionOwner, QueryOwner, DiscoveryOwner,
-   GraphAndFindingOwner and NotificationRouter. Reuse the same modules.
+1. Reuse the existing `araphor-data` library without moving its owners.
    Graph results/references/progress remain one local database transaction.
-   Add an optional `mithril-data` binary in `crates/mithril-control/src/bin/`;
-   do not fork algorithms, schemas or retention code.
+   Add an optional binary in `crates/araphor-data/src/bin/`; do not fork
+   algorithms, schemas or retention code.
 2. Add Embedded/Remote placement configuration. Remote mode must not open a
    local analysis DB. Keep policy/trust/approval, publication and TraceOwner
    dispatch in Control. Give NotificationRouter only its scoped sink credentials.
@@ -110,6 +108,7 @@ two-node harness and Helm assets after the lightweight result passes.
 
 ```sh
 cargo test -p mithril-control
+cargo test -p araphor-data
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case remote-placement --output-directory /tmp/araphor-remote
 bash .github/scripts/verify-rust-ci.sh
 ```

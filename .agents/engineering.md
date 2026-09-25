@@ -77,8 +77,11 @@
 - `mithril-node` embeds the Interceptor for Mithril mode. It owns node-local
   identity, signed policy activation, effect result handling, local evidence,
   and local response. `mithril-control` owns policy compilation/signing,
-  secure node control, graph/finding work, approvals, and approved connectors.
-  `mithril-e2e` owns fixtures, qualification, and release proof.
+  secure node control, authenticated intake and ACK, trace authorization and
+  dispatch, approvals, and approved connectors. `araphor-data` owns retained
+  evidence, query, discovery, graph/finding, notification, and trace-output
+  data. Control embeds this crate by default; the crate does not depend on
+  Control. `mithril-e2e` owns fixtures, qualification, and release proof.
 - A Runtime deployment can embed the shared Interceptor only after it obtains
   the same exclusive lease. It must use an authenticated, scoped client when
   Mithril owns the loader. Never start a Runtime loader and a Mithril loader at
