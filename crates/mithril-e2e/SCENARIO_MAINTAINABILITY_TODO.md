@@ -1807,7 +1807,10 @@ test does not close a row when its physical condition or an assertion changed.
         results kept distinct mount IDs and equal file and composite
         authority. All four Host mount-alias lifecycle tests passed together
         in 77.94 seconds.
-      - [ ] Pass direct `runc` and commit it.
+      - [x] Direct `runc` passed in 59.84 seconds with the same actor,
+        policy, and assertions through stock `runc` and the production OCI
+        hook. All four direct-`runc` mount-alias lifecycle tests passed
+        together in 139.70 seconds.
       - [ ] Pass Kubernetes and commit it.
   - [ ] Replace the exact-secret mount-change checks. Keep the first decision
     after mutation, dirty view, replaced-path denial, and restored decision.
