@@ -562,7 +562,7 @@ runner that still needs replacement:
 | --- | ---: | --- |
 | `effect/runc.rs` | 6,864 | Size and runner retirement |
 | `identity.rs` | 5,425 | Size and runner retirement |
-| `effect.rs` | 3,267 | Size and runner retirement |
+| `effect.rs` | 3,202 | Size and runner retirement |
 | `effect/child.rs` | 2,991 | Size and runner retirement |
 | `control_tls.rs` | 2,416 | Size and runner retirement |
 | `effect/network.rs` | 1,505 | Runner retirement; size limit met |
@@ -588,6 +588,15 @@ Runner retirement is a separate, open check. In particular:
   Keep the entry identity and denial assertions. Do not add an automatic
   retry. Identify why an exec child can reach IPC without an identity before
   this gate is called stable.
+- [ ] Qualify the approval readiness check on Kubernetes. A later 50-test
+  direct-`runc` identity run passed the entry-role case but failed
+  `approved_exec_consumes_once`: Control rejected `approve` because Node
+  admission was not ready. A focused run logged transient evidence recovery
+  checks after the denied exec. The test now waits for Node readiness after
+  that denial and before it asks Control for approval. The denied exec,
+  consumed approval, and replay checks remain. The three approval tests
+  passed together on Host and direct `runc`. The Kubernetes admission-timeout
+  gate below still blocks its physical rerun.
 - [ ] Reproduce a live but unresponsive Node admission endpoint in lightweight
   qualification. On 2026-09-25, `identity_kubernetes` passed 49 of 50 tests.
   `tcp_send_variants_are_allowed` failed before its actor started: the OCI

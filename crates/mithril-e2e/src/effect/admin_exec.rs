@@ -36,6 +36,7 @@ fn approved_exec_consumes_once<P: Platform>() -> TestResult<()> {
         "unapproved actor did not reach runtime enforcement: {denied}"
     );
 
+    env.node_ready()?;
     env.approve("sleep", &["0.5"])?;
     let mismatch = match env.add_actor("sleep", &["1"]) {
         Err(error) => error,
