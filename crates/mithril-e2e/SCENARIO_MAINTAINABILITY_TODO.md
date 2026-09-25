@@ -3068,6 +3068,31 @@ test does not close a row when its physical condition or an assertion changed.
         `CFG_KUBERNETES_PROCESS_CONTROL`. The draft test and actor modes were
         removed. No platform is qualified by that draft. Keep the legacy
         after-policy transfer check until a shared test preserves it.
+      - [ ] Use the existing Unix control socket and `SCM_RIGHTS` instead of
+        `pidfd_getfd`. Move the receiver to a new network namespace before
+        Node starts. Create a filesystem Unix control listener after recovery,
+        then transfer the accepted TCP descriptor.
+        Require the denied Send and Receive effects, no forbidden payload,
+        and distinct creator and current network namespace evidence. Pass
+        Host, direct `runc`, and Kubernetes before removing the old action.
+        The first Host draft bound an abstract listener before Node recovered
+        its creator. The later Unix connect returned `EACCES` before descriptor
+        transfer. The draft now creates the listener after recovery. No old
+        assertion was removed. The second Host draft reached the filesystem
+        socket bind. Production denied File/Create with `UNRESOLVED_OBJECT`
+        and `-EACCES`. A separate signed policy now permits only that control
+        socket creation for the restricted role. Its Network Send and Receive
+        permissions remain unchanged.
+      - [x] Host passed with the final 99-line test in 32.94 seconds. It used
+        one accepted TCP descriptor and `SCM_RIGHTS`. It required denied Send
+        and Receive,
+        no forbidden payload, distinct live network namespaces, and matching
+        creator and current namespace in both production effect results. The
+        existing same-namespace restricted case passed in 33.75 seconds.
+        Formatting, strict Clippy, 91 non-privileged tests, and JSON syntax
+        passed.
+      - [ ] Pass the unchanged case under direct `runc`, then commit it.
+      - [ ] Pass the unchanged case on Kubernetes, then commit it.
     - [ ] Qualify the approved receiver with the same physical transfer and
       distinct namespace evidence. Require the allowed Send, payload receipt,
       and exact production role and effect result on all three platforms.

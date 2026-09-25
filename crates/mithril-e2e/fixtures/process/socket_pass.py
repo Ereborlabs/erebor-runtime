@@ -12,8 +12,8 @@ import time
 libc = ctypes.CDLL(None, use_errno=True)
 libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
 work = sys.argv[1]
-endpoint = "\0mithril-pass"
 mode = sys.argv[2]
+endpoint = os.path.join(work, "cross-pass.sock") if mode in ("main-net", "receiver-net") else "\0mithril-pass"
 
 if mode == "main-unmatched":
     os.makedirs(os.path.join(work, "bin"), exist_ok=True)
@@ -39,7 +39,10 @@ if mode == "unmatched":
         listener.listen(1)
         named("pass-listening")
         hold()
-elif mode in ("receiver", "approved", "stale"):
+elif mode in ("receiver", "approved", "stale", "receiver-net"):
+    if mode == "receiver-net":
+        if libc.unshare(0x40000000) != 0:
+            raise OSError(ctypes.get_errno(), "unshare network namespace")
     print("native-fixture-ready", flush=True)
     sys.stdin.buffer.readline()
     named("rx-create")
