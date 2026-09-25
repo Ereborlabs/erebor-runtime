@@ -84,10 +84,11 @@ Kubernetes reconciles a Trace resource
 
 These commands and schemas are proposed. Add `araphor` as an entry point to
 the existing CLI command tree; retain `erebor` compatibility. Do not rename
-crates, API groups, or repositories. The selected HTTPS endpoint is distinct from the local Runtime daemon socket.
+crates, API groups, or repositories. The selected TLS gRPC endpoint is distinct
+from the local Runtime daemon socket.
 Reject a daemon-socket option on these commands. --endpoint or the configured
 profile can select Control or the optional remote deployment. Keep commands,
-tokens' intended API audience, routes and output unchanged. The remote endpoint
+tokens' intended API audience, methods and output unchanged. The remote endpoint
 routes trace and authority mutations to Control; it does not execute them.
 
 ```sh
@@ -161,28 +162,43 @@ that a different probe attributes work to the current cgroup correctly.
 
 ## Shared APIs and output
 
-Reuse the planned `ConsoleHttpOwner`, audience checks, browser sessions, and
+Reuse the planned `ClientGrpcOwner`, audience checks, browser sessions, and
 service-principal grants. Observability 3 owns query/trace authentication and
-transport; Phase 7.8 extends it. The CLI is not a privileged proxy. Mithril 7.3 owns QueryOwner; this plan
-owns its transport and client adapters.
-Console JavaScript calls these APIs; the server does not run the CLI.
-The remote deployment reuses this listener and API implementation. Follow the
+transport; Phase 7.8 extends it. The CLI is not a privileged proxy. Mithril 7.3
+owns QueryOwner; this plan owns its transport and client adapters.
+Console JavaScript uses generated gRPC-Web clients; the server does not run
+the CLI.
+The remote deployment reuses this service implementation. Follow the
 [Mithril placement contract](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/engine-design.md#optional-remote-placement)
 for direct clients, current authorization and delegated Control operations.
 No client redirect, second monitoring command or remote-specific tool is needed.
 
-| Route | Contract |
-| --- | --- |
-| `POST /v1/discovery/query` | Normal mode returns bounded JSON. Follow returns one `application/x-ndjson` response with metadata, append/replace, checkpoint, health and error/terminal frames. Optional target scope narrows authorized input before evaluation. |
-| `POST /v1/observability/traces` | Source or recipe, target, duration, parameters, optional finding reference. Required idempotency key. Returns ID, accepted spec digest, state, and output reference. The CLI automatically follows output. |
-| `GET /v1/observability/traces/{id}` | Authorized source, resolved scope, accepted limits, per-target state, and result references. |
-| `GET /v1/observability/traces/{id}/output` | Optional cursor; one JSONL response replays retained output and follows to the trace terminal state. Use QueryOwner's bounded append reader with trace-specific grants. No SQL text or second user command is needed. |
-| `POST /v1/observability/traces/{id}/cancel` | Idempotent cancellation intent under an execution-owner or administrative grant. Acceptance is not cleanup proof. |
+Define `AraphorClientService` in
+`crates/mithril-control/proto/erebor/mithril/control/v1/client.proto`.
+Keep the existing protobuf package until a separate migration. The CLI and
+service clients use native gRPC over TLS. The browser uses gRPC-Web on the same
+service through an adapter in the selected endpoint; it does not use REST,
+JSON/HTTP routes, WebSocket, or an extra gateway process. Use `grpcwebtext`
+for browser server streams. Native gRPC and gRPC-Web share owner methods and
+authorization. Static assets, OIDC browser redirects, and Kubernetes-required
+webhook callbacks still require HTTPS; they are not Araphor client data APIs.
 
-Use typed Rust request/response contracts and generated browser schemas.
-Normal query and trace submission use JSON. Follow and trace output use the
+| RPC | Contract |
+| --- | --- |
+| `Query(QueryRequest) returns (stream QueryFrame)` | One-shot and follow use one server stream. The request carries SQL, parameters, optional scope, follow flag and resume cursor. Frames carry metadata, append/replace, checkpoint, health, error and terminal results. Optional target scope narrows authorized input before evaluation. |
+| `SubmitTrace(SubmitTraceRequest) returns (TraceReceipt)` | Source or recipe, target, duration, parameters, optional finding reference and required idempotency key. The receipt has ID, accepted spec digest and state. The CLI calls `WatchTrace` within the same command. |
+| `GetTrace(GetTraceRequest) returns (TraceDetail)` | Authorized source, resolved scope, accepted limits, per-target state and result references. |
+| `WatchTrace(WatchTraceRequest) returns (stream TraceFrame)` | Optional cursor; replay retained output and follow to terminal state. Use QueryOwner's bounded append reader with trace-specific grants. No SQL text or second user command is needed. |
+| `CancelTrace(CancelTraceRequest) returns (CancelTraceReceipt)` | Idempotent cancellation intent under an execution-owner or administrative grant. Acceptance is not cleanup proof. |
+
+Generate Rust and browser clients from the same protobuf contract. One-shot
+query, follow and trace output use the
 [canonical stream envelope](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/engine-design.md#commit-driven-follow).
-This section defines only trace-specific payloads and grants.
+This section defines only trace-specific payloads and grants. Observability 3
+also migrates existing administrative-exec and node-decommission client routes
+to `AraphorAdministrativeService` protobuf RPCs on the same Control TLS
+listener. This service is Control-only. Its separate approval and authority
+rules remain in force.
 
 A trace frame has schema version, trace ID, committed delivery sequence, node
 execution ID, source sequence, kind, and bounded payload. Kinds are metadata,
@@ -195,7 +211,8 @@ success. This follows [Pixie's explicit end-of-stream lesson](https://docs.px.de
 
 Trace cursors bind the caller's authorized scope, trace ID, output schema,
 export policy, and committed position. Recheck permissions after every wait.
-Return 410 if retained output is no longer available. No silent gap skipping.
+Return gRPC `OUT_OF_RANGE` with authorized gap bounds if retained output is no
+longer available. No silent gap skipping.
 Slow readers do not block Node collection or enforcement. Storage exhaustion
 stops that diagnostic capture and retains a bounded failure record.
 
@@ -352,10 +369,22 @@ delivery. Mithril 7.7 adds assessment transport; 7.8 adds review/publication.
 Mithril 7.10 reruns the advertised observability cases. Optional CRD delivery
 does not block the embedded SQL/trace release.
 
+### Test level by phase
+
+Component tests check each changed owner. Lightweight end-to-end tests call
+production owners without Kubernetes; run a physical case only where listed.
+
+| Phase | Component tests | End-to-end and physical tests |
+| --- | --- | --- |
+| 1 | Check source limits, process supervision, output bounds and cleanup. | Run `backend-lifecycle` with a process double, then run the paired real-bpftrace case. |
+| 2 | Check target grants, dispatch identity, Node spooling, commits and recovery. | Run `owned-capture` through the production owners, then run paired physical Pod, restart and partition cases. |
+| 3 | Check CLI parsing, gRPC grants, CSRF, console states, and old client-route retirement. | Run `query-trace-client` with the built CLI and gRPC owner, browser gRPC-Web tests, and migrated admin/decommission cases. |
+| 4 | Check CRD schema, RBAC, reconciliation identity and finalizer behavior. | Run `trace-crd` with a Kubernetes API double, then run the paired physical Kubernetes case. |
+
 Status: **Not done** for the complete target. Existing backend tests must run
 on the implementing revision; they do not prove shared DuckDB or streaming
-contracts. Each phase records unit tests, production-owner mithril-e2e cases,
-paired physical results, and an explicit completion result in that phase.
+contracts. Each phase records its test results and an explicit completion
+result in that phase.
 No separate gap-review document is required.
 
 The initial recipe set is syscall errors and failed file opens. Connection

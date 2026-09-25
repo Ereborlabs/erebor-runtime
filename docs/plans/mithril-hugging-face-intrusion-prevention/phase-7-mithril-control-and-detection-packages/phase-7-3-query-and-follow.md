@@ -69,7 +69,7 @@ Reader is slow, revoked or disconnected
    A query error is never an empty success.
 8. Add fixed recipes for exact match, revision difference, counts and qualified
    within-subject sequence. Recipes describe required fields and limitations;
-   detection interpretation remains 7.6. HTTP/CLI wiring belongs to
+   detection interpretation remains 7.6. gRPC/CLI wiring belongs to
    Observability 3; no second query implementation is needed there.
 
 ## Unit tests and end-to-end proof

@@ -71,9 +71,9 @@ it for providers. Those owner phases include shared APIs, console, and physical
 tests in their own deliverables. Their absence must pass explicit Unsupported
 tests here, not keep this phase open until Mithril 10.
 
-1. **Authentication — Control `src/console_http.rs`,
+1. **Authentication — Control `src/client_grpc.rs`,
    `src/administrative_http.rs`, `src/config.rs`, `src/main.rs`.** Do not add
-   another HTTP owner. Reuse Observability 3's `ConsoleHttpOwner` and extend
+   another client API owner. Reuse Observability 3's `ClientGrpcOwner` and extend
    it for these mutations. Reuse extracted OIDC issuer/audience/nonce/PKCE
    validation; do not reuse administrative-exec activation tokens. Existing
    auth is an exec workflow, not console membership. Use server-side sessions,
@@ -84,19 +84,23 @@ tests here, not keep this phase open until Mithril 10.
    the API design. No grant means deny. Check every object lookup, evidence
    link, and mutation; recheck grants at publication. Raw evidence requires
    separate permission. No browser tenant claim or exec role creates a grant.
-3. **API — `ConsoleHttpOwner` and `DiscoveryOwner`.** Reuse the bounded query
-   route and add mutation routes in [console-and-api.md](console-and-api.md).
+3. **API — `ClientGrpcOwner` and `DiscoveryOwner`.** Reuse the bounded `Query`
+   RPC and add mutation RPCs in [console-and-api.md](console-and-api.md).
    No read-job API. Limit results to 200 rows/1 MiB; normal overflow is explicit,
    and follow cursors bind SQL, scope, schema, export policy, and position.
    Use the qualified isolated query worker and committed digest checks. Return
    Pending/Unavailable on owner lag, not an empty list. Close DB readers
-   before HTTP output; verify cursors survive ordinary database restart.
-   Serve assets and API on one optional Control HTTPS listener, disabled by
-   default. Do not expose Node credentials or administrative endpoints there.
+   before gRPC output; verify cursors survive ordinary database restart.
+   Serve assets and gRPC/gRPC-Web on the shared optional Control TLS listener.
+   Discovery methods stay disabled until configured with their own grants.
+   Do not expose Node credentials through this listener. The separate
+   administrative gRPC service retains its own authority on Control only.
    Reuse service-principal bearer validation with a dedicated API audience and
-   export-scoped grants. Reuse OIDC validation, not browser session cookies.
+   export-scoped grants for native clients. Browser gRPC-Web calls use the
+   bounded session cookie, CSRF metadata, and exact origin check from item 1;
+   neither identity inherits administrative-exec authority.
    An optional `src/bin/mithril_discovery_mcp.rs` stdio adapter can use the
-   same HTTP contracts and generated schemas; it is not required for CLI
+   same gRPC contracts and generated protobuf clients; it is not required for CLI
    agents or phase completion. Expose submit_assessment, propose_policy, and
    separately granted publish_policy through the shared API. Proposal construction
    includes native validation/preview; query reads pending/result revisions.
@@ -116,7 +120,8 @@ tests here, not keep this phase open until Mithril 10.
    After a lost reply, read exact identity/content before any retry. An
    intervening source edit requires review. No source creation or Git writer.
 6. **UI — `ui/mithril-console/src/Console.tsx`, `App.tsx`, `consoleData.ts`,
-   plus a small `discoveryApi.ts`.** Current code has eight fixture routes, not
+   plus a small `discoveryApi.ts` backed by the generated gRPC-Web client.**
+   Current code has eight fixture routes, not
    the planned five workspaces. Coordinate the shell change with the console
    plan; do not build a second shell. Add Behavior, Suggestions, test requests,
    evidence links, projection health, and capability availability. Keep fixture mode separate from live errors.
@@ -132,7 +137,8 @@ tests here, not keep this phase open until Mithril 10.
 7. **Package — `packaging/mithril/Dockerfile`, Helm `values.yaml`,
    `templates/control-deployment.yaml`, `templates/control-rbac.yaml`.** Build
    the UI with its lockfile and copy static output into the existing Control
-   image. Add optional listener/TLS configuration and a Service port. Grant
+   image. Reuse Observability 3's optional listener/TLS configuration and
+   Service port; do not add another client listener. Grant
    policy update permission only in configured publication namespaces; no new
    secret-read, exec, or wildcard privilege. Preserve read-only container state
    and existing admission/Node mTLS services. Test discovery-disabled rendering.
@@ -165,7 +171,7 @@ tests here, not keep this phase open until Mithril 10.
     and open branches. Process exit, Pod deletion, and provider API success cannot
     produce a Contained badge by themselves. A replacement branch needs a new
     authorized plan revision. Keep response restrictions independent of policy.
-11. **Shared investigation and escalation.** ConsoleHttpOwner resolves the same
+11. **Shared investigation and escalation.** ClientGrpcOwner resolves the same
     subject/finding/input references used by the local defender. Show submitted
     assessments, proposals, approvals, results, and branches in that view without
     manual import or copied IDs. Query exposes NotificationRouter's delivery,
@@ -190,7 +196,7 @@ Do not implement later backend owners to finish this phase without approval.
 - The UI cannot approve a revision whose semantic fields changed after preview.
 - An external model outage does not disable review or local enforcement.
   A source/actuator outage is unavailable, not an empty healthy result.
-- Pass `DE-AGENT`, `DE-ASSESS`, and `DE-DISCLOSE` through HTTP and the client
+- Pass `DE-AGENT`, `DE-ASSESS`, and `DE-DISCLOSE` through gRPC and the client
   path used by the defender. Run MCP adapter checks only if that optional
   adapter is delivered. Tool annotations cannot bypass grants. An investigator cannot
   publish or act; a defender requires exact separate authority. Neither can
@@ -203,12 +209,13 @@ Do not implement later backend owners to finish this phase without approval.
   checks. Run focused Control/e2e tests and final Rust verification.
 - Record screenshots and exact revision/case IDs for partial and failure states.
 
-Add `discovery_http_` and `discovery_publish_` owner tests, plus the lightweight
+Add `discovery_grpc_` and `discovery_publish_` owner tests, plus the lightweight
 `review-publish` case. Test bad OIDC audience, CSRF, grant removal, foreign
 evidence IDs, UID replacement, lost replies, and retained old generations.
 Require existing administrative-exec tests to pass after auth extraction.
 Add protocol tests for each delivered adapter and a recorded external-client
-task against the production HTTP owner. These tests require no model runtime.
+task against the production gRPC owner. Browser tests must use generated
+gRPC-Web clients for reads, streaming, and mutations. These tests require no model runtime.
 
 ```sh
 cargo test -p mithril-control discovery_ -- --nocapture
@@ -216,7 +223,7 @@ bash packaging/mithril/helm/tests/verify.sh
 ```
 
 Implement `review-publish` in `crates/mithril-e2e/src/discovery/` and register
-it in `src/bin/mithril_discovery_test.rs`. Use production HTTP, proposal,
+it in `src/bin/mithril_discovery_test.rs`. Use production gRPC, proposal,
 approval, publication and rollout owner APIs. The Kubernetes API double can
 lose a reply or change resourceVersion; it cannot make the approval decision.
 Require one conditional source change, the exact reviewed digest, and distinct

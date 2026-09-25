@@ -90,7 +90,7 @@ damaging unrelated controls. Provider-specific completion remains Phase 10.
 Follow the [combined Araphor order](phase-7-mithril-control-and-detection-packages/README.md#combined-implementation-order).
 Implement and test ResponseCoordinator and local/Kubernetes actuators before
 exposing `plan_response` and `execute_response` through the existing
-ConsoleHttpOwner and stdio MCP adapter. This phase owns that wiring; it is not
+ClientGrpcOwner and optional stdio MCP adapter. This phase owns that wiring; it is not
 unfinished Phase 7.6 work. Reuse the shared types, principal/grant checks,
 finding references, and read projection.
 

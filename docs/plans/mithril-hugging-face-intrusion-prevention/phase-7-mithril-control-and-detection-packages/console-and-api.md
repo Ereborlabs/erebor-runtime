@@ -150,7 +150,7 @@ source health. No partial query result can appear as Nothing to review.
 ### CLI-first reads and diagnostic capture
 
 The [observability contract](../../araphor-observability/README.md) owns
-`araphor sql`, `araphor trace`, their CLI behavior, trace routes, target
+`araphor sql`, `araphor trace`, their CLI behavior, trace RPCs, target
 resolution, source inspection, limits, and optional Trace CRD. Agents use
 their existing terminal tool. Trace prints its own output; SQL is not a
 required monitoring step. The CLI receives a single response stream and resumes only after transport loss.
@@ -162,33 +162,37 @@ to that same owner.
 There is no extra listener, read-job registry, or transport-specific authority.
 MCP remains optional. Trace cancellation does not change installed protection.
 
-Use the shared optional HTTPS listener for assets and scoped requests in
+Use the shared optional TLS listener for native gRPC and browser gRPC-Web in
 Control or the remote deployment. CLI --endpoint/profile selection uses the
-same API routes. Remote authority operations forward to Control under the
+same protobuf service. Remote authority operations forward to Control under the
 [placement contract](engine-design.md#optional-remote-placement), not a broader
-service grant. These are proposed contracts, not deployed endpoints.
+service grant. Static assets and OIDC browser redirects still use HTTPS;
+neither exposes Araphor data as REST/JSON. These are proposed contracts, not
+deployed endpoints.
 
 ### One investigation read
 
-`POST /v1/discovery/query` accepts the same strict schema as the query tool:
+`AraphorClientService.Query` accepts the same strict protobuf schema as the
+query tool:
 
 ```text
 query(sql, follow=false, cursor?, parameters?, scope?)
 ```
 
 This simplifies reads; it is not the complete Araphor tool surface. Normal SQL
-retrieves context, evidence, differences, counts, and owner state. Follow
-returns one JSONL response. QueryOwner appends retained immutable rows or
+retrieves context, evidence, differences, counts, and owner state. One-shot
+and follow return one server-streaming RPC. QueryOwner appends retained immutable rows or
 replaces a complete bounded result on relevant commits. Metadata declares
 the operation, schema, scope and time-window resolution. Checkpoint frames
 support reconnect; no client polling loop is required.
 
-Examples use proposed columns and fixture IDs:
+Examples use proposed columns and fixture IDs. These are protobuf request
+fields, not JSON/HTTP bodies:
 
-```json
-{"sql":"SELECT * FROM context WHERE subject_id = 'workload-123' AND method_id = 'credential-access'","follow":false}
-{"sql":"SELECT operation, COUNT(*) AS records FROM events WHERE subject_id = 'workload-123' AND record_kind = 'observation' GROUP BY operation","follow":false}
-{"sql":"SELECT event_id, record_kind, entity_id, revision FROM events WHERE subject_id = 'workload-123'","follow":true}
+```text
+QueryRequest { sql: "SELECT * FROM context WHERE subject_id = 'workload-123' AND method_id = 'credential-access'" follow: false }
+QueryRequest { sql: "SELECT operation, COUNT(*) AS records FROM events WHERE subject_id = 'workload-123' AND record_kind = 'observation' GROUP BY operation" follow: false }
+QueryRequest { sql: "SELECT event_id, record_kind, entity_id, revision FROM events WHERE subject_id = 'workload-123'" follow: true }
 ```
 
 Resume a broken stream with its last complete checkpoint. Closing the read
@@ -229,23 +233,27 @@ Do not add a discovery-owned notification state machine or agent-only case DB.
 
 SQL does not mutate policy, submit assessments, or execute response.
 
-| Proposed HTTP operation | Contract |
+| Proposed `AraphorClientService` RPC | Contract |
 | --- | --- |
-| `POST /v1/discovery/assessments` | Validate a bounded assessment/suggestion report; create Suggested drafts, not confirmed facts or authority. |
-| `POST /v1/discovery/proposals` | Build and preview a policy proposal from pinned requirements/base/targets; return its immutable revision and Pending or validated result. |
-| `POST /v1/discovery/proposals/{id}/revisions` | Create an edit with an expected parent revision; invalidate old approval. |
-| `POST /v1/discovery/proposals/{id}/previews` | Re-evaluate exact inputs; track bounded work on the proposal, not a generic job. |
-| `POST /v1/discovery/proposals/{id}/reviews` | Human approval/rejection binds exact digests, expiry, and reviewer independence. |
-| `POST /v1/discovery/proposals/{id}/publish` | Check separate publication authority and approved digests; conditionally update the existing source. |
-| `POST /v1/discovery/test-requests` | Record a scoped question and fixture reference; no execution. |
-| `POST /v1/discovery/classification-feedback` | Scoped correction, not automatic training or promotion. |
-| `POST /v1/discovery/context-documents` | Import versioned context with trust, sensitivity, and validity. |
+| `SubmitAssessment` | Validate a bounded assessment/suggestion report; create Suggested drafts, not confirmed facts or authority. |
+| `CreateProposal` | Build and preview a policy proposal from pinned requirements/base/targets; return its immutable revision and Pending or validated result. |
+| `ReviseProposal` | Create an edit with an expected parent revision; invalidate old approval. |
+| `PreviewProposal` | Re-evaluate exact inputs; track bounded work on the proposal, not a generic job. |
+| `ReviewProposal` | Human approval/rejection binds exact digests, expiry, and reviewer independence. |
+| `PublishProposal` | Check separate publication authority and approved digests; conditionally update the existing source. |
+| `CreateTestRequest` | Record a scoped question and fixture reference; no execution. |
+| `SubmitClassificationFeedback` | Scoped correction, not automatic training or promotion. |
+| `ImportContextDocument` | Import versioned context with trust, sensitivity, and validity. |
 
 Read proposal, publication, and assessment state through query. Preserve the
 existing policy-owner boundaries; do not turn these writes into SQL procedures.
 
+All mutation RPCs are unary and use typed protobuf requests, bounded replies,
+and idempotency keys where retries could duplicate work. Reads of their owner
+state use `Query`; no parallel REST representation exists.
+
 Response and exception interfaces belong to their own owners, not DiscoveryOwner.
-Expose them only after the readiness gates below. Their route/schema definitions
+Expose them only after the readiness gates below. Their RPC/schema definitions
 must follow those owners' qualified types. A missing owner returns Unsupported
 and is not advertised as an executable tool.
 
@@ -255,7 +263,7 @@ and is not advertised as an executable tool.
 
 Use the CLI over authenticated owner APIs for terminal-based agents. An
 optional thin stdio MCP adapter can expose the same contracts when a client
-needs it. Generate schemas from the same Rust types as HTTP. Operation count
+needs it. Generate client types from the same protobuf definitions as gRPC. Operation count
 follows authority boundaries, not a fixed minimum. Do not hide a large
 operation switch inside `query` or add tracing side effects to SQL.
 
@@ -297,7 +305,7 @@ response owner's qualified authorized operation; ceasing reads is not cancellati
 
 ### Identity and grants
 
-Reuse OIDC validation from administrative HTTP, but add console sessions and
+Reuse OIDC validation from the existing administrative workflow, but add console sessions and
 authorization separately. Existing administrative-exec credentials do not
 establish console membership. Require tenant and object scope on
 every lookup, mutation, artifact download, and evidence link. Do not trust a
@@ -341,18 +349,18 @@ Use the canonical [stream contract](engine-design.md#commit-driven-follow)
 and [trace payloads](../../araphor-observability/README.md#shared-apis-and-output).
 Clients replace a displayed result only after the complete replacement arrives.
 Deduplicate append frames and save only complete checkpoints. A trace result
-reports its actual cleanup state; HTTP EOF is not execution proof.
+reports its actual cleanup state; gRPC stream closure is not execution proof.
 
 ## Errors, concurrency, and audit
 
-- `400`: malformed schema or unsupported input fields.
-- `401/403`: absent identity or insufficient scope. Avoid tenant enumeration.
-- `409`: stale source, target, proposal revision, or reused idempotency key with
+- `INVALID_ARGUMENT`: malformed schema or unsupported input fields.
+- `UNAUTHENTICATED`/`PERMISSION_DENIED`: absent identity or insufficient scope. Avoid tenant enumeration.
+- `ABORTED`: stale source, target, proposal revision, or reused idempotency key with
   different content. Return authorized conflict details.
-- `410`: retained artifact or read revision expired. Do not invent empty data.
-- `422`: valid request with unsupported semantics or missing mandatory proof.
-- `429`: quota exhausted, with a bounded retry hint.
-- `503`: owner unavailable. Never represent it as an empty healthy profile.
+- `OUT_OF_RANGE`: retained artifact or read revision expired. Do not invent empty data.
+- `FAILED_PRECONDITION`: valid request with unsupported semantics or missing mandatory proof.
+- `RESOURCE_EXHAUSTED`: quota exhausted, with a bounded retry hint.
+- `UNAVAILABLE`: owner unavailable. Never represent it as an empty healthy profile.
 
 Bound preview work is tracked on its proposal revision; reads create no job.
 Response retains its own durable transaction. Cancellation does not undo an
