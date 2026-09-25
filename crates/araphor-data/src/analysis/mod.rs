@@ -322,7 +322,6 @@ impl AnalysisStore {
         }))
     }
 
-    #[allow(dead_code, reason = "offline proof precedes live intake cutover")]
     pub fn accept_validated_batch(
         &self,
         identity: EvidenceIntakeIdentityV1,
@@ -463,25 +462,7 @@ impl AnalysisStore {
                     operation: "insert source receipt",
                 })?;
         }
-        for relation in ["events", "source_receipts"] {
-            transaction
-                .execute(
-                    "INSERT INTO relation_revisions VALUES (?, ?)
-                     ON CONFLICT (relation_name) DO UPDATE SET last_changed_revision = EXCLUDED.last_changed_revision",
-                    params![relation, revision],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "advance relation revision",
-                })?;
-        }
-        transaction
-            .execute(
-                "UPDATE store_meta SET commit_revision = ? WHERE singleton = true",
-                params![revision],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "advance store revision",
-            })?;
+        Self::record_revision(&transaction, revision, &["events", "source_receipts"])?;
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit evidence",
         })?;
@@ -492,7 +473,6 @@ impl AnalysisStore {
         })
     }
 
-    #[allow(dead_code, reason = "offline proof precedes live intake cutover")]
     pub fn accept_validated_coverage(&self, input: ValidatedCoverageV1) -> Result<u64> {
         let identity = &input.identity;
         if !valid_source_identity(identity)
@@ -584,32 +564,13 @@ impl AnalysisStore {
                     operation: "insert coverage receipt",
                 })?;
         }
-        for relation in ["coverage", "source_receipts"] {
-            transaction
-                .execute(
-                    "INSERT INTO relation_revisions VALUES (?, ?)
-                     ON CONFLICT (relation_name) DO UPDATE SET last_changed_revision = EXCLUDED.last_changed_revision",
-                    params![relation, revision],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "advance relation revision",
-                })?;
-        }
-        transaction
-            .execute(
-                "UPDATE store_meta SET commit_revision = ? WHERE singleton = true",
-                params![revision],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "advance store revision",
-            })?;
+        Self::record_revision(&transaction, revision, &["coverage", "source_receipts"])?;
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit coverage",
         })?;
         Ok(input.revision)
     }
 
-    #[allow(dead_code, reason = "offline proof precedes live intake cutover")]
     fn validate_batch(
         &self,
         identity: &EvidenceIntakeIdentityV1,
@@ -700,7 +661,6 @@ impl AnalysisStore {
             .transpose()
     }
 
-    #[allow(dead_code, reason = "offline proof precedes live intake cutover")]
     fn reject<T>(&self, reason: &str) -> Result<T> {
         AnalysisStateSnafu {
             path: self.root.clone(),
@@ -709,7 +669,6 @@ impl AnalysisStore {
         .fail()
     }
 
-    #[allow(dead_code, reason = "offline proof precedes live intake cutover")]
     fn state_error(&self, reason: &str) -> crate::Error {
         AnalysisStateSnafu {
             path: self.root.clone(),
@@ -726,6 +685,33 @@ impl AnalysisStore {
             }
             .build()
         })
+    }
+
+    fn record_revision(
+        transaction: &duckdb::Transaction<'_>,
+        revision: u64,
+        relations: &[&str],
+    ) -> Result<()> {
+        for relation in relations {
+            transaction
+                .execute(
+                    "INSERT INTO relation_revisions VALUES (?, ?)
+                     ON CONFLICT (relation_name) DO UPDATE SET last_changed_revision = EXCLUDED.last_changed_revision",
+                    params![relation, revision],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "advance relation revision",
+                })?;
+        }
+        transaction
+            .execute(
+                "UPDATE store_meta SET commit_revision = ? WHERE singleton = true",
+                params![revision],
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "advance store revision",
+            })?;
+        Ok(())
     }
 
     fn read_meta_from(connection: &Connection, path: &Path) -> Result<AnalysisStoreMetaV1> {
@@ -830,8 +816,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_store_identity_and_rollback_survive_reopen(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn analysis_store_reopen_rollback() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
@@ -868,8 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_store_rejects_unsupported_schema_and_nonprivate_directory(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn analysis_store_schema_permissions() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         for version in [0, 2] {
             let root = directory.path().join(format!("schema-{version}"));
@@ -891,8 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_store_evidence_receipt_is_atomic_and_gap_aware(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn analysis_store_batch_receipt() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
@@ -927,6 +910,12 @@ mod tests {
         assert_eq!(store.meta()?.commit_revision, 2);
         {
             let writer = store.writer()?;
+            let changed: u64 = writer.query_row(
+                "SELECT COUNT(*) FROM relation_revisions WHERE last_changed_revision = 2",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(changed, 2);
             let key = source_key(&identity);
             let position: (u64, u32) = writer.query_row(
                 "SELECT commit_revision, ordinal FROM events
@@ -992,8 +981,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_store_coverage_receipt_is_atomic_and_idempotent(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn analysis_store_coverage_receipt() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
@@ -1035,6 +1023,12 @@ mod tests {
         assert_eq!(status.latest_coverage_report, Some(b"coverage-3".to_vec()));
         {
             let writer = reopened.writer()?;
+            let changed: u64 = writer.query_row(
+                "SELECT COUNT(*) FROM relation_revisions WHERE last_changed_revision = 2",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(changed, 2);
             writer.execute(
                 "UPDATE coverage SET report_sha256 = ? WHERE revision = 3",
                 params![vec![0_u8; 32]],
@@ -1045,8 +1039,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_store_accepts_limits_and_rejects_limit_plus_one(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn analysis_store_limit_edges() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let mut source = identity();
@@ -1103,8 +1096,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_store_commit_before_ack_survives_process_exit(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn analysis_store_crash_replay() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let identity = identity();
         if let Some(root) = std::env::var_os("ARAPHOR_ANALYSIS_CRASH_PROOF_ROOT") {
             let store = AnalysisStore::open(PathBuf::from(root))?;
@@ -1119,7 +1111,7 @@ mod tests {
         let root = directory.path().join("analysis");
         let status = std::process::Command::new(std::env::current_exe()?)
             .arg("--exact")
-            .arg("analysis::tests::analysis_store_commit_before_ack_survives_process_exit")
+            .arg("analysis::tests::analysis_store_crash_replay")
             .env("ARAPHOR_ANALYSIS_CRASH_PROOF_ROOT", &root)
             .status()?;
         assert_eq!(status.code(), Some(73));
@@ -1141,8 +1133,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_duckdb_binding_cancels_long_query(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn analysis_duckdb_cancel_query() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let worker = Connection::open_in_memory_with_flags(
             Config::default()
                 .enable_autoload_extension(false)?
@@ -1167,8 +1158,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires Linux bwrap and prlimit for the offline worker proof"]
-    fn analysis_sql_worker_isolated_from_data_store(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn analysis_sql_worker_isolation() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use std::io::Write as _;
         use std::process::{Command, Stdio};
 
