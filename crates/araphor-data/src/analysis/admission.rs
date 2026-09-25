@@ -329,9 +329,15 @@ fn implied_lower_bound(
         }
         Expr::BinaryOp {
             left,
-            op: BinaryOperator::GtEq,
+            op: BinaryOperator::GtEq | BinaryOperator::Gt,
             right,
         } if is_received_at(left, alias) => timestamp_micros(right, parameters, placeholders),
+        Expr::Between {
+            expr,
+            negated: false,
+            low,
+            ..
+        } if is_received_at(expr, alias) => timestamp_micros(low, parameters, placeholders),
         _ => None,
     }
 }
@@ -495,6 +501,16 @@ mod tests {
                 Some(BOUND),
             ),
             (
+                "SELECT COUNT(*) FROM events WHERE received_at > TIMESTAMP '2026-01-01 00:00:00'",
+                Vec::new(),
+                Some(BOUND),
+            ),
+            (
+                "SELECT COUNT(*) FROM events WHERE received_at BETWEEN TIMESTAMP '2026-01-01 00:00:00' AND TIMESTAMP '2026-01-01 00:00:01'",
+                Vec::new(),
+                Some(BOUND),
+            ),
+            (
                 "SELECT COUNT(*) FROM events WHERE operation = 'rare' OR received_at >= TIMESTAMP '2026-01-01 00:00:00'",
                 Vec::new(),
                 None,
@@ -503,6 +519,11 @@ mod tests {
                 "SELECT COUNT(*) FROM events WHERE (received_at >= TIMESTAMP '2026-01-01 00:00:00' AND operation = 'normal') OR received_at >= TIMESTAMP '2025-12-31 23:59:59'",
                 Vec::new(),
                 Some(BOUND - 1_000_000),
+            ),
+            (
+                "SELECT COUNT(*) FROM events WHERE received_at >= CAST(NULL AS TIMESTAMP)",
+                Vec::new(),
+                None,
             ),
         ];
         for (sql, parameters, expected_bound) in cases {
@@ -547,6 +568,14 @@ mod tests {
             safe_received_at_lower_bound(
                 "SELECT COUNT(*) FROM events WHERE received_at >= ?",
                 &[DuckValue::Text("2026-01-01".to_owned())],
+                &["events"]
+            )?,
+            None
+        );
+        assert_eq!(
+            safe_received_at_lower_bound(
+                "SELECT COUNT(*) FROM events WHERE received_at NOT BETWEEN TIMESTAMP '2026-01-01 00:00:00' AND TIMESTAMP '2026-01-01 00:00:01'",
+                &[],
                 &["events"]
             )?,
             None
