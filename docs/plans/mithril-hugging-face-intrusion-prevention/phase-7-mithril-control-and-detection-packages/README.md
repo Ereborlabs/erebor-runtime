@@ -147,9 +147,9 @@ production owners without Kubernetes; run a physical case only where listed.
 
 | Phase | Component tests | End-to-end and physical tests |
 | --- | --- | --- |
-| 7.1 | Check schema bounds, exact derivation, DuckDB recovery and SQL isolation. | Run `offline-exact` and `storage-contract` through production owners; no physical case is required. |
-| 7.2 | Check transactions, receipts, retention, backup and upgrade failures. | Run `data-store-recovery` through Node mTLS, `data-store-upgrade` on fixtures and the paired physical storage/partition case. |
-| 7.3 | Check SQL admission, scope, worker isolation, follow frames and cursor limits. | Run `query-follow` against AnalysisStore and QueryOwner; physical qualification follows in 7.10. |
+| 7.1 | Check schema bounds, exact derivation, offline DuckDB recovery, SQL admission and worker isolation. | Run `offline-exact` and `storage-contract` through public recorded and AnalysisStore methods. Do not call live Node intake; no physical case is required. |
+| 7.2 | Check transactions, receipts, retention, backup and upgrade failures. | Run `data-store-recovery` through Node mTLS with durable ACK and storage measurements, `data-store-upgrade` on fixtures and the paired physical storage/partition case. |
+| 7.3 | Check SQL admission, scope, extraction limits, worker resources, follow frames and cursor limits. | Run `query-follow` against AnalysisStore and QueryOwner with bounded-extraction measurements; physical qualification follows in 7.10. |
 | 7.4 | Check exact atoms, context selection, comparison and deterministic replay. | Run `context-roundtrip` and `profile-restart` from Node WAL through mTLS and DiscoveryOwner; physical qualification follows in 7.10. |
 | 7.5 | Check graph, finding, provenance and routing decisions under gaps and retries. | Run `graph-notification` through intake, graph and router owners, then run the paired physical incident case. |
 | 7.6 | Check method matches, suggestion validation and exact preview counterexamples. | Run `detection-context`, `proposal-preview` and `poisoned-window` through production owners; physical policy proof follows in 7.8 and 7.10. |

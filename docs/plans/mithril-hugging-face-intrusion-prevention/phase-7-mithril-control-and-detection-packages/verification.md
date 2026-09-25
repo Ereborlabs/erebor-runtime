@@ -112,9 +112,10 @@ to safe policy review.
 ## Initial resource limits
 
 These are proposed pilot limits, not measured capacity or final service-level
-commitments. Phase 7.1 can revise them with recorded measurements before a live
-contract depends on them. Enforce both count and byte limits; use the first
-one reached.
+commitments. Phase 7.1 pins offline feasibility defaults. Phase 7.2 measures
+intake and storage limits before cutover. Phase 7.3 measures extraction and
+query-worker limits before query release. Enforce both count and byte limits;
+use the first one reached.
 
 | Resource | Initial limit | Limit behavior |
 | --- | --- | --- |
@@ -320,9 +321,9 @@ Use external clock/runtime/network doubles only; call production owner APIs.
 
 | Phase | Crate-local unit test families | mithril-e2e case |
 | --- | --- | --- |
-| 7.1 | schema, exact aggregation, DuckDB transaction and SQL-isolation tests | offline-exact; storage-contract |
-| 7.2 | analysis_store_, analysis_upgrade_, control_retention_ | data-store-recovery; data-store-upgrade |
-| 7.3 | query_admission_, query_scope_, query_follow_ | query-follow |
+| 7.1 | schema, exact aggregation, offline DuckDB transaction, SQL-admission and isolation tests | offline-exact; storage-contract through public AnalysisStore methods |
+| 7.2 | analysis_store_, analysis_upgrade_, control_retention_ | data-store-recovery through production intake with ACK/storage measurements; data-store-upgrade |
+| 7.3 | query_admission_, query_scope_, query_follow_, frame and extraction-limit tests | query-follow with extraction/worker measurements |
 | 7.4 | discovery_derivation_, discovery_context_, discovery_comparison_ | context-roundtrip; profile-restart |
 | 7.5 | control_graph_, control_notification_, control_authority_ | graph-notification |
 | 7.6 | discovery_detection_, discovery_proposal_, discovery_suggestion_ | detection-context; proposal-preview; poisoned-window |

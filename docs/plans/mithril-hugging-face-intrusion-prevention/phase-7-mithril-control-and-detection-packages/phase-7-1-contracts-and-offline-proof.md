@@ -5,8 +5,9 @@ Freeze the data and investigation contracts before live storage changes.
 ## Intended end state
 
 A recorded manifest produces deterministic atoms and an exact native preview.
-The selected DuckDB binding passes durability, bounded extraction, cancellation
-and isolated-query checks. The corpus and expected outcomes are executable.
+The selected DuckDB binding passes offline durability, cancellation and
+isolated-query checks. SQL bounds match full authorized-input results in the
+recorded proof. The corpus and expected outcomes are executable.
 Entry: Mithril 6.2 and 6.3 contracts. Status: **Not done** for this design.
 
 ## Implementation flow
@@ -19,7 +20,7 @@ Engineer submits a bounded recorded manifest
   -> mithril-e2e compares canonical output with the frozen oracle
 
 Engineer runs storage proof
-  -> AnalysisStore commits evidence and receipt progress in one transaction
+  -> public AnalysisStore methods commit validated evidence and receipt progress
   -> process stops before or after commit
   -> reopen returns the complete old or new state
   -> isolated query worker receives only authorized bounded inputs
@@ -66,6 +67,8 @@ Engineer runs storage proof
    predicates, nulls and exact window endpoints. Prove untrusted SQL runs only
    in a no-network, no-credential, OS-limited worker with in-memory DuckDB.
    Use the isolation contract in engine-design.md, not a SELECT-prefix check.
+   Production extraction budgets and worker resource measurements belong to
+   7.3, when QueryOwner and its trusted extractor exist.
 6. Extend `crates/mithril-e2e/fixtures/discovery/manifest.json` and `pilot.json`.
    Pin source, context, policy, coverage, expected rows and proof kind.
    Include repeats, rare valid work, poisoned baseline, deployment drift,
@@ -73,21 +76,27 @@ Engineer runs storage proof
    Freeze workload/time train/validation/holdout splits before AI experiments.
 7. Keep existing `offline-exact` and add `storage-contract` to
    `src/bin/mithril_discovery_test.rs`. Implement cases in the existing
-   `src/discovery/` family. Call public owners; do not build private database
-   transactions in the e2e harness.
+   `src/discovery/` family. Call public AnalysisStore methods with validated
+   fixture inputs; do not build private database transactions in the e2e
+   harness. This case does not call the live Node intake path.
 
 ## Unit tests and end-to-end proof
 
 Unit tests beside the owners must check schema N/N+1 bounds, duplicate and
 conflicting identity, count conservation, absent bindings, canonical ordering,
 unknown runtime conditions, source continuity, transaction rollback and
-forbidden SQL. Test crash after commit but before ACK in a separate process.
+forbidden SQL. Test a crash after commit but before the caller observes success
+in a separate process. The production ACK test belongs to 7.2.
 
-The `storage-contract` e2e case must commit through the production intake
-adapter, reopen through AnalysisStore, and read the same identity, receipt,
-coverage and counts. Kill the query worker; intake and policy state remain
-valid. Record query plans, native RSS, temporary bytes, batch latency, ACK
-latency and checkpoint time. No benchmark result follows from choosing DuckDB.
+The `storage-contract` e2e case must commit through public AnalysisStore
+methods, reopen the store, and read the same identity, receipt, coverage and
+counts. Control policy state remains unchanged. The separate offline worker
+test proves process isolation and failure without opening the data store.
+Record the store identity, revisions, source receipt, counts and result digests.
+The production intake-path proof, ACK and batch latency, disk reuse and
+checkpoint measurements belong to 7.2.
+Query plans, bounded extraction, worker RSS and temporary-byte measurements
+belong to 7.3. No benchmark result follows from choosing DuckDB.
 
 Commands after the new case is implemented:
 
@@ -101,11 +110,15 @@ bash .github/scripts/verify-rust-ci.sh
 
 ## Completion gate
 
-Pass DE-IDENTITY, DE-AGGREGATE, DE-REPLAY, DE-PREVIEW, DE-QUERY and DE-STORE
-for this recorded slice with nonzero test counts and result digests. A binding
-that fails durability or isolation blocks live integration. Do not substitute
-another backend without approval. No production intake cutover, public API,
-model runtime, or policy publication is part of this phase.
+Pass DE-IDENTITY, DE-AGGREGATE, DE-REPLAY and DE-PREVIEW for this recorded slice
+with nonzero test counts and result digests. Prove the offline DE-STORE
+transaction/reopen and DE-QUERY parser/isolation prerequisites. Full DE-STORE
+needs the production intake and recovery checks in 7.2. Full DE-QUERY and
+executable follow frames need QueryOwner in 7.3; wire-level gRPC frame checks
+belong to Observability 3. A binding that fails durability or isolation blocks
+live integration. Do not substitute another backend without approval. No
+production intake cutover, public API, model runtime, or policy publication is
+part of this phase.
 
 ## Implementation result
 
@@ -130,7 +143,5 @@ lookups and no production authority. The repository Rust CI script passed
 formatting, workspace check, strict lint and workspace all-targets tests on
 that code revision.
 
-The `storage-contract` e2e case, a production intake-path proof, bounded
-extraction measurements and executable schema/stream contract checks are not
-complete. Resolve whether that e2e case belongs before or with the live
-intake cutover before changing the intake owner or the completion gate.
+The offline `storage-contract` e2e case is not complete. Production intake,
+extraction and wire-stream checks follow their owning phases above.
