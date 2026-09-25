@@ -3649,9 +3649,10 @@ setup, production actions, assertions, and focused test.
     Kubernetes issues a credential at approval time and arms Node only after
     an exact CONNECT admission. A mismatched CONNECT must leave no slot to
     consume. Keep the approved role, nonzero proof and claim IDs, argv-chunk
-    cleanup, and replay denial. The Control owner mismatch test and the exact
-    Host and stock-`runc` cases pass. Recheck Kubernetes and the complete
-    platform lanes before marking this item done.
+    cleanup, and replay denial. The Control owner mismatch test, the exact
+    Host and stock-`runc` cases, all 50 direct-`runc` identity tests, and the
+    exact Kubernetes case pass. Recheck the complete Host and Kubernetes
+    lifecycles before marking this item done.
   - [x] Keep ordinary Kubernetes `pods/exec` tasks in the restricted external
     role. Invoke the Control admission webhook only for the trusted Mithril
     approval group. A matching armed slot can then select the approved role.

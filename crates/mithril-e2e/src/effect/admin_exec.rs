@@ -1,8 +1,8 @@
 use std::{cell::RefCell, time::Duration};
 
 use erebor_interceptor_abi::{
-    ExecutionApprovalSlotStateV1, ExecutionArgvChunkKeyV1, ExecutionArgvChunkV1,
-    KernelEffectFamilyV1, KernelEffectOperationV1,
+    EntryPurposeV1, ExecutionApprovalSlotStateV1, ExecutionArgvChunkKeyV1, ExecutionArgvChunkV1,
+    ExternalRootClassificationV1, KernelEffectFamilyV1, KernelEffectOperationV1,
     EXECUTION_APPROVAL_TRACE_FAILURE_PREPARE_ARGV_V1,
     EXECUTION_APPROVAL_TRACE_STAGE_EXECVEAT_ENTRY_V1,
     EXECUTION_APPROVAL_TRACE_STAGE_EXECVE_ENTRY_V1,
@@ -52,8 +52,14 @@ fn approved_exec_consumes_once<P: Platform>() -> TestResult<()> {
     );
 
     let mut actor = env.add_actor("sleep", &["0.5"])?;
-    let consumed = env.approval(&root)?.ok_or("consumed slot is missing")?;
     let task = env.task(actor.id(), "approved administrative actor")?;
+    let class = env
+        .state::<ExternalRootClassificationV1>(
+            "external_root_classifications",
+            &task.snapshot.task_cookie.to_ne_bytes(),
+            "approved root classification",
+        )?
+        .ok_or("approved root classification is missing")?;
     assert_eq!(
         task.snapshot.root_class.as_deref(),
         Some("external_runtime_root")
@@ -61,7 +67,7 @@ fn approved_exec_consumes_once<P: Platform>() -> TestResult<()> {
     assert_eq!(
         task.snapshot.installed_role_class.as_deref(),
         Some("approved_administrative_role"),
-        "approval: {consumed:?}; task: {:?}",
+        "task: {:?}",
         task.snapshot
     );
     assert_ne!(task.snapshot.admitted_entry_rule_id, 0);
@@ -71,11 +77,11 @@ fn approved_exec_consumes_once<P: Platform>() -> TestResult<()> {
         root.snapshot.profile_generation_ref_id
     );
     assert_eq!(
-        consumed.state,
-        ExecutionApprovalSlotStateV1::Consumed,
-        "task: {:?}",
-        task.snapshot
+        class.purpose,
+        EntryPurposeV1::ApprovedAdministrativeNextMatch
     );
+    assert!(!class.administrative_approval_proof_id.is_zero());
+    assert!(!class.administrative_claim_slot_id.is_zero());
 
     actor.close();
     assert_eq!(
@@ -85,20 +91,8 @@ fn approved_exec_consumes_once<P: Platform>() -> TestResult<()> {
         Some(0)
     );
     env.wait_slot(&root)?;
-    for chunk_index in 0..consumed.expected_argv.chunk_count {
-        let key = ExecutionArgvChunkKeyV1 {
-            snapshot_id: consumed.expected_argv.snapshot_id,
-            chunk_index,
-            reserved: 0,
-        };
-        assert!(env
-            .state::<ExecutionArgvChunkV1>(
-                "execution_argv_expected_chunks",
-                key.as_bytes(),
-                "expected argv chunk",
-            )?
-            .is_none());
-    }
+    let (_, reader) = env.maps();
+    assert!(reader.keys("execution_argv_expected_chunks")?.is_empty());
     assert!(env.add_actor("sleep", &["0.5"]).is_err());
     init.stop()?;
     env.stop()
