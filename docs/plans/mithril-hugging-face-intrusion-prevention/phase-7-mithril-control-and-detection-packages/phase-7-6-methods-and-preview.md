@@ -63,12 +63,14 @@ Require Phase 7.3 query and Phase 7.5 findings. Status: **Not done**.
 Use QueryOwner and AnalysisStore; do not implement another SQL path.
 Observability 3 can already expose query/trace without these algorithms.
 
-1. In `mithril-control/src/discovery/`, add
-   `DiscoveryOwner::{evaluate_method,create_requirement_set,build_proposal,preview,request_test}`.
+1. In `crates/araphor-data/src/discovery/`, add
+   `DiscoveryOwner::{evaluate_method,create_requirement_set,build_proposal,request_test}`.
    In AnalysisStore, add revision-checked immutable proposal records.
    A proposal binds snapshot, requirements, base UID/generation/spec digest,
    target facts, compiler version, and every context digest.
-2. Build typed edits to an existing `WorkloadProtectionPolicy.spec`. Reuse
+2. Build typed edits to an existing `WorkloadProtectionPolicy.spec`. Control
+   owns exact native preview and calls the data owner for frozen proposal
+   inputs; the data crate does not import the policy compiler. Reuse
    `lower_kubernetes_policy`, `PolicyCompiler::compile`, and
    `canonical_kubernetes_policy_spec_digest` from the existing policy modules.
    Retain the base object identities needed for lowering. Do not serialize an
@@ -81,7 +83,7 @@ Observability 3 can already expose query/trace without these algorithms.
    selector scope, and future-match behavior. Keep exact edits by default.
    Directory/selector broadening is a separate manual edit with an expansion
    receipt; unknown mount semantics cannot become an equivalence claim.
-5. Add a context-to-`StaticDecisionKeyV1` adapter inside DiscoveryOwner. Require
+5. Add a context-to-`StaticDecisionKeyV1` adapter at Control's preview boundary. Require
    every selector, scope, role, state, entry, object, and binding-lifecycle
    input. `PolicySimulator` searches static cells; it does not check live
    exception consumption or all runtime hard-safety state. Dynamic exceptions,

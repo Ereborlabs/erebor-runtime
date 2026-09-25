@@ -43,13 +43,14 @@ Enabled security packages are required processors. They use accepted evidence
 and owner-qualified context without waiting for optional discovery profiles.
 Their failure raises unhealthy coverage; their protected retention bounds,
 not a separate lag timer, govern intake backpressure.
-Implement these owners inside `crates/mithril-control`; no second service,
+Implement the graph, finding and notification data owners in `crates/araphor-data`;
+keep signed provider-neutral authority records in Control. No second service,
 incident graph, source collector, or query database is required.
 
 Status: **Not done**.
 
 Implement `GraphAndFindingOwner` under proposed `src/graph/` and
-`NotificationRouter` under proposed `src/notification/` in mithril-control.
+`NotificationRouter` under proposed `src/notification/` in `araphor-data`.
 Reuse policy provenance and authorization-proof owners. Each graph result
 transaction commits its input manifest, revisions, witness references and
 processor progress through AnalysisStore. Compute outside the transaction.

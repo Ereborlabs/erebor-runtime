@@ -34,8 +34,8 @@ Reader is slow, revoked or disconnected
 
 ## Changes in implementation order
 
-1. Add `QueryOwner::{query,follow}` under Control `src/query/` and the
-   isolated query-worker entry point under `src/bin/`. Reuse 7.1 admission
+1. Add `QueryOwner::{query,follow}` under `crates/araphor-data/src/query/` and
+   the isolated query-worker entry point under its `src/bin/`. Reuse 7.1 admission
    and sandbox proof. Do not expose a storage handle or arbitrary SQL to
    credentialed Control. Fixed prepared extraction runs inside AnalysisStore.
 2. Implement typed request/result/frame/cursor records and documented

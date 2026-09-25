@@ -1,6 +1,6 @@
 # Engine Design
 
-This design defines discovery inside Mithril Control. Mithril 7 owns shared
+This design defines discovery in `crates/araphor-data`. Mithril 7 owns shared
 processing and the discovery backend. Discovery methods produce review artifacts;
 they do not own evidence intake, physical enforcement, or response execution.
 
@@ -19,7 +19,7 @@ precedes each source acknowledgement. ControlStore keeps policy, trust, rollout,
 and approval authority in its existing format. Node keeps its existing delivery
 WAL. Neither store replaces the other's authority.
 
-The default deployment embeds the data component in Control: AnalysisStore,
+The default deployment embeds the `araphor-data` crate in Control: AnalysisStore,
 EvidenceRetentionOwner, QueryOwner, DiscoveryOwner, GraphAndFindingOwner and
 NotificationRouter. Discovery can be disabled without disabling intake, query,
 or tracing. Optional remote placement moves this complete component and its
@@ -49,11 +49,13 @@ Installed policy -> Node pre-effect decision
   -> activation/readback/watch -> same evidence and owner views
 ```
 
-Discovery implementation home: `crates/mithril-control/src/discovery/`. Create
-modules only as an approved slice needs them. Keep policy compilation in
-`policy/`. Put AnalysisStore in proposed `src/analysis/` and QueryOwner in
-proposed `src/query/`. Mithril 7 owns data recovery, query admission, and retention.
-Discovery analysis and TraceOwner use those facilities independently. The
+Data implementation home: `crates/araphor-data/src/`. Put AnalysisStore in
+`analysis/`, QueryOwner in `query/`, and portable discovery in `discovery/`.
+Create modules only as an approved slice needs them. Keep policy compilation,
+source authentication, trace authorization and dispatch in `mithril-control`.
+Control may call data owners but the data crate must not import Control.
+Mithril 7 owns data recovery, query admission, and retention. Discovery analysis
+and Control's TraceOwner use those facilities independently. The
 query credential has no source-write,
 signing, Kubernetes, response, or model-provider authority. The external agent
 owns model execution. Control applies export policy before query evaluation.
@@ -883,9 +885,10 @@ to fill a historical gap.
 
 ### Optional remote placement
 
-Move AnalysisStore, EvidenceRetentionOwner, QueryOwner, DiscoveryOwner,
-GraphAndFindingOwner and NotificationRouter together into the optional data
-process. Reuse their embedded implementations and local database transactions.
+Run `araphor-data` in the optional data process instead of linking it into
+Control's process. AnalysisStore, EvidenceRetentionOwner, QueryOwner,
+DiscoveryOwner, GraphAndFindingOwner, NotificationRouter and trace-output reads
+use the same crate and local database transactions in either placement.
 Graph/finding/progress commits and notification recovery do not cross RPC.
 Control retains policy/trust/approval authority, source publication, TraceOwner,
 Node authentication and dispatch. External agents retain model execution.
