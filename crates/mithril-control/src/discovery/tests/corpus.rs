@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 
@@ -10,6 +10,7 @@ struct Corpus {
     version: u32,
     proof_kind: DiscoveryProofKindV1,
     storage_binding: StorageBinding,
+    splits: BTreeMap<String, Split>,
     recorded_oracle: serde_json::Value,
     operator_protocol: Vec<String>,
     cases: Vec<Case>,
@@ -21,6 +22,14 @@ struct Corpus {
 struct StorageBinding {
     duckdb: String,
     sqlparser: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Split {
+    workload_id: String,
+    start_utc_ns: i64,
+    end_utc_ns: i64,
 }
 
 #[derive(Deserialize)]
@@ -81,10 +90,12 @@ struct Capability {
 }
 
 impl Case {
-    fn input(&self) -> TestResult<DiscoveryInputManifestV1> {
+    fn input(&self, split: &Split) -> TestResult<DiscoveryInputManifestV1> {
         let mut input = super::input()?;
         let seed_record = input.records[0].clone();
-        let seed_context = input.contexts[0].clone();
+        let mut seed_context = input.contexts[0].clone();
+        seed_context.subject_revision = format!("{}/revision-1", split.workload_id);
+        seed_context.static_key.workload_selector_id = split.workload_id.clone();
         input.source_revision = format!("synthetic-pilot-v1/{}", self.id);
         input.records.clear();
         input.contexts.clear();
@@ -98,7 +109,11 @@ impl Case {
                 record.original_kernel_sequence = Some(cursor + 100);
                 record.observation.source_sequence = cursor;
                 record.observation.observed_boottime_ns = cursor + 1000;
-                record.observation.ingested_utc_ns = i64::try_from(cursor + 2000)?;
+                record.observation.ingested_utc_ns = split
+                    .start_utc_ns
+                    .checked_add(i64::try_from(cursor)?)
+                    .ok_or("pilot timestamp overflow")?;
+                assert!(record.observation.ingested_utc_ns < split.end_utc_ns);
                 record.observation.effect.decision = 0;
                 record.observation.effect.kernel_result = 0;
                 record.observation.effect.configured_errno = 0;
@@ -115,7 +130,7 @@ impl Case {
                     Variation::Release => {
                         context.image_digest = format!("sha256:{}", "c".repeat(64));
                         context.configuration_digest = "d".repeat(64);
-                        context.subject_revision = "workload-uid-a/revision-2".into();
+                        context.subject_revision = format!("{}/revision-2", split.workload_id);
                     }
                     Variation::Entry => {
                         context.entry_instance_id.low += 1;
@@ -128,7 +143,8 @@ impl Case {
                     Variation::ReplicaGapped => {
                         record.id.stream.node_id = "node-b".into();
                         context.record_id = record.id.clone();
-                        context.subject_revision = "workload-uid-b/revision-1".into();
+                        context.subject_revision =
+                            format!("{}-replica/revision-1", split.workload_id);
                         context.process_instance_id.low += 1;
                         context.entry_instance_id.low += 1;
                         context.binding_id.low += 1;
@@ -195,14 +211,28 @@ fn discovery_pilot_preserves_exact_counts_risk_and_replay() -> TestResult<()> {
     assert!(corpus.recorded_oracle.is_object());
     assert_eq!(corpus.operator_protocol.len(), 6);
     assert_eq!(corpus.cases.len(), 21);
+    assert_eq!(corpus.splits.len(), 4);
+    let mut workload_ids = BTreeSet::new();
+    let mut windows = Vec::new();
+    for split in corpus.splits.values() {
+        assert!(workload_ids.insert(&split.workload_id));
+        assert!(split.start_utc_ns > 0 && split.start_utc_ns < split.end_utc_ns);
+        windows.push((split.start_utc_ns, split.end_utc_ns));
+    }
+    windows.sort_unstable();
+    assert!(windows.windows(2).all(|pair| pair[0].1 <= pair[1].0));
     let mut ids = BTreeSet::new();
     for case in corpus.cases {
         assert!(ids.insert(case.id.clone()));
         assert!(["TRAIN", "TUNE", "HELD_OUT_VALID", "FORBIDDEN"].contains(&case.partition.as_str()));
+        let split = corpus
+            .splits
+            .get(&case.partition)
+            .ok_or("pilot split absent")?;
         assert!(!case.question.is_empty() && !case.next_check.is_empty());
         assert!(!case.acceptable_dispositions.is_empty() && !case.required_facts.is_empty());
         assert!(case.untrusted_text.iter().all(|text| text.len() <= 1024));
-        let mut input = case.input()?;
+        let mut input = case.input(split)?;
         let expected = &case.expected;
         let result = DiscoveryOwner::derive_recorded(&input)?.snapshot;
         assert_eq!(result.accepted_records, expected.accepted, "{}", case.id);
