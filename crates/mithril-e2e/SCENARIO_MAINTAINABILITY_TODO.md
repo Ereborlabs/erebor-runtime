@@ -839,8 +839,11 @@ count as maintainability migrations.
     Rust test binary and runs each suffix in one process. The current binary
     reports 32 Kubernetes lifecycle names. Shell syntax and the VM harness
     self-test pass. The complete 32-lifecycle physical run is still open.
-  - [ ] Apply the same suffix invocation to the direct-`runc` launcher after
-    its current platform gates pass.
+  - [x] The direct-`runc` VM launcher uses the same suffix selection. The
+    current binary has 33 direct-`runc` lifecycle names. All 33 groups passed
+    with stock `runc` in the retained VM, including all 50 identity tests.
+    Every group removed its pin root, cgroup, and lease. Shell syntax and the
+    VM harness self-test passed. A complete `run.sh` run is still open.
 - [x] Share one Control and one Node across each named Host lifecycle.
   Keep each actor, cgroup, policy instance, runtime identity, output path, and
   assertion test-scoped. Pass every existing Host scenario before commit.

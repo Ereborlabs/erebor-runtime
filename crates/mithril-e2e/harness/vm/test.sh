@@ -84,6 +84,11 @@ grep -Fq '_host: test$' "$directory/run.sh"
 grep -Fq 'host-$lifecycle.txt.partial' "$directory/run.sh"
 grep -Fq '"${lifecycle}_host" --ignored --nocapture --test-threads=1' \
   "$directory/run.sh"
+grep -Fq '_runc: test$' "$directory/run.sh"
+grep -Fq 'runc-$lifecycle.txt.partial' "$directory/run.sh"
+grep -Fq '"MITHRIL_TEST_RUNC=$entry_runc_path"' "$directory/run.sh"
+grep -Fq '"${lifecycle}_runc" --ignored --nocapture --test-threads=1' \
+  "$directory/run.sh"
 grep -Fq '_kubernetes: test$' "$directory/run.sh"
 grep -Fq 'k3s-$lifecycle.txt.partial' "$directory/run.sh"
 grep -Fq '"${lifecycle}_kubernetes" --ignored --nocapture --test-threads=1' \

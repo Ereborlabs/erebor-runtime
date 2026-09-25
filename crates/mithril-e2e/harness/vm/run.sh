@@ -461,6 +461,32 @@ if [[ $entry_role_runtime_only == false && $recovered_entry_only == false ]]; th
     verify_absent "/sys/fs/cgroup/$vm_name-$lifecycle-host"
     verify_absent "$host_output/owner.lock"
   done <<<"$host_lifecycles"
+  runc_lifecycles=$("$test_bin" --list --ignored |
+    sed -nE 's/^.*::([a-z0-9_]+)_runc: test$/\1/p' | sort -u)
+  [[ -n $runc_lifecycles ]] || {
+    echo "the Mithril test binary has no direct-runc platform tests" >&2
+    exit 1
+  }
+  while IFS= read -r lifecycle; do
+    runc_output=$remote_root/platform-runc-$lifecycle
+    partial=$output_directory/runc-$lifecycle.txt.partial
+    "$provider" run "$vm_name" sudo env \
+      "RUST_LOG=warn" \
+      "MITHRIL_TEST_ROOT=$remote_source" \
+      "MITHRIL_TEST_OUTPUT=$runc_output" \
+      "MITHRIL_TEST_PIN=/sys/fs/bpf/$vm_name-$lifecycle-runc" \
+      "MITHRIL_TEST_LEASE=$runc_output/owner.lock" \
+      "MITHRIL_TEST_CGROUP=/sys/fs/cgroup/$vm_name-$lifecycle-runc" \
+      "MITHRIL_TEST_RUNC=$entry_runc_path" \
+      "MITHRIL_TEST_OCI_HOOK=$remote_bin/mithril-oci-hook" \
+      "$remote_bin/mithril-e2e-tests" \
+      "${lifecycle}_runc" --ignored --nocapture --test-threads=1 \
+      >"$partial"
+    mv -- "$partial" "$output_directory/runc-$lifecycle.txt"
+    verify_absent "/sys/fs/bpf/$vm_name-$lifecycle-runc"
+    verify_absent "/sys/fs/cgroup/$vm_name-$lifecycle-runc"
+    verify_absent "$runc_output/owner.lock"
+  done <<<"$runc_lifecycles"
   "$provider" run "$vm_name" sudo "$remote_bin/mithril-identity-test" \
     --repo-root "$remote_source" --output-directory "$identity_output" \
     physical-probe --pin-root "/sys/fs/bpf/$vm_name-identity" \
