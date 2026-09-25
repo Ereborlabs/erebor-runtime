@@ -3068,7 +3068,7 @@ test does not close a row when its physical condition or an assertion changed.
         `CFG_KUBERNETES_PROCESS_CONTROL`. The draft test and actor modes were
         removed. No platform is qualified by that draft. Keep the legacy
         after-policy transfer check until a shared test preserves it.
-      - [ ] Use the existing Unix control socket and `SCM_RIGHTS` instead of
+      - [x] Use the existing Unix control socket and `SCM_RIGHTS` instead of
         `pidfd_getfd`. Move the receiver to a new network namespace before
         Node starts. Create a filesystem Unix control listener after recovery,
         then transfer the accepted TCP descriptor.
@@ -3094,7 +3094,15 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Direct `runc` passed in 36.74 seconds with the same actor, policy,
         and assertions through stock `runc` and the production OCI hook. The
         existing same-namespace restricted case passed in 34.36 seconds.
-      - [ ] Pass the unchanged case on Kubernetes, then commit it.
+      - [x] Kubernetes passed in 78.31 seconds with the unchanged test body,
+        actor, policy, and assertions against deployed Control and Node. The
+        existing same-namespace restricted case passed in 71.90 seconds. The
+        pinned Python image was restored from the retained archive before
+        the new test started; no scenario or production code changed.
+      - [ ] Keep the original `pidfd_getfd` and Ptrace permission check open.
+        `SCM_RIGHTS` proves cross-namespace socket authority but does not
+        execute that separate descriptor-acquisition operation. Do not delete
+        the legacy pidfd action or count its permission assertion as replaced.
     - [ ] Qualify the approved receiver with the same physical transfer and
       distinct namespace evidence. Require the allowed Send, payload receipt,
       and exact production role and effect result on all three platforms.
