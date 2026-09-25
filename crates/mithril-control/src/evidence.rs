@@ -12,17 +12,18 @@ use crate::{
 
 mod model;
 
+pub use araphor_data::{
+    EvidenceIntakeIdentityV1, MAX_EVIDENCE_BATCH_RECORDS, MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES,
+    MAX_EVIDENCE_GRPC_MESSAGE_BYTES,
+};
+pub(crate) use araphor_data::{EvidenceStoreOutcomeV1, MAX_PENDING_EVIDENCE_RECORDS};
 pub use model::*;
 
-pub const MAX_EVIDENCE_BATCH_RECORDS: usize = 4_096;
 pub const DEFAULT_EVIDENCE_BATCH_RECORDS: usize = MAX_EVIDENCE_BATCH_RECORDS;
 pub const MAX_EVIDENCE_RECORD_BYTES: usize = 128 * 1_024;
-pub const MAX_EVIDENCE_GRPC_MESSAGE_BYTES: usize = 4 * 1_024 * 1_024;
 pub const MAX_EVIDENCE_BATCH_PAYLOAD_BYTES: usize = 3 * 1_024 * 1_024;
 pub const MAX_EVIDENCE_SEGMENT_BYTES: usize = 16 * 1_024 * 1_024;
-pub const MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES: usize = 128 * 1_024 * 1_024;
 const MAX_COVERAGE_INTERVALS: usize = 8_192;
-pub(crate) const MAX_PENDING_EVIDENCE_RECORDS: u64 = 4_096;
 
 #[derive(Clone)]
 /// Owns evidence validation and delegates atomic persistence to the Control store.
@@ -34,18 +35,6 @@ pub struct EvidenceIntakeOwner {
 /// Owns the durable boundary after which retained evidence can be reclaimed.
 pub struct EvidenceRetentionOwner {
     store: crate::ControlStore,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-/// Separates evidence streams by authenticated tenant, node session, source, and source epoch.
-pub struct EvidenceIntakeIdentityV1 {
-    pub tenant_id: [u8; 16],
-    pub node_id: String,
-    pub node_boot_id: [u8; 16],
-    pub label_epoch: u64,
-    pub source_id: [u8; 16],
-    pub source_epoch: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -196,12 +185,6 @@ pub(crate) struct StoredCoverageReportV1 {
 pub(crate) struct CoverageReportInputV1 {
     pub identity: EvidenceIntakeIdentityV1,
     pub report: CoverageReport,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EvidenceStoreOutcomeV1 {
-    Accepted,
-    Pending,
 }
 
 impl EvidenceIntakeOwner {

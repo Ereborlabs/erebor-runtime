@@ -8,20 +8,6 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
-    #[snafu(display("Analysis database operation {operation} failed: {source}"))]
-    AnalysisDatabase {
-        operation: &'static str,
-        source: duckdb::Error,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Analysis store `{}` is invalid: {reason}", path.display()))]
-    AnalysisState {
-        path: PathBuf,
-        reason: String,
-        #[snafu(implicit)]
-        location: Location,
-    },
     #[snafu(display("Araphor trace rejected {code:?}: {reason}"))]
     Observability {
         code: crate::TraceErrorCodeV1,
@@ -160,8 +146,7 @@ impl ErrorExt for Error {
                 crate::TraceErrorCodeV1::Integrity => StatusCode::IllegalState,
             },
             Self::RetainedRangeExpired { .. } => StatusCode::NotFound,
-            Self::AnalysisState { .. }
-            | Self::Discovery { .. }
+            Self::Discovery { .. }
             | Self::InvalidConfiguration { .. }
             | Self::Json { .. }
             | Self::PolicySource { .. }
@@ -172,8 +157,7 @@ impl ErrorExt for Error {
             | Self::ControlStore { .. }
             | Self::Decommission { .. }
             | Self::AdministrativeApproval { .. } => StatusCode::InvalidArguments,
-            Self::AnalysisDatabase { .. }
-            | Self::DiscoveryDatabase { .. }
+            Self::DiscoveryDatabase { .. }
             | Self::Io { .. }
             | Self::Tls { .. }
             | Self::Serve { .. } => StatusCode::External,
@@ -187,7 +171,6 @@ impl ErrorExt for Error {
                 ..
             } => RetryHint::Retryable,
             Self::Observability { .. } => RetryHint::NonRetryable,
-            Self::AnalysisDatabase { .. } => RetryHint::NonRetryable,
             Self::DiscoveryDatabase { source, .. } => {
                 if matches!(
                     source.sqlite_error_code(),
@@ -200,8 +183,7 @@ impl ErrorExt for Error {
             }
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Serve { .. } => RetryHint::Retryable,
-            Self::AnalysisState { .. }
-            | Self::RetainedRangeExpired { .. }
+            Self::RetainedRangeExpired { .. }
             | Self::Discovery { .. }
             | Self::InvalidConfiguration { .. }
             | Self::Json { .. }
