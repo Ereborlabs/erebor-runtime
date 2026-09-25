@@ -46,6 +46,14 @@ Engineer runs storage proof
    identity, contiguous ACK, gap and retransmission rules. No generic public
    Ingest RPC or producer SDK is added. The input is the existing Node
    contract; only its durable destination changes in 7.2.
+   After Control authenticates and validates a group, pass the exact
+   `EvidenceIntakeIdentityV1` and `ValidatedEvidenceBatchV1` with CPU, cursor
+   range, shared framed bytes, and frame ends to AnalysisStore. The store
+   computes the source key and commits new records with its source receipt.
+   `Accepted` means the submitted end cursor is contiguous and durable;
+   `Pending` means a gap remains. Control issues only the durable contiguous
+   ACK. For coverage, pass the validated encoded report, CPU and revision as
+   `ValidatedCoverageV1`; commit it with the coverage receipt before ACK.
 4. Freeze `StorePosition(commit_revision, ordinal)`, store UUID/recovery epoch,
    relation revisions, processor progress and retained floors. Keep source
    cursors distinct. Freeze query `append`, `replace`, checkpoint, health,
