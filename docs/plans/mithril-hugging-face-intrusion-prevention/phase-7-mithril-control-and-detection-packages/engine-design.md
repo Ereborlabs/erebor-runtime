@@ -551,6 +551,22 @@ schema contains these logical relations; do not create unused indexes.
 | `assessments`, `requirements`, `proposals`, `reviews`, `publications` | Bounded immutable content, parent references, expected revision, request digest and owner state. A query row cannot authorize a mutation. |
 | `traces`, `trace_output`, `trace_measurements` | Accepted source/grant/target digests, execution state, deduplicated output and reviewed typed measurements. Host-sensitive output keeps its wider read restriction. |
 
+`StorePositionV1` is `(commit_revision: u64, ordinal: u32)`. Revision zero
+means an empty store. A transaction that changes retained data advances the
+revision once. Its new rows have distinct zero-based ordinals. An exact retry
+that changes nothing does not advance the revision. This position orders data
+commits; it is not a Node source cursor or a kernel sequence.
+
+`store_meta` keeps one UUID across ordinary restarts. A restored copy uses a
+new recovery epoch. Each `relation_revisions` entry contains the last commit
+revision that changed that relation, including retention changes. A processor
+progress key is processor ID, method version, tenant and source scope. Its
+value contains the last consumed store position, the coverage and context
+revisions used, and the required input floor. Commit output and progress in
+one transaction. A missing retained range is a separate coverage fact, not
+successful processor progress. Each authenticated source/CPU receipt has its
+own contiguous cursor and retained floor. Neither value is a query position.
+
 Store canonical manifests and bounded bodies in DuckDB, not parallel
 authoritative artifact files. Export bundles are optional portable copies.
 A retained summary cannot reproduce arbitrary queries over expired raw input.
@@ -839,6 +855,22 @@ precedes data. Frame operations are append, replace, checkpoint, health, error
 and terminal. Trace-specific payloads follow the observability contract.
 The CLI can render these frames as JSONL on stdout. A closed gRPC stream does
 not prove trace cleanup.
+
+Freeze the version-one protobuf payloads as follows. Every frame carries
+`schema_version`, operation, store UUID and recovery epoch, read revision,
+stable frame ID, coverage summary and one typed payload. The coverage summary
+contains its revision, completeness state and authorized missing ranges. Do
+not put an untrusted SQL expression or a secret in a frame ID.
+
+| Payload | Required fields and meaning |
+| --- | --- |
+| Metadata | Selected `append` or `replace` operation; authorized column names, types, null meanings and units; query receipt; dependency revisions; row/byte limits; owner readiness. Include the one-second resolution for a moving window. |
+| Append | Ordered rows with their store positions. A row belongs to this frame only after its complete bytes are sent. A retry uses the same frame ID for the same rows and cursor binding. |
+| Replace | One complete ordered result, row count and result digest. The client replaces its prior table only after this frame is complete. An oversized result is an error, not a partial table. |
+| Checkpoint | Opaque resume cursor and last completely scanned store position for append, or the read revision for replace. A nonmatching row can advance an append checkpoint. |
+| Health | Current relation revisions, owner readiness and lag. It has no result rows and does not mark missing evidence complete. |
+| Error | Typed code, bounded safe reason and last complete checkpoint if available. Close the stream after this frame. |
+| Terminal | Terminal reason and last complete checkpoint if available. A trace terminal also contains its execution and cleanup result; transport closure alone has neither meaning. |
 
 ### Query isolation
 

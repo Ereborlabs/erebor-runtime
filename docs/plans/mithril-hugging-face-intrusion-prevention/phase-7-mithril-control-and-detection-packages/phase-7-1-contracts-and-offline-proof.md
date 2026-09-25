@@ -114,6 +114,8 @@ model runtime, or policy publication is part of this phase.
 limits. The store has atomic event, coverage and receipt commits, and a
 separate-process post-commit crash test. The offline SQL proof covers admitted
 read shapes, safe fixed lower bounds and a manually run isolated worker.
+The durable position, progress and follow-frame fields are frozen in
+engine-design.md.
 Control still uses its existing live evidence store; no Node ACK path changed.
 
 At code revision `7a776428`, `cargo test -p araphor-data` passed 10 tests with
@@ -125,6 +127,6 @@ Rust CI script passed formatting, workspace check, strict lint and workspace
 all-targets tests on that code revision.
 
 The `storage-contract` e2e case, a production intake-path proof, bounded
-extraction measurements and the remaining schema/stream contract checks are
-not complete. Resolve whether that e2e case belongs before or with the live
+extraction measurements and executable schema/stream contract checks are not
+complete. Resolve whether that e2e case belongs before or with the live
 intake cutover before changing the intake owner or the completion gate.
