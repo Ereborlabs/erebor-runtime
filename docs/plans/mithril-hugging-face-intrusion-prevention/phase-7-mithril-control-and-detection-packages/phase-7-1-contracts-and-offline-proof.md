@@ -122,22 +122,28 @@ part of this phase.
 
 ## Implementation result
 
-**Done for the offline scope.** Code revision `9a6f38f1` puts AnalysisStore and
-SQL admission in `araphor-data`. Public store methods commit validated framed
-records, coverage, and source receipts. A public read returns the retained
-count and digest-checked coverage. The separate-process post-commit test proves
+**Done for the offline scope.** The current working tree is based on
+`2d8242e9`. AnalysisStore and SQL admission are in `araphor-data`. Public
+store methods commit validated framed records, coverage, and source receipts.
+A public read returns retained count and digest-checked coverage. The
+separate-process post-commit test proves
 reopen after the writer exits before its caller observes success. The tests
 reject schema versions 0 and 2 for the version-1 store, conflicting retries,
 and forbidden SQL. They check binding cancellation and safe SQL lower bounds
 against full authorized-input results. The OS-isolated worker test passed with
 `--ignored`; it is not a public query service.
 
+The 7.1 simplification uses one admitted syntax tree for SQL bound checks.
+Both data commit paths use one private method for relation and store revisions.
+Tests check the affected relation revisions. No owner or persistence boundary
+changed.
+
 `offline-exact` passed at
-`/tmp/araphor-proof.Ejt7yh/offline-exact/result.json`. Its recorded oracle
+`/tmp/araphor-simplify.bO8mk9/offline-exact/result.json`. Its recorded oracle
 has three accepted records, one duplicate delivery, one unresolved record, a
 nonzero snapshot digest, exact replay, and one synthetic native preview. It
 made zero live lookups and no production authority claim. `storage-contract`
-passed at `/tmp/araphor-proof.Ejt7yh/storage-contract/result.json` with nine
+passed at `/tmp/araphor-simplify.bO8mk9/storage-contract/result.json` with nine
 asserted contracts. It retained three events, contiguous cursor 3, coverage
 revision 1, commit revision 2, and unchanged identity, receipt, report, and
 count after reopen. The independent Control policy state did not change.
@@ -145,8 +151,8 @@ The pilot fixture pins DuckDB 1.4.4, sqlparser 0.63.0, distinct workload IDs,
 and non-overlapping train, tune, held-out, and forbidden time windows.
 
 `bash .github/scripts/verify-rust-ci.sh` passed formatting, workspace check,
-strict lint, and workspace all-targets tests on the committed code. This
-includes 11 passing `araphor-data` tests with two ignored and 190 passing
+strict lint, and workspace all-targets tests on this working-tree Rust source.
+The run includes 11 passing `araphor-data` tests with two ignored and 190 passing
 Control library tests with two ignored. Control still uses its existing live
 evidence store. Production Node intake, durable ACK measurements, and recovery
 belong to 7.2. QueryOwner, bounded extraction and query-worker measurements

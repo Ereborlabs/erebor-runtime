@@ -34,35 +34,44 @@ pub(crate) fn inspect_read_only_shape(
     sql: &str,
     authorized_relations: &[&str],
 ) -> Result<BTreeSet<String>, SqlAdmissionError> {
-    if sql.is_empty() || sql.len() > 16 * 1_024 {
-        return Err(SqlAdmissionError::TooLarge);
-    }
-    let mut statements =
-        Parser::parse_sql(&DuckDbDialect {}, sql).map_err(|_| SqlAdmissionError::Syntax)?;
-    if statements.len() != 1 {
-        return Err(SqlAdmissionError::NotReadOnly);
-    }
-    let Statement::Query(query) = statements.remove(0) else {
-        return Err(SqlAdmissionError::NotReadOnly);
-    };
-    let mut guard = ReadOnlyGuard {
-        authorized: authorized_relations
-            .iter()
-            .map(|name| name.to_ascii_lowercase())
-            .collect(),
-        ctes: Vec::new(),
-        dependencies: BTreeSet::new(),
-    };
-    match query.visit(&mut guard) {
-        ControlFlow::Continue(()) => Ok(guard.dependencies),
-        ControlFlow::Break(error) => Err(error),
-    }
+    ReadOnlyGuard::parse(sql, authorized_relations).map(|(_, relations)| relations)
 }
 
 struct ReadOnlyGuard {
     authorized: BTreeSet<String>,
     ctes: Vec<BTreeSet<String>>,
     dependencies: BTreeSet<String>,
+}
+
+impl ReadOnlyGuard {
+    fn parse(
+        sql: &str,
+        authorized_relations: &[&str],
+    ) -> Result<(Box<Query>, BTreeSet<String>), SqlAdmissionError> {
+        if sql.is_empty() || sql.len() > 16 * 1_024 {
+            return Err(SqlAdmissionError::TooLarge);
+        }
+        let mut statements =
+            Parser::parse_sql(&DuckDbDialect {}, sql).map_err(|_| SqlAdmissionError::Syntax)?;
+        if statements.len() != 1 {
+            return Err(SqlAdmissionError::NotReadOnly);
+        }
+        let Some(Statement::Query(query)) = statements.pop() else {
+            return Err(SqlAdmissionError::NotReadOnly);
+        };
+        let mut guard = Self {
+            authorized: authorized_relations
+                .iter()
+                .map(|name| name.to_ascii_lowercase())
+                .collect(),
+            ctes: Vec::new(),
+            dependencies: BTreeSet::new(),
+        };
+        match query.visit(&mut guard) {
+            ControlFlow::Continue(()) => Ok((query, guard.dependencies)),
+            ControlFlow::Break(error) => Err(error),
+        }
+    }
 }
 
 impl Visitor for ReadOnlyGuard {
@@ -237,17 +246,12 @@ fn simple_name(name: &ObjectName) -> Option<String> {
 }
 
 #[allow(dead_code, reason = "offline proof precedes the query owner")]
-pub(crate) fn safe_received_at_lower_bound(
+pub(crate) fn safe_received_at_bound(
     sql: &str,
     parameters: &[DuckValue],
     authorized_relations: &[&str],
 ) -> Result<Option<i64>, SqlAdmissionError> {
-    inspect_read_only_shape(sql, authorized_relations)?;
-    let mut statements =
-        Parser::parse_sql(&DuckDbDialect {}, sql).map_err(|_| SqlAdmissionError::Syntax)?;
-    let Statement::Query(query) = statements.remove(0) else {
-        return Err(SqlAdmissionError::NotReadOnly);
-    };
+    let (query, _) = ReadOnlyGuard::parse(sql, authorized_relations)?;
     let mut shape = BoundShape::default();
     let _ = query.visit(&mut shape);
     if shape.queries != 1 || shape.placeholders > 1 || query.with.is_some() {
@@ -395,7 +399,7 @@ mod tests {
     use duckdb::{params, params_from_iter, Config, Connection};
 
     #[test]
-    fn analysis_sql_admission_follows_ctes_aliases_and_joins() {
+    fn analysis_sql_admission_dependencies() {
         let allowed = ["events", "coverage"];
         let sql = "WITH recent AS (SELECT e.operation FROM \"events\" e WHERE e.received_at >= ?)
                    SELECT r.operation, COUNT(*) FROM recent r LEFT JOIN coverage c ON c.operation = r.operation
@@ -428,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_sql_admission_rejects_side_effects_and_external_access() {
+    fn analysis_sql_admission_escapes() {
         let allowed = ["events"];
         for sql in [
             "SELECT * FROM events; DELETE FROM events",
@@ -447,8 +451,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_sql_authorized_schema_binds_before_evaluation(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn analysis_sql_authorized_binding() -> Result<(), Box<dyn std::error::Error>> {
         let config = Config::default()
             .enable_external_access(false)?
             .enable_autoload_extension(false)?;
@@ -486,8 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_sql_lower_bound_matches_full_authorized_input(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn analysis_sql_bound_equivalence() -> Result<(), Box<dyn std::error::Error>> {
         const BOUND: i64 = 1_767_225_600_000_000;
         let cases = [
             (
@@ -527,7 +529,7 @@ mod tests {
             ),
         ];
         for (sql, parameters, expected_bound) in cases {
-            let bound = safe_received_at_lower_bound(sql, &parameters, &["events"])?;
+            let bound = safe_received_at_bound(sql, &parameters, &["events"])?;
             assert_eq!(bound, expected_bound, "wrong extraction bound for {sql}");
             let config = || -> duckdb::Result<Config> {
                 Config::default()
@@ -565,7 +567,7 @@ mod tests {
             assert_eq!(extracted_count, full_count, "partial input changed {sql}");
         }
         assert_eq!(
-            safe_received_at_lower_bound(
+            safe_received_at_bound(
                 "SELECT COUNT(*) FROM events WHERE received_at >= ?",
                 &[DuckValue::Text("2026-01-01".to_owned())],
                 &["events"]
@@ -573,7 +575,7 @@ mod tests {
             None
         );
         assert_eq!(
-            safe_received_at_lower_bound(
+            safe_received_at_bound(
                 "SELECT COUNT(*) FROM events WHERE received_at NOT BETWEEN TIMESTAMP '2026-01-01 00:00:00' AND TIMESTAMP '2026-01-01 00:00:01'",
                 &[],
                 &["events"]
@@ -581,7 +583,7 @@ mod tests {
             None
         );
         assert_eq!(
-            safe_received_at_lower_bound(
+            safe_received_at_bound(
                 "WITH recent AS (SELECT * FROM events) SELECT COUNT(*) FROM recent",
                 &[],
                 &["events"]
@@ -589,7 +591,7 @@ mod tests {
             None
         );
         assert_eq!(
-            safe_received_at_lower_bound(
+            safe_received_at_bound(
                 "SELECT COUNT(*) FROM events e JOIN coverage c ON e.operation = c.operation WHERE e.received_at >= TIMESTAMP '2026-01-01 00:00:00'",
                 &[],
                 &["events", "coverage"]
