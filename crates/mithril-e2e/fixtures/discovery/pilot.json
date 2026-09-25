@@ -1,6 +1,10 @@
 {
   "version": 1,
   "proof_kind": "SYNTHETIC",
+  "storage_binding": {
+    "duckdb": "1.4.4",
+    "sqlparser": "0.63.0"
+  },
   "recorded_oracle": {
     "source_revision": "synthetic-discovery-corpus-v1",
     "manifest_sha256": "cf13990f749a6d880054a48741cadc053b8688996d9520214b11ece08e6ad4ad",
