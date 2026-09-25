@@ -58,6 +58,8 @@ mod privilege;
 mod process_control;
 mod runc;
 #[cfg(test)]
+mod socket_cross;
+#[cfg(test)]
 mod socket_inherit;
 #[cfg(test)]
 mod socket_lifecycle;

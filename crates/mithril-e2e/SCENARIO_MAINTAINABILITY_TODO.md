@@ -2992,6 +2992,21 @@ test does not close a row when its physical condition or an assertion changed.
   - [ ] Replace cross-network-namespace socket transfer. Keep narrow denial,
     approved success, descriptor transfer, payload receipt, and distinct
     creator and current namespace evidence.
+    - [ ] Qualify the restricted receiver first. Reuse the socket-pass actor,
+      policy, and effect checks. Enter a new network namespace before Node
+      recovers the receiver. Transfer the accepted TCP descriptor with
+      `pidfd_getfd`. Require the physical transfer, denied Send and Receive,
+      no forbidden payload, and distinct socket creator and current network
+      namespaces on Host, direct `runc`, and Kubernetes.
+      - [x] Host passed in 27.77 seconds. The 97-line test uses the existing
+        socket-pass actor and policy. It observed both denied operations on
+        one transferred socket and no forbidden payload.
+      - [ ] Pass direct `runc` and commit it.
+      - [ ] Pass Kubernetes and commit it.
+    - [ ] Qualify the approved receiver with the same physical transfer and
+      distinct namespace evidence. Require the allowed Send, payload receipt,
+      and exact production role and effect result on all three platforms.
+      Remove the matching legacy transfer only after both tests pass.
   - [ ] Replace shared-socket-holder fencing. Keep both holders denied after
     the response floor, no received bytes, and the shared reference alive
     until the last close.
