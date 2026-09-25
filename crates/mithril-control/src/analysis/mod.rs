@@ -3,12 +3,17 @@ use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-use duckdb::{params, Config, Connection};
+use duckdb::{params, Config, Connection, OptionalExt as _};
+use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 use uuid::Uuid;
 
-use crate::error::{AnalysisDatabaseSnafu, AnalysisStateSnafu, IoSnafu};
-use crate::Result;
+use crate::error::{AnalysisDatabaseSnafu, AnalysisStateSnafu, IoSnafu, JsonSnafu};
+use crate::{
+    DiscoveryDigestV1, EvidenceBatchInputV1, EvidenceIntakeIdentityV1, EvidenceStoreOutcomeV1,
+    Result, MAX_EVIDENCE_BATCH_RECORDS, MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES,
+    MAX_PENDING_EVIDENCE_RECORDS,
+};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.4.4";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
@@ -26,6 +31,21 @@ pub struct AnalysisStoreMetaV1 {
     pub schema_version: u32,
     pub recovery_epoch: u64,
     pub commit_revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StorePositionV1 {
+    pub commit_revision: u64,
+    pub ordinal: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnalysisSourceReceiptV1 {
+    pub identity: EvidenceIntakeIdentityV1,
+    pub cpu_id: u32,
+    pub contiguous_cursor: u64,
+    pub coverage_revision: u64,
+    pub retained_floor: u64,
 }
 
 impl AnalysisStore {
@@ -142,6 +162,26 @@ impl AnalysisStore {
                 CREATE TABLE IF NOT EXISTS relation_revisions (
                     relation_name VARCHAR PRIMARY KEY,
                     last_changed_revision UBIGINT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS source_receipts (
+                    stream_key BLOB PRIMARY KEY,
+                    identity_json VARCHAR NOT NULL,
+                    tenant_id BLOB NOT NULL,
+                    cpu_id UINTEGER NOT NULL,
+                    contiguous_cursor UBIGINT NOT NULL,
+                    coverage_revision UBIGINT NOT NULL,
+                    retained_floor UBIGINT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS events (
+                    stream_key BLOB NOT NULL,
+                    tenant_id BLOB NOT NULL,
+                    durable_cursor UBIGINT NOT NULL,
+                    cpu_id UINTEGER NOT NULL,
+                    framed_record BLOB NOT NULL,
+                    frame_sha256 BLOB NOT NULL,
+                    commit_revision UBIGINT NOT NULL,
+                    ordinal UINTEGER NOT NULL,
+                    PRIMARY KEY (stream_key, durable_cursor)
                 );",
             )
             .context(AnalysisDatabaseSnafu {
@@ -178,6 +218,299 @@ impl AnalysisStore {
     pub fn meta(&self) -> Result<AnalysisStoreMetaV1> {
         let writer = self.writer()?;
         Self::read_meta_from(&writer, &self.root.join("analysis.duckdb"))
+    }
+
+    pub fn source_receipt(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+    ) -> Result<Option<AnalysisSourceReceiptV1>> {
+        let key = DiscoveryDigestV1::of(identity)?;
+        let writer = self.writer()?;
+        Self::read_receipt_from(&writer, &self.root, identity, &key.0)
+    }
+
+    #[allow(dead_code, reason = "offline proof precedes live intake cutover")]
+    pub(crate) fn accept_validated_batch(
+        &self,
+        identity: EvidenceIntakeIdentityV1,
+        batch: EvidenceBatchInputV1,
+    ) -> Result<EvidenceStoreOutcomeV1> {
+        self.validate_batch(&identity, &batch)?;
+        let key = DiscoveryDigestV1::of(&identity)?.0;
+        let identity_json = serde_json::to_string(&identity).context(JsonSnafu {
+            path: self.root.join("analysis.duckdb"),
+        })?;
+        let mut writer = self.writer()?;
+        let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
+            operation: "begin evidence",
+        })?;
+        let previous = Self::read_receipt_from(&transaction, &self.root, &identity, &key)?;
+        if previous
+            .as_ref()
+            .is_some_and(|receipt| receipt.cpu_id != batch.cpu_id)
+        {
+            return self.reject("one evidence source epoch changed CPU identity");
+        }
+        let contiguous = previous
+            .as_ref()
+            .map_or(0, |receipt| receipt.contiguous_cursor);
+        if batch.first_cursor > contiguous.saturating_add(1)
+            && batch.last_cursor > contiguous.saturating_add(MAX_PENDING_EVIDENCE_RECORDS)
+        {
+            return self.reject("out-of-order evidence exceeds the pending window");
+        }
+        let revision = Self::read_meta_from(&transaction, &self.root.join("analysis.duckdb"))?
+            .commit_revision
+            .checked_add(1)
+            .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
+        let mut new_records = 0_u32;
+        let mut frame_start = 0;
+        for (index, frame_end) in batch.frame_ends.iter().copied().enumerate() {
+            let frame = &batch.framed_records[frame_start..frame_end];
+            frame_start = frame_end;
+            let cursor = batch
+                .first_cursor
+                .checked_add(index as u64)
+                .ok_or_else(|| self.state_error("the evidence cursor is exhausted"))?;
+            let existing: Option<Vec<u8>> = transaction
+                .query_row(
+                    "SELECT framed_record FROM events WHERE stream_key = ? AND durable_cursor = ?",
+                    params![key.as_slice(), cursor],
+                    |row| row.get(0),
+                )
+                .optional()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read duplicate evidence",
+                })?;
+            if let Some(existing) = existing {
+                if existing != frame {
+                    return self.reject("an evidence retry has conflicting record content");
+                }
+                continue;
+            }
+            if cursor <= contiguous {
+                return self.reject("an acknowledged evidence record is not retained");
+            }
+            let frame_digest: [u8; 32] = Sha256::digest(frame).into();
+            transaction
+                .execute(
+                    "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    params![
+                        key.as_slice(),
+                        identity.tenant_id.as_slice(),
+                        cursor,
+                        batch.cpu_id,
+                        frame,
+                        frame_digest.as_slice(),
+                        revision,
+                        new_records,
+                    ],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "insert evidence",
+                })?;
+            new_records += 1;
+        }
+        if new_records == 0 {
+            return Ok(if contiguous >= batch.last_cursor {
+                EvidenceStoreOutcomeV1::Accepted
+            } else {
+                EvidenceStoreOutcomeV1::Pending
+            });
+        }
+        let mut next_contiguous = contiguous;
+        {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT durable_cursor FROM events WHERE stream_key = ?
+                     AND durable_cursor > ? ORDER BY durable_cursor",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare contiguous evidence scan",
+                })?;
+            let mut rows = statement
+                .query(params![key.as_slice(), contiguous])
+                .context(AnalysisDatabaseSnafu {
+                    operation: "scan contiguous evidence",
+                })?;
+            while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+                operation: "scan contiguous evidence",
+            })? {
+                let cursor: u64 = row.get(0).context(AnalysisDatabaseSnafu {
+                    operation: "read evidence cursor",
+                })?;
+                if next_contiguous.checked_add(1) != Some(cursor) {
+                    break;
+                }
+                next_contiguous = cursor;
+            }
+        }
+        if previous.is_some() {
+            transaction
+                .execute(
+                    "UPDATE source_receipts SET contiguous_cursor = ? WHERE stream_key = ?",
+                    params![next_contiguous, key.as_slice()],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "advance source receipt",
+                })?;
+        } else {
+            transaction
+                .execute(
+                    "INSERT INTO source_receipts VALUES (?, ?, ?, ?, ?, 0, 0)",
+                    params![
+                        key.as_slice(),
+                        identity_json,
+                        identity.tenant_id.as_slice(),
+                        batch.cpu_id,
+                        next_contiguous,
+                    ],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "insert source receipt",
+                })?;
+        }
+        for relation in ["events", "source_receipts"] {
+            transaction
+                .execute(
+                    "INSERT INTO relation_revisions VALUES (?, ?)
+                     ON CONFLICT (relation_name) DO UPDATE SET last_changed_revision = EXCLUDED.last_changed_revision",
+                    params![relation, revision],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "advance relation revision",
+                })?;
+        }
+        transaction
+            .execute(
+                "UPDATE store_meta SET commit_revision = ? WHERE singleton = true",
+                params![revision],
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "advance store revision",
+            })?;
+        transaction.commit().context(AnalysisDatabaseSnafu {
+            operation: "commit evidence",
+        })?;
+        Ok(if next_contiguous >= batch.last_cursor {
+            EvidenceStoreOutcomeV1::Accepted
+        } else {
+            EvidenceStoreOutcomeV1::Pending
+        })
+    }
+
+    #[allow(dead_code, reason = "offline proof precedes live intake cutover")]
+    fn validate_batch(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+        batch: &EvidenceBatchInputV1,
+    ) -> Result<()> {
+        if !crate::node_id_is_valid(&identity.node_id)
+            || identity.tenant_id == [0; 16]
+            || identity.node_boot_id == [0; 16]
+            || identity.source_id == [0; 16]
+            || identity.label_epoch == 0
+            || identity.source_epoch == 0
+            || batch.first_cursor == 0
+            || batch.frame_ends.is_empty()
+            || batch.frame_ends.len() > MAX_EVIDENCE_BATCH_RECORDS
+            || batch.framed_records.len() > MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES
+            || batch.frame_ends.last().copied() != Some(batch.framed_records.len())
+            || batch
+                .frame_ends
+                .iter()
+                .scan(0, |prior, end| {
+                    let increasing = *end > *prior;
+                    *prior = *end;
+                    Some(increasing)
+                })
+                .any(|increasing| !increasing)
+            || batch
+                .first_cursor
+                .checked_add(batch.frame_ends.len() as u64 - 1)
+                != Some(batch.last_cursor)
+        {
+            return self.reject("the validated evidence identity or bounds are invalid");
+        }
+        Ok(())
+    }
+
+    fn read_receipt_from(
+        connection: &Connection,
+        root: &Path,
+        identity: &EvidenceIntakeIdentityV1,
+        key: &[u8; 32],
+    ) -> Result<Option<AnalysisSourceReceiptV1>> {
+        let stored: Option<(String, Vec<u8>, u32, u64, u64, u64)> = connection
+            .query_row(
+                "SELECT identity_json, tenant_id, cpu_id, contiguous_cursor,
+                        coverage_revision, retained_floor
+                 FROM source_receipts WHERE stream_key = ?",
+                params![key.as_slice()],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .context(AnalysisDatabaseSnafu {
+                operation: "read source receipt",
+            })?;
+        stored
+            .map(
+                |(
+                    identity_json,
+                    tenant,
+                    cpu_id,
+                    contiguous_cursor,
+                    coverage_revision,
+                    retained_floor,
+                )| {
+                    let saved: EvidenceIntakeIdentityV1 = serde_json::from_str(&identity_json)
+                        .context(JsonSnafu {
+                            path: root.join("analysis.duckdb"),
+                        })?;
+                    if &saved != identity || tenant != identity.tenant_id {
+                        return AnalysisStateSnafu {
+                            path: root.join("analysis.duckdb"),
+                            reason: "the source key does not match its durable identity".to_owned(),
+                        }
+                        .fail();
+                    }
+                    Ok(AnalysisSourceReceiptV1 {
+                        identity: saved,
+                        cpu_id,
+                        contiguous_cursor,
+                        coverage_revision,
+                        retained_floor,
+                    })
+                },
+            )
+            .transpose()
+    }
+
+    #[allow(dead_code, reason = "offline proof precedes live intake cutover")]
+    fn reject<T>(&self, reason: &str) -> Result<T> {
+        AnalysisStateSnafu {
+            path: self.root.clone(),
+            reason: reason.to_owned(),
+        }
+        .fail()
+    }
+
+    #[allow(dead_code, reason = "offline proof precedes live intake cutover")]
+    fn state_error(&self, reason: &str) -> crate::Error {
+        AnalysisStateSnafu {
+            path: self.root.clone(),
+            reason: reason.to_owned(),
+        }
+        .build()
     }
 
     fn writer(&self) -> Result<MutexGuard<'_, Connection>> {
@@ -228,6 +561,7 @@ impl AnalysisStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DiscoveryInputManifestV1;
 
     #[test]
     fn analysis_store_identity_and_rollback_survive_reopen(
@@ -282,6 +616,132 @@ mod tests {
         fs::set_permissions(&root, fs::Permissions::from_mode(0o755))?;
         assert!(AnalysisStore::open(&root).is_err());
         assert!(AnalysisStore::open("relative-analysis").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_store_evidence_receipt_is_atomic_and_gap_aware(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let input = DiscoveryInputManifestV1::from_json(include_bytes!(
+            "../../../mithril-e2e/fixtures/discovery/manifest.json"
+        ))?;
+        let identity = input.records[0].id.stream.clone();
+        let first = input.records[0].observation.to_wire_record()?;
+        let second = input.records[1].observation.to_wire_record()?;
+        let third = input.records[2].observation.to_wire_record()?;
+
+        let pending = EvidenceBatchInputV1::encode(2, vec![second.clone()])?;
+        assert_eq!(
+            store.accept_validated_batch(identity.clone(), pending.clone())?,
+            EvidenceStoreOutcomeV1::Pending
+        );
+        assert_eq!(
+            store
+                .source_receipt(&identity)?
+                .ok_or("receipt absent")?
+                .contiguous_cursor,
+            0
+        );
+        assert_eq!(
+            store.accept_validated_batch(
+                identity.clone(),
+                EvidenceBatchInputV1::encode(1, vec![first])?
+            )?,
+            EvidenceStoreOutcomeV1::Accepted
+        );
+        assert_eq!(
+            store
+                .source_receipt(&identity)?
+                .ok_or("receipt absent")?
+                .contiguous_cursor,
+            2
+        );
+        assert_eq!(store.meta()?.commit_revision, 2);
+        {
+            let writer = store.writer()?;
+            let key = DiscoveryDigestV1::of(&identity)?.0;
+            let position: (u64, u32) = writer.query_row(
+                "SELECT commit_revision, ordinal FROM events
+                 WHERE stream_key = ? AND durable_cursor = 2",
+                params![key.as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert_eq!(position, (1, 0));
+        }
+        assert_eq!(
+            store.accept_validated_batch(identity.clone(), pending)?,
+            EvidenceStoreOutcomeV1::Accepted
+        );
+        assert_eq!(store.meta()?.commit_revision, 2);
+
+        let mut conflicting_second = input.records[1].observation.clone();
+        conflicting_second.ingested_utc_ns += 1;
+        assert!(store
+            .accept_validated_batch(
+                identity.clone(),
+                EvidenceBatchInputV1::encode(2, vec![conflicting_second.to_wire_record()?])?
+            )
+            .is_err());
+        assert_eq!(store.meta()?.commit_revision, 2);
+
+        assert_eq!(
+            store.accept_validated_batch(
+                identity.clone(),
+                EvidenceBatchInputV1::encode(4, vec![third.clone()])?
+            )?,
+            EvidenceStoreOutcomeV1::Pending
+        );
+        let mut conflicting_fourth = input.records[2].observation.clone();
+        conflicting_fourth.ingested_utc_ns += 1;
+        assert!(store
+            .accept_validated_batch(
+                identity.clone(),
+                EvidenceBatchInputV1::encode(
+                    3,
+                    vec![third.clone(), conflicting_fourth.to_wire_record()?]
+                )?
+            )
+            .is_err());
+        assert_eq!(store.meta()?.commit_revision, 3);
+        assert_eq!(
+            store
+                .source_receipt(&identity)?
+                .ok_or("receipt absent")?
+                .contiguous_cursor,
+            2
+        );
+        {
+            let writer = store.writer()?;
+            let count: u64 =
+                writer.query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
+            assert_eq!(count, 3);
+        }
+        drop(store);
+        let reopened = AnalysisStore::open(&root)?;
+        assert_eq!(
+            reopened
+                .source_receipt(&identity)?
+                .ok_or("receipt absent")?
+                .contiguous_cursor,
+            2
+        );
+        assert_eq!(
+            reopened.accept_validated_batch(
+                identity.clone(),
+                EvidenceBatchInputV1::encode(3, vec![third])?
+            )?,
+            EvidenceStoreOutcomeV1::Accepted
+        );
+        assert_eq!(
+            reopened
+                .source_receipt(&identity)?
+                .ok_or("receipt absent")?
+                .contiguous_cursor,
+            4
+        );
         Ok(())
     }
 }
