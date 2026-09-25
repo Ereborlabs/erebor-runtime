@@ -13,12 +13,15 @@ target until they run against its implementation.
 
 Accepted evidence produces bounded, replayable behavior profiles and scoped
 context. Diagnostic capture adds measurements for an exact workload lifetime.
-Control retains both kinds of data. Agents and the console will use the same
-owners. Neither a query nor a diagnostic measurement grants policy authority.
+The target puts retained data in AnalysisStore and keeps policy, trace grants,
+and source authentication in Control. The default deployment embeds the data
+crate in Control. Agents and the console will use the same owners. Neither a
+query nor a diagnostic measurement grants policy authority.
 
-Current scope: Discovery contracts and durable derivation are implemented.
-Diagnostic contracts, execution, transport, and projection are implemented in
-the working tree. Diagnostic physical qualification is incomplete. Public SQL,
+Current scope: Discovery contracts, durable derivation, and offline AnalysisStore
+proof are implemented. Live Control intake still uses its existing store.
+Diagnostic contracts, execution, transport, and projection are implemented.
+Diagnostic physical qualification is incomplete. Public SQL,
 trace CLI/API, assessment submission, classification, proposal generation, and
 declarative captures are not delivered by these changes.
 
@@ -55,6 +58,23 @@ evidence.
 -> Partial [measure](../../../../crates/mithril-e2e/harness/discovery/storage_compare.py) Evaluator checks equal counts, canonical output, and measured resource use. Measurements apply to the recorded hosts.<br>
 -> [native qualification](../../../../crates/mithril-e2e/src/discovery/storage.rs) SQLite passes the native storage and isolated-worker gates.<br>
 -> [DiscoveryIndex](../../../../crates/mithril-control/src/discovery/index.rs) Durable discovery uses SQLite. Live Control interference remains a deployment limit.
+
+The next route is the offline DuckDB proof. It does not replace the live
+Control intake or the SQLite discovery projection.
+
+[manifest](../../../../crates/mithril-e2e/fixtures/discovery/manifest.json) Engineer supplies the bounded recorded source, coverage, and duplicate.<br>
+-> [DiscoveryOwner::derive_recorded](../../../../crates/mithril-control/src/discovery/recorded.rs) Existing owner derives the expected accepted count and snapshot digest.<br>
+-> [run_discovery_offline](../../../../crates/mithril-e2e/src/discovery.rs) Existing case checks exact counts, replay, and native preview against the frozen oracle.<br>
+-> [run_discovery_storage_contract](../../../../crates/mithril-e2e/src/discovery/storage_contract.rs) New case frames validated fixture records for the public data owner.<br>
+-> [AnalysisStore::accept_validated_batch](../../../../crates/araphor-data/src/analysis/mod.rs) One transaction commits new records and the contiguous source receipt. An identical retry is a no-op; different content fails.<br>
+-> [AnalysisStore::accept_validated_coverage](../../../../crates/araphor-data/src/analysis/mod.rs) A second transaction commits the report bytes and coverage revision.<br>
+-> [AnalysisStore::source_status](../../../../crates/araphor-data/src/analysis/mod.rs) A locked read returns the exact source receipt, retained count, and digest-checked report.<br>
+-> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) Reopen preserves store identity, revisions, receipt, report, and count.<br>
+-> [storage-contract result](../../../../crates/mithril-e2e/src/discovery/storage_contract.rs) Case records nonzero cursors, revisions, counts, and digests; the independent Control policy state remains unchanged.
+
+[inspect_read_only_shape](../../../../crates/araphor-data/src/analysis/admission.rs) DuckDB-dialect parser rejects unauthorized SQL shape and external access.<br>
+-> [safe_received_at_lower_bound](../../../../crates/araphor-data/src/analysis/admission.rs) Optimization keeps a lower bound only when the predicate implies it; tests compare with full authorized input.<br>
+-> [analysis_sql_worker_isolated_from_data_store](../../../../crates/araphor-data/src/analysis/mod.rs) Separate-process test checks an OS-limited in-memory worker without opening the data store. This is not QueryOwner or a public SQL API.
 
 ### Durable evidence, profiles, and context
 
@@ -144,6 +164,7 @@ facts; it does not resolve a name or broaden a cohort on retry.
 | [NodePolicyGenerationOwner](../../../../crates/mithril-node/src/policy.rs) | Node owns the installed generations and immutable discovery catalogue. Catalogue replacement drops the old snapshot after readers release it. | Verified policy and measured exact objects produce the catalogue. Node refreshes the catalogue during policy and binding transitions. The observation batch reads one snapshot. | `discovery_catalog_pins_verified_coordinates_and_bounds_lookup` in [policy/discovery.rs](../../../../crates/mithril-node/src/policy/discovery.rs). |
 | [EffectObservationStore](../../../../crates/mithril-node/src/observation.rs) | Node opens the existing observation owner and write-ahead log (WAL). Diagnostic capture does not own this log. | Kernel observations plus the catalogue produce optional decision context before WAL append. The existing observation owner remains the writer. | `discovery_context_old_and_new_wal_frames_reopen_without_reencoding` in [wal.rs](../../../../crates/mithril-node/src/observation/wal.rs). |
 | [ControlStore](../../../../crates/mithril-control/src/store.rs) | Control opens one leased durable store. The last local lease owner explicitly unlocks it. Closing the owner does not delete durable records. | Existing transactions own CPU bindings, immutable artifact references, and bounded heads. Discovery and TraceOwner use these methods; neither writes the state image directly. | `discovery_store_lease_releases_after_last_owner_with_duplicate_descriptor` and `discovery_store_lease_inherited_guard_cannot_unlock_active_parent`. |
+| [AnalysisStore](../../../../crates/araphor-data/src/analysis/mod.rs) | Offline proof opens one private DuckDB store and writer. Reopen retains its UUID, recovery epoch, and source receipts. | Public methods accept Control-validated identity, framed evidence, and coverage. This owner writes retained data only; it does not authenticate a Node or change policy. | [storage_contract.rs](../../../../crates/mithril-e2e/src/discovery/storage_contract.rs) and `analysis_store_commit_before_ack_survives_process_exit`. |
 | [DiscoveryOwner](../../../../crates/mithril-control/src/discovery/mod.rs) | Configured runtime or an in-process caller opens the live owner. One admission guard bounds mutating work. Shutdown finishes the current bounded operation, then releases handles. | Bounded evidence pages and imported context produce export heads, profiles, and context packets. Stateless recorded-input methods need no live owner instance. | `discovery_derivation_runtime_disable_and_failure_leave_intake_active` in [runtime.rs](../../../../crates/mithril-control/src/discovery/runtime.rs). |
 | [DiscoveryIndex](../../../../crates/mithril-control/src/discovery/index.rs) | Discovery opens the leased SQLite projection. Closing connections retains the database. Recovery can replace only this derived state. | One writer applies retained artifacts. Two query-only readers serve bounded reads. Authoritative artifacts, not SQL rows, determine recovery. | `discovery_index_replacement_keeps_prior_index_on_invalid_authority` in [recovery.rs](../../../../crates/mithril-control/src/discovery/index/recovery.rs). |
 | [TraceOwner](../../../../crates/mithril-control/src/observability/owner.rs) | Control creates the owner over ControlStore. Accepted inputs and per-execution heads survive owner destruction. | Separate execution/read grants and optional host approval govern acceptance, append, cancellation, and disclosure. Only owner methods change trace heads. | `observability_recovery_commits_once_and_rejects_changed_output` and `observability_target_partial_cohort_never_widens_on_retry`. |
@@ -227,7 +248,7 @@ SQLite reserves 1 GiB of each participating tenant's logical budget. This
 reserve is conservative accounting, not a measurement of that tenant's rows.
 
 Current store metadata uses schema 6. Current SQLite uses schema 5, including
-the uncommitted trace tables. [Store migration](../../../../crates/mithril-control/src/store.rs)
+the trace tables. [Store migration](../../../../crates/mithril-control/src/store.rs)
 checks the prior state and recovery copy. A future schema is rejected.
 `StoreLease` records the acquiring process ID. An inherited guard cannot unlock
 the parent's lease; the last owner in that process releases it explicitly.
@@ -544,13 +565,14 @@ prevented effect. Enforcement evidence supplies the separate decision proof.
 | [discovery/tests.rs](../../../../crates/mithril-control/src/discovery/tests.rs), [corpus.rs](../../../../crates/mithril-control/src/discovery/tests/corpus.rs) | Exact counts, conflicting duplicates, changed actors/images/objects, incomplete coverage, native preview, scoped resume, invalid reports, and citation limits. |
 | [evidence_read.rs tests](../../../../crates/mithril-control/src/store/evidence_read.rs) | Frozen pages, retention races, bounds, store identity, and CPU metadata. |
 | [store.rs tests](../../../../crates/mithril-control/src/store.rs), [artifact tests](../../../../crates/mithril-control/src/store/discovery.rs) | Migration, leases, synced references, orphan cleanup, quotas, and pinned workload/policy context. |
-| [index.rs tests](../../../../crates/mithril-control/src/discovery/index.rs), [recovery.rs tests](../../../../crates/mithril-control/src/discovery/index/recovery.rs) | Atomic deduplication/counts/progress; invalid authority; index replacement across process exits. Trace additions in these files are uncommitted. |
+| [index.rs tests](../../../../crates/mithril-control/src/discovery/index.rs), [recovery.rs tests](../../../../crates/mithril-control/src/discovery/index/recovery.rs) | Atomic deduplication/counts/progress; invalid authority; index replacement across process exits. |
 | [runtime.rs tests](../../../../crates/mithril-control/src/discovery/runtime.rs), [live.rs tests](../../../../crates/mithril-control/src/discovery/live.rs) | Separate checkpoints, nine process-crash boundaries, exact gaps, resource admission, disable/failure isolation, and rebuild. |
 | [context.rs tests](../../../../crates/mithril-control/src/discovery/context.rs), [feed.rs tests](../../../../crates/mithril-control/src/discovery/index/feed.rs) | Cutoffs, disclosure, conflicts, context replay, and stable revision positions. |
 | [roundtrip.rs](../../../../crates/mithril-e2e/src/discovery/roundtrip.rs) | `discovery_context_roundtrip_uses_verified_catalog_wal_and_mtls` and `discovery_derivation_profile_restart_uses_wal_and_mtls` use production owners with synthetic external inputs. |
 | [storage.rs](../../../../crates/mithril-e2e/src/discovery/storage.rs) | Native SQLite bounds and isolated query-worker qualification. This is not a shipped arbitrary-SQL API. |
+| [storage_contract.rs](../../../../crates/mithril-e2e/src/discovery/storage_contract.rs), [analysis/mod.rs tests](../../../../crates/araphor-data/src/analysis/mod.rs), [admission.rs tests](../../../../crates/araphor-data/src/analysis/admission.rs) | Offline DuckDB commits, duplicate rejection, reopen, coverage digest, post-commit process exit, SQL admission, authorized-input equivalence, and isolated worker. No live intake or QueryOwner proof. |
 
-### Uncommitted diagnostic tests and physical harnesses
+### Diagnostic tests and physical harnesses
 
 | Read these tests or harnesses | Contract and limit |
 | --- | --- |
@@ -604,7 +626,7 @@ future owner exists. UI code and the console-only plan family are excluded.
 
 | Changed files | Review purpose and current boundary |
 | --- | --- |
-| [workspace Cargo.toml](../../../../Cargo.toml), [Cargo.lock](../../../../Cargo.lock), [Control manifest](../../../../crates/mithril-control/Cargo.toml) | Pin bundled `rusqlite` 0.40.2 and its required hooks/limits features. Add Control's checked ABI dependency. DuckDB remains an experiment, not a second production backend. |
+| [workspace Cargo.toml](../../../../Cargo.toml), [Cargo.lock](../../../../Cargo.lock), [Control manifest](../../../../crates/mithril-control/Cargo.toml), [data manifest](../../../../crates/araphor-data/Cargo.toml) | Pin the existing SQLite backend and the offline DuckDB data crate. DuckDB is not yet the live intake backend. |
 | [Interceptor manifest](../../../../crates/erebor-interceptor/Cargo.toml), [Interceptor exports](../../../../crates/erebor-interceptor/src/lib.rs) | Add diagnostic process/mount/thread system calls and export the supervised backend. No new daemon or generic backend interface. |
 | [Control build.rs](../../../../crates/mithril-control/build.rs), [Control exports](../../../../crates/mithril-control/src/lib.rs), [observability module](../../../../crates/mithril-control/src/observability/mod.rs), [Control errors](../../../../crates/mithril-control/src/error.rs) | Generate strict JSON support for decision-context protobuf types; expose owner contracts and typed errors. |
 | [Control config](../../../../crates/mithril-control/src/config.rs), [signing-key reader](../../../../crates/mithril-control/src/policy/reconciliation.rs), [server](../../../../crates/mithril-control/src/server.rs) | Discovery is opt-in. Diagnostics require Discovery storage and a trusted configured signing key. Reuse the existing key reader. Register the bounded NodeDiagnostics service on existing authenticated transport. |
@@ -630,18 +652,14 @@ not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
 
-The review covers `codex/mithril-ui` at
-`c1788de29d2c6dfa7a5c04b385ef09592639fb18`, plus its current non-UI working-tree
-changes and untracked diagnostic files. The branch merge base with local
-`main` is `cbb2e7c32590d4f202e86f72f7812849a13feeb4`. Use that merge base for
-branch attribution; local `main` also has later independent changes.
+The offline AnalysisStore proof is committed on `codex/mithril-ui` at
+`9a6f38f1`. The branch merge base with local `main` is
+`a9586be0ccaa2f38022721c911302bab36585c43`. The new data-owner route
+does not certify live Node intake, QueryOwner, or trace API frames.
 
-Discovery implementation and its tests are committed at this source state.
-The diagnostic implementation and its tests are not committed. This guide
-does not change that distinction or certify later source changes.
-
-This documentation task checks local links, source symbols, event transitions,
-map writers/readers, diagram calls, and coverage of the non-UI diff. It does
-not rerun Rust or physical tests. Prior test results remain in their existing
-phase records. No UI file, implementation source, dependency, or test is
-changed by this documentation task.
+The current offline runs are `storage-contract` and `offline-exact` under
+`/tmp/araphor-proof.Ejt7yh/`. Both report `PASS`. The isolated SQL worker
+test passed with `--ignored`. The storage case reports three retained events,
+contiguous cursor 3, coverage revision 1, and commit revision 2. Physical
+diagnostic results above are prior recorded runs, not fresh runs for this
+offline proof.
