@@ -1265,20 +1265,25 @@ mod tests {
             approved_role_id: "admin".into(),
             ..Default::default()
         };
-        owner.state.lock().unwrap().approvals.insert(
-            id,
-            ApprovalRecord {
-                requester_principal_id: id,
-                node_id: "node".into(),
-                expires_at_utc_ns: i64::MAX,
-                proof_id: id,
-                claim_slot_id: id,
-                body_sha256: [0; 32],
-                signed_intent: Vec::new(),
-                resolution,
-                state: ApprovalRecordState::Authenticated,
-            },
-        );
+        owner
+            .state
+            .lock()
+            .map_err(|_| std::io::Error::other("approval state poisoned"))?
+            .approvals
+            .insert(
+                id,
+                ApprovalRecord {
+                    requester_principal_id: id,
+                    node_id: "node".into(),
+                    expires_at_utc_ns: i64::MAX,
+                    proof_id: id,
+                    claim_slot_id: id,
+                    body_sha256: [0; 32],
+                    signed_intent: Vec::new(),
+                    resolution,
+                    state: ApprovalRecordState::Authenticated,
+                },
+            );
         let target = owner.admission_target(
             id,
             id,
@@ -1290,11 +1295,21 @@ mod tests {
             vec![b"sleep".to_vec(), b"1".to_vec()],
             0,
         )?;
-        let error = owner.admit(id, target).await.unwrap_err();
+        let error = owner
+            .admit(id, target)
+            .await
+            .err()
+            .ok_or("mismatched admission was accepted")?;
         assert!(error.to_string().contains("admission request differs"));
         assert!(matches!(
-            owner.state.lock().unwrap().approvals[&id].state,
-            ApprovalRecordState::Authenticated
+            owner
+                .state
+                .lock()
+                .map_err(|_| std::io::Error::other("approval state poisoned"))?
+                .approvals
+                .get(&id)
+                .map(|record| &record.state),
+            Some(ApprovalRecordState::Authenticated)
         ));
         Ok(())
     }
