@@ -54,6 +54,11 @@ Data implementation home: `crates/araphor-data/src/`. Put AnalysisStore in
 Create modules only as an approved slice needs them. Keep policy compilation,
 source authentication, trace authorization and dispatch in `mithril-control`.
 Control may call data owners but the data crate must not import Control.
+`EvidenceIntakeIdentityV1` and storage limits live in the data crate and are
+re-exported by Control. Control authenticates the Node and validates the wire
+record before calling a data owner. The data owner computes a source key from
+the exact identity fields and checks receipt, duplicate, gap, and size rules.
+It must not accept client-supplied tenant or source keys as authority.
 Mithril 7 owns data recovery, query admission, and retention. Discovery analysis
 and Control's TraceOwner use those facilities independently. The
 query credential has no source-write,

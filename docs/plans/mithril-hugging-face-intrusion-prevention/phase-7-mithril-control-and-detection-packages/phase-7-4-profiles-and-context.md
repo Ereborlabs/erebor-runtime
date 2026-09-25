@@ -35,11 +35,13 @@ Derivation fails or is disabled
 
 ## Changes in implementation order
 
-1. Move portable derivation from Control `src/discovery/recorded.rs`,
-   `live.rs`, `runtime.rs`, `model.rs` and `context.rs` into
-   `crates/araphor-data/src/discovery/`. Keep ControlStore and policy-compiler
-   calls behind Control-owned exports and exact preview requests; do not make
-   `araphor-data` depend on Control. Pass AnalysisStore into DiscoveryOwner.
+1. Move the portable model, recorded derivation and context selection from
+   Control `src/discovery/` into `crates/araphor-data/src/discovery/`.
+   Replace live/runtime ControlStore reads and checkpoints with bounded
+   AnalysisStore reads and one data transaction for result plus progress.
+   Control exports qualified policy facts; exact native preview stays in
+   Control. Delete the superseded Control discovery loop after parity tests.
+   Do not make `araphor-data` depend on Control.
    Keep storage startup outside `DiscoveryOwner::run`. No second database,
    copied raw-event archive or public derivation-job API is required.
    Register discovery as optional. Required graph packages read accepted data

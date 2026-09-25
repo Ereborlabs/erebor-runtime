@@ -186,11 +186,11 @@ fn discovery_pilot_preserves_exact_counts_risk_and_replay() -> TestResult<()> {
     assert_eq!(corpus.proof_kind, DiscoveryProofKindV1::Synthetic);
     assert_eq!(
         corpus.storage_binding.duckdb,
-        crate::ANALYSIS_DUCKDB_BINDING_VERSION
+        araphor_data::ANALYSIS_DUCKDB_BINDING_VERSION
     );
     assert_eq!(
         corpus.storage_binding.sqlparser,
-        crate::ANALYSIS_SQLPARSER_VERSION
+        araphor_data::ANALYSIS_SQLPARSER_VERSION
     );
     assert!(corpus.recorded_oracle.is_object());
     assert_eq!(corpus.operator_protocol.len(), 6);

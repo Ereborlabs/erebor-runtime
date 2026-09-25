@@ -1,6 +1,5 @@
 mod administrative_exec;
 mod administrative_http;
-mod analysis;
 mod canonical;
 mod config;
 mod decommission;
@@ -18,7 +17,6 @@ mod trust;
 
 pub use administrative_exec::*;
 pub use administrative_http::*;
-pub use analysis::*;
 pub use config::{ControlConfig, ControlRuntimeParts};
 pub use decommission::*;
 pub use discovery::*;

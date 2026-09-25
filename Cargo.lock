@@ -123,6 +123,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "araphor-data"
+version = "0.1.0"
+dependencies = [
+ "duckdb",
+ "prost",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "snafu",
+ "sqlparser",
+ "tempfile",
+ "time",
+ "uuid",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3622,12 +3639,12 @@ dependencies = [
 name = "mithril-control"
 version = "0.1.0"
 dependencies = [
+ "araphor-data",
  "axum",
  "axum-server",
  "clap",
  "crc32c",
  "crossterm",
- "duckdb",
  "ed25519-dalek 3.0.0",
  "erebor-interceptor-abi",
  "erebor-runtime-error",
@@ -3652,7 +3669,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "snafu",
- "sqlparser",
  "tempfile",
  "time",
  "tokio",

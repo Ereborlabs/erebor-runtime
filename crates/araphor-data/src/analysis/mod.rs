@@ -4,16 +4,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use duckdb::{params, Config, Connection, OptionalExt as _};
-use prost::Message as _;
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 use uuid::Uuid;
 
-use crate::error::{AnalysisDatabaseSnafu, AnalysisStateSnafu, IoSnafu, JsonSnafu};
+use crate::{AnalysisDatabaseSnafu, AnalysisStateSnafu, IoSnafu, JsonSnafu};
 use crate::{
-    CoverageReportInputV1, DiscoveryDigestV1, EvidenceBatchInputV1, EvidenceIntakeIdentityV1,
-    EvidenceStoreOutcomeV1, Result, MAX_EVIDENCE_BATCH_RECORDS, MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES,
-    MAX_EVIDENCE_GRPC_MESSAGE_BYTES, MAX_PENDING_EVIDENCE_RECORDS,
+    EvidenceIntakeIdentityV1, Result, MAX_EVIDENCE_BATCH_RECORDS,
+    MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES, MAX_EVIDENCE_GRPC_MESSAGE_BYTES,
+    MAX_PENDING_EVIDENCE_RECORDS,
 };
 
 mod admission;
@@ -49,6 +48,29 @@ pub struct AnalysisSourceReceiptV1 {
     pub contiguous_cursor: u64,
     pub coverage_revision: u64,
     pub retained_floor: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ValidatedEvidenceBatchV1 {
+    pub cpu_id: u32,
+    pub first_cursor: u64,
+    pub last_cursor: u64,
+    pub framed_records: prost::bytes::Bytes,
+    pub frame_ends: Vec<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ValidatedCoverageV1 {
+    pub identity: EvidenceIntakeIdentityV1,
+    pub cpu_id: u32,
+    pub revision: u64,
+    pub encoded_report: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EvidenceStoreOutcomeV1 {
+    Accepted,
+    Pending,
 }
 
 impl AnalysisStore {
@@ -237,19 +259,19 @@ impl AnalysisStore {
         &self,
         identity: &EvidenceIntakeIdentityV1,
     ) -> Result<Option<AnalysisSourceReceiptV1>> {
-        let key = DiscoveryDigestV1::of(identity)?;
+        let key = source_key(identity);
         let writer = self.writer()?;
-        Self::read_receipt_from(&writer, &self.root, identity, &key.0)
+        Self::read_receipt_from(&writer, &self.root, identity, &key)
     }
 
     #[allow(dead_code, reason = "offline proof precedes live intake cutover")]
-    pub(crate) fn accept_validated_batch(
+    pub fn accept_validated_batch(
         &self,
         identity: EvidenceIntakeIdentityV1,
-        batch: EvidenceBatchInputV1,
+        batch: ValidatedEvidenceBatchV1,
     ) -> Result<EvidenceStoreOutcomeV1> {
         self.validate_batch(&identity, &batch)?;
-        let key = DiscoveryDigestV1::of(&identity)?.0;
+        let key = source_key(&identity);
         let identity_json = serde_json::to_string(&identity).context(JsonSnafu {
             path: self.root.join("analysis.duckdb"),
         })?;
@@ -413,18 +435,17 @@ impl AnalysisStore {
     }
 
     #[allow(dead_code, reason = "offline proof precedes live intake cutover")]
-    pub(crate) fn accept_validated_coverage(&self, input: CoverageReportInputV1) -> Result<u64> {
+    pub fn accept_validated_coverage(&self, input: ValidatedCoverageV1) -> Result<u64> {
         let identity = &input.identity;
-        let report = &input.report;
-        if report.source_id.as_slice() != identity.source_id
-            || report.source_epoch != identity.source_epoch
-            || report.revision == 0
-            || report.encoded_len() > MAX_EVIDENCE_GRPC_MESSAGE_BYTES
+        if !valid_source_identity(identity)
+            || input.revision == 0
+            || input.encoded_report.is_empty()
+            || input.encoded_report.len() > MAX_EVIDENCE_GRPC_MESSAGE_BYTES
         {
             return self.reject("the validated coverage identity or bounds are invalid");
         }
-        let bytes = report.encode_to_vec();
-        let key = DiscoveryDigestV1::of(identity)?.0;
+        let bytes = &input.encoded_report;
+        let key = source_key(identity);
         let mut writer = self.writer()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin coverage",
@@ -432,19 +453,19 @@ impl AnalysisStore {
         let previous = Self::read_receipt_from(&transaction, &self.root, identity, &key)?;
         if previous
             .as_ref()
-            .is_some_and(|receipt| receipt.cpu_id != report.cpu_id)
+            .is_some_and(|receipt| receipt.cpu_id != input.cpu_id)
         {
             return self.reject("coverage changed the bound evidence CPU identity");
         }
         let current_revision = previous
             .as_ref()
             .map_or(0, |receipt| receipt.coverage_revision);
-        if report.revision <= current_revision {
-            if report.revision == current_revision {
+        if input.revision <= current_revision {
+            if input.revision == current_revision {
                 let existing: Option<Vec<u8>> = transaction
                     .query_row(
                         "SELECT report FROM coverage WHERE stream_key = ? AND revision = ?",
-                        params![key.as_slice(), report.revision],
+                        params![key.as_slice(), input.revision],
                         |row| row.get(0),
                     )
                     .optional()
@@ -461,14 +482,14 @@ impl AnalysisStore {
             .commit_revision
             .checked_add(1)
             .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
-        let digest: [u8; 32] = Sha256::digest(&bytes).into();
+        let digest: [u8; 32] = Sha256::digest(bytes).into();
         transaction
             .execute(
                 "INSERT INTO coverage VALUES (?, ?, ?, ?, ?, ?, 0)",
                 params![
                     key.as_slice(),
                     identity.tenant_id.as_slice(),
-                    report.revision,
+                    input.revision,
                     bytes.as_slice(),
                     digest.as_slice(),
                     revision,
@@ -481,7 +502,7 @@ impl AnalysisStore {
             transaction
                 .execute(
                     "UPDATE source_receipts SET coverage_revision = ? WHERE stream_key = ?",
-                    params![report.revision, key.as_slice()],
+                    params![input.revision, key.as_slice()],
                 )
                 .context(AnalysisDatabaseSnafu {
                     operation: "advance coverage receipt",
@@ -497,8 +518,8 @@ impl AnalysisStore {
                         key.as_slice(),
                         identity_json,
                         identity.tenant_id.as_slice(),
-                        report.cpu_id,
-                        report.revision,
+                        input.cpu_id,
+                        input.revision,
                     ],
                 )
                 .context(AnalysisDatabaseSnafu {
@@ -527,21 +548,16 @@ impl AnalysisStore {
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit coverage",
         })?;
-        Ok(report.revision)
+        Ok(input.revision)
     }
 
     #[allow(dead_code, reason = "offline proof precedes live intake cutover")]
     fn validate_batch(
         &self,
         identity: &EvidenceIntakeIdentityV1,
-        batch: &EvidenceBatchInputV1,
+        batch: &ValidatedEvidenceBatchV1,
     ) -> Result<()> {
-        if !crate::node_id_is_valid(&identity.node_id)
-            || identity.tenant_id == [0; 16]
-            || identity.node_boot_id == [0; 16]
-            || identity.source_id == [0; 16]
-            || identity.label_epoch == 0
-            || identity.source_epoch == 0
+        if !valid_source_identity(identity)
             || batch.first_cursor == 0
             || batch.frame_ends.is_empty()
             || batch.frame_ends.len() > MAX_EVIDENCE_BATCH_RECORDS
@@ -689,10 +705,71 @@ impl AnalysisStore {
     }
 }
 
+fn valid_source_identity(identity: &EvidenceIntakeIdentityV1) -> bool {
+    crate::node_id_is_valid(&identity.node_id)
+        && identity.tenant_id != [0; 16]
+        && identity.node_boot_id != [0; 16]
+        && identity.source_id != [0; 16]
+        && identity.label_epoch != 0
+        && identity.source_epoch != 0
+}
+
+fn source_key(identity: &EvidenceIntakeIdentityV1) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"ARAPHOR-ANALYSIS-SOURCE-V1\0");
+    hash.update(identity.tenant_id);
+    hash.update((identity.node_id.len() as u64).to_be_bytes());
+    hash.update(identity.node_id.as_bytes());
+    hash.update(identity.node_boot_id);
+    hash.update(identity.label_epoch.to_be_bytes());
+    hash.update(identity.source_id);
+    hash.update(identity.source_epoch.to_be_bytes());
+    hash.finalize().into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CoverageCounters, CoverageInterval, CoverageReport, DiscoveryInputManifestV1};
+
+    fn identity() -> EvidenceIntakeIdentityV1 {
+        EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "node-a".to_owned(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        }
+    }
+
+    fn batch(first_cursor: u64, records: &[&[u8]]) -> ValidatedEvidenceBatchV1 {
+        let mut framed_records = Vec::new();
+        let mut frame_ends = Vec::new();
+        for record in records {
+            framed_records.extend_from_slice(record);
+            frame_ends.push(framed_records.len());
+        }
+        ValidatedEvidenceBatchV1 {
+            cpu_id: 0,
+            first_cursor,
+            last_cursor: first_cursor + records.len() as u64 - 1,
+            framed_records: framed_records.into(),
+            frame_ends,
+        }
+    }
+
+    fn coverage(
+        identity: &EvidenceIntakeIdentityV1,
+        revision: u64,
+        bytes: &[u8],
+    ) -> ValidatedCoverageV1 {
+        ValidatedCoverageV1 {
+            identity: identity.clone(),
+            cpu_id: 0,
+            revision,
+            encoded_report: bytes.to_vec(),
+        }
+    }
 
     #[test]
     fn analysis_store_identity_and_rollback_survive_reopen(
@@ -756,15 +833,12 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
-        let input = DiscoveryInputManifestV1::from_json(include_bytes!(
-            "../../../mithril-e2e/fixtures/discovery/manifest.json"
-        ))?;
-        let identity = input.records[0].id.stream.clone();
-        let first = input.records[0].observation.to_wire_record()?;
-        let second = input.records[1].observation.to_wire_record()?;
-        let third = input.records[2].observation.to_wire_record()?;
+        let identity = identity();
+        let first = b"first".as_slice();
+        let second = b"second".as_slice();
+        let third = b"third".as_slice();
 
-        let pending = EvidenceBatchInputV1::encode(2, vec![second.clone()])?;
+        let pending = batch(2, &[second]);
         assert_eq!(
             store.accept_validated_batch(identity.clone(), pending.clone())?,
             EvidenceStoreOutcomeV1::Pending
@@ -777,10 +851,7 @@ mod tests {
             0
         );
         assert_eq!(
-            store.accept_validated_batch(
-                identity.clone(),
-                EvidenceBatchInputV1::encode(1, vec![first])?
-            )?,
+            store.accept_validated_batch(identity.clone(), batch(1, &[first]))?,
             EvidenceStoreOutcomeV1::Accepted
         );
         assert_eq!(
@@ -793,7 +864,7 @@ mod tests {
         assert_eq!(store.meta()?.commit_revision, 2);
         {
             let writer = store.writer()?;
-            let key = DiscoveryDigestV1::of(&identity)?.0;
+            let key = source_key(&identity);
             let position: (u64, u32) = writer.query_row(
                 "SELECT commit_revision, ordinal FROM events
                  WHERE stream_key = ? AND durable_cursor = 2",
@@ -808,33 +879,17 @@ mod tests {
         );
         assert_eq!(store.meta()?.commit_revision, 2);
 
-        let mut conflicting_second = input.records[1].observation.clone();
-        conflicting_second.ingested_utc_ns += 1;
         assert!(store
-            .accept_validated_batch(
-                identity.clone(),
-                EvidenceBatchInputV1::encode(2, vec![conflicting_second.to_wire_record()?])?
-            )
+            .accept_validated_batch(identity.clone(), batch(2, &[b"changed"]))
             .is_err());
         assert_eq!(store.meta()?.commit_revision, 2);
 
         assert_eq!(
-            store.accept_validated_batch(
-                identity.clone(),
-                EvidenceBatchInputV1::encode(4, vec![third.clone()])?
-            )?,
+            store.accept_validated_batch(identity.clone(), batch(4, &[third]))?,
             EvidenceStoreOutcomeV1::Pending
         );
-        let mut conflicting_fourth = input.records[2].observation.clone();
-        conflicting_fourth.ingested_utc_ns += 1;
         assert!(store
-            .accept_validated_batch(
-                identity.clone(),
-                EvidenceBatchInputV1::encode(
-                    3,
-                    vec![third.clone(), conflicting_fourth.to_wire_record()?]
-                )?
-            )
+            .accept_validated_batch(identity.clone(), batch(3, &[third, b"changed"]))
             .is_err());
         assert_eq!(store.meta()?.commit_revision, 3);
         assert_eq!(
@@ -860,10 +915,7 @@ mod tests {
             2
         );
         assert_eq!(
-            reopened.accept_validated_batch(
-                identity.clone(),
-                EvidenceBatchInputV1::encode(3, vec![third])?
-            )?,
+            reopened.accept_validated_batch(identity.clone(), batch(3, &[third]))?,
             EvidenceStoreOutcomeV1::Accepted
         );
         assert_eq!(
@@ -882,38 +934,8 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
-        let input = DiscoveryInputManifestV1::from_json(include_bytes!(
-            "../../../mithril-e2e/fixtures/discovery/manifest.json"
-        ))?;
-        let identity = input.records[0].id.stream.clone();
-        let report = CoverageReport {
-            source_id: identity.source_id.to_vec(),
-            source_epoch: identity.source_epoch,
-            revision: 1,
-            intervals: vec![CoverageInterval {
-                interval_id: vec![1; 16],
-                source_epoch: identity.source_epoch,
-                revision: 1,
-                state: "COMPLETE".to_owned(),
-                first_sequence: 1,
-                last_sequence: Some(3),
-                opening_counters: Some(CoverageCounters::default()),
-                closing_counters: Some(CoverageCounters {
-                    attempted: 3,
-                    requested: 3,
-                    emitted: 3,
-                    next_sequence: 4,
-                    ..CoverageCounters::default()
-                }),
-                current: true,
-                ..CoverageInterval::default()
-            }],
-            ..CoverageReport::default()
-        };
-        let accepted = CoverageReportInputV1 {
-            identity: identity.clone(),
-            report: report.clone(),
-        };
+        let identity = identity();
+        let accepted = coverage(&identity, 1, b"coverage-1");
         assert_eq!(store.accept_validated_coverage(accepted.clone())?, 1);
         assert_eq!(store.meta()?.commit_revision, 1);
         let receipt = store.source_receipt(&identity)?.ok_or("receipt absent")?;
@@ -922,19 +944,14 @@ mod tests {
         assert_eq!(store.accept_validated_coverage(accepted.clone())?, 1);
         assert_eq!(store.meta()?.commit_revision, 1);
 
-        let mut conflicting = accepted.clone();
-        conflicting.report.intervals[0].state = "GAPPED".to_owned();
+        let conflicting = coverage(&identity, 1, b"changed");
         assert!(store.accept_validated_coverage(conflicting).is_err());
         assert_eq!(store.meta()?.commit_revision, 1);
 
-        let mut newer = accepted.clone();
-        newer.report.revision = 3;
-        newer.report.intervals[0].revision = 3;
+        let newer = coverage(&identity, 3, b"coverage-3");
         assert_eq!(store.accept_validated_coverage(newer)?, 3);
         assert_eq!(store.meta()?.commit_revision, 2);
-        let mut stale = accepted;
-        stale.report.revision = 2;
-        stale.report.intervals[0].revision = 2;
+        let stale = coverage(&identity, 2, b"coverage-2");
         assert!(store.accept_validated_coverage(stale).is_err());
         assert_eq!(store.meta()?.commit_revision, 2);
         drop(store);
@@ -951,18 +968,11 @@ mod tests {
     #[test]
     fn analysis_store_commit_before_ack_survives_process_exit(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let input = DiscoveryInputManifestV1::from_json(include_bytes!(
-            "../../../mithril-e2e/fixtures/discovery/manifest.json"
-        ))?;
-        let identity = input.records[0].id.stream.clone();
+        let identity = identity();
         if let Some(root) = std::env::var_os("ARAPHOR_ANALYSIS_CRASH_PROOF_ROOT") {
             let store = AnalysisStore::open(PathBuf::from(root))?;
-            let record = input.records[0].observation.to_wire_record()?;
             assert_eq!(
-                store.accept_validated_batch(
-                    identity,
-                    EvidenceBatchInputV1::encode(1, vec![record])?
-                )?,
+                store.accept_validated_batch(identity, batch(1, &[b"first"]))?,
                 EvidenceStoreOutcomeV1::Accepted
             );
             std::process::exit(73);
@@ -985,10 +995,8 @@ mod tests {
                 .contiguous_cursor,
             1
         );
-        let record = input.records[0].observation.to_wire_record()?;
         assert_eq!(
-            store
-                .accept_validated_batch(identity, EvidenceBatchInputV1::encode(1, vec![record])?)?,
+            store.accept_validated_batch(identity, batch(1, &[b"first"]))?,
             EvidenceStoreOutcomeV1::Accepted
         );
         assert_eq!(store.meta()?.commit_revision, 1);

@@ -21,6 +21,7 @@ members = [
     "crates/erebor-runtime-session",
     "crates/erebor-runtime-terminal",
     "crates/mithril-control",
+    "crates/araphor-data",
     "crates/mithril-e2e",
     "crates/mithril-e2e-macros",
     "crates/mithril-node",
