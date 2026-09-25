@@ -8,7 +8,7 @@ A recorded manifest produces deterministic atoms and an exact native preview.
 The selected DuckDB binding passes offline durability, cancellation and
 isolated-query checks. SQL bounds match full authorized-input results in the
 recorded proof. The corpus and expected outcomes are executable.
-Entry: Mithril 6.2 and 6.3 contracts. Status: **Not done** for this design.
+Entry: Mithril 6.2 and 6.3 contracts. Status: **Done** for this offline design.
 
 ## Implementation flow
 
@@ -122,26 +122,32 @@ part of this phase.
 
 ## Implementation result
 
-**Not done.** The current code puts AnalysisStore and SQL admission in
-`araphor-data`. Control re-exports the unchanged source identity and intake
-limits. The store has atomic event, coverage and receipt commits, and a
-separate-process post-commit crash test. The offline SQL proof covers admitted
-read shapes, safe fixed lower bounds and a manually run isolated worker.
-The durable position, progress and follow-frame fields are frozen in
-engine-design.md. The pilot fixture freezes distinct workload IDs and
-non-overlapping time windows for its train, tune, held-out and forbidden cases.
-Control still uses its existing live evidence store; no Node ACK path changed.
+**Done for the offline scope.** Code revision `9a6f38f1` puts AnalysisStore and
+SQL admission in `araphor-data`. Public store methods commit validated framed
+records, coverage, and source receipts. A public read returns the retained
+count and digest-checked coverage. The separate-process post-commit test proves
+reopen after the writer exits before its caller observes success. The tests
+reject schema versions 0 and 2 for the version-1 store, conflicting retries,
+and forbidden SQL. They check binding cancellation and safe SQL lower bounds
+against full authorized-input results. The OS-isolated worker test passed with
+`--ignored`; it is not a public query service.
 
-At code revision `ce5f672`, the workspace gate passed 11 `araphor-data` tests
-with 2 ignored. The tests reject schema versions 0 and 2 for the version-1
-store and cancel a long-running in-memory DuckDB query. This proves binding
-cancellation, not QueryOwner deadline wiring. The isolated worker test passed
-with `--ignored`. The pilot corpus test passed with distinct workload/time
-splits. The `offline-exact` e2e case passed at
-`/tmp/araphor-corpus.2xySiD/offline-exact/result.json`; it reports zero live
-lookups and no production authority. The repository Rust CI script passed
-formatting, workspace check, strict lint and workspace all-targets tests on
-that code revision.
+`offline-exact` passed at
+`/tmp/araphor-proof.Ejt7yh/offline-exact/result.json`. Its recorded oracle
+has three accepted records, one duplicate delivery, one unresolved record, a
+nonzero snapshot digest, exact replay, and one synthetic native preview. It
+made zero live lookups and no production authority claim. `storage-contract`
+passed at `/tmp/araphor-proof.Ejt7yh/storage-contract/result.json` with nine
+asserted contracts. It retained three events, contiguous cursor 3, coverage
+revision 1, commit revision 2, and unchanged identity, receipt, report, and
+count after reopen. The independent Control policy state did not change.
+The pilot fixture pins DuckDB 1.4.4, sqlparser 0.63.0, distinct workload IDs,
+and non-overlapping train, tune, held-out, and forbidden time windows.
 
-The offline `storage-contract` e2e case is not complete. Production intake,
-extraction and wire-stream checks follow their owning phases above.
+`bash .github/scripts/verify-rust-ci.sh` passed formatting, workspace check,
+strict lint, and workspace all-targets tests on the committed code. This
+includes 11 passing `araphor-data` tests with two ignored and 190 passing
+Control library tests with two ignored. Control still uses its existing live
+evidence store. Production Node intake, durable ACK measurements, and recovery
+belong to 7.2. QueryOwner, bounded extraction and query-worker measurements
+belong to 7.3. Wire-level gRPC frames belong to Observability 3.
