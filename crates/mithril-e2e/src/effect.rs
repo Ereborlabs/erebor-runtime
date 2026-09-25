@@ -470,7 +470,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub io_uring_worker_request_attributed: bool,
     pub io_uring_sqpoll_denied_before_ring: bool,
     pub io_uring_lifecycle_released: bool,
-    pub bind_alias_canonicalized: bool,
     pub path_tree_outside_control_allowed: bool,
     pub fsconfig_reconfigure_global_invalidation: bool,
     pub mount_snapshot_rebuilt_after_mutation: bool,
@@ -2256,22 +2255,22 @@ impl EffectTestRunner {
                 KernelEffectOperationV1::OpenRead,
             ),
         )?;
-        let original_composite_atom_id = observations
-            .recent_since(original_marker)
-            .iter()
-            .find(|event| {
-                event.reason == exact_reason
-                    && event.exact_object_key_id == PathSelectorV1::kernel_handle_for_id("manual-secret")
-                    && event.composite_atom_id > 0
-            })
-            .map(|event| event.composite_atom_id)
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: Path::new("effect_observations"),
-                    reason: "the original exact-object result lacked its object and composite authority",
-                }
-                .build()
-            })?;
+        ensure!(
+            observations
+                .recent_since(original_marker)
+                .iter()
+                .any(|event| {
+                    event.reason == exact_reason
+                        && event.exact_object_key_id
+                            == PathSelectorV1::kernel_handle_for_id("manual-secret")
+                        && event.composite_atom_id > 0
+                }),
+            InvalidInputSnafu {
+                path: Path::new("effect_observations"),
+                reason:
+                    "the original exact-object result lacked its object and composite authority",
+            }
+        );
 
         if protect {
             let detached_mount_marker = observations.cursor();
@@ -2354,77 +2353,6 @@ impl EffectTestRunner {
             hard_link_marker,
             "UNRESOLVED_OBJECT",
         )?;
-
-        for (bind_alias, bind_alias_object) in [
-            (&paths.bind_alias, &bind_alias_object),
-            (&paths.second_bind_alias, &second_bind_alias_object),
-        ] {
-            let bind_marker = observations.cursor();
-            let bind_alias_outcome = fixture.open(bind_alias)?;
-            if bind_alias_outcome.allowed == protect {
-                reader
-                    .poll(Duration::from_millis(100))
-                    .context(InterceptorSnafu)?;
-            }
-            ensure!(
-                bind_alias_outcome.allowed != protect,
-                InvalidInputSnafu {
-                    path: bind_alias,
-                    reason: format!(
-                        "pre-existing bind alias did not preserve the exact policy result: {:?}",
-                        observations
-                            .recent_since(bind_marker)
-                            .iter()
-                            .map(|event| (
-                                event.reason.as_str(),
-                                event.active_role_id,
-                                event.admitted_entry_rule_id,
-                                event.exact_object_key_id,
-                                event.composite_atom_id,
-                                event.kernel_result,
-                            ))
-                            .collect::<Vec<_>>()
-                    ),
-                }
-            );
-            if protect {
-                ensure!(
-                    bind_alias_outcome.denied(),
-                    InvalidInputSnafu {
-                        path: bind_alias,
-                        reason: "protected bind alias returned a file descriptor",
-                    }
-                );
-            }
-            wait_for_effect(
-                &reader,
-                &observations,
-                bind_marker,
-                exact_reason,
-                (
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::OpenRead,
-                ),
-            )?;
-            ensure!(
-                observations
-                    .recent_since(bind_marker)
-                    .iter()
-                    .any(|event| {
-                        event.reason == exact_reason
-                            && event.mount_id_unique == bind_alias_object.mount_id_unique
-                            && event.filesystem_device == bind_alias_object.filesystem_device
-                            && event.inode == bind_alias_object.inode
-                            && event.inode_generation == bind_alias_object.inode_generation
-                            && event.exact_object_key_id == PathSelectorV1::kernel_handle_for_id("manual-secret")
-                            && event.composite_atom_id == original_composite_atom_id
-                    }),
-                InvalidInputSnafu {
-                    path: Path::new("effect_observations"),
-                    reason: "bind-alias evidence did not preserve the live alias identity and canonical exact authority",
-                }
-            );
-        }
 
         for (operation, expected_effect, label) in [
             (
@@ -3013,7 +2941,6 @@ impl EffectTestRunner {
             io_uring_worker_request_attributed: true,
             io_uring_sqpoll_denied_before_ring: true,
             io_uring_lifecycle_released,
-            bind_alias_canonicalized: true,
             path_tree_outside_control_allowed: protect,
             fsconfig_reconfigure_global_invalidation,
             mount_snapshot_rebuilt_after_mutation: true,
