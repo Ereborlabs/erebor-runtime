@@ -55,6 +55,11 @@
   fluent chaining.
 - Add traits only at a real seam. Do not add a trait with one implementation to
   hide a module split or make a local helper appear abstract.
+- Use `From` or `TryFrom` for a direct single-input conversion. Do not add a
+  conversion trait for validation that needs separate context or owner state.
+- Use at most three words in a new variable name and four in a new function
+  name. Count words separated by underscores. Keep required trait method names
+  and stable external contract names unchanged.
 - Borrow for read-only work and move at natural ownership boundaries. Use
   `Arc` or cloning only for a real shared async or lifetime requirement.
 - Put tests beside the owner they prove. A shared test prelude may centralize
