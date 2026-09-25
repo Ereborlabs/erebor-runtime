@@ -36,10 +36,10 @@ Control or Node restarts after dispatch
 
 ## Scope, owners, and changes
 
-1. Implement `TraceOwner` in `mithril-control/src/observability/`, backed by
-   the shared AnalysisStore. Commit immutable source and request records with
-   revision-checked state. Keep state transitions local
-   to this owner. Store source once; do not place output in the main state
+1. Keep `TraceOwner` in `mithril-control/src/observability/`, backed by
+   `araphor-data` AnalysisStore owner methods. Commit immutable source and
+   request records with revision-checked state. Control decides transitions;
+   the data crate commits them durably. Store source once; do not place output in the main state
    image. New requests, read grants, execution grants, and approvals are distinct.
 2. Extend the authenticated protocol in
    `crates/mithril-control/proto/erebor/mithril/control/v1/control.proto` with
@@ -64,9 +64,9 @@ Control or Node restarts after dispatch
 6. New source uses the separately granted host-diagnostic path described in
    the parent. Do not expose arbitrary source under a namespace-only grant.
    Pin complete approved inputs; reject stale approvals and changed source.
-7. Add `traces`, `trace_output` and `trace_measurements` to AnalysisStore.
-   Reuse `observability/{model,owner,dispatch,recipe}.rs` and adapt
-   `TraceOwner::{accept,append,output,cancel}` to shared transactions.
+7. Add `traces`, `trace_output` and `trace_measurements` to AnalysisStore in
+   `araphor-data`. Reuse Control's `observability/{model,owner,dispatch,recipe}.rs`;
+   adapt `TraceOwner` to owner-qualified data commits and reads.
    Commit output, deduplication receipt, state and table revisions together.
    Equal execution/source sequence and bytes is a retry; changed bytes reject.
    Typed measurements require reviewed schemas. Preserve cumulative/interval

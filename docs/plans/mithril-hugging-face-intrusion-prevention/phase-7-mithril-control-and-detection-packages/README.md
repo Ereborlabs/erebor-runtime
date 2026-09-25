@@ -1,6 +1,7 @@
 # Phase 7: Control Data, Discovery, And Detection
 
-Build Araphor's retained-data and discovery functions inside Mithril Control.
+Build Araphor's retained-data and discovery functions in one reusable data crate.
+Embed that crate in Mithril Control by default.
 Araphor is the combined product name for Mithril and Erebor. Keep current crate,
 repository and API-group names.
 
@@ -13,9 +14,11 @@ Read [engine-design.md](engine-design.md) for shared contracts and
 One default Control deployment accepts Node evidence, stores retained data in
 DuckDB, serves SQL and subscriptions, coordinates traces, derives behavior and
 findings, and supports agents and the console. No external platform is required.
-An optional deployment runs the complete data, discovery, graph and notification
-component outside Control. CLI and console can connect directly to either
-deployment. Remote trace and policy mutations retain Control's authority.
+The data crate owns storage, retention, query, discovery, graph/finding,
+notification, and trace-output persistence and reads. An optional deployment
+runs that same crate outside Control. CLI and console can connect directly to
+either deployment. Control retains Node authentication and ACK, trace intent
+and dispatch, policy, approval, publication, and response authority.
 
 ControlStore retains policy, trust, rollout and authority state. AnalysisStore
 retains events, context, trace output and analysis in DuckDB with its native WAL.
@@ -75,6 +78,10 @@ replaces a complete bounded query result. It has no public read-job lifecycle.
 | Policy and response owners | Their existing approval and physical-effect contracts | Treat source-write success as activation or containment |
 
 Remote placement changes where the data component runs, not these authorities.
+The data crate must not depend on `mithril-control`. Control passes validated,
+owner-qualified records across a narrow API; neither placement exposes raw
+database writes. Embedded mode calls the crate in process. Remote mode uses
+private authenticated protobuf gRPC operations for the same owner methods.
 No DataFusion layer, mandatory broker, second raw-event database, model gateway,
 model runtime or Control-owned agent loop is part of this design. A generic public producer API
 remains outside scope; use the existing authenticated Node service contracts.
@@ -110,7 +117,7 @@ Each row is a bounded deliverable. The required test level appears below.
 
 | Order | Phase | Deliverable and entry gate |
 | --- | --- | --- |
-| 1 | [7.1 Contracts and offline proof](phase-7-1-contracts-and-offline-proof.md) | Freeze schemas, corpus and DuckDB durability/isolation proof. |
+| 1 | [7.1 Contracts and offline proof](phase-7-1-contracts-and-offline-proof.md) | Establish the data crate, freeze schemas and corpus, and prove DuckDB durability/isolation. |
 | 2 | [7.2 Data store](phase-7-2-data-store.md) | Durable intake, context records, commit revisions, retention, backup and upgrade; needs 7.1. |
 | 3 | [7.3 Query and follow](phase-7-3-query-and-follow.md) | Isolated SQL and commit-driven append/replace streams; needs 7.2. |
 | 4 | [Observability 1](../../araphor-observability/phase-1-contracts-and-backend.md), then [2](../../araphor-observability/phase-2-owned-capture.md) | Backend proof can run alongside 7.1–7.3. Capture integration requires 7.2 and backend proof. |
@@ -120,7 +127,7 @@ Each row is a bounded deliverable. The required test level appears below.
 | 8 | [7.6 Methods and preview](phase-7-6-methods-and-preview.md) | Deterministic recipes, typed suggestions, requirements and exact native preview; needs 7.3 and 7.5. |
 | 9 | [7.7 Agent classification](phase-7-7-agent-investigation-and-classification.md) | Assessment owner/API, disclosure and recorded-client proof; optional external-agent measurements are separate; needs 7.6 and Observability 3. |
 | 10 | [7.8 Console and publication](phase-7-8-console-and-publication.md) | Shared review, independent approval, conditional source write and activation display; needs 7.7 and console fixture work. |
-| 11 | [7.9 Remote placement](phase-7-9-remote-placement.md) | Optional full data-component deployment and direct CLI/console access with identical contracts; needs 7.8. It is not needed for embedded operation. |
+| 11 | [7.9 Remote placement](phase-7-9-remote-placement.md) | Package the existing data crate as an optional process and add direct CLI/console access with identical contracts; needs 7.8. It is not needed for embedded operation. |
 | 12 | [7.10 Qualification](phase-7-10-qualification.md) | Integrated unit/e2e/physical, performance, recovery and recorded-client proof; needs 7.8 and every advertised optional phase. |
 | Optional | [Observability 4](../../araphor-observability/phase-4-declarative-captures.md) | Finite Trace CRD adapter after Observability 3. |
 

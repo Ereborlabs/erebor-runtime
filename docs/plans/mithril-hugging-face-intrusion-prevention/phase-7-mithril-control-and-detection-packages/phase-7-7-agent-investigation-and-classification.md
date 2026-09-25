@@ -65,7 +65,7 @@ disclosure and assessment validation. Real external-agent evaluation is a
 separate compatibility result, not a prerequisite for Phase 7.8 or 7.10.
 A local-defense or model-quality claim requires its actual measured result.
 
-1. Add `src/discovery/assessment.rs` with
+1. Add `crates/araphor-data/src/discovery/assessment.rs` with
    `DiscoveryOwner::submit_assessment` and `AssessmentReport::validate`.
    Validate separate activity, detector-relative verdict, security disposition,
    impact, urgency, hypotheses, counterevidence, and missing facts. Check cited

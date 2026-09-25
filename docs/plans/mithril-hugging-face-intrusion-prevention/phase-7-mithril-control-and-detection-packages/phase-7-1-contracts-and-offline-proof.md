@@ -33,8 +33,10 @@ Engineer runs storage proof
    engine-design.md: source key, kernel sequence, coverage revision, context,
    profiles, receipts, assessments, suggestions and publication references.
    Canonical digests exclude database positions, run IDs and model output.
-2. Add the first concrete `AnalysisStore` module under
-   `crates/mithril-control/src/analysis/`. Pin one DuckDB Rust binding/build
+2. Add `crates/araphor-data` as a library with the first concrete
+   `AnalysisStore` module under `src/analysis/`. It must not depend on
+   `mithril-control`. Control keeps source authentication and sends validated
+   source keys, framed records and coverage to the data owner. Pin one DuckDB Rust binding/build
    in Cargo and record its version in the fixture manifest. Use one writer,
    explicit transactions and local filesystem checks. No storage trait or
    production SQLite/DuckDB switch is required.
@@ -81,6 +83,7 @@ latency and checkpoint time. No benchmark result follows from choosing DuckDB.
 Commands after the new case is implemented:
 
 ```sh
+cargo test -p araphor-data
 cargo test -p mithril-control
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case offline-exact --output-directory /tmp/araphor-offline
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case storage-contract --output-directory /tmp/araphor-storage-contract

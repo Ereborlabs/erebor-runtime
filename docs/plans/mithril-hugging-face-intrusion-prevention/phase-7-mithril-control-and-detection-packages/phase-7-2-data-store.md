@@ -38,8 +38,8 @@ Store recovery fails
 
 ## Changes in implementation order
 
-1. Implement `AnalysisStore::{open,commit_evidence,read_page,commit_result,
-   retain,backup,restore}` in `mithril-control/src/analysis/`.
+1. Complete `AnalysisStore::{open,commit_evidence,read_page,commit_result,
+   retain,backup,restore}` in `crates/araphor-data/src/analysis/`.
    Names are proposed public owner methods. Use the schema, single-writer,
    batching and durability contract in engine-design.md. No new data service
    is required for embedded operation.
@@ -55,7 +55,8 @@ Store recovery fails
    affected relation revisions, including coverage/context and retention.
    Expose fixed prepared bounded reads: 256 records or 1 MiB per page.
    Return explicit range expiry. Never hold a reader during client I/O.
-5. Implement the fixed optional/required classes in engine-design.md.
+5. Implement `EvidenceRetentionOwner` in `araphor-data` with the fixed
+   optional/required classes in engine-design.md.
    Discovery progress does not pin raw data. Required security progress and
    bounded exact witness references constrain expiry. Lag is a health warning;
    backpressure starts at the protected age/byte or physical capacity bound.
@@ -115,6 +116,7 @@ the physical storage/partition case in the existing mithril-e2e harness.
 
 ```sh
 cargo test -p mithril-control
+cargo test -p araphor-data
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-recovery --output-directory /tmp/araphor-data-recovery
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-upgrade --output-directory /tmp/araphor-data-upgrade
 bash .github/scripts/verify-rust-ci.sh

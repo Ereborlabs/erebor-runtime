@@ -106,11 +106,11 @@ tests here, not keep this phase open until Mithril 10.
    includes native validation/preview; query reads pending/result revisions.
    If MCP is later selected, pin one maintained SDK after schema/transport
    review; no new remote MCP auth service or business owner.
-4. **Review — discovery and AnalysisStore.** Bind approval to proposal, preview,
+4. **Review — Control approval with data references.** Bind approval to proposal, preview,
    base source, target facts, guardrails, reviewer, and expiry. Require an
    independent reviewer for every widening in this slice. Any semantic change
    requires a new preview/review. Commit publication intent before network I/O.
-5. **Source write — `src/discovery/publication.rs` (new).** The current
+5. **Source write — `crates/mithril-control/src/discovery/publication.rs` (new).** The current
    `PolicyDesiredStateOwner` watches sources; it is not a write API. Add one
    adapter that updates an existing `WorkloadProtectionPolicy` through the
    Kubernetes client. Fetch and check UID, namespace UID, generation, spec

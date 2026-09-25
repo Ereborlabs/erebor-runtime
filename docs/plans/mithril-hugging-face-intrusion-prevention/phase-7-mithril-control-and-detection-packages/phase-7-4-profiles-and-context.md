@@ -35,8 +35,11 @@ Derivation fails or is disabled
 
 ## Changes in implementation order
 
-1. Reuse Control `src/discovery/recorded.rs`, `live.rs`, `runtime.rs`,
-   `model.rs` and `context.rs`. Pass AnalysisStore into DiscoveryOwner.
+1. Move portable derivation from Control `src/discovery/recorded.rs`,
+   `live.rs`, `runtime.rs`, `model.rs` and `context.rs` into
+   `crates/araphor-data/src/discovery/`. Keep ControlStore and policy-compiler
+   calls behind Control-owned exports and exact preview requests; do not make
+   `araphor-data` depend on Control. Pass AnalysisStore into DiscoveryOwner.
    Keep storage startup outside `DiscoveryOwner::run`. No second database,
    copied raw-event archive or public derivation-job API is required.
    Register discovery as optional. Required graph packages read accepted data
@@ -100,6 +103,7 @@ full replay correctly reports unavailable input.
 
 ```sh
 cargo test -p mithril-control
+cargo test -p araphor-data
 cargo test -p mithril-node
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case context-roundtrip --output-directory /tmp/araphor-context
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case profile-restart --output-directory /tmp/araphor-profiles

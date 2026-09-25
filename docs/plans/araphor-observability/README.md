@@ -4,8 +4,9 @@ Add one CLI for retained-data queries and live diagnostic capture. Agents run
 the CLI through their terminal. The console calls the same authenticated
 APIs at the selected Control or remote endpoint. Use upstream bpftrace for
 scripts, not a new tracing language.
-Capture belongs to Mithril Control. It uses the shared processing foundation
-owned by Mithril 7; it does not require discovery analysis to be enabled.
+Capture authorization and dispatch belong to Mithril Control. Retained trace
+output and reads belong to `araphor-data`, which Mithril 7 embeds by default;
+capture does not require discovery analysis to be enabled.
 This plan does not replace prevention or response.
 
 Read the shared [implementation review guide](../mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/implementation-review.md)
@@ -225,7 +226,9 @@ object loader. No second daemon, Kubernetes debug Job, or host shell is added.
 Keep this exception disabled until lifecycle and interference tests pass.
 
 `TraceOwner` in Control owns intent, authorization, dispatch, and aggregate
-result. Node owns exact runtime identity and the local execution record.
+result decisions. The data crate commits accepted intent and output under
+owner-qualified requests; it does not grant execution. Node owns exact runtime
+identity and the local execution record.
 Interceptor owns the child process, BPF resource inventory, and cleanup.
 Control/Node traffic extends the existing authenticated gRPC service families;
 no HTTP endpoint or agent credential is placed on Node.
