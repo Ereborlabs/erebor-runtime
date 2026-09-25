@@ -8,8 +8,8 @@ use snafu::{Location, Snafu};
 mod analysis;
 
 pub use analysis::{
-    AnalysisSourceReceiptV1, AnalysisStore, AnalysisStoreMetaV1, EvidenceStoreOutcomeV1,
-    StorePositionV1, ValidatedCoverageV1, ValidatedEvidenceBatchV1,
+    AnalysisSourceReceiptV1, AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1,
+    EvidenceStoreOutcomeV1, StorePositionV1, ValidatedCoverageV1, ValidatedEvidenceBatchV1,
     ANALYSIS_DUCKDB_BINDING_VERSION, ANALYSIS_SQLPARSER_VERSION,
 };
 
