@@ -1271,6 +1271,7 @@ impl Drop for Shared {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::env;
     use std::ffi::OsStr;
     use std::fs;
@@ -1278,12 +1279,76 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
+    use mithril_node::{RuntimeAdmissionClient, RuntimeAdmissionOperationV1};
     use rustix::process::{kill_process, Pid, Signal};
 
     use super::{Shared, READY_LIMIT};
-    use crate::physical::ProbeFile;
+    use crate::physical::{wait_for, ProbeFile};
     use crate::platform::{test_lifecycle, CriFixture, Host, TestResult};
     use crate::process::ProcessFixture;
+
+    #[test]
+    #[ignore = "requires its physical test environment"]
+    fn live_node_stall_is_closed() -> TestResult<()> {
+        test_lifecycle::<Host, _>("live-node-stall", || {
+            let mut env = Shared::setup("live-node-stall")?;
+            env.start_control()?;
+            env.start_node()?;
+            env.install_policy("actor_policy.json")?;
+            env.node_ready()?;
+            env.observe()?;
+            let request = env.request(RuntimeAdmissionOperationV1::StageRuntimeFacts, None)?;
+
+            let cri = env.cri.as_ref().ok_or("CRI is not running")?;
+            let before = cri.delay_list(Duration::from_secs(8))?;
+            wait_for(
+                &env.cri_path,
+                "delayed CRI inventory",
+                READY_LIMIT,
+                || Ok((cri.delayed_lists() > before).then_some(())),
+                || format!("last delayed CRI call: {}", cri.delayed_lists()),
+            )?;
+
+            let socket = env.admit_path.clone();
+            // Keep the client deadline below Node's deadline to test the transport timeout.
+            let client = RuntimeAdmissionClient::new(socket.clone(), Duration::from_secs(4))?;
+            assert!(env.runtime.block_on(client.available()));
+            let result = env.runtime.block_on(client.submit(&request));
+            cri.delay_list(Duration::ZERO)?;
+            let error = match result {
+                Err(error) => error,
+                Ok(response) => {
+                    return Err(format!(
+                        "the live Node answered during a blocked CRI read: {response:?}"
+                    )
+                    .into())
+                }
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("runtime admission endpoint exceeded its fail-closed timeout"),
+                "{error}"
+            );
+            assert!(socket.exists());
+            let last = RefCell::new(String::from("<none>"));
+            let recovered = wait_for(
+                &socket,
+                "admission recovery after CRI delay",
+                READY_LIMIT,
+                || match env.runtime.block_on(client.submit(&request)) {
+                    Ok(response) => Ok(Some(response)),
+                    Err(error) => {
+                        *last.borrow_mut() = error.to_string();
+                        Ok(None)
+                    }
+                },
+                || format!("last admission result: {}", last.borrow()),
+            )?;
+            assert!(recovered.allowed, "{recovered:?}");
+            env.stop()
+        })
+    }
 
     #[test]
     #[ignore = "requires its physical test environment"]

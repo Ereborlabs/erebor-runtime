@@ -22,6 +22,8 @@ struct CriService {
     value: Arc<RwLock<Option<(u64, CriRuntimeContainerObservationV1)>>>,
     next: Arc<AtomicU64>,
     seen: Arc<AtomicU64>,
+    list_delay_ms: Arc<AtomicU64>,
+    delayed_lists: Arc<AtomicU64>,
 }
 
 pub(crate) struct CriFixture {
@@ -102,6 +104,20 @@ impl CriFixture {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) fn delay_list(&self, delay: Duration) -> TestResult<u64> {
+        let before = self.service.delayed_lists.load(Ordering::Acquire);
+        self.service
+            .list_delay_ms
+            .store(u64::try_from(delay.as_millis())?, Ordering::Release);
+        Ok(before)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn delayed_lists(&self) -> u64 {
+        self.service.delayed_lists.load(Ordering::Acquire)
+    }
+
     pub(crate) fn stop(&mut self) -> TestResult<()> {
         if let Some(stop) = self.stop.take() {
             let _result = stop.send(());
@@ -155,6 +171,11 @@ impl cri::runtime_service_server::RuntimeService for CriService {
         &self,
         _request: Request<cri::ListContainersRequest>,
     ) -> Result<Response<cri::ListContainersResponse>, Status> {
+        let delay = self.list_delay_ms.load(Ordering::Acquire);
+        if delay != 0 {
+            self.delayed_lists.fetch_add(1, Ordering::Release);
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+        }
         let value = self
             .value
             .read()

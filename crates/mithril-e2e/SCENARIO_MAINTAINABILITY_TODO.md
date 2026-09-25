@@ -588,16 +588,16 @@ Runner retirement is a separate, open check. In particular:
   Keep the entry identity and denial assertions. Do not add an automatic
   retry. Identify why an exec child can reach IPC without an identity before
   this gate is called stable.
-- [ ] Qualify the approval readiness check on Kubernetes. A later 50-test
+- [x] Qualify the approval readiness check on Kubernetes. A later 50-test
   direct-`runc` identity run passed the entry-role case but failed
   `approved_exec_consumes_once`: Control rejected `approve` because Node
   admission was not ready. A focused run logged transient evidence recovery
   checks after the denied exec. The test now waits for Node readiness after
   that denial and before it asks Control for approval. The denied exec,
   consumed approval, and replay checks remain. The three approval tests
-  passed together on Host and direct `runc`. The Kubernetes admission-timeout
-  gate below still blocks its physical rerun.
-- [ ] Reproduce a live but unresponsive Node admission endpoint in lightweight
+  passed together on Host and direct `runc`. The approval test also passed in
+  the complete 50-test Kubernetes identity lifecycle.
+- [x] Reproduce a live but unresponsive Node admission endpoint in lightweight
   qualification. On 2026-09-25, `identity_kubernetes` passed 49 of 50 tests.
   `tcp_send_variants_are_allowed` failed before its actor started: the OCI
   hook returned `DENY_NODE_UNAVAILABLE` after its five-second admission
@@ -606,8 +606,20 @@ Runner retirement is a separate, open check. In particular:
   showed no OOM kill in that interval. A direct-`runc` test proved the
   missing-socket fail-closed case. A separate 32-cycle direct-`runc` policy
   and actor churn check passed in 265.57 seconds, so it did not reproduce the
-  live-endpoint timeout. Do not change admission code or rerun Kubernetes
-  until a lightweight case reproduces that timeout.
+  live-endpoint timeout. `live_node_stall_is_closed` now delays an external CRI
+  inventory response while the real Node remains live. The production
+  `StageRuntimeFacts` request times out at the client. The same request
+  succeeds after the delay clears. The exact privileged Host test passed
+  twice in 35.76 and 35.98 seconds. The paired
+  `tcp_send_variants_are_allowed::identity_kubernetes` test passed in 65.31
+  seconds with unchanged assertions. The complete identity lifecycles passed
+  on Host (55 tests, 572.53 seconds), direct `runc` (50 tests, 563.35 seconds),
+  and Kubernetes (50 tests, 1320.75 seconds). This proves the missing timeout
+  case. It does not identify the cause of the earlier Kubernetes stall.
+- [ ] Identify the intermittent live-Node admission stall. The complete
+  Kubernetes identity lifecycle passed on the next run, including the earlier
+  failed TCP case. Do not claim that the intermittent stall is fixed without
+  evidence of its cause and a check for that cause.
 
 The diff from `95775f48` adds or relocates these private test functions with
 more than five name components:
