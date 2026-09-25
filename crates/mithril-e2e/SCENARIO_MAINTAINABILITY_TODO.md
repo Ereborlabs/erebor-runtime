@@ -3116,7 +3116,7 @@ test does not close a row when its physical condition or an assertion changed.
         exact control-socket Create and namespace-setup capability. Require
         the worker role and admission rule, received `ok` payload, attributed
         Network/Send Allow result, and distinct creator and current namespace
-        in that result. The Rust test has 94 lines. A Node-first draft and a
+        in that result. The Rust test has 93 lines. A Node-first draft and a
         PID1-before-Node draft both got `ENOMEM` from `unshare(CLONE_NEWNET)`.
         The Node-first attempt recorded an exact SysAdmin Allow decision, then
         Linux failed before the socket action. No production code changed.
@@ -3131,15 +3131,26 @@ test does not close a row when its physical condition or an assertion changed.
         Both socket-recovery tests then passed together on Host in 53.10
         seconds and direct `runc` in 54.88 seconds. This lifecycle does not
         stop the Node shared by unrelated identity tests.
-      - [ ] Pass Kubernetes and commit it.
+      - [x] Pass Kubernetes and commit it.
         The first physical run failed with an unlocated OS `EACCES` after K3s
         created the actor Pod and Mithril Node Pod. The test did not reach a
         verified socket result. K3s restarted during runtime-hook installation
         and returned to Ready. The stage-labeled Host and direct-`runc` cases
         passed in 37.75 and 34.39 seconds. Locate the denied resource, then
         reproduce any missing condition in lightweight before an implementation
-        fix or another Kubernetes qualification run. Do not count this case as
-        qualified.
+        fix or another Kubernetes qualification run. The later diagnostics
+        located `EACCES` at the test runner's read of the approved receiver's
+        `/proc/<pid>/ns/net` entry. The shared actor now checks its own network
+        namespace after `setns`. The Rust test uses the holder's measured
+        namespace inode and still compares distinct namespaces and the exact
+        production effect fields. The final test has 93 lines. Host passed in
+        32.65 and 32.13 seconds, direct `runc` passed in 31.43 and 33.68
+        seconds, and Kubernetes passed in 87.29 and 79.87 seconds. The second
+        direct-`runc` and Kubernetes runs used the exact final test source.
+        A separate Host diagnostic run
+        returned `EACCES` when the actor opened the holder's namespace handle;
+        the same code passed on the next run. Keep that intermittent setup
+        failure open. It does not qualify the old `pidfd_getfd` permission check.
   - [ ] Replace shared-socket-holder fencing. Keep both holders denied after
     the response floor, no received bytes, and the shared reference alive
     until the last close.

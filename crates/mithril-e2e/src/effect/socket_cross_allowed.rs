@@ -5,7 +5,7 @@ use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = socket_cross_recovery]
 fn cross_namespace_socket_is_allowed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("socket-cross-allowed")?;
@@ -46,9 +46,8 @@ fn cross_namespace_socket_is_allowed<P: Platform>() -> TestResult<()> {
     receiver.ready()?;
     let task = env.task(receiver.id(), "approved receiver")?;
     let owner_ns = u32::try_from(fs::metadata(format!("/proc/{}/ns/net", main.id()))?.ino())?;
-    let entry_ns = u32::try_from(fs::metadata(format!("/proc/{}/ns/net", receiver.id()))?.ino())?;
+    let entry_ns = u32::try_from(holder_ns)?;
     assert_ne!(owner_ns, entry_ns);
-    assert_eq!(entry_ns, u32::try_from(holder_ns)?);
     let rx = &task.snapshot;
     let tx = &root.snapshot;
     assert_eq!(tx.root_class.as_deref(), Some("recovered_application_root"));

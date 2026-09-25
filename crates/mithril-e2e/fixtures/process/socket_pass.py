@@ -59,6 +59,8 @@ elif mode in ("receiver", "approved", "stale", "receiver-net", "approved-net"):
                 continue
         else:
             raise RuntimeError("the namespace holder is unavailable")
+        if os.stat("/proc/self/ns/net").st_ino != expected:
+            raise RuntimeError("the receiver did not join the holder namespace")
     print("native-fixture-ready", flush=True)
     sys.stdin.buffer.readline()
     named("rx-create")
