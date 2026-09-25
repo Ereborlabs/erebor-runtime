@@ -1,6 +1,7 @@
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
+use mithril_node::ExactFileObjectResolver;
 
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
@@ -51,12 +52,38 @@ fn bind_alias_keeps_exact_deny<P: Platform>() -> TestResult<()> {
         3,
         "exact bind alias evidence",
     )?;
+    let paths: Vec<String> =
+        serde_json::from_slice(&std::fs::read(env.work().join("bind-paths"))?)?;
+    assert_eq!(paths.len(), events.len());
+    let mut views = Vec::new();
+    for (path, event) in paths.iter().zip(&events) {
+        let view = ExactFileObjectResolver::resolve(
+            pid,
+            Path::new(path),
+            event.profile_generation_ref_id,
+            event.exact_object_key_id,
+            "secret-read".into(),
+            event.inode_generation,
+            None,
+        )?;
+        assert_eq!(view.mount_id_unique, event.mount_id_unique);
+        assert_eq!(view.filesystem_device, event.filesystem_device);
+        assert_eq!(view.inode, event.inode);
+        views.push(view);
+    }
     let base = &events[0];
+    let origin = &views[0];
     assert_ne!(base.mount_id_unique, 0);
     assert_ne!(base.exact_object_key_id, 0);
     assert_ne!(base.composite_atom_id, 0);
-    for alias in &events[1..] {
+    for (alias, view) in events[1..].iter().zip(&views[1..]) {
         assert_ne!(alias.mount_id_unique, base.mount_id_unique);
+        assert_eq!(view.mount_namespace_inode, origin.mount_namespace_inode);
+        assert_eq!(
+            view.selected_mount_id_unique,
+            origin.selected_mount_id_unique
+        );
+        assert_eq!(view.canonical_component_hex, origin.canonical_component_hex);
         assert_eq!(alias.filesystem_device, base.filesystem_device);
         assert_eq!(alias.inode, base.inode);
         assert_eq!(alias.inode_generation, base.inode_generation);

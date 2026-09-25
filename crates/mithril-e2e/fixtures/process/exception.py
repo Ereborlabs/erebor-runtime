@@ -69,6 +69,7 @@ elif mode in ("symlink", "procfd", "bind"):
             ("first", aliases[0] / secret.name),
             ("second", aliases[1] / secret.name),
         ]
+        write("bind-paths", json.dumps([str(path) for _, path in actions[1:]]))
     elif mode == "symlink":
         alias = Path("/tmp/mithril-observe-link")
         alias.symlink_to(secret)

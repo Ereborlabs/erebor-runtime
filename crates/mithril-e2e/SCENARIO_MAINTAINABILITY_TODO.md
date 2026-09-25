@@ -1831,6 +1831,16 @@ test does not close a row when its physical condition or an assertion changed.
     - [ ] Replace the old resolver topology check before removing its alias
       fixture paths. It also checks the selected mount, canonical component,
       and mount namespace, which the new effect events do not expose.
+    - [x] Match each new alias effect to the live public resolver result for
+      that actor path. The removed old action made this match. Distinct mount
+      IDs alone do not prove that each alias used its expected mount. Keep
+      this check in both Protect and Observe cases on all three platforms.
+      Both 99-line tests pass on Host, direct `runc`, and Kubernetes. The
+      checks also compare the selected mount, canonical component, and mount
+      namespace. The first Kubernetes Protect attempt stopped at a missing
+      pinned Python image; the unchanged case passed after the existing
+      archive restored that image. Other resolver topology cases remain in
+      the old runner.
   - [ ] Replace the exact-secret mount-change checks. Keep the first decision
     after mutation, dirty view, replaced-path denial, and restored decision.
   - [ ] Remove the old exact control open only after these alias and mount
