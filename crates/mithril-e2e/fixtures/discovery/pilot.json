@@ -5,6 +5,12 @@
     "duckdb": "1.4.4",
     "sqlparser": "0.63.0"
   },
+  "splits": {
+    "TRAIN": {"workload_id": "synthetic-train", "start_utc_ns": 2000000000, "end_utc_ns": 2100000000},
+    "TUNE": {"workload_id": "synthetic-tune", "start_utc_ns": 3000000000, "end_utc_ns": 3100000000},
+    "HELD_OUT_VALID": {"workload_id": "synthetic-held-out", "start_utc_ns": 4000000000, "end_utc_ns": 4100000000},
+    "FORBIDDEN": {"workload_id": "synthetic-forbidden", "start_utc_ns": 5000000000, "end_utc_ns": 5100000000}
+  },
   "recorded_oracle": {
     "source_revision": "synthetic-discovery-corpus-v1",
     "manifest_sha256": "cf13990f749a6d880054a48741cadc053b8688996d9520214b11ece08e6ad4ad",
