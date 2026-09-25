@@ -66,7 +66,8 @@ Reader is slow, revoked or disconnected
 7. Close readers before response writes. Enforce worker limits, one queued
    frame, 10-second stalled-output timeout, grant revocation, stream lifetime
    and shutdown cancellation. Emit a typed terminal/error state when possible.
-   A query error is never an empty success.
+   Keep query-worker health separate from intake storage health. A worker
+   failure does not stop intake. A query error is never an empty success.
 8. Add fixed recipes for exact match, revision difference, counts and qualified
    within-subject sequence. Recipes describe required fields and limitations;
    detection interpretation remains 7.6. gRPC/CLI wiring belongs to
@@ -77,6 +78,10 @@ Reader is slow, revoked or disconnected
 Unit tests `query_admission_`, `query_scope_`, `query_follow_` must cover
 nested forbidden functions, hidden-column predicates, cross-tenant aggregates,
 external access, input/output N/N+1, worker timeout and sandbox failure.
+Check every emitted append, replace, checkpoint, health, error and terminal
+frame against the frozen version-one fields and ordering. A closed stream is
+not a trace terminal result. Wire-level protobuf and gRPC client checks belong
+to Observability 3.
 Use deterministic commit barriers, not sleep-based race tests. Compare each
 optimized result with full authorized-input execution in the pinned DuckDB.
 Include an OR branch with older matching rows, two aliases of events, CTE reuse,
@@ -94,8 +99,14 @@ SQL-derived window. Require a correct count and bounded extraction, then add a
 matching batch and require a complete replacement. Expire a moving-window row
 with no new traffic. Revoke access during a quiet
 stream. Prove reader cancellation leaves intake and policy work active.
+Kill or time out the isolated worker and prove intake, policy work and the
+authoritative AnalysisStore remain healthy.
+Record the trusted extraction plan, extracted row/byte counts, worker native
+RSS, temporary bytes and evaluation time for the bounded case and the complete-
+input fallback. Reject an over-budget input before returning an aggregate.
 
 ```sh
+cargo test -p araphor-data
 cargo test -p mithril-control
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case query-follow --output-directory /tmp/araphor-query-follow
 bash .github/scripts/verify-rust-ci.sh

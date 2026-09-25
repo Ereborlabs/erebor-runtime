@@ -151,7 +151,9 @@ Add `observability_cli_` and `observability_grpc_` tests. Migrate the existing
 calls to native gRPC or gRPC-Web as appropriate. Prove the old administrative
 and decommission JSON routes are absent, unknown paths are rejected,
 the OIDC and Kubernetes callbacks still work, and approval/decommission
-decisions are unchanged. Run focused tests,
+decisions are unchanged. Check protobuf frame fields, operation order,
+complete checkpoint replay and trace terminal results through both native
+gRPC and gRPC-Web clients. Run focused tests,
 the existing UI check/test/build/e2e scripts, Helm checks, and full Rust CI.
 Record exact versions and nonzero case counts. A fixture-only UI cannot pass.
 

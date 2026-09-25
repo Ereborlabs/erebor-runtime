@@ -64,10 +64,10 @@ Store recovery fails
    Return Conflict on a competing commit. Commit optional missing ranges before
    resuming from a newer retained floor. External readers cannot pin input.
    Required-package retirement is explicit and authorized.
-6. Separate health for intake storage, query workers, each processor and trace
-   capacity. A query worker failure does not stop intake. Database corruption
-   does stop data ACK. Supervise analysis failures without exiting Control's
-   policy service. Enforce per-tenant and global queue/disk quotas.
+6. Separate health for intake storage, each processor and trace capacity.
+   Database corruption stops data ACK. Supervise analysis failures without
+   exiting Control's policy service. Enforce per-tenant and global queue/disk
+   quotas. Query-worker health and failure isolation belong to 7.3.
 7. Implement checkpoint, backup and restore through the data owner. Measure
    physical disk reuse after DELETE. Reserve maintenance space before work.
    Stop writes when reclamation fails; never unlink the native WAL. Recovery
@@ -96,17 +96,21 @@ disk full, unsupported schema and interrupted upgrade.
 
 Add `data-store-recovery` to the discovery e2e binary. Through the production
 mTLS service, submit data, lose ACK, resend, restart, process and expire input.
-Require one accepted identity, exact counts, unchanged policy state and explicit
-expired reads. Stop after every transaction boundary. Also run backup/restore
-after raw expiry; retained findings/profile fixtures and references must survive.
-A stale backup with already-purged Node input must report Partial recovery.
+This is the production counterpart to the offline `storage-contract` case in
+7.1. Reopen AnalysisStore and require the same source identity, receipt,
+coverage and exact counts. Require unchanged policy state and explicit expired
+reads. Stop after every transaction boundary. Record batch latency, durable
+ACK latency, checkpoint time and actual database, WAL and temporary bytes. Run
+backup/restore after raw expiry; retained findings/profile fixtures and
+references must survive. A stale backup with already-purged Node input must
+report Partial recovery.
 
 Extend `data-store-recovery` with a controllable clock and 24-hour retention.
 Disable optional discovery for eight hours, then two days. Require continued
-intake and query, exact retained replay, explicit expired gaps and no double
-counts. A required detector stall raises health immediately; one-hour lag alone
-does not pause intake. Reach its protected age/byte bound and require
-backpressure without deleting protected input. Keep a review witness through
+intake and bounded AnalysisStore reads, exact retained replay, explicit expired
+gaps and no double counts. A required detector stall raises health immediately.
+One-hour lag alone does not pause intake. Reach its protected age/byte bound
+and require backpressure without deleting protected input. Keep a review witness through
 optional expiry; no source-wide pin is permitted.
 
 Add `data-store-upgrade` using retained-format fixture bytes. Validate all
