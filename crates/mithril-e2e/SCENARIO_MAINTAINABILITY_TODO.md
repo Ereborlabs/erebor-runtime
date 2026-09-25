@@ -3132,6 +3132,14 @@ test does not close a row when its physical condition or an assertion changed.
         seconds and direct `runc` in 54.88 seconds. This lifecycle does not
         stop the Node shared by unrelated identity tests.
       - [ ] Pass Kubernetes and commit it.
+        The first physical run failed with an unlocated OS `EACCES` after K3s
+        created the actor Pod and Mithril Node Pod. The test did not reach a
+        verified socket result. K3s restarted during runtime-hook installation
+        and returned to Ready. The stage-labeled Host and direct-`runc` cases
+        passed in 37.75 and 34.39 seconds. Locate the denied resource, then
+        reproduce any missing condition in lightweight before an implementation
+        fix or another Kubernetes qualification run. Do not count this case as
+        qualified.
   - [ ] Replace shared-socket-holder fencing. Keep both holders denied after
     the response floor, no received bytes, and the shared reference alive
     until the last close.
