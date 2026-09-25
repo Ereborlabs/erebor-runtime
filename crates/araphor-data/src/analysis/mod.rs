@@ -966,6 +966,64 @@ mod tests {
     }
 
     #[test]
+    fn analysis_store_accepts_limits_and_rejects_limit_plus_one(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let mut source = identity();
+        source.node_id = "n".repeat(crate::MAX_NODE_ID_BYTES);
+        let mut max_batch = ValidatedEvidenceBatchV1 {
+            cpu_id: 0,
+            first_cursor: 1,
+            last_cursor: MAX_EVIDENCE_BATCH_RECORDS as u64,
+            framed_records: vec![1; MAX_EVIDENCE_BATCH_RECORDS].into(),
+            frame_ends: (1..=MAX_EVIDENCE_BATCH_RECORDS).collect(),
+        };
+        store.validate_batch(&source, &max_batch)?;
+        max_batch.last_cursor += 1;
+        max_batch.framed_records = vec![1; MAX_EVIDENCE_BATCH_RECORDS + 1].into();
+        max_batch.frame_ends.push(MAX_EVIDENCE_BATCH_RECORDS + 1);
+        assert!(store.validate_batch(&source, &max_batch).is_err());
+        source.node_id.push('n');
+        assert!(store
+            .validate_batch(&source, &batch(1, &[b"first"]))
+            .is_err());
+        source.node_id.pop();
+
+        assert_eq!(
+            store.accept_validated_batch(
+                source.clone(),
+                batch(MAX_PENDING_EVIDENCE_RECORDS, &[b"gap"])
+            )?,
+            EvidenceStoreOutcomeV1::Pending
+        );
+        let revision = store.meta()?.commit_revision;
+        assert!(store
+            .accept_validated_batch(
+                source.clone(),
+                batch(MAX_PENDING_EVIDENCE_RECORDS + 1, &[b"too-far"])
+            )
+            .is_err());
+        assert_eq!(store.meta()?.commit_revision, revision);
+
+        store.accept_validated_coverage(coverage(
+            &source,
+            1,
+            &vec![1; MAX_EVIDENCE_GRPC_MESSAGE_BYTES],
+        ))?;
+        let revision = store.meta()?.commit_revision;
+        assert!(store
+            .accept_validated_coverage(coverage(
+                &source,
+                2,
+                &vec![1; MAX_EVIDENCE_GRPC_MESSAGE_BYTES + 1],
+            ))
+            .is_err());
+        assert_eq!(store.meta()?.commit_revision, revision);
+        Ok(())
+    }
+
+    #[test]
     fn analysis_store_commit_before_ack_survives_process_exit(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let identity = identity();
