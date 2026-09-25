@@ -42,8 +42,10 @@ Operator changes placement
 
 1. Reuse the existing `araphor-data` library without moving its owners.
    Graph results/references/progress remain one local database transaction.
-   Add an optional binary in `crates/araphor-data/src/bin/`; do not fork
-   algorithms, schemas or retention code.
+   Add the optional host binary in `crates/mithril-control/src/bin/` so it can
+   reuse the client authentication and gRPC adapters without a crate cycle.
+   It calls `araphor-data` owners and does not start Control authority owners.
+   Do not fork algorithms, schemas or retention code.
 2. Add Embedded/Remote placement configuration. Remote mode must not open a
    local analysis DB. Keep policy/trust/approval, publication and TraceOwner
    dispatch in Control. Give NotificationRouter only its scoped sink credentials.
