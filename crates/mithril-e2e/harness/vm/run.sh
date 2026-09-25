@@ -457,6 +457,9 @@ if [[ $entry_role_runtime_only == false && $recovered_entry_only == false ]]; th
       "${lifecycle}_host" --ignored --nocapture --test-threads=1 \
       >"$partial"
     mv -- "$partial" "$output_directory/host-$lifecycle.txt"
+    verify_absent "/sys/fs/bpf/$vm_name-$lifecycle-host"
+    verify_absent "/sys/fs/cgroup/$vm_name-$lifecycle-host"
+    verify_absent "$host_output/owner.lock"
   done <<<"$host_lifecycles"
   "$provider" run "$vm_name" sudo "$remote_bin/mithril-identity-test" \
     --repo-root "$remote_source" --output-directory "$identity_output" \
@@ -713,18 +716,15 @@ if [[ $with_k3s == true ]]; then
 fi
 
 verify_absent "/sys/fs/bpf/$vm_name-identity"
-verify_absent "/sys/fs/bpf/$vm_name-pid-reuse"
 verify_absent "/sys/fs/bpf/$vm_name-runc-entry-roles"
 verify_absent "/sys/fs/bpf/$vm_name-effect-observation"
 verify_absent "/sys/fs/bpf/$vm_name-local-enforcement"
 verify_absent "/sys/fs/bpf/$vm_name-network-enforcement"
 verify_absent "/sys/fs/cgroup/$vm_name-identity"
-verify_absent "/sys/fs/cgroup/$vm_name-pid-reuse"
 verify_absent "/sys/fs/cgroup/$vm_name-effect-observation"
 verify_absent "/sys/fs/cgroup/$vm_name-local-enforcement"
 verify_absent "/sys/fs/cgroup/$vm_name-network-enforcement"
 verify_absent "$identity_output/owner.lock"
-verify_absent "$identity_output/pid-owner.lock"
 verify_absent "$entry_role_output/owner.lock"
 if [[ $with_k3s == true ]]; then
   verify_absent "$remote_root/kubernetes-identity/kubernetes-entry"
