@@ -1822,6 +1822,17 @@ test does not close a row when its physical condition or an assertion changed.
         existing direct-`runc` retained-gate probe covers the same
         fail-closed decision and absent process. The pinned Python image
         was restored from its verified archive after K3s removed it.
+    - [ ] Retire the old alias action after the old physical probe still
+      passes. Remove the old per-alias opens and their test-only result
+      field. Keep the resolver's topology check for now: it also checks the
+      selected mount, canonical component, and mount namespace, which the
+      new effect observations do not expose. A focused Observe run denied
+      all 6,000 baseline opens before it reached the alias action. The same
+      denial occurred after the attempted deletion was fully restored and
+      the original probe was rebuilt. The VM had no retained Mithril process
+      or BPF pin. Do not delete the old action until this baseline defect is
+      understood or the remaining old probe is replaced with qualified
+      standard tests.
   - [ ] Replace the exact-secret mount-change checks. Keep the first decision
     after mutation, dirty view, replaced-path denial, and restored decision.
   - [ ] Remove the old exact control open only after these alias and mount
