@@ -1811,7 +1811,17 @@ test does not close a row when its physical condition or an assertion changed.
         policy, and assertions through stock `runc` and the production OCI
         hook. All four direct-`runc` mount-alias lifecycle tests passed
         together in 139.70 seconds.
-      - [ ] Pass Kubernetes and commit it.
+      - [x] Kubernetes passed in 95.43 seconds with the unchanged Observe
+        scenario body in its own recovery lifecycle. Host and direct `runc`
+        requalified in 41.63 and 50.55 seconds. The three remaining
+        Kubernetes mount-alias tests passed together in 124.52 seconds.
+        A prior four-test shared-lifecycle run passed Protect, then denied
+        three new actor Pods after Observe stopped an activated Node. The
+        production OCI hook returned `DENY_NODE_UNAVAILABLE`. This is a new
+        start during a Node outage, not recovery of a running actor. The
+        existing direct-`runc` retained-gate probe covers the same
+        fail-closed decision and absent process. The pinned Python image
+        was restored from its verified archive after K3s removed it.
   - [ ] Replace the exact-secret mount-change checks. Keep the first decision
     after mutation, dirty view, replaced-path denial, and restored decision.
   - [ ] Remove the old exact control open only after these alias and mount
