@@ -3644,15 +3644,18 @@ setup, production actions, assertions, and focused test.
     reconcile the consumed slot while the test reads the task. The explicit
     `Consumed` assertion passed on Host, direct `runc`, and Kubernetes. The
     shared direct-`runc` order also passed the three administrative cases.
-  - [ ] Replace the transient slot read with the durable approved-task
+  - [x] Replace the transient slot read with the durable approved-task
     classification. Node can retire a consumed slot before the test reads it.
     Kubernetes issues a credential at approval time and arms Node only after
     an exact CONNECT admission. A mismatched CONNECT must leave no slot to
     consume. Keep the approved role, nonzero proof and claim IDs, argv-chunk
     cleanup, and replay denial. The Control owner mismatch test, the exact
     Host and stock-`runc` cases, all 50 direct-`runc` identity tests, and the
-    exact Kubernetes case pass. Recheck the complete Host and Kubernetes
-    lifecycles before marking this item done.
+    exact Kubernetes case pass. The complete Host identity lifecycle passed
+    55 tests in 574.34 seconds. The complete direct-`runc` identity lifecycle
+    passed 50 tests in 568.39 seconds. The complete Kubernetes identity
+    lifecycle passed 50 tests in 1,333.84 seconds. K3s remained Ready and
+    removed its test namespace and pin root.
   - [x] Keep ordinary Kubernetes `pods/exec` tasks in the restricted external
     role. Invoke the Control admission webhook only for the trusted Mithril
     approval group. A matching armed slot can then select the approved role.
