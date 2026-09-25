@@ -1801,6 +1801,14 @@ test does not close a row when its physical condition or an assertion changed.
         from its verified archive before rerunning the unchanged test.
     - [ ] Repeat the alias check in Observe mode. Require successful opens
       and attributed `WOULD_DENY` evidence before deleting the old block.
+      - [x] Host passed in 35.86 seconds. The standard test uses the same
+        Python actor and two live directory binds as Protect mode. The
+        original and both aliases opened. Three attributed `WOULD_DENY`
+        results kept distinct mount IDs and equal file and composite
+        authority. All four Host mount-alias lifecycle tests passed together
+        in 77.94 seconds.
+      - [ ] Pass direct `runc` and commit it.
+      - [ ] Pass Kubernetes and commit it.
   - [ ] Replace the exact-secret mount-change checks. Keep the first decision
     after mutation, dirty view, replaced-path denial, and restored decision.
   - [ ] Remove the old exact control open only after these alias and mount
