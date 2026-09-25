@@ -245,8 +245,8 @@ decisions, external-entry denial, runtime version, and owned-resource cleanup.
 The network result records the
 single-host actor, destination, response-fence, and socket-lifetime oracles.
 With `--with-k3s`, the directory also keeps `k3s.txt`, `k3s-cri-observe.txt`,
-`k3s-cri-effect.txt`, `k3s-platform-tests.txt`, and
-`k3s-workload-recovery.txt`. These files record the Pod
+`k3s-cri-effect.txt`, and one `k3s-<lifecycle>.txt` file for each discovered
+Kubernetes test lifecycle. These files record the Pod
 initial-root classification, the direct CRI and `kubectl exec` external-root
 classifications, each matching exact-secret effect, and the observe and protect
 file-open results. The Rust test records contain the platform lifecycle,

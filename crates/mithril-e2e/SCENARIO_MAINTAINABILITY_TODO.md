@@ -831,8 +831,12 @@ count as maintainability migrations.
   per process with `--test-threads=1`. Do not list scenarios in the launcher.
   - [x] The Host VM launcher invokes `identity_host` once. It does not list PID
     reuse and TID reuse as separate processes.
-  - [ ] Apply the same suffix invocation to the direct-`runc` and Kubernetes
-    launchers after their current platform gates pass.
+  - [x] The Kubernetes VM launcher reads lifecycle suffixes from the standard
+    Rust test binary and runs each suffix in one process. The current binary
+    reports 32 Kubernetes lifecycle names. Shell syntax and the VM harness
+    self-test pass. The complete 32-lifecycle physical run is still open.
+  - [ ] Apply the same suffix invocation to the direct-`runc` launcher after
+    its current platform gates pass.
 - [x] Share one Control and one Node across each named Host lifecycle.
   Keep each actor, cgroup, policy instance, runtime identity, output path, and
   assertion test-scoped. Pass every existing Host scenario before commit.

@@ -620,14 +620,14 @@ if [[ $with_k3s == true ]]; then
   k3s_cri_effect_partial=$output_directory/k3s-cri-effect.txt.partial
   run_k3s_cri_effect PROTECT >"$k3s_cri_effect_partial"
   mv -- "$k3s_cri_effect_partial" "$output_directory/k3s-cri-effect.txt"
-  for suite in \
-    identity:k3s-platform-tests \
-    workload_recovery:k3s-workload-recovery \
-    process_recovery:k3s-process-recovery \
-    ptrace_recovery:k3s-ptrace-recovery \
-    signal_recovery:k3s-signal-recovery; do
-    IFS=: read -r lifecycle evidence <<<"$suite"
-    partial=$output_directory/$evidence.txt.partial
+  lifecycles=$("$test_bin" --list --ignored |
+    sed -nE 's/^.*::([a-z0-9_]+)_kubernetes: test$/\1/p' | sort -u)
+  [[ -n $lifecycles ]] || {
+    echo "the Mithril test binary has no Kubernetes platform tests" >&2
+    exit 1
+  }
+  while IFS= read -r lifecycle; do
+    partial=$output_directory/k3s-$lifecycle.txt.partial
     "$provider" run "$vm_name" sudo env \
       "MITHRIL_TEST_ROOT=$remote_source" \
       "MITHRIL_TEST_OUTPUT=$remote_root/platform-tests" \
@@ -641,8 +641,8 @@ if [[ $with_k3s == true ]]; then
       "$remote_bin/mithril-e2e-tests" \
       "${lifecycle}_kubernetes" --ignored --nocapture --test-threads=1 \
       >"$partial"
-    mv -- "$partial" "$output_directory/$evidence.txt"
-  done
+    mv -- "$partial" "$output_directory/k3s-$lifecycle.txt"
+  done <<<"$lifecycles"
 fi
 
 qualification_output=$remote_root/kernel-qualification
