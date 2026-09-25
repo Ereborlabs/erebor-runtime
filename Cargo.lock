@@ -3684,6 +3684,7 @@ dependencies = [
 name = "mithril-e2e"
 version = "0.1.0"
 dependencies = [
+ "araphor-data",
  "axum",
  "clap",
  "containerd-client",
