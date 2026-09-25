@@ -1,12 +1,14 @@
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
+use duckdb::types::{TimeUnit, Value as DuckValue};
 use sqlparser::ast::{
-    Expr, FunctionArguments, ObjectName, Query, Select, SelectFlavor, SetExpr, Statement,
-    TableFactor, Visit as _, Visitor,
+    BinaryOperator, DataType, Expr, FunctionArguments, ObjectName, Query, Select, SelectFlavor,
+    SetExpr, Statement, TableFactor, TimezoneInfo, Value as SqlValue, Visit as _, Visitor,
 };
 use sqlparser::dialect::DuckDbDialect;
 use sqlparser::parser::Parser;
+use time::PrimitiveDateTime;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SqlAdmissionError {
@@ -17,6 +19,14 @@ pub(crate) enum SqlAdmissionError {
     UnknownRelation,
     UnknownFunction,
 }
+
+impl std::fmt::Display for SqlAdmissionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl std::error::Error for SqlAdmissionError {}
 
 #[allow(dead_code, reason = "offline proof precedes the query owner")]
 /// Checks read-only syntax and relation names. It does not bind columns or grant access.
@@ -226,10 +236,157 @@ fn simple_name(name: &ObjectName) -> Option<String> {
     Some(part.as_ident()?.value.to_ascii_lowercase())
 }
 
+#[allow(dead_code, reason = "offline proof precedes the query owner")]
+pub(crate) fn safe_received_at_lower_bound(
+    sql: &str,
+    parameters: &[DuckValue],
+    authorized_relations: &[&str],
+) -> Result<Option<i64>, SqlAdmissionError> {
+    inspect_read_only_shape(sql, authorized_relations)?;
+    let mut statements =
+        Parser::parse_sql(&DuckDbDialect {}, sql).map_err(|_| SqlAdmissionError::Syntax)?;
+    let Statement::Query(query) = statements.remove(0) else {
+        return Err(SqlAdmissionError::NotReadOnly);
+    };
+    let mut shape = BoundShape::default();
+    let _ = query.visit(&mut shape);
+    if shape.queries != 1 || shape.placeholders > 1 || query.with.is_some() {
+        return Ok(None);
+    }
+    let SetExpr::Select(select) = query.body.as_ref() else {
+        return Ok(None);
+    };
+    let [from] = select.from.as_slice() else {
+        return Ok(None);
+    };
+    if !from.joins.is_empty() {
+        return Ok(None);
+    }
+    let TableFactor::Table { name, alias, .. } = &from.relation else {
+        return Ok(None);
+    };
+    if simple_name(name).as_deref() != Some("events") {
+        return Ok(None);
+    }
+    let table_alias = alias
+        .as_ref()
+        .map_or("events", |alias| alias.name.value.as_str());
+    Ok(select.selection.as_ref().and_then(|predicate| {
+        implied_lower_bound(predicate, table_alias, parameters, shape.placeholders)
+    }))
+}
+
+#[derive(Default)]
+struct BoundShape {
+    queries: usize,
+    placeholders: usize,
+}
+
+impl Visitor for BoundShape {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.queries += 1;
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<Self::Break> {
+        if matches!(expr, Expr::Value(value) if matches!(value.value, SqlValue::Placeholder(_))) {
+            self.placeholders += 1;
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+fn implied_lower_bound(
+    expression: &Expr,
+    alias: &str,
+    parameters: &[DuckValue],
+    placeholders: usize,
+) -> Option<i64> {
+    match expression {
+        Expr::Nested(inner) => implied_lower_bound(inner, alias, parameters, placeholders),
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::And,
+            right,
+        } => match (
+            implied_lower_bound(left, alias, parameters, placeholders),
+            implied_lower_bound(right, alias, parameters, placeholders),
+        ) {
+            (Some(left), Some(right)) => Some(left.max(right)),
+            (left, right) => left.or(right),
+        },
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::Or,
+            right,
+        } => {
+            Some(
+                implied_lower_bound(left, alias, parameters, placeholders)?
+                    .min(implied_lower_bound(right, alias, parameters, placeholders)?),
+            )
+        }
+        Expr::BinaryOp {
+            left,
+            op: BinaryOperator::GtEq,
+            right,
+        } if is_received_at(left, alias) => timestamp_micros(right, parameters, placeholders),
+        _ => None,
+    }
+}
+
+fn is_received_at(expression: &Expr, alias: &str) -> bool {
+    match expression {
+        Expr::Identifier(column) => column.value.eq_ignore_ascii_case("received_at"),
+        Expr::CompoundIdentifier(parts) => {
+            matches!(parts.as_slice(), [table, column]
+                if table.value.eq_ignore_ascii_case(alias)
+                    && column.value.eq_ignore_ascii_case("received_at"))
+        }
+        _ => false,
+    }
+}
+
+fn timestamp_micros(
+    expression: &Expr,
+    parameters: &[DuckValue],
+    placeholders: usize,
+) -> Option<i64> {
+    match expression {
+        Expr::Value(value) if matches!(&value.value, SqlValue::Placeholder(mark) if mark == "?") => {
+            if placeholders != 1 {
+                return None;
+            }
+            match parameters {
+                [DuckValue::Timestamp(TimeUnit::Microsecond, micros)] => Some(*micros),
+                _ => None,
+            }
+        }
+        Expr::TypedString(typed)
+            if matches!(
+                typed.data_type,
+                DataType::Timestamp(None, TimezoneInfo::None)
+            ) && !typed.uses_odbc_syntax =>
+        {
+            let SqlValue::SingleQuotedString(value) = &typed.value.value else {
+                return None;
+            };
+            let format = time::format_description::parse_borrowed::<2>(
+                "[year]-[month]-[day] [hour]:[minute]:[second]",
+            )
+            .ok()?;
+            let parsed = PrimitiveDateTime::parse(value, &format).ok()?;
+            i64::try_from(parsed.assume_utc().unix_timestamp_nanos() / 1_000).ok()
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use duckdb::{Config, Connection};
+    use duckdb::{params, params_from_iter, Config, Connection};
 
     #[test]
     fn analysis_sql_admission_follows_ctes_aliases_and_joins() {
@@ -276,7 +433,10 @@ mod tests {
             "SELECT * FROM main.events",
             "SELECT * FROM coverage",
         ] {
-            assert!(inspect_read_only_shape(sql, &allowed).is_err(), "accepted {sql}");
+            assert!(
+                inspect_read_only_shape(sql, &allowed).is_err(),
+                "accepted {sql}"
+            );
         }
     }
 
@@ -307,12 +467,106 @@ mod tests {
             "SELECT id FROM events ORDER BY secret",
             "SELECT COUNT(secret) FROM events",
         ] {
-            assert!(inspect_read_only_shape(sql, &allowed).is_ok(), "syntax rejected {sql}");
+            assert!(
+                inspect_read_only_shape(sql, &allowed).is_ok(),
+                "syntax rejected {sql}"
+            );
             assert!(worker.prepare(sql).is_err(), "bound hidden column in {sql}");
         }
         assert!(worker
             .prepare("SELECT * FROM read_csv('/etc/passwd')")
             .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_sql_lower_bound_matches_full_authorized_input(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        const BOUND: i64 = 1_767_225_600_000_000;
+        let cases = [
+            (
+                "SELECT COUNT(*) FROM events WHERE received_at >= TIMESTAMP '2026-01-01 00:00:00'",
+                Vec::new(),
+                Some(BOUND),
+            ),
+            (
+                "SELECT COUNT(*) FROM events e WHERE e.received_at >= ? AND e.operation = 'normal'",
+                vec![DuckValue::Timestamp(TimeUnit::Microsecond, BOUND)],
+                Some(BOUND),
+            ),
+            (
+                "SELECT COUNT(*) FROM events WHERE operation = 'rare' OR received_at >= TIMESTAMP '2026-01-01 00:00:00'",
+                Vec::new(),
+                None,
+            ),
+            (
+                "SELECT COUNT(*) FROM events WHERE (received_at >= TIMESTAMP '2026-01-01 00:00:00' AND operation = 'normal') OR received_at >= TIMESTAMP '2025-12-31 23:59:59'",
+                Vec::new(),
+                Some(BOUND - 1_000_000),
+            ),
+        ];
+        for (sql, parameters, expected_bound) in cases {
+            let bound = safe_received_at_lower_bound(sql, &parameters, &["events"])?;
+            assert_eq!(bound, expected_bound, "wrong extraction bound for {sql}");
+            let config = || -> duckdb::Result<Config> {
+                Config::default()
+                    .enable_external_access(false)?
+                    .enable_autoload_extension(false)
+            };
+            let full = Connection::open_in_memory_with_flags(config()?)?;
+            let extracted = Connection::open_in_memory_with_flags(config()?)?;
+            for worker in [&full, &extracted] {
+                worker.execute_batch(
+                    "CREATE TABLE events(id BIGINT, received_at TIMESTAMP, operation VARCHAR)",
+                )?;
+            }
+            for (id, timestamp, operation) in [
+                (1_i64, BOUND - 1_000_000, "rare"),
+                (2, BOUND, "normal"),
+                (3, BOUND + 1_000_000, "normal"),
+            ] {
+                let value = DuckValue::Timestamp(TimeUnit::Microsecond, timestamp);
+                full.execute(
+                    "INSERT INTO events VALUES (?, ?, ?)",
+                    params![id, value.clone(), operation],
+                )?;
+                if bound.is_none_or(|floor| timestamp >= floor) {
+                    extracted.execute(
+                        "INSERT INTO events VALUES (?, ?, ?)",
+                        params![id, value, operation],
+                    )?;
+                }
+            }
+            let full_count: i64 =
+                full.query_row(sql, params_from_iter(parameters.iter()), |row| row.get(0))?;
+            let extracted_count: i64 =
+                extracted.query_row(sql, params_from_iter(parameters.iter()), |row| row.get(0))?;
+            assert_eq!(extracted_count, full_count, "partial input changed {sql}");
+        }
+        assert_eq!(
+            safe_received_at_lower_bound(
+                "SELECT COUNT(*) FROM events WHERE received_at >= ?",
+                &[DuckValue::Text("2026-01-01".to_owned())],
+                &["events"]
+            )?,
+            None
+        );
+        assert_eq!(
+            safe_received_at_lower_bound(
+                "WITH recent AS (SELECT * FROM events) SELECT COUNT(*) FROM recent",
+                &[],
+                &["events"]
+            )?,
+            None
+        );
+        assert_eq!(
+            safe_received_at_lower_bound(
+                "SELECT COUNT(*) FROM events e JOIN coverage c ON e.operation = c.operation WHERE e.received_at >= TIMESTAMP '2026-01-01 00:00:00'",
+                &[],
+                &["events", "coverage"]
+            )?,
+            None
+        );
         Ok(())
     }
 }
