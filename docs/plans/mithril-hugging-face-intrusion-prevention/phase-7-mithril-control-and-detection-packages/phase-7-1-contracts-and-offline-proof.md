@@ -35,8 +35,9 @@ Engineer runs storage proof
    Canonical digests exclude database positions, run IDs and model output.
 2. Add `crates/araphor-data` as a library with the first concrete
    `AnalysisStore` module under `src/analysis/`. It must not depend on
-   `mithril-control`. Control keeps source authentication and sends validated
-   source keys, framed records and coverage to the data owner. Pin one DuckDB Rust binding/build
+   `mithril-control`. Control keeps source authentication and passes the exact
+   validated source identity, framed records, and coverage to the data owner.
+   The data owner computes the durable source key. Pin one DuckDB Rust binding/build
    in Cargo and record its version in the fixture manifest. Use one writer,
    explicit transactions and local filesystem checks. No storage trait or
    production SQLite/DuckDB switch is required.
