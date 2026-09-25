@@ -1002,4 +1002,129 @@ mod tests {
         assert_eq!(store.meta()?.commit_revision, 1);
         Ok(())
     }
+
+    #[test]
+    #[ignore = "requires Linux bwrap and prlimit for the offline worker proof"]
+    fn analysis_sql_worker_isolated_from_data_store(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let before = store.meta()?;
+        let parent_net = std::fs::read_link("/proc/self/ns/net")?;
+        let worker = std::env::current_exe()?;
+        for (sql, expected_success) in [
+            ("SELECT SUM(atom) FROM events WHERE id >= 2", true),
+            ("COPY (SELECT * FROM events) TO '/tmp/forbidden'", false),
+            ("SELECT read_text('/etc/passwd') FROM events", false),
+        ] {
+            let mut child = Command::new("/usr/bin/timeout")
+                .args(["--kill-after=1s", "10s", "/usr/bin/bwrap"])
+                .args([
+                    "--unshare-all",
+                    "--die-with-parent",
+                    "--new-session",
+                    "--ro-bind",
+                    "/usr",
+                    "/usr",
+                    "--symlink",
+                    "usr/lib",
+                    "/lib",
+                    "--symlink",
+                    "usr/lib64",
+                    "/lib64",
+                    "--proc",
+                    "/proc",
+                    "--dev",
+                    "/dev",
+                    "--tmpfs",
+                    "/tmp",
+                    "--ro-bind",
+                ])
+                .arg(&worker)
+                .args([
+                    "/worker",
+                    "--clearenv",
+                    "--setenv",
+                    "ARAPHOR_QUERY_SQL",
+                    sql,
+                    "--",
+                    "/usr/bin/prlimit",
+                    "--as=1073741824",
+                    "--cpu=5",
+                    "--fsize=1048576",
+                    "--nofile=32",
+                    "--nproc=1",
+                    "--",
+                    "/worker",
+                    "--exact",
+                    "analysis::tests::analysis_sql_worker_child",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?;
+            child
+                .stdin
+                .take()
+                .ok_or("worker stdin is absent")?
+                .write_all(b"1,2\n2,3\n3,4\n")?;
+            let output = child.wait_with_output()?;
+            assert_eq!(
+                output.status.success(),
+                expected_success,
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if expected_success {
+                let stdout = String::from_utf8(output.stdout)?;
+                assert!(stdout.contains("ARAPHOR_QUERY_RESULT=7"), "{stdout}");
+                assert!(!stdout.contains(&format!("ARAPHOR_NET_NS={}", parent_net.display())));
+            }
+            assert_eq!(store.meta()?, before);
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "invoked only inside the offline query sandbox"]
+    fn analysis_sql_worker_child() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use std::io::Read as _;
+
+        assert!(std::env::var_os("HOME").is_none());
+        assert!(!Path::new("/home").exists());
+        let sql = std::env::var("ARAPHOR_QUERY_SQL")?;
+        let relations = admission::inspect_read_only_shape(&sql, &["events"])?;
+        assert_eq!(relations.into_iter().collect::<Vec<_>>(), ["events"]);
+        let config = Config::default()
+            .enable_autoload_extension(false)?
+            .enable_external_access(false)?;
+        let mut connection = Connection::open_in_memory_with_flags(config)?;
+        connection.execute_batch("CREATE TABLE events (id BIGINT, atom BIGINT)")?;
+        let mut projection = String::new();
+        std::io::stdin()
+            .take(1024)
+            .read_to_string(&mut projection)?;
+        let transaction = connection.transaction()?;
+        for line in projection.lines() {
+            let (id, atom) = line.split_once(',').ok_or("invalid projection row")?;
+            transaction.execute(
+                "INSERT INTO events VALUES (?, ?)",
+                params![id.parse::<i64>()?, atom.parse::<i64>()?],
+            )?;
+        }
+        transaction.commit()?;
+        let value: i64 = connection.query_row(&sql, [], |row| row.get(0))?;
+        println!("ARAPHOR_QUERY_RESULT={value}");
+        println!(
+            "ARAPHOR_NET_NS={}",
+            std::fs::read_link("/proc/self/ns/net")?.display()
+        );
+        Ok(())
+    }
 }
