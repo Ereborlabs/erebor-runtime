@@ -810,17 +810,22 @@ mod tests {
     }
 
     #[test]
-    fn analysis_store_rejects_newer_schema_and_nonprivate_directory(
+    fn analysis_store_rejects_unsupported_schema_and_nonprivate_directory(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let root = directory.path().join("analysis");
-        let store = AnalysisStore::open(&root)?;
-        {
-            let writer = store.writer()?;
-            writer.execute("UPDATE store_meta SET schema_version = 2", [])?;
+        for version in [0, 2] {
+            let root = directory.path().join(format!("schema-{version}"));
+            let store = AnalysisStore::open(&root)?;
+            {
+                let writer = store.writer()?;
+                writer.execute("UPDATE store_meta SET schema_version = ?", params![version])?;
+            }
+            drop(store);
+            assert!(AnalysisStore::open(&root).is_err());
         }
+        let root = directory.path().join("nonprivate");
+        let store = AnalysisStore::open(&root)?;
         drop(store);
-        assert!(AnalysisStore::open(&root).is_err());
         fs::set_permissions(&root, fs::Permissions::from_mode(0o755))?;
         assert!(AnalysisStore::open(&root).is_err());
         assert!(AnalysisStore::open("relative-analysis").is_err());
