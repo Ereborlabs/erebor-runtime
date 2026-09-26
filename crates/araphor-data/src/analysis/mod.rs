@@ -423,6 +423,7 @@ impl AnalysisStore {
 
     fn require_retention(&self) -> Result<()> {
         if !self.retention_healthy() {
+            self.require_capacity(true)?;
             return crate::RetentionUnavailableSnafu.fail();
         }
         Ok(())

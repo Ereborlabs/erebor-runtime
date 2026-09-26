@@ -92,6 +92,10 @@ Store recovery fails
    missing-coverage flag after an optional processor resumes. Report physical
    storage capacity separately from retention health. A capacity sample does
    not promise admission for a later write or for a tenant's logical quota.
+   If retention is unhealthy, check maintenance capacity before returning its
+   error. Insufficient space returns ResourceExhausted for evidence and
+   coverage. Other retention failures return Unavailable. Neither result
+   permits an ACK or a data commit.
    Read exact recovery gaps in source-scoped pages of at most 256 ranges.
    These health reads must not advance receipts or processor progress.
    Charge each retained row 256 logical bytes plus its variable payload and
@@ -272,6 +276,10 @@ reach the data-file quota. The second requires an empty, task-owned 1-GiB tmpfs.
 Allocate all free blocks and require an `ENOSPC` result. Through mTLS, require
 ResourceExhausted, an unchanged receipt and revision, readable accepted data,
 retained Node input, and a working policy RPC. Release only the test padding.
+First make the retention sweep observe insufficient space. Check the same
+condition in `data_capacity_retry` with a retained source and an unmet
+filesystem reserve. Evidence and coverage must return ResourceExhausted even
+after retention becomes unhealthy. Run this regression before the physical case.
 Reconnect the evidence stream without restarting Control. Require one commit,
 an unchanged duplicate retry, and exact retained records after store reopen.
 The harness is `crates/mithril-e2e/harness/discovery/disk-full.sh`. It accepts
@@ -912,5 +920,10 @@ The 37 selected `analysis_store_` tests and all twelve enabled data-store mTLS
 tests passed. The first backup run failed the filesystem-reserve check because
 generated build files reduced host free space. Removing only the idle ignored
 incremental cache restored capacity. The tests then passed without reducing
-storage reserves. The final workspace gate and paired full-filesystem check
-are pending. The complete phase remains **Not done**.
+storage reserves. A later full-filesystem run found a status race after
+retention became unhealthy. The lightweight capacity-retry case reproduced
+the failure before the production change. The shared retention guard now
+checks capacity before returning Unavailable. All 37 selected component tests
+and twelve enabled data-store e2e cases pass with this change. The final
+workspace gate and paired full-filesystem check are pending. The complete
+phase remains **Not done**.

@@ -20,6 +20,7 @@ set -o noclobber
   git status --short
   uname -srmo
   sha256sum -- "$1"
+  "$1" discovery::data_store::tests::data_capacity_retry --exact --nocapture
   "$1" discovery::data_store::tests::data_capacity_recovery --exact --nocapture
   ARAPHOR_TEST_DATA_DISK=$disk "$1" \
     discovery::data_store::tests::data_full_disk --ignored --exact --nocapture
