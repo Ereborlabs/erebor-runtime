@@ -162,7 +162,8 @@ Store recovery fails
    live exact witnesses; do not require each partial deletion to shrink a file.
 8. Activate the data owner in a clean development deployment. Control opens
    a private AnalysisStore with the current schema and selects it as the only
-   evidence writer before Node intake starts. Reject an unsupported schema
+   evidence writer before Node intake starts. Backward compatibility with
+   development data formats is not required. Reject an unsupported schema
    or a Control store that still has accepted evidence. Start each Node with
    a new source identity so an old ACK or cursor cannot enter the new store.
    There is no old-store import, schema migration, dual write, or rollback
@@ -979,13 +980,24 @@ open. The complete phase remains **Not done**.
 
 The offline inspection command and outage-harness conversion are implemented.
 The source-page test passed with 258 same-tenant sources and one foreign source.
-The mTLS inspection regression and CLI argument test passed before the final
-addition of file-byte fields and the proof-output size check. The final shell
+The mTLS inspection regression and CLI argument test passed on `7412f4ba`,
+including the file-byte fields and proof-output size check. The final shell
 smoke test passed, including rejection when one Node's extra records hide the
 other Node's missing replay. Shell syntax and `git diff --check` passed.
-The first workspace gate stopped on three forbidden `unwrap()` calls in the
-CLI test. The test now returns parse errors. The final gate passed formatting,
-workspace compilation, and strict Clippy. It is building the full test suite.
-This result is **Not done** for final workspace tests and physical qualification.
+The final gate passed on `7412f4ba` with
+`CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh`: formatting,
+workspace compilation, strict Clippy, and the full workspace test suite.
+The data crate passed 47 tests with two ignored; Control passed 196 with two
+ignored; Node passed 256 with one ignored.
+
+The rebuilt CLI passed startup (18 checks) and recovery (29 checks) on the
+same source. Results are in `startup/result.json` and `recovery/result.json`
+under `/tmp/araphor-inspection-qualification.KEVN8o7J`. Recovery reports
+cursor 4, retained floor 2, two retained events, backup revision 12, an
+8,400,896-byte database, and zero checkpointed WAL bytes. The CLI SHA-256 is
+`348c5dd104cd91d29e2cd16ecbb018825d210ff621f22f3eb5a926d0865553c6`.
+The complete phase remains **Not done**. Old-writer removal, full-quota and
+reserve measurements, and Kubernetes storage/partition qualification remain
+open. The offline inspection command is verified; physical qualification is not.
 No retained two-node environment has been selected or changed. The unrelated
 running VM remains unchanged.
