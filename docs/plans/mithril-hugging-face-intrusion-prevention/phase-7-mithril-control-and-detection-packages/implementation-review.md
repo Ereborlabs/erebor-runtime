@@ -76,7 +76,7 @@ Control intake or the SQLite discovery projection.
 The next route covers the data-owner implementation. It does not cover
 production intake.
 
-[AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) The owner opens one private DuckDB writer and upgrades the earlier analysis schema under its lease.<br>
+[AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) The owner opens one private DuckDB writer and rejects unsupported stored schemas under its lease.<br>
 -> [AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/read.rs) A bounded read checks frame digests and reports a recorded expired range.<br>
 -> [AnalysisStore::commit_context](../../../../crates/araphor-data/src/analysis/context.rs) The data owner commits an exact, tenant-scoped context version. A retry with different content conflicts.<br>
 -> [AnalysisStore::register_processor](../../../../crates/araphor-data/src/analysis/progress.rs) A processor binds its class, source, method version, and retained start cursor.<br>
@@ -90,15 +90,8 @@ production intake.
 -> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) The transaction keeps that row. An expired row can be deleted on a later call after its protection ends.<br>
 -> [AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/read.rs) A read distinguishes committed expiry from an unexplained missing row.
 
-Not implemented [Control intake](../../../../crates/mithril-control/src/evidence.rs) Control still writes the chunked evidence store. No single-writer cutover, production retention scheduler, or mTLS recovery case proves the new path.
-
-[ControlStore::read_evidence_frames_page](../../../../crates/mithril-control/src/store/evidence_read.rs) The old store exports at most one checked evidence page with original frame bytes and cursor ends.<br>
--> [EvidenceSegmentReadV1::read_frame](../../../../crates/mithril-control/src/evidence_segment.rs) Each frame is read from the retained segment and its length and checksum are checked again.<br>
--> [ControlStore::copy_legacy_evidence](../../../../crates/mithril-control/src/store/evidence_upgrade.rs) An offline caller enumerates accepted and coverage-only sources. It reuses the production validator and copies retained original frames and coverage bytes.<br>
--> [AnalysisStore::begin_legacy_import](../../../../crates/araphor-data/src/analysis/legacy.rs) A per-source marker fixes the accepted cursor, retained floor, CPU, and expected digests. Restart repeats the same import or fails on a changed source.<br>
--> [AnalysisStore::import_legacy_batch](../../../../crates/araphor-data/src/analysis/mod.rs) Imported events have unknown intake time. An unfinished import rejects live event writes for that source.<br>
--> [AnalysisStore::finish_legacy_import](../../../../crates/araphor-data/src/analysis/legacy.rs) The data owner checks exact event order, count, frame digests, coverage count, report digest, and receipt before completing the source marker.<br>
--> Not implemented [full upgrade](phase-7-2-data-store.md) The copy has no global activation marker, backup, referenced analysis/trace migration, or production intake selection. It refuses old sources without CPU proof or with an acknowledged coverage revision whose report is absent.
+[EvidenceIntakeOwner::with_data_store](../../../../crates/mithril-control/src/evidence.rs) An explicit owner path validates Node batches and commits evidence and coverage only to AnalysisStore. Its component test checks exact frames, replay, old Control-store isolation, and restart.<br>
+-> Not implemented [Control startup](phase-7-2-data-store.md) The server still selects the old writer. Fresh-store activation, production retention scheduling, and an mTLS recovery case remain open.
 
 [inspect_read_only_shape](../../../../crates/araphor-data/src/analysis/admission.rs) DuckDB-dialect parser rejects unauthorized SQL shape and external access.<br>
 -> [ReadOnlyGuard::parse](../../../../crates/araphor-data/src/analysis/admission.rs) The bound check reuses the admitted syntax tree; it does not parse the statement a second time.<br>
@@ -692,12 +685,9 @@ test passed with `--ignored`. The storage case reports three retained events,
 contiguous cursor 3, coverage revision 1, and commit revision 2. Physical
 diagnostic results above are prior recorded runs, not fresh runs for this
 offline proof.
-For the current uncommitted source, `cargo test -p araphor-data --lib` passed
-18 tests. The repository Rust CI procedure passed formatting, workspace check,
-all-features Clippy, and workspace tests with `RUST_TEST_THREADS=1`. The
-parallel run failed one existing 500 ms Control reconnect timing assertion.
-That test passed alone and in the serialized run. A fresh `storage-contract`
-run passed nine assertions at `/tmp/araphor-storage-contract.M3VQD9t6/result4`.
-The case reports analysis schema 2 and `production_intake: false`. The new
-production recovery and upgrade cases have not run because they are not
-implemented.
+For the current source, `cargo test -p araphor-data --lib` passed 19 tests with
+two ignored. The focused data-backed intake and old-store read tests passed.
+Strict Clippy passed for both changed crates. The earlier `storage-contract`
+result used an older schema and does not qualify this source. The full Control
+suite, repository CI procedure, and production recovery and startup cases
+remain to run.

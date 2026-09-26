@@ -19,7 +19,6 @@ use crate::{
 mod admission;
 mod backup;
 mod context;
-mod legacy;
 mod progress;
 mod read;
 mod retention;
@@ -27,7 +26,6 @@ mod schema;
 
 pub use backup::{AnalysisBackupManifestV1, AnalysisRecoveryStatusV1};
 pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
-pub use legacy::LegacySourceImportV1;
 pub use progress::{
     AnalysisContextRefV1, AnalysisProcessorGapV1, AnalysisResultCommitV1, AnalysisResultReceiptV1,
     AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,
@@ -36,7 +34,7 @@ pub use retention::{EvidenceRetentionOwner, RetentionLimitsV1, RetentionResultV1
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.4.4";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-const ANALYSIS_SCHEMA_VERSION: i64 = 2;
+const ANALYSIS_SCHEMA_VERSION: i64 = 3;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -98,7 +96,7 @@ pub struct ValidatedEvidenceBatchV1 {
     pub cpu_id: u32,
     pub first_cursor: u64,
     pub last_cursor: u64,
-    /// Positive for live intake. Zero means unknown only during legacy import.
+    /// Positive UTC time at durable intake.
     pub intake_utc_ns: u64,
     pub framed_records: prost::bytes::Bytes,
     pub frame_ends: Vec<usize>,
@@ -222,27 +220,17 @@ impl AnalysisStore {
             .then(|| Self::read_meta_from(&writer, &path))
             .transpose()?;
         if let Some(meta) = &prior {
-            if !matches!(meta.schema_version, 1 | 2) {
+            if meta.schema_version != ANALYSIS_SCHEMA_VERSION as u32 {
                 return AnalysisStateSnafu {
                     path,
                     reason: "the analysis schema version is unsupported".to_owned(),
                 }
                 .fail();
             }
-            if meta.schema_version == 1 {
-                Self::prepare_upgrade(&writer, &root, &path, meta)?;
-            }
         }
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin schema",
         })?;
-        if prior.as_ref().is_some_and(|meta| meta.schema_version == 1) {
-            transaction
-                .execute_batch("ALTER TABLE events ADD COLUMN intake_utc_ns UBIGINT")
-                .context(AnalysisDatabaseSnafu {
-                    operation: "upgrade event intake time",
-                })?;
-        }
         transaction
             .execute_batch(
                 "CREATE TABLE IF NOT EXISTS store_meta (
@@ -271,17 +259,6 @@ impl AnalysisStore {
                     node_boot_id BLOB NOT NULL,
                     label_epoch UBIGINT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS legacy_import_sources (
-                    stream_key BLOB PRIMARY KEY,
-                    tenant_id BLOB NOT NULL,
-                    cpu_id UINTEGER NOT NULL,
-                    accepted_cursor UBIGINT NOT NULL,
-                    retained_floor UBIGINT NOT NULL,
-                    coverage_revision UBIGINT NOT NULL,
-                    event_sha256 BLOB NOT NULL,
-                    coverage_sha256 BLOB,
-                    complete BOOLEAN NOT NULL
-                );
                 CREATE TABLE IF NOT EXISTS events (
                     stream_key BLOB NOT NULL,
                     tenant_id BLOB NOT NULL,
@@ -291,7 +268,7 @@ impl AnalysisStore {
                     frame_sha256 BLOB NOT NULL,
                     commit_revision UBIGINT NOT NULL,
                     ordinal UINTEGER NOT NULL,
-                    intake_utc_ns UBIGINT,
+                    intake_utc_ns UBIGINT NOT NULL,
                     PRIMARY KEY (stream_key, durable_cursor)
                 );
                 CREATE TABLE IF NOT EXISTS coverage (
@@ -400,17 +377,6 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "initialize store identity",
             })?;
-        Self::populate_bindings(&transaction, &root)?;
-        if prior.as_ref().is_some_and(|meta| meta.schema_version == 1) {
-            transaction
-                .execute(
-                    "UPDATE store_meta SET schema_version = ? WHERE singleton = true",
-                    params![ANALYSIS_SCHEMA_VERSION],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "advance analysis schema",
-                })?;
-        }
         let meta = Self::read_meta_from(&transaction, &path)?;
         if meta.schema_version != ANALYSIS_SCHEMA_VERSION as u32 {
             return AnalysisStateSnafu {
@@ -422,7 +388,6 @@ impl AnalysisStore {
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit schema",
         })?;
-        Self::finish_upgrade(&root, &meta)?;
         let (revision, _) = watch::channel(meta.commit_revision);
         Ok(Self {
             root,
@@ -509,26 +474,13 @@ impl AnalysisStore {
         if batch.intake_utc_ns == 0 {
             return self.reject("live evidence has no intake time");
         }
-        let intake_utc_ns = batch.intake_utc_ns;
-        self.commit_evidence(identity, batch, Some(intake_utc_ns))
-    }
-
-    pub fn import_legacy_batch(
-        &self,
-        identity: EvidenceIntakeIdentityV1,
-        batch: ValidatedEvidenceBatchV1,
-    ) -> Result<EvidenceStoreOutcomeV1> {
-        if batch.intake_utc_ns != 0 {
-            return self.reject("legacy evidence must not invent an intake time");
-        }
-        self.commit_evidence(identity, batch, None)
+        self.commit_evidence(identity, batch)
     }
 
     fn commit_evidence(
         &self,
         identity: EvidenceIntakeIdentityV1,
         batch: ValidatedEvidenceBatchV1,
-        intake_utc_ns: Option<u64>,
     ) -> Result<EvidenceStoreOutcomeV1> {
         self.validate_batch(&identity, &batch)?;
         let key = source_key(&identity);
@@ -539,26 +491,6 @@ impl AnalysisStore {
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin evidence",
         })?;
-        let legacy: Option<(u64, u64, bool)> = transaction
-            .query_row(
-                "SELECT accepted_cursor, retained_floor, complete FROM legacy_import_sources
-                 WHERE stream_key = ? AND tenant_id = ?",
-                params![key.as_slice(), identity.tenant_id.as_slice()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .context(AnalysisDatabaseSnafu {
-                operation: "check legacy import state",
-            })?;
-        match (intake_utc_ns, legacy) {
-            (None, Some((accepted, floor, _)))
-                if batch.first_cursor > floor && batch.last_cursor <= accepted => {}
-            (Some(_), Some((_, _, false))) => {
-                return self.reject("live evidence cannot enter an unfinished legacy import");
-            }
-            (None, _) => return self.reject("legacy evidence is outside its import range"),
-            (Some(_), _) => {}
-        }
         let bound = Self::bind_source(&transaction, &self.root, &identity)?;
         let previous = Self::read_receipt_from(&transaction, &self.root, &identity, &key)?;
         if previous
@@ -655,7 +587,7 @@ impl AnalysisStore {
                         frame_digest.as_slice(),
                         revision,
                         new_records,
-                        intake_utc_ns,
+                        batch.intake_utc_ns,
                     ],
                 )
                 .context(AnalysisDatabaseSnafu {
@@ -1093,7 +1025,7 @@ mod tests {
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
         let initial = store.meta()?;
-        assert_eq!(initial.schema_version, 2);
+        assert_eq!(initial.schema_version, 3);
         assert_eq!(initial.commit_revision, 0);
         assert!(AnalysisStore::open(&root).is_err());
         {
@@ -1127,7 +1059,7 @@ mod tests {
     #[test]
     fn analysis_store_schema_permissions() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        for version in [0, 3] {
+        for version in [0, 2, 4] {
             let root = directory.path().join(format!("schema-{version}"));
             let store = AnalysisStore::open(&root)?;
             {

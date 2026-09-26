@@ -21,16 +21,11 @@ pub struct EvidenceReadMetadataV1 {
 pub struct EvidenceReadV1 {
     store: ControlStore,
     metadata: EvidenceReadMetadataV1,
-    coverage_bytes: Option<Vec<u8>>,
 }
 
 impl EvidenceReadV1 {
     pub fn metadata(&self) -> &EvidenceReadMetadataV1 {
         &self.metadata
-    }
-
-    pub(crate) fn coverage_bytes(&self) -> Option<&[u8]> {
-        self.coverage_bytes.as_deref()
     }
 }
 
@@ -39,14 +34,6 @@ pub struct EvidenceReadPageV1 {
     pub first_cursor: u64,
     pub records: Vec<EvidenceRecord>,
     pub encoded_bytes: usize,
-    pub next_cursor: Option<u64>,
-}
-
-#[derive(Debug, PartialEq)]
-pub(crate) struct EvidenceFramePageV1 {
-    pub first_cursor: u64,
-    pub framed_records: Vec<u8>,
-    pub frame_ends: Vec<usize>,
     pub next_cursor: Option<u64>,
 }
 
@@ -70,23 +57,6 @@ impl OpenEvidencePage {
             next_cursor: self.next_cursor,
         })
     }
-
-    fn frames(self) -> Result<EvidenceFramePageV1> {
-        let mut framed_records = Vec::with_capacity(self.encoded_bytes);
-        let mut frame_ends = Vec::new();
-        for segment in self.segments {
-            let (bytes, ends) = segment.frames()?;
-            let offset = framed_records.len();
-            frame_ends.extend(ends.into_iter().map(|end| end + offset));
-            framed_records.extend_from_slice(&bytes);
-        }
-        Ok(EvidenceFramePageV1 {
-            first_cursor: self.first_cursor,
-            framed_records,
-            frame_ends,
-            next_cursor: self.next_cursor,
-        })
-    }
 }
 
 impl ControlStore {
@@ -106,36 +76,6 @@ impl ControlStore {
             .take(32)
             .map(|(identity, _)| identity.clone())
             .collect())
-    }
-
-    pub(crate) fn legacy_sources(
-        &self,
-        after: Option<&EvidenceIntakeIdentityV1>,
-    ) -> Result<Vec<EvidenceIntakeIdentityV1>> {
-        use std::ops::Bound;
-        let inner = self.evidence_lock()?;
-        let range = (
-            after.map_or(Bound::Unbounded, Bound::Excluded),
-            Bound::Unbounded,
-        );
-        let mut sources = BTreeSet::new();
-        sources.extend(
-            inner
-                .state
-                .evidence_cursors
-                .range(range)
-                .take(32)
-                .map(|(identity, _)| identity.clone()),
-        );
-        sources.extend(
-            inner
-                .state
-                .coverage_cursors
-                .range(range)
-                .take(32)
-                .map(|(identity, _)| identity.clone()),
-        );
-        Ok(sources.into_iter().take(32).collect())
     }
 
     pub fn begin_evidence_read(
@@ -205,7 +145,6 @@ impl ControlStore {
                 coverage,
             )
         };
-        let mut coverage_bytes = None;
         if let Some(coverage) = coverage {
             let revision = coverage.first;
             let (frames, ends) = coverage.frames()?;
@@ -240,12 +179,10 @@ impl ControlStore {
                 .fail();
             };
             metadata.coverage = Some(report);
-            coverage_bytes = Some(bytes);
         }
         Ok(EvidenceReadV1 {
             store: self.clone(),
             metadata,
-            coverage_bytes,
         })
     }
 
@@ -255,14 +192,6 @@ impl ControlStore {
         first_cursor: u64,
     ) -> Result<EvidenceReadPageV1> {
         self.open_evidence_page(read, first_cursor)?.decode()
-    }
-
-    pub(crate) fn read_evidence_frames_page(
-        &self,
-        read: &EvidenceReadV1,
-        first_cursor: u64,
-    ) -> Result<EvidenceFramePageV1> {
-        self.open_evidence_page(read, first_cursor)?.frames()
     }
 
     fn open_evidence_page(
@@ -479,44 +408,6 @@ mod tests {
             )?;
             Ok(())
         }
-    }
-
-    #[test]
-    fn evidence_frame_export_preserves_checked_original_bytes() -> TestResult<()> {
-        let fixture = ReadFixture::new()?;
-        fixture.append(1, 2, None)?;
-        fixture.append(3, 1, None)?;
-        let read = fixture.store.begin_evidence_read(&fixture.identity, 1)?;
-        let page = fixture.store.read_evidence_frames_page(&read, 1)?;
-        let mut expected = Vec::new();
-        let mut ends = Vec::new();
-        for cursor in 1..=3 {
-            let mut record = fixture.record.clone();
-            record.observed_boottime_ns = cursor;
-            let payload = record.encode_to_vec();
-            let start = expected.len();
-            expected.extend_from_slice(&u32::try_from(payload.len())?.to_be_bytes());
-            expected.extend_from_slice(&payload);
-            expected.extend_from_slice(&crc32c::crc32c(&expected[start..]).to_be_bytes());
-            ends.push(expected.len());
-        }
-        assert_eq!(page.first_cursor, 1);
-        assert_eq!(page.framed_records, expected);
-        assert_eq!(page.frame_ends, ends);
-        assert_eq!(page.next_cursor, None);
-        Ok(())
-    }
-
-    #[test]
-    fn evidence_coverage_export_keeps_checked_payload_bytes() -> TestResult<()> {
-        let fixture = ReadFixture::new()?;
-        fixture.append(1, 1, None)?;
-        fixture.coverage(1, false)?;
-        let read = fixture.store.begin_evidence_read(&fixture.identity, 1)?;
-        let bytes = read.coverage_bytes().ok_or("coverage bytes are absent")?;
-        let decoded = CoverageReport::decode(bytes)?;
-        assert_eq!(read.metadata().coverage.as_ref(), Some(&decoded));
-        Ok(())
     }
 
     #[test]

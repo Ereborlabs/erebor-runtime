@@ -138,8 +138,9 @@ required here. Stop before enabling a data path whose recovery case fails.
 **Not done.** AnalysisStore has a writer, bounded reads, exact context
 versions, processor results and references, guarded raw expiry, backup and
 restore. Source bindings and an explicit data-backed EvidenceIntakeOwner path
-have component tests. The data-owner library suite passed 20 tests with two
-ignored, and strict Clippy passed for both changed crates. Tests use temporary
+have component tests. The data-owner library suite passed 19 tests with two
+ignored, two focused Control tests passed, and strict Clippy passed for both
+changed crates. Tests use temporary
 databases; no retention call ran on an existing deployment. Server startup
 still selects the old writer. Fresh-store activation, capacity admission,
 Control context projection, mTLS recovery and startup cases, and physical disk

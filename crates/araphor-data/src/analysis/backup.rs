@@ -325,7 +325,7 @@ mod tests {
         let manifest = store.backup(&backup)?;
         assert_eq!(manifest.commit_revision, 1);
         assert_eq!(manifest.recovery_epoch, 1);
-        assert_eq!(manifest.schema_version, 2);
+        assert_eq!(manifest.schema_version, 3);
         assert_eq!(manifest.database_bytes, fs::metadata(&backup)?.len());
         assert!(store.backup(&backup).is_err());
         assert_eq!(
