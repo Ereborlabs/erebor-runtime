@@ -141,7 +141,18 @@ At each data check, Control has zero replicas and no Pod. The checker uses
 Control's numeric user 65532 and opens the existing AnalysisStore under its
 exclusive lease. It compares retained frame digests, source cursors, and counts
 before and after replay. It does not compare DuckDB file bytes or copy a live
-database. The storage fault makes only `evidence/analysis` read-only. Policy
+database. `inspect-data.sh` exposes the selected directory through a private
+mount namespace, then drops to user and group 65532. It does not change K3s
+parent permissions. The mount ends with the checker process. Run the permission
+regression before the physical case on a Linux host with root permission:
+
+```bash
+sudo bash crates/mithril-e2e/harness/vm/inspect-data-test.sh
+```
+
+The regression uses only temporary files. It checks a root-only parent,
+non-root file ownership, and mount cleanup on success and failure. It does not
+need a cluster. The storage fault makes only `evidence/analysis` read-only. Policy
 storage remains writable. Node sessions and policy acknowledgements must work
 while evidence ACKs stop. Cleanup removes the fault mount and checker files;
 it does not remove the retained data volume.

@@ -293,6 +293,13 @@ affinity, and generated directory. Reject other volume sources and foreign
 claims or Nodes. Reproduce the provisioner's Local-volume shape in the shell
 regression before running the physical case.
 Stop Control before each inspection and run the checker as numeric user 65532.
+Use `inspect-data.sh` to bind only the selected data directory inside a private
+mount namespace. Drop to user and group 65532 before starting the checker.
+Keep the K3s parent permissions unchanged. The mount ends with the checker;
+cleanup must not traverse a host-visible data mount. Run `inspect-data-test.sh`
+as root on Linux before the physical case. Use temporary files to prove private
+parent refusal, non-root access through the mount, unchanged file ownership,
+and mount removal after successful and failed checks. This test needs no cluster.
 Compare retained data before and after Node replay. Keep the Node WAL checks.
 Make only the `evidence/analysis` mount read-only for the storage fault. Require
 working Node sessions and policy acknowledgements while evidence ACKs stop.
@@ -1046,7 +1053,10 @@ lightweight cases and the volume check, then stopped at offline inspection
 with `Permission denied (os error 13)`. K3s owns its `storage` parent as
 root with mode 0700. The data directories belong to user 65532. The checker
 cannot traverse that host parent, although Control can use its mounted volume.
-Do not change the host parent's permissions or run the data owner as root.
-The inspector still needs isolated access to the volume as user 65532.
-Cleanup restored Control and kept the data volume.
+Cleanup restored Control and kept the data volume. `inspect-data-test.sh`
+reproduced the private-parent failure before the fix. The corrected launcher
+uses a private mount and starts the checker as user 65532. The regression now
+passes on temporary files, including unchanged parent permissions, file
+ownership, and removal of the mount on success and failure. The VM shell suite
+and syntax checks also pass. The final full gate and physical retry remain open.
 The physical storage/partition result remains **Not done**.

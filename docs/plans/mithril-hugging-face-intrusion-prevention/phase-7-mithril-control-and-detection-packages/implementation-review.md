@@ -94,6 +94,7 @@ or convert data.
 
 [two-node outage harness](../../../../crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh) The harness runs the lightweight startup and recovery cases and validates the retained local-path volume.<br>
 -> [inspect_control_data](../../../../crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh) Control has zero replicas and no Pod. The checker runs with Control's numeric user.<br>
+-> [inspect-data.sh](../../../../crates/mithril-e2e/harness/vm/inspect-data.sh) A private mount exposes only the selected data directory at the checker path. The launcher drops to user and group 65532 before it starts the checker.<br>
 -> [DataStoreQualification::inspect](../../../../crates/mithril-e2e/src/discovery/data_store/inspection.rs) The checker requires an existing data file and obtains the production owner's exclusive lease.<br>
 -> [AnalysisStore::source_page](../../../../crates/araphor-data/src/analysis/read.rs) One fixed query returns at most 256 source identities for the requested tenant. Each identity must match its stored key.<br>
 -> [SourceProof::read](../../../../crates/mithril-e2e/src/discovery/data_store/inspection.rs) Bounded owner reads check continuity and hash the exact retained frames.<br>
@@ -107,6 +108,14 @@ expired baseline, changed digest, foreign tenant, or exhausted bound fails the
 check. A run reads at most 256 MiB across baseline and current evidence. The
 source and proof limits are 1,024 sources and one MiB. Each source range has at
 most one million records. No reader handle crosses a public owner call.
+
+The private mount ends when the checker exits. K3s parent permissions remain
+unchanged. No mount remains in the host namespace for directory cleanup to
+traverse. [inspect-data-test.sh](../../../../crates/mithril-e2e/harness/vm/inspect-data-test.sh)
+reproduces a root-only parent with temporary files. It checks user and group
+65532, file ownership, parent permissions, checker error propagation, and no
+remaining mount after success or failure. This Linux component test requires
+root, but it needs no Kubernetes cluster and uses no deployment data.
 
 `analysis_store_source_pages` checks pagination, tenant isolation, unchanged
 revisions, and restart. `data_inspection_recovery` sends 300 records through

@@ -133,7 +133,7 @@ inspect_control_data() {
   local label=$1
   local baseline=${2:-}
   local command
-  local args=(--case data-store-inspect --data-directory "$data_path"
+  local args=(--case data-store-inspect --data-directory "$remote_check/data"
     --tenant-id aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
     --output-directory "$remote_check/results/$label")
   [[ $(remote_kubectl -n "$system_namespace" get deployment mithril-control \
@@ -143,8 +143,8 @@ inspect_control_data() {
   if [[ -n $baseline ]]; then
     args+=(--baseline "$remote_check/results/$baseline/result.json")
   fi
-  printf -v command '%q ' sudo setpriv --reuid=65532 --regid=65532 \
-    --clear-groups -- "$remote_check/check" "${args[@]}"
+  printf -v command '%q ' sudo bash "$remote_check/inspect-data.sh" \
+    "$data_path" "$remote_check" "${args[@]}"
   "$provider" run "$vm_a" "$command"
   "$provider" run "$vm_a" sudo cat "$remote_check/results/$label/result.json" \
     >"$output_directory/$label.json"
@@ -711,7 +711,9 @@ data_path=$data_base/evidence/analysis
 remote_check=$("$provider" run "$vm_a" mktemp -d /var/tmp/mithril-data-check.XXXXXXXX)
 [[ $remote_check =~ ^/var/tmp/mithril-data-check\.[A-Za-z0-9]+$ ]]
 "$provider" put "$vm_a" "$data_check" "$remote_check/check"
+"$provider" put "$vm_a" "$directory/inspect-data.sh" "$remote_check/inspect-data.sh"
 "$provider" run "$vm_a" chmod 755 "$remote_check" "$remote_check/check"
+"$provider" run "$vm_a" mkdir "$remote_check/data"
 "$provider" run "$vm_a" sudo install -d -m 700 -o 65532 -g 65532 "$remote_check/results"
 "$provider" run "$vm_a" "$remote_check/check" --help >/dev/null
 remote_digest=$("$provider" run "$vm_a" sha256sum "$remote_check/check" | cut -d ' ' -f1)
