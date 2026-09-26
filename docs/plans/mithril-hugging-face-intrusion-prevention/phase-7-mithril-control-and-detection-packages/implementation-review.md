@@ -19,7 +19,7 @@ crate in Control. Agents and the console will use the same owners. Neither a
 query nor a diagnostic measurement grants policy authority.
 
 Current scope: Discovery contracts, durable derivation, and offline AnalysisStore
-proof are implemented. Live Control intake still uses its existing store.
+proof are implemented. Default Control startup still uses its existing store.
 Diagnostic contracts, execution, transport, and projection are implemented.
 Diagnostic physical qualification is incomplete. Public SQL,
 trace CLI/API, assessment submission, classification, proposal generation, and
@@ -73,8 +73,8 @@ Control intake or the SQLite discovery projection.
 -> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) Reopen preserves store identity, revisions, receipt, report, and count.<br>
 -> [storage-contract result](../../../../crates/mithril-e2e/src/discovery/storage_contract.rs) Case records nonzero cursors, revisions, counts, and digests; the independent Control policy state remains unchanged.
 
-The next route covers the data-owner implementation. It does not cover
-production intake.
+The next route covers the data-owner implementation. The mTLS qualification
+below selects this owner explicitly. Default startup does not select it.
 
 [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) The owner opens one private DuckDB writer and rejects unsupported stored schemas under its lease.<br>
 -> [AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/read.rs) A bounded read checks frame digests and reports a recorded expired range.<br>
@@ -91,7 +91,20 @@ production intake.
 -> [AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/read.rs) A read distinguishes committed expiry from an unexplained missing row.
 
 [EvidenceIntakeOwner::new](../../../../crates/mithril-control/src/evidence.rs) The explicit data-backed constructor rejects accepted, pending, or coverage state in the old Control evidence store. The owner validates Node batches and commits evidence and coverage only to AnalysisStore. Its component tests check exact frames, replay, old Control-store isolation, and restart.<br>
--> Not implemented [Control startup](phase-7-2-data-store.md) The server still selects the old writer. Fresh-store activation, production retention scheduling, and an mTLS recovery case remain open.
+-> [ControlPlane::from_intake](../../../../crates/mithril-control/src/service.rs) The service accepts the selected intake owner and keeps the same Control policy and trust store.<br>
+-> [DataStoreQualification::recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The mTLS case submits Node WAL records, leaves an ACK unread, restarts the owners, and retries the same bytes. The case passed 19 checks with the selected data owner.<br>
+-> Not implemented [Control startup](phase-7-2-data-store.md) Default startup still selects the old writer. Fresh-store activation and production retention scheduling remain open.
+
+[DataStoreQualification::recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The test clock advances while optional discovery remains disabled.<br>
+-> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) Required progress protects raw input. A result transaction advances that progress and retains one exact witness.<br>
+-> [AnalysisStore::resume_optional](../../../../crates/araphor-data/src/analysis/progress.rs) The optional processor records the expired range before resuming.<br>
+-> [AnalysisStore::read_result](../../../../crates/araphor-data/src/analysis/progress.rs) A tenant-scoped read checks the retained result digest.<br>
+-> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) The case checks result, witness, coverage, and receipt preservation after expiry. A stale backup reports purged Node input as Partial.
+
+`IntakeClock` is a clock boundary, not a scheduling owner. Production uses
+`SystemIntakeClock`. The e2e case uses an atomic test clock. Control still owns
+authentication and ACK. The test calls production store, processor, retention,
+and backup methods. It does not implement their transactions.
 
 [inspect_read_only_shape](../../../../crates/araphor-data/src/analysis/admission.rs) DuckDB-dialect parser rejects unauthorized SQL shape and external access.<br>
 -> [ReadOnlyGuard::parse](../../../../crates/araphor-data/src/analysis/admission.rs) The bound check reuses the admitted syntax tree; it does not parse the statement a second time.<br>
@@ -675,9 +688,9 @@ not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
 
-This review covers `codex/mithril-ui` at `5cdef22` plus the fresh-store rejection
-changes. The new data-owner route does not certify live Node intake,
-QueryOwner, or trace API frames.
+This review covers `codex/mithril-ui` at `52c322a` plus the mTLS recovery
+changes. The new route qualifies the selected data-backed intake owner.
+It does not qualify default startup, QueryOwner, or trace API frames.
 
 The current offline runs are `storage-contract` and `offline-exact` under
 `/tmp/araphor-simplify.bO8mk9/`. Both report `PASS`. The isolated SQL worker
@@ -685,12 +698,13 @@ test passed with `--ignored`. The storage case reports three retained events,
 contiguous cursor 3, coverage revision 1, and commit revision 2. Physical
 diagnostic results above are prior recorded runs, not fresh runs for this
 offline proof.
-For the current source, `cargo test -p araphor-data --lib` passed 19 tests with
-two ignored. `cargo test -p mithril-control --lib evidence::tests` passed
-12 tests. These tests include old-state rejection, data-backed intake, and
-cursor-overflow rejection. Workspace formatting, compilation, and strict Clippy
-passed.
-The earlier `storage-contract` result used an older schema and does not
-qualify this source. The repository CI procedure reached the full test build;
-that test run is not yet complete.
-The full Control suite and production recovery and startup cases remain to run.
+The current `data-store-recovery` command passed 19 checks. Its result is
+`/tmp/araphor-live-store.M3z6hl/recovery/result.json`. It records cursor 3,
+retained floor 2, one retained witness, and backup revision 8. The database
+uses 8,663,040 bytes after checkpoint; its native WAL is absent. These small
+fixture measurements are not a throughput or physical-reuse qualification.
+`cargo test -p araphor-data --lib` passed 19 tests with two ignored.
+`analysis_store_result_progress` includes tenant and corrupt-body checks.
+Workspace formatting, compilation, and strict Clippy passed. The full workspace
+test run is still running. Startup, capacity, crash injection, and physical qualification
+remain open.

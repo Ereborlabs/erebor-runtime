@@ -8,6 +8,7 @@ enum Case {
     StorageContract,
     ProfileRestart,
     ContextRoundtrip,
+    DataStoreRecovery,
 }
 
 #[derive(Parser)]
@@ -26,6 +27,11 @@ async fn main() {
         Case::OfflineExact => mithril_e2e::run_discovery_offline(&cli.output_directory)
             .map_err(Box::<dyn std::error::Error>::from),
         Case::StorageContract => mithril_e2e::run_discovery_storage_contract(&cli.output_directory),
+        Case::DataStoreRecovery => {
+            mithril_e2e::DataStoreQualification::new(cli.output_directory)
+                .recovery()
+                .await
+        }
         Case::ProfileRestart => {
             mithril_e2e::DiscoveryQualificationRunner::new(cli.output_directory)
                 .profile_restart()

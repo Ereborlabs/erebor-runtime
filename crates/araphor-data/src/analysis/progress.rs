@@ -85,6 +85,24 @@ impl ProcessorScopeV1 {
 }
 
 impl AnalysisStore {
+    pub fn read_result(&self, tenant: [u8; 16], result_id: &str) -> Result<Option<Vec<u8>>> {
+        if tenant == [0; 16] || result_id.is_empty() || result_id.len() > 256 {
+            return self.reject("the analysis result identity is invalid");
+        }
+        let stored: Option<(Vec<u8>, Vec<u8>)> = self.writer()?.query_row(
+            "SELECT body, body_sha256 FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
+            params![tenant.as_slice(), result_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional().context(AnalysisDatabaseSnafu { operation: "read retained analysis result" })?;
+        let Some((body, digest)) = stored else {
+            return Ok(None);
+        };
+        if body.len() > MAX_RESULT_BYTES || Sha256::digest(&body).as_slice() != digest {
+            return self.reject("the retained analysis result digest or size is invalid");
+        }
+        Ok(Some(body))
+    }
+
     pub fn register_processor(
         &self,
         scope: &ProcessorScopeV1,
@@ -610,6 +628,12 @@ mod tests {
         let receipt = store.commit_result(&input)?;
         assert_eq!(receipt.commit_revision, 4);
         assert_eq!(receipt.consumed_cursor, 1);
+        assert_eq!(
+            store.read_result([1; 16], "finding-1")?,
+            Some(b"result".to_vec())
+        );
+        assert_eq!(store.read_result([4; 16], "finding-1")?, None);
+        assert_eq!(store.read_result([1; 16], "missing")?, None);
         assert_eq!(store.commit_result(&input)?, receipt);
         assert_eq!(store.meta()?.commit_revision, 4);
         input.result_id = "finding-2".into();
@@ -625,6 +649,14 @@ mod tests {
         input.witnesses[0].identity = identity(4);
         assert!(store.commit_result(&input).is_err());
         assert_eq!(store.meta()?.commit_revision, 4);
+        store.writer()?.execute(
+            "UPDATE analysis_results SET body = ? WHERE result_id = ?",
+            params![b"changed".as_slice(), "finding-1"],
+        )?;
+        assert!(matches!(
+            store.read_result([1; 16], "finding-1"),
+            Err(crate::Error::AnalysisState { .. })
+        ));
         Ok(())
     }
 }

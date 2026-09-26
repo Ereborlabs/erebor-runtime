@@ -12,10 +12,12 @@ use crate::{
     Result,
 };
 
+mod data_store;
 mod roundtrip;
 #[cfg(test)]
 mod storage;
 mod storage_contract;
+pub use data_store::DataStoreQualification;
 pub use roundtrip::DiscoveryQualificationRunner;
 pub use storage_contract::run as run_discovery_storage_contract;
 
