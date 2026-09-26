@@ -160,3 +160,6 @@ The current Control intake still writes its chunked store. A complete offline
 upgrade, single-writer cutover, capacity admission,
 context projection from Control, data-store recovery/upgrade cases, and physical disk reuse
 remain unverified. Do not enable the new data path yet.
+AnalysisStore can now read a source's committed boot and label binding. The
+lookup checks the matching receipt and rejects changed bindings. The focused
+test and the data-owner library suite passed with 20 tests and two ignored.

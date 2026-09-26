@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
-use super::{AnalysisStore, AnalysisStoreMetaV1, ANALYSIS_SCHEMA_VERSION};
+use super::{
+    source_key, valid_source_identity, AnalysisStore, AnalysisStoreMetaV1, ANALYSIS_SCHEMA_VERSION,
+};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, JsonSnafu, Result};
 
 #[derive(Deserialize, Serialize)]
@@ -33,6 +35,59 @@ impl EvidenceIntakeIdentityV1 {
 }
 
 impl AnalysisStore {
+    pub fn source_binding(
+        &self,
+        tenant_id: [u8; 16],
+        node_id: &str,
+        source_id: [u8; 16],
+        source_epoch: u64,
+    ) -> Result<Option<EvidenceIntakeIdentityV1>> {
+        let mut identity = EvidenceIntakeIdentityV1 {
+            tenant_id,
+            node_id: node_id.to_owned(),
+            node_boot_id: [0; 16],
+            label_epoch: 0,
+            source_id,
+            source_epoch,
+        };
+        if !crate::node_id_is_valid(node_id)
+            || tenant_id == [0; 16]
+            || source_id == [0; 16]
+            || source_epoch == 0
+        {
+            return Self::reject_path(&self.root, "the source epoch lookup is invalid");
+        }
+        let writer = self.writer()?;
+        let saved: Option<(Vec<u8>, Vec<u8>, u64)> = writer
+            .query_row(
+                "SELECT tenant_id, node_boot_id, label_epoch FROM source_bindings WHERE epoch_key = ?",
+                params![identity.epoch_key().as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .context(AnalysisDatabaseSnafu {
+                operation: "read source epoch binding",
+            })?;
+        let Some((tenant, boot, label)) = saved else {
+            return Ok(None);
+        };
+        identity.node_boot_id = boot
+            .try_into()
+            .map_err(|_| self.state_error("the source epoch boot identity is invalid"))?;
+        identity.label_epoch = label;
+        if tenant != identity.tenant_id
+            || !valid_source_identity(&identity)
+            || Self::read_receipt_from(&writer, &self.root, &identity, &source_key(&identity))?
+                .is_none()
+        {
+            return Self::reject_path(
+                &self.root,
+                "the source epoch binding has no matching receipt",
+            );
+        }
+        Ok(Some(identity))
+    }
+
     pub(super) fn bind_source(
         writer: &Connection,
         root: &Path,
@@ -246,6 +301,52 @@ mod tests {
 
     use super::*;
     use crate::{EvidenceIntakeIdentityV1, EvidenceRetentionOwner, RetentionLimitsV1};
+
+    #[test]
+    fn source_binding_keeps_the_committed_boot_and_label(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let identity = EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "node-a".into(),
+            node_boot_id: [2; 16],
+            label_epoch: 7,
+            source_id: [3; 16],
+            source_epoch: 9,
+        };
+        let lookup = || {
+            store.source_binding(
+                identity.tenant_id,
+                &identity.node_id,
+                identity.source_id,
+                identity.source_epoch,
+            )
+        };
+        assert_eq!(lookup()?, None);
+        store.accept_validated_batch(
+            identity.clone(),
+            super::super::ValidatedEvidenceBatchV1 {
+                cpu_id: 1,
+                first_cursor: 1,
+                last_cursor: 1,
+                intake_utc_ns: 1,
+                framed_records: prost::bytes::Bytes::from_static(b"frame"),
+                frame_ends: vec![5],
+            },
+        )?;
+        assert_eq!(lookup()?, Some(identity.clone()));
+        assert_eq!(
+            store.source_binding([4; 16], &identity.node_id, identity.source_id, 9)?,
+            None
+        );
+        store.writer()?.execute(
+            "UPDATE source_bindings SET node_boot_id = ? WHERE epoch_key = ?",
+            params![[5_u8; 16].as_slice(), identity.epoch_key().as_slice()],
+        )?;
+        assert!(lookup().is_err());
+        Ok(())
+    }
 
     fn legacy_store(
         root: &Path,
