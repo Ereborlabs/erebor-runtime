@@ -138,6 +138,10 @@ impl AnalysisStore {
                     .mode(0o700)
                     .create(parent)
                     .context(IoSnafu { path: parent })?;
+                File::open(&self.root)
+                    .context(IoSnafu { path: &self.root })?
+                    .sync_all()
+                    .context(IoSnafu { path: &self.root })?;
             }
             Err(source) => return Err(source).context(IoSnafu { path: parent }),
         }
