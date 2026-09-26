@@ -120,6 +120,23 @@ commits rows, receipt, and revisions. A conflict rolls back all appended rows.
 `analysis_store_bulk_rollback` checks a conflict at the last row of a full batch,
 then retry and restart. An exact retry does not send a revision notification.
 
+[AnalysisStore::writer](../../../../crates/araphor-data/src/analysis/connection.rs) A data mutation reserves one of nine writer permits before it waits for the single connection.<br>
+-> [AnalysisConnection](../../../../crates/araphor-data/src/analysis/connection.rs) One operation runs and at most eight wait. The guard releases the connection and permit on return or error.<br>
+-> [EvidenceIntakeOwner::data_status](../../../../crates/mithril-control/src/evidence.rs) Excess admission returns ResourceExhausted. It does not become an ACK.<br>
+
+[AnalysisStore::reader](../../../../crates/araphor-data/src/analysis/connection.rs) A bounded read reserves one of 16 read permits and one of two private connections.<br>
+-> [AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/read.rs) A read transaction freezes receipt, expiry, revision, and row statements together. Source-status reads use the same snapshot rule.<br>
+-> [AnalysisStore::checkpoint](../../../../crates/araphor-data/src/analysis/backup.rs) Checkpoint and backup hold the writer, then wait for all read guards to close. Normal data writes do not take this maintenance lock.<br>
+
+AnalysisStore creates and closes all three native connections. Its directory
+lease drops after those connections. These guards are private; callers receive
+bounded values, not connections or retained snapshots. No guard spans client I/O.
+A queued read keeps its selected reader when both readers are busy. There is
+no shared queue or fairness guarantee between those two connections.
+`analysis_store_admission_bounds` checks full queues, rejection without commit,
+permit release, and writes during read saturation. `analysis_store_snapshot_maintenance`
+checks a stable snapshot during append and expiry, checkpoint wait, and restart.
+
 [EvidenceWal::next_batches](../../../../crates/mithril-node/src/observation/wal.rs)
 uses the same byte and record limits. `wal_bounds_group_records` checks the
 Node split. `intake_bounds_group_records` checks rejection without a commit.
@@ -751,8 +768,8 @@ not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
 
-This review covers `codex/mithril-ui` at `666d1c99` plus retention scheduling
-and required-input protection. The startup command passed 16 checks; recovery
+This review covers `codex/mithril-ui` at `f2c2db33` plus bounded data connections
+and snapshot reads. The startup command passed 16 checks; recovery
 passed 23 checks. Their results are in `/tmp/araphor-retention.NH24lk/`. QueryOwner and trace API
 frames are not qualified by these changes.
 
@@ -777,7 +794,12 @@ startup and recovery passed again. The `be877df` gate passed formatting,
 compilation, and strict Clippy but failed the unchanged SQLite 50,000-atom test
 with `OperationInterrupted`. The concurrent Mithril e2e suite passed 110 tests
 with 247 ignored. The final workspace gate passed for `666d1c99`.
-The current-source final gate is running.
+The final workspace gate also passed at `f2c2db33`, including 25 data-crate tests
+with two ignored and 110 Mithril e2e tests with 247 ignored.
+The connection-change final gate is running.
+For that change, formatting, compilation, and strict Clippy passed. The data
+crate passed 27 tests with two ignored. All four data e2e tests passed with
+the new connections, as did `data_backed_intake_acks_only_the_analysis_commit`.
 The four current data e2e tests passed, including `data_stream_flushes_without_tail`
 and `data_reopen_preserves_errors`. The Node and Control record-bound tests
 passed. `admission_releases_exact_capacity` passed with canonical tenant keys.

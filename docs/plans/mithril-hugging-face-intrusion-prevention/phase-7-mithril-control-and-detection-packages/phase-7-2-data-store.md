@@ -228,8 +228,24 @@ The startup command passed 16 checks at
 holds a native read transaction across deletion. Intake stays unavailable while
 that transaction blocks checkpointing, including a retry with no rows to remove.
 Intake recovers only after the read transaction ends and checkpoint succeeds.
-The final workspace gate for this retention change is running.
-General data-owner admission, physical capacity
+The final workspace gate passed for retention at `f2c2db33`. It passed
+formatting, compilation, strict Clippy, and workspace tests. The data crate
+passed 25 tests with two ignored. The Mithril e2e suite passed 110 tests with
+247 physical or explicit qualification tests ignored.
+AnalysisStore now bounds all connection admission, including direct processor
+and maintenance calls. One writer permits eight queued operations. Two private
+readers permit 16 active or queued reads in total. Excess work returns
+AnalysisBusy; Control maps that error to ResourceExhausted. Connection guards
+release permits on return and error. Evidence pages and source-status reads use
+one database snapshot for all of their statements. Fixed single-statement reads
+also use the private readers. No database handle crosses the public data API.
+Checkpoint and backup hold the writer and wait for read guards to close.
+Readers can run during normal writes. No reader survives a public method return.
+The current data crate passed 27 tests with two ignored, including the exact
+16-read cap, writer queue saturation, and snapshot/maintenance checks. All four
+data e2e tests passed. `data_backed_intake_acks_only_the_analysis_commit` passed.
+Formatting, compilation, and strict Clippy passed. The final workspace tests
+are running. Physical capacity
 and processor health, Control context projection, crash injection, removal of
 the remaining old library writer, and physical disk reuse remain open.
 Production enablement is not qualified.

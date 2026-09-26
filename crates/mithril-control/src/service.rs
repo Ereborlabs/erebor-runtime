@@ -2562,7 +2562,10 @@ fn utc_now_ns() -> Result<i64, Status> {
 }
 
 fn internal_status(error: crate::Error) -> Status {
-    Status::internal(error.to_string())
+    match error {
+        crate::Error::DataStore { source, .. } => crate::EvidenceIntakeOwner::data_status(*source),
+        error => Status::internal(error.to_string()),
+    }
 }
 
 fn invalid_policy_status(error: crate::Error) -> Status {

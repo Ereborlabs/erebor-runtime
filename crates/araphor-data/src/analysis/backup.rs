@@ -94,7 +94,12 @@ impl AnalysisStore {
     }
 
     pub fn checkpoint(&self) -> Result<()> {
-        self.writer()?
+        let writer = self.writer()?;
+        let _maintenance = self
+            .maintenance
+            .write()
+            .map_err(|_| self.state_error("the analysis maintenance lock is poisoned"))?;
+        writer
             .execute_batch("CHECKPOINT")
             .context(AnalysisDatabaseSnafu {
                 operation: "checkpoint analysis database",
@@ -113,6 +118,10 @@ impl AnalysisStore {
             return self.reject("the backup directory is not private");
         }
         let writer = self.writer()?;
+        let _maintenance = self
+            .maintenance
+            .write()
+            .map_err(|_| self.state_error("the analysis maintenance lock is poisoned"))?;
         writer
             .execute_batch("CHECKPOINT")
             .context(AnalysisDatabaseSnafu {

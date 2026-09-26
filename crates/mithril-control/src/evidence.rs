@@ -265,9 +265,10 @@ impl EvidenceIntakeOwner {
     }
 
     #[allow(clippy::result_large_err)]
-    fn data_status(error: araphor_data::Error) -> Status {
+    pub(crate) fn data_status(error: araphor_data::Error) -> Status {
         match error {
-            araphor_data::Error::ProtectedInputCapacity { .. } => {
+            araphor_data::Error::ProtectedInputCapacity { .. }
+            | araphor_data::Error::AnalysisBusy { .. } => {
                 Status::resource_exhausted(error.to_string())
             }
             araphor_data::Error::RetentionUnavailable { .. } => {
@@ -336,7 +337,7 @@ impl EvidenceIntakeOwner {
             .as_ref()
             .map(|data| {
                 data.source_binding(tenant_id, node_id, source_id, batch.source_epoch)
-                    .map_err(|error| Status::internal(error.to_string()))
+                    .map_err(Self::data_status)
             })
             .transpose()?
             .flatten();
@@ -811,7 +812,10 @@ fn coverage_counters_do_not_regress(
 }
 
 fn internal_status(error: crate::Error) -> Status {
-    Status::internal(error.to_string())
+    match error {
+        crate::Error::DataStore { source, .. } => EvidenceIntakeOwner::data_status(*source),
+        error => Status::internal(error.to_string()),
+    }
 }
 
 #[cfg(test)]
