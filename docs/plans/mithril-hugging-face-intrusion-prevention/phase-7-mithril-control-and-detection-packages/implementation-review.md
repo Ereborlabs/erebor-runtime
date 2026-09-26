@@ -1138,5 +1138,10 @@ data/mTLS tests. Fresh CLI artifacts are in
 Startup passed 16 checks; recovery passed 29. The stale-backup case uses the
 actual Node WAL floor and production mTLS RPC, not a direct gap mutation.
 Repeated reporting after restart preserves the same gap and does not create
-an accepted receipt. Full workspace CI is running after the final source edit.
+an accepted receipt. Full workspace CI passed for `a50c42d9`: formatting,
+workspace checks, strict Clippy, and workspace tests. The data crate passed
+41 tests with two ignored; Control passed 196 with two ignored; Mithril e2e
+passed 114 with 248 ignored; Node passed 256 with one ignored.
+The CLI binary SHA-256 for these artifacts is
+`8dfb226c5147f347c0803b011c0dfb85a5188677f20c5631bd7e7e8f806ca9cf`.
 These tests do not prove Kubernetes scheduling of the periodic Node report.
