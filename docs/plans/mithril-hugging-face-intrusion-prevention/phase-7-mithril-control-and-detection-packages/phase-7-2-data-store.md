@@ -142,11 +142,13 @@ deletes only eligible raw rows. Required progress and live exact witnesses
 protect rows. The tests use temporary databases. No retention call ran on an
 existing deployment.
 
-`cargo test -p araphor-data --lib` passed 18 tests. The repository Rust CI
-procedure passed formatting, workspace check, all-features Clippy, and workspace
-tests with `RUST_TEST_THREADS=1`. The parallel run failed one existing 500 ms
-Control reconnect timing assertion. That test passed alone and in the serialized
-run. The offline `storage-contract` case passed nine assertions. That case
+`cargo test -p araphor-data --lib` passed 19 tests with two ignored.
+`RUST_TEST_THREADS=1 cargo test -p mithril-control --lib` passed 193 tests with
+two ignored. The repository Rust CI procedure passed before the offline import
+change and must be rerun for the current source. The parallel run at that time
+failed one existing 500 ms Control reconnect timing assertion. That test passed
+alone and in the serialized run. The offline `storage-contract` case passed nine
+assertions. That case
 does not use production intake. The old Control store now exports bounded,
 length- and checksum-checked original frame pages; its focused test passed.
 An offline copy now moves accepted original frames and coverage into AnalysisStore.
