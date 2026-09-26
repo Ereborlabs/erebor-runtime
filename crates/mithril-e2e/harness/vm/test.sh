@@ -191,6 +191,34 @@ grep -Fq 'restore_control_storage || cleanup_failed=true' \
 grep -Fq '"readOnly":true' "$directory/two-node-outage-recovery.sh"
 grep -Fq '"subPath":"evidence/analysis"' "$directory/two-node-outage-recovery.sh"
 grep -Fq '"$patch":"delete"' "$directory/two-node-outage-recovery.sh"
+(
+  source <(sed -n '/^block_control_storage() {$/,/^}$/p' "$directory/two-node-outage-recovery.sh")
+  source <(sed -n '/^restore_control_storage() {$/,/^}$/p' "$directory/two-node-outage-recovery.sh")
+  system_namespace=mithril-system
+  control_storage_read_only=false
+  fault_mounted=false
+  restore_status=23
+  remote_kubectl() {
+    if [[ $* == *'"readOnly":true'* ]]; then
+      fault_mounted=true
+      return 23
+    fi
+    [[ $* == *'"$patch":"delete"'* ]]
+    ((restore_status == 0)) || return "$restore_status"
+    fault_mounted=false
+  }
+  status=0
+  block_control_storage || status=$?
+  [[ $status -eq 23 && $fault_mounted == true &&
+     $control_storage_read_only == true ]]
+  status=0
+  restore_control_storage || status=$?
+  [[ $status -eq 23 && $fault_mounted == true &&
+     $control_storage_read_only == true ]]
+  restore_status=0
+  restore_control_storage
+  [[ $fault_mounted == false && $control_storage_read_only == false ]]
+)
 grep -Fq -- "-name '*.seg'" "$directory/two-node-outage-recovery.sh"
 grep -Fq -- '--property ActiveState --value k3s' \
   "$directory/two-node-outage-recovery.sh"

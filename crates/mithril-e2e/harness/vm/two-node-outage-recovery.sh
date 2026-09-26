@@ -177,16 +177,16 @@ restore_control_storage() {
   if [[ $control_storage_read_only == true ]]; then
     remote_kubectl -n "$system_namespace" patch deployment mithril-control \
       --type=strategic -p '{"spec":{"template":{"spec":{"containers":[{"name":"mithril-control","volumeMounts":[{"mountPath":"/var/lib/mithril-control/evidence/analysis","$patch":"delete"}]}]}}}}' \
-      >/dev/null
+      >/dev/null || return $?
     control_storage_read_only=false
   fi
 }
 
 block_control_storage() {
+  control_storage_read_only=true
   remote_kubectl -n "$system_namespace" patch deployment mithril-control \
     --type=strategic -p '{"spec":{"template":{"spec":{"containers":[{"name":"mithril-control","volumeMounts":[{"name":"state","mountPath":"/var/lib/mithril-control/evidence/analysis","subPath":"evidence/analysis","readOnly":true}]}]}}}}' \
     >/dev/null
-  control_storage_read_only=true
 }
 
 remove_markers() {

@@ -293,6 +293,10 @@ Compare retained data before and after Node replay. Keep the Node WAL checks.
 Make only the `evidence/analysis` mount read-only for the storage fault. Require
 working Node sessions and policy acknowledgements while evidence ACKs stop.
 Restore the mount, drain Node input, and compare the retained baseline again.
+Set the cleanup flag before applying the fault mount. A failed or lost patch
+reply must not cancel cleanup. Keep the flag until mount removal succeeds.
+The shell regression must check a lost apply reply, a failed removal, and a
+successful removal retry with the same flag.
 Do not compare DuckDB file prefixes or import old evidence. Local shell checks
 do not replace this physical run.
 
@@ -1001,3 +1005,9 @@ reserve measurements, and Kubernetes storage/partition qualification remain
 open. The offline inspection command is verified; physical qualification is not.
 No retained two-node environment has been selected or changed. The unrelated
 running VM remains unchanged.
+
+The storage-fault cleanup regression failed before the correction and passed
+after it. `bash crates/mithril-e2e/harness/vm/test.sh` passed. The final workspace
+gate is running after this harness change. A fresh two-node setup is building
+current-source images for the physical test. Its output directory is
+`/tmp/araphor-two-node-storage.ChbP3Nmp/environment`. No physical pass is claimed.
