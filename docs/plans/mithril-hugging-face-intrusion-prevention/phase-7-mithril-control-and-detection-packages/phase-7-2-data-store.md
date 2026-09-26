@@ -630,4 +630,11 @@ The rebuilt CLI passed startup (18 checks) and recovery (29 checks). Results
 are in `/tmp/araphor-data-qualification.MtrjRy/restore-{startup,recovery}/result.json`.
 The startup case uses a pending-marker fixture to prove rejected evidence and
 coverage ACK, retained Node input, unchanged database bytes, and working policy
-RPCs. The full workspace gate is pending. The complete phase remains **Not done**.
+RPCs. The full `bash .github/scripts/verify-rust-ci.sh` gate passed for
+`3121ea7d`: formatting, workspace checks, strict Clippy, and workspace tests.
+The data crate passed 44 tests with two ignored; Control passed 196 with two
+ignored; Mithril e2e passed 114 with 248 ignored; Node passed 256 with one ignored.
+The tests use temporary stores and synthetic inputs. They do not prove a Control
+process crash before ACK, hardware power loss, native commit failure after
+admission, reserve adequacy, load limits, or physical Kubernetes behavior.
+The complete phase remains **Not done**.
