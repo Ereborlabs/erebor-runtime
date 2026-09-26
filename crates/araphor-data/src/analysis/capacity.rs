@@ -44,7 +44,7 @@ impl StorageLimitsV1 {
                 .is_some()
     }
 
-    fn check(&self, usage: StorageUsageV1, maintenance: bool) -> Result<()> {
+    pub(super) fn check(&self, usage: StorageUsageV1, maintenance: bool) -> Result<()> {
         let reserve = self.maintenance_bytes();
         let reserve = if maintenance {
             reserve

@@ -28,6 +28,18 @@ impl ProcessorClassV1 {
     }
 }
 
+impl TryFrom<&str> for ProcessorClassV1 {
+    type Error = ();
+
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        match value {
+            "optional" => Ok(Self::Optional),
+            "required" => Ok(Self::Required),
+            _ => Err(()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProcessorScopeV1 {
     pub processor_id: String,
@@ -68,15 +80,15 @@ pub struct AnalysisResultReceiptV1 {
     pub consumed_cursor: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AnalysisProcessorGapV1 {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct AnalysisGapV1 {
     pub first_cursor: u64,
     pub last_cursor: u64,
     pub commit_revision: u64,
 }
 
 impl ProcessorScopeV1 {
-    fn valid(&self) -> bool {
+    pub(super) fn valid(&self) -> bool {
         !self.processor_id.is_empty()
             && self.processor_id.len() <= 128
             && self.method_version > 0
@@ -179,10 +191,7 @@ impl AnalysisStore {
         Ok(revision)
     }
 
-    pub fn resume_optional(
-        &self,
-        scope: &ProcessorScopeV1,
-    ) -> Result<Option<AnalysisProcessorGapV1>> {
+    pub fn resume_optional(&self, scope: &ProcessorScopeV1) -> Result<Option<AnalysisGapV1>> {
         if !scope.valid() {
             return self.reject("the optional processor scope is invalid");
         }
@@ -286,7 +295,7 @@ impl AnalysisStore {
             operation: "commit optional processor gap",
         })?;
         self.revision.send_replace(revision);
-        Ok(Some(AnalysisProcessorGapV1 {
+        Ok(Some(AnalysisGapV1 {
             first_cursor: first,
             last_cursor,
             commit_revision: revision,
