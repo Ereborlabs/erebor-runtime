@@ -90,7 +90,7 @@ production intake.
 -> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) The transaction keeps that row. An expired row can be deleted on a later call after its protection ends.<br>
 -> [AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/read.rs) A read distinguishes committed expiry from an unexplained missing row.
 
-[EvidenceIntakeOwner::with_data_store](../../../../crates/mithril-control/src/evidence.rs) An explicit owner path validates Node batches and commits evidence and coverage only to AnalysisStore. Its component test checks exact frames, replay, old Control-store isolation, and restart.<br>
+[EvidenceIntakeOwner::new](../../../../crates/mithril-control/src/evidence.rs) The explicit data-backed constructor rejects accepted, pending, or coverage state in the old Control evidence store. The owner validates Node batches and commits evidence and coverage only to AnalysisStore. Its component tests check exact frames, replay, old Control-store isolation, and restart.<br>
 -> Not implemented [Control startup](phase-7-2-data-store.md) The server still selects the old writer. Fresh-store activation, production retention scheduling, and an mTLS recovery case remain open.
 
 [inspect_read_only_shape](../../../../crates/araphor-data/src/analysis/admission.rs) DuckDB-dialect parser rejects unauthorized SQL shape and external access.<br>
@@ -675,7 +675,7 @@ not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
 
-This review covers `codex/mithril-ui` at `c09ee7ac` plus uncommitted data-owner
+This review covers `codex/mithril-ui` at `5cdef22` plus the fresh-store rejection
 changes. The new data-owner route does not certify live Node intake,
 QueryOwner, or trace API frames.
 
@@ -686,8 +686,11 @@ contiguous cursor 3, coverage revision 1, and commit revision 2. Physical
 diagnostic results above are prior recorded runs, not fresh runs for this
 offline proof.
 For the current source, `cargo test -p araphor-data --lib` passed 19 tests with
-two ignored. The focused data-backed intake and old-store read tests passed.
-Strict Clippy passed for both changed crates. The earlier `storage-contract`
-result used an older schema and does not qualify this source. The full Control
-suite, repository CI procedure, and production recovery and startup cases
-remain to run.
+two ignored. `cargo test -p mithril-control --lib evidence::tests` passed
+12 tests. These tests include old-state rejection, data-backed intake, and
+cursor-overflow rejection. Workspace formatting, compilation, and strict Clippy
+passed.
+The earlier `storage-contract` result used an older schema and does not
+qualify this source. The repository CI procedure reached the full test build;
+that test run is not yet complete.
+The full Control suite and production recovery and startup cases remain to run.
