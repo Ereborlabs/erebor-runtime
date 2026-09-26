@@ -2,7 +2,7 @@
   "version": 1,
   "proof_kind": "SYNTHETIC",
   "storage_binding": {
-    "duckdb": "1.4.4",
+    "duckdb": "1.10505.0",
     "sqlparser": "0.63.0"
   },
   "splits": {

@@ -277,6 +277,23 @@ The check samples space; it cannot constrain unrelated filesystem writers.
 Native limits are a 128-MiB memory target, two threads, a 64-MiB WAL checkpoint
 threshold, and a 128-MiB temporary-directory limit. No RSS limit is claimed.
 
+`open_native` pins DuckDB core 1.5.5 through Rust binding 1.10505.0. It enables
+`vacuum_rebuild_indexes` at startup and backup reopen with a `u64::MAX`
+threshold. Primary keys remain present. Native compaction can rebuild their
+indexes instead of retaining deleted payload indefinitely. The setting does
+not remove logical quotas or native resource limits. The
+[upstream option](https://github.com/duckdb/duckdb/pull/21769) is experimental;
+index-rebuild cost and large-store recovery remain qualification requirements.
+Checkpoint can retain a partly deleted row group. Repeated reuse, not file
+shrinkage after every DELETE, is the physical storage contract.
+[`analysis_store_physical_reuse`](../../../../crates/araphor-data/src/analysis/retention.rs)
+loads five 8-MiB cycles of poorly compressible raw data through the public
+owner. Each cycle uses the production retention sweep and keeps one exact
+witness. After the first two cycles, the test checks a fixed file-growth bound.
+It then expires the witness, checks native block reclamation, and reopens the
+store with the same receipt and retained floor. This is temporary-file component
+proof, not full-disk, throughput, or Kubernetes qualification.
+
 `storage_usage` visits at most 4,096 directory entries and rejects non-file,
 non-directory entries. It reports logical-or-allocated file bytes, allocated
 bytes, and available filesystem bytes. Native WAL, temporary files, and backups

@@ -750,6 +750,150 @@ mod tests {
     }
 
     #[test]
+    fn analysis_store_physical_reuse() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use sha2::{Digest as _, Sha256};
+        use std::os::unix::fs::MetadataExt as _;
+
+        const ROWS: u64 = 512;
+        const CYCLES: u64 = 5;
+        const BATCH: u64 = 64;
+        const FRAME_BYTES: usize = 16 * 1024;
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let source = identity(1);
+        let owner = EvidenceRetentionOwner::new(
+            &store,
+            RetentionLimitsV1 {
+                raw_max_age_ns: 100,
+                raw_max_bytes: 1024 * 1024 * 1024,
+            },
+        )?;
+        let mut first_peak = 0;
+        let mut witness = Vec::new();
+        for cycle in 0..CYCLES {
+            let intake = 100 + cycle * 1000;
+            for offset in (0..ROWS).step_by(BATCH as usize) {
+                let first = cycle * ROWS + offset + 1;
+                let mut frames = Vec::with_capacity(BATCH as usize * FRAME_BYTES);
+                for cursor in first..first + BATCH {
+                    for block in 0..FRAME_BYTES / 32 {
+                        let mut hash = Sha256::new();
+                        hash.update(cursor.to_be_bytes());
+                        hash.update((block as u64).to_be_bytes());
+                        frames.extend_from_slice(&hash.finalize());
+                    }
+                }
+                assert_eq!(
+                    store.accept_validated_batch(
+                        source.clone(),
+                        ValidatedEvidenceBatchV1 {
+                            cpu_id: 0,
+                            first_cursor: first,
+                            last_cursor: first + BATCH - 1,
+                            intake_utc_ns: intake,
+                            framed_records: frames.into(),
+                            frame_ends: (1..=BATCH as usize).map(|row| row * FRAME_BYTES).collect(),
+                        }
+                    )?,
+                    EvidenceStoreOutcomeV1::Accepted
+                );
+            }
+            if cycle == 0 {
+                witness = store.read_page(&source, ROWS)?.records[0]
+                    .framed_record
+                    .clone();
+                let scope = ProcessorScopeV1 {
+                    processor_id: "review".into(),
+                    method_version: 1,
+                    identity: source.clone(),
+                };
+                store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
+                store.commit_result(&AnalysisResultCommitV1 {
+                    scope,
+                    expected_cursor: 0,
+                    consumed_cursor: ROWS,
+                    coverage_revision: 0,
+                    context_revision: 0,
+                    result_id: "retained-witness".into(),
+                    body: b"review".to_vec(),
+                    created_utc_ns: intake,
+                    witnesses: vec![AnalysisWitnessV1 {
+                        identity: source.clone(),
+                        cursor: ROWS,
+                        expires_utc_ns: 10_000,
+                    }],
+                    context_refs: vec![],
+                })?;
+            }
+            store.checkpoint()?;
+            let loaded = std::fs::metadata(root.join("analysis.duckdb"))?;
+            let peak = loaded.len();
+            assert!(loaded.blocks() * 512 >= ROWS * FRAME_BYTES as u64);
+            if cycle < 2 {
+                first_peak = first_peak.max(peak);
+            } else {
+                assert!(
+                    peak <= first_peak + 8 * 1024 * 1024,
+                    "cycle {cycle} grew from {first_peak} to {peak} bytes"
+                );
+            }
+            let mut removed = 0;
+            let expected = ROWS - u64::from(cycle == 0);
+            for _ in 0..ROWS / RETENTION_BATCH as u64 {
+                let sweep = owner.sweep(None, intake + 101)?;
+                assert_eq!(sweep.checked_sources, 1);
+                assert_eq!(
+                    sweep.removed_records as u64,
+                    (expected - removed as u64).min(RETENTION_BATCH as u64)
+                );
+                removed += sweep.removed_records;
+            }
+            assert_eq!(removed as u64, expected);
+            let retained = store.source_status(&source)?.ok_or("source is absent")?;
+            assert_eq!(retained.retained_event_count, 1);
+            assert_eq!(retained.receipt.contiguous_cursor, (cycle + 1) * ROWS);
+            assert_eq!(retained.receipt.retained_floor, ROWS - 1);
+            assert_eq!(
+                store.read_page(&source, ROWS)?.records[0].framed_record,
+                witness
+            );
+            assert!(matches!(
+                store.read_page(&source, cycle * ROWS + 1),
+                Err(crate::Error::RetainedRangeExpired { .. })
+            ));
+            assert!(!root.join("analysis.duckdb.wal").exists());
+        }
+        let pinned: (u64, u64, u64) = store.reader()?.get()?.query_row(
+            "SELECT total_blocks, used_blocks, free_blocks FROM pragma_database_size()",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(owner.sweep(None, 10_000)?.removed_records, 1);
+        let cleared: (u64, u64, u64) = store.reader()?.get()?.query_row(
+            "SELECT total_blocks, used_blocks, free_blocks FROM pragma_database_size()",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert!(
+            cleared.1 < pinned.1 && (cleared.0 < pinned.0 || cleared.2 > pinned.2),
+            "checkpoint did not release blocks: {pinned:?} -> {cleared:?}"
+        );
+        let before = store.meta()?;
+        drop(store);
+        let reopened = AnalysisStore::open(root)?;
+        assert_eq!(reopened.meta()?, before);
+        let receipt = reopened
+            .source_receipt(&source)?
+            .ok_or("source is absent")?;
+        assert_eq!(
+            (receipt.contiguous_cursor, receipt.retained_floor),
+            (CYCLES * ROWS, CYCLES * ROWS)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn analysis_store_retention_reclaims_byte_pressure(
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;

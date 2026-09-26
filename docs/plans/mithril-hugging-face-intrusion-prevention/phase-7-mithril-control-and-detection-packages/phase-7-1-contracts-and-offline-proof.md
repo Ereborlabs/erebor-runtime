@@ -147,7 +147,8 @@ passed at `/tmp/araphor-simplify.bO8mk9/storage-contract/result.json` with nine
 asserted contracts. It retained three events, contiguous cursor 3, coverage
 revision 1, commit revision 2, and unchanged identity, receipt, report, and
 count after reopen. The independent Control policy state did not change.
-The pilot fixture pins DuckDB 1.4.4, sqlparser 0.63.0, distinct workload IDs,
+The pilot fixture pins DuckDB Rust binding 1.10505.0 (core 1.5.5),
+sqlparser 0.63.0, distinct workload IDs,
 and non-overlapping train, tune, held-out, and forbidden time windows.
 
 `bash .github/scripts/verify-rust-ci.sh` passed formatting, workspace check,

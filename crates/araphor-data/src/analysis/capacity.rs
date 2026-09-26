@@ -188,13 +188,19 @@ mod tests {
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let reader_guard = store.reader()?;
         let reader = reader_guard.get()?;
-        let settings: (String, String, String, u64) = reader.query_row(
-            "SELECT current_setting('memory_limit'), current_setting('wal_autocheckpoint'), current_setting('max_temp_directory_size'), current_setting('threads')",
-            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        let settings: (String, String, String, u64, u64) = reader.query_row(
+            "SELECT current_setting('memory_limit'), current_setting('wal_autocheckpoint'), current_setting('max_temp_directory_size'), current_setting('threads'), current_setting('vacuum_rebuild_indexes')",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )?;
         assert_eq!(
             settings,
-            ("128.0 MiB".into(), "64.0 MiB".into(), "128.0 MiB".into(), 2)
+            (
+                "128.0 MiB".into(),
+                "64.0 MiB".into(),
+                "128.0 MiB".into(),
+                2,
+                u64::MAX
+            )
         );
         Ok(())
     }
