@@ -147,7 +147,9 @@ procedure passed formatting, workspace check, all-features Clippy, and workspace
 tests with `RUST_TEST_THREADS=1`. The parallel run failed one existing 500 ms
 Control reconnect timing assertion. That test passed alone and in the serialized
 run. The offline `storage-contract` case passed nine assertions. That case
-does not use production intake. The current Control intake still writes its
+does not use production intake. The old Control store now exports bounded,
+length- and checksum-checked original frame pages; its focused test passed.
+The current Control intake still writes its
 chunked store. Offline import, a single-writer cutover, capacity admission,
 context projection from Control, data-store recovery/upgrade cases, and physical disk reuse
 remain unverified. Do not enable the new data path yet.

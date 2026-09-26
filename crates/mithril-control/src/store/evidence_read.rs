@@ -35,6 +35,14 @@ pub struct EvidenceReadPageV1 {
     pub next_cursor: Option<u64>,
 }
 
+#[derive(Debug, PartialEq)]
+pub(crate) struct EvidenceFramePageV1 {
+    pub first_cursor: u64,
+    pub framed_records: Vec<u8>,
+    pub frame_ends: Vec<usize>,
+    pub next_cursor: Option<u64>,
+}
+
 struct OpenEvidencePage {
     first_cursor: u64,
     segments: Vec<EvidenceSegmentReadV1>,
@@ -52,6 +60,23 @@ impl OpenEvidencePage {
             first_cursor: self.first_cursor,
             records,
             encoded_bytes: self.encoded_bytes,
+            next_cursor: self.next_cursor,
+        })
+    }
+
+    fn frames(self) -> Result<EvidenceFramePageV1> {
+        let mut framed_records = Vec::with_capacity(self.encoded_bytes);
+        let mut frame_ends = Vec::new();
+        for segment in self.segments {
+            let (bytes, ends) = segment.frames()?;
+            let offset = framed_records.len();
+            frame_ends.extend(ends.into_iter().map(|end| end + offset));
+            framed_records.extend_from_slice(&bytes);
+        }
+        Ok(EvidenceFramePageV1 {
+            first_cursor: self.first_cursor,
+            framed_records,
+            frame_ends,
             next_cursor: self.next_cursor,
         })
     }
@@ -167,6 +192,14 @@ impl ControlStore {
         first_cursor: u64,
     ) -> Result<EvidenceReadPageV1> {
         self.open_evidence_page(read, first_cursor)?.decode()
+    }
+
+    pub(crate) fn read_evidence_frames_page(
+        &self,
+        read: &EvidenceReadV1,
+        first_cursor: u64,
+    ) -> Result<EvidenceFramePageV1> {
+        self.open_evidence_page(read, first_cursor)?.frames()
     }
 
     fn open_evidence_page(
@@ -383,6 +416,32 @@ mod tests {
             )?;
             Ok(())
         }
+    }
+
+    #[test]
+    fn evidence_frame_export_preserves_checked_original_bytes() -> TestResult<()> {
+        let fixture = ReadFixture::new()?;
+        fixture.append(1, 2, None)?;
+        fixture.append(3, 1, None)?;
+        let read = fixture.store.begin_evidence_read(&fixture.identity, 1)?;
+        let page = fixture.store.read_evidence_frames_page(&read, 1)?;
+        let mut expected = Vec::new();
+        let mut ends = Vec::new();
+        for cursor in 1..=3 {
+            let mut record = fixture.record.clone();
+            record.observed_boottime_ns = cursor;
+            let payload = record.encode_to_vec();
+            let start = expected.len();
+            expected.extend_from_slice(&u32::try_from(payload.len())?.to_be_bytes());
+            expected.extend_from_slice(&payload);
+            expected.extend_from_slice(&crc32c::crc32c(&expected[start..]).to_be_bytes());
+            ends.push(expected.len());
+        }
+        assert_eq!(page.first_cursor, 1);
+        assert_eq!(page.framed_records, expected);
+        assert_eq!(page.frame_ends, ends);
+        assert_eq!(page.next_cursor, None);
+        Ok(())
     }
 
     #[test]

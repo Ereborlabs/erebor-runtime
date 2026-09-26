@@ -73,7 +73,7 @@ Control intake or the SQLite discovery projection.
 -> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) Reopen preserves store identity, revisions, receipt, report, and count.<br>
 -> [storage-contract result](../../../../crates/mithril-e2e/src/discovery/storage_contract.rs) Case records nonzero cursors, revisions, counts, and digests; the independent Control policy state remains unchanged.
 
-The next route covers the uncommitted data-owner changes. It does not cover
+The next route covers the data-owner implementation. It does not cover
 production intake.
 
 [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) The owner opens one private DuckDB writer and upgrades the earlier analysis schema under its lease.<br>
@@ -91,6 +91,10 @@ production intake.
 -> [AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/read.rs) A read distinguishes committed expiry from an unexplained missing row.
 
 Not implemented [Control intake](../../../../crates/mithril-control/src/evidence.rs) Control still writes the chunked evidence store. No offline import, single-writer cutover, production retention scheduler, or mTLS recovery case proves the new path.
+
+[ControlStore::read_evidence_frames_page](../../../../crates/mithril-control/src/store/evidence_read.rs) The old store exports at most one checked evidence page with original frame bytes and cursor ends.<br>
+-> [EvidenceSegmentReadV1::read_frame](../../../../crates/mithril-control/src/evidence_segment.rs) Each frame is read from the retained segment and its length and checksum are checked again.<br>
+-> Not implemented [offline import](phase-7-2-data-store.md) No caller transfers these pages into AnalysisStore or selects it for production intake yet.
 
 [inspect_read_only_shape](../../../../crates/araphor-data/src/analysis/admission.rs) DuckDB-dialect parser rejects unauthorized SQL shape and external access.<br>
 -> [ReadOnlyGuard::parse](../../../../crates/araphor-data/src/analysis/admission.rs) The bound check reuses the admitted syntax tree; it does not parse the statement a second time.<br>
