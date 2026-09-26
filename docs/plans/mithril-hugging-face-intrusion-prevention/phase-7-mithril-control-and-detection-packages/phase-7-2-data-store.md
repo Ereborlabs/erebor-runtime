@@ -144,7 +144,8 @@ existing deployment.
 
 `cargo test -p araphor-data --lib` passed 19 tests with two ignored.
 `RUST_TEST_THREADS=1 cargo test -p mithril-control --lib` passed 193 tests with
-two ignored. The repository Rust CI procedure passed before the offline import
+two ignored. Strict Clippy passed for `araphor-data` and `mithril-control` on all
+targets. The repository Rust CI procedure passed before the offline import
 change and must be rerun for the current source. The parallel run at that time
 failed one existing 500 ms Control reconnect timing assertion. That test passed
 alone and in the serialized run. The offline `storage-contract` case passed nine
