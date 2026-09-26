@@ -1061,3 +1061,17 @@ Clippy, and all workspace tests. The data crate passed 37 tests with two ignored
 Control passed 195 tests with two ignored.
 The tests use temporary stores. They do not qualify physical disk reclamation,
 disk-full recovery reserves, or all process-crash boundaries.
+
+The final workspace gate passed for `373474f`: formatting, workspace checks,
+strict Clippy, and workspace tests. The data crate passed 41 tests with two
+ignored; Control passed 196 with two ignored; Mithril e2e passed 113 with
+247 ignored; Node passed 255 with one ignored. The explicit ignored SQL-worker
+isolation test also passed. The rebuilt qualification CLI passed startup
+(16 checks), recovery (27 checks), storage contract (nine checks), and the exact
+offline case. Results are in
+`/tmp/araphor-data-qualification.MtrjRy/{startup,recovery,storage,offline}/result.json`.
+Recovery reports accepted cursor 4, retained floor 2, two retained events,
+backup revision 12, an 8,400,896-byte database, and no native WAL after
+checkpoint. These results use temporary stores and synthetic input. They do
+not qualify physical storage/partition recovery, full-disk reserves, large-index
+compaction cost, or every process-crash boundary.

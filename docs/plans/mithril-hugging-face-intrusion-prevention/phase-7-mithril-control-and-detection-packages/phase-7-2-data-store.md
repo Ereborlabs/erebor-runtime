@@ -466,9 +466,11 @@ e2e tests passed. The first workspace build stopped during linking with
 cache restored build capacity; the same focused workspace command then passed.
 The first final workspace CI run passed formatting and workspace checks. It
 stopped on a strict-Clippy needless-borrow warning in the new native setting.
-That borrow is removed. The final workspace procedure is running again with
-the crash checks below. The phase remains **Not done** pending that result and
-its other open requirements.
+That borrow is removed. The final workspace procedure passed for `373474f`:
+formatting, workspace checks, strict Clippy, and workspace tests. The data crate
+passed 41 tests with two ignored. Control passed 196 tests with two ignored.
+Mithril e2e passed 113 tests with 247 ignored. Node passed 255 tests with one
+ignored. The phase remains **Not done** for its other open requirements.
 
 `analysis_store_commit_crashes` passed twice. Four child processes exit without
 Rust cleanup immediately before or after the production result and retention
@@ -480,3 +482,15 @@ live witness and the accepted source cursor. A second reopen keeps that state.
 The test calls production mutations; it does not reproduce their SQL writes.
 This proof does not cover interruption inside the native commit, hardware power
 loss, every other mutation boundary, or a Control process crash during mTLS.
+
+The rebuilt qualification CLI passed `data-store-startup` (16 checks),
+`data-store-recovery` (27 checks), `storage-contract` (nine checks), and
+`offline-exact` for `373474f`. Results are in
+`/tmp/araphor-data-qualification.MtrjRy/{startup,recovery,storage,offline}/result.json`.
+Recovery records accepted cursor 4, retained floor 2, two retained events,
+and backup revision 12. After checkpoint, the database uses 8,400,896 bytes
+and the native WAL uses zero bytes. Measured batch commit, durable ACK, and
+checkpoint times are 97,903, 45,958, and 13,232 microseconds. These single-run
+fixture measurements do not establish throughput or reserve adequacy.
+The explicit ignored SQL-worker isolation test also passed on this source.
+No physical storage/partition qualification ran in this verification batch.
