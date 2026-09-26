@@ -33,6 +33,8 @@ pub struct ControlConfig {
     #[serde(default)]
     pub data_storage: araphor_data::StorageLimitsV1,
     #[serde(default)]
+    pub data_retirements: Vec<araphor_data::ProcessorRetirementV1>,
+    #[serde(default)]
     pub control_store_directory: Option<PathBuf>,
     #[serde(default)]
     pub kubernetes_policy: Option<PolicyDesiredStateConfigV1>,
@@ -132,6 +134,23 @@ impl ControlConfig {
             }
         );
         self.evidence_store.validate()?;
+        let mut retired_scopes = BTreeSet::new();
+        ensure!(
+            self.data_retirements.len() <= 32,
+            InvalidConfigurationSnafu {
+                reason: "data_retirements exceeds 32 requests",
+            }
+        );
+        for request in &self.data_retirements {
+            let scope = &request.scope;
+            ensure!(request.valid()
+                && retired_scopes.insert((scope.processor_id.as_str(), scope.method_version, &scope.identity))
+                && self.allowed_nodes.iter().any(|node| node.node_id == scope.identity.node_id
+                    && uuid::Uuid::parse_str(&node.tenant_id).is_ok_and(|tenant| tenant.as_bytes() == &scope.identity.tenant_id)),
+                InvalidConfigurationSnafu {
+                    reason: "a data retirement must name one unique valid processor scope on an allowed Node and tenant",
+                });
+        }
         ensure!(
             self.data_storage.valid(),
             InvalidConfigurationSnafu {
@@ -220,7 +239,12 @@ impl ControlConfig {
             self.data_retention,
             self.data_storage,
         )
-        .map(Arc::new)
+        .and_then(|data| {
+            for request in &self.data_retirements {
+                data.retire_required(request)?;
+            }
+            Ok(Arc::new(data))
+        })
         .map_err(|source| crate::Error::DataStore {
             source: Box::new(source),
             location: snafu::Location::default(),

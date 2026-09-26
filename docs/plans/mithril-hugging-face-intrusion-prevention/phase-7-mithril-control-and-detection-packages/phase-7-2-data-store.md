@@ -55,6 +55,10 @@ Store recovery fails
    affected relation revisions, including coverage/context and retention.
    Expose fixed prepared bounded reads: 256 records or 1 MiB per page.
    Return explicit range expiry. Never hold a reader during client I/O.
+   End a retained page before the next expired interval. Return that interval's
+   first cursor as `next_cursor`; a read at that cursor returns explicit expiry.
+   A later gap must not hide an earlier retained witness. An unexplained missing
+   row still fails the read.
 5. Implement `EvidenceRetentionOwner` in `araphor-data` with the fixed
    optional/required classes in engine-design.md.
    Discovery progress does not pin raw data. Required security progress and
@@ -64,6 +68,17 @@ Store recovery fails
    Return Conflict on a competing commit. Commit optional missing ranges before
    resuming from a newer retained floor. External readers cannot pin input.
    Required-package retirement is explicit and authorized.
+   Control applies at most 32 explicit `data_retirements` from its trusted
+   startup configuration before it admits Node data. Each request names the
+   exact processor, method version, tenant/source identity, change ID, reason,
+   expected consumed cursor, and accepted cutoff. Require an allowed Node and
+   tenant. Compare both cursors in the data transaction. Record the change,
+   cutoff, and unprocessed range with the retired state. Keep consumed progress
+   unchanged. A matching retry returns the original commit revision; a changed
+   retry conflicts. A retired scope cannot restart by registration. A new
+   method version needs its own registration. Never remove exact witness pins
+   as part of retirement. A request conflict stops data startup, not the
+   independent policy service. No public retirement RPC is added in this phase.
 6. Separate health for intake storage, each processor and trace capacity.
    Database corruption stops data ACK. Supervise analysis failures without
    exiting Control's policy service. Enforce per-tenant and global queue/disk
@@ -361,5 +376,31 @@ connection closure, a held lease, rejected identity change, and restart.
 All five data e2e tests passed with the post-backup mTLS replay assertion.
 The recovery case now passes 27 checks. The same authenticated connection
 retries the retained batch after backup; ACK and store revision stay unchanged.
+The final workspace gate passed for `c2e4d3ed`: formatting, compilation, strict
+Clippy, and all workspace tests. The data crate passed 37 tests with two ignored.
+Control passed 195 tests with two ignored.
+
+Explicit required-processor retirement now uses `data_retirements` in trusted
+Control startup configuration. Control rejects more than 32 requests, duplicate
+scopes, and requests outside an allowed Node and tenant. AnalysisStore compares
+expected progress and accepted cutoff in one transaction. It records the change
+ID, reason, cutoff, revision, and missing range before it releases the required
+retention obligation. It does not advance consumed progress or remove witness
+pins. A matching retry returns the original revision. Registration cannot
+reactivate the retired processor version. The current development schema is 4;
+older formats are rejected without migration.
+The six data e2e tests passed. `data_retirement_startup` checks rejected foreign
+and duplicate scopes, the request-count bound, policy RPCs during a stale-cutoff
+conflict, Node retention of unacknowledged input, successful retirement, resumed
+intake, and an unchanged retirement replay after restart.
+The component test found a retained witness before an expired interval that
+the old page read hid. The reader now stops before the next expired interval.
+It returns the retained prefix and the gap's first cursor. A read at the gap
+still returns explicit expiry. The existing witness test now checks readable
+records on both sides of that gap. Retirement component checks include quota
+rollback, unchanged consumed progress, retained witness protection, exact retry,
+new-version registration, empty-input retirement, and corrupt retirement state.
 The final workspace gate passed formatting, compilation, strict Clippy, and
-37 data-crate tests with two ignored. The remaining workspace tests are running.
+39 data-crate tests with two ignored after the last witness assertion update.
+All six data e2e tests passed again on those rebuilt binaries. The remaining
+workspace tests are running. The complete phase remains **Not done**.

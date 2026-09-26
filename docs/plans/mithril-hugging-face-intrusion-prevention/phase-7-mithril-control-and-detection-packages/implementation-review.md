@@ -108,7 +108,51 @@ Processor health uses one bounded reader transaction. It returns no native
 connection. `cursor_lag` compares the accepted cursor with the larger of the
 consumed cursor and optional resume floor. `incomplete` remains true after a
 recorded processor or recovery gap. Runtime failure supervision is not part
-of this progress read. Required-package retirement is not yet implemented.
+of this progress read. Explicit required-package retirement follows the next
+Control configuration route.
+
+[ControlConfig::validate](../../../../crates/mithril-control/src/config.rs) The operator supplies at most 32 explicit `data_retirements` in trusted startup configuration. Control rejects duplicate scopes and requests outside an allowed Node and tenant.<br>
+-> [ControlConfig::open_analysis](../../../../crates/mithril-control/src/config.rs) Control opens the data owner and applies each request before it enables intake.<br>
+-> [AnalysisStore::retire_required](../../../../crates/araphor-data/src/analysis/retirement.rs) One transaction compares consumed progress and accepted cutoff, records missing coverage, and retires the exact processor scope.<br>
+-> [AnalysisStore::processor_retirement](../../../../crates/araphor-data/src/analysis/retirement.rs) A scoped read returns the change ID, reason, cutoff, original progress, and commit revision.<br>
+-> [AnalysisStore::validate_state](../../../../crates/araphor-data/src/analysis/schema.rs) Restart rejects an inconsistent retirement record or an absent required missing range.
+
+This route uses the existing administrative configuration boundary. It is not
+a public request-authentication API. The data method requires an authorized
+Control caller. Control retains policy authority. Retirement does not advance
+consumed progress, alter source ACKs, or remove exact witness pins. The retained
+state prevents re-registration of the same processor and method version.
+A matching retirement retry returns its original revision, including after
+later intake. A changed request conflicts. Startup then leaves data unavailable
+while policy RPCs retain their independent owner. Invalid configuration fails
+configuration validation before either owner starts. Requests commit one at a
+time; a later request failure does not undo an earlier committed retirement.
+
+Retirement adds bounded fields to the existing processor row and uses the
+existing processor-gap relation. The current development schema is 4. Older
+schemas are rejected without import or migration. The reason and change ID
+count toward the existing logical data quota.
+
+[AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/read.rs)
+ends a retained page before the next recorded expiry. The page returns the
+gap's first cursor as its continuation. A read at that cursor returns explicit
+expiry. Thus a later expired row does not hide an earlier retained witness.
+An unexplained missing row still rejects the page.
+
+The [retirement tests](../../../../crates/araphor-data/src/analysis/retirement.rs)
+check expected progress and cutoff, tenant isolation, quota rollback, retained
+witnesses, replay after new input, terminal registration, replacement method
+registration, empty-input retirement, and corrupt retirement recovery.
+`analysis_store_retention_respects_progress_and_witnesses` checks retained
+records on both sides of an expired interval.
+[data_retirement_startup](../../../../crates/mithril-e2e/src/discovery/data_store.rs)
+uses production configuration and mTLS. It checks rejected foreign/duplicate
+scopes, the request-count bound, policy RPCs during a stale request, retained
+Node input, successful retirement, resumed intake, and restart replay.
+The six data e2e tests passed on the final rebuilt binaries. The final workspace
+gate passed formatting, compilation, strict Clippy, and 39 data-crate tests
+with two ignored after the last retained-witness assertion update. The remaining
+workspace tests are running. The complete data-store phase remains not done.
 
 [AnalysisStore::storage_health](../../../../crates/araphor-data/src/analysis/health.rs)
 checks readable store metadata and samples physical storage usage. Its intake
@@ -859,8 +903,8 @@ not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
 
-This review covers `codex/mithril-ui` at `4c9fca1f` plus the closed-connection
-backup lifecycle. The startup command passed 16 checks; recovery
+This review covers `codex/mithril-ui` at `c2e4d3ed` plus explicit required
+processor retirement and retained-prefix reads. The startup command passed 16 checks; recovery
 passed 23 checks. Their results are in `/tmp/araphor-retention.NH24lk/`. QueryOwner and trace API
 frames are not qualified by these changes.
 
@@ -940,7 +984,8 @@ drain, post-backup writes, copy/manifest failure, unchanged prior backup,
 closed-access errors, the held lease, identity validation, and restart.
 The recovery case now passes 27 checks. The same authenticated connection
 retries its retained batch after backup without changing ACK or store revision.
-The final workspace gate passed formatting, compilation, strict Clippy, and
-37 data-crate tests with two ignored. The remaining workspace tests are running.
+The final workspace gate passed for `c2e4d3ed`: formatting, compilation, strict
+Clippy, and all workspace tests. The data crate passed 37 tests with two ignored.
+Control passed 195 tests with two ignored.
 The tests use temporary stores. They do not qualify physical disk reclamation,
 disk-full recovery reserves, or all process-crash boundaries.

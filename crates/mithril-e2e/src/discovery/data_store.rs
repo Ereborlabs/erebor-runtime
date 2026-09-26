@@ -163,7 +163,7 @@ impl DataStoreQualification {
         let faults = [
             Some("UPDATE source_receipts SET contiguous_cursor = 2"),
             Some("UPDATE store_meta SET schema_version = 99"),
-            Some("UPDATE store_meta SET schema_version = 3; ALTER TABLE events RENAME TO missing_events"),
+            Some("UPDATE store_meta SET schema_version = 4; ALTER TABLE events RENAME TO missing_events"),
             None,
         ];
         for fault in faults {
@@ -837,6 +837,133 @@ mod tests {
         DataStoreQualification::new(output.path().join("result"))
             .recovery()
             .await
+    }
+
+    #[tokio::test]
+    async fn data_retirement_startup() -> Result<()> {
+        let tls = MtlsFixture::new(false)?;
+        let case = DataStoreQualification::new(tls.path().join("result"));
+        let parts = tls.configuration()?.into_parts()?;
+        let data = parts.control.analysis_store().ok_or("data owner absent")?;
+        let observations = EffectObservationStore::durable(
+            8,
+            tls.path().join("wal"),
+            EvidenceWalLimits::default(),
+            ObservationCanonicalizer::new(
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(3, 4),
+                1,
+                [7; 16].into(),
+            )?,
+        )?;
+        DataStoreQualification::record(&observations, 1);
+        let batch = observations.next_evidence_batch().ok_or("batch absent")?;
+        let wire: mithril_control::EvidenceBatch = batch.clone().into();
+        let request = araphor_data::ProcessorRetirementV1 {
+            scope: ProcessorScopeV1 {
+                processor_id: "security-fixture".into(),
+                method_version: 1,
+                identity: EvidenceIntakeIdentityV1 {
+                    tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+                    node_id: "node-a".into(),
+                    node_boot_id: [7; 16],
+                    label_epoch: 1,
+                    source_id: wire.source_id.as_slice().try_into()?,
+                    source_epoch: wire.source_epoch,
+                },
+            },
+            change_id: "operator-change-1".into(),
+            reason: "Retire this fixture package.".into(),
+            expected_cursor: 0,
+            cutoff_cursor: 1,
+        };
+        data.register_processor(&request.scope, ProcessorClassV1::Required, 1)?;
+        let server = tls.start(parts.control).await?;
+        let mut connection = case.connect(&tls, &server).await?;
+        connection.send_evidence_batch(batch).await?;
+        observations.acknowledge_evidence(DataStoreQualification::ack(&mut connection).await?)?;
+        let before = data.meta()?;
+        let mut config = tls.configuration()?;
+        let mut foreign = request.clone();
+        foreign.scope.identity.tenant_id = [9; 16];
+        config.data_retirements = vec![foreign];
+        assert!(config.into_parts().is_err());
+        let mut config = tls.configuration()?;
+        config.data_retirements = vec![request.clone(), request.clone()];
+        assert!(config.into_parts().is_err());
+        let mut config = tls.configuration()?;
+        config.data_retirements = vec![request.clone(); 33];
+        assert!(config.into_parts().is_err());
+        assert_eq!(data.meta()?, before);
+        assert!(data.processor_retirement(&request.scope)?.is_none());
+        drop(connection);
+        server.shutdown().await?;
+        drop(data);
+        drop(DataStoreQualification::reopen_data(&tls.path().join("evidence/analysis")).await?);
+        drop(reopen_control_store(&tls.path().join("control-store")).await?);
+
+        let mut config = tls.configuration()?;
+        let mut stale = request.clone();
+        stale.cutoff_cursor = 0;
+        config.data_retirements = vec![stale];
+        let parts = config.into_parts()?;
+        assert!(parts.data_error.is_some());
+        assert!(parts.control.analysis_store().is_none());
+        let server = tls.start(parts.control).await?;
+        let mut connection = case.connect(&tls, &server).await?;
+        connection.report_readiness(true, true).await?;
+        connection.policy_inventory(None, Vec::new()).await?;
+        DataStoreQualification::record(&observations, 2);
+        let pending = observations
+            .next_evidence_batch()
+            .ok_or("pending batch absent")?;
+        connection.send_evidence_batch(pending.clone()).await?;
+        let rejected =
+            tokio::time::timeout(Duration::from_secs(5), connection.next_message()).await?;
+        assert!(
+            matches!(rejected, Err(mithril_node::Error::ControlRpc { source, .. }) if source.code() == tonic::Code::Unavailable)
+        );
+        assert_eq!(observations.pending_evidence_records(), 1);
+        drop(connection);
+        server.shutdown().await?;
+        drop(reopen_control_store(&tls.path().join("control-store")).await?);
+
+        let mut config = tls.configuration()?;
+        config.data_retirements = vec![request.clone()];
+        let parts = config.into_parts()?;
+        assert!(parts.data_error.is_none(), "{:?}", parts.data_error);
+        let data = parts.control.analysis_store().ok_or("data owner absent")?;
+        let retirement = data
+            .processor_retirement(&request.scope)?
+            .ok_or("retirement absent")?;
+        assert_eq!(retirement.0, request);
+        let health = data
+            .processor_health(&request.scope)?
+            .ok_or("health absent")?;
+        assert_eq!(health.state, ProcessorStateV1::Retired);
+        assert_eq!(health.consumed_cursor, 0);
+        assert!(health.incomplete);
+        let server = tls.start(parts.control).await?;
+        let mut connection = case.connect(&tls, &server).await?;
+        connection.send_evidence_batch(pending).await?;
+        let ack = DataStoreQualification::ack(&mut connection).await?;
+        assert_eq!(ack.contiguous_cursor, 2);
+        observations.acknowledge_evidence(ack)?;
+        assert_eq!(observations.pending_evidence_records(), 0);
+        let before = data.meta()?;
+        drop(connection);
+        server.shutdown().await?;
+        drop(data);
+        drop(DataStoreQualification::reopen_data(&tls.path().join("evidence/analysis")).await?);
+        drop(reopen_control_store(&tls.path().join("control-store")).await?);
+        let mut config = tls.configuration()?;
+        config.data_retirements = vec![request.clone()];
+        let parts = config.into_parts()?;
+        assert!(parts.data_error.is_none(), "{:?}", parts.data_error);
+        let data = parts.control.analysis_store().ok_or("data owner absent")?;
+        assert_eq!(data.meta()?, before);
+        assert_eq!(data.processor_retirement(&request.scope)?, Some(retirement));
+        Ok(())
     }
 
     #[tokio::test]

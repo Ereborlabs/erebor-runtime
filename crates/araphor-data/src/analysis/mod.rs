@@ -27,6 +27,7 @@ mod progress;
 mod quota;
 mod read;
 mod retention;
+mod retirement;
 mod schema;
 
 pub use backup::{AnalysisBackupManifestV1, AnalysisRecoveryStatusV1};
@@ -40,10 +41,11 @@ pub use progress::{
 pub use retention::{
     EvidenceRetentionOwner, RetentionLimitsV1, RetentionResultV1, RetentionSweepV1,
 };
+pub use retirement::ProcessorRetirementV1;
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.4.4";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-const ANALYSIS_SCHEMA_VERSION: i64 = 3;
+const ANALYSIS_SCHEMA_VERSION: i64 = 4;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -343,6 +345,10 @@ impl AnalysisStore {
                     start_cursor UBIGINT NOT NULL,
                     required_floor UBIGINT NOT NULL,
                     retired BOOLEAN NOT NULL,
+                    retirement_id VARCHAR NOT NULL,
+                    retirement_reason VARCHAR NOT NULL,
+                    retirement_cursor UBIGINT NOT NULL,
+                    retirement_revision UBIGINT NOT NULL,
                     PRIMARY KEY (processor_id, method_version, tenant_id, stream_key)
                 );
                 CREATE TABLE IF NOT EXISTS evidence_refs (
@@ -1113,7 +1119,7 @@ mod tests {
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
         let initial = store.meta()?;
-        assert_eq!(initial.schema_version, 3);
+        assert_eq!(initial.schema_version, 4);
         assert_eq!(initial.commit_revision, 0);
         assert!(AnalysisStore::open(&root).is_err());
         {
@@ -1149,7 +1155,7 @@ mod tests {
     #[test]
     fn analysis_store_schema_permissions() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        for version in [0, 2, 4] {
+        for version in [0, 2, 3, 5] {
             let root = directory.path().join(format!("schema-{version}"));
             let store = AnalysisStore::open(&root)?;
             {
