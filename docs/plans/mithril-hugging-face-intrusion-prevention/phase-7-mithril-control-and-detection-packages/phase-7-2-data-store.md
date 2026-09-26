@@ -294,12 +294,27 @@ to record whole-process CPU time and peak RSS. This fixed single-source workload
 does not prove multi-tenant contention, concurrent policy rollout, worst-case
 payloads, disk-reserve adequacy, or full-quota throughput.
 
+Use `data-store-tenants` for two authenticated tenants sharing one Control
+and AnalysisStore. Give each Node a distinct certificate, tenant, and boot ID.
+Wait for each tenant's exact initial trust-context record before measurement.
+Send 32 groups of 4,096 records per Node through the production bounded worker.
+Send both groups before waiting for either ACK. Run a policy inventory RPC
+while the groups are in flight. After both commits, replay both groups and
+require unchanged metadata. Check each Node's pending input, exact retained
+frame digest, source receipt, and rejected foreign-tenant reads. Checkpoint and
+reopen the shared store. Require unchanged metadata and both source states.
+Record per-tenant ACK and policy RPC times, aggregate elapsed time, and sampled
+database/WAL bytes. `data_tenant_load` uses two groups per Node in CI.
+This case does not prove concurrent policy rollout, worst-case payloads, or
+full-quota capacity.
+
 ```sh
 cargo test -p mithril-control
 cargo test -p araphor-data
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-recovery --output-directory /tmp/araphor-data-recovery
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-startup --output-directory /tmp/araphor-data-startup
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-load --output-directory /tmp/araphor-data-load
+cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-tenants --output-directory /tmp/araphor-data-tenants
 bash .github/scripts/verify-rust-ci.sh
 ```
 
@@ -826,3 +841,36 @@ workspace checks, strict Clippy, and workspace tests. Control passed 196 tests
 with two ignored; Mithril e2e passed 118 with 251 ignored; Node passed 256 with
 one ignored. No Rust source changed after this gate.
 Other phase requirements remain **Not done**.
+
+The single-source and two-tenant load cases now share one runner. Each tenant
+uses a distinct certificate and boot ID. The runner waits for the exact initial
+trust context before checking duplicate metadata. Both original groups are
+sent before either ACK wait. Exact retained digests, rejected foreign-tenant
+reads, Node ACK application, checkpoint, and restart checks passed in both CLI
+modes with 262,144 total records. The first measurements are in
+`/tmp/araphor-tenant-qualification.7tmi4y0w/{single,tenants}/result.json`.
+These measurements precede the final edit that restores Node generation time
+in each sample. The measured binary SHA-256 is
+`dcaf5428c954e2354a13bf3af8d6a9974e767ff90d29347810c2b0330f138868`.
+
+| Measurement | One source | Two tenants |
+| --- | ---: | ---: |
+| Input bytes | 30,113,740 | 30,080,920 |
+| Intake, seconds | 31.323 | 30.556 |
+| Bounded reads, seconds | 30.540 | 26.647 |
+| ACK p95, ms | 278.154 | 493.082 |
+| Maximum policy RPC, ms | 4.002 | 5.414 |
+| Checkpoint, seconds | 1.390 | 1.472 |
+| Restart, seconds | 0.915 | 0.925 |
+| Sampled peak files, bytes | 60,596,224 | 60,567,552 |
+| Checkpointed database, bytes | 24,915,968 | 24,653,824 |
+| Peak RSS, KiB | 221,192 | 242,796 |
+
+Both checkpointed WAL files use zero bytes. Each tenant retains 131,072 records
+at the same accepted cursor, with retained floor zero. The adjacent
+`single-resources.log` and `tenant-resources.log` record CPU and wall time.
+The debug binary ran on Linux x86_64 with a Ryzen 9 5900HX, 16 logical CPUs,
+and 31,492 MiB memory. This host is not the declared 4-vCPU, 8-GiB pilot host.
+One pair of runs does not prove variability, rollout performance, worst-case
+payloads, full quotas, or reserve adequacy. The final workspace gate is running
+after the generation-time edit. The complete phase remains **Not done**.

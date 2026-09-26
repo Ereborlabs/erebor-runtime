@@ -11,6 +11,7 @@ enum Case {
     DataStoreRecovery,
     DataStoreStartup,
     DataStoreLoad,
+    DataStoreTenants,
 }
 
 #[derive(Parser)]
@@ -42,6 +43,11 @@ async fn main() {
         Case::DataStoreLoad => {
             mithril_e2e::DataStoreQualification::new(cli.output_directory)
                 .load()
+                .await
+        }
+        Case::DataStoreTenants => {
+            mithril_e2e::DataStoreQualification::new(cli.output_directory)
+                .tenant_load()
                 .await
         }
         Case::ProfileRestart => {
