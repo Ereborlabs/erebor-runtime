@@ -419,9 +419,9 @@ impl OciRuntimeConfigV1 {
         };
         annotation("io.kubernetes.cri.container-type") == Some("sandbox")
             && annotation("io.kubernetes.cri.podsandbox.image-name")
-                .is_some_and(|value| !value.is_empty() && value.len() <= 4_096)
+                .is_some_and(|value| !value.is_empty())
             && annotation("io.kubernetes.cri.sandbox-id").is_some_and(|value| {
-                value.len() == 64
+                !value.is_empty()
                     && value
                         .bytes()
                         .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
@@ -838,6 +838,7 @@ mod tests {
                 .decide(&fixture.bundle, &BTreeMap::new(), false)?,
             RetainedRuntimeDecisionV1::DenyUnavailable
         );
+
         Ok(())
     }
 
@@ -888,6 +889,51 @@ mod tests {
         );
 
         config["process"]["args"] = serde_json::json!(["/bin/sh", "-c", "true"]);
+        fs::write(
+            fixture.bundle.join("config.json"),
+            serde_json::to_vec(&config)?,
+        )?;
+        assert_eq!(
+            fixture
+                .gate()?
+                .decide(&fixture.bundle, &BTreeMap::new(), false)?,
+            RetainedRuntimeDecisionV1::DenyUnavailable
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_type_ignores_lengths() -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        let mut config = Fixture::cri_sandbox_config();
+        config["annotations"]["io.kubernetes.cri.sandbox-id"] = serde_json::json!("a1b2c3");
+        config["annotations"]["io.kubernetes.cri.podsandbox.image-name"] =
+            serde_json::json!("image".repeat(1_000));
+        fs::write(
+            fixture.bundle.join("config.json"),
+            serde_json::to_vec(&config)?,
+        )?;
+        assert_eq!(
+            fixture
+                .gate()?
+                .decide(&fixture.bundle, &BTreeMap::new(), false)?,
+            RetainedRuntimeDecisionV1::AllowSandbox
+        );
+
+        config["annotations"]["io.kubernetes.cri.container-type"] = serde_json::json!("container");
+        fs::write(
+            fixture.bundle.join("config.json"),
+            serde_json::to_vec(&config)?,
+        )?;
+        assert_eq!(
+            fixture
+                .gate()?
+                .decide(&fixture.bundle, &BTreeMap::new(), false)?,
+            RetainedRuntimeDecisionV1::DenyUnavailable
+        );
+
+        config["annotations"]["io.kubernetes.cri.container-type"] = serde_json::json!("sandbox");
+        config["annotations"]["io.kubernetes.cri.sandbox-id"] = serde_json::json!("not-hex");
         fs::write(
             fixture.bundle.join("config.json"),
             serde_json::to_vec(&config)?,

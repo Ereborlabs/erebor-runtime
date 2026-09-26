@@ -2,16 +2,20 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, Read as _, Write as _};
 use std::os::fd::AsRawFd as _;
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use erebor_runtime_ipc::v1::{
+    RuntimeAdmissionEntriesRequest, RuntimeAdmissionPrepareRequest, RuntimeAdmissionStageRequest,
+};
 use erebor_telemetry::{error, init_stderr_logging};
+use mithril_node::admission_limits as limit;
 use mithril_node::{
     NodeDecommissionOwner, OciBaseSpecOwner, RetainedRuntimeDecisionV1, RetainedRuntimeGate,
-    RuntimeAdmissionClient, RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1,
-    RuntimeControlRecoveryMountInputV1, RuntimeIntegrationInstallV1, RuntimeIntegrationOwner,
-    RuntimeRecoveryMountInputV1, PROFILE_ID_ANNOTATION,
+    RuntimeAdmissionClient, RuntimeControlRecoveryMountInputV1, RuntimeIntegrationInstallV1,
+    RuntimeIntegrationOwner, RuntimeRecoveryMountInputV1, PROFILE_ID_ANNOTATION,
 };
 use serde::Deserialize;
 
@@ -245,7 +249,7 @@ impl OciHookOwner {
     async fn run_hook(args: RunArgsV1) -> Result<(), Box<dyn std::error::Error>> {
         Self::validate_run_args(&args)?;
         let state: OciStateV1 = serde_json::from_slice(&Self::read_stdin()?)?;
-        if !(32..=128).contains(&state.id.len()) || !state.bundle.is_absolute() {
+        if state.id.is_empty() || !state.bundle.is_absolute() {
             return Err(invalid_data("OCI state has no valid container identity or bundle").into());
         }
 
@@ -348,8 +352,29 @@ impl OciHookOwner {
             .map(|root| u32::try_from(root.as_raw_fd()))
             .transpose()
             .map_err(|error| invalid_data(&format!("OCI root fd is invalid: {error}")))?;
-        let request = Self::request_for_stage(stage, state, cgroup_root, root_fd)?;
-        let response = match client.submit(&request).await {
+        let result = match stage {
+            HookStageV1::StageRuntimeFacts => {
+                if state.pid == 0 {
+                    return Err(invalid_data("OCI hook has no initial process").into());
+                }
+                let path = Self::process_cgroup_path(state.pid, cgroup_root)?;
+                client
+                    .stage_runtime_facts(Self::stage_request(state, &path))
+                    .await
+            }
+            HookStageV1::PrepareContainer => {
+                client
+                    .prepare_container(Self::prepare_request(state)?)
+                    .await
+            }
+            HookStageV1::PrepareDeclaredEntries => {
+                let fd = root_fd.ok_or_else(|| invalid_data("OCI root fd is missing"))?;
+                client
+                    .prepare_declared_entries(Self::entries_request(state, fd))
+                    .await
+            }
+        };
+        let response = match result {
             Ok(response) => response,
             Err(error) => {
                 erebor_telemetry::info!(
@@ -396,7 +421,7 @@ impl OciHookOwner {
         if !Self::clean_absolute(&args.socket)
             || !Self::clean_absolute(&args.recovery_manifest)
             || args.cgroup_root != Path::new("/sys/fs/cgroup")
-            || !(100..=30_000).contains(&args.timeout_ms)
+            || !limit::TIMEOUT_MS.contains(&u128::from(args.timeout_ms))
         {
             return Err(invalid_data("OCI hook arguments are not safe and bounded"));
         }
@@ -407,9 +432,10 @@ impl OciHookOwner {
         if !Self::clean_absolute(&args.hook_path)
             || !Self::clean_absolute(&args.recovery_manifest)
             || !Self::clean_absolute(&args.socket)
-            || !(100..=30_000).contains(&args.timeout_ms)
-            || args.runtime_timeout_seconds * 1_000 <= args.timeout_ms
-            || args.runtime_timeout_seconds > 30
+            || !limit::TIMEOUT_MS.contains(&u128::from(args.timeout_ms))
+            || Duration::from_secs(args.runtime_timeout_seconds)
+                <= Duration::from_millis(args.timeout_ms)
+            || !limit::RUNTIME_TIMEOUT_SECONDS.contains(&args.runtime_timeout_seconds)
             || args.log_filter.is_empty()
             || args.log_filter.len() > 1_024
             || args.log_filter.contains(['\r', '\n'])
@@ -423,7 +449,6 @@ impl OciHookOwner {
 
     fn clean_absolute(path: &Path) -> bool {
         path.is_absolute()
-            && path.as_os_str().as_encoded_bytes().len() <= 4_096
             && path.components().all(|component| {
                 matches!(
                     component,
@@ -443,65 +468,32 @@ impl OciHookOwner {
         Ok(bytes)
     }
 
-    fn request_for_stage(
-        stage: HookStageV1,
-        state: OciStateV1,
-        cgroup_root: &Path,
-        oci_root_fd: Option<u32>,
-    ) -> io::Result<RuntimeAdmissionRequestV1> {
-        let cgroup_path = match stage {
-            HookStageV1::StageRuntimeFacts => {
-                if state.pid == 0 {
-                    return Err(invalid_data("OCI hook has no initial process"));
-                }
-                Some(Self::process_cgroup_path(state.pid, cgroup_root)?)
-            }
-            HookStageV1::PrepareContainer | HookStageV1::PrepareDeclaredEntries => None,
-        };
-        Self::request_with_cgroup(stage, state, cgroup_path, oci_root_fd)
+    fn stage_request(state: OciStateV1, path: &Path) -> RuntimeAdmissionStageRequest {
+        RuntimeAdmissionStageRequest {
+            container_id: state.id,
+            annotations: state.annotations.into_iter().collect(),
+            cgroup_path: path.as_os_str().as_bytes().to_vec(),
+        }
     }
 
-    fn request_with_cgroup(
-        stage: HookStageV1,
-        state: OciStateV1,
-        cgroup_path: Option<PathBuf>,
-        oci_root_fd: Option<u32>,
-    ) -> io::Result<RuntimeAdmissionRequestV1> {
-        let (operation, initial_pid, cgroup_path, oci_bundle) = match stage {
-            HookStageV1::StageRuntimeFacts => (
-                RuntimeAdmissionOperationV1::StageRuntimeFacts,
-                None,
-                cgroup_path,
-                None,
-            ),
-            HookStageV1::PrepareContainer => {
-                if state.pid == 0 {
-                    return Err(invalid_data("OCI runtime admission has no initial process"));
-                }
-                // The second ordered hook keeps the task held until exact map readback succeeds.
-                (
-                    RuntimeAdmissionOperationV1::PrepareContainer,
-                    Some(state.pid),
-                    None,
-                    None,
-                )
-            }
-            HookStageV1::PrepareDeclaredEntries => (
-                RuntimeAdmissionOperationV1::PrepareDeclaredEntries,
-                None,
-                None,
-                Some(state.bundle),
-            ),
-        };
-        Ok(RuntimeAdmissionRequestV1 {
-            operation,
+    fn prepare_request(state: OciStateV1) -> io::Result<RuntimeAdmissionPrepareRequest> {
+        if state.pid == 0 {
+            return Err(invalid_data("OCI runtime admission has no initial process"));
+        }
+        Ok(RuntimeAdmissionPrepareRequest {
             container_id: state.id,
-            initial_pid,
-            cgroup_path,
-            oci_bundle,
-            oci_root_fd,
-            annotations: state.annotations,
+            annotations: state.annotations.into_iter().collect(),
+            initial_pid: state.pid,
         })
+    }
+
+    fn entries_request(state: OciStateV1, fd: u32) -> RuntimeAdmissionEntriesRequest {
+        RuntimeAdmissionEntriesRequest {
+            container_id: state.id,
+            annotations: state.annotations.into_iter().collect(),
+            oci_bundle: state.bundle.as_os_str().as_bytes().to_vec(),
+            oci_root_fd: fd,
+        }
     }
 
     fn open_oci_root() -> io::Result<File> {
@@ -561,11 +553,10 @@ fn invalid_data(reason: &str) -> io::Error {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::ffi::OsStrExt as _;
     use std::path::Path;
 
-    use mithril_node::RuntimeAdmissionOperationV1;
-
-    use super::{HookStageV1, OciHookOwner, OciStateV1};
+    use super::{OciHookOwner, OciStateV1};
 
     #[test]
     fn unified_cgroup_parser_rejects_legacy_or_empty_entries() {
@@ -592,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn ordered_requests_preserve_stage_ownership() -> Result<(), Box<dyn std::error::Error>> {
+    fn typed_requests_preserve_stage_fields() -> Result<(), Box<dyn std::error::Error>> {
         let state = || {
             serde_json::from_value(serde_json::json!({
                 "id": "a".repeat(64),
@@ -601,44 +592,21 @@ mod tests {
                 "annotations": {}
             }))
         };
-        let staged = OciHookOwner::request_with_cgroup(
-            HookStageV1::StageRuntimeFacts,
-            state()?,
-            Some(Path::new("/sys/fs/cgroup/kubepods/pod-a/container-a").to_path_buf()),
-            None,
-        )?;
-        assert_eq!(
-            staged.operation,
-            RuntimeAdmissionOperationV1::StageRuntimeFacts
-        );
-        assert!(staged.initial_pid.is_none());
-        assert!(staged.cgroup_path.is_some());
+        let path = Path::new("/sys/fs/cgroup/kubepods/pod-a/container-a");
+        let staged = OciHookOwner::stage_request(state()?, path);
+        assert_eq!(staged.cgroup_path, path.as_os_str().as_bytes());
 
-        let prepared =
-            OciHookOwner::request_with_cgroup(HookStageV1::PrepareContainer, state()?, None, None)?;
-        assert_eq!(
-            prepared.operation,
-            RuntimeAdmissionOperationV1::PrepareContainer
-        );
-        assert_eq!(prepared.initial_pid, Some(42));
+        let prepared = OciHookOwner::prepare_request(state()?)?;
+        assert_eq!(prepared.initial_pid, 42);
 
-        let entries = OciHookOwner::request_with_cgroup(
-            HookStageV1::PrepareDeclaredEntries,
-            state()?,
-            None,
-            Some(7),
-        )?;
+        let entries = OciHookOwner::entries_request(state()?, 7);
         assert_eq!(
-            entries.operation,
-            RuntimeAdmissionOperationV1::PrepareDeclaredEntries
+            entries.oci_bundle,
+            Path::new("/run/containerd/io.containerd.runtime.v2.task/k8s.io/container-a")
+                .as_os_str()
+                .as_bytes()
         );
-        assert_eq!(
-            entries.oci_bundle.as_deref(),
-            Some(Path::new(
-                "/run/containerd/io.containerd.runtime.v2.task/k8s.io/container-a"
-            ))
-        );
-        assert_eq!(entries.oci_root_fd, Some(7));
+        assert_eq!(entries.oci_root_fd, 7);
 
         Ok(())
     }

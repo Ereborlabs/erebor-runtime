@@ -408,6 +408,36 @@ const EXPECTED_METHODS: &[ExpectedMethod] = &[
         "MithrilObservationSnapshotRequest",
         "MithrilObservationSnapshotResponse"
     ),
+    method!(
+        "RuntimeAdmissionService",
+        "Health",
+        "RuntimeAdmissionHealthRequest",
+        "RuntimeAdmissionDecision"
+    ),
+    method!(
+        "RuntimeAdmissionService",
+        "StageRuntimeFacts",
+        "RuntimeAdmissionStageRequest",
+        "RuntimeAdmissionDecision"
+    ),
+    method!(
+        "RuntimeAdmissionService",
+        "PrepareContainer",
+        "RuntimeAdmissionPrepareRequest",
+        "RuntimeAdmissionDecision"
+    ),
+    method!(
+        "RuntimeAdmissionService",
+        "PrepareDeclaredEntries",
+        "RuntimeAdmissionEntriesRequest",
+        "RuntimeAdmissionDecision"
+    ),
+    method!(
+        "RuntimeAdmissionService",
+        "Confirm",
+        "RuntimeAdmissionReceipt",
+        "RuntimeAdmissionComplete"
+    ),
 ];
 
 #[test]

@@ -1,4 +1,5 @@
 mod administrative_exec;
+pub mod admission_limits;
 mod config;
 mod control;
 mod decommission;
@@ -58,9 +59,9 @@ pub use policy_delivery::{
     policy_delivery_status, NodePolicyDeliveryOwner, PolicyDeliveryStatusV1,
     PolicyDeliveryTargetStatusV1,
 };
+pub(crate) use runtime_admission::RuntimeAdmissionResponseV1;
 pub use runtime_admission::{
-    RuntimeAdmissionClient, RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1,
-    RuntimeAdmissionResponseV1, ScheduledRuntimeBindingV1, CONTAINER_NAME_ANNOTATION,
+    RuntimeAdmissionClient, ScheduledRuntimeBindingV1, CONTAINER_NAME_ANNOTATION,
     IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
     POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
 };

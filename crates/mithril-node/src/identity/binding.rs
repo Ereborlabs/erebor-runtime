@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::mem::size_of;
 use std::os::fd::AsRawFd as _;
-use std::os::unix::ffi::OsStrExt as _;
+use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -17,6 +17,9 @@ use erebor_interceptor_abi::{
     TaskCoordinateV1, TaskLabelV1,
 };
 use erebor_runtime_error::{ErrorExt as _, RetryHint};
+use erebor_runtime_ipc::v1::{
+    RuntimeAdmissionEntriesRequest, RuntimeAdmissionPrepareRequest, RuntimeAdmissionStageRequest,
+};
 use rustix::process::{pidfd_open, Pid, PidfdFlags};
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
@@ -24,10 +27,7 @@ use uuid::Uuid;
 use zerocopy::{FromBytes as _, IntoBytes as _, TryFromBytes as _};
 
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu};
-use crate::runtime_admission::{
-    KubernetesRuntimeIdentityV1, RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1,
-    ScheduledRuntimeBindingV1,
-};
+use crate::runtime_admission::{KubernetesRuntimeIdentityV1, ScheduledRuntimeBindingV1};
 use crate::{ContainerRuntimeConfig, Result, WorkloadBindingConfig};
 
 use super::runtime::{
@@ -492,13 +492,13 @@ impl StagedRuntimeAdmissionV1 {
     fn verify_preparation(
         &self,
         authority_head_binding_id: &str,
-        request: &RuntimeAdmissionRequestV1,
+        request: &RuntimeAdmissionPrepareRequest,
         now: Instant,
     ) -> Result<()> {
         ensure!(
             self.deadline > now
                 && authority_head_binding_id == self.authority_head_binding_id
-                && request.kubernetes_identity()? == self.identity,
+                && KubernetesRuntimeIdentityV1::prepare(request)? == self.identity,
             IdentityStateSnafu {
                 reason: "the second OCI hook differs from its immutable first stage",
             }
@@ -509,13 +509,13 @@ impl StagedRuntimeAdmissionV1 {
     fn verify_declared_entries(
         &self,
         authority_head_binding_id: &str,
-        request: &RuntimeAdmissionRequestV1,
+        request: &RuntimeAdmissionEntriesRequest,
         now: Instant,
     ) -> Result<()> {
         ensure!(
             self.deadline > now
                 && authority_head_binding_id == self.authority_head_binding_id
-                && request.kubernetes_identity()? == self.identity,
+                && KubernetesRuntimeIdentityV1::entries(request)? == self.identity,
             IdentityStateSnafu {
                 reason: "declared-entry preparation differs from its immutable runtime stage",
             }
@@ -1144,14 +1144,8 @@ impl WorkloadBindingOwner {
     pub(crate) fn stage_runtime_admission(
         &mut self,
         configured: &[WorkloadBindingConfig],
-        request: &RuntimeAdmissionRequestV1,
+        request: &RuntimeAdmissionStageRequest,
     ) -> Result<bool> {
-        ensure!(
-            request.operation == RuntimeAdmissionOperationV1::StageRuntimeFacts,
-            IdentityStateSnafu {
-                reason: "only the first ordered OCI hook can stage runtime facts",
-            }
-        );
         let now = Instant::now();
         self.staged_runtime_admissions
             .retain(|_container_id, stage| stage.deadline > now);
@@ -1159,10 +1153,8 @@ impl WorkloadBindingOwner {
         let authority_head_binding_id = configured[scheduled.binding_index].binding_id.clone();
         let stage = StagedRuntimeAdmissionV1 {
             authority_head_binding_id,
-            identity: request.kubernetes_identity()?,
-            cgroup_path: request.cgroup_path.clone().context(IdentityStateSnafu {
-                reason: "OCI runtime-fact stage has no cgroup path",
-            })?,
+            identity: KubernetesRuntimeIdentityV1::stage(request)?,
+            cgroup_path: PathBuf::from(std::ffi::OsString::from_vec(request.cgroup_path.clone())),
             oci_bundle: None,
             declared_entries_staged: false,
             deadline: now + RUNTIME_STAGE_LIFETIME,
@@ -1192,7 +1184,7 @@ impl WorkloadBindingOwner {
     pub(crate) async fn verify_runtime_preparation(
         &mut self,
         configured: &[WorkloadBindingConfig],
-        request: &RuntimeAdmissionRequestV1,
+        request: &RuntimeAdmissionPrepareRequest,
     ) -> Result<(ScheduledRuntimeBindingV1, CriRuntimeContainerObservationV1)> {
         let now = Instant::now();
         let staged = self
@@ -1223,21 +1215,15 @@ impl WorkloadBindingOwner {
     pub(crate) fn verify_runtime_entry_preparation(
         &self,
         configured: &[WorkloadBindingConfig],
-        request: &RuntimeAdmissionRequestV1,
+        request: &RuntimeAdmissionEntriesRequest,
     ) -> Result<(String, u32)> {
-        ensure!(
-            request.operation == RuntimeAdmissionOperationV1::PrepareDeclaredEntries,
-            IdentityStateSnafu {
-                reason: "declared-entry preparation requires the post-root OCI hook",
-            }
-        );
         let staged = self
             .staged_runtime_admissions
             .get(&request.container_id)
             .context(IdentityStateSnafu {
                 reason: "declared-entry preparation has no live runtime stage",
             })?;
-        let identity = request.kubernetes_identity()?;
+        let identity = KubernetesRuntimeIdentityV1::entries(request)?;
         let matches = configured
             .iter()
             .filter(|binding| {
@@ -1396,16 +1382,12 @@ impl WorkloadBindingOwner {
         notification_pid: u32,
         initial_exec: bool,
     ) -> Result<String> {
-        let request = RuntimeAdmissionRequestV1 {
-            operation: RuntimeAdmissionOperationV1::PrepareContainer,
+        let request = RuntimeAdmissionPrepareRequest {
             container_id: process.container_id().to_owned(),
-            initial_pid: Some(notification_pid),
-            cgroup_path: None,
-            oci_bundle: None,
-            oci_root_fd: None,
-            annotations: process.annotations().clone(),
+            initial_pid: notification_pid,
+            annotations: process.annotations().clone().into_iter().collect(),
         };
-        let identity = request.kubernetes_identity()?;
+        let identity = KubernetesRuntimeIdentityV1::prepare(&request)?;
         let matches = configured
             .iter()
             .filter(|binding| {
@@ -2793,9 +2775,14 @@ fn completed_recovery_matches_binding(
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
+    use std::os::unix::ffi::OsStrExt as _;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
+    use erebor_runtime_ipc::v1::{
+        RuntimeAdmissionEntriesRequest, RuntimeAdmissionPrepareRequest,
+        RuntimeAdmissionStageRequest,
+    };
     use snafu::{OptionExt as _, ResultExt as _};
     use zerocopy::TryFromBytes as _;
 
@@ -2806,12 +2793,11 @@ mod tests {
     };
     use crate::error::{IdentityStateSnafu, IoSnafu};
     use crate::identity::runtime::RuntimeContainerState;
-    use crate::runtime_admission::ScheduledRuntimeBindingV1;
+    use crate::runtime_admission::{KubernetesRuntimeIdentityV1, ScheduledRuntimeBindingV1};
     use crate::{
-        RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1, WorkloadBindingConfig,
-        CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION,
-        POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION,
-        SANDBOX_ID_ANNOTATION,
+        WorkloadBindingConfig, CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION,
+        POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION,
+        PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
     };
     use erebor_interceptor_abi::{
         BindingLifecycleStateV1, Id128V1, InitialRootStateV1, RecoveredContainerActivationPhaseV1,
@@ -2856,14 +2842,10 @@ mod tests {
         assert!(!declared_entry_request_is_present(&1_u64.to_ne_bytes()));
     }
 
-    fn authorization_request(_cgroup_path: &Path) -> RuntimeAdmissionRequestV1 {
-        RuntimeAdmissionRequestV1 {
-            operation: RuntimeAdmissionOperationV1::PrepareContainer,
+    fn authorization_request() -> RuntimeAdmissionPrepareRequest {
+        RuntimeAdmissionPrepareRequest {
             container_id: "a".repeat(64),
-            initial_pid: Some(42),
-            cgroup_path: None,
-            oci_bundle: None,
-            oci_root_fd: None,
+            initial_pid: 42,
             annotations: BTreeMap::from([
                 (POD_NAMESPACE_ANNOTATION.to_owned(), "default".to_owned()),
                 (POD_UID_ANNOTATION.to_owned(), "pod-uid-a".to_owned()),
@@ -2878,17 +2860,19 @@ mod tests {
                     "33333333-3333-4333-8333-333333333333".to_owned(),
                 ),
                 (POLICY_SOURCE_REVISION_ANNOTATION.to_owned(), "d".repeat(64)),
-            ]),
+            ])
+            .into_iter()
+            .collect(),
         }
     }
 
     #[test]
     fn preparation_must_match_the_staged_authority_head_and_runtime_facts() -> crate::Result<()> {
         let cgroup = PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a");
-        let request = authorization_request(&cgroup);
+        let request = authorization_request();
         let stage = StagedRuntimeAdmissionV1 {
             authority_head_binding_id: "authority-head-a".to_owned(),
-            identity: request.kubernetes_identity()?,
+            identity: KubernetesRuntimeIdentityV1::prepare(&request)?,
             cgroup_path: cgroup.clone(),
             oci_bundle: None,
             declared_entries_staged: false,
@@ -2896,24 +2880,27 @@ mod tests {
         };
         let now = Instant::now();
         stage.verify_preparation("authority-head-a", &request, now)?;
-        let mut entries = request.clone();
-        entries.operation = RuntimeAdmissionOperationV1::PrepareDeclaredEntries;
-        entries.initial_pid = None;
-        entries.oci_bundle = Some(PathBuf::from("/run/oci/container-a"));
-        entries.oci_root_fd = Some(3);
+        let entries = RuntimeAdmissionEntriesRequest {
+            container_id: request.container_id.clone(),
+            annotations: request.annotations.clone(),
+            oci_bundle: b"/run/oci/container-a".to_vec(),
+            oci_root_fd: 3,
+        };
         stage.verify_declared_entries("authority-head-a", &entries, now)?;
         assert!(stage
             .verify_preparation("authority-head-b", &request, now)
             .is_err());
-        let mut wrong_identity = authorization_request(&cgroup);
+        let mut wrong_identity = authorization_request();
         wrong_identity
             .annotations
             .insert(POD_UID_ANNOTATION.to_owned(), "pod-uid-b".to_owned());
         assert!(stage
             .verify_preparation("authority-head-a", &wrong_identity, now)
             .is_err());
+        let mut wrong_entries = entries;
+        wrong_entries.annotations = wrong_identity.annotations.clone();
         assert!(stage
-            .verify_declared_entries("authority-head-a", &wrong_identity, now)
+            .verify_declared_entries("authority-head-a", &wrong_entries, now)
             .is_err());
         let mut expired = stage;
         expired.deadline = now;
@@ -2930,10 +2917,12 @@ mod tests {
         })?;
         let mut owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
         let cgroup = PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a");
-        let mut request = authorization_request(&cgroup);
-        request.operation = RuntimeAdmissionOperationV1::StageRuntimeFacts;
-        request.initial_pid = None;
-        request.cgroup_path = Some(cgroup.clone());
+        let input = authorization_request();
+        let request = RuntimeAdmissionStageRequest {
+            container_id: input.container_id,
+            annotations: input.annotations,
+            cgroup_path: cgroup.as_os_str().as_bytes().to_vec(),
+        };
         let authority = ScheduledRuntimeBindingV1::authority_binding_id("pod-uid-a", "worker");
         let mut scheduled = spec(temporary.path());
         scheduled.binding_id.clone_from(&authority);
@@ -2958,7 +2947,7 @@ mod tests {
             path: "temporary missing runtime stage root",
         })?;
         let mut owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
-        let request = authorization_request(Path::new("/sys/fs/cgroup/kubepods/pod-a/container-a"));
+        let request = authorization_request();
         let Err(error) = owner.verify_runtime_preparation(&[], &request).await else {
             return IdentityStateSnafu {
                 reason: "runtime authorization without staging reached runtime inventory"

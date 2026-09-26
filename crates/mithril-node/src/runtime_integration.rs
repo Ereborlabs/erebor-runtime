@@ -2,12 +2,15 @@ use std::fs::{self, File};
 use std::io::{self, Read as _, Write as _};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use crate::runtime_gate::{
     RuntimeControlRecoveryEntryV1, RuntimeRecoveryEntryV1, RuntimeRecoveryManifestV1,
     RuntimeRecoveryMountDestinationV1, RuntimeRecoveryMountV1, MAXIMUM_RECOVERY_ARGUMENTS,
 };
 use serde_json::{Map, Value};
+
+use crate::admission_limits as limit;
 
 const MAXIMUM_OWNED_FILE_BYTES: u64 = 536_870_912;
 
@@ -120,9 +123,10 @@ impl RuntimeIntegrationOwner {
                 .iter()
                 .any(|arg| arg.is_empty() || arg.len() > 128 || arg.contains(['\0', '\r', '\n']))
             || !Self::valid_runtime_services(&install.runtime_services)
-            || !(100..=30_000).contains(&install.timeout_ms)
-            || install.runtime_timeout_seconds * 1_000 <= install.timeout_ms
-            || install.runtime_timeout_seconds > 30
+            || !limit::TIMEOUT_MS.contains(&u128::from(install.timeout_ms))
+            || Duration::from_secs(install.runtime_timeout_seconds)
+                <= Duration::from_millis(install.timeout_ms)
+            || !limit::RUNTIME_TIMEOUT_SECONDS.contains(&install.runtime_timeout_seconds)
             || install.log_filter.is_empty()
             || install.log_filter.len() > 1_024
             || install.log_filter.contains(['\r', '\n'])
@@ -657,7 +661,6 @@ impl RuntimeIntegrationOwner {
 
     fn clean_absolute(path: &Path) -> bool {
         path.is_absolute()
-            && path.as_os_str().as_encoded_bytes().len() <= 4_096
             && path
                 .components()
                 .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))

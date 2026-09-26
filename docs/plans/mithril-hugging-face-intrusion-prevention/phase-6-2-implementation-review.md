@@ -783,7 +783,7 @@ required mount destinations and access modes because Kubernetes assigns the
 host-side volume paths.
 
 [`OciBaseSpecOwner::build`](../../../crates/mithril-node/src/runtime_integration.rs) Containerd invokes the first two ordered Mithril `createRuntime` hooks
-  -> [`request_with_cgroup`](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) the first hook stages immutable container, cgroup, image, and Pod facts
+  -> [`OciHookOwner::stage_request`](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) the first hook stages immutable container, cgroup, image, and Pod facts
   -> [`stage_runtime_admission`](../../../crates/mithril-node/src/identity/binding.rs) the node stores one bounded stage and grants no runtime authority
 
 [`RuntimeAdmissionServer`](../../../crates/mithril-node/src/runtime_admission.rs) The second OCI `createRuntime` hook holds the exact initial task
@@ -792,7 +792,7 @@ host-side volume paths.
   -> [`publish_held_activated_root`](../../../crates/mithril-node/src/identity/binding.rs) the node publishes `PreparedContainer` for the exact binding and held host TGID
   -> [`install_late_activation_target`](../../../crates/mithril-node/src/identity/binding.rs) the node reads back the binding and active generation
   -> [`prepare_runtime_start`](../../../crates/mithril-node/src/node.rs) the node does not call exact-binding reconciliation
-  -> [`RuntimeAdmissionEnvelope::deliver`](../../../crates/mithril-node/src/runtime_admission.rs) the hook returns allow for runc to continue to `createContainer`
+  -> [`RuntimeAdmissionCall::deliver`](../../../crates/mithril-node/src/runtime_admission.rs) the hook returns allow for runc to continue to `createContainer`
 
 [`NodeChassis::reconcile`](../../../crates/mithril-node/src/node.rs) Periodic reconciliation runs before `createContainer`
   -> [`WorkloadBindingOwner::exact_object_binding_targets`](../../../crates/mithril-node/src/identity/binding.rs) the prepared binding forbids its process path view
@@ -803,7 +803,7 @@ host-side volume paths.
   -> [`NodePolicyGenerationOwner::reconcile_cri_exact_bindings_for_oci_entries`](../../../crates/mithril-node/src/policy.rs) the node measures exact objects and canonical mount routes through the OCI root view
   -> [`WorkloadBindingOwner::verify_runtime_entry_staging`](../../../crates/mithril-node/src/identity/binding.rs) the node reads back the binding entry rows
   -> [`WorkloadBindingOwner::mark_runtime_entries_staged`](../../../crates/mithril-node/src/identity/binding.rs) the node records successful OCI path staging
-  -> [`RuntimeAdmissionEnvelope::deliver`](../../../crates/mithril-node/src/runtime_admission.rs) the hook returns allow for runc to release the application
+  -> [`RuntimeAdmissionCall::deliver`](../../../crates/mithril-node/src/runtime_admission.rs) the hook returns allow for runc to release the application
 
 [`prepared_container_actor_is_exact`](../../../bpf/erebor-interceptor/programs/identity_prepared_container.h) Trusted runtime setup uses the exact prepared binding and initial runtime entry
   -> [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h) BPF permits runtime implementation details without a runtime-specific operation list

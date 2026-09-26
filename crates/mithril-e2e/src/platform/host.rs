@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use erebor_interceptor::KernelStateReader;
 use erebor_runtime_ipc::v1::MithrilObservationSnapshot;
-use mithril_node::RuntimeAdmissionOperationV1;
 use snafu::{ensure, ResultExt as _};
 
 use super::shared::Shared;
@@ -61,12 +60,9 @@ impl Host {
         let config = rootfs.join("bundle/config.json");
         fs::write(&config, br#"{"root":{"path":"/"}}"#).context(IoSnafu { path: &config })?;
         let root = File::open(rootfs).context(IoSnafu { path: rootfs })?;
-        let mut request = self
+        let response = self
             .shared
-            .request(RuntimeAdmissionOperationV1::PrepareDeclaredEntries, None)?;
-        request.oci_bundle = Some(PathBuf::from("/bundle"));
-        request.oci_root_fd = Some(u32::try_from(root.as_raw_fd())?);
-        let response = self.shared.submit(&request)?;
+            .entries(Path::new("/bundle"), u32::try_from(root.as_raw_fd())?)?;
         ensure!(
             response.allowed && response.reason_code == "DECLARED_ENTRY_CANDIDATE_STAGED",
             InvalidInputSnafu {
@@ -228,10 +224,7 @@ impl Platform for Host {
             return Ok(());
         }
         self.shared.observe()?;
-        let request = self
-            .shared
-            .request(RuntimeAdmissionOperationV1::StageRuntimeFacts, None)?;
-        let response = self.shared.submit(&request)?;
+        let response = self.shared.stage()?;
         ensure!(
             response.allowed && response.reason_code == "RUNTIME_FACTS_STAGING",
             InvalidInputSnafu {
@@ -254,10 +247,7 @@ impl Platform for Host {
             );
             return Ok(());
         }
-        let request = self
-            .shared
-            .request(RuntimeAdmissionOperationV1::PrepareContainer, Some(pid))?;
-        let response = self.shared.submit(&request)?;
+        let response = self.shared.prepare(pid)?;
         ensure!(
             response.allowed && response.reason_code == "ACTIVE_POLICY_AND_BINDING_VERIFIED",
             InvalidInputSnafu {

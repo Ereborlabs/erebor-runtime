@@ -6,6 +6,47 @@ service RuntimeObservationService {
   rpc GetSnapshot(MithrilObservationSnapshotRequest) returns (MithrilObservationSnapshotResponse);
 }
 
+service RuntimeAdmissionService {
+  rpc Health(RuntimeAdmissionHealthRequest) returns (RuntimeAdmissionDecision);
+  rpc StageRuntimeFacts(RuntimeAdmissionStageRequest) returns (RuntimeAdmissionDecision);
+  rpc PrepareContainer(RuntimeAdmissionPrepareRequest) returns (RuntimeAdmissionDecision);
+  rpc PrepareDeclaredEntries(RuntimeAdmissionEntriesRequest) returns (RuntimeAdmissionDecision);
+  rpc Confirm(RuntimeAdmissionReceipt) returns (RuntimeAdmissionComplete);
+}
+
+message RuntimeAdmissionHealthRequest {}
+
+message RuntimeAdmissionStageRequest {
+  string container_id = 1;
+  map<string, string> annotations = 2;
+  bytes cgroup_path = 3;
+}
+
+message RuntimeAdmissionPrepareRequest {
+  string container_id = 1;
+  map<string, string> annotations = 2;
+  uint32 initial_pid = 3;
+}
+
+message RuntimeAdmissionEntriesRequest {
+  string container_id = 1;
+  map<string, string> annotations = 2;
+  bytes oci_bundle = 3;
+  uint32 oci_root_fd = 4;
+}
+
+message RuntimeAdmissionDecision {
+  bool allowed = 1;
+  string reason_code = 2;
+  bytes receipt_token = 3;
+}
+
+message RuntimeAdmissionReceipt {
+  bytes token = 1;
+}
+
+message RuntimeAdmissionComplete {}
+
 message MithrilObservationSnapshotRequest {
   string cgroup_scope = 1;
 }

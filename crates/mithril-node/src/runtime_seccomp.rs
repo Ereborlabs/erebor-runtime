@@ -149,7 +149,7 @@ impl OciContainerProcessStateV1 {
                 && self.state.version.starts_with("1.")
                 && self.fds == ["seccompFd"]
                 && self.metadata == crate::runtime_admission::SECCOMP_LISTENER_METADATA
-                && (32..=128).contains(&self.state.id.len())
+                && !self.state.id.is_empty()
                 && self
                     .state
                     .id
@@ -158,9 +158,7 @@ impl OciContainerProcessStateV1 {
                 && self.pid > 0
                 && self.state.pid >= 0
                 && matches!(self.state.status.as_str(), "creating" | "running")
-                && Path::new(&self.state.bundle).is_absolute()
-                && self.state.bundle.len() <= 4_096
-                && self.state.annotations.len() <= 64,
+                && Path::new(&self.state.bundle).is_absolute(),
             IdentityStateSnafu {
                 reason: "runc seccomp process state is not canonical and bounded",
             }

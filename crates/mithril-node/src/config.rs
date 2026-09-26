@@ -6,6 +6,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
 
+use crate::admission_limits as limit;
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, JsonSnafu};
 use crate::Result;
 
@@ -419,8 +420,8 @@ impl NodeConfig {
                 admission.socket_path.is_absolute()
                     && clean_absolute_path(&admission.trusted_start_hook_path)
                     && admission.trusted_start_hook_path != Path::new("/")
-                    && (1_024..=1_048_576).contains(&admission.maximum_request_bytes)
-                    && (100..=30_000).contains(&admission.timeout_ms)
+                    && limit::REQUEST_BYTES.contains(&admission.maximum_request_bytes)
+                    && limit::TIMEOUT_MS.contains(&u128::from(admission.timeout_ms))
                     && self.kubernetes_node_name.is_some()
                     && self.container_runtime.is_some(),
                 InvalidConfigurationSnafu {
@@ -465,7 +466,7 @@ impl NodeConfig {
                 || !binding.service_account_uid.is_empty()
                 || !binding.pod_labels.is_empty();
             ensure!(
-                (32..=128).contains(&binding.container_id.len())
+                !binding.container_id.is_empty()
                     && (1..=253).contains(&binding.namespace.len())
                     && (1..=64).contains(&binding.pod_uid.len())
                     && (1..=128).contains(&binding.sandbox_id.len())

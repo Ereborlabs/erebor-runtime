@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::ops::{Deref, DerefMut};
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
@@ -11,7 +12,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{TaskCoordinateStateV1, TaskCoordinateV1};
 use erebor_runtime_client::MithrilObservationClient;
-use erebor_runtime_ipc::v1::MithrilObservationSnapshot;
+use erebor_runtime_ipc::v1::{
+    MithrilObservationSnapshot, RuntimeAdmissionDecision, RuntimeAdmissionEntriesRequest,
+    RuntimeAdmissionPrepareRequest, RuntimeAdmissionStageRequest,
+};
 use k8s_cri::v1::ContainerState;
 use mithril_control::{
     lower_kubernetes_policy, workload_target_fact_digest, AdministrativeApprovalConfigV1,
@@ -26,7 +30,6 @@ use mithril_node::{
     AdministrativeAuthorizationConfig, ContainerKindV1, ContainerRuntimeConfig, EvidenceConfig,
     EvidenceWalCapacityPolicyV1, InterceptorConfig, NativeIdentityInspector, NativeTaskSnapshotV1,
     NodeChassis, NodeConfig, NodeReadinessV1, RuntimeAdmissionClient, RuntimeAdmissionConfig,
-    RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1, RuntimeAdmissionResponseV1,
     RuntimeObservationConfig, ScheduledRuntimeBindingV1, WorkloadBindingConfig,
     CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
     POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
@@ -230,30 +233,41 @@ impl SharedState {
         self.cri.as_ref().ok_or("CRI is not running")?.set(value)
     }
 
-    pub(super) fn request(
-        &self,
-        operation: RuntimeAdmissionOperationV1,
-        pid: Option<u32>,
-    ) -> TestResult<RuntimeAdmissionRequestV1> {
-        let binding = self.binding()?;
-        Ok(RuntimeAdmissionRequestV1 {
-            operation,
-            container_id: binding.container_id.clone(),
-            initial_pid: pid,
-            cgroup_path: (operation == RuntimeAdmissionOperationV1::StageRuntimeFacts)
-                .then(|| self.cgroup_path.clone()),
-            oci_bundle: None,
-            oci_root_fd: None,
-            annotations: self.annotations()?,
+    pub(super) fn stage_request(&self) -> TestResult<RuntimeAdmissionStageRequest> {
+        Ok(RuntimeAdmissionStageRequest {
+            container_id: self.binding()?.container_id.clone(),
+            annotations: self.annotations()?.into_iter().collect(),
+            cgroup_path: self.cgroup_path.as_os_str().as_bytes().to_vec(),
         })
     }
 
-    pub(super) fn submit(
-        &self,
-        request: &RuntimeAdmissionRequestV1,
-    ) -> TestResult<RuntimeAdmissionResponseV1> {
+    pub(super) fn stage(&self) -> TestResult<RuntimeAdmissionDecision> {
+        let request = self.stage_request()?;
         let client = RuntimeAdmissionClient::new(self.admit_path.clone(), READY_LIMIT)?;
-        Ok(self.runtime.block_on(client.submit(request))?)
+        Ok(self.runtime.block_on(client.stage_runtime_facts(request))?)
+    }
+
+    pub(super) fn prepare(&self, pid: u32) -> TestResult<RuntimeAdmissionDecision> {
+        let request = RuntimeAdmissionPrepareRequest {
+            container_id: self.binding()?.container_id.clone(),
+            annotations: self.annotations()?.into_iter().collect(),
+            initial_pid: pid,
+        };
+        let client = RuntimeAdmissionClient::new(self.admit_path.clone(), READY_LIMIT)?;
+        Ok(self.runtime.block_on(client.prepare_container(request))?)
+    }
+
+    pub(super) fn entries(&self, bundle: &Path, fd: u32) -> TestResult<RuntimeAdmissionDecision> {
+        let request = RuntimeAdmissionEntriesRequest {
+            container_id: self.binding()?.container_id.clone(),
+            annotations: self.annotations()?.into_iter().collect(),
+            oci_bundle: bundle.as_os_str().as_bytes().to_vec(),
+            oci_root_fd: fd,
+        };
+        let client = RuntimeAdmissionClient::new(self.admit_path.clone(), READY_LIMIT)?;
+        Ok(self
+            .runtime
+            .block_on(client.prepare_declared_entries(request))?)
     }
 
     pub(super) fn node_running(&self) -> bool {
@@ -1279,7 +1293,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
-    use mithril_node::{RuntimeAdmissionClient, RuntimeAdmissionOperationV1};
+    use mithril_node::RuntimeAdmissionClient;
     use rustix::process::{kill_process, Pid, Signal};
 
     use super::{Shared, READY_LIMIT};
@@ -1297,7 +1311,7 @@ mod tests {
             env.install_policy("actor_policy.json")?;
             env.node_ready()?;
             env.observe()?;
-            let request = env.request(RuntimeAdmissionOperationV1::StageRuntimeFacts, None)?;
+            let request = env.stage_request()?;
 
             let cri = env.cri.as_ref().ok_or("CRI is not running")?;
             let before = cri.delay_list(Duration::from_secs(8))?;
@@ -1313,7 +1327,9 @@ mod tests {
             // Keep the client deadline below Node's deadline to test the transport timeout.
             let client = RuntimeAdmissionClient::new(socket.clone(), Duration::from_secs(4))?;
             assert!(env.runtime.block_on(client.available()));
-            let result = env.runtime.block_on(client.submit(&request));
+            let result = env
+                .runtime
+                .block_on(client.stage_runtime_facts(request.clone()));
             cri.delay_list(Duration::ZERO)?;
             let error = match result {
                 Err(error) => error,
@@ -1336,7 +1352,10 @@ mod tests {
                 &socket,
                 "admission recovery after CRI delay",
                 READY_LIMIT,
-                || match env.runtime.block_on(client.submit(&request)) {
+                || match env
+                    .runtime
+                    .block_on(client.stage_runtime_facts(request.clone()))
+                {
                     Ok(response) => Ok(Some(response)),
                     Err(error) => {
                         *last.borrow_mut() = error.to_string();

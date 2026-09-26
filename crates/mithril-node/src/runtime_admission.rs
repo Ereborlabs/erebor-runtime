@@ -1,16 +1,32 @@
-use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::future::Future;
+use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use erebor_runtime_ipc::{
+    transport::{connect_unix, UnixIncoming, UnixPeerIdentity},
+    v1::{
+        runtime_admission_service_client::RuntimeAdmissionServiceClient,
+        runtime_admission_service_server::{
+            RuntimeAdmissionService, RuntimeAdmissionServiceServer,
+        },
+        RuntimeAdmissionComplete, RuntimeAdmissionDecision, RuntimeAdmissionEntriesRequest,
+        RuntimeAdmissionHealthRequest, RuntimeAdmissionPrepareRequest, RuntimeAdmissionReceipt,
+        RuntimeAdmissionStageRequest,
+    },
+};
 use sha2::{Digest as _, Sha256};
-use snafu::{ensure, OptionExt as _, ResultExt as _};
-use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
-use tokio::net::{UnixListener, UnixStream};
+use snafu::ensure;
+use tokio::net::UnixListener;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
+use tonic::{transport::Channel, Request, Response, Status};
 
-use crate::error::{IdentityStateSnafu, IoSnafu, JsonSnafu};
+use crate::admission_limits as limit;
+use crate::error::IdentityStateSnafu;
 use crate::{Result, RuntimeAdmissionConfig, WorkloadBindingConfig};
 
 pub const POD_UID_ANNOTATION: &str = "io.kubernetes.cri.sandbox-uid";
@@ -22,39 +38,22 @@ pub const PROFILE_ID_ANNOTATION: &str = "mithril.erebor.dev/profile-id";
 pub const POLICY_SOURCE_REVISION_ANNOTATION: &str = "mithril.erebor.dev/policy-source-revision";
 pub(crate) const POLICY_CONVERGENCE_PENDING: &str = "POLICY_CONVERGENCE_PENDING";
 pub(crate) const SECCOMP_LISTENER_METADATA: &str = "mithril-runtime-exec-v1";
+const MAX_PENDING_ADMISSIONS: usize = 128;
+const MAX_RPCS_PER_CONNECTION: usize = 32;
+const POLICY_RETRY_DELAY: Duration = Duration::from_millis(25);
 
 pub(crate) fn seccomp_listener_path(socket_path: &Path) -> PathBuf {
     socket_path.with_extension("seccomp.sock")
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeAdmissionRequestV1 {
-    pub operation: RuntimeAdmissionOperationV1,
-    pub container_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub initial_pid: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cgroup_path: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub oci_bundle: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub oci_root_fd: Option<u32>,
-    pub annotations: BTreeMap<String, String>,
+pub(crate) enum RuntimeAdmissionCall {
+    Stage(RuntimeAdmissionStageRequest, AdmissionReply),
+    Prepare(RuntimeAdmissionPrepareRequest, AdmissionReply),
+    Entries(RuntimeAdmissionEntriesRequest, AdmissionReply),
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum RuntimeAdmissionOperationV1 {
-    Health,
-    StageRuntimeFacts,
-    PrepareContainer,
-    PrepareDeclaredEntries,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeAdmissionResponseV1 {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RuntimeAdmissionResponseV1 {
     pub allowed: bool,
     pub reason_code: String,
 }
@@ -76,8 +75,7 @@ pub struct ScheduledRuntimeBindingV1 {
     pub resolved: WorkloadBindingConfig,
 }
 
-pub(crate) struct RuntimeAdmissionEnvelope {
-    pub(crate) request: RuntimeAdmissionRequestV1,
+pub(crate) struct AdmissionReply {
     peer_pid: u32,
     deadline: Instant,
     response: oneshot::Sender<RuntimeAdmissionResponseV1>,
@@ -93,15 +91,27 @@ struct RuntimeAdmissionDispatch {
 pub(crate) struct RuntimeAdmissionServer {
     listener: UnixListener,
     _socket_owner: crate::unix_socket::UnixSocketPathOwner,
-    socket_path: PathBuf,
     maximum_request_bytes: usize,
     timeout: Duration,
-    requests: mpsc::Sender<RuntimeAdmissionEnvelope>,
+    requests: mpsc::Sender<RuntimeAdmissionCall>,
+}
+
+#[derive(Clone)]
+struct RuntimeAdmissionGrpc {
+    timeout: Duration,
+    requests: mpsc::Sender<RuntimeAdmissionCall>,
+    pending: Arc<Mutex<HashMap<uuid::Uuid, AdmissionPending>>>,
+}
+
+struct AdmissionPending {
+    peer_pid: u32,
+    deadline: Instant,
+    delivered: oneshot::Sender<()>,
 }
 
 /// This receiver gives the node event loop one bounded runtime request stream.
 pub(crate) struct RuntimeAdmissionReceiver {
-    requests: mpsc::Receiver<RuntimeAdmissionEnvelope>,
+    requests: mpsc::Receiver<RuntimeAdmissionCall>,
 }
 
 /// This client controls one hook exchange and its fail-closed deadline.
@@ -110,61 +120,60 @@ pub struct RuntimeAdmissionClient {
     timeout: Duration,
 }
 
-impl RuntimeAdmissionRequestV1 {
-    fn is_health_probe(&self) -> bool {
-        self.operation == RuntimeAdmissionOperationV1::Health
-            && self.container_id.is_empty()
-            && self.initial_pid.is_none()
-            && self.cgroup_path.is_none()
-            && self.oci_bundle.is_none()
-            && self.oci_root_fd.is_none()
-            && self.annotations.is_empty()
+impl KubernetesRuntimeIdentityV1 {
+    pub(crate) fn stage(request: &RuntimeAdmissionStageRequest) -> Result<Self> {
+        let path = PathBuf::from(OsString::from_vec(request.cgroup_path.clone()));
+        ensure!(
+            clean_cgroup_path(&path),
+            IdentityStateSnafu {
+                reason: "runtime admission request is not canonical",
+            }
+        );
+        Self::parse(&request.container_id, &request.annotations)
     }
 
-    pub(crate) fn kubernetes_identity(&self) -> Result<KubernetesRuntimeIdentityV1> {
-        let operation_is_canonical = match self.operation {
-            RuntimeAdmissionOperationV1::Health => false,
-            RuntimeAdmissionOperationV1::StageRuntimeFacts => {
-                self.initial_pid.is_none()
-                    && self.cgroup_path.as_deref().is_some_and(clean_cgroup_path)
-                    && self.oci_bundle.is_none()
-                    && self.oci_root_fd.is_none()
-            }
-            RuntimeAdmissionOperationV1::PrepareContainer => {
-                self.initial_pid.is_some_and(|pid| pid > 0)
-                    && self.cgroup_path.is_none()
-                    && self.oci_bundle.is_none()
-                    && self.oci_root_fd.is_none()
-            }
-            RuntimeAdmissionOperationV1::PrepareDeclaredEntries => {
-                self.initial_pid.is_none()
-                    && self.cgroup_path.is_none()
-                    && self.oci_bundle.as_deref().is_some_and(clean_oci_bundle)
-                    && self.oci_root_fd.is_some_and(|fd| fd > 2)
-            }
-        };
+    pub(crate) fn prepare(request: &RuntimeAdmissionPrepareRequest) -> Result<Self> {
         ensure!(
-            (32..=128).contains(&self.container_id.len())
-                && self
-                    .container_id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:".contains(&byte))
-                && operation_is_canonical
-                && self.annotations.len() <= 64
-                && self.annotations.iter().all(|(key, value)| {
-                    !key.is_empty() && key.len() <= 253 && !value.is_empty() && value.len() <= 4_096
-                }),
+            request.initial_pid > 0,
             IdentityStateSnafu {
-                reason: "runtime admission request is not canonical and bounded",
+                reason: "runtime admission request is not canonical",
+            }
+        );
+        Self::parse(&request.container_id, &request.annotations)
+    }
+
+    pub(crate) fn entries(request: &RuntimeAdmissionEntriesRequest) -> Result<Self> {
+        let bundle = PathBuf::from(OsString::from_vec(request.oci_bundle.clone()));
+        ensure!(
+            clean_oci_bundle(&bundle) && request.oci_root_fd > 2,
+            IdentityStateSnafu {
+                reason: "runtime admission request is not canonical",
+            }
+        );
+        Self::parse(&request.container_id, &request.annotations)
+    }
+
+    fn parse(container_id: &str, annotations: &HashMap<String, String>) -> Result<Self> {
+        ensure!(
+            !container_id.is_empty()
+                && container_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:".contains(&byte)),
+            IdentityStateSnafu {
+                reason: "runtime admission request is not canonical",
             }
         );
         let required = |key: &str| {
-            self.annotations.get(key).cloned().ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: format!("runtime admission request has no `{key}` annotation"),
-                }
-                .build()
-            })
+            annotations
+                .get(key)
+                .filter(|value| !value.is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: format!("runtime admission request has no `{key}` annotation"),
+                    }
+                    .build()
+                })
         };
         let image = required(IMAGE_NAME_ANNOTATION)?;
         let image_digest = image
@@ -191,7 +200,7 @@ impl RuntimeAdmissionRequestV1 {
                 reason: "runtime admission policy annotations are not canonical",
             }
         );
-        Ok(KubernetesRuntimeIdentityV1 {
+        Ok(Self {
             namespace: required(POD_NAMESPACE_ANNOTATION)?,
             pod_uid: required(POD_UID_ANNOTATION)?,
             container_name: required(CONTAINER_NAME_ANNOTATION)?,
@@ -200,23 +209,10 @@ impl RuntimeAdmissionRequestV1 {
             profile_id,
         })
     }
-
-    pub(crate) fn held_initial_pid(&self) -> Result<u32> {
-        ensure!(
-            self.operation == RuntimeAdmissionOperationV1::PrepareContainer,
-            IdentityStateSnafu {
-                reason: "container preparation requires the second ordered OCI hook",
-            }
-        );
-        self.initial_pid.context(IdentityStateSnafu {
-            reason: "OCI runtime admission has no initial process",
-        })
-    }
 }
 
 fn clean_oci_bundle(path: &Path) -> bool {
     path.is_absolute()
-        && (1..=4_096).contains(&path.as_os_str().as_encoded_bytes().len())
         && path.components().all(|component| {
             matches!(
                 component,
@@ -225,15 +221,28 @@ fn clean_oci_bundle(path: &Path) -> bool {
         })
 }
 
-impl RuntimeAdmissionEnvelope {
+impl RuntimeAdmissionCall {
+    fn reply(&self) -> &AdmissionReply {
+        match self {
+            Self::Stage(_, reply) | Self::Prepare(_, reply) | Self::Entries(_, reply) => reply,
+        }
+    }
+
+    fn into_reply(self) -> AdmissionReply {
+        match self {
+            Self::Stage(_, reply) | Self::Prepare(_, reply) | Self::Entries(_, reply) => reply,
+        }
+    }
+
     #[must_use]
-    pub(crate) const fn peer_pid(&self) -> u32 {
-        self.peer_pid
+    pub(crate) fn peer_pid(&self) -> u32 {
+        self.reply().peer_pid
     }
 
     pub(crate) fn ensure_active(&self) -> Result<()> {
+        let reply = self.reply();
         ensure!(
-            Instant::now() < self.deadline && !self.response.is_closed(),
+            Instant::now() < reply.deadline && !reply.response.is_closed(),
             IdentityStateSnafu {
                 reason: "runtime admission caller is no longer waiting".to_owned(),
             }
@@ -243,13 +252,14 @@ impl RuntimeAdmissionEnvelope {
 
     pub(crate) async fn deliver(self, response: RuntimeAdmissionResponseV1) -> Result<()> {
         self.ensure_active()?;
-        self.response.send(response).map_err(|_response| {
+        let reply = self.into_reply();
+        reply.response.send(response).map_err(|_response| {
             IdentityStateSnafu {
                 reason: "runtime admission caller closed before its response".to_owned(),
             }
             .build()
         })?;
-        tokio::time::timeout_at(self.deadline, self.delivered)
+        tokio::time::timeout_at(reply.deadline, reply.delivered)
             .await
             .map_err(|_elapsed| {
                 IdentityStateSnafu {
@@ -272,12 +282,11 @@ impl RuntimeAdmissionServer {
     ) -> Result<(Self, RuntimeAdmissionReceiver)> {
         let (listener, socket_owner) =
             crate::unix_socket::UnixSocketPathOwner::bind(&config.socket_path, 0)?;
-        let (requests, receiver) = mpsc::channel(128);
+        let (requests, receiver) = mpsc::channel(MAX_PENDING_ADMISSIONS);
         Ok((
             Self {
                 listener,
                 _socket_owner: socket_owner,
-                socket_path: config.socket_path.clone(),
                 maximum_request_bytes: config.maximum_request_bytes,
                 timeout: Duration::from_millis(config.timeout_ms),
                 requests,
@@ -287,52 +296,44 @@ impl RuntimeAdmissionServer {
     }
 
     pub(crate) async fn serve(self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
-        loop {
-            tokio::select! {
-                accepted = self.listener.accept() => {
-                    let (stream, _address) = accepted.context(IoSnafu {
-                        path: &self.socket_path,
-                    })?;
-                    let requests = self.requests.clone();
-                    let path = self.socket_path.clone();
-                    let maximum_request_bytes = self.maximum_request_bytes;
-                    let timeout = self.timeout;
-                    tokio::spawn(async move {
-                        if let Err(error) = Self::handle_connection(
-                            stream,
-                            &path,
-                            maximum_request_bytes,
-                            timeout,
-                            requests,
-                        )
-                        .await
-                        {
-                            erebor_telemetry::warn!(
-                                error;
-                                "runtime admission exchange failed",
-                                retry = %"caller"
-                            );
-                        }
-                    });
+        let service = RuntimeAdmissionGrpc {
+            timeout: self.timeout,
+            requests: self.requests.clone(),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let server = tonic::transport::Server::builder()
+            .concurrency_limit_per_connection(MAX_RPCS_PER_CONNECTION)
+            .add_service(
+                RuntimeAdmissionServiceServer::new(service)
+                    .max_decoding_message_size(self.maximum_request_bytes)
+                    .max_encoding_message_size(limit::RESPONSE_BYTES),
+            )
+            .serve_with_incoming(UnixIncoming::new(self.listener));
+        tokio::select! {
+            result = server => result,
+            () = async move {
+                while !*shutdown.borrow() {
+                    if shutdown.changed().await.is_err() {
+                        break;
+                    }
                 }
-                changed = shutdown.changed() => {
-                    let _result = changed;
-                    break;
-                }
-            }
+            } => Ok(()),
         }
-        Ok(())
+        .map_err(|source| crate::Error::LocalTransport {
+            source,
+            location: snafu::Location::default(),
+        })
     }
 }
 
 impl RuntimeAdmissionReceiver {
-    pub(crate) async fn receive(&mut self) -> Option<RuntimeAdmissionEnvelope> {
+    pub(crate) async fn receive(&mut self) -> Option<RuntimeAdmissionCall> {
         self.requests.recv().await
     }
 
     #[cfg(test)]
     pub(crate) fn test_request(
-        request: RuntimeAdmissionRequestV1,
+        request: RuntimeAdmissionPrepareRequest,
         timeout: Duration,
     ) -> (
         Self,
@@ -344,13 +345,15 @@ impl RuntimeAdmissionReceiver {
             let (response, received) = oneshot::channel();
             let (delivered, delivery) = oneshot::channel();
             requests
-                .send(RuntimeAdmissionEnvelope {
+                .send(RuntimeAdmissionCall::Prepare(
                     request,
-                    peer_pid: std::process::id(),
-                    deadline,
-                    response,
-                    delivered: delivery,
-                })
+                    AdmissionReply {
+                        peer_pid: std::process::id(),
+                        deadline,
+                        response,
+                        delivered: delivery,
+                    },
+                ))
                 .await
                 .map_err(|_closed| {
                     IdentityStateSnafu {
@@ -379,7 +382,7 @@ impl RuntimeAdmissionReceiver {
 impl RuntimeAdmissionClient {
     pub fn new(socket_path: PathBuf, timeout: Duration) -> Result<Self> {
         ensure!(
-            socket_path.is_absolute() && (100..=30_000).contains(&timeout.as_millis()),
+            socket_path.is_absolute() && limit::TIMEOUT_MS.contains(&timeout.as_millis()),
             IdentityStateSnafu {
                 reason:
                     "runtime admission client requires an absolute socket and a bounded timeout",
@@ -391,72 +394,128 @@ impl RuntimeAdmissionClient {
         })
     }
 
-    pub async fn submit(
-        &self,
-        request: &RuntimeAdmissionRequestV1,
-    ) -> Result<RuntimeAdmissionResponseV1> {
-        // Timeout is denial because the exact initial task stays held during this exchange.
+    pub async fn available(&self) -> bool {
         tokio::time::timeout(self.timeout, async {
-            let stream = UnixStream::connect(&self.socket_path)
-                .await
-                .context(IoSnafu {
-                    path: &self.socket_path,
-                })?;
-            self.exchange(stream, request).await
+            let channel = connect_unix(&self.socket_path).await.ok()?;
+            let mut client = RuntimeAdmissionServiceClient::new(channel)
+                .max_decoding_message_size(limit::RESPONSE_BYTES)
+                .max_encoding_message_size(*limit::REQUEST_BYTES.end());
+            let mut request = Request::new(RuntimeAdmissionHealthRequest {});
+            request.set_timeout(self.timeout);
+            client.health(request).await.ok().map(Response::into_inner)
         })
         .await
-        .map_err(|_elapsed| {
-            IdentityStateSnafu {
-                reason: "runtime admission endpoint exceeded its fail-closed timeout".to_owned(),
-            }
-            .build()
-        })?
+        .ok()
+        .flatten()
+        .is_some_and(|response| response.allowed && response.reason_code == "ADMISSION_READY")
     }
 
-    pub async fn available(&self) -> bool {
-        let request = RuntimeAdmissionRequestV1 {
-            operation: RuntimeAdmissionOperationV1::Health,
-            container_id: String::new(),
-            initial_pid: None,
-            cgroup_path: None,
-            oci_bundle: None,
-            oci_root_fd: None,
-            annotations: BTreeMap::new(),
-        };
-        self.submit(&request)
-            .await
-            .is_ok_and(|response| response.allowed && response.reason_code == "ADMISSION_READY")
-    }
-
-    async fn exchange(
+    pub async fn stage_runtime_facts(
         &self,
-        mut stream: UnixStream,
-        request: &RuntimeAdmissionRequestV1,
-    ) -> Result<RuntimeAdmissionResponseV1> {
-        let mut bytes = serde_json::to_vec(request).context(JsonSnafu {
-            path: "runtime-admission-request",
-        })?;
-        bytes.push(b'\n');
-        stream.write_all(&bytes).await.context(IoSnafu {
-            path: &self.socket_path,
-        })?;
-        let mut response = Vec::new();
-        (&mut stream)
-            .take(4_097)
-            .read_to_end(&mut response)
+        input: RuntimeAdmissionStageRequest,
+    ) -> Result<RuntimeAdmissionDecision> {
+        self.bounded(async {
+            let mut client = self.connect().await?;
+            let mut request = Request::new(input);
+            request.set_timeout(self.timeout);
+            let decision = client
+                .stage_runtime_facts(request)
+                .await
+                .map_err(Self::grpc_error)?
+                .into_inner();
+            self.confirm(&mut client, decision).await
+        })
+        .await
+    }
+
+    pub async fn prepare_container(
+        &self,
+        input: RuntimeAdmissionPrepareRequest,
+    ) -> Result<RuntimeAdmissionDecision> {
+        self.bounded(async {
+            let mut client = self.connect().await?;
+            let mut request = Request::new(input);
+            request.set_timeout(self.timeout);
+            let decision = client
+                .prepare_container(request)
+                .await
+                .map_err(Self::grpc_error)?
+                .into_inner();
+            self.confirm(&mut client, decision).await
+        })
+        .await
+    }
+
+    pub async fn prepare_declared_entries(
+        &self,
+        input: RuntimeAdmissionEntriesRequest,
+    ) -> Result<RuntimeAdmissionDecision> {
+        self.bounded(async {
+            let mut client = self.connect().await?;
+            let mut request = Request::new(input);
+            request.set_timeout(self.timeout);
+            let decision = client
+                .prepare_declared_entries(request)
+                .await
+                .map_err(Self::grpc_error)?
+                .into_inner();
+            self.confirm(&mut client, decision).await
+        })
+        .await
+    }
+
+    async fn bounded<T>(&self, work: impl Future<Output = Result<T>>) -> Result<T> {
+        tokio::time::timeout(self.timeout, work)
             .await
-            .context(IoSnafu {
-                path: &self.socket_path,
+            .map_err(|_elapsed| {
+                IdentityStateSnafu {
+                    reason: "runtime admission endpoint exceeded its fail-closed timeout"
+                        .to_owned(),
+                }
+                .build()
+            })?
+    }
+
+    async fn connect(&self) -> Result<RuntimeAdmissionServiceClient<Channel>> {
+        let channel = connect_unix(&self.socket_path)
+            .await
+            .map_err(|source| crate::Error::Io {
+                path: self.socket_path.clone(),
+                source: std::io::Error::other(source),
+                location: snafu::Location::default(),
             })?;
+        Ok(RuntimeAdmissionServiceClient::new(channel)
+            .max_decoding_message_size(limit::RESPONSE_BYTES)
+            .max_encoding_message_size(*limit::REQUEST_BYTES.end()))
+    }
+
+    async fn confirm(
+        &self,
+        client: &mut RuntimeAdmissionServiceClient<Channel>,
+        decision: RuntimeAdmissionDecision,
+    ) -> Result<RuntimeAdmissionDecision> {
         ensure!(
-            !response.is_empty() && response.len() <= 4_096,
+            uuid::Uuid::from_slice(&decision.receipt_token).is_ok(),
             IdentityStateSnafu {
-                reason: "runtime admission response exceeds its byte limit",
+                reason: "runtime admission decision has no receipt token",
             }
         );
-        serde_json::from_slice(&response).context(JsonSnafu {
-            path: "runtime-admission-response",
+        let mut receipt = Request::new(RuntimeAdmissionReceipt {
+            token: decision.receipt_token,
+        });
+        receipt.set_timeout(self.timeout);
+        client.confirm(receipt).await.map_err(Self::grpc_error)?;
+        Ok(RuntimeAdmissionDecision {
+            receipt_token: Vec::new(),
+            ..decision
         })
+    }
+
+    fn grpc_error(status: Status) -> crate::Error {
+        IdentityStateSnafu {
+            reason: format!("runtime admission gRPC failed: {status}"),
+        }
+        .build()
     }
 }
 
@@ -479,38 +538,33 @@ impl ScheduledRuntimeBindingV1 {
 
     pub(crate) fn resolve(
         configured: &[WorkloadBindingConfig],
-        request: &RuntimeAdmissionRequestV1,
+        request: &RuntimeAdmissionPrepareRequest,
     ) -> Result<Self> {
-        ensure!(
-            request.operation == RuntimeAdmissionOperationV1::PrepareContainer,
-            IdentityStateSnafu {
-                reason: "scheduled runtime activation requires the second ordered OCI hook",
-            }
-        );
-        Self::resolve_request(configured, request, None)
+        Self::resolve_request(
+            configured,
+            &request.container_id,
+            KubernetesRuntimeIdentityV1::prepare(request)?,
+        )
     }
 
     pub(crate) fn resolve_stage(
         configured: &[WorkloadBindingConfig],
-        request: &RuntimeAdmissionRequestV1,
+        request: &RuntimeAdmissionStageRequest,
     ) -> Result<Self> {
-        ensure!(
-            request.operation == RuntimeAdmissionOperationV1::StageRuntimeFacts,
-            IdentityStateSnafu {
-                reason: "runtime fact staging requires the first ordered OCI hook",
-            }
-        );
-        Self::resolve_request(configured, request, None)
+        Self::resolve_request(
+            configured,
+            &request.container_id,
+            KubernetesRuntimeIdentityV1::stage(request)?,
+        )
     }
 
     fn resolve_request(
         configured: &[WorkloadBindingConfig],
-        request: &RuntimeAdmissionRequestV1,
-        cgroup_path: Option<&Path>,
+        container_id: &str,
+        identity: KubernetesRuntimeIdentityV1,
     ) -> Result<Self> {
-        let identity = request.kubernetes_identity()?;
         ensure!(
-            (32..=128).contains(&identity.sandbox_id.len())
+            !identity.sandbox_id.is_empty()
                 && identity
                     .sandbox_id
                     .bytes()
@@ -569,16 +623,16 @@ impl ScheduledRuntimeBindingV1 {
         );
         let mut resolved = current.clone();
         // Derive a distinct binding from signed authority and the runtime container identity.
-        resolved.binding_id = Self::runtime_binding_id(authority_binding_id, &request.container_id);
+        resolved.binding_id = Self::runtime_binding_id(authority_binding_id, container_id);
         ensure!(
             current_is_placeholder || resolved.binding_id != current.binding_id,
             IdentityStateSnafu {
                 reason: "runtime admission attempted to reuse one container lifetime",
             }
         );
-        resolved.container_id = request.container_id.clone();
+        resolved.container_id = container_id.to_owned();
         resolved.sandbox_id = identity.sandbox_id;
-        resolved.root_cgroup_path = cgroup_path.map(Path::to_path_buf);
+        resolved.root_cgroup_path = None;
         resolved.container_generation = if current_is_placeholder {
             1
         } else {
@@ -640,146 +694,25 @@ fn clean_cgroup_path(path: &Path) -> bool {
 }
 
 impl RuntimeAdmissionServer {
-    async fn handle_connection(
-        mut stream: UnixStream,
-        socket_path: &Path,
-        maximum_request_bytes: usize,
-        timeout: Duration,
-        requests: mpsc::Sender<RuntimeAdmissionEnvelope>,
-    ) -> Result<()> {
-        let deadline = Instant::now() + timeout;
-        let result = tokio::time::timeout_at(deadline, async {
-            // SO_PEERCRED prevents an unprivileged local process from invoking the gate.
-            let credentials = stream.peer_cred().context(IoSnafu { path: socket_path })?;
-            ensure!(
-                credentials.uid() == 0,
-                IdentityStateSnafu {
-                    reason: "runtime admission peer is not root",
-                }
-            );
-            let peer_pid = credentials
-                .pid()
-                .and_then(|pid| u32::try_from(pid).ok())
-                .filter(|pid| *pid > 0)
-                .context(IdentityStateSnafu {
-                    reason: "runtime admission peer has no valid process ID",
-                })?;
-            let maximum = u64::try_from(maximum_request_bytes).map_err(|_| {
-                IdentityStateSnafu {
-                    reason: "runtime admission request limit is invalid".to_owned(),
-                }
-                .build()
-            })?;
-            let mut bytes = Vec::new();
-            BufReader::new(&mut stream)
-                .take(maximum.saturating_add(1))
-                .read_until(b'\n', &mut bytes)
-                .await
-                .context(IoSnafu { path: socket_path })?;
-            ensure!(
-                bytes.last() == Some(&b'\n') && bytes.len() <= maximum_request_bytes,
-                IdentityStateSnafu {
-                    reason: "runtime admission request exceeds its byte limit",
-                }
-            );
-            bytes.pop();
-            let request: RuntimeAdmissionRequestV1 =
-                serde_json::from_slice(&bytes).context(JsonSnafu {
-                    path: "runtime-admission-request",
-                })?;
-            if request.is_health_probe() {
-                let bytes = serde_json::to_vec(&RuntimeAdmissionResponseV1 {
-                    allowed: true,
-                    reason_code: "ADMISSION_READY".to_owned(),
-                })
-                .context(JsonSnafu {
-                    path: "runtime-admission-response",
-                })?;
-                stream
-                    .write_all(&bytes)
-                    .await
-                    .context(IoSnafu { path: socket_path })?;
-                return Ok(());
-            }
-            let mut trailing = [0_u8; 1];
-            let dispatched = tokio::select! {
-                result = Self::dispatch(request, peer_pid, requests, deadline) => result?,
-                read = stream.read(&mut trailing) => {
-                    let count = read.context(IoSnafu { path: socket_path })?;
-                    let reason = if count == 0 {
-                        "runtime admission caller closed before its response"
-                    } else {
-                        "runtime admission caller sent data after its request"
-                    };
-                    return IdentityStateSnafu {
-                        reason: reason.to_owned(),
-                    }
-                    .fail();
-                }
-            };
-            let bytes = serde_json::to_vec(&dispatched.response).context(JsonSnafu {
-                path: "runtime-admission-response",
-            })?;
-            stream
-                .write_all(&bytes)
-                .await
-                .context(IoSnafu { path: socket_path })?;
-            // The node retains authority only after the response reaches the socket transport.
-            let _result = dispatched.delivered.send(());
-            Ok::<(), crate::Error>(())
-        })
-        .await;
-        let response = match result {
-            Ok(Ok(())) => return Ok(()),
-            Err(_elapsed) => {
-                erebor_telemetry::info!(
-                    "denied a runtime admission request",
-                    reason_code = %"ADMISSION_TIMEOUT"
-                );
-                RuntimeAdmissionResponseV1 {
-                    allowed: false,
-                    reason_code: "ADMISSION_TIMEOUT".to_owned(),
-                }
-            }
-            Ok(Err(error)) => {
-                erebor_telemetry::info!(
-                    "denied a runtime admission request",
-                    reason_code = %"ADMISSION_REJECTED",
-                    error = %error
-                );
-                RuntimeAdmissionResponseV1 {
-                    allowed: false,
-                    reason_code: "ADMISSION_REJECTED".to_owned(),
-                }
-            }
-        };
-        // Convert every timeout and internal error into an explicit denial response.
-        let bytes = serde_json::to_vec(&response).context(JsonSnafu {
-            path: "runtime-admission-response",
-        })?;
-        stream
-            .write_all(&bytes)
-            .await
-            .context(IoSnafu { path: socket_path })
-    }
-
-    async fn dispatch(
-        request: RuntimeAdmissionRequestV1,
+    async fn dispatch<F>(
+        make: F,
         peer_pid: u32,
-        requests: mpsc::Sender<RuntimeAdmissionEnvelope>,
+        requests: mpsc::Sender<RuntimeAdmissionCall>,
         deadline: Instant,
-    ) -> Result<RuntimeAdmissionDispatch> {
+    ) -> Result<RuntimeAdmissionDispatch>
+    where
+        F: Fn(AdmissionReply) -> RuntimeAdmissionCall,
+    {
         loop {
             let (response, receiver) = oneshot::channel();
             let (delivered, delivery) = oneshot::channel();
             requests
-                .send(RuntimeAdmissionEnvelope {
-                    request: request.clone(),
+                .send(make(AdmissionReply {
                     peer_pid,
                     deadline,
                     response,
                     delivered: delivery,
-                })
+                }))
                 .await
                 .map_err(|_closed| {
                     IdentityStateSnafu {
@@ -801,35 +734,195 @@ impl RuntimeAdmissionServer {
             }
             // A pending response stays inside the node protocol and can start the next attempt.
             let _result = delivered.send(());
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            tokio::time::sleep(POLICY_RETRY_DELAY).await;
         }
+    }
+}
+
+impl RuntimeAdmissionGrpc {
+    #[expect(clippy::result_large_err, reason = "tonic uses Status by value")]
+    fn peer<T>(request: &Request<T>) -> std::result::Result<u32, Status> {
+        let peer = request
+            .extensions()
+            .get::<UnixPeerIdentity>()
+            .copied()
+            .ok_or_else(|| Status::unauthenticated("runtime admission peer is unavailable"))?;
+        if peer.uid != 0 {
+            return Err(Status::permission_denied(
+                "runtime admission peer is not root",
+            ));
+        }
+        peer.pid
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+            .ok_or_else(|| Status::unauthenticated("runtime admission peer has no process ID"))
+    }
+
+    async fn decide<F>(
+        &self,
+        make: F,
+        peer_pid: u32,
+    ) -> std::result::Result<Response<RuntimeAdmissionDecision>, Status>
+    where
+        F: Fn(AdmissionReply) -> RuntimeAdmissionCall,
+    {
+        let deadline = Instant::now() + self.timeout;
+        let dispatched = tokio::time::timeout_at(
+            deadline,
+            RuntimeAdmissionServer::dispatch(make, peer_pid, self.requests.clone(), deadline),
+        )
+        .await
+        .map_err(|_elapsed| Status::deadline_exceeded("ADMISSION_TIMEOUT"))?
+        .map_err(|_error| Status::unavailable("runtime admission owner is unavailable"))?;
+        let token = uuid::Uuid::new_v4();
+        {
+            let mut pending = self.pending.lock().map_err(|_poison| {
+                Status::internal("runtime admission receipts are unavailable")
+            })?;
+            if pending.len() >= MAX_PENDING_ADMISSIONS {
+                return Err(Status::resource_exhausted(
+                    "runtime admission receipts are full",
+                ));
+            }
+            pending.insert(
+                token,
+                AdmissionPending {
+                    peer_pid,
+                    deadline,
+                    delivered: dispatched.delivered,
+                },
+            );
+        }
+        let pending = self.pending.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep_until(deadline).await;
+            if let Ok(mut pending) = pending.lock() {
+                pending.remove(&token);
+            }
+        });
+        Ok(Response::new(RuntimeAdmissionDecision {
+            allowed: dispatched.response.allowed,
+            reason_code: dispatched.response.reason_code,
+            receipt_token: token.as_bytes().to_vec(),
+        }))
+    }
+}
+
+#[tonic::async_trait]
+impl RuntimeAdmissionService for RuntimeAdmissionGrpc {
+    async fn health(
+        &self,
+        request: Request<RuntimeAdmissionHealthRequest>,
+    ) -> std::result::Result<Response<RuntimeAdmissionDecision>, Status> {
+        Self::peer(&request)?;
+        Ok(Response::new(RuntimeAdmissionDecision {
+            allowed: true,
+            reason_code: "ADMISSION_READY".to_owned(),
+            receipt_token: Vec::new(),
+        }))
+    }
+
+    async fn stage_runtime_facts(
+        &self,
+        request: Request<RuntimeAdmissionStageRequest>,
+    ) -> std::result::Result<Response<RuntimeAdmissionDecision>, Status> {
+        let peer_pid = Self::peer(&request)?;
+        let call = request.into_inner();
+        self.decide(
+            |reply| RuntimeAdmissionCall::Stage(call.clone(), reply),
+            peer_pid,
+        )
+        .await
+    }
+
+    async fn prepare_container(
+        &self,
+        request: Request<RuntimeAdmissionPrepareRequest>,
+    ) -> std::result::Result<Response<RuntimeAdmissionDecision>, Status> {
+        let peer_pid = Self::peer(&request)?;
+        let call = request.into_inner();
+        self.decide(
+            |reply| RuntimeAdmissionCall::Prepare(call.clone(), reply),
+            peer_pid,
+        )
+        .await
+    }
+
+    async fn prepare_declared_entries(
+        &self,
+        request: Request<RuntimeAdmissionEntriesRequest>,
+    ) -> std::result::Result<Response<RuntimeAdmissionDecision>, Status> {
+        let peer_pid = Self::peer(&request)?;
+        let call = request.into_inner();
+        self.decide(
+            |reply| RuntimeAdmissionCall::Entries(call.clone(), reply),
+            peer_pid,
+        )
+        .await
+    }
+
+    async fn confirm(
+        &self,
+        request: Request<RuntimeAdmissionReceipt>,
+    ) -> std::result::Result<Response<RuntimeAdmissionComplete>, Status> {
+        let peer_pid = Self::peer(&request)?;
+        let token = uuid::Uuid::from_slice(&request.into_inner().token)
+            .map_err(|_error| Status::invalid_argument("runtime admission receipt is invalid"))?;
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_poison| Status::internal("runtime admission receipts are unavailable"))?;
+        let receipt = pending
+            .get(&token)
+            .ok_or_else(|| Status::failed_precondition("runtime admission receipt is unknown"))?;
+        if receipt.peer_pid != peer_pid {
+            return Err(Status::permission_denied(
+                "runtime admission receipt peer changed",
+            ));
+        }
+        if Instant::now() >= receipt.deadline {
+            pending.remove(&token);
+            return Err(Status::deadline_exceeded("ADMISSION_TIMEOUT"));
+        }
+        let receipt = pending
+            .remove(&token)
+            .ok_or_else(|| Status::failed_precondition("runtime admission receipt is unknown"))?;
+        receipt
+            .delivered
+            .send(())
+            .map_err(|()| Status::cancelled("runtime admission owner closed"))?;
+        Ok(Response::new(RuntimeAdmissionComplete {}))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::path::PathBuf;
     use std::time::Duration;
 
+    use erebor_runtime_ipc::transport::UnixPeerIdentity;
+    use erebor_runtime_ipc::v1::{
+        runtime_admission_service_server::RuntimeAdmissionService, RuntimeAdmissionEntriesRequest,
+        RuntimeAdmissionPrepareRequest, RuntimeAdmissionReceipt, RuntimeAdmissionStageRequest,
+    };
+    use tonic::{Code, Request};
+
     use super::{
-        RuntimeAdmissionClient, RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1,
-        RuntimeAdmissionResponseV1, RuntimeAdmissionServer, ScheduledRuntimeBindingV1,
-        CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION,
-        POD_UID_ANNOTATION, POLICY_CONVERGENCE_PENDING, POLICY_SOURCE_REVISION_ANNOTATION,
-        PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
+        AdmissionPending, KubernetesRuntimeIdentityV1, RuntimeAdmissionCall,
+        RuntimeAdmissionClient, RuntimeAdmissionGrpc, RuntimeAdmissionResponseV1,
+        RuntimeAdmissionServer, ScheduledRuntimeBindingV1, CONTAINER_NAME_ANNOTATION,
+        IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
+        POLICY_CONVERGENCE_PENDING, POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION,
+        SANDBOX_ID_ANNOTATION,
     };
     use crate::{ContainerKindV1, WorkloadBindingConfig};
 
-    fn request() -> RuntimeAdmissionRequestV1 {
-        RuntimeAdmissionRequestV1 {
-            operation: RuntimeAdmissionOperationV1::PrepareContainer,
+    fn request() -> RuntimeAdmissionPrepareRequest {
+        RuntimeAdmissionPrepareRequest {
             container_id: "a".repeat(64),
-            initial_pid: Some(42),
-            cgroup_path: None,
-            oci_bundle: None,
-            oci_root_fd: None,
-            annotations: BTreeMap::from([
+            initial_pid: 42,
+            annotations: HashMap::from([
                 (POD_NAMESPACE_ANNOTATION.to_owned(), "tenant-a".to_owned()),
                 (POD_UID_ANNOTATION.to_owned(), "pod-a".to_owned()),
                 (CONTAINER_NAME_ANNOTATION.to_owned(), "worker".to_owned()),
@@ -844,6 +937,25 @@ mod tests {
                 ),
                 (POLICY_SOURCE_REVISION_ANNOTATION.to_owned(), "f".repeat(64)),
             ]),
+        }
+    }
+
+    fn stage() -> RuntimeAdmissionStageRequest {
+        let input = request();
+        RuntimeAdmissionStageRequest {
+            container_id: input.container_id,
+            annotations: input.annotations,
+            cgroup_path: b"/sys/fs/cgroup/kubepods/pod-a/container-a".to_vec(),
+        }
+    }
+
+    fn entries() -> RuntimeAdmissionEntriesRequest {
+        let input = request();
+        RuntimeAdmissionEntriesRequest {
+            container_id: input.container_id,
+            annotations: input.annotations,
+            oci_bundle: b"/run/oci/container-a".to_vec(),
+            oci_root_fd: 3,
         }
     }
 
@@ -882,60 +994,154 @@ mod tests {
 
     #[test]
     fn exact_kubernetes_identity_is_canonical() -> crate::Result<()> {
-        let identity = request().kubernetes_identity()?;
+        let identity = KubernetesRuntimeIdentityV1::prepare(&request())?;
         assert_eq!(identity.pod_uid, "pod-a");
         assert_eq!(identity.image_digest, format!("sha256:{}", "b".repeat(64)));
         Ok(())
     }
 
     #[test]
+    fn oci_id_and_extra_annotations_need_no_digest_shape() -> crate::Result<()> {
+        let mut input = request();
+        input.container_id = "oci-container1".to_owned();
+        input
+            .annotations
+            .insert(SANDBOX_ID_ANNOTATION.to_owned(), "sandbox-a".to_owned());
+        input
+            .annotations
+            .insert("example.org/optional".to_owned(), String::new());
+        let identity = KubernetesRuntimeIdentityV1::prepare(&input)?;
+        assert_eq!(identity.sandbox_id, "sandbox-a");
+        let resolved = ScheduledRuntimeBindingV1::resolve(&[scheduled_binding()], &input)?;
+        assert_eq!(resolved.resolved.container_id, input.container_id);
+        Ok(())
+    }
+
+    #[test]
+    fn grpc_admission_requires_a_root_process() {
+        let mut request = Request::new(());
+        assert_eq!(
+            RuntimeAdmissionGrpc::peer(&request)
+                .err()
+                .map(|error| error.code()),
+            Some(Code::Unauthenticated)
+        );
+        request.extensions_mut().insert(UnixPeerIdentity {
+            pid: Some(42),
+            uid: 1,
+            gid: 1,
+        });
+        assert_eq!(
+            RuntimeAdmissionGrpc::peer(&request)
+                .err()
+                .map(|error| error.code()),
+            Some(Code::PermissionDenied)
+        );
+        request.extensions_mut().insert(UnixPeerIdentity {
+            pid: None,
+            uid: 0,
+            gid: 0,
+        });
+        assert_eq!(
+            RuntimeAdmissionGrpc::peer(&request)
+                .err()
+                .map(|error| error.code()),
+            Some(Code::Unauthenticated)
+        );
+    }
+
+    #[tokio::test]
+    async fn admission_receipt_is_peer_bound_and_one_use() {
+        let token = uuid::Uuid::new_v4();
+        let (delivered, confirmed) = tokio::sync::oneshot::channel();
+        let (requests, _receiver) = tokio::sync::mpsc::channel(1);
+        let server = RuntimeAdmissionGrpc {
+            timeout: Duration::from_secs(1),
+            requests,
+            pending: std::sync::Arc::new(std::sync::Mutex::new(HashMap::from([(
+                token,
+                AdmissionPending {
+                    peer_pid: 42,
+                    deadline: tokio::time::Instant::now() + Duration::from_secs(1),
+                    delivered,
+                },
+            )]))),
+        };
+        let receipt = |pid| {
+            let mut request = Request::new(RuntimeAdmissionReceipt {
+                token: token.as_bytes().to_vec(),
+            });
+            request.extensions_mut().insert(UnixPeerIdentity {
+                pid: Some(pid),
+                uid: 0,
+                gid: 0,
+            });
+            request
+        };
+        assert_eq!(
+            server
+                .confirm(receipt(43))
+                .await
+                .err()
+                .map(|error| error.code()),
+            Some(Code::PermissionDenied)
+        );
+        assert!(server.confirm(receipt(42)).await.is_ok());
+        assert!(confirmed.await.is_ok());
+        assert_eq!(
+            server
+                .confirm(receipt(42))
+                .await
+                .err()
+                .map(|error| error.code()),
+            Some(Code::FailedPrecondition)
+        );
+    }
+
+    #[test]
     fn first_hook_can_stage_facts_but_cannot_request_runtime_authority() -> crate::Result<()> {
-        let mut stage = request();
-        stage.operation = RuntimeAdmissionOperationV1::StageRuntimeFacts;
-        stage.initial_pid = None;
-        stage.cgroup_path = Some(PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a"));
+        let stage = stage();
         let scheduled = scheduled_binding();
         let resolved = ScheduledRuntimeBindingV1::resolve_stage(&[scheduled], &stage)?;
         assert_eq!(resolved.resolved.root_cgroup_path, None);
-        assert!(ScheduledRuntimeBindingV1::resolve(&[resolved.resolved], &stage).is_err());
-
-        stage.initial_pid = Some(42);
-        assert!(stage.kubernetes_identity().is_err());
+        assert_eq!(
+            stage.cgroup_path,
+            b"/sys/fs/cgroup/kubepods/pod-a/container-a"
+        );
         Ok(())
     }
 
     #[test]
     fn post_root_entry_preparation_has_no_initial_process_claim() -> crate::Result<()> {
-        let mut entries = request();
-        entries.operation = RuntimeAdmissionOperationV1::PrepareDeclaredEntries;
-        entries.initial_pid = None;
-        entries.oci_bundle = Some(PathBuf::from("/run/oci/container-a"));
-        entries.oci_root_fd = Some(3);
-        entries.kubernetes_identity()?;
-
-        entries.initial_pid = Some(42);
-        assert!(entries.kubernetes_identity().is_err());
+        let mut input = entries();
+        KubernetesRuntimeIdentityV1::entries(&input)?;
+        input.oci_root_fd = 0;
+        assert!(KubernetesRuntimeIdentityV1::entries(&input).is_err());
         Ok(())
     }
 
     #[test]
     fn malformed_or_unpinned_requests_fail_closed() {
-        let mut invalid_path = request();
-        invalid_path.cgroup_path = Some(PathBuf::from("/tmp/not-a-cgroup"));
-        assert!(invalid_path.kubernetes_identity().is_err());
+        let mut invalid_path = stage();
+        invalid_path.cgroup_path = b"/tmp/not-a-cgroup".to_vec();
+        assert!(KubernetesRuntimeIdentityV1::stage(&invalid_path).is_err());
+
+        let mut invalid_pid = request();
+        invalid_pid.initial_pid = 0;
+        assert!(KubernetesRuntimeIdentityV1::prepare(&invalid_pid).is_err());
 
         let mut unpinned = request();
         unpinned.annotations.insert(
             IMAGE_NAME_ANNOTATION.to_owned(),
             "repo/worker:latest".to_owned(),
         );
-        assert!(unpinned.kubernetes_identity().is_err());
+        assert!(KubernetesRuntimeIdentityV1::prepare(&unpinned).is_err());
 
         let mut forged_profile = request();
         forged_profile
             .annotations
             .insert(PROFILE_ID_ANNOTATION.to_owned(), "profile-a".to_owned());
-        assert!(forged_profile.kubernetes_identity().is_err());
+        assert!(KubernetesRuntimeIdentityV1::prepare(&forged_profile).is_err());
     }
 
     #[test]
@@ -1002,7 +1208,15 @@ mod tests {
         })?;
         let missing = directory.path().join("missing.sock");
         let client = RuntimeAdmissionClient::new(missing, Duration::from_millis(100))?;
-        assert!(client.submit(&request()).await.is_err());
+        let input = request();
+        assert!(client
+            .prepare_container(RuntimeAdmissionPrepareRequest {
+                container_id: input.container_id,
+                annotations: input.annotations.into_iter().collect(),
+                initial_pid: input.initial_pid,
+            })
+            .await
+            .is_err());
 
         assert!(
             tokio::time::timeout(Duration::from_millis(20), std::future::pending::<()>(),)
@@ -1017,7 +1231,7 @@ mod tests {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
         let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
         let task = tokio::spawn(RuntimeAdmissionServer::dispatch(
-            request(),
+            |reply| RuntimeAdmissionCall::Prepare(request(), reply),
             std::process::id(),
             sender,
             deadline,
@@ -1030,6 +1244,7 @@ mod tests {
                 location: snafu::Location::default(),
             })?;
         first
+            .into_reply()
             .response
             .send(RuntimeAdmissionResponseV1 {
                 allowed: false,
@@ -1047,6 +1262,7 @@ mod tests {
                 location: snafu::Location::default(),
             })?;
         second
+            .into_reply()
             .response
             .send(RuntimeAdmissionResponseV1 {
                 allowed: true,
@@ -1069,11 +1285,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn expired_envelope_rejects_a_late_allow_delivery() -> crate::Result<()> {
+    async fn expired_call_rejects_late_allow() -> crate::Result<()> {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         let deadline = tokio::time::Instant::now() + Duration::from_millis(20);
         let task = tokio::spawn(RuntimeAdmissionServer::dispatch(
-            request(),
+            |reply| RuntimeAdmissionCall::Prepare(request(), reply),
             std::process::id(),
             sender,
             deadline,

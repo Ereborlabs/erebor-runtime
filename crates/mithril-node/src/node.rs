@@ -1,5 +1,6 @@
 use erebor_interceptor::{EffectObservationReader, KernelHost, KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::Id128V1;
+use erebor_runtime_ipc::v1::RuntimeAdmissionPrepareRequest;
 use mithril_control::{
     AdministrativeExecArmResult, AdministrativeExecResolution, AdministrativeFileObject,
     CapabilityRecord, NodeRegistration, PolicyActivationAcknowledgement, PolicyBundleV1,
@@ -12,7 +13,8 @@ use std::cmp;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::os::fd::AsRawFd as _;
-use std::path::Component;
+use std::os::unix::ffi::OsStringExt as _;
+use std::path::{Component, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,6 +27,7 @@ use crate::epoch::NodeEpochs;
 use crate::error::{
     EvidenceStateSnafu, IdentityStateSnafu, InterceptorSnafu, JsonSnafu, LocalTaskSnafu,
 };
+use crate::runtime_admission::{KubernetesRuntimeIdentityV1, RuntimeAdmissionCall};
 use crate::{
     AdministrativeControlRequest, CoverageGapReasonV1, NativeSecurityStateOwner, NodeConfig,
     NodeControlConnector, NodeControlMessage, NodeDecommissionAcceptanceV1, NodeDecommissionOwner,
@@ -1877,36 +1880,24 @@ impl NodeChassis {
         Ok(())
     }
 
-    async fn answer_runtime_admission(
-        &mut self,
-        envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
-    ) -> Result<()> {
-        if envelope.ensure_active().is_err() {
+    async fn answer_runtime_admission(&mut self, call: RuntimeAdmissionCall) -> Result<()> {
+        if call.ensure_active().is_err() {
             return Ok(());
         }
-        match envelope.request.operation {
-            crate::runtime_admission::RuntimeAdmissionOperationV1::Health => {
-                unreachable!("runtime admission health requests do not enter the node queue")
-            }
-            crate::runtime_admission::RuntimeAdmissionOperationV1::StageRuntimeFacts => {
-                self.answer_runtime_stage(envelope).await
-            }
-            crate::runtime_admission::RuntimeAdmissionOperationV1::PrepareContainer => {
-                self.answer_runtime_preparation(envelope).await
-            }
-            crate::runtime_admission::RuntimeAdmissionOperationV1::PrepareDeclaredEntries => {
-                self.answer_runtime_entry_preparation(envelope).await
-            }
+        match &call {
+            RuntimeAdmissionCall::Stage(..) => self.answer_runtime_stage(call).await,
+            RuntimeAdmissionCall::Prepare(..) => self.answer_runtime_preparation(call).await,
+            RuntimeAdmissionCall::Entries(..) => self.answer_runtime_entry_preparation(call).await,
         }
     }
 
-    async fn answer_runtime_stage(
-        &mut self,
-        envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
-    ) -> Result<()> {
-        if let Err(error) = envelope.request.kubernetes_identity() {
-            let request = envelope.request.clone();
-            let delivered = envelope
+    async fn answer_runtime_stage(&mut self, call: RuntimeAdmissionCall) -> Result<()> {
+        let RuntimeAdmissionCall::Stage(request, _) = &call else {
+            unreachable!("runtime stage handler received another request")
+        };
+        let request = request.clone();
+        if let Err(error) = KubernetesRuntimeIdentityV1::stage(&request) {
+            let delivered = call
                 .deliver(crate::RuntimeAdmissionResponseV1 {
                     allowed: false,
                     reason_code: "RUNTIME_ADMISSION_REJECTED".to_owned(),
@@ -1922,15 +1913,14 @@ impl NodeChassis {
             }
             return Ok(());
         }
-        let container_id = envelope.request.container_id.clone();
+        let container_id = request.container_id.clone();
         // The first ordered hook stages facts only. The second hook owns CRI
         // Created-state proof and exact prepared-binding publication.
         if let Err(error) = self
             .bindings
-            .stage_runtime_admission(&self.config.workload_bindings, &envelope.request)
+            .stage_runtime_admission(&self.config.workload_bindings, &request)
         {
-            let request = envelope.request.clone();
-            let delivered = envelope
+            let delivered = call
                 .deliver(crate::RuntimeAdmissionResponseV1 {
                     allowed: false,
                     reason_code: crate::runtime_admission::POLICY_CONVERGENCE_PENDING.to_owned(),
@@ -1946,8 +1936,7 @@ impl NodeChassis {
             }
             return Ok(());
         }
-        let request = envelope.request.clone();
-        if envelope
+        if call
             .deliver(crate::RuntimeAdmissionResponseV1 {
                 allowed: true,
                 reason_code: "RUNTIME_FACTS_STAGING".to_owned(),
@@ -1965,29 +1954,29 @@ impl NodeChassis {
         Ok(())
     }
 
-    async fn answer_runtime_preparation(
-        &mut self,
-        envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
-    ) -> Result<()> {
+    async fn answer_runtime_preparation(&mut self, call: RuntimeAdmissionCall) -> Result<()> {
+        let RuntimeAdmissionCall::Prepare(request, _) = &call else {
+            unreachable!("runtime preparation handler received another request")
+        };
+        let request = request.clone();
         // Only a valid first-use request can wait; malformed and replayed requests fail immediately.
-        let malformed = envelope.request.kubernetes_identity().is_err();
+        let malformed = KubernetesRuntimeIdentityV1::prepare(&request).is_err();
         let reused = self.config.workload_bindings.iter().any(|binding| {
             binding.scheduled_binding_authority_id.is_some()
-                && binding.container_id == envelope.request.container_id
+                && binding.container_id == request.container_id
         });
         let ready = {
             let readiness = *self.readiness.borrow();
             readiness.admits_protected_runtime_start(self.policy.is_some())
                 && crate::runtime_admission::ScheduledRuntimeBindingV1::resolve(
                     &self.config.workload_bindings,
-                    &envelope.request,
+                    &request,
                 )
                 .is_ok()
         };
         // Only a canonical, unused identity can wait for policy convergence.
         if !malformed && !reused && !ready {
-            let request = envelope.request.clone();
-            let delivered = envelope
+            let delivered = call
                 .deliver(crate::RuntimeAdmissionResponseV1 {
                     allowed: false,
                     reason_code: crate::runtime_admission::POLICY_CONVERGENCE_PENDING.to_owned(),
@@ -2002,10 +1991,9 @@ impl NodeChassis {
             }
             return Ok(());
         }
-        match self.prepare_runtime_start(&envelope).await {
+        match self.prepare_runtime_start(&call, &request).await {
             Ok(commit) => {
-                let request = envelope.request.clone();
-                let delivered = envelope
+                let delivered = call
                     .deliver(crate::RuntimeAdmissionResponseV1 {
                         allowed: true,
                         reason_code: "ACTIVE_POLICY_AND_BINDING_VERIFIED".to_owned(),
@@ -2016,7 +2004,7 @@ impl NodeChassis {
                 } else {
                     // Log allow only after the hook receives it and no rollback is required.
                     log_runtime_admission_decision(
-                        &request,
+                        &request.container_id,
                         true,
                         "ACTIVE_POLICY_AND_BINDING_VERIFIED",
                         None,
@@ -2025,8 +2013,7 @@ impl NodeChassis {
             }
             Err(error) if error.fatal => return Err(error.source),
             Err(error) => {
-                let request = envelope.request.clone();
-                let delivered = envelope
+                let delivered = call
                     .deliver(crate::RuntimeAdmissionResponseV1 {
                         allowed: false,
                         reason_code: "RUNTIME_ADMISSION_REJECTED".to_owned(),
@@ -2034,7 +2021,7 @@ impl NodeChassis {
                     .await;
                 if delivered.is_ok() {
                     log_runtime_admission_decision(
-                        &request,
+                        &request.container_id,
                         false,
                         "RUNTIME_ADMISSION_REJECTED",
                         Some(&error.source),
@@ -2045,19 +2032,17 @@ impl NodeChassis {
         Ok(())
     }
 
-    async fn answer_runtime_entry_preparation(
-        &mut self,
-        envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
-    ) -> Result<()> {
-        let request = envelope.request.clone();
+    async fn answer_runtime_entry_preparation(&mut self, call: RuntimeAdmissionCall) -> Result<()> {
+        let RuntimeAdmissionCall::Entries(request, _) = &call else {
+            unreachable!("runtime entry handler received another request")
+        };
+        let request = request.clone();
+        let bundle = PathBuf::from(std::ffi::OsString::from_vec(request.oci_bundle.clone()));
         let prepared = (|| {
-            envelope.ensure_active()?;
+            call.ensure_active()?;
             let (binding_id, held_initial_pid) = self
                 .bindings
                 .verify_runtime_entry_preparation(&self.config.workload_bindings, &request)?;
-            let bundle = request.oci_bundle.as_deref().context(IdentityStateSnafu {
-                reason: "declared-entry preparation has no OCI bundle",
-            })?;
             let policy = self.policy.as_mut().context(IdentityStateSnafu {
                 reason: "declared-entry preparation has no active policy owner",
             })?;
@@ -2073,35 +2058,34 @@ impl NodeChassis {
                 &self.bindings,
                 &binding_id,
                 held_initial_pid,
-                envelope.peer_pid(),
-                request.oci_root_fd.context(IdentityStateSnafu {
-                    reason: "declared-entry preparation has no OCI root handle",
-                })?,
-                bundle,
+                call.peer_pid(),
+                request.oci_root_fd,
+                &bundle,
             )?;
             self.bindings
                 .verify_runtime_entry_staging(host, &binding_id)?;
-            self.bindings.mark_runtime_entries_staged(
-                &request.container_id,
-                request.oci_bundle.as_deref().context(IdentityStateSnafu {
-                    reason: "declared-entry staging has no OCI bundle",
-                })?,
-            )?;
-            envelope.ensure_active()?;
+            self.bindings
+                .mark_runtime_entries_staged(&request.container_id, &bundle)?;
+            call.ensure_active()?;
             Ok(())
         })();
         let (allowed, reason_code) = match &prepared {
             Ok(()) => (true, "DECLARED_ENTRY_CANDIDATE_STAGED"),
             Err(_error) => (false, "RUNTIME_ADMISSION_REJECTED"),
         };
-        let delivered = envelope
+        let delivered = call
             .deliver(crate::RuntimeAdmissionResponseV1 {
                 allowed,
                 reason_code: reason_code.to_owned(),
             })
             .await;
         if delivered.is_ok() {
-            log_runtime_admission_decision(&request, allowed, reason_code, prepared.as_ref().err());
+            log_runtime_admission_decision(
+                &request.container_id,
+                allowed,
+                reason_code,
+                prepared.as_ref().err(),
+            );
         }
         Ok(())
     }
@@ -2125,7 +2109,6 @@ impl NodeChassis {
                     && (!initial_exec
                         || executable_path.as_ref().is_some_and(|path| {
                             path.is_absolute()
-                                && path.as_os_str().as_encoded_bytes().len() <= 4_096
                                 && path.components().all(|component| {
                                     matches!(component, Component::RootDir | Component::Normal(_))
                                 })
@@ -2242,10 +2225,16 @@ impl NodeChassis {
 
     async fn prepare_runtime_start(
         &mut self,
-        envelope: &crate::runtime_admission::RuntimeAdmissionEnvelope,
+        call: &RuntimeAdmissionCall,
+        request: &RuntimeAdmissionPrepareRequest,
     ) -> std::result::Result<CommittedRuntimePreparationV1, RuntimeAdmissionFailureV1> {
-        envelope.ensure_active()?;
-        let request = &envelope.request;
+        call.ensure_active()?;
+        snafu::ensure!(
+            request.initial_pid > 0,
+            IdentityStateSnafu {
+                reason: "OCI runtime admission has no initial process",
+            }
+        );
         let readiness = *self.readiness.borrow();
         snafu::ensure!(
             readiness.admits_protected_runtime_start(self.policy.is_some()),
@@ -2260,7 +2249,7 @@ impl NodeChassis {
         let mut dynamic = self.config.clone();
         dynamic.workload_bindings[scheduled.binding_index] = scheduled.resolved.clone();
         dynamic.validate()?;
-        envelope.ensure_active()?;
+        call.ensure_active()?;
         let policy_authority_present =
             self.policy.is_some() || self.policy_delivery.inventory_retirement().is_some();
         let Some(host) = self.host.as_mut() else {
@@ -2271,18 +2260,18 @@ impl NodeChassis {
             .into());
         };
         // Cancellation must be visible before any existing or new kernel authority changes.
-        envelope.ensure_active()?;
+        call.ensure_active()?;
         if let Some(previous) = scheduled.previous_binding_id.as_deref() {
             // Retire a prior container lifetime before this replacement gains authority.
             if let Err(error) = self.bindings.retire_binding_id(host, previous) {
                 return Err(RuntimeAdmissionFailureV1::fatal(error));
             }
         }
-        envelope.ensure_active()?;
+        call.ensure_active()?;
         if let Err(error) = self.bindings.publish_held_activated_root(
             host,
             &scheduled.resolved,
-            request.held_initial_pid()?,
+            request.initial_pid,
             &observation,
         ) {
             return Err(RuntimeAdmissionFailureV1::fatal(error));
@@ -2296,7 +2285,7 @@ impl NodeChassis {
                 self.bindings.verify_prepared_initial_root(
                     host,
                     &scheduled.resolved.binding_id,
-                    request.held_initial_pid()?,
+                    request.initial_pid,
                 )
             });
         if let Err(error) = identity_readback {
@@ -2315,7 +2304,7 @@ impl NodeChassis {
                 )),
             };
         }
-        if let Err(error) = envelope.ensure_active() {
+        if let Err(error) = call.ensure_active() {
             let rollback = self
                 .bindings
                 .retire_binding_id(host, &scheduled.resolved.binding_id);
@@ -2361,7 +2350,7 @@ impl NodeChassis {
             previous_config,
             durable_rollback,
         };
-        if let Err(error) = envelope.ensure_active() {
+        if let Err(error) = call.ensure_active() {
             return match self.rollback_runtime_preparation(commit) {
                 Ok(()) => Err(error.into()),
                 Err(rollback) => Err(RuntimeAdmissionFailureV1::fatal(
@@ -3166,7 +3155,7 @@ fn close_kernel_claims(
 }
 
 fn log_runtime_admission_decision(
-    request: &crate::RuntimeAdmissionRequestV1,
+    container_id: &str,
     allowed: bool,
     reason_code: &'static str,
     error: Option<&crate::Error>,
@@ -3174,20 +3163,20 @@ fn log_runtime_admission_decision(
     if let Some(error) = error {
         erebor_telemetry::info!(
             "denied a protected runtime start",
-            container_id = %request.container_id,
+            container_id = %container_id,
             reason_code = %reason_code,
             error = %error
         );
     } else if allowed {
         erebor_telemetry::info!(
             "allowed a protected runtime start",
-            container_id = %request.container_id,
+            container_id = %container_id,
             reason_code = %reason_code
         );
     } else {
         erebor_telemetry::info!(
             "denied a protected runtime start",
-            container_id = %request.container_id,
+            container_id = %container_id,
             reason_code = %reason_code
         );
     }
@@ -3334,7 +3323,7 @@ fn runtime_seccomp_exit(
 
 async fn next_runtime_admission(
     receiver: &mut Option<crate::runtime_admission::RuntimeAdmissionReceiver>,
-) -> crate::runtime_admission::RuntimeAdmissionEnvelope {
+) -> RuntimeAdmissionCall {
     if let Some(receiver) = receiver {
         if let Some(request) = receiver.receive().await {
             return request;
@@ -3525,7 +3514,7 @@ pub(crate) fn workload_binding_generation_digest(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
@@ -3536,6 +3525,7 @@ mod tests {
         NodeReadinessV1, PolicyControlRpcV1,
     };
     use erebor_interceptor_abi::{EffectObservationHealthV1, EffectObservationV1, Id128V1};
+    use erebor_runtime_ipc::v1::RuntimeAdmissionPrepareRequest;
     use mithril_control::{CapabilityRecord, NodeRegistration};
     use tokio::sync::watch;
     use zerocopy::IntoBytes as _;
@@ -3543,10 +3533,9 @@ mod tests {
     use crate::{
         EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, InterceptorConfig,
         NativeSecurityStateOwner, NodeConfig, NodeControlConfig, NodeControlConnector,
-        ObservationCanonicalizer, RuntimeAdmissionRequestV1, TrustCache, WorkloadBindingOwner,
-        CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION,
-        POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION,
-        SANDBOX_ID_ANNOTATION,
+        ObservationCanonicalizer, TrustCache, WorkloadBindingOwner, CONTAINER_NAME_ANNOTATION,
+        IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
+        POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
     };
 
     #[test]
@@ -4118,15 +4107,11 @@ mod tests {
         }
     }
 
-    fn admission_test_request() -> RuntimeAdmissionRequestV1 {
-        RuntimeAdmissionRequestV1 {
-            operation: crate::RuntimeAdmissionOperationV1::PrepareContainer,
+    fn admission_test_request() -> RuntimeAdmissionPrepareRequest {
+        RuntimeAdmissionPrepareRequest {
             container_id: "a".repeat(64),
-            initial_pid: Some(1),
-            cgroup_path: None,
-            oci_bundle: None,
-            oci_root_fd: None,
-            annotations: BTreeMap::from([
+            initial_pid: 1,
+            annotations: HashMap::from([
                 (POD_NAMESPACE_ANNOTATION.to_owned(), "default".to_owned()),
                 (POD_UID_ANNOTATION.to_owned(), "pod-a".to_owned()),
                 (CONTAINER_NAME_ANNOTATION.to_owned(), "worker".to_owned()),
