@@ -229,7 +229,12 @@ source status, exact prior bytes, absent result, and unchanged consumed progress
 after failure. After successful retry, raw expiry preserves the result witness.
 The four cases passed in the focused run. This test does not prove a torn write,
 ENOSPC during commit, hardware power loss, or Control's mTLS error response.
-The full workspace gate for this test addition is pending.
+All nine enabled data-store tests passed. Three helper or environment-specific
+tests remain ignored. The full workspace gate passed for `c67d6588` with
+`CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh`: formatting,
+workspace checks, strict Clippy, and workspace tests. The data crate passed
+45 tests with two ignored; Control passed 196 with two ignored; Node passed
+256 with one ignored. No Rust source changed after this gate.
 
 The full workspace gate passed for `cb8417f8`, including all twelve cases in
 `analysis_store_commit_crashes` and `analysis_store_input_crashes`. The data
