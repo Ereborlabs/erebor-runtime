@@ -150,7 +150,7 @@ These tests include tenant and corrupt-body checks in
 `analysis_store_result_progress`.
 `bash .github/scripts/verify-rust-ci.sh` passed for commit `658c16c3`:
 workspace formatting, compilation, strict Clippy, and workspace tests.
-This result does not cover subsequent uncommitted startup changes.
+This result does not cover subsequent startup or recovery-validation changes.
 Tests use temporary databases; no retention call ran on an existing deployment.
 Default startup now opens `evidence_directory/analysis` and shares its data
 handle with intake. Policy/trust/rollout persistence stays in ControlStore.
@@ -159,16 +159,23 @@ creation. Data recovery failure leaves evidence and coverage unavailable;
 the policy service keeps its durable owner. There is no old-writer fallback.
 The default process no longer starts the superseded discovery projection or
 accepts its configuration. Its replacement belongs to Phase 7.4.
-The `data-store-startup` command passed 15 checks. Its result is
-`/tmp/araphor-startup.Sxc096/startup/result.json`. The case checks fresh intake,
+The `data-store-startup` command passed 16 checks. Its result is
+`/tmp/araphor-integrity.K3NdoS/startup/result.json`. The case checks fresh intake,
 restart, exact frames, policy persistence, old-receipt refusal, and policy RPCs
-under unsupported schema, missing table, and corrupt file failures. All three
+under invalid receipt, unsupported schema, missing table, and corrupt file failures. All four
 failures stop evidence and coverage ACK while Node retains its pending input.
 The `data-store-recovery` command passed its 19 checks again at
-`/tmp/araphor-startup.Sxc096/recovery/result.json`.
-`analysis_startup_is_independent` passed. The final workspace gate is running.
-Restart rejects missing tables and columns without creating them. Complete
-stored-reference validation, bounded admission, retention scheduling, capacity
+`/tmp/araphor-integrity.K3NdoS/recovery/result.json`.
+`analysis_startup_is_independent` passed. The workspace run for `5c86f3d`
+failed in the old SQLite 50,000-atom replay test with `OperationInterrupted`
+while decoding atom samples. The current recovery-validation gate is running.
+Restart rejects missing tables and columns without creating them. It also
+checks source bindings, receipts, retained/expired range counts, coverage,
+frame/result/context digests, processor progress, tenant-scoped references,
+pending bounds, and relation revisions. Restore uses the same checks.
+The data-owner suite passed 21 tests with two ignored, including 16 corruption
+cases in `analysis_rejects_broken_state`.
+Bounded admission, retention scheduling, capacity
 and processor health, Control context projection, crash injection, removal of
 the remaining old library writer, and physical disk reuse remain open.
 Production enablement is not qualified.
