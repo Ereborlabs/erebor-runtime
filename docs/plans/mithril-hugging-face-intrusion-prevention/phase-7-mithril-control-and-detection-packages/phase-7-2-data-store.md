@@ -511,9 +511,10 @@ The explicit ignored SQL-worker isolation test also passed on this source.
 No physical storage/partition qualification ran in this verification batch.
 
 The paired `data_capacity_recovery` and `data_full_disk` checks now pass.
-The final harness log is `/tmp/araphor-data-qualification.MtrjRy/disk-full-final.log`.
-It covers the test additions above `37324d30` and records the dirty paths and
-test-binary digest. The platform is Linux 6.8.0-139-generic, x86_64. A private
+The committed-source harness log is
+`/tmp/araphor-data-qualification.MtrjRy/disk-full-committed.log`.
+It covers clean commit `db51fcea` and records the test-binary digest.
+The platform is Linux 6.8.0-139-generic, x86_64. A private
 1-GiB tmpfs reached zero free bytes with 1,070,059,520 allocated padding bytes.
 The exact evidence stream received ResourceExhausted. The prior receipt and
 revision remained unchanged; the pending Node batch survived. Accepted data
@@ -521,8 +522,10 @@ remained readable and a policy inventory RPC succeeded. After padding release,
 a new stream obtained cursor 2 without a Control restart. Duplicate replay
 did not add a commit. Reopen retained two records at commit revision 3.
 The seven enabled data-store tests passed; the explicit full-filesystem test
-also passed. Formatting, workspace checks, strict Clippy, and all 41 enabled
-data-crate tests passed after the final test edit. The full workspace run is
-still active. Full-disk admission is qualified for this isolated fixture, not
+also passed. The full workspace gate passed for `db51fcea`: formatting,
+workspace checks, strict Clippy, and workspace tests. The data crate passed
+41 tests with two ignored; Control passed 196 with two ignored; Mithril e2e
+passed 114 with 248 ignored; Node passed 255 with one ignored.
+Full-disk admission is qualified for this isolated fixture, not
 for native failure during commit, hardware power loss, reserve sizing, or the
 Kubernetes storage/partition case. The complete phase remains **Not done**.
