@@ -84,6 +84,27 @@ impl StorageLimitsV1 {
         }
         Ok(())
     }
+
+    pub(super) fn check_backup(&self, usage: StorageUsageV1, bytes: u64) -> Result<()> {
+        self.check_copy(usage.available_bytes, bytes)?;
+        let reserve = bytes
+            .checked_add(bytes / 4)
+            .and_then(|size| size.checked_add(4096));
+        let projected = reserve.and_then(|reserve| {
+            Some(StorageUsageV1 {
+                file_bytes: usage.file_bytes.checked_add(reserve)?,
+                available_bytes: usage.available_bytes.checked_sub(reserve)?,
+                ..usage
+            })
+        });
+        let projected = projected.ok_or_else(|| {
+            StorageCapacitySnafu {
+                resource: "backup files",
+            }
+            .build()
+        })?;
+        self.check(projected, false)
+    }
 }
 
 #[cfg(test)]
@@ -110,6 +131,43 @@ mod tests {
         }
         assert!(limits.check_copy(u64::MAX, u64::MAX).is_err());
         assert!(limits.check_copy(u64::MAX, u64::MAX / 5 * 4).is_err());
+        let bytes = 1024 * 1024;
+        let reserve = bytes + bytes / 4 + 4096;
+        let usage = StorageUsageV1 {
+            file_bytes: limits.disk_max_bytes - WRITE_RESERVE - reserve,
+            allocated_bytes: 0,
+            available_bytes: limits.maintenance_bytes() + limits.disk_max_bytes / 4 + reserve,
+        };
+        limits.check_backup(usage, bytes)?;
+        assert!(limits
+            .check_backup(
+                StorageUsageV1 {
+                    file_bytes: usage.file_bytes + 1,
+                    ..usage
+                },
+                bytes
+            )
+            .is_err());
+        assert!(limits
+            .check_backup(
+                StorageUsageV1 {
+                    available_bytes: usage.available_bytes - 1,
+                    ..usage
+                },
+                bytes
+            )
+            .is_err());
+        assert!(limits
+            .check_backup(
+                StorageUsageV1 {
+                    file_bytes: u64::MAX,
+                    available_bytes: u64::MAX,
+                    ..usage
+                },
+                bytes
+            )
+            .is_err());
+        assert!(limits.check_backup(usage, u64::MAX).is_err());
         Ok(())
     }
 
@@ -264,12 +322,15 @@ impl StorageUsageV1 {
 
 impl AnalysisStore {
     pub fn storage_usage(&self) -> Result<StorageUsageV1> {
+        self.storage_with_entries(0)
+    }
+
+    pub(super) fn storage_with_entries(&self, mut entries: usize) -> Result<StorageUsageV1> {
         let mut usage = StorageUsageV1 {
             available_bytes: StorageUsageV1::free_bytes(&self.root)?,
             ..Default::default()
         };
         let mut pending = vec![self.root.clone()];
-        let mut entries = 0;
         while let Some(directory) = pending.pop() {
             for entry in fs::read_dir(&directory).context(IoSnafu { path: &directory })? {
                 let entry = entry.context(IoSnafu { path: &directory })?;

@@ -104,6 +104,17 @@ Store recovery fails
    512-MiB tenant witness limit. Check these bounds before transaction commit.
 7. Implement checkpoint, backup and restore through the data owner. Measure
    physical disk reuse after DELETE. Reserve maintenance space before work.
+   Write managed backups only as `.duckdb` files directly in the private
+   `AnalysisStore/backups` directory. Create that directory through the owner.
+   Count complete and incomplete copies in the existing data-file budget.
+   Before copying, reserve the database size, one quarter of that size, and
+   4,096 manifest bytes against ordinary file and free-space admission. Reserve
+   two file entries in the bounded directory scan. Reserve one more entry when
+   the backup directory is absent. Keep all existing copies unchanged
+   on rejection or failure. Do not add automatic backup deletion. Operators can
+   copy a completed database and its manifest outside the managed directory;
+   restore accepts that external copy. External operator copies are not managed
+   data-store usage.
    Stop writes when reclamation fails; never unlink the native WAL. Recovery
    after an older backup reports source ranges no longer retained on Node.
    Add `NodeEvidence.ReportFloor` to the existing Node mTLS service. Each
@@ -270,9 +281,10 @@ does not qualify hardware failure, native commit failure after admission,
 reserve adequacy, or Kubernetes partition recovery.
 
 Use `analysis_store_copy_limits` for exact copy-reserve boundaries and overflow.
-The capacity scenario also makes a current-format backup and restores it outside
-the constrained filesystem. In the full-tmpfs case, require rejected backup and
-restore copies with the `copy reserve` error. A rejected backup creates neither
+The capacity scenario also makes a current-format managed backup, copies both
+files outside the constrained filesystem, and restores that external copy.
+In the full-tmpfs case, require the managed backup to fail its filesystem
+reserve check and restore to fail its `copy reserve` check. A rejected backup creates neither
 database nor manifest and leaves its source usable. A rejected restore creates
 no database, retains its pending marker, and rejects normal startup. The same
 backup must still restore into a new directory with sufficient space. This case
@@ -446,8 +458,8 @@ write allowance, and one quarter of the configured disk budget as free space.
 The directory scan visits at most 4,096 entries. It counts each file's larger
 logical or allocated size. Separate fields report allocated and available bytes.
 The check includes native WAL and temporary files below the data directory.
-Backups outside that directory have a separate destination-space check; they
-are not charged to the directory total.
+Managed backups now stay inside that directory and count toward the total.
+Restore can read an operator-owned external copy.
 Retention, checkpoint, and processor catch-up retain access above the ordinary
 file limit while the policy reserve and write allowance remain available.
 Exact durable retries do not require ordinary write capacity. New evidence and
@@ -889,3 +901,15 @@ workspace checks, strict Clippy, and workspace tests. The data crate passed
 45 tests with two ignored; Control passed 196 with two ignored; Mithril e2e
 passed 119 with 251 ignored; Node passed 256 with one ignored. No Rust source
 changed after this gate. The complete phase remains **Not done**.
+
+Managed backups now use the private `analysis/backups` directory and the
+existing data-file budget. Admission checks projected copy and manifest bytes,
+ordinary free-space reserves, and directory entries. Complete and incomplete
+copies remain charged after restart. Restore still accepts an external copy.
+No backup registry, deletion worker, or new configuration is added.
+The 37 selected `analysis_store_` tests and all twelve enabled data-store mTLS
+tests passed. The first backup run failed the filesystem-reserve check because
+generated build files reduced host free space. Removing only the idle ignored
+incremental cache restored capacity. The tests then passed without reducing
+storage reserves. The final workspace gate and paired full-filesystem check
+are pending. The complete phase remains **Not done**.

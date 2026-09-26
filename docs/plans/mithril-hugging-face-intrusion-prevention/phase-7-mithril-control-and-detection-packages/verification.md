@@ -159,8 +159,12 @@ heads. Check physical free bytes before admission; logical tenant charging alone
 does not bound a shared DuckDB file. Keep a separate filesystem reserve for
 policy/control-state commits; the data budget cannot consume that reserve.
 
-Backups need enough capacity for a complete validated copy. Reserve that space
-before backup; use a separately configured owned backup directory if necessary.
+Managed backups use the private `AnalysisStore/backups` directory and the
+existing data-file budget. Reserve the copy size, one quarter of that size,
+4,096 manifest bytes, and two file entries before backup. Reserve one more entry
+when the backup directory is absent. Preserve ordinary
+free-space admission. Count incomplete copies after failure and restart. Restore
+also accepts a completed database and manifest copied to an external location.
 Never overwrite the last good backup to satisfy a disk quota. If DELETE and
 checkpoint cannot recover capacity, stop new data writes and report the reason.
 An engine setting is not an OS RSS cap or a durability proof.

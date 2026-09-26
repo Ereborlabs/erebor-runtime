@@ -1,6 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read as _, Write as _};
-use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::Path;
 
 use duckdb::params;
@@ -122,14 +122,29 @@ impl AnalysisStore {
         let parent = destination
             .parent()
             .ok_or_else(|| self.state_error("the backup path has no parent"))?;
-        if !destination.is_absolute() || destination == self.root.join("analysis.duckdb") {
-            return self.reject("the backup path is not an independent absolute file");
+        if parent != self.root.join("backups")
+            || destination
+                .extension()
+                .is_none_or(|extension| extension != "duckdb")
+        {
+            return self.reject("the backup must be a duckdb file in the owned backups directory");
+        }
+        let mut writer = self.maintenance_writer()?;
+        match fs::symlink_metadata(parent) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.storage_with_entries(3)?;
+                fs::DirBuilder::new()
+                    .mode(0o700)
+                    .create(parent)
+                    .context(IoSnafu { path: parent })?;
+            }
+            Err(source) => return Err(source).context(IoSnafu { path: parent }),
         }
         let parent_meta = fs::symlink_metadata(parent).context(IoSnafu { path: parent })?;
         if !parent_meta.is_dir() || parent_meta.permissions().mode() & 0o077 != 0 {
             return self.reject("the backup directory is not private");
         }
-        let mut writer = self.maintenance_writer()?;
         let _maintenance = self
             .maintenance
             .write()
@@ -202,7 +217,7 @@ impl AnalysisStore {
             .context(IoSnafu { path: &source })?
             .len();
         self.storage
-            .check_copy(StorageUsageV1::free_bytes(parent)?, source_bytes)?;
+            .check_backup(self.storage_with_entries(2)?, source_bytes)?;
         let mut source_file = File::open(&source).context(IoSnafu { path: &source })?;
         let mut output = OpenOptions::new()
             .write(true)
@@ -401,6 +416,77 @@ mod tests {
     }
 
     #[test]
+    fn analysis_store_backup_quota() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let limits = StorageLimitsV1 {
+            disk_max_bytes: 1024 * 1024 * 1024,
+            ..Default::default()
+        };
+        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+        store.accept_validated_batch(identity(), batch(1))?;
+        store.checkpoint()?;
+        let before = store.storage_usage()?;
+        let meta = store.meta()?;
+        for invalid in [
+            directory.path().join("outside.duckdb"),
+            root.join("analysis.duckdb"),
+            root.join("backups/nested/copy.duckdb"),
+            root.join("backups/../escape.duckdb"),
+            root.join("backups/copy.manifest.json"),
+        ] {
+            assert!(store.backup(&invalid).is_err());
+        }
+        let backup = root.join("backups/first.duckdb");
+        let manifest = store.backup(&backup)?;
+        let usage = store.storage_usage()?;
+        assert!(usage.file_bytes >= before.file_bytes + manifest.database_bytes);
+        assert!(usage.allocated_bytes > before.allocated_bytes);
+        assert_eq!(
+            fs::metadata(root.join("backups"))?.permissions().mode() & 0o777,
+            0o700
+        );
+        assert!(store.storage_with_entries(4096).is_err());
+        let padding = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(root.join("quota"))?;
+        padding.set_len(limits.disk_max_bytes)?;
+        let blocked = root.join("backups/blocked.duckdb");
+        assert!(matches!(
+            store.backup(&blocked),
+            Err(crate::Error::StorageCapacity {
+                resource: "data files",
+                ..
+            })
+        ));
+        assert!(!blocked.exists());
+        assert!(!blocked.with_extension("manifest.json").exists());
+        assert_eq!(store.meta()?, meta);
+        assert_eq!(
+            AnalysisStore::file_digest(&backup)?,
+            manifest.database_sha256
+        );
+        assert_eq!(store.read_page(&identity(), 1)?.records.len(), 1);
+        padding.set_len(0)?;
+        store.backup(&blocked)?;
+        let usage = store.storage_usage()?;
+        drop(store);
+        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+        assert_eq!(store.storage_usage()?.file_bytes, usage.file_bytes);
+        assert_eq!(store.meta()?, meta);
+        let external = directory.path().join("external.duckdb");
+        fs::copy(&backup, &external)?;
+        fs::copy(
+            backup.with_extension("manifest.json"),
+            external.with_extension("manifest.json"),
+        )?;
+        let restored = AnalysisStore::restore(&external, &directory.path().join("restored"))?;
+        assert_eq!(restored.read_page(&identity(), 1)?.records.len(), 1);
+        Ok(())
+    }
+
+    #[test]
     fn analysis_store_backup_window() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use std::{sync::mpsc, thread, time::Duration};
 
@@ -409,8 +495,7 @@ mod tests {
         let store = AnalysisStore::open(&root)?;
         store.accept_validated_batch(identity(), batch(1))?;
         let meta = store.meta()?;
-        let backups = directory.path().join("backups");
-        DirBuilder::new().mode(0o700).create(&backups)?;
+        let backups = root.join("backups");
         let destination = backups.join("saved.duckdb");
         let reader = store.reader()?;
         let (sender, receiver) = mpsc::channel();
@@ -440,7 +525,13 @@ mod tests {
         DirBuilder::new()
             .mode(0o700)
             .create(blocked.with_extension("manifest.json"))?;
+        store.checkpoint()?;
+        let before_failure = store.storage_usage()?;
         assert!(store.backup(&blocked).is_err());
+        assert!(
+            store.storage_usage()?.file_bytes
+                >= before_failure.file_bytes + fs::metadata(&blocked)?.len()
+        );
         assert_eq!(store.read_page(&identity(), 1)?.records.len(), 2);
         assert!(AnalysisStore::restore(&blocked, &directory.path().join("invalid")).is_err());
         assert_eq!(AnalysisStore::file_digest(&destination)?, saved_digest);
@@ -483,8 +574,7 @@ mod tests {
             store.accept_validated_batch(source.clone(), batch(1))?,
             EvidenceStoreOutcomeV1::Accepted
         );
-        let backup_dir = directory.path().join("backups");
-        DirBuilder::new().mode(0o700).create(&backup_dir)?;
+        let backup_dir = store.root.join("backups");
         let backup = backup_dir.join("analysis.duckdb");
         let manifest = store.backup(&backup)?;
         assert_eq!(manifest.commit_revision, 1);
