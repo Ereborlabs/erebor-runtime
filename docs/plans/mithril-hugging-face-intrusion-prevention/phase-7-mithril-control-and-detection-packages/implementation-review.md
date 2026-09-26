@@ -298,8 +298,18 @@ ACK times include the policy RPC and both group-send calls. File sizes are
 samples, not continuous peaks. `data_tenant_load` uses 16,384 total records and
 checks invalid group and tenant counts. Each sample also records Node generation
 time. No production owner or API changes are added. The final workspace gate
-is running after the generation-time field was restored. The earlier gate
-passed before that final measurement edit.
+passed for `c69dba4a` after the generation-time field was restored. It passed
+formatting, workspace checks, strict Clippy, and workspace tests. Control passed
+196 tests with two ignored. Mithril e2e passed 119 tests with 251 ignored.
+The final CLI also passed with 262,144 records and 64 generation-time samples.
+Its result is
+`/tmp/araphor-tenant-qualification.7tmi4y0w/final-tenants/result.json`.
+The binary SHA-256 is
+`26a1957c9993a6ace4b209753f8f19a5c2522c94793878d634fcd9f0ed1ce13c`.
+This CLI ran during workspace tests. Its timings are not a clean performance
+baseline. The phase result records the earlier pair of load measurements and
+their host limits. Capacity, rollout, old-writer removal, and physical proof
+remain open.
 
 The full workspace gate passed for `cb8417f8`, including all twelve cases in
 `analysis_store_commit_crashes` and `analysis_store_input_crashes`. The data

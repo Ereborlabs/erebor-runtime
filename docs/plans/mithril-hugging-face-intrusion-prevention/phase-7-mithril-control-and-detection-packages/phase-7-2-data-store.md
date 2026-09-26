@@ -872,5 +872,20 @@ at the same accepted cursor, with retained floor zero. The adjacent
 The debug binary ran on Linux x86_64 with a Ryzen 9 5900HX, 16 logical CPUs,
 and 31,492 MiB memory. This host is not the declared 4-vCPU, 8-GiB pilot host.
 One pair of runs does not prove variability, rollout performance, worst-case
-payloads, full quotas, or reserve adequacy. The final workspace gate is running
-after the generation-time edit. The complete phase remains **Not done**.
+payloads, full quotas, or reserve adequacy.
+
+The final CLI passed for `c69dba4a` with 262,144 records. All 64 samples include
+Node generation time. Each tenant retained 131,072 exact records at cursor
+131,072, with retained floor zero. Reopen preserved commit revision 66 and
+recovery epoch 1. The result is
+`/tmp/araphor-tenant-qualification.7tmi4y0w/final-tenants/result.json`;
+resource measurements are in the adjacent `final-resources.log`.
+The final binary SHA-256 is
+`26a1957c9993a6ace4b209753f8f19a5c2522c94793878d634fcd9f0ed1ce13c`.
+This CLI ran during workspace tests. Its timings are not a clean performance
+baseline. The final gate passed for the same source with
+`CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh`: formatting,
+workspace checks, strict Clippy, and workspace tests. The data crate passed
+45 tests with two ignored; Control passed 196 with two ignored; Mithril e2e
+passed 119 with 251 ignored; Node passed 256 with one ignored. No Rust source
+changed after this gate. The complete phase remains **Not done**.
