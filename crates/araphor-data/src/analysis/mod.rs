@@ -40,9 +40,10 @@ pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
 pub struct AnalysisStore {
     root: PathBuf,
-    _lease: File,
     writer: Mutex<Connection>,
     revision: watch::Sender<u64>,
+    // Release the lease after the database connection closes.
+    _lease: File,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

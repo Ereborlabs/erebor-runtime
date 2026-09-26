@@ -152,12 +152,16 @@ pub struct ControlPlane {
     policy_desired_state: Option<crate::PolicyDesiredStateOwner>,
     trace_signer: Option<Arc<(String, u64, ed25519_dalek::SigningKey)>>,
     trace_admission: Arc<tokio::sync::Semaphore>,
+    evidence_admission: Arc<crate::evidence::EvidenceAdmission>,
 }
 
 impl ControlPlane {
     #[must_use]
     pub fn new(allowed: Vec<AllowedNodeIdentity>, trust: TrustGenerationV1) -> Self {
         Self {
+            evidence_admission: Arc::new(crate::evidence::EvidenceAdmission::from(
+                allowed.as_slice(),
+            )),
             allowed_nodes: Arc::new(
                 allowed
                     .into_iter()
@@ -220,6 +224,9 @@ impl ControlPlane {
     ) -> crate::Result<Self> {
         let trust = crate::TrustBundleOwner::open(store.clone(), trust)?;
         Ok(Self {
+            evidence_admission: Arc::new(crate::evidence::EvidenceAdmission::from(
+                allowed.as_slice(),
+            )),
             allowed_nodes: Arc::new(
                 allowed
                     .into_iter()
@@ -241,6 +248,14 @@ impl ControlPlane {
         self.evidence
             .as_ref()
             .and_then(crate::EvidenceIntakeOwner::analysis_store)
+    }
+
+    fn admit_evidence(&self, node_id: &str) -> Result<crate::evidence::EvidencePermit, Status> {
+        if self.evidence.is_none() {
+            return Err(Status::unavailable("Control data intake is unavailable"));
+        }
+        self.evidence_admission
+            .acquire(&self.evidence_tenant(node_id)?)
     }
 
     #[must_use]
@@ -1313,16 +1328,17 @@ impl NodeEvidence for ControlPlane {
         request: Request<EvidenceBatchRequest>,
     ) -> Result<Response<EvidenceAck>, Status> {
         let node_id = self.authenticated_node(&request)?;
+        let permit = self.admit_evidence(&node_id)?;
         let request = request.into_inner();
         let control = self.clone();
         // Durable evidence intake performs fsync. Keep it off the RPC executor so policy and
         // readiness requests can enter their owners while evidence upload is busy.
-        let acknowledgement =
-            tokio::task::spawn_blocking(move || control.receive_evidence_batch(&node_id, request))
-                .await
-                .map_err(|error| {
-                    Status::internal(format!("evidence intake worker failed: {error}"))
-                })??;
+        let acknowledgement = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            control.receive_evidence_batch(&node_id, request)
+        })
+        .await
+        .map_err(|error| Status::internal(format!("evidence intake worker failed: {error}")))??;
         Ok(Response::new(acknowledgement))
     }
 
@@ -1333,37 +1349,78 @@ impl NodeEvidence for ControlPlane {
         let node_id = self.authenticated_node(&request)?;
         let mut input = request.into_inner();
         let (output, receiver) = mpsc::channel(8);
-        let (pending_output, mut pending_input) = mpsc::channel(64);
-        tokio::spawn(async move {
-            while let Some(message) = input.next().await {
-                if pending_output.send(message).await.is_err() {
-                    return;
-                }
-            }
-        });
         let control = self.clone();
         tokio::spawn(async move {
             let mut group = Vec::new();
             let mut framed_bytes = 0_usize;
+            let mut permit = None;
+            let mut deadline = None;
             loop {
-                let message = pending_input.recv().await;
-                let closing = message.is_none();
+                let (message, closing) = if let Some(until) = deadline {
+                    if tokio::time::Instant::now() >= until {
+                        (None, false)
+                    } else {
+                        match tokio::time::timeout_at(until, input.next()).await {
+                            Ok(message) => {
+                                let closing = message.is_none();
+                                (message, closing)
+                            }
+                            Err(_) => (None, false),
+                        }
+                    }
+                } else {
+                    let message = input.next().await;
+                    let closing = message.is_none();
+                    (message, closing)
+                };
                 if let Some(message) = message {
                     let request = match message {
                         Ok(request) => request,
                         Err(status) => {
+                            drop(permit.take());
                             let _result = output.send(Err(status)).await;
                             return;
                         }
                     };
                     let Some(batch) = request.batch.as_ref() else {
+                        drop(permit.take());
                         let _result = output
                             .send(Err(Status::invalid_argument("evidence batch is required")))
                             .await;
                         return;
                     };
+                    let admitted = (|| -> Result<(), Status> {
+                        let context = request.session.as_ref().ok_or_else(|| {
+                            Status::invalid_argument("node session context is required")
+                        })?;
+                        control.require_session(&node_id, context)?;
+                        control.require_current_evidence_trust(&node_id, context)?;
+                        if batch.framed_records.is_empty()
+                            || batch.node_boot_id.len() != 16
+                            || batch.source_id.len() != 16
+                        {
+                            return Err(Status::invalid_argument(
+                                "evidence batch identity or bounds are invalid",
+                            ));
+                        }
+                        if permit.is_none() {
+                            permit = Some(control.admit_evidence(&node_id)?);
+                            deadline = Some(
+                                tokio::time::Instant::now() + std::time::Duration::from_millis(50),
+                            );
+                        }
+                        Ok(())
+                    })();
+                    if let Err(status) = admitted {
+                        drop(permit.take());
+                        let _result = output.send(Err(status)).await;
+                        return;
+                    }
                     framed_bytes = framed_bytes.saturating_add(batch.framed_records.len());
-                    if framed_bytes > crate::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES {
+                    if framed_bytes > crate::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES
+                        || group.len() >= crate::MAX_EVIDENCE_BATCH_RECORDS
+                    {
+                        drop(permit.take());
                         let _result = output
                             .send(Err(Status::invalid_argument(
                                 "an evidence commit group exceeds one segment",
@@ -1381,9 +1438,12 @@ impl NodeEvidence for ControlPlane {
                 }
                 let ready = std::mem::take(&mut group);
                 framed_bytes = 0;
+                deadline = None;
+                let permit = permit.take();
                 let control = control.clone();
                 let node_id = node_id.clone();
                 let result = match tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
                     control.receive_evidence_stream_group(&node_id, ready)
                 })
                 .await
@@ -1492,14 +1552,15 @@ impl NodeCoverage for ControlPlane {
         request: Request<CoverageReportRequest>,
     ) -> Result<Response<CoverageAck>, Status> {
         let node_id = self.authenticated_node(&request)?;
+        let permit = self.admit_evidence(&node_id)?;
         let request = request.into_inner();
         let control = self.clone();
-        let acknowledgement =
-            tokio::task::spawn_blocking(move || control.receive_coverage_report(&node_id, request))
-                .await
-                .map_err(|error| {
-                    Status::internal(format!("coverage intake worker failed: {error}"))
-                })??;
+        let acknowledgement = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            control.receive_coverage_report(&node_id, request)
+        })
+        .await
+        .map_err(|error| Status::internal(format!("coverage intake worker failed: {error}")))??;
         Ok(Response::new(acknowledgement))
     }
 }

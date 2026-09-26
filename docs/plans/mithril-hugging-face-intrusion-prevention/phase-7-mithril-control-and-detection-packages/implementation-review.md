@@ -102,6 +102,27 @@ the owner explicitly. The startup case uses ControlConfig and the default owner.
 -> [DataStoreQualification::startup](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The test uses configuration loading and mTLS to check exact frames, durable ACK, replay, and unchanged policy state.<br>
 -> Not implemented [retention scheduling](phase-7-2-data-store.md) Production retention scheduling and capacity enforcement remain open.
 
+[NodeEvidence::open](../../../../crates/mithril-control/src/service.rs) An authenticated Node sends evidence on an open stream.<br>
+-> [ControlPlane::admit_evidence](../../../../crates/mithril-control/src/service.rs) The service checks the session and current trust before group assembly. Evidence and coverage use eight permits per process and two per tenant UUID.<br>
+-> [EvidenceAdmission](../../../../crates/mithril-control/src/evidence/admission.rs) Semaphore guards bound group assembly and blocking work. Excess work returns ResourceExhausted. Idle streams hold no guard.<br>
+-> [NodeEvidence::open](../../../../crates/mithril-control/src/service.rs) One task reads requests directly. A group flushes on its tail, input closure, or a 50-ms deadline. Framed payload is at most 4 MiB.<br>
+-> [EvidenceIntakeOwner::receive_group](../../../../crates/mithril-control/src/evidence.rs) Blocking validation checks all records, source, CPU, continuity, and the 4,096-record group limit before the store writer lock.<br>
+-> [AnalysisStore::accept_validated_batch](../../../../crates/araphor-data/src/analysis/mod.rs) A durable commit precedes the ACK. The blocking closure releases its admission guard before client output can wait.
+
+[EvidenceWal::next_batches](../../../../crates/mithril-node/src/observation/wal.rs)
+uses the same byte and record limits. `wal_bounds_group_records` checks the
+Node split. `intake_bounds_group_records` checks rejection without a commit.
+`admission_releases_exact_capacity` checks tenant/process limits, shared UUID
+spellings, and guard release. `data_stream_flushes_without_tail` uses mTLS and
+an open input stream to check deadline ACKs and duplicate retries.
+
+[DataStoreQualification::reopen_data](../../../../crates/mithril-e2e/src/discovery/data_store.rs)
+waits for the old data lease during qualification restart. It retries only an
+active-lease error and stops after five seconds. `data_reopen_preserves_errors`
+checks that wait and immediate corruption failure. AnalysisStore closes its
+database connection before it releases the lease. This wait is test lifecycle
+coordination; it is not a production corruption retry or an empty-store fallback.
+
 [ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Data recovery fails.<br>
 -> [ControlPlane::without_intake](../../../../crates/mithril-control/src/service.rs) Policy and trust retain their durable owner. No old evidence writer replaces the failed data owner.<br>
 -> [ControlPlane::receive_evidence_stream_group](../../../../crates/mithril-control/src/service.rs) Evidence returns Unavailable without an ACK. Coverage uses the same unavailable result.<br>
@@ -701,8 +722,8 @@ not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
 
-This review covers `codex/mithril-ui` at `5c86f3d` plus the recovery-validation
-changes. The startup command passed 16 checks; recovery passed 19 checks again.
+This review covers `codex/mithril-ui` at `99b494f1` plus the bounded-intake and
+lease-lifecycle changes. The startup command passed 16 checks; recovery passed 19 checks again.
 Their results are in `/tmp/araphor-integrity.K3NdoS/`. QueryOwner and trace API
 frames are not qualified by these changes.
 
@@ -721,7 +742,12 @@ fixture measurements are not a throughput or physical-reuse qualification.
 `analysis_store_result_progress` includes tenant and corrupt-body checks.
 The full workspace procedure passed for `658c16c3`. The run for `5c86f3d`
 failed in the old SQLite 50,000-atom replay test with `OperationInterrupted`
-while decoding atom samples. The current integrity run is in progress.
+while decoding atom samples. The integrity runs passed that test but failed
+startup during a data-lease race. The qualification now waits for that lease;
+startup and recovery passed again. The current-source final gate is running.
+The four current data e2e tests passed, including `data_stream_flushes_without_tail`
+and `data_reopen_preserves_errors`. The Node and Control record-bound tests
+passed. `admission_releases_exact_capacity` passed with canonical tenant keys.
 The data-owner suite passed 21 tests with two ignored. The
 `analysis_rejects_broken_state` test changes 16 receipt, source, context, result,
 reference, and revision fields in temporary stores. Reopen rejects each change.

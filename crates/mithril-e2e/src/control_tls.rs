@@ -62,6 +62,125 @@ const GRPC_THROUGHPUT_MESSAGE_BYTES: usize = 4 * 1_024 * 1_024;
 const GRPC_THROUGHPUT_WINDOW_BYTES: u32 = 16 * 1_024 * 1_024;
 
 #[tokio::test]
+async fn data_stream_flushes_without_tail() -> Result<(), Box<dyn StdError>> {
+    use mithril_control::{
+        node_evidence_client::NodeEvidenceClient, node_registry_client::NodeRegistryClient,
+        node_trust_client::NodeTrustClient, EvidenceStreamRequest, NodeRegistrationRequest,
+        NodeSessionContext, TrustGenerationAck, TrustGenerationAckRequest,
+    };
+    let tls = MtlsFixture::new(false)?;
+    let parts = tls.configuration()?.into_parts()?;
+    if let Some(error) = parts.data_error {
+        return Err(error.into());
+    }
+    let data = parts.control.analysis_store().ok_or("data owner absent")?;
+    let server = tls.start(parts.control).await?;
+    let client_tls = ClientTlsConfig::new()
+        .ca_certificate(TonicCertificate::from_pem(fs::read(&tls.files.ca)?))
+        .identity(Identity::from_pem(
+            fs::read(&tls.files.node_certificate)?,
+            fs::read(&tls.files.node_key)?,
+        ))
+        .domain_name("localhost");
+    let channel = Endpoint::from_shared(format!("https://{}", server.address()))?
+        .tls_config(client_tls)?
+        .connect()
+        .await?;
+    let session = NodeSessionContext {
+        node_id: "node-a".into(),
+        node_boot_id: vec![7; 16],
+        connection_nonce: uuid::Uuid::new_v4().as_bytes().to_vec(),
+    };
+    NodeRegistryClient::new(channel.clone())
+        .register(NodeRegistrationRequest {
+            session: Some(session.clone()),
+            registration: Some(registration()),
+        })
+        .await?;
+    let mut trust_stream = NodeTrustClient::new(channel.clone())
+        .watch(session.clone())
+        .await?
+        .into_inner();
+    let trust = trust_stream.message().await?.ok_or("trust absent")?;
+    drop(trust_stream);
+    NodeTrustClient::new(channel.clone())
+        .acknowledge(TrustGenerationAckRequest {
+            session: Some(session.clone()),
+            acknowledgement: Some(TrustGenerationAck {
+                generation: trust.generation,
+                bundle_digest: trust.bundle_digest,
+            }),
+        })
+        .await?;
+    let observations = EffectObservationStore::durable(
+        4,
+        tls.path().join("wal"),
+        EvidenceWalLimits::default(),
+        ObservationCanonicalizer::new(
+            EvidenceIdV1::new(1, 2),
+            EvidenceIdV1::new(3, 4),
+            1,
+            [7; 16].into(),
+        )?,
+    )?;
+    observations.record_bytes(
+        erebor_interceptor_abi::EffectObservationV1 {
+            observed_boottime_ns: 1,
+            source_sequence: 1,
+            task_cookie: 1,
+            reason: 9,
+            physical_result: 1,
+            effect_family: 1,
+            operation: 1,
+            ..Default::default()
+        }
+        .as_bytes(),
+    );
+    let mut batch: EvidenceBatch = observations
+        .next_evidence_batch()
+        .ok_or("evidence absent")?
+        .into();
+    batch.commit_group_tail = false;
+    let identity = EvidenceIntakeIdentityV1 {
+        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+        node_id: "node-a".into(),
+        node_boot_id: [7; 16],
+        label_epoch: 1,
+        source_id: batch.source_id.as_slice().try_into()?,
+        source_epoch: batch.source_epoch,
+    };
+    let (output, input) = mpsc::channel(1);
+    let mut client = NodeEvidenceClient::new(channel);
+    let mut replies = client.open(ReceiverStream::new(input)).await?.into_inner();
+    for _ in 0..3 {
+        output
+            .send(EvidenceStreamRequest {
+                session: Some(session.clone()),
+                batch: Some(batch.clone()),
+            })
+            .await?;
+        let ack = tokio::time::timeout(Duration::from_secs(5), replies.message())
+            .await??
+            .ok_or("ACK absent while input remains open")?;
+        assert_eq!(ack.contiguous_cursor, 1);
+        assert_eq!(data.meta()?.commit_revision, 1);
+    }
+    let page = data.read_page(&identity, 1)?;
+    assert_eq!(page.records.len(), 1);
+    assert_eq!(page.records[0].framed_record, batch.framed_records);
+    drop(output);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), replies.message())
+            .await??
+            .is_none()
+    );
+    drop(replies);
+    drop(client);
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn observability_recovery_mtls_reconnect_preserves_dispatch_and_output(
 ) -> Result<(), Box<dyn StdError>> {
     use mithril_control::{
@@ -1873,8 +1992,10 @@ async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box
     assert!(encoded_batch_bytes <= mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES as u64);
     let batch_count = QUALIFICATION_BYTES.div_ceil(encoded_batch_bytes);
     let accepted_bytes = encoded_batch_bytes * batch_count;
-    let maximum_group_batches =
-        (mithril_control::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES as u64 / encoded_batch_bytes).max(1);
+    let maximum_group_batches = (mithril_control::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES as u64
+        / encoded_batch_bytes)
+        .min((mithril_control::MAX_EVIDENCE_BATCH_RECORDS / BATCH_RECORDS) as u64)
+        .max(1);
     let (grpc_elapsed, grpc_mib_per_second) =
         measure_grpc_file_transfer(&files, accepted_bytes, None).await?;
     let (durable_grpc_elapsed, durable_grpc_mib_per_second) = measure_grpc_file_transfer(

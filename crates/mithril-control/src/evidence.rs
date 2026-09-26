@@ -12,7 +12,10 @@ use crate::{
     Result,
 };
 
+mod admission;
 mod model;
+
+pub(crate) use admission::{EvidenceAdmission, EvidencePermit};
 
 pub use araphor_data::{
     EvidenceIntakeIdentityV1, MAX_EVIDENCE_BATCH_RECORDS, MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES,
@@ -331,6 +334,8 @@ impl EvidenceIntakeOwner {
                     .len()
                     .saturating_add(input.framed_records.len())
                     > MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES
+                || frame_ends.len().saturating_add(input.frame_ends.len())
+                    > MAX_EVIDENCE_BATCH_RECORDS
             {
                 return Err(Status::invalid_argument(
                     "an evidence commit group crossed its stream, cursor, or segment bound",
@@ -1083,6 +1088,36 @@ mod tests {
         let intake =
             EvidenceIntakeOwner::new(control, reopened, Arc::new(super::SystemIntakeClock))?;
         assert_eq!(intake.contiguous_cursor(&identity())?, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn intake_bounds_group_records() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let control = crate::ControlStore::open(directory.path().join("control"))?;
+        let data = Arc::new(araphor_data::AnalysisStore::open(
+            directory.path().join("analysis"),
+        )?);
+        let intake =
+            EvidenceIntakeOwner::new(control, data.clone(), Arc::new(super::SystemIntakeClock))?;
+        let maximum = super::MAX_EVIDENCE_BATCH_RECORDS as u64;
+        let first = batch(1, maximum / 2)?;
+        let second = batch(maximum / 2 + 1, maximum / 2)?;
+        let error = intake
+            .receive_group(vec![
+                (authenticated(), first.clone()),
+                (authenticated(), second.clone()),
+                (authenticated(), batch(maximum + 1, 1)?),
+            ])
+            .err()
+            .ok_or("oversized group was accepted")?;
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(intake.contiguous_cursor(&identity())?, 0);
+        assert_eq!(data.meta()?.commit_revision, 0);
+        let ack =
+            intake.receive_group(vec![(authenticated(), first), (authenticated(), second)])?;
+        assert_eq!(ack.contiguous_cursor, maximum);
+        assert_eq!(data.meta()?.commit_revision, 1);
         Ok(())
     }
 

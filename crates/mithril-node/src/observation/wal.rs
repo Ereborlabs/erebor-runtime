@@ -1281,8 +1281,10 @@ impl EvidenceWal {
         while let Some(batch) = self.batch_from(record_offset) {
             let batch_bytes = batch.framed_records.len();
             if !batches.is_empty()
-                && framed_bytes.saturating_add(batch_bytes)
+                && (framed_bytes.saturating_add(batch_bytes)
                     > mithril_control::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES
+                    || record_offset.saturating_add(batch.record_count())
+                        > mithril_control::MAX_EVIDENCE_BATCH_RECORDS)
             {
                 break;
             }
@@ -1628,6 +1630,44 @@ mod tests {
             contiguous_cursor: 5,
         })?);
         assert!(owner.next_batches().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn wal_bounds_group_records() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let maximum = mithril_control::MAX_EVIDENCE_BATCH_RECORDS;
+        let mut owner = EvidenceWalOwner::open(
+            directory.path(),
+            EvidenceWalLimits {
+                maximum_retained_records: maximum + 1,
+                maximum_retained_bytes: 16 * 1_024 * 1_024,
+                maximum_batch_records: maximum / 2,
+                ..limits()
+            },
+        )?;
+        let records = (1..=maximum as u64 + 1)
+            .map(observation)
+            .collect::<Result<Vec<_>, _>>()?;
+        owner
+            .append_classified_batch(&records)
+            .map_err(|failure| failure.error)?;
+        let batches = owner.next_batches();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(
+            batches
+                .iter()
+                .map(|batch| batch.record_count())
+                .sum::<usize>(),
+            maximum
+        );
+        assert!(owner.acknowledge(EvidenceAckV1 {
+            contiguous_cursor: maximum as u64,
+        })?);
+        let next = owner.next_batches();
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].record_count(), 1);
+        assert_eq!(next[0].first_cursor, maximum as u64 + 1);
         Ok(())
     }
 

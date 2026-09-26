@@ -168,14 +168,31 @@ The `data-store-recovery` command passed its 19 checks again at
 `/tmp/araphor-integrity.K3NdoS/recovery/result.json`.
 `analysis_startup_is_independent` passed. The workspace run for `5c86f3d`
 failed in the old SQLite 50,000-atom replay test with `OperationInterrupted`
-while decoding atom samples. The current recovery-validation gate is running.
+while decoding atom samples. The recovery-validation runs passed that test,
+but failed the startup case during data-store reopen. Concurrent server cleanup
+could still hold the data lease after the policy lease became available.
 Restart rejects missing tables and columns without creating them. It also
 checks source bindings, receipts, retained/expired range counts, coverage,
 frame/result/context digests, processor progress, tenant-scoped references,
 pending bounds, and relation revisions. Restore uses the same checks.
 The data-owner suite passed 21 tests with two ignored, including 16 corruption
 cases in `analysis_rejects_broken_state`.
-Bounded admission, retention scheduling, capacity
+Control now uses shared evidence/coverage admission: eight active or queued
+groups per process and two per tenant. Tenant UUID bytes select the quota.
+Idle streams hold no permit. A permit covers group assembly, blocking validation,
+and commit. Control removes the separate 64-message stream queue. A group has
+at most 4 MiB of framed data and 4,096 records. An incomplete group flushes after
+50 ms; it does not wait indefinitely for a tail marker or stream closure.
+Node uses the same group bounds. Component tests passed the 4,096/4,097-record
+boundary and proved that rejection does not advance the receipt or revision.
+Qualification restart now waits at most five seconds for the data lease.
+Other open failures return immediately. AnalysisStore releases its lease only
+after the database connection closes. Startup and recovery passed with that
+wait. The four current data e2e tests passed, including the open-stream deadline
+case and the lease/error case. The semaphore quota test passed. The final
+workspace gate is running. These changes do not prove physical disk capacity
+or throughput.
+General data-owner admission, retention scheduling, capacity
 and processor health, Control context projection, crash injection, removal of
 the remaining old library writer, and physical disk reuse remain open.
 Production enablement is not qualified.

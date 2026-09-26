@@ -2,7 +2,7 @@ use std::{
     error::Error as StdError,
     fs,
     os::unix::fs::DirBuilderExt as _,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -74,7 +74,9 @@ impl DataStoreQualification {
             .ok_or("policy is absent")?;
         drop(control);
         let parts = tls.configuration()?.into_parts()?;
-        self.check(parts.data_error.is_none(), "default data owner failed")?;
+        if let Some(error) = parts.data_error {
+            return Err(error.into());
+        }
         let data = parts
             .control
             .analysis_store()
@@ -121,6 +123,7 @@ impl DataStoreQualification {
         drop(connection);
         server.shutdown().await?;
         drop(data);
+        drop(Self::reopen_data(&tls.path().join("evidence/analysis")).await?);
         let control = reopen_control_store(&control_root).await?;
         self.check(
             control.health()?.evidence_cursors == 0
@@ -130,7 +133,9 @@ impl DataStoreQualification {
         drop(control);
 
         let parts = tls.configuration()?.into_parts()?;
-        self.check(parts.data_error.is_none(), "default data restart failed")?;
+        if let Some(error) = parts.data_error {
+            return Err(error.into());
+        }
         let data = parts
             .control
             .analysis_store()
@@ -150,6 +155,7 @@ impl DataStoreQualification {
         drop(connection);
         server.shutdown().await?;
         drop(data);
+        drop(Self::reopen_data(&tls.path().join("evidence/analysis")).await?);
         drop(reopen_control_store(&control_root).await?);
 
         let database = tls.path().join("evidence/analysis/analysis.duckdb");
@@ -404,7 +410,7 @@ impl DataStoreQualification {
         drop(control);
 
         let control = reopen_control_store(&control_root).await?;
-        let data = Arc::new(AnalysisStore::open(&data_root)?);
+        let data = Arc::new(Self::reopen_data(&data_root).await?);
         self.check(
             data.meta()? == before && data.source_status(&identity)? == Some(status),
             "restart changed identity, receipt, coverage, or count",
@@ -609,6 +615,24 @@ impl DataStoreQualification {
         Ok(())
     }
 
+    async fn reopen_data(root: &Path) -> Result<AnalysisStore> {
+        Ok(crate::physical::wait_for_async(
+            root,
+            "the stopped server to release its data lease",
+            Duration::from_secs(5),
+            || match AnalysisStore::open(root) {
+                Err(araphor_data::Error::AnalysisState { reason, .. })
+                    if reason.starts_with("the analysis writer is already owned:") =>
+                {
+                    Ok(None)
+                }
+                result => Ok(Some(result)),
+            },
+            || "the stopped server still holds the data lease".into(),
+        )
+        .await??)
+    }
+
     fn record(observations: &EffectObservationStore, sequence: u64) {
         let raw = erebor_interceptor_abi::EffectObservationV1 {
             observed_boottime_ns: sequence + 100,
@@ -687,6 +711,32 @@ impl DataStoreQualification {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn data_reopen_preserves_errors() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let reopening = DataStoreQualification::reopen_data(&root);
+        tokio::pin!(reopening);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut reopening)
+                .await
+                .is_err()
+        );
+        drop(store);
+        drop(reopening.await?);
+        fs::write(root.join("analysis.duckdb"), b"invalid database")?;
+        let error = DataStoreQualification::reopen_data(&root)
+            .await
+            .err()
+            .ok_or("corrupt store accepted")?;
+        assert!(matches!(
+            error.downcast_ref::<araphor_data::Error>(),
+            Some(araphor_data::Error::AnalysisDatabase { .. })
+        ));
+        Ok(())
+    }
 
     #[tokio::test]
     async fn data_store_startup() -> Result<()> {
