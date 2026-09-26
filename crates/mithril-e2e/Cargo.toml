@@ -59,7 +59,7 @@ mithril-e2e-macros = { path = "../mithril-e2e-macros" }
 prost.workspace = true
 reqwest.workspace = true
 serde-saphyr.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process"] }
 tokio-stream = { workspace = true, features = ["net"] }
 tower.workspace = true
 

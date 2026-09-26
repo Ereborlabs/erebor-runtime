@@ -190,6 +190,16 @@ the new epoch across restart. Run the mTLS startup case with a pending-marker
 fixture and require unavailable evidence/coverage, retained Node input, and
 unchanged policy service and database bytes.
 
+Use `data_control_crash` for a Control process exit after the data commit and
+before the evidence ACK. Start the production mTLS server in a child process
+from ControlConfig. Install its exit callback through the existing
+`test-fixtures` feature. Reject an invalid batch without running the callback.
+For valid input, require exit code 73 and no ACK. Reopen the Node WAL and data
+store. Require the exact committed frame and receipt. Restart Control and replay
+the same batch through mTLS. The replay must ACK without another record or
+revision. Apply the ACK to Node, accept the next cursor, and reopen again.
+Keep policy state unchanged. Use temporary directories and bounded child waits.
+
 Add `data-store-recovery` to the discovery e2e binary. Through the production
 mTLS service, submit data, lose ACK, resend, restart, process and expire input.
 This is the production counterpart to the offline `storage-contract` case in
@@ -637,4 +647,17 @@ ignored; Mithril e2e passed 114 with 248 ignored; Node passed 256 with one ignor
 The tests use temporary stores and synthetic inputs. They do not prove a Control
 process crash before ACK, hardware power loss, native commit failure after
 admission, reserve adequacy, load limits, or physical Kubernetes behavior.
+The complete phase remains **Not done**.
+
+`data_control_crash` now passes through a real child Control process and mTLS.
+Invalid input does not trigger the exit. Valid input commits before exit code
+73, without an ACK. Reopened Node WAL returns the exact pending batch. Data
+recovery returns its committed frame and receipt. Restarted Control ACKs replay
+without a second record or revision. Applying that ACK clears Node pending
+input. The next cursor commits once and survives another reopen. Policy state
+remains unchanged, and the Control evidence cursor count remains zero.
+All eight enabled `discovery::data_store::tests` cases passed; two are ignored
+helpers or environment-specific cases. The full workspace gate is pending for
+this deliverable. These tests do not qualify hardware power loss, native commit
+failure after admission, reserve adequacy, load, or Kubernetes behavior.
 The complete phase remains **Not done**.

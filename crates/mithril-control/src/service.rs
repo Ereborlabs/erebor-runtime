@@ -153,6 +153,8 @@ pub struct ControlPlane {
     trace_signer: Option<Arc<(String, u64, ed25519_dalek::SigningKey)>>,
     trace_admission: Arc<tokio::sync::Semaphore>,
     evidence_admission: Arc<crate::evidence::EvidenceAdmission>,
+    #[cfg(feature = "test-fixtures")]
+    evidence_commit_hook: Option<fn()>,
 }
 
 impl ControlPlane {
@@ -240,6 +242,8 @@ impl ControlPlane {
             policy_desired_state: None,
             trace_signer: None,
             trace_admission: Arc::new(tokio::sync::Semaphore::new(2)),
+            #[cfg(feature = "test-fixtures")]
+            evidence_commit_hook: None,
         }
     }
 
@@ -305,6 +309,8 @@ impl ControlPlane {
             policy_desired_state: None,
             trace_signer: None,
             trace_admission: Arc::new(tokio::sync::Semaphore::new(2)),
+            #[cfg(feature = "test-fixtures")]
+            evidence_commit_hook: None,
         })
     }
 
@@ -312,6 +318,11 @@ impl ControlPlane {
         self.evidence
             .as_ref()
             .and_then(crate::EvidenceIntakeOwner::analysis_store)
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    pub fn set_evidence_commit_hook(&mut self, hook: fn()) {
+        self.evidence_commit_hook = Some(hook);
     }
 
     fn admit_evidence(&self, node_id: &str) -> Result<crate::evidence::EvidencePermit, Status> {
@@ -1628,6 +1639,10 @@ impl ControlPlane {
         }
         let batch_count = batches.len();
         let acknowledgement = evidence.receive_group(batches)?;
+        #[cfg(feature = "test-fixtures")]
+        if let Some(hook) = self.evidence_commit_hook {
+            hook();
+        }
         debug!(
             "accepted a Mithril evidence commit group",
             node_id = %node_id,
