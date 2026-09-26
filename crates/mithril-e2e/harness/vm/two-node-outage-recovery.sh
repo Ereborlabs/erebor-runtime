@@ -159,6 +159,16 @@ require_replayed_data() {
   ' "$2" >/dev/null
 }
 
+control_data_path() {
+  jq -er --arg claim "$1" --arg uid "$2" --arg node "$3" --arg namespace "$4" '
+    select(.spec.claimRef.name == $claim and .spec.claimRef.uid == $uid and
+      .spec.claimRef.namespace == $namespace) |
+    select(any(.spec.nodeAffinity.required.nodeSelectorTerms[].matchExpressions[];
+      .key == "kubernetes.io/hostname" and .operator == "In" and .values == [$node])) |
+    .spec.local.path
+  '
+}
+
 remove_network_block() {
   if [[ $network_blocked == true ]]; then
     "$provider" run "$vm_b" sudo nft delete table inet "$network_table"
@@ -690,14 +700,8 @@ claim_json=$(remote_kubectl -n "$system_namespace" get pvc "$state_claim" -o jso
 claim_uid=$(jq -er '.metadata.uid' <<<"$claim_json")
 volume_name=$(jq -er '.spec.volumeName' <<<"$claim_json")
 volume_json=$(remote_kubectl get pv "$volume_name" -o json)
-data_base=$(jq -er --arg claim "$state_claim" --arg uid "$claim_uid" \
-  --arg node "$node_a_name" --arg namespace "$system_namespace" '
-  select(.spec.claimRef.name == $claim and .spec.claimRef.uid == $uid and
-    .spec.claimRef.namespace == $namespace) |
-  select(any(.spec.nodeAffinity.required.nodeSelectorTerms[].matchExpressions[];
-    .key == "kubernetes.io/hostname" and .operator == "In" and .values == [$node])) |
-  .spec.hostPath.path
-' <<<"$volume_json")
+data_base=$(control_data_path "$state_claim" "$claim_uid" "$node_a_name" \
+  "$system_namespace" <<<"$volume_json")
 [[ $data_base == "/var/lib/rancher/k3s/storage/pvc-${claim_uid}_${system_namespace}_${state_claim}" ]] || {
   echo "Control data path does not match its retained local-path volume" >&2
   exit 2

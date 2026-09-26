@@ -287,7 +287,11 @@ incomplete or conflicting inspection inputs.
 
 The two-node outage harness accepts `--data-check PATH` for this qualification
 binary. Run its startup and recovery cases before cluster changes. Validate
-the retained PVC identity and its standard K3s local-path directory on Node A.
+the retained PVC identity and its standard K3s Local-volume directory on Node A.
+Read `.spec.local.path`; require the exact claim name, UID, namespace, Node
+affinity, and generated directory. Reject other volume sources and foreign
+claims or Nodes. Reproduce the provisioner's Local-volume shape in the shell
+regression before running the physical case.
 Stop Control before each inspection and run the checker as numeric user 65532.
 Compare retained data before and after Node replay. Keep the Node WAL checks.
 Make only the `evidence/analysis` mount read-only for the storage fault. Require
@@ -1011,8 +1015,10 @@ after it. `bash crates/mithril-e2e/harness/vm/test.sh` passed. The first workspa
 gate stopped when the observability output-limit test reached its deadline
 during native compilation. That test passed unchanged on a direct rerun. The
 second gate stopped in the unrelated CLI surface test. That test also passed
-alone. The full gate is running with `RUST_TEST_THREADS=1` after the final
-harness edits. No test or assertion is excluded.
+alone. The serial gate passed the data and Control suites, then stopped on
+`data_control_crash` with `Elapsed(())`. The exact crash test passed unchanged
+on a focused rerun in 1.35 seconds. The final full gate must run again after
+the last harness correction. No test or assertion is excluded.
 
 Current-source Node and Control release images built successfully. The fresh
 two-node setup then failed before cluster installation: both two-node callers
@@ -1022,6 +1028,25 @@ Both callers now copy and pass the existing checked authentication file.
 The regression uses each caller's actual argument list and the guest parser;
 an invalid version stops the check before host changes. The shell suite passes.
 The failed setup's two VM definitions were removed after exact UUID checks.
-Their disks remain. The corrected fresh setup is running at
-`/tmp/araphor-two-node-storage.ChbP3Nmp/retry`. The unrelated VM is unchanged.
+Their disks remain. The corrected fresh setup installed K3s and Mithril at
+`/tmp/araphor-two-node-storage.ChbP3Nmp/retry`. Its direct-runc prerequisite
+passed. Its separate protected-start check failed because Node did not retire
+unreachable mount-cache rows. This failure remains unresolved. The retained
+Control and both Nodes were Running without restarts. Only this run's protected
+workload namespace was removed before the separate storage case; Control,
+Node state, and the data volume remain. The unrelated VM is unchanged.
+
+The storage case passed startup and recovery, then rejected the actual K3s
+Local volume before fault injection. The check used `hostPath` instead of
+`local`. The shell regression reproduced this mismatch before the correction.
+The corrected check accepts the actual Local-volume shape and rejects foreign
+claims, Nodes, and unsupported sources. The shell suite passes. The physical
+retry at `/tmp/araphor-two-node-storage.ChbP3Nmp/outage-local` passed both
+lightweight cases and the volume check, then stopped at offline inspection
+with `Permission denied (os error 13)`. K3s owns its `storage` parent as
+root with mode 0700. The data directories belong to user 65532. The checker
+cannot traverse that host parent, although Control can use its mounted volume.
+Do not change the host parent's permissions or run the data owner as root.
+The inspector still needs isolated access to the volume as user 65532.
+Cleanup restored Control and kept the data volume.
 The physical storage/partition result remains **Not done**.
