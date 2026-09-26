@@ -108,11 +108,28 @@ until restart. This path does not change Control policy persistence.
 -> [AnalysisStore::crash_at](../../../../crates/araphor-data/src/analysis/crash.rs) A test child exits immediately before or after the production commit.<br>
 -> [analysis_store_commit_crashes](../../../../crates/araphor-data/src/analysis/crash.rs) Reopen preserves the accepted cursor and live witness. Raw count and expiry agree with the recovered floor. Retry and a second reopen preserve the same result.
 
+[AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/mod.rs) New events, receipt progress, and relation revisions are ready to commit.<br>
+-> [AnalysisStore::crash_at](../../../../crates/araphor-data/src/analysis/crash.rs) A test child exits immediately before or after the production commit, before notification.<br>
+-> [analysis_store_input_crashes](../../../../crates/araphor-data/src/analysis/crash.rs) Reopen returns the exact prior or new records, receipt, and revisions. Retry adds no second effect.
+
+[AnalysisStore::accept_validated_coverage](../../../../crates/araphor-data/src/analysis/mod.rs) A new coverage report and its receipt revision are ready to commit.<br>
+-> [analysis_store_input_crashes](../../../../crates/araphor-data/src/analysis/crash.rs) The same exit boundaries preserve either the prior state or the exact report and coverage revision.
+
+[AnalysisStore::commit_context](../../../../crates/araphor-data/src/analysis/context.rs) An exact context version and its relation revision are ready to commit.<br>
+-> [analysis_store_input_crashes](../../../../crates/araphor-data/src/analysis/crash.rs) The same exit boundaries preserve either no version or the complete version, including its digest.
+
+[AnalysisStore::record_recovery_floor](../../../../crates/araphor-data/src/analysis/backup.rs) A missing source range and its relation revision are ready to commit.<br>
+-> [analysis_store_input_crashes](../../../../crates/araphor-data/src/analysis/crash.rs) The same exit boundaries preserve either no range or the exact range. Accepted and consumed cursors do not advance.
+
 The exit hook and its module compile only under `cfg(test)`. The hook requires
 the exact requested point and temporary store path. It adds no production
-configuration, public API, or alternate writer. The four cases check process
-exit at these two transaction boundaries, not hardware power loss or every
-data mutation. Existing mTLS cases remain separate integration proof.
+configuration, public API, or alternate writer. Twelve cases cover six commit
+boundaries. The eight input cases also check tenant isolation, unchanged
+processor progress, no notification on duplicate retry, and a second reopen.
+Input bodies are opaque data-owner fixtures, not Node or kernel evidence.
+These cases do not cover interruption inside native commit, hardware power
+loss, or every data mutation. Existing mTLS cases remain separate integration
+proof.
 
 [NodeChassis](../../../../crates/mithril-node/src/node.rs) The connected Node selects one WAL source per second, including sources without pending records.<br>
 -> [EffectObservationStore::evidence_floor](../../../../crates/mithril-node/src/observation.rs) The owner reads one ordered source and its durable acknowledged cursor, then releases the WAL lock.<br>

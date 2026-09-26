@@ -162,6 +162,15 @@ batches, explicit gaps, checked overflow, cross-tenant references, required
 processor stall, review pins, retirement, expiry, late context, WAL recovery,
 disk full, unsupported schema and rejected old evidence state.
 
+Use `analysis_store_input_crashes` for process exits immediately before and
+after evidence, coverage, context, and recovery-gap commits. Reopen through the
+production owner. Require the complete prior or new state, exact receipts and
+relation revisions, tenant isolation, unchanged consumed progress, and an
+idempotent retry. A duplicate retry must not publish a revision notification.
+Reopen again after retry. Use temporary stores and test-only exit hooks.
+These checks do not prove interruption inside native commit or hardware power
+loss.
+
 Add `data-store-recovery` to the discovery e2e binary. Through the production
 mTLS service, submit data, lose ACK, resend, restart, process and expire input.
 This is the production counterpart to the offline `storage-contract` case in
@@ -566,3 +575,14 @@ workspace checks, strict Clippy, and workspace tests. The data crate passed
 passed 114 with 248 ignored; Node passed 256 with one ignored.
 Kubernetes scheduling of the new periodic report remains unqualified.
 The complete phase remains **Not done**.
+
+`analysis_store_input_crashes` passed all eight subprocess cases. Each case
+calls the production mutation and exits without Rust cleanup at its selected
+commit boundary. The test checks exact frames, coverage, context, recovery
+ranges, receipts, relation revisions, notification state, tenant isolation,
+and unchanged consumed progress. Retry and a second reopen preserve one effect.
+The hooks compile only under `cfg(test)` and require an exact temporary path.
+The first build stopped with `No space left on device`. Removing only this
+worktree's ignored incremental build cache allowed the same command to pass.
+The final workspace gate is pending for this change. The complete phase remains
+**Not done**.
