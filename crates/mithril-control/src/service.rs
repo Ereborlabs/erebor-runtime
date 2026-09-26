@@ -156,6 +156,62 @@ pub struct ControlPlane {
 }
 
 impl ControlPlane {
+    pub(crate) async fn run_context(&self) -> std::convert::Infallible {
+        let (Some(store), Some(data)) = (&self.policy_store, self.analysis_store()) else {
+            return std::future::pending().await;
+        };
+        let allowed: Vec<_> = self.allowed_nodes.values().cloned().collect();
+        let mut owner = match crate::ControlContextOwner::new(store.clone(), data.clone(), &allowed)
+        {
+            Ok(owner) => owner,
+            Err(error) => {
+                erebor_telemetry::warn!("Control context is unavailable", error = %error);
+                return std::future::pending().await;
+            }
+        };
+        let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut failed = false;
+        loop {
+            timer.tick().await;
+            match tokio::task::spawn_blocking(move || {
+                let result = owner.reconcile();
+                (owner, result)
+            })
+            .await
+            {
+                Ok((next, result)) => {
+                    owner = next;
+                    match result {
+                        Ok(_) => {
+                            if failed {
+                                erebor_telemetry::info!("Control context projection resumed");
+                            }
+                            failed = false;
+                        }
+                        Err(error) => {
+                            if !failed {
+                                erebor_telemetry::warn!("Control context projection failed", error = %error);
+                            }
+                            failed = true;
+                        }
+                    }
+                }
+                Err(error) => {
+                    erebor_telemetry::warn!("Control context worker failed", error = %error);
+                    owner = match crate::ControlContextOwner::new(
+                        store.clone(),
+                        data.clone(),
+                        &allowed,
+                    ) {
+                        Ok(owner) => owner,
+                        Err(_) => return std::future::pending().await,
+                    };
+                }
+            }
+        }
+    }
+
     pub(crate) async fn run_retention(&self) -> std::convert::Infallible {
         if let Some(evidence) = &self.evidence {
             evidence.run_retention().await

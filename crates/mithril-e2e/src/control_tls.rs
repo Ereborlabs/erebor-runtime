@@ -64,7 +64,20 @@ async fn data_stream_flushes_without_tail() -> Result<(), Box<dyn StdError>> {
         return Err(error.into());
     }
     let data = parts.control.analysis_store().ok_or("data owner absent")?;
+    let trust = parts.control.trust_bundle_owner().current()?;
     let server = tls.start(parts.control).await?;
+    ControlServerFixture::wait_context(
+        &data,
+        &araphor_data::AnalysisContextKeyV1 {
+            tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+            owner_id: "mithril-control/trust".into(),
+            entity_key: b"trust".to_vec(),
+            lifetime_key: trust.bundle_digest.into_bytes(),
+            owner_revision: trust.generation,
+        },
+    )
+    .await?;
+    let baseline = data.meta()?.commit_revision;
     let client_tls = ClientTlsConfig::new()
         .ca_certificate(TonicCertificate::from_pem(fs::read(&tls.files.ca)?))
         .identity(Identity::from_pem(
@@ -153,7 +166,7 @@ async fn data_stream_flushes_without_tail() -> Result<(), Box<dyn StdError>> {
             .await??
             .ok_or("ACK absent while input remains open")?;
         assert_eq!(ack.contiguous_cursor, 1);
-        assert_eq!(data.meta()?.commit_revision, 1);
+        assert_eq!(data.meta()?.commit_revision, baseline + 1);
     }
     let page = data.read_page(&identity, 1)?;
     assert_eq!(page.records.len(), 1);

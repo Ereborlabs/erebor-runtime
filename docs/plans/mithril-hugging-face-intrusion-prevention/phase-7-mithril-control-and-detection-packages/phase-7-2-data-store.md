@@ -115,7 +115,22 @@ Store recovery fails
 9. Keep policy/trust/rollout state outside this conversion. Reconcile their
    committed versions into context with idempotent reads; unavailable context
    stays Pending or Unknown. Do not hold both stores' locks or claim a shared
-   transaction. Remove the superseded event write path only after cutover
+   transaction. Control reads at most 16 entries per one-second tick. It cycles
+   through configured tenants and the policy, trust, and rollout maps. Copy the
+   source revision with its policy document, the trust generation, and the
+   current rollout transition. Bound each serialized body to 32 KiB. Never
+   truncate a body. Release the Control lock before each data commit. Retain
+   the source generation, trust generation, or rollout transition number as
+   the owner revision, including a rollout revision of zero. Use the source
+   revision ID, trust digest, or candidate ID as the exact lifetime key.
+   A projection has no claimed validity interval; store both bounds as null.
+   The body retains any time reported by its authoritative owner. Do not infer
+   activation or continuous coverage from a copied state. A missing exact key,
+   including a transition that was replaced before projection, stays Unknown.
+   Retry failed entries on the next pass. Continue other entries and keep
+   policy RPCs active. Restart the worker after a panic; never restart Control
+   to repair a projection failure. Remove the superseded event write path only
+   after cutover
    tests prove every production caller uses AnalysisStore.
 
 ## Unit tests and end-to-end proof
@@ -357,7 +372,7 @@ ignored. Control passed 195 tests with two ignored, including the SQLite
 50,000-atom case. The aggregate
 scan cost still needs load qualification; passing small fixtures does not
 prove the declared intake budget. Physical capacity and trace reservation,
-processor runtime-failure reporting, Control context projection, crash injection, removal of
+processor runtime-failure reporting, crash injection, removal of
 the remaining old library writer, and physical disk reuse remain open.
 Production enablement is not qualified.
 
@@ -387,7 +402,7 @@ expected progress and accepted cutoff in one transaction. It records the change
 ID, reason, cutoff, revision, and missing range before it releases the required
 retention obligation. It does not advance consumed progress or remove witness
 pins. A matching retry returns the original revision. Registration cannot
-reactivate the retired processor version. The current development schema is 4;
+reactivate the retired processor version. The current development schema is 5;
 older formats are rejected without migration.
 The six data e2e tests passed. `data_retirement_startup` checks rejected foreign
 and duplicate scopes, the request-count bound, policy RPCs during a stale-cutoff
@@ -402,5 +417,23 @@ rollback, unchanged consumed progress, retained witness protection, exact retry,
 new-version registration, empty-input retirement, and corrupt retirement state.
 The final workspace gate passed formatting, compilation, strict Clippy, and
 39 data-crate tests with two ignored after the last witness assertion update.
-All six data e2e tests passed again on those rebuilt binaries. The remaining
-workspace tests are running. The complete phase remains **Not done**.
+All six data e2e tests passed again on those rebuilt binaries. The full gate
+passed for `61b6ee89`, including 195 Control tests and 112 lightweight e2e tests.
+The complete phase remains **Not done**.
+
+Control context projection is implemented in `ControlContextOwner` and the
+server's independent context task. The task reads committed authority records
+and uses `AnalysisStore::commit_context`. It does not add a queue, outbox,
+control transaction, or persistence owner. Schema 5 stores unknown context
+validity as null and accepts exact zero-based owner revisions. Older schemas
+are rejected; no migration is provided.
+`control_context_bounded_replay` checks bounded pages, retry, restart, tenant
+isolation, unchanged Control state, and an oversized trust body followed by a
+valid body. `data_context_projection` exercises background policy and rollout
+copies, source replacement, retained prior copies, restart, and a policy RPC.
+Formatting, workspace checks, strict Clippy, and the data-crate tests passed.
+All seven data e2e tests and the context component test passed on the final
+rebuilt binaries. The startup test reads its restart baseline after server
+shutdown drains blocking workers; independent context commits can occur before
+that drain. The full workspace test run continues. Physical qualification and
+the other open phase requirements remain **Not done**.

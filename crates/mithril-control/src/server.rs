@@ -83,6 +83,7 @@ pub async fn serve(
     tokio::select! {
         result = server => result.context(ServeSnafu { address }),
         never = maintenance.run_retention() => match never {},
+        never = maintenance.run_context() => match never {},
     }
 }
 

@@ -45,7 +45,7 @@ pub use retirement::ProcessorRetirementV1;
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.4.4";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-const ANALYSIS_SCHEMA_VERSION: i64 = 4;
+const ANALYSIS_SCHEMA_VERSION: i64 = 5;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -324,7 +324,7 @@ impl AnalysisStore {
                     entity_key BLOB NOT NULL,
                     lifetime_key BLOB NOT NULL,
                     owner_revision UBIGINT NOT NULL,
-                    valid_from_utc_ns UBIGINT NOT NULL,
+                    valid_from_utc_ns UBIGINT,
                     valid_until_utc_ns UBIGINT,
                     sensitivity VARCHAR NOT NULL,
                     body BLOB NOT NULL,
@@ -1119,7 +1119,7 @@ mod tests {
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
         let initial = store.meta()?;
-        assert_eq!(initial.schema_version, 4);
+        assert_eq!(initial.schema_version, 5);
         assert_eq!(initial.commit_revision, 0);
         assert!(AnalysisStore::open(&root).is_err());
         {
@@ -1155,7 +1155,7 @@ mod tests {
     #[test]
     fn analysis_store_schema_permissions() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        for version in [0, 2, 3, 5] {
+        for version in [0, 2, 3, 4, 6] {
             let root = directory.path().join(format!("schema-{version}"));
             let store = AnalysisStore::open(&root)?;
             {

@@ -119,9 +119,9 @@ impl DataStoreQualification {
             page.records.len() == 1 && page.records[0].framed_record == wire.framed_records,
             "default intake did not retain the exact frame",
         )?;
-        let before = data.meta()?;
         drop(connection);
         server.shutdown().await?;
+        let before = data.meta()?;
         drop(data);
         drop(Self::reopen_data(&tls.path().join("evidence/analysis")).await?);
         let control = reopen_control_store(&control_root).await?;
@@ -163,7 +163,7 @@ impl DataStoreQualification {
         let faults = [
             Some("UPDATE source_receipts SET contiguous_cursor = 2"),
             Some("UPDATE store_meta SET schema_version = 99"),
-            Some("UPDATE store_meta SET schema_version = 4; ALTER TABLE events RENAME TO missing_events"),
+            Some("UPDATE store_meta SET schema_version = 5; ALTER TABLE events RENAME TO missing_events"),
             None,
         ];
         for fault in faults {
@@ -798,6 +798,101 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn data_context_projection() -> Result<()> {
+        use araphor_data::AnalysisContextKeyV1;
+        let tls = MtlsFixture::new(false)?;
+        let store = ControlStore::open(tls.path().join("control-store"))?;
+        let fixture = OutagePolicyFixture::new(store.clone());
+        let resource = fixture.resource(1)?;
+        let first = fixture.owner.reconcile(
+            &resource,
+            OUTAGE_NAMESPACE_UID,
+            &fixture.inventory(&resource)?,
+            i64::try_from(START)?,
+        )?;
+        let data = Arc::new(AnalysisStore::open(tls.path().join("analysis"))?);
+        let intake = EvidenceIntakeOwner::new(
+            store.clone(),
+            data.clone(),
+            Arc::new(TestClock(AtomicU64::new(START))),
+        )?;
+        let control = tls.control_from_intake(intake, 1)?;
+        let authority = store.commit_index();
+        let source = &first.source_revision;
+        let source_key = AnalysisContextKeyV1 {
+            tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+            owner_id: "mithril-control/policy".into(),
+            entity_key: source.object_uid.as_bytes().to_vec(),
+            lifetime_key: source.policy_source_revision_id.as_bytes().to_vec(),
+            owner_revision: source.object_generation,
+        };
+        assert_eq!(data.context_version(&source_key)?, None);
+        let server = tls.start(control.clone()).await?;
+        let projected = ControlServerFixture::wait_context(&data, &source_key).await?;
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&projected.body)?,
+            serde_json::json!({"source": source,
+                "document": store.policy_document(&source.policy_source_revision_id)?})
+        );
+        assert_eq!(projected.valid_from_utc_ns, None);
+        assert_eq!(projected.valid_until_utc_ns, None);
+        let rollout = first.rollout_states.first().ok_or("rollout absent")?;
+        assert_eq!(rollout.transition_version, 0);
+        let rollout_key = AnalysisContextKeyV1 {
+            tenant_id: source_key.tenant_id,
+            owner_id: "mithril-control/rollout".into(),
+            entity_key: rollout.target.node_id.as_bytes().to_vec(),
+            lifetime_key: rollout.desired_candidate_content_id.as_bytes().to_vec(),
+            owner_revision: rollout.transition_version,
+        };
+        let pending = ControlServerFixture::wait_context(&data, &rollout_key).await?;
+        assert_eq!(pending.body, serde_json::to_vec(rollout)?);
+        assert_eq!(store.commit_index(), authority);
+        let mut foreign = source_key.clone();
+        foreign.tenant_id = [9; 16];
+        assert_eq!(data.context_version(&foreign)?, None);
+
+        let resource = fixture.resource(2)?;
+        let second = fixture.owner.reconcile(
+            &resource,
+            OUTAGE_NAMESPACE_UID,
+            &fixture.inventory(&resource)?,
+            i64::try_from(START + 1)?,
+        )?;
+        let source = &second.source_revision;
+        let second_key = AnalysisContextKeyV1 {
+            lifetime_key: source.policy_source_revision_id.as_bytes().to_vec(),
+            owner_revision: source.object_generation,
+            ..source_key.clone()
+        };
+        let second_copy = ControlServerFixture::wait_context(&data, &second_key).await?;
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&second_copy.body)?,
+            serde_json::json!({"source": source,
+                "document": store.policy_document(&source.policy_source_revision_id)?})
+        );
+        assert_eq!(data.context_version(&source_key)?, Some(projected));
+        assert_eq!(data.context_version(&rollout_key)?, Some(pending));
+        server.shutdown().await?;
+        let allowed: Vec<_> = control.allowed_nodes().values().cloned().collect();
+        let mut projector =
+            mithril_control::ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
+        projector.reconcile()?;
+        let before = data.meta()?;
+        projector.reconcile()?;
+        assert_eq!(data.meta()?, before);
+        let server = tls.start(control).await?;
+        let case = DataStoreQualification::new(tls.path().join("result"));
+        let mut connection = case.connect(&tls, &server).await?;
+        connection.report_readiness(true, true).await?;
+        connection.policy_inventory(None, Vec::new()).await?;
+        assert_eq!(data.meta()?, before);
+        drop(connection);
+        server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn data_reopen_preserves_errors() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
@@ -1014,14 +1109,27 @@ mod tests {
             let parts = tls.configuration()?.into_parts()?;
             assert!(parts.data_error.is_none(), "{:?}", parts.data_error);
             let data = parts.control.analysis_store().ok_or("data owner absent")?;
+            let trust = parts.control.trust_bundle_owner().current()?;
             let server = tls.start(parts.control).await?;
+            ControlServerFixture::wait_context(
+                &data,
+                &araphor_data::AnalysisContextKeyV1 {
+                    tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+                    owner_id: "mithril-control/trust".into(),
+                    entity_key: b"trust".to_vec(),
+                    lifetime_key: trust.bundle_digest.into_bytes(),
+                    owner_revision: trust.generation,
+                },
+            )
+            .await?;
+            let baseline = data.meta()?.commit_revision;
             let mut connection = case.connect(&tls, &server).await?;
             connection.send_evidence_batch(batch).await?;
             let ack = DataStoreQualification::ack(&mut connection).await?;
             assert_eq!(ack.contiguous_cursor, 1);
             observations.acknowledge_evidence(ack)?;
             assert_eq!(observations.pending_evidence_records(), 0);
-            assert_eq!(data.meta()?.commit_revision, 1);
+            assert_eq!(data.meta()?.commit_revision, baseline + 1);
             drop(connection);
             server.shutdown().await?;
         }

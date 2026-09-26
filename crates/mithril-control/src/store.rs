@@ -38,6 +38,8 @@ mod discovery;
 pub use discovery::*;
 mod discovery_context;
 pub use discovery_context::*;
+mod context;
+pub use context::ControlContextOwner;
 mod evidence_read;
 pub use evidence_read::*;
 const STATE_DIGEST_BYTES: usize = 32;
