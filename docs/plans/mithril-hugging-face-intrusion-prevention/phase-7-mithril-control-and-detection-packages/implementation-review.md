@@ -132,7 +132,12 @@ clearing that flag.
 keeps the flag after a failed removal and clears it after successful removal.
 The regression checks both failures and a successful retry. This shell test
 does not prove Kubernetes behavior. The updated physical storage/partition run
-remains **Not done**.
+passed on `47edef4c`, including cleanup. Its result is
+`/tmp/araphor-two-node-storage.ChbP3Nmp/outage-mount/result.json`. Exact retained
+prefixes survive both outages. The read-only data fault stops evidence ACK
+without stopping policy service. Node replay, partition recovery, API recovery,
+and watch relist pass. This result does not replace the separate failed
+mount-cache test or qualify full-quota performance and reserve adequacy.
 
 The next route covers the data-owner implementation. The recovery case selects
 the owner explicitly. The startup case uses ControlConfig and the default owner.
