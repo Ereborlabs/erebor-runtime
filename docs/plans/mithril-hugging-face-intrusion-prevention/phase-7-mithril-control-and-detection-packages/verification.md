@@ -322,7 +322,7 @@ Use external clock/runtime/network doubles only; call production owner APIs.
 | Phase | Crate-local unit test families | mithril-e2e case |
 | --- | --- | --- |
 | 7.1 | schema, exact aggregation, offline DuckDB transaction, SQL-admission and isolation tests | offline-exact; storage-contract through public AnalysisStore methods |
-| 7.2 | analysis_store_, analysis_upgrade_, control_retention_ | data-store-recovery through production intake with ACK/storage measurements; data-store-upgrade |
+| 7.2 | analysis_store_, analysis_startup_, control_retention_ | data-store-recovery through production intake with ACK/storage measurements; data-store-startup on clean development state |
 | 7.3 | query_admission_, query_scope_, query_follow_, frame and extraction-limit tests | query-follow with extraction/worker measurements |
 | 7.4 | discovery_derivation_, discovery_context_, discovery_comparison_ | context-roundtrip; profile-restart |
 | 7.5 | control_graph_, control_notification_, control_authority_ | graph-notification |
