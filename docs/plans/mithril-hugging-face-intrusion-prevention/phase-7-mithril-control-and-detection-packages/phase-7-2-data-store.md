@@ -68,6 +68,13 @@ Store recovery fails
    Database corruption stops data ACK. Supervise analysis failures without
    exiting Control's policy service. Enforce per-tenant and global queue/disk
    quotas. Query-worker health and failure isolation belong to 7.3.
+   Read processor progress, accepted cursor, missing ranges and revision from
+   one snapshot. Report lag separately from expired or lost input. Keep a
+   missing-coverage flag after an optional processor resumes. Report physical
+   storage capacity separately from retention health. A capacity sample does
+   not promise admission for a later write or for a tenant's logical quota.
+   Read exact recovery gaps in source-scoped pages of at most 256 ranges.
+   These health reads must not advance receipts or processor progress.
    Charge each retained row 256 logical bytes plus its variable payload and
    key bytes. Use 8 GiB per store and 2 GiB per tenant by default. Ordinary
    writes leave one quarter of each limit for result and maintenance commits.
@@ -311,9 +318,24 @@ cleanup after witness expiry, and duplicate-descriptor lease release.
 impossible physical reserve and a one-byte tenant quota through mTLS.
 After the lease fix, the full concurrent Mithril e2e suite passed 111 tests;
 247 physical or explicit qualification tests remained ignored.
-The final workspace gate for these quota changes is running. The aggregate
+The final workspace gate for `ae7d342c` passed formatting, compilation, strict
+Clippy, and 33 data-crate tests with two ignored. It failed the unchanged
+SQLite 50,000-atom test with `OperationInterrupted` during atom-sample decoding.
+Control passed 194 tests, failed one, and ignored two.
+Fixed health reads now return processor lag, expired input, recovery loss,
+and historical missing coverage from one snapshot. Storage health separates
+retention failure from sampled physical intake and maintenance capacity.
+Neither capacity field checks a tenant's logical quota or reserves space.
+Exact recovery-gap reads return at most 256 source-scoped ranges. A stale
+restore retains those ranges across restart without creating a source receipt.
+No read advances an ACK or processor progress. The Node protocol does not
+provide an authenticated purge-floor report; this change adds no cursor skip.
+The 26 `analysis_store_` tests and all five data e2e tests passed. The recovery
+case now passes 26 checks, including required lag, optional missing coverage,
+and recovery-gap restart. These runs use temporary stores and synthetic input.
+The final workspace gate for the health changes is running. The aggregate
 scan cost still needs load qualification; passing small fixtures does not
 prove the declared intake budget. Physical capacity and trace reservation,
-processor health, Control context projection, crash injection, removal of
+processor runtime-failure reporting, Control context projection, crash injection, removal of
 the remaining old library writer, and physical disk reuse remain open.
 Production enablement is not qualified.

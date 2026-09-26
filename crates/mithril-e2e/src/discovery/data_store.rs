@@ -13,7 +13,7 @@ use std::{
 use araphor_data::{
     AnalysisRecoveryStatusV1, AnalysisResultCommitV1, AnalysisStore, AnalysisWitnessV1,
     EvidenceIntakeIdentityV1, EvidenceRetentionOwner, ProcessorClassV1, ProcessorScopeV1,
-    RetentionLimitsV1,
+    ProcessorStateV1, RetentionLimitsV1,
 };
 use mithril_control::{
     ControlStore, EvidenceIdV1, EvidenceIntakeOwner, IntakeClock, NodeRegistration,
@@ -455,6 +455,15 @@ impl DataStoreQualification {
             raw_max_age_ns: 24 * HOUR,
             raw_max_bytes: 1024 * 1024,
         };
+        let health = data
+            .processor_health(&required)?
+            .ok_or("required health is absent")?;
+        self.check(
+            health.state == ProcessorStateV1::Lagging
+                && health.cursor_lag == 3
+                && data.storage_health()?.retention_healthy,
+            "required lag was hidden or changed intake health",
+        )?;
         self.check(
             EvidenceRetentionOwner::new(&data, limits)?
                 .retain(&identity, START + 8 * HOUR)?
@@ -569,6 +578,16 @@ impl DataStoreQualification {
                 && data.resume_optional(&optional)?.is_none(),
             "optional resume changed or repeated the gap",
         )?;
+        let health = data
+            .processor_health(&optional)?
+            .ok_or("optional health is absent")?;
+        self.check(
+            health.state == ProcessorStateV1::Lagging
+                && health.incomplete
+                && health.consumed_cursor == 0
+                && health.resume_floor == 2,
+            "optional health hid the missing interval or invented consumed progress",
+        )?;
         self.check(
             data.read_result(identity.tenant_id, &result.result_id)? == Some(result.body.clone())
                 && data.read_result([9; 16], &result.result_id)?.is_none(),
@@ -613,6 +632,19 @@ impl DataStoreQualification {
                     },
             "stale backup hid purged Node input",
         )?;
+        let gaps = stale.recovery_gaps(&identity, 0)?;
+        let before = stale.meta()?;
+        drop(stale);
+        let stale = AnalysisStore::open(tls.path().join("stale-restored"))?;
+        self.check(
+            gaps.len() == 1
+                && gaps[0].first_cursor == 1
+                && gaps[0].last_cursor == 4
+                && stale.recovery_gaps(&identity, 0)? == gaps
+                && stale.meta()? == before
+                && stale.source_receipt(&identity)?.is_none(),
+            "recovery gap restart lost evidence or invented an accepted receipt",
+        )?;
         drop(connection);
         server.shutdown().await?;
         let checks = [
@@ -625,6 +657,7 @@ impl DataStoreQualification {
             "durable-ack-purges-node-wal",
             "disabled-discovery-intake",
             "required-progress-protection",
+            "required-lag-health",
             "required-age-backpressure",
             "protected-input-retry",
             "policy-rpc-during-backpressure",
@@ -633,12 +666,14 @@ impl DataStoreQualification {
             "exact-witness-retention",
             "explicit-expired-range",
             "optional-resume-gap",
+            "optional-incomplete-health",
             "tenant-scoped-result",
             "unchanged-policy",
             "single-evidence-writer",
             "backup-after-expiry",
             "restore-recovery-epoch",
             "stale-backup-partial",
+            "recovery-gap-restart",
         ];
         fs::create_dir(&self.output)?;
         super::write_json(

@@ -84,8 +84,28 @@ the owner explicitly. The startup case uses ControlConfig and the default owner.
 -> [AnalysisStore::commit_result](../../../../crates/araphor-data/src/analysis/progress.rs) One transaction checks expected progress and exact context/witness digests. It commits the result, references, and progress.<br>
 -> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) One transaction deletes eligible raw rows, records expired ranges, and advances the retained floor. Required progress and live exact witnesses protect rows.<br>
 -> [AnalysisStore::resume_optional](../../../../crates/araphor-data/src/analysis/progress.rs) An optional processor records an expired gap before it resumes. Its consumed cursor does not advance for the skipped input.<br>
+-> [AnalysisStore::processor_health](../../../../crates/araphor-data/src/analysis/health.rs) One snapshot returns accepted and effective progress, lag, missing input, and its revision. An optional resume keeps the missing-coverage flag.<br>
 -> [AnalysisStore::backup](../../../../crates/araphor-data/src/analysis/backup.rs) A checkpoint and synced copy produce a digest manifest.<br>
 -> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) A validated copy opens in an empty private directory with a new recovery epoch.
+
+[AnalysisStore::record_recovery_floor](../../../../crates/araphor-data/src/analysis/backup.rs) A caller reports Node input no longer available after a stale restore.<br>
+-> [AnalysisStore::recovery_gaps](../../../../crates/araphor-data/src/analysis/health.rs) A source-scoped read returns at most 256 exact missing ranges after the supplied cursor.<br>
+-> [AnalysisStore::processor_health](../../../../crates/araphor-data/src/analysis/health.rs) Recovery loss takes precedence over ordinary lag or expiry. The read does not create a receipt or advance progress.
+
+These are fixed internal data-owner reads, not public SQL or gRPC methods.
+Processor health uses one bounded reader transaction. It returns no native
+connection. `cursor_lag` compares the accepted cursor with the larger of the
+consumed cursor and optional resume floor. `incomplete` remains true after a
+recorded processor or recovery gap. Runtime failure supervision is not part
+of this progress read. Required-package retirement is not yet implemented.
+
+[AnalysisStore::storage_health](../../../../crates/araphor-data/src/analysis/health.rs)
+checks readable store metadata and samples physical storage usage. Its intake
+and maintenance capacity fields reuse physical admission checks. They do not
+include tenant logical quotas or reserve space for the next operation.
+Retention health is separate. A lagging processor does not make storage
+unhealthy. The Node protocol has no authenticated purge-floor report; the
+recovery helper does not grant permission to skip input or advance an ACK.
 
 [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) A required processor has not consumed a row, or a live witness names it.<br>
 -> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) The transaction keeps that row. An expired row can be deleted on a later call after its protection ends.<br>
@@ -828,8 +848,8 @@ not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
 
-This review covers `codex/mithril-ui` at `abab59fc` plus logical quotas
-and quota-driven retention. The startup command passed 16 checks; recovery
+This review covers `codex/mithril-ui` at `ae7d342c` plus scoped health and
+recovery-gap reads. The startup command passed 16 checks; recovery
 passed 23 checks. Their results are in `/tmp/araphor-retention.NH24lk/`. QueryOwner and trace API
 frames are not qualified by these changes.
 
@@ -878,7 +898,20 @@ A concurrent rerun exposed a held data lease. The data owner now uses the
 existing process-owned explicit unlock rule. The 24 `analysis_store_` tests
 passed with logical quotas, quota-driven retention, and duplicate-descriptor
 lease release. The full concurrent Mithril e2e suite then passed 111 tests with
-247 ignored. The final workspace gate for those changes is running. Aggregate
+247 ignored. The final workspace gate for `ae7d342c` passed formatting,
+compilation, strict Clippy, and 33 data-crate tests with two ignored. It failed
+the unchanged SQLite 50,000-atom test with `OperationInterrupted` during
+atom-sample decoding. Control passed 194 tests, failed one, and ignored two.
+The health changes passed 26 `analysis_store_` tests and all five data e2e
+tests. `analysis_store_processor_health` checks required lag, optional expiry
+and resume, recovery loss, tenant isolation, restart, and separate physical
+capacity and retention failure. `analysis_store_recovery_pages` checks the
+256-range bound and continuation, invalid identity, and tenant isolation.
+The recovery e2e case now passes 26 checks through production owners. Its
+three new checks prove required lag, optional missing coverage, and durable
+recovery gaps without a fabricated source receipt. The earlier command
+artifacts above do not contain those new checks. The final workspace gate
+for the health changes is running. Aggregate
 scan performance, trace reservation, crash injection, and physical qualification
 remain open.
 The 16 `analysis_store_` tests passed with scheduled retention and required-input

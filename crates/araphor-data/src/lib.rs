@@ -9,13 +9,14 @@ mod analysis;
 
 pub use analysis::{
     AnalysisBackupManifestV1, AnalysisContextKeyV1, AnalysisContextRefV1, AnalysisContextVersionV1,
-    AnalysisProcessorGapV1, AnalysisReadPageV1, AnalysisRecordV1, AnalysisRecoveryStatusV1,
+    AnalysisGapV1, AnalysisReadPageV1, AnalysisRecordV1, AnalysisRecoveryStatusV1,
     AnalysisResultCommitV1, AnalysisResultReceiptV1, AnalysisSourceReceiptV1,
     AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1, AnalysisWitnessV1,
     ContextSensitivityV1, EvidenceRetentionOwner, EvidenceStoreOutcomeV1, ProcessorClassV1,
-    ProcessorScopeV1, RetentionLimitsV1, RetentionResultV1, RetentionSweepV1, StorageLimitsV1,
-    StorageUsageV1, StorePositionV1, ValidatedCoverageV1, ValidatedEvidenceBatchV1,
-    ANALYSIS_DUCKDB_BINDING_VERSION, ANALYSIS_SQLPARSER_VERSION,
+    ProcessorHealthV1, ProcessorScopeV1, ProcessorStateV1, RetentionLimitsV1, RetentionResultV1,
+    RetentionSweepV1, StorageHealthV1, StorageLimitsV1, StorageUsageV1, StorePositionV1,
+    ValidatedCoverageV1, ValidatedEvidenceBatchV1, ANALYSIS_DUCKDB_BINDING_VERSION,
+    ANALYSIS_SQLPARSER_VERSION,
 };
 
 pub const MAX_EVIDENCE_BATCH_RECORDS: usize = 4_096;

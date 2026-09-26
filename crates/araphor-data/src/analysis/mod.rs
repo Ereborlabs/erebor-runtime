@@ -22,6 +22,7 @@ mod backup;
 mod capacity;
 mod connection;
 mod context;
+mod health;
 mod progress;
 mod quota;
 mod read;
@@ -31,8 +32,9 @@ mod schema;
 pub use backup::{AnalysisBackupManifestV1, AnalysisRecoveryStatusV1};
 pub use capacity::{StorageLimitsV1, StorageUsageV1};
 pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
+pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};
 pub use progress::{
-    AnalysisContextRefV1, AnalysisProcessorGapV1, AnalysisResultCommitV1, AnalysisResultReceiptV1,
+    AnalysisContextRefV1, AnalysisGapV1, AnalysisResultCommitV1, AnalysisResultReceiptV1,
     AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,
 };
 pub use retention::{
