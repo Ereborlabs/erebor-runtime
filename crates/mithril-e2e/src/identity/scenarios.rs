@@ -49,6 +49,8 @@ mod multi_policy;
 #[cfg(test)]
 mod namespace_init;
 #[cfg(test)]
+mod network_probes;
+#[cfg(test)]
 mod non_leader_exec;
 #[cfg(test)]
 mod orphan;

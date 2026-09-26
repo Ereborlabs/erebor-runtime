@@ -646,6 +646,11 @@ impl ProcessFixture {
     }
 
     #[cfg(test)]
+    pub(crate) fn group_path(&self) -> Option<&Path> {
+        self.group.as_deref()
+    }
+
+    #[cfg(test)]
     pub(crate) fn send(&mut self, bytes: &[u8]) -> Result<()> {
         self.stdin
             .as_mut()

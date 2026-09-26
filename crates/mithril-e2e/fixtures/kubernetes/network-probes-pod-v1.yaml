@@ -1,13 +1,7 @@
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: MITHRIL_IDENTITY_NETWORK_PROBE_NAMESPACE
----
-apiVersion: v1
 kind: Pod
 metadata:
   name: mithril-network-probes
-  namespace: MITHRIL_IDENTITY_NETWORK_PROBE_NAMESPACE
 spec:
   automountServiceAccountToken: false
   restartPolicy: Never

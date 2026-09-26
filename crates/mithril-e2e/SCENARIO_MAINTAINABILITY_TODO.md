@@ -682,7 +682,6 @@ The diff from `95775f48` adds or relocates these private test functions with
 more than five name components:
 
 - `production_object_and_identity_fixture_allocation_are_exact`
-- `kubernetes_network_probe_container_no_task`
 
 The same diff adds or relocates these local variables with more than three
 name components:
@@ -4049,7 +4048,7 @@ setup, production actions, assertions, and focused test.
   running before Node starts. Require public production recovery, exact
   identity retention across the Kubernetes service and Node outages, and
   fresh identity after same-name Pod and container recreation.
-- [ ] `physical_kubernetes_network_probe`
+- [x] `physical_kubernetes_network_probe`
   - [x] Add one `Platform::start_actor_group` operation. Kubernetes starts the
     group in one Pod from a checked YAML fixture. Host and direct `runc` start
     separate PID-1 actors in separate cgroups. Do not implement the group as
@@ -4057,10 +4056,10 @@ setup, production actions, assertions, and focused test.
   - [x] Prove that one policy assigns different entry roles to two containers
     in the same Pod. Run the same read action in both containers. Require one
     allow result and one deny result on Host, direct `runc`, and Kubernetes.
-  - [ ] Keep native HTTP, TCP, and gRPC readiness probes. Require each
+  - [x] Keep native HTTP, TCP, and gRPC readiness probes. Require each
     container to become Ready with zero restarts. Sample each exact CRI
     container cgroup for four seconds and require only its init PID.
-  - [ ] Keep the test below 100 lines and remove the legacy probe only after
+  - [x] Keep the test below 100 lines and remove the legacy probe only after
     the replacement passes. Verify group setup and cleanup on Host and direct
     `runc`, then run the Kubernetes case.
 
