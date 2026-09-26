@@ -138,12 +138,20 @@ required here. Stop before enabling a data path whose recovery case fails.
 **Not done.** AnalysisStore has a writer, bounded reads, exact context
 versions, processor results and references, guarded raw expiry, backup and
 restore. Source bindings and an explicit data-backed EvidenceIntakeOwner path
-have component tests. The data-owner library suite passed 19 tests with two
-ignored. The evidence-owner suite passed 12 tests, including old-state
-rejection and cursor-overflow rejection. Workspace formatting, compilation,
-and strict Clippy passed; the full workspace test run is not yet complete.
-Tests use temporary
-databases; no retention call ran on an existing deployment. Server startup
-still selects the old writer. Fresh-store activation, capacity admission,
-Control context projection, mTLS recovery and startup cases, and physical disk
-reuse remain unverified. Do not enable the new data path yet.
+have component tests. `data-store-recovery` passed 19 checks through the
+production mTLS service with an explicitly selected data owner. The case proves
+lost-ACK replay, owner restart, exact frames and coverage, required-progress
+protection, optional expiry, an exact witness, tenant-scoped result reads,
+backup after expiry, and Partial recovery from a stale backup.
+The result is `/tmp/araphor-live-store.M3z6hl/recovery/result.json`: cursor 3,
+retained floor 2, one retained witness, and backup revision 8.
+`cargo test -p araphor-data --lib` passed 19 tests with two ignored.
+These tests include tenant and corrupt-body checks in
+`analysis_store_result_progress`.
+Workspace formatting, compilation, and strict Clippy passed. The full workspace
+test run is still running.
+Tests use temporary databases; no retention call ran on an existing deployment.
+Default startup still selects the old writer. Fresh-store activation, bounded
+admission, capacity and processor health, Control context projection, crash
+injection, the startup case, and physical disk reuse remain open.
+Do not enable the new default data path yet.

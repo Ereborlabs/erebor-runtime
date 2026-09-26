@@ -32,6 +32,19 @@ const MAX_COVERAGE_INTERVALS: usize = 8_192;
 pub struct EvidenceIntakeOwner {
     store: crate::ControlStore,
     data: Option<Arc<araphor_data::AnalysisStore>>,
+    clock: Arc<dyn IntakeClock>,
+}
+
+pub trait IntakeClock: Send + Sync {
+    fn now(&self) -> SystemTime;
+}
+
+pub struct SystemIntakeClock;
+
+impl IntakeClock for SystemIntakeClock {
+    fn now(&self) -> SystemTime {
+        SystemTime::now()
+    }
 }
 
 #[derive(Clone)]
@@ -197,10 +210,18 @@ impl EvidenceIntakeOwner {
 
     #[must_use]
     pub fn from_store(store: crate::ControlStore) -> Self {
-        Self { store, data: None }
+        Self {
+            store,
+            data: None,
+            clock: Arc::new(SystemIntakeClock),
+        }
     }
 
-    pub fn new(store: crate::ControlStore, data: Arc<araphor_data::AnalysisStore>) -> Result<Self> {
+    pub fn new(
+        store: crate::ControlStore,
+        data: Arc<araphor_data::AnalysisStore>,
+        clock: Arc<dyn IntakeClock>,
+    ) -> Result<Self> {
         let health = store.health()?;
         snafu::ensure!(
             health.evidence_cursors == 0
@@ -213,6 +234,7 @@ impl EvidenceIntakeOwner {
         Ok(Self {
             store,
             data: Some(data),
+            clock,
         })
     }
 
@@ -338,7 +360,8 @@ impl EvidenceIntakeOwner {
         // Pending batches are durable but receive no acknowledgement before the gap closes.
         let outcome = if let Some(data) = &self.data {
             let intake_utc_ns = u64::try_from(
-                SystemTime::now()
+                self.clock
+                    .now()
                     .duration_since(UNIX_EPOCH)
                     .map_err(|_| Status::unavailable("the intake clock precedes the Unix epoch"))?
                     .as_nanos(),
@@ -1021,7 +1044,11 @@ mod tests {
         let data = Arc::new(araphor_data::AnalysisStore::open(
             directory.path().join("analysis"),
         )?);
-        let intake = EvidenceIntakeOwner::new(control.clone(), data.clone())?;
+        let intake = EvidenceIntakeOwner::new(
+            control.clone(),
+            data.clone(),
+            Arc::new(super::SystemIntakeClock),
+        )?;
         let first = batch(1, 2)?;
         let original = first.framed_records.clone();
         assert_eq!(
@@ -1057,7 +1084,8 @@ mod tests {
         let reopened = Arc::new(araphor_data::AnalysisStore::open(
             directory.path().join("analysis"),
         )?);
-        let intake = EvidenceIntakeOwner::new(control, reopened)?;
+        let intake =
+            EvidenceIntakeOwner::new(control, reopened, Arc::new(super::SystemIntakeClock))?;
         assert_eq!(intake.contiguous_cursor(&identity())?, 2);
         Ok(())
     }
@@ -1082,7 +1110,12 @@ mod tests {
             let data = Arc::new(araphor_data::AnalysisStore::open(
                 directory.path().join("analysis"),
             )?);
-            assert!(EvidenceIntakeOwner::new(control, data.clone()).is_err());
+            assert!(EvidenceIntakeOwner::new(
+                control,
+                data.clone(),
+                Arc::new(super::SystemIntakeClock)
+            )
+            .is_err());
             assert_eq!(data.meta()?.commit_revision, 0);
         }
         Ok(())

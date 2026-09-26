@@ -188,6 +188,19 @@ impl ControlPlane {
         trust: TrustGenerationV1,
         store: crate::ControlStore,
     ) -> crate::Result<Self> {
+        Self::from_intake(
+            allowed,
+            trust,
+            crate::EvidenceIntakeOwner::from_store(store),
+        )
+    }
+
+    pub fn from_intake(
+        allowed: Vec<AllowedNodeIdentity>,
+        trust: TrustGenerationV1,
+        evidence: crate::EvidenceIntakeOwner,
+    ) -> crate::Result<Self> {
+        let store = evidence.store();
         let trust = crate::TrustBundleOwner::open(store.clone(), trust)?;
         Ok(Self {
             allowed_nodes: Arc::new(
@@ -198,7 +211,7 @@ impl ControlPlane {
             ),
             trust,
             state: Arc::new(Mutex::new(ControlState::default())),
-            evidence: Some(crate::EvidenceIntakeOwner::from_store(store.clone())),
+            evidence: Some(evidence),
             policy_store: Some(store),
             policy_rollout: None,
             policy_desired_state: None,

@@ -297,7 +297,18 @@ impl MtlsFixture {
         store: ControlStore,
         generation: u64,
     ) -> mithril_control::Result<ControlPlane> {
-        ControlPlane::with_control_store(
+        self.control_from_intake(
+            mithril_control::EvidenceIntakeOwner::from_store(store),
+            generation,
+        )
+    }
+
+    pub(crate) fn control_from_intake(
+        &self,
+        intake: mithril_control::EvidenceIntakeOwner,
+        generation: u64,
+    ) -> mithril_control::Result<ControlPlane> {
+        ControlPlane::from_intake(
             vec![AllowedNodeIdentity {
                 node_id: "node-a".to_owned(),
                 certificate_sha256: self.certificates.node_digest(),
@@ -309,7 +320,7 @@ impl MtlsFixture {
                 policy_issuer_sequence_epoch: 0,
                 policy_signers: Vec::new(),
             },
-            store,
+            intake,
         )
     }
 
