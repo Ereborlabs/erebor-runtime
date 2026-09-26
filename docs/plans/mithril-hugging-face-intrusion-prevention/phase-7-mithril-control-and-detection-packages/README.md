@@ -26,6 +26,12 @@ Node retains its delivery WAL. A source ACK follows the data commit, not receipt
 in memory. Raw input can expire while bounded profiles, findings and exact
 witnesses remain available. Summary retention is not full raw-history retention.
 
+Development changes do not require backward compatibility. Use a fresh data
+store and fresh Node source identities when the data format changes. Reject
+unsupported stored formats without changing them. Do not add old-store imports,
+schema migrations, or mixed-version support. Current-format restart, replay,
+backup and restore remain required.
+
 ## Implementation flow
 
 ```text
@@ -118,7 +124,7 @@ Each row is a bounded deliverable. The required test level appears below.
 | Order | Phase | Deliverable and entry gate |
 | --- | --- | --- |
 | 1 | [7.1 Contracts and offline proof](phase-7-1-contracts-and-offline-proof.md) | Establish the data crate, freeze schemas and corpus, and prove DuckDB durability/isolation. |
-| 2 | [7.2 Data store](phase-7-2-data-store.md) | Durable intake, context records, commit revisions, retention, backup and upgrade; needs 7.1. |
+| 2 | [7.2 Data store](phase-7-2-data-store.md) | Durable intake, context records, commit revisions, retention, backup and fresh-store activation; needs 7.1. |
 | 3 | [7.3 Query and follow](phase-7-3-query-and-follow.md) | Isolated SQL and commit-driven append/replace streams; needs 7.2. |
 | 4 | [Observability 1](../../araphor-observability/phase-1-contracts-and-backend.md), then [2](../../araphor-observability/phase-2-owned-capture.md) | Backend proof can run alongside 7.1–7.3. Capture integration requires 7.2 and backend proof. |
 | 5 | [Observability 3](../../araphor-observability/phase-3-cli-api-and-console.md) | Shared protobuf gRPC, SQL/trace CLI, gRPC-Web console views, and old client-route retirement; needs 7.3 and Observability 2. |

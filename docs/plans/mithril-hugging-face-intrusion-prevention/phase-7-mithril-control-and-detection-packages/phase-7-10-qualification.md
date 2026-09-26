@@ -95,7 +95,8 @@ bounded scope before those increments; it cannot claim their physical results.
    documentation: enable/disable derivation, query/follow, recover cursor expiry,
    inspect gaps, expire bundles, revoke export, resolve stale writes, and submit
    reviewed rollback or qualified response.
-   Test upgrade from old records/state and restart during publication.
+   Test fresh-store activation, rejection of unsupported stored formats, and
+   restart during publication. Do not require old-state migration.
 7. Add deterministic discovery checks and UI checks to `.github/workflows/ci.yml`.
    Keep physical qualification in its existing environment-dependent lane.
    Record the supported source/policy/platform matrix and results here.

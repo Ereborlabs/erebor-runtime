@@ -51,8 +51,9 @@ Derivation fails or is disabled
    and the existing protobuf fields. Bind roles, state, entry, selector,
    object and kernel sequence to the exact policy generation and lifetime.
    Use a bounded immutable Node lookup snapshot, not per-event filesystem
-   resolution. Old records stay readable with explicit missing-context fields.
-   Upgrade Control before Node. Keep Node WAL compatibility tests.
+   resolution. Missing context in a supported record stays unresolved.
+   Use matching Node and Control formats. Test the current Node WAL round trip
+   and reject unsupported formats; do not add old-format readers.
 3. Apply the exact algorithm in engine-design.md. Deduplicate by accepted
    identity, not similarity. Keep source lifetime, cohort, role/state, operation,
    exact binding, source decision, physical result and proof kind in atom keys.
