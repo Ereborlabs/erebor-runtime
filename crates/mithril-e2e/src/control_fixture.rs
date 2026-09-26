@@ -503,8 +503,14 @@ impl ControlServerFixture {
         files: &CertificateFiles,
         control: ControlPlane,
     ) -> Result<Self, Box<dyn StdError>> {
+        Self::start_tls(files.server_tls(), control).await
+    }
+
+    pub(crate) async fn start_tls(
+        tls: ControlServerTls,
+        control: ControlPlane,
+    ) -> Result<Self, Box<dyn StdError>> {
         let address = free_address()?;
-        let tls = files.server_tls();
         let (shutdown, receiver) = oneshot::channel();
         let server = tokio::task::spawn_blocking(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()

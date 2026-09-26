@@ -163,8 +163,31 @@ with 248 ignored; Node passed 256 with one ignored. All 22 cases in the four
 crash tests passed. The rebuilt CLI passed startup (18 checks) and recovery
 (29 checks). Results are in
 `/tmp/araphor-data-qualification.MtrjRy/restore-{startup,recovery}/result.json`.
-These checks use temporary stores. Control process interruption before ACK,
-native commit failure after admission, and physical qualification remain open.
+These checks use temporary stores. Native commit failure after admission and
+physical qualification remain open. The next route adds the Control process
+interruption check; its verification is recorded separately.
+
+[data_control_child](../../../../crates/mithril-e2e/src/discovery/data_store.rs) A child process loads ControlConfig and starts the production mTLS server.<br>
+-> [ControlPlane::set_evidence_commit_hook](../../../../crates/mithril-control/src/service.rs) The child installs an exit callback available only with `test-fixtures`.<br>
+-> [ControlPlane::receive_evidence_stream_group](../../../../crates/mithril-control/src/service.rs) The shared unary and stream path authenticates and validates input, then commits through EvidenceIntakeOwner.<br>
+-> [data_control_child](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The callback exits the process after commit and before the ACK can enter the response stream.<br>
+-> [data_control_crash](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The parent requires no ACK, reopens Node WAL, and checks the exact committed data and source receipt.<br>
+-> [ControlPlane::receive_evidence_stream_group](../../../../crates/mithril-control/src/service.rs) Restarted Control accepts the retained duplicate and returns its durable cursor without another revision.<br>
+-> [data_control_crash](../../../../crates/mithril-e2e/src/discovery/data_store.rs) Applying the ACK clears Node pending input. A new cursor commits once and survives a second data-store reopen. Policy state remains unchanged.
+
+The callback defaults to absent. No configuration field or production exit
+condition enables it. The test first sends an invalid batch and requires the
+child to remain alive. The parent owns the child, sets readiness and exit
+timeouts, and kills the child on an early test return. Existing server and TLS
+fixtures supply the real owners. Before replay, the test reconciles the small
+policy context fixture to completion so independent context commits cannot
+change the revision assertion. This case tests the stream ACK path, not every
+unary request shape, hardware power loss, or interruption inside native commit.
+
+`data_control_crash` passed alone and with all eight enabled data-store tests.
+Two tests remain ignored: the child helper and the separate tmpfs case. This
+source state adds the optional fixture callback, shared TLS fixture entry, and
+test-only Tokio process support. The final workspace gate is pending.
 
 The full workspace gate passed for `cb8417f8`, including all twelve cases in
 `analysis_store_commit_crashes` and `analysis_store_input_crashes`. The data

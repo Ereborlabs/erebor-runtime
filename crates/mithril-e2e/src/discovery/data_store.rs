@@ -797,33 +797,44 @@ impl DataStoreQualification {
         tls: &MtlsFixture,
         server: &ControlServerFixture,
     ) -> Result<ControlConnection> {
+        self.connect_at(tls, server.address()).await
+    }
+
+    async fn connect_at(
+        &self,
+        tls: &MtlsFixture,
+        address: std::net::SocketAddr,
+    ) -> Result<ControlConnection> {
         let mut trust = TrustCache::load(&tls.path().join("trust"))?;
-        Ok(tls
-            .connector(server, "node-a", [7; 16])
-            .connect(
-                NodeRegistration {
-                    platform_digest: "a".repeat(64),
-                    program_digest: "b".repeat(64),
-                    label_epoch: 1,
-                    kernel_ready: true,
-                    effect_prevention_claims_enabled: false,
-                    kubernetes_node_name: String::new(),
-                    startup_absence_proof_digest: mithril_control::startup_absence_proof_digest(
-                        "node-a", &[7; 16], 1, true, true,
-                    ),
-                    policy_authority_absent: true,
-                    exception_authority_absent: true,
-                    capabilities: vec![mithril_control::CapabilityRecord {
-                        capability_id: "KERNEL_LSM_CHASSIS".into(),
-                        state: "UNSUPPORTED".into(),
-                        reason_code: "SYNTHETIC_INPUT_ONLY".into(),
-                    }],
-                    workload_targets: Vec::new(),
-                },
-                false,
-                &mut trust,
-            )
-            .await?)
+        Ok(mithril_node::NodeControlConnector::new(
+            tls.node_config(address),
+            "node-a".to_owned(),
+            [7; 16],
+        )
+        .connect(
+            NodeRegistration {
+                platform_digest: "a".repeat(64),
+                program_digest: "b".repeat(64),
+                label_epoch: 1,
+                kernel_ready: true,
+                effect_prevention_claims_enabled: false,
+                kubernetes_node_name: String::new(),
+                startup_absence_proof_digest: mithril_control::startup_absence_proof_digest(
+                    "node-a", &[7; 16], 1, true, true,
+                ),
+                policy_authority_absent: true,
+                exception_authority_absent: true,
+                capabilities: vec![mithril_control::CapabilityRecord {
+                    capability_id: "KERNEL_LSM_CHASSIS".into(),
+                    state: "UNSUPPORTED".into(),
+                    reason_code: "SYNTHETIC_INPUT_ONLY".into(),
+                }],
+                workload_targets: Vec::new(),
+            },
+            false,
+            &mut trust,
+        )
+        .await?)
     }
 
     async fn ack(connection: &mut ControlConnection) -> Result<mithril_node::EvidenceAckV1> {
@@ -853,6 +864,203 @@ impl DataStoreQualification {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "subprocess helper; requires the parent's temporary Control configuration"]
+    async fn data_control_child() -> Result<()> {
+        let root =
+            PathBuf::from(std::env::var_os("ARAPHOR_CONTROL_CRASH_ROOT").ok_or("root absent")?);
+        let mut parts =
+            mithril_control::ControlConfig::load(&root.join("control.json"))?.into_parts()?;
+        if let Some(error) = parts.data_error {
+            return Err(error.into());
+        }
+        parts
+            .control
+            .set_evidence_commit_hook(|| std::process::exit(73));
+        let server = ControlServerFixture::start_tls(parts.tls, parts.control).await?;
+        println!("CONTROL_READY={}", server.address());
+        std::future::pending::<()>().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn data_control_crash() -> Result<()> {
+        use std::process::Stdio;
+        use tokio::io::AsyncBufReadExt as _;
+
+        let tls = MtlsFixture::new(false)?;
+        let control_root = tls.path().join("control-store");
+        let store = ControlStore::open(&control_root)?;
+        let policy_id = {
+            let fixture = OutagePolicyFixture::new(store.clone());
+            let resource = fixture.resource(1)?;
+            fixture
+                .owner
+                .reconcile(
+                    &resource,
+                    OUTAGE_NAMESPACE_UID,
+                    &fixture.inventory(&resource)?,
+                    i64::try_from(START)?,
+                )?
+                .source_revision
+                .policy_source_revision_id
+        };
+        let policy = store.policy_document(&policy_id)?.ok_or("policy absent")?;
+        drop(store);
+        tls.configuration()?;
+        let open_node = || {
+            EffectObservationStore::durable(
+                8,
+                tls.path().join("wal"),
+                EvidenceWalLimits::default(),
+                ObservationCanonicalizer::new(
+                    EvidenceIdV1::new(1, 2),
+                    EvidenceIdV1::new(3, 4),
+                    1,
+                    [7; 16].into(),
+                )?,
+            )
+        };
+        let observations = open_node()?;
+        DataStoreQualification::record(&observations, 1);
+        let batch = observations
+            .next_evidence_batch()
+            .ok_or("Node batch absent")?;
+        let wire: mithril_control::EvidenceBatch = batch.clone().into();
+        let identity = EvidenceIntakeIdentityV1 {
+            tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+            node_id: "node-a".into(),
+            node_boot_id: [7; 16],
+            label_epoch: 1,
+            source_id: wire.source_id.as_slice().try_into()?,
+            source_epoch: wire.source_epoch,
+        };
+        let mut child = tokio::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "discovery::data_store::tests::data_control_child",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("ARAPHOR_CONTROL_CRASH_ROOT", tls.path())
+            .stdout(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?;
+        let mut output =
+            tokio::io::BufReader::new(child.stdout.take().ok_or("child stdout absent")?).lines();
+        let address = tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(line) = output.next_line().await? {
+                if let Some(value) = line.strip_prefix("CONTROL_READY=") {
+                    return Ok::<std::net::SocketAddr, Box<dyn StdError>>(value.parse()?);
+                }
+            }
+            Err("Control child exited before readiness".into())
+        })
+        .await??;
+        let case = DataStoreQualification::new(tls.path().join("result"));
+        let mut connection = case.connect_at(&tls, address).await?;
+        connection.report_readiness(true, true).await?;
+        connection.policy_inventory(None, Vec::new()).await?;
+        let mut invalid = batch.clone();
+        invalid.first_cursor = 0;
+        connection.send_evidence_batch(invalid).await?;
+        let error = DataStoreQualification::ack(&mut connection)
+            .await
+            .err()
+            .ok_or("invalid batch accepted")?;
+        assert!(matches!(error.downcast_ref::<mithril_node::Error>(),
+            Some(mithril_node::Error::ControlRpc { source, .. }) if source.code() == tonic::Code::InvalidArgument));
+        assert!(child.try_wait()?.is_none());
+        assert_eq!(observations.pending_evidence_records(), 1);
+        drop(connection);
+        let mut connection = case.connect_at(&tls, address).await?;
+        connection.send_evidence_batch(batch).await?;
+        assert!(
+            DataStoreQualification::ack(&mut connection).await.is_err(),
+            "Control sent an ACK before its injected exit"
+        );
+        let status = tokio::time::timeout(Duration::from_secs(5), child.wait()).await??;
+        assert_eq!(status.code(), Some(73));
+        assert_eq!(observations.pending_evidence_records(), 1);
+        drop(connection);
+        drop(observations);
+        let observations = open_node()?;
+        let replay = observations
+            .next_evidence_batch()
+            .ok_or("Node replay absent")?;
+        assert_eq!(mithril_control::EvidenceBatch::from(replay.clone()), wire);
+        let data = Arc::new(AnalysisStore::open(tls.path().join("evidence/analysis"))?);
+        let receipt = data
+            .source_receipt(&identity)?
+            .ok_or("committed receipt absent")?;
+        assert_eq!(receipt.contiguous_cursor, 1);
+        let committed = data.read_page(&identity, 1)?;
+        assert_eq!(committed.records.len(), 1);
+        assert_eq!(committed.records[0].framed_record, wire.framed_records);
+        let store = ControlStore::open(&control_root)?;
+        assert_eq!(store.policy_document(&policy_id)?, Some(policy.clone()));
+        assert_eq!(store.health()?.evidence_cursors, 0);
+        let intake = EvidenceIntakeOwner::new(
+            store.clone(),
+            data.clone(),
+            Arc::new(mithril_control::SystemIntakeClock),
+        )?;
+        let control = tls.control_from_intake(intake, 1)?;
+        let allowed: Vec<_> = control.allowed_nodes().values().cloned().collect();
+        let mut projector =
+            mithril_control::ControlContextOwner::new(store.clone(), data.clone(), &allowed)?;
+        projector.reconcile()?;
+        let before = data.meta()?;
+        projector.reconcile()?;
+        assert_eq!(data.meta()?, before);
+        drop(projector);
+        let server = tls.start(control).await?;
+        let mut connection = case.connect(&tls, &server).await?;
+        connection.send_evidence_batch(replay.clone()).await?;
+        let ack = DataStoreQualification::ack(&mut connection).await?;
+        assert_eq!(ack.contiguous_cursor, 1);
+        assert_eq!(data.meta()?, before);
+        assert_eq!(data.source_receipt(&identity)?, Some(receipt));
+        assert_eq!(data.read_page(&identity, 1)?.records, committed.records);
+        observations.acknowledge_evidence(ack)?;
+        assert_eq!(observations.pending_evidence_records(), 0);
+        connection.send_evidence_batch(replay).await?;
+        assert_eq!(
+            DataStoreQualification::ack(&mut connection)
+                .await?
+                .contiguous_cursor,
+            1
+        );
+        assert_eq!(data.meta()?, before);
+        DataStoreQualification::record(&observations, 2);
+        connection
+            .send_evidence_batch(
+                observations
+                    .next_evidence_batch()
+                    .ok_or("new Node batch absent")?,
+            )
+            .await?;
+        let ack = DataStoreQualification::ack(&mut connection).await?;
+        assert_eq!(ack.contiguous_cursor, 2);
+        observations.acknowledge_evidence(ack)?;
+        assert_eq!(observations.pending_evidence_records(), 0);
+        assert_eq!(data.meta()?.commit_revision, before.commit_revision + 1);
+        connection.report_readiness(true, true).await?;
+        connection.policy_inventory(None, Vec::new()).await?;
+        assert_eq!(store.policy_document(&policy_id)?, Some(policy));
+        let after = data.meta()?;
+        drop(connection);
+        server.shutdown().await?;
+        drop(data);
+        let reopened =
+            DataStoreQualification::reopen_data(&tls.path().join("evidence/analysis")).await?;
+        assert_eq!(reopened.meta()?, after);
+        let page = reopened.read_page(&identity, 1)?;
+        assert_eq!(page.records.len(), 2);
+        assert_eq!(page.records[0], committed.records[0]);
+        Ok(())
+    }
 
     impl DataStoreQualification {
         async fn capacity_recovery(&self, disk: Option<&Path>) -> Result<()> {
