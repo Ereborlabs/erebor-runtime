@@ -15,7 +15,8 @@ impl AnalysisStore {
         first_cursor: u64,
     ) -> Result<AnalysisReadPageV1> {
         let key = source_key(identity);
-        let mut reader = self.reader()?;
+        let mut reader_guard = self.reader()?;
+        let reader = reader_guard.get_mut()?;
         let writer = reader.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin evidence snapshot",
         })?;

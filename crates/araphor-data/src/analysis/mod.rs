@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, RwLock};
 
-use duckdb::{params, Config, Connection, OptionalExt as _};
+use duckdb::{params, Connection, OptionalExt as _};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 use tokio::sync::watch;
@@ -49,8 +49,9 @@ pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
 pub struct AnalysisStore {
     root: PathBuf,
-    writer: Mutex<Connection>,
-    readers: [Mutex<Connection>; 2],
+    // Close the cloned readers before their owning writer.
+    readers: [Mutex<Option<Connection>>; 2],
+    writer: Mutex<Option<Connection>>,
     write_slots: tokio::sync::Semaphore,
     read_slots: tokio::sync::Semaphore,
     read_next: AtomicUsize,
@@ -234,24 +235,7 @@ impl AnalysisStore {
             Err(source) => return Err(source).context(IoSnafu { path: &path }),
         };
 
-        let config = Config::default()
-            .enable_autoload_extension(false)
-            .context(AnalysisDatabaseSnafu {
-                operation: "disable extension loading",
-            })?
-            .enable_external_access(false)
-            .context(AnalysisDatabaseSnafu {
-                operation: "disable external access",
-            })?
-            .max_memory("128MiB")
-            .and_then(|config| config.threads(2))
-            .and_then(|config| config.with("wal_autocheckpoint", "64MiB"))
-            .and_then(|config| config.with("max_temp_directory_size", "128MiB"))
-            .context(AnalysisDatabaseSnafu {
-                operation: "bound native data resources",
-            })?;
-        let mut writer = Connection::open_with_flags(&path, config)
-            .context(AnalysisDatabaseSnafu { operation: "open" })?;
+        let mut writer = Self::open_native(&path)?;
         let metadata = fs::symlink_metadata(&path).context(IoSnafu { path: &path })?;
         if !metadata.is_file() {
             return AnalysisStateSnafu {
@@ -435,17 +419,17 @@ impl AnalysisStore {
         let meta = Self::read_meta_from(&writer, &path)?;
         let (revision, _) = watch::channel(meta.commit_revision);
         let readers = [
-            Mutex::new(writer.try_clone().context(AnalysisDatabaseSnafu {
+            Mutex::new(Some(writer.try_clone().context(AnalysisDatabaseSnafu {
                 operation: "open first trusted reader",
-            })?),
-            Mutex::new(writer.try_clone().context(AnalysisDatabaseSnafu {
+            })?)),
+            Mutex::new(Some(writer.try_clone().context(AnalysisDatabaseSnafu {
                 operation: "open second trusted reader",
-            })?),
+            })?)),
         ];
         Ok(Self {
             root,
             _lease: lease,
-            writer: Mutex::new(writer),
+            writer: Mutex::new(Some(writer)),
             readers,
             write_slots: tokio::sync::Semaphore::new(9),
             read_slots: tokio::sync::Semaphore::new(16),
@@ -478,8 +462,9 @@ impl AnalysisStore {
     }
 
     pub fn meta(&self) -> Result<AnalysisStoreMetaV1> {
-        let writer = self.reader()?;
-        Self::read_meta_from(&writer, &self.root.join("analysis.duckdb"))
+        let writer_guard = self.reader()?;
+        let writer = writer_guard.get()?;
+        Self::read_meta_from(writer, &self.root.join("analysis.duckdb"))
     }
 
     pub fn source_receipt(
@@ -487,8 +472,9 @@ impl AnalysisStore {
         identity: &EvidenceIntakeIdentityV1,
     ) -> Result<Option<AnalysisSourceReceiptV1>> {
         let key = source_key(identity);
-        let writer = self.reader()?;
-        Self::read_receipt_from(&writer, &self.root, identity, &key)
+        let writer_guard = self.reader()?;
+        let writer = writer_guard.get()?;
+        Self::read_receipt_from(writer, &self.root, identity, &key)
     }
 
     pub fn source_status(
@@ -496,7 +482,8 @@ impl AnalysisStore {
         identity: &EvidenceIntakeIdentityV1,
     ) -> Result<Option<AnalysisSourceStatusV1>> {
         let key = source_key(identity);
-        let mut reader = self.reader()?;
+        let mut reader_guard = self.reader()?;
+        let reader = reader_guard.get_mut()?;
         let writer = reader.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin source snapshot",
         })?;
@@ -567,7 +554,8 @@ impl AnalysisStore {
         let identity_json = serde_json::to_string(&identity).context(JsonSnafu {
             path: self.root.join("analysis.duckdb"),
         })?;
-        let mut writer = self.maintenance_writer()?;
+        let mut writer_guard = self.maintenance_writer()?;
+        let writer = writer_guard.get_mut()?;
         self.require_retention()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin evidence",
@@ -786,7 +774,8 @@ impl AnalysisStore {
         }
         let bytes = &input.encoded_report;
         let key = source_key(identity);
-        let mut writer = self.maintenance_writer()?;
+        let mut writer_guard = self.maintenance_writer()?;
+        let writer = writer_guard.get_mut()?;
         self.require_retention()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin coverage",
@@ -1075,6 +1064,7 @@ fn source_key(identity: &EvidenceIntakeIdentityV1) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use duckdb::Config;
 
     fn identity() -> EvidenceIntakeIdentityV1 {
         EvidenceIntakeIdentityV1 {
@@ -1127,7 +1117,8 @@ mod tests {
         assert_eq!(initial.commit_revision, 0);
         assert!(AnalysisStore::open(&root).is_err());
         {
-            let mut writer = store.writer()?;
+            let mut writer_guard = store.writer()?;
+            let writer = writer_guard.get_mut()?;
             let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
                 operation: "begin rollback proof",
             })?;
@@ -1141,7 +1132,8 @@ mod tests {
         drop(store);
         let reopened = AnalysisStore::open(&root)?;
         assert_eq!(reopened.meta()?, initial);
-        let writer = reopened.writer()?;
+        let writer_guard = reopened.writer()?;
+        let writer = writer_guard.get()?;
         let version: String = writer
             .query_row("SELECT version()", [], |row| row.get(0))
             .context(AnalysisDatabaseSnafu {
@@ -1161,7 +1153,8 @@ mod tests {
             let root = directory.path().join(format!("schema-{version}"));
             let store = AnalysisStore::open(&root)?;
             {
-                let writer = store.writer()?;
+                let writer_guard = store.writer()?;
+                let writer = writer_guard.get()?;
                 writer.execute("UPDATE store_meta SET schema_version = ?", params![version])?;
             }
             drop(store);
@@ -1211,7 +1204,8 @@ mod tests {
         );
         assert_eq!(store.meta()?.commit_revision, 2);
         {
-            let writer = store.writer()?;
+            let writer_guard = store.writer()?;
+            let writer = writer_guard.get()?;
             let changed: u64 = writer.query_row(
                 "SELECT COUNT(*) FROM relation_revisions WHERE last_changed_revision = 2",
                 [],
@@ -1254,7 +1248,8 @@ mod tests {
             2
         );
         {
-            let writer = store.writer()?;
+            let writer_guard = store.writer()?;
+            let writer = writer_guard.get()?;
             let count: u64 =
                 writer.query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
             assert_eq!(count, 3);
@@ -1414,7 +1409,8 @@ mod tests {
         assert_eq!(status.receipt, receipt);
         assert_eq!(status.latest_coverage_report, Some(b"coverage-3".to_vec()));
         {
-            let writer = reopened.writer()?;
+            let writer_guard = reopened.writer()?;
+            let writer = writer_guard.get()?;
             let changed: u64 = writer.query_row(
                 "SELECT COUNT(*) FROM relation_revisions WHERE last_changed_revision = 2",
                 [],

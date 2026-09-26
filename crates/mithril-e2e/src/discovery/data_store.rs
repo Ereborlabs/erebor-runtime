@@ -530,7 +530,7 @@ impl DataStoreQualification {
             ),
             "stale progress was accepted",
         )?;
-        connection.send_evidence_batch(blocked).await?;
+        connection.send_evidence_batch(blocked.clone()).await?;
         let ack = Self::ack(&mut connection).await?;
         self.check(
             ack.contiguous_cursor == 4,
@@ -609,6 +609,12 @@ impl DataStoreQualification {
         };
         let backup_path = backup_root.join("after-expiry.duckdb");
         let backup = data.backup(&backup_path)?;
+        connection.send_evidence_batch(blocked).await?;
+        let ack = Self::ack(&mut connection).await?;
+        self.check(
+            ack.contiguous_cursor == 4 && data.meta()?.commit_revision == backup.commit_revision,
+            "backup did not reopen intake or replay changed the revision",
+        )?;
         let restored = AnalysisStore::restore(&backup_path, &tls.path().join("restored"))?;
         self.check(
             restored.source_status(&identity)? == data.source_status(&identity)?
@@ -671,6 +677,7 @@ impl DataStoreQualification {
             "unchanged-policy",
             "single-evidence-writer",
             "backup-after-expiry",
+            "backup-reopens-intake",
             "restore-recovery-epoch",
             "stale-backup-partial",
             "recovery-gap-restart",

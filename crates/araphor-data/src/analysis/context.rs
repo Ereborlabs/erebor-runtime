@@ -97,7 +97,8 @@ impl AnalysisStore {
         let path = self.root.join("analysis.duckdb");
         let digest = input.content_digest().context(JsonSnafu { path: &path })?;
         let key = &input.key;
-        let mut writer = self.writer()?;
+        let mut writer_guard = self.writer()?;
+        let writer = writer_guard.get_mut()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin context version",
         })?;
@@ -166,8 +167,9 @@ impl AnalysisStore {
         if !key.valid() {
             return self.reject("the context version key is invalid");
         }
-        let writer = self.reader()?;
-        Ok(Self::read_context_from(&writer, &self.root, key)?.map(|(version, _)| version))
+        let writer_guard = self.reader()?;
+        let writer = writer_guard.get()?;
+        Ok(Self::read_context_from(writer, &self.root, key)?.map(|(version, _)| version))
     }
 
     pub(super) fn read_context_from(
@@ -269,7 +271,7 @@ mod tests {
         let mut foreign = input.key.clone();
         foreign.tenant_id = [2; 16];
         assert_eq!(reopened.context_version(&foreign)?, None);
-        reopened.writer()?.execute(
+        reopened.writer()?.get()?.execute(
             "UPDATE context_versions SET body = ? WHERE tenant_id = ? AND owner_id = ?",
             duckdb::params![
                 b"changed".as_slice(),

@@ -85,8 +85,19 @@ the owner explicitly. The startup case uses ControlConfig and the default owner.
 -> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) One transaction deletes eligible raw rows, records expired ranges, and advances the retained floor. Required progress and live exact witnesses protect rows.<br>
 -> [AnalysisStore::resume_optional](../../../../crates/araphor-data/src/analysis/progress.rs) An optional processor records an expired gap before it resumes. Its consumed cursor does not advance for the skipped input.<br>
 -> [AnalysisStore::processor_health](../../../../crates/araphor-data/src/analysis/health.rs) One snapshot returns accepted and effective progress, lag, missing input, and its revision. An optional resume keeps the missing-coverage flag.<br>
--> [AnalysisStore::backup](../../../../crates/araphor-data/src/analysis/backup.rs) A checkpoint and synced copy produce a digest manifest.<br>
+-> [AnalysisStore::backup](../../../../crates/araphor-data/src/analysis/backup.rs) Maintenance drains readers, checkpoints, and closes all native connections while the directory lease remains held.<br>
+-> [AnalysisStore::copy_backup](../../../../crates/araphor-data/src/analysis/backup.rs) A closed database has no native WAL. A new synced copy and digest manifest preserve the committed revision.<br>
+-> [AnalysisStore::reopen_backup](../../../../crates/araphor-data/src/analysis/backup.rs) The owner validates identity, schema, receipts, and references before it publishes reopened native connections.<br>
 -> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) A validated copy opens in an empty private directory with a new recovery epoch.
+
+Backup closes the two cloned readers before their owning writer. Normal owner
+drop uses the same order. Private connection guards return a typed error for
+a closed slot; they cannot return a dummy database. The existing writer and
+maintenance locks prevent data access during copy. Backup retains the data
+lease, so another data owner cannot open the directory during maintenance.
+`open_native` supplies the same resource settings at startup and reopen.
+A copy error still attempts reopen. A failed reopen keeps data access closed
+until restart. This path does not change Control policy persistence.
 
 [AnalysisStore::record_recovery_floor](../../../../crates/araphor-data/src/analysis/backup.rs) A caller reports Node input no longer available after a stale restore.<br>
 -> [AnalysisStore::recovery_gaps](../../../../crates/araphor-data/src/analysis/health.rs) A source-scoped read returns at most 256 exact missing ranges after the supplied cursor.<br>
@@ -848,8 +859,8 @@ not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
 
-This review covers `codex/mithril-ui` at `ae7d342c` plus scoped health and
-recovery-gap reads. The startup command passed 16 checks; recovery
+This review covers `codex/mithril-ui` at `4c9fca1f` plus the closed-connection
+backup lifecycle. The startup command passed 16 checks; recovery
 passed 23 checks. Their results are in `/tmp/araphor-retention.NH24lk/`. QueryOwner and trace API
 frames are not qualified by these changes.
 
@@ -911,10 +922,25 @@ The recovery e2e case now passes 26 checks through production owners. Its
 three new checks prove required lag, optional missing coverage, and durable
 recovery gaps without a fabricated source receipt. The earlier command
 artifacts above do not contain those new checks. The final workspace gate
-for the health changes is running. Aggregate
+passed for `4c9fca1f`: formatting, compilation, strict Clippy, and workspace
+tests. The data crate passed 35 tests with two ignored. Control passed 195
+tests with two ignored, including the SQLite 50,000-atom case. Aggregate
 scan performance, trace reservation, crash injection, and physical qualification
 remain open.
 The 16 `analysis_store_` tests passed with scheduled retention and required-input
 limits. The current mTLS `data_store_startup` and `data_store_recovery` tests
 passed. The recovery test checks automatic expiry and rejected-input retry
 while policy RPCs remain available. These tests do not qualify physical disk reuse.
+
+The backup changes passed 28 `analysis_store_` tests and all five data e2e
+tests, including the post-backup mTLS assertion. Read
+`analysis_store_backup_window` and `analysis_store_closed_access` in
+[backup.rs](../../../../crates/araphor-data/src/analysis/backup.rs) for reader
+drain, post-backup writes, copy/manifest failure, unchanged prior backup,
+closed-access errors, the held lease, identity validation, and restart.
+The recovery case now passes 27 checks. The same authenticated connection
+retries its retained batch after backup without changing ACK or store revision.
+The final workspace gate passed formatting, compilation, strict Clippy, and
+37 data-crate tests with two ignored. The remaining workspace tests are running.
+The tests use temporary stores. They do not qualify physical disk reclamation,
+disk-full recovery reserves, or all process-crash boundaries.
