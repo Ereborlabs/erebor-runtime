@@ -3567,6 +3567,13 @@ setup, production actions, assertions, and focused test.
       Kubernetes tests in 951.49 seconds.
 - [ ] Kubernetes subpath, bind alias, and wildcard paths: keep the same mount
   order and protected reads as the Kubernetes workload.
+  - [x] Retire the duplicate in-container bind-mount result and shell gate.
+    `late_bind_keeps_policy` requires the mount to succeed after production
+    policy activation on Host, direct `runc`, and Kubernetes. Keep the legacy
+    mount action and its local failure check while the separate subPath and
+    bind-alias reads still use that mount. On 2026-09-26, the exact Host,
+    direct-`runc`, and Kubernetes tests passed with the removed result field.
+    The VM harness checks passed. Each run removed its test resources.
 - [ ] Concurrent exec and reader-queue saturation: keep the same containerd
   exec operation, topology snapshots, bounded queue, and fail-closed results
   as `two-node-convergence.sh`.

@@ -559,7 +559,6 @@ if [[ $entry_role_runtime_only == true ]]; then
     .application_exec_transition_event_driven and
     .kubernetes_subpath_alias_path_tree_denied and
     .newer_kubernetes_subpath_alias_path_tree_denied and
-    .container_bind_mount_succeeded and
     .container_bind_alias_path_tree_denied and
     .concurrent_exec_detached_mounts_preserved_view and
     .bounded_reader_queue_preserved_concurrent_burst and
