@@ -13,9 +13,9 @@ fn passed_socket_keeps_worker_role<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("socket-pass-allowed")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("socket_pass_allowed_policy.json")?;
+    let labels = env.install_policy("socket_pass_allowed_policy.json")?;
     env.node_ready()?;
-    let mut main = env.start_actor("socket_pass.py", &["main-approved"])?;
+    let mut main = env.start_actor("socket_pass.py", &["main-approved"], &labels)?;
     let root = env.task(main.id(), "socket owner")?;
     let mut receiver =
         env.add_actor("python", &["/fixtures/socket_pass.py", "/work", "approved"])?;

@@ -10,7 +10,7 @@ use mithril_node::OciBaseSpecOwner;
 use serde_json::{json, Value};
 
 use super::shared::Shared;
-use super::{Platform, Task, TestResult, PROCESS_FIXTURES};
+use super::{Labels, Platform, Task, TestResult, PROCESS_FIXTURES};
 use crate::physical::ProbeDirectory;
 use crate::process::ProcessFixture;
 
@@ -23,6 +23,7 @@ pub(crate) struct Runc {
     manifest_path: PathBuf,
     cleanup: Option<ProbeDirectory>,
     container_id: Option<String>,
+    containers: Vec<String>,
 }
 
 impl Runc {
@@ -121,21 +122,25 @@ impl Runc {
     }
 
     fn close(&mut self) -> TestResult<()> {
-        let deleted = if let Some(id) = self.container_id.take() {
+        let mut deleted = Ok(());
+        for id in self.container_id.iter().chain(self.containers.iter()) {
             let mut command = Command::new(&self.runc_path);
             command
                 .arg("--root")
                 .arg(&self.state_path)
-                .args(["delete", "--force", &id]);
-            Self::run(&mut command, &self.runc_path).map(|_| ())
-        } else {
-            Ok(())
-        };
+                .args(["delete", "--force", id]);
+            if let Err(error) = Self::run(&mut command, &self.runc_path) {
+                deleted = Err(error);
+            }
+        }
+        deleted?;
+        self.container_id = None;
+        self.containers.clear();
         if let Some(cleanup) = self.cleanup.take() {
             cleanup.cleanup()?;
         }
         self.shared.stop()?;
-        deleted
+        Ok(())
     }
 }
 
@@ -155,7 +160,12 @@ impl Platform for Runc {
         let dir_path = shared.output().join("runc");
         let cleanup = ProbeDirectory::create(&dir_path)?;
         let state_path = dir_path.join("state");
-        let bundle_path = dir_path.join("bundle");
+        let bundle_path = dir_path.join(
+            shared
+                .work()
+                .file_name()
+                .ok_or("actor directory has no name")?,
+        );
         let hook_dir = dir_path.join("hook");
         fs::create_dir(&state_path)?;
         fs::create_dir(&bundle_path)?;
@@ -188,6 +198,7 @@ impl Platform for Runc {
             manifest_path,
             cleanup: Some(cleanup),
             container_id: None,
+            containers: Vec::new(),
         })
     }
 
@@ -203,7 +214,7 @@ impl Platform for Runc {
         self.shared.stop_node()
     }
 
-    fn install_policy(&mut self, name: &str) -> TestResult<()> {
+    fn install_policy(&mut self, name: &str) -> TestResult<Labels> {
         self.shared.install_policy(name)
     }
 
@@ -215,9 +226,24 @@ impl Platform for Runc {
         self.shared.node_ready()
     }
 
-    fn start_actor(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
-        if self.container_id.is_some() {
-            return Err("the runc actor is already started".into());
+    fn start_actor(
+        &mut self,
+        name: &str,
+        extra: &[&str],
+        labels: &Labels,
+    ) -> TestResult<ProcessFixture> {
+        self.shared.prepare_actor(labels)?;
+        if let Some(id) = self.container_id.take() {
+            self.containers.push(id);
+            self.bundle_path = self
+                .state_path
+                .parent()
+                .ok_or("runc state has no parent")?
+                .join(format!("actor-{}", self.containers.len()));
+            fs::create_dir_all(self.bundle_path.join("rootfs"))?;
+            let mut command = Command::new(&self.runc_path);
+            command.arg("spec").arg("--bundle").arg(&self.bundle_path);
+            Self::run(&mut command, &self.runc_path)?;
         }
         let rootfs = self.bundle_path.join("rootfs");
         for name in ["usr", "lib", "lib64", "dev/net", "fixtures", "work"] {

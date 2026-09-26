@@ -14,9 +14,9 @@ fn incomplete_probe_fails_closed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("runtime-effects")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("runtime_entries_policy.json")?;
+    let labels = env.install_policy("runtime_entries_policy.json")?;
     env.node_ready()?;
-    let mut init = env.start_actor("runtime_exec.py", &[])?;
+    let mut init = env.start_actor("runtime_exec.py", &[], &labels)?;
     let seen = env
         .snapshot()?
         .recent_effects

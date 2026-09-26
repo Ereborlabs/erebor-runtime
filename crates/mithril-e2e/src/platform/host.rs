@@ -1,21 +1,22 @@
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use erebor_interceptor::KernelStateReader;
 use erebor_runtime_ipc::v1::MithrilObservationSnapshot;
 use snafu::{ensure, ResultExt as _};
 
 use super::shared::Shared;
-use super::{Platform, Task, TestResult, PROCESS_FIXTURES};
+use super::{Labels, Platform, Task, TestResult, PROCESS_FIXTURES};
 use crate::error::{InvalidInputSnafu, IoSnafu};
 use crate::physical::ProbeDirectory;
 use crate::process::ProcessFixture;
 
 pub(crate) struct Host {
     shared: Shared,
-    bundle: Option<ProbeDirectory>,
+    bundles: Vec<ProbeDirectory>,
     init_pid: Option<u32>,
     staged: bool,
     admitted: bool,
@@ -33,10 +34,10 @@ impl Host {
     }
 
     fn actor_root(&mut self) -> TestResult<PathBuf> {
-        let bundle_path = self.shared.output().join("bundle");
+        let bundle_path = self.shared.work().with_extension("bundle");
         let rootfs = bundle_path.join("rootfs");
-        if self.bundle.is_some() {
-            return Ok(rootfs);
+        if rootfs.exists() {
+            return Err("the actor directory already has an initial process".into());
         }
         let bundle = ProbeDirectory::create(&bundle_path)?;
         fs::create_dir_all(rootfs.join("bundle"))?;
@@ -52,24 +53,50 @@ impl Host {
         self.bind(&fixtures, &rootfs.join("fixtures"))?;
         let work = self.shared.work().to_owned();
         self.bind(&work, &rootfs.join("work"))?;
-        self.bundle = Some(bundle);
+        self.bundles.push(bundle);
         Ok(rootfs)
     }
 
     fn stage_entries(&self, rootfs: &Path) -> TestResult<()> {
         let config = rootfs.join("bundle/config.json");
         fs::write(&config, br#"{"root":{"path":"/"}}"#).context(IoSnafu { path: &config })?;
-        let root = File::open(rootfs).context(IoSnafu { path: rootfs })?;
-        let response = self
+        let pid = self.init_pid.ok_or("the initial actor is not held")?;
+        let state = self.shared.work().join("oci-state.json");
+        fs::write(
+            &state,
+            serde_json::to_vec(&serde_json::json!({
+                "id": self.shared.actor_id()?, "pid": pid, "bundle": "/bundle",
+                "annotations": self.shared.annotations()?,
+            }))?,
+        )?;
+        let hook = std::env::var_os("MITHRIL_TEST_OCI_HOOK")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.shared.source().join("target/debug/mithril-oci-hook"));
+        let manifest = self
             .shared
-            .entries(Path::new("/bundle"), u32::try_from(root.as_raw_fd())?)?;
-        ensure!(
-            response.allowed && response.reason_code == "DECLARED_ENTRY_CANDIDATE_STAGED",
-            InvalidInputSnafu {
-                path: self.shared.admit_path(),
-                reason: format!("Node rejected declared entries: {response:?}"),
-            }
-        );
+            .source()
+            .join("crates/mithril-e2e/fixtures/convergence/direct-runc-recovery-v1.json");
+        let child = Command::new("nsenter")
+            .arg(format!("--mount=/proc/{pid}/ns/mnt"))
+            .arg(format!("--wdns={}", rootfs.display()))
+            .arg(&hook)
+            .args(["run", "--stage", "prepare-declared-entries", "--socket"])
+            .arg(self.shared.admit_path())
+            .arg("--recovery-manifest")
+            .arg(manifest)
+            .stdin(File::open(&state)?)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let mut hook = ProcessFixture::new(child, &hook);
+        let status = hook.wait_exit("declared entry preparation", Duration::from_secs(30))?;
+        if !status.success() {
+            return Err(format!(
+                "declared entry preparation failed: {status}; stderr: {:?}",
+                hook.stderr()?
+            )
+            .into());
+        }
         Ok(())
     }
 
@@ -84,7 +111,7 @@ impl Host {
                 reason: "the runtime read an empty initial actor map",
             }
         );
-        let rootfs = self.shared.output().join("bundle/rootfs");
+        let rootfs = self.shared.work().with_extension("bundle").join("rootfs");
         let program = Path::new(command);
         let mut actor =
             ProcessFixture::held_cgroup(program, args, self.shared.cgroup(), &rootfs, init)?;
@@ -117,7 +144,7 @@ impl Host {
                 .map_err(std::io::Error::from)
                 .context(IoSnafu { path: &target })?;
         }
-        if let Some(bundle) = self.bundle.take() {
+        for bundle in self.bundles.drain(..) {
             bundle.cleanup()?;
         }
         self.init_pid = None;
@@ -133,9 +160,10 @@ impl Platform for Host {
     }
 
     fn setup(name: &str) -> TestResult<Self> {
+        let shared = Shared::setup(name)?;
         Ok(Self {
-            shared: Shared::setup(name)?,
-            bundle: None,
+            shared,
+            bundles: Vec::new(),
             init_pid: None,
             staged: false,
             admitted: false,
@@ -155,7 +183,7 @@ impl Platform for Host {
         self.shared.stop_node()
     }
 
-    fn install_policy(&mut self, name: &str) -> TestResult<()> {
+    fn install_policy(&mut self, name: &str) -> TestResult<Labels> {
         self.shared.install_policy(name)
     }
 
@@ -167,14 +195,15 @@ impl Platform for Host {
         self.shared.node_ready()
     }
 
-    fn start_actor(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
-        ensure!(
-            self.init_pid.is_none(),
-            InvalidInputSnafu {
-                path: self.shared.work(),
-                reason: "the initial actor is already running",
-            }
-        );
+    fn start_actor(
+        &mut self,
+        name: &str,
+        extra: &[&str],
+        labels: &Labels,
+    ) -> TestResult<ProcessFixture> {
+        self.shared.prepare_actor(labels)?;
+        self.staged = false;
+        self.admitted = false;
         let protected = self.shared.protected();
         let rootfs = self.actor_root()?;
         let mut args = vec![OsString::from("/work")];

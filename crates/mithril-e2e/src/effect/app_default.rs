@@ -11,9 +11,9 @@ fn application_read_uses_default<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("application-read")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("runtime_entries_policy.json")?;
+    let labels = env.install_policy("runtime_entries_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("runtime_exec.py", &[])?;
+    let mut actor = env.start_actor("runtime_exec.py", &[], &labels)?;
     let pid = actor.id();
     let task = env.task(pid, "application actor")?;
     assert_eq!(task.snapshot.active_role_id, 3);

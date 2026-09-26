@@ -10,9 +10,9 @@ fn delegated_egress_keeps_policy<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("network-delegate")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("network_delegate_policy.json")?;
+    let labels = env.install_policy("network_delegate_policy.json")?;
     env.node_ready()?;
-    let mut requester = env.start_actor("network_delegate.py", &["requester"])?;
+    let mut requester = env.start_actor("network_delegate.py", &["requester"], &labels)?;
     let root = env.task(requester.id(), "network requester")?;
     let args = ["/fixtures/network_delegate.py", "/work", "delegate"];
     let mut delegate = env.add_actor("python", &args)?;

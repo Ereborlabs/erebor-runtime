@@ -11,9 +11,9 @@ fn independent_mapping_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("independent-mmap")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("actor_policy.json")?;
+    let labels = env.install_policy("actor_policy.json")?;
     env.node_ready()?;
-    let mut main = env.start_actor("retained_descriptor.py", &[])?;
+    let mut main = env.start_actor("retained_descriptor.py", &[], &labels)?;
     env.install_policy("retained_descriptor_policy.json")?;
     env.node_ready()?;
 

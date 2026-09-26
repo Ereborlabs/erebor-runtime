@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use std::{fs, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
@@ -11,7 +13,10 @@ fn tun_setup_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("tun-setup")?;
     env.start_control()?;
     env.stop_node()?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let policy: Policy =
+        serde_json::from_str(include_str!("../../fixtures/process/python_policy.json"))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     env.place(init.id())?;
     let mut actor = env.add_actor("python", &["/fixtures/tun.py", "/work"])?;
     actor.ready()?;

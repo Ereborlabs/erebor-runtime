@@ -7,11 +7,11 @@ use crate::platform::{platform_test, Platform, TestResult};
 fn native_sleep_adds_no_task<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("lifecycle-sleep")?;
     env.start_control()?;
-    env.install_policy("python_policy.json")?;
+    let labels = env.install_policy("python_policy.json")?;
     env.start_node()?;
     env.node_ready()?;
     env.post_start_sleep(Duration::from_secs(30))?;
-    let mut actor = env.start_actor("ready.py", &[])?;
+    let mut actor = env.start_actor("ready.py", &[], &labels)?;
 
     let tasks = env.actor_tasks()?;
     assert_eq!(tasks, vec![actor.id()], "native sleep created a task");

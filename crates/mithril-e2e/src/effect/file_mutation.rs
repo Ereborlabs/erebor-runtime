@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use std::{fs, os::unix::fs::PermissionsExt as _, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
@@ -13,7 +15,10 @@ fn unknown_create_is_denied<P: Platform>() -> TestResult<()> {
     env.start_control()?;
     env.stop_node()?;
     let target = env.work().join("forbidden-create");
-    let mut init = env.start_actor("ready.py", &[])?;
+    let policy: Policy =
+        serde_json::from_str(include_str!("../../fixtures/process/python_policy.json"))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     env.place(init.id())?;
     let args = [
         "/fixtures/file_mutation.py",
@@ -74,7 +79,10 @@ fn unknown_chmod_is_denied<P: Platform>() -> TestResult<()> {
     let target = env.work().join("setattr-target");
     fs::write(&target, b"protected\n")?;
     fs::set_permissions(&target, fs::Permissions::from_mode(0o600))?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let policy: Policy =
+        serde_json::from_str(include_str!("../../fixtures/process/python_policy.json"))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     env.place(init.id())?;
     let args = [
         "/fixtures/file_mutation.py",
@@ -135,7 +143,10 @@ fn retained_truncate_is_denied<P: Platform>() -> TestResult<()> {
     let target = env.work().join("truncate-target");
     fs::write(&target, b"truncate\n")?;
     let length = fs::metadata(&target)?.len();
-    let mut init = env.start_actor("ready.py", &[])?;
+    let policy: Policy =
+        serde_json::from_str(include_str!("../../fixtures/process/python_policy.json"))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     env.place(init.id())?;
     let args = [
         "/fixtures/file_mutation.py",
@@ -195,7 +206,10 @@ fn unknown_unlink_is_denied<P: Platform>() -> TestResult<()> {
     env.stop_node()?;
     let target = env.work().join("unlink-target");
     fs::write(&target, b"unlink\n")?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let policy: Policy =
+        serde_json::from_str(include_str!("../../fixtures/process/python_policy.json"))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     env.place(init.id())?;
     let args = [
         "/fixtures/file_mutation.py",
@@ -260,7 +274,10 @@ fn unknown_link_is_denied<P: Platform>() -> TestResult<()> {
     let source = env.work().join("mutation-source");
     let target = env.work().join("link-target");
     fs::write(&source, b"mutation\n")?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let policy: Policy =
+        serde_json::from_str(include_str!("../../fixtures/process/python_policy.json"))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     env.place(init.id())?;
     let args = [
         "/fixtures/file_mutation.py",
@@ -323,7 +340,10 @@ fn unknown_rename_is_denied<P: Platform>() -> TestResult<()> {
     let source = env.work().join("mutation-source");
     let target = env.work().join("rename-target");
     fs::write(&source, b"mutation\n")?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let policy: Policy =
+        serde_json::from_str(include_str!("../../fixtures/process/python_policy.json"))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     env.place(init.id())?;
     let args = [
         "/fixtures/file_mutation.py",

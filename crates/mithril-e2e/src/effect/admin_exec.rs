@@ -19,9 +19,9 @@ fn approved_exec_consumes_once<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("admin-exec")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("actor_sleep_policy.json")?;
+    let labels = env.install_policy("actor_sleep_policy.json")?;
     env.node_ready()?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     let root = env.task(init.id(), "administrative target")?;
 
     let unapproved = match env.add_actor("sleep", &["0.5"]) {
@@ -104,9 +104,9 @@ fn consumed_exec_is_restricted<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("admin-replay")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("actor_sleep_policy.json")?;
+    let labels = env.install_policy("actor_sleep_policy.json")?;
     env.node_ready()?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     let root = env.task(init.id(), "administrative target")?;
     env.approve("sleep", &["0.5"])?;
     let mut actor = env.add_actor("sleep", &["0.5"])?;
@@ -171,9 +171,9 @@ fn approval_argv_mismatch_traced<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("admin-argv")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("actor_sleep_policy.json")?;
+    let labels = env.install_policy("actor_sleep_policy.json")?;
     env.node_ready()?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     let root = env.task(init.id(), "administrative target")?;
     env.approve("sleep", &["0.5"])?;
     let armed = env.approval(&root)?.ok_or("approval slot is missing")?;

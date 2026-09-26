@@ -15,9 +15,9 @@ fn one_use_after_replace<P: Platform>() -> TestResult<()> {
     env.start_node()?;
     let secret = env.work().join("expired-secret");
     fs::write(&secret, b"")?;
-    env.install_policy("actor_policy.json")?;
+    let labels = env.install_policy("actor_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("exception.py", &["single"])?;
+    let mut actor = env.start_actor("exception.py", &["single"], &labels)?;
     let initial = env.task(actor.id(), "initial exception actor")?;
     let old = initial.snapshot.profile_generation_ref_id;
 

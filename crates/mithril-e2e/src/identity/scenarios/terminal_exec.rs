@@ -20,9 +20,9 @@ fn terminal_entry_is_fatal<P: Platform>() -> TestResult<()> {
     ProcessFixture::fatal_exec(&bin.join("post-ponr-execfail"))?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("fatal_exec_policy.json")?;
+    let labels = env.install_policy("fatal_exec_policy.json")?;
     env.node_ready()?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     let mut probe = env.add_actor("sleep", &["0.5"])?;
     let role = env.task(probe.id(), "termination role")?;
     assert!(role.snapshot.active_role_id != 0 && role.snapshot.admitted_entry_rule_id != 0);

@@ -12,9 +12,9 @@ fn inactive_grant_denies<P: Platform>() -> TestResult<()> {
     env.start_control()?;
     env.start_node()?;
     fs::write(env.work().join("expired-secret"), b"")?;
-    env.install_policy("exception_policy.json")?;
+    let labels = env.install_policy("exception_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("exception.py", &["expired"])?;
+    let mut actor = env.start_actor("exception.py", &["expired"], &labels)?;
     let task = env.task(actor.id(), "initial exception actor")?;
     let generation = task.snapshot.profile_generation_ref_id;
     assert_ne!(generation, 0);

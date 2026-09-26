@@ -10,9 +10,9 @@ fn namespace_init_reparents_child<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("namespace-init")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("namespace_init_policy.json")?;
+    let labels = env.install_policy("namespace_init_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("native_namespace_init.py", &[])?;
+    let mut actor = env.start_actor("native_namespace_init.py", &[], &labels)?;
 
     let root_pid = actor.id();
     assert_eq!(ProcessFixture::namespace_pid(root_pid)?, 1);

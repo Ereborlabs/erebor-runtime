@@ -13,9 +13,9 @@ fn fork_child_cannot_borrow_socket<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("socket-pass-allowed")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("socket_pass_allowed_policy.json")?;
+    let labels = env.install_policy("socket_pass_allowed_policy.json")?;
     env.node_ready()?;
-    let mut main = env.start_actor("socket_pass.py", &["main-inherit"])?;
+    let mut main = env.start_actor("socket_pass.py", &["main-inherit"], &labels)?;
     let root = env.task(main.id(), "Unix socket owner")?;
     assert_ne!(root.snapshot.admitted_entry_rule_id, 0);
     let mut peer = env.add_actor("python", &["/fixtures/socket_pass.py", "/work", "approved"])?;

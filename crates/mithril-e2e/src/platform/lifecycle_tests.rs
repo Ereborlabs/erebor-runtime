@@ -8,11 +8,11 @@ fn lifecycle_reuses_node<P: Platform + 'static>() -> TestResult<()> {
     let mut first = P::setup("lifecycle-first")?;
     first.start_control()?;
     first.start_node()?;
-    first.install_policy("python_policy.json")?;
+    let labels = first.install_policy("python_policy.json")?;
     first.node_ready()?;
     let pin = first.maps().0.to_owned();
     let inode = std::fs::metadata(&pin)?.ino();
-    let mut actor = first.start_actor("runtime_exec.py", &[])?;
+    let mut actor = first.start_actor("runtime_exec.py", &[], &labels)?;
     let denied = match first.add_actor(
         "python-runtime",
         &["/fixtures/ready.py", "/work/runtime-ready"],
@@ -36,10 +36,10 @@ fn lifecycle_reuses_node<P: Platform + 'static>() -> TestResult<()> {
     let mut second = P::setup("lifecycle-second")?;
     second.start_control()?;
     second.start_node()?;
-    second.install_policy("python_policy.json")?;
+    let labels = second.install_policy("python_policy.json")?;
     second.node_ready()?;
     assert_eq!(std::fs::metadata(&pin)?.ino(), inode);
-    let mut actor = second.start_actor("ready.py", &[])?;
+    let mut actor = second.start_actor("ready.py", &[], &labels)?;
     second.task(actor.id(), "fresh lifecycle actor")?;
     actor.stop()?;
     second.stop()
@@ -58,9 +58,9 @@ fn churn_keeps_next_actor<P: Platform + 'static>() -> TestResult<()> {
         let mut env = P::setup(&name)?;
         env.start_control()?;
         env.start_node()?;
-        env.install_policy(policy)?;
+        let labels = env.install_policy(policy)?;
         env.node_ready()?;
-        let mut actor = env.start_actor("task_churn.py", &["512"])?;
+        let mut actor = env.start_actor("task_churn.py", &["512"], &labels)?;
         let base = env.health()?;
         let before = env.task(actor.id(), "actor identity before churn")?;
         actor.send(b"churn\n")?;

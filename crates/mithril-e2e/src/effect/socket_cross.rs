@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use std::{fs, os::unix::fs::MetadataExt, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
@@ -11,7 +13,11 @@ fn cross_namespace_socket_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("socket-cross")?;
     env.start_control()?;
     env.stop_node()?;
-    let mut main = env.start_actor("socket_pass.py", &["main-net"])?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../fixtures/process/socket_cross_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut main = env.start_actor("socket_pass.py", &["main-net"], &labels)?;
     env.place(main.id())?;
     let mut receiver = env.add_actor(
         "python",

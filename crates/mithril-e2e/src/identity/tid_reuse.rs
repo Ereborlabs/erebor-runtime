@@ -18,9 +18,9 @@ fn tid_reuse_is_fresh<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("tid-reuse")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("python_policy.json")?;
+    let labels = env.install_policy("python_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("native_tid_reuse.py", &[])?;
+    let mut actor = env.start_actor("native_tid_reuse.py", &[], &labels)?;
 
     let root_pid = actor.id();
     actor.track(root_pid)?;

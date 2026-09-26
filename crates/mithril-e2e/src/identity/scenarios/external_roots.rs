@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use erebor_interceptor_abi::TaskCoordinateStateV1;
 
 use crate::platform::{platform_test, Platform, TestResult};
@@ -7,7 +9,11 @@ use crate::platform::{platform_test, Platform, TestResult};
 fn concurrent_roots_stay_distinct<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("concurrent-roots")?;
     env.start_control()?;
-    let mut init = env.start_actor("external_roots.py", &[])?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../../fixtures/process/external_roots_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut init = env.start_actor("external_roots.py", &[], &labels)?;
     env.install_policy("external_roots_policy.json")?;
     env.start_node()?;
     env.sync_policy()?;

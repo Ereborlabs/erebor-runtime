@@ -48,6 +48,19 @@ physical setup. Do not add a second process wrapper or reproduce Node work
 inside a helper. A fixture owns placement, readiness, and cleanup. The test
 owns component order, policy installation, actor actions, and assertions.
 
+`install_policy("fixture.json")` returns that policy's `matchLabels` map.
+Pass it to `start_actor("actor.py", &[], &labels)`. For simultaneous policies,
+use fixtures with distinct selectors and retain both returned actors. Control
+and Node remain shared. There is no workload-selection method in the test.
+For recovery, read the labels from the policy fixture before starting the
+actor. Install the policy at the required later step. Do not write labels by
+hand or install policy early to obtain labels. Automatic label extraction
+requires `matchLabels` only; it rejects `matchExpressions`.
+See [the simultaneous policy test](src/identity/scenarios/multi_policy.rs)
+and [its ownership review](MULTI_POLICY_REVIEW.md). Host tests also need the
+production `mithril-oci-hook` binary. Set `MITHRIL_TEST_OCI_HOOK` when the binary
+is not at `target/debug/mithril-oci-hook` under `MITHRIL_TEST_ROOT`.
+
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path
 result flags for a shell gate. The 41-line

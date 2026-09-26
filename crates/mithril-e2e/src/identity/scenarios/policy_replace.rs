@@ -13,9 +13,9 @@ fn running_task_uses_new_policy<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("policy-replace")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("actor_policy.json")?;
+    let labels = env.install_policy("actor_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("policy_replace.py", &[])?;
+    let mut actor = env.start_actor("policy_replace.py", &[], &labels)?;
     let root = env.task(actor.id(), "initial policy identity")?;
     let snap = &root.snapshot;
     let old = snap.profile_generation_ref_id;

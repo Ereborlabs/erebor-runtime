@@ -243,7 +243,8 @@ impl ProcessFixture {
             cgroup,
             rootfs,
             linux_raw_sys::general::CLONE_INTO_CGROUP
-                | u64::from(linux_raw_sys::general::CLONE_NEWPID),
+                | u64::from(linux_raw_sys::general::CLONE_NEWPID)
+                | u64::from(linux_raw_sys::general::CLONE_NEWNS),
             None,
             path,
         )
@@ -263,13 +264,15 @@ impl ProcessFixture {
     {
         let path = PathBuf::from(format!("/proc/{init}/ns/pid"));
         let pidns = File::open(&path).context(IoSnafu { path: &path })?;
+        let path = PathBuf::from(format!("/proc/{init}/ns/mnt"));
+        let mountns = File::open(&path).context(IoSnafu { path: &path })?;
         Self::held(
             command,
             args,
             cgroup,
             rootfs,
             linux_raw_sys::general::CLONE_INTO_CGROUP,
-            Some(&pidns),
+            Some((&pidns, &mountns)),
             command,
         )
     }
@@ -281,7 +284,7 @@ impl ProcessFixture {
         cgroup: &Path,
         rootfs: &Path,
         flags: u64,
-        pidns: Option<&File>,
+        namespaces: Option<(&File, &File)>,
         path: &Path,
     ) -> Result<Self>
     where
@@ -337,6 +340,23 @@ impl ProcessFixture {
                 libc::syscall(libc::SYS_clone3, &raw const clone, size_of::<clone_args>())
             };
             if result == 0 {
+                if let Some((_, mountns)) = namespaces {
+                    if unsafe { libc::setns(mountns.as_raw_fd(), libc::CLONE_NEWNS) } < 0 {
+                        unsafe { libc::_exit(125) };
+                    }
+                } else if flags & u64::from(linux_raw_sys::general::CLONE_NEWNS) != 0
+                    && unsafe {
+                        libc::mount(
+                            std::ptr::null(),
+                            c"/".as_ptr(),
+                            std::ptr::null(),
+                            libc::MS_PRIVATE | libc::MS_REC,
+                            std::ptr::null(),
+                        )
+                    } < 0
+                {
+                    unsafe { libc::_exit(125) };
+                }
                 run_held(
                     &command,
                     &argv,
@@ -350,7 +370,7 @@ impl ProcessFixture {
             let error = (result < 0).then(|| unsafe { *libc::__errno_location() });
             (result, error)
         };
-        let (result, error) = if let Some(pidns) = pidns {
+        let (result, error) = if let Some((pidns, _)) = namespaces {
             std::thread::scope(|scope| {
                 scope
                     .spawn(|| {

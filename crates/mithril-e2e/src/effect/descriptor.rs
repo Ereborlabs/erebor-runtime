@@ -11,9 +11,9 @@ fn retained_descriptor_is_enforced<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("retained-descriptor")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("actor_policy.json")?;
+    let labels = env.install_policy("actor_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("retained_descriptor.py", &[])?;
+    let mut actor = env.start_actor("retained_descriptor.py", &[], &labels)?;
     let pid = actor.id();
     let task = env.task(pid, "retained descriptor actor")?;
 

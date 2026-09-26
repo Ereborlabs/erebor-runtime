@@ -25,6 +25,49 @@ calls, stock `runc` and containerd paths, and paired Kubernetes operations.
 
 ## Binding acceptance rules
 
+### Simultaneous policy qualification
+
+- [x] Keep two independent workloads on one Control and one Node. Use one
+  platform setup. `install_policy` returns labels from the policy selector.
+  `start_actor` receives those labels. Do not add a workload-selection API.
+  Read recovery labels from the policy fixture without installing it early.
+  Preserve existing actor, policy, and component order when updating calls.
+- Remove the internal workload wrappers and context-switching methods. Do not
+  retain the rejected API as a deprecated alias or private selector.
+- The user permits the narrow 102–105-line recovery-file exception required
+  to read policy labels before actor startup. Do not move assertions to helpers
+  or change recovery order to meet the previous limit.
+- [x] Install a different policy for each workload. Keep both policies, runtime
+  observations, and workload targets present at the same time.
+- [x] Use the same Python actor on both workloads. Ask both actors to read the
+  same file. Assert denial under one policy and success under the other policy.
+  Repeat the reads while both actors remain alive. Check distinct policy
+  generations and bindings on the same Node.
+- [x] Run the shared Rust test on Host, then runc, then real Kubernetes. Add each
+  platform to the test attribute only after its focused test passes.
+- [ ] Verify shared fixture regressions and record the commands and results.
+- Do not change production policy installation in this task. Independent
+  per-policy installation is separate work after this proof passes.
+- The one-actor rule permits multiple actors when the requested behavior is
+  simultaneous workload isolation. Each actor has its own physical workload.
+
+Current verification:
+
+- The workload wrappers and selection methods are removed. The shared scenario
+  is 93 lines. Existing scenario assertion counts are unchanged in 79 files.
+- Host passed the simultaneous-policy proof and lifecycle-reuse check together:
+  2 passed in 48.25 seconds in the replacement VM.
+- runc passed the same pair: 2 passed in 139.13 seconds.
+- Real Kubernetes passed the same pair: 2 passed in 125.01 seconds. The
+  launcher-prepared pinned image had no conflicting manifest alias. No Node,
+  Control, BPF, test assertion, or readiness deadline change was required.
+- The CRI image-digest rejection was reproduced in lightweight before the
+  Kubernetes rerun. Node rejected the mismatch without a runtime binding and
+  accepted the restored digest: 1 passed in 41.00 seconds.
+- The final Rust CI gate passed. The full physical platform matrix is not yet
+  qualified for this change. See [MULTI_POLICY_REVIEW.md](MULTI_POLICY_REVIEW.md)
+  for the failed attempts, retained VM, and verification limits.
+
 These rules control every checkmark and commit in this file.
 
 ### Scenario shape

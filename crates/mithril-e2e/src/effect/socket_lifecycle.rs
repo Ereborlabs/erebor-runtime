@@ -11,9 +11,9 @@ fn socket_generation_is_fresh<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("tcp-nodelay")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("tcp_nodelay_policy.json")?;
+    let labels = env.install_policy("tcp_nodelay_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("tcp_nodelay.py", &[])?;
+    let mut actor = env.start_actor("tcp_nodelay.py", &[], &labels)?;
     let pid = actor.id();
     let task = env.task(pid, "TCP actor")?;
     assert_ne!(task.snapshot.admitted_entry_rule_id, 0);

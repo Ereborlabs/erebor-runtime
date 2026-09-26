@@ -11,9 +11,9 @@ fn proc_fd_keeps_exact_deny<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("file-procfd")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("actor_policy.json")?;
+    let labels = env.install_policy("actor_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("exception.py", &["procfd"])?;
+    let mut actor = env.start_actor("exception.py", &["procfd"], &labels)?;
     let pid = actor.id();
     env.install_policy("file_protect.json")?;
     env.node_ready()?;

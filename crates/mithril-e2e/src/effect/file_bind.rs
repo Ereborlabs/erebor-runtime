@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use std::{path::Path, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
@@ -12,7 +14,11 @@ fn bind_alias_keeps_exact_deny<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("file-bind-protect")?;
     env.start_control()?;
     env.stop_node()?;
-    let mut actor = env.start_actor("exception.py", &["bind"])?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../fixtures/process/mount_alias_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut actor = env.start_actor("exception.py", &["bind"], &labels)?;
     let pid = actor.id();
     env.place(pid)?;
     env.install_policy("mount_alias_policy.json")?;

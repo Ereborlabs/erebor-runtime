@@ -27,6 +27,11 @@ For a diagnostic VM that you must retain, use `virsh shutdown NAME`, wait for
 An active harness-owned two-node pair is valid only while its two-node lane
 runs. An old running VM can delay BPF verification and make Node startup fail.
 
+Before stopping a retained diagnostic VM, run `virsh domblklist NAME` and
+check that its disk files still exist. A running QEMU process can retain an
+open disk after its file is removed. Such a VM cannot restart. Keep the VM work
+directory until you remove the VM through its owner.
+
 Run:
 
 ```bash

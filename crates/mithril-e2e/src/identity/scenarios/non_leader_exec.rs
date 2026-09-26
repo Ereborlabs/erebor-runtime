@@ -27,9 +27,9 @@ fn non_leader_exec<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("non-leader-exec")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("actor_sleep_policy.json")?;
+    let labels = env.install_policy("actor_sleep_policy.json")?;
     env.node_ready()?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     let mut actor = env.add_actor("python", &["/fixtures/native_non_leader_exec.py", "/work"])?;
 
     let root_pid = actor.id();

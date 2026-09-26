@@ -6,11 +6,11 @@ fn runtime_gate_fails_closed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("runtime-outage")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("python_policy.json")?;
+    let labels = env.install_policy("python_policy.json")?;
     env.node_ready()?;
     env.stop_node()?;
 
-    let denied = match env.start_actor("ready.py", &[]) {
+    let denied = match env.start_actor("ready.py", &[], &labels) {
         Err(error) => error,
         Ok(mut actor) => {
             actor.stop()?;

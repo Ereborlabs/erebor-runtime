@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use std::{cell::RefCell, collections::BTreeSet, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
@@ -12,7 +14,11 @@ fn protected_mount_race_is_closed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("mount-race")?;
     env.start_control()?;
     env.stop_node()?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../../fixtures/process/mount_race_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     let mut actor = env.add_actor("python3", &["/fixtures/mount_alias.py", "/work", "race"])?;
     actor.ready()?;
     let pid = actor.id();

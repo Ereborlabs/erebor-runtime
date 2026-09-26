@@ -11,9 +11,9 @@ fn symlink_keeps_exact_file<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("file-symlink")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("actor_policy.json")?;
+    let labels = env.install_policy("actor_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("exception.py", &["symlink"])?;
+    let mut actor = env.start_actor("exception.py", &["symlink"], &labels)?;
     let pid = actor.id();
     env.install_policy("file_observe.json")?;
     env.node_ready()?;

@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use std::{cell::RefCell, collections::BTreeSet, time::Duration};
 
 use erebor_interceptor_abi::{
@@ -13,7 +15,11 @@ use crate::platform::{platform_test, Platform, TestResult};
 fn maximum_depth_child_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("path-depth")?;
     env.start_control()?;
-    let mut actor = env.start_actor("path_wildcards.py", &["max-depth"])?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../../fixtures/process/path_wildcards_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut actor = env.start_actor("path_wildcards.py", &["max-depth"], &labels)?;
     let pid = actor.id();
     env.place(pid)?;
     env.install_policy("path_wildcards_policy.json")?;

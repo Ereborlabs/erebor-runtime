@@ -14,9 +14,9 @@ fn unclassified_connect_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("unclassified-connect")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("network_connect_policy.json")?;
+    let labels = env.install_policy("network_connect_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("network_connect.py", &[])?;
+    let mut actor = env.start_actor("network_connect.py", &[], &labels)?;
     let pid = actor.id();
     let task = env.task(pid, "network actor")?;
     assert_ne!(task.snapshot.admitted_entry_rule_id, 0);

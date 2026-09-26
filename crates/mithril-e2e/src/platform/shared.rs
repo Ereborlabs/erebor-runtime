@@ -13,8 +13,8 @@ use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{TaskCoordinateStateV1, TaskCoordinateV1};
 use erebor_runtime_client::MithrilObservationClient;
 use erebor_runtime_ipc::v1::{
-    MithrilObservationSnapshot, RuntimeAdmissionDecision, RuntimeAdmissionEntriesRequest,
-    RuntimeAdmissionPrepareRequest, RuntimeAdmissionStageRequest,
+    MithrilObservationSnapshot, RuntimeAdmissionDecision, RuntimeAdmissionPrepareRequest,
+    RuntimeAdmissionStageRequest,
 };
 use k8s_cri::v1::ContainerState;
 use mithril_control::{
@@ -39,7 +39,7 @@ use tokio::sync::watch;
 use zerocopy::TryFromBytes as _;
 
 use super::lifecycle::{enter, LifecycleGuard};
-use super::{policy_path, CriFixture, Task, TestResult};
+use super::{policy_labels, policy_path, CriFixture, Labels, Task, TestResult};
 use crate::control_fixture::{ControlServerFixture, MtlsFixture};
 use crate::error::{
     InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu, PolicySnafu,
@@ -60,23 +60,34 @@ const NODE_UID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const NODE_ID: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const POLICY_UID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
+struct ActorFiles {
+    work: ProbeDirectory,
+    cgroup: ProbeCgroup,
+    pod_uid: String,
+}
+
 pub(super) struct SharedState {
+    labels: Labels,
+    actors: BTreeMap<Labels, ActorFiles>,
+    policies: BTreeMap<Labels, (WorkloadProtectionPolicy, PathBuf)>,
+    targets: BTreeMap<Labels, WorkloadTargetFactV1>,
+    bindings: BTreeMap<Labels, WorkloadBindingConfig>,
+    work_path: PathBuf,
+    cgroup_path: PathBuf,
+    work: Option<ProbeDirectory>,
+    cgroup: Option<ProbeCgroup>,
     root: PathBuf,
     out: PathBuf,
     out_dir: Option<ProbeDirectory>,
-    work_path: PathBuf,
     state_path: PathBuf,
-    cgroup_path: PathBuf,
     node_path: PathBuf,
     pin_path: PathBuf,
     lease_path: PathBuf,
     cri_path: PathBuf,
     admit_path: PathBuf,
     observation_path: PathBuf,
-    work: Option<ProbeDirectory>,
     state: Option<ProbeDirectory>,
     admit: Option<ProbeDirectory>,
-    cgroup: Option<ProbeCgroup>,
     node_cgroup: Option<ProbeCgroup>,
     pin: Option<ProbeDirectory>,
     lease: Option<ProbeFile>,
@@ -85,11 +96,6 @@ pub(super) struct SharedState {
     plane: Option<ControlPlane>,
     policy: Option<PolicyDesiredStateOwner>,
     policy_generation: i64,
-    resource: Option<WorkloadProtectionPolicy>,
-    policy_path: Option<PathBuf>,
-    binding: Option<WorkloadBindingConfig>,
-    target: Option<WorkloadTargetFactV1>,
-    revision: Option<String>,
     cri: Option<CriFixture>,
     node_stop: Option<watch::Sender<bool>>,
     node_task: Option<thread::JoinHandle<mithril_node::Result<()>>>,
@@ -132,35 +138,60 @@ impl SharedState {
     }
 
     fn reset(&mut self) -> TestResult<()> {
-        ensure!(
-            self.work.is_none() && self.cgroup.is_none(),
-            InvalidInputSnafu {
-                path: &self.out,
-                reason: "the previous scenario is not clean",
-            }
-        );
-        let work = ProbeDirectory::create(&self.work_path)?;
-        let bin = self.work_path.join("bin");
-        fs::create_dir(&bin)?;
-        fs::copy(fs::canonicalize("/usr/bin/python3")?, bin.join("python"))?;
-        self.work = Some(work);
+        self.work = Some(ProbeDirectory::create(&self.work_path)?);
         self.cgroup = Some(ProbeCgroup::create(&self.cgroup_path)?);
-        self.resource = None;
-        self.policy_path = None;
-        self.binding = None;
-        self.target = None;
-        self.revision = None;
+        self.labels.clear();
+        Ok(())
+    }
+
+    pub(super) fn prepare_actor(&mut self, labels: &Labels) -> TestResult<()> {
+        if !self.actors.contains_key(labels) {
+            let first = self.actors.is_empty();
+            let pod_uid = if first {
+                POD_UID.to_owned()
+            } else {
+                uuid::Uuid::new_v4().to_string()
+            };
+            let work = if first {
+                self.work
+                    .take()
+                    .ok_or("the initial actor directory is missing")?
+            } else {
+                ProbeDirectory::create(&self.out.join(format!("actor-{pod_uid}")))?
+            };
+            let cgroup = if first {
+                self.cgroup
+                    .take()
+                    .ok_or("the initial actor cgroup is missing")?
+            } else {
+                ProbeCgroup::create(&self.node_path.with_file_name(format!("actor-{pod_uid}")))?
+            };
+            let bin = work.path().join("bin");
+            fs::create_dir(&bin)?;
+            fs::copy(fs::canonicalize("/usr/bin/python3")?, bin.join("python"))?;
+            self.actors.insert(
+                labels.clone(),
+                ActorFiles {
+                    work,
+                    cgroup,
+                    pod_uid,
+                },
+            );
+        }
+        self.labels = labels.clone();
         Ok(())
     }
 
     fn binding(&self) -> TestResult<&WorkloadBindingConfig> {
-        self.binding
-            .as_ref()
-            .ok_or_else(|| "the policy is not installed".into())
+        self.bindings
+            .get(&self.labels)
+            .ok_or_else(|| "the actor has no installed binding".into())
     }
 
     pub(super) fn cgroup(&self) -> &Path {
-        &self.cgroup_path
+        self.actors
+            .get(&self.labels)
+            .map_or(&self.cgroup_path, |actor| actor.cgroup.path())
     }
 
     pub(super) fn move_out(&self, pid: u32) -> TestResult<()> {
@@ -180,7 +211,7 @@ impl SharedState {
     }
 
     pub(super) fn actor_id(&self) -> TestResult<String> {
-        if let Some(binding) = &self.binding {
+        if let Some(binding) = self.bindings.get(&self.labels) {
             return Ok(binding.container_id.clone());
         }
         let generation = self
@@ -191,15 +222,17 @@ impl SharedState {
     }
 
     pub(super) fn has_policy(&self) -> bool {
-        self.binding.is_some()
+        self.bindings.contains_key(&self.labels)
     }
 
     pub(super) fn annotations(&self) -> TestResult<BTreeMap<String, String>> {
         let binding = self.binding()?;
-        let revision = self
-            .revision
-            .as_ref()
-            .ok_or("the policy revision is not installed")?;
+        let revision = &self
+            .targets
+            .get(&self.labels)
+            .and_then(|target| target.kubernetes.as_ref())
+            .ok_or("the policy revision is not installed")?
+            .policy_source_revision_id;
         Ok(BTreeMap::from([
             (
                 POD_NAMESPACE_ANNOTATION.to_owned(),
@@ -237,7 +270,7 @@ impl SharedState {
         Ok(RuntimeAdmissionStageRequest {
             container_id: self.binding()?.container_id.clone(),
             annotations: self.annotations()?.into_iter().collect(),
-            cgroup_path: self.cgroup_path.as_os_str().as_bytes().to_vec(),
+            cgroup_path: self.cgroup().as_os_str().as_bytes().to_vec(),
         })
     }
 
@@ -257,25 +290,12 @@ impl SharedState {
         Ok(self.runtime.block_on(client.prepare_container(request))?)
     }
 
-    pub(super) fn entries(&self, bundle: &Path, fd: u32) -> TestResult<RuntimeAdmissionDecision> {
-        let request = RuntimeAdmissionEntriesRequest {
-            container_id: self.binding()?.container_id.clone(),
-            annotations: self.annotations()?.into_iter().collect(),
-            oci_bundle: bundle.as_os_str().as_bytes().to_vec(),
-            oci_root_fd: fd,
-        };
-        let client = RuntimeAdmissionClient::new(self.admit_path.clone(), READY_LIMIT)?;
-        Ok(self
-            .runtime
-            .block_on(client.prepare_declared_entries(request))?)
-    }
-
     pub(super) fn node_running(&self) -> bool {
         self.node_task.is_some()
     }
 
     pub(super) fn protected(&self) -> bool {
-        self.node_running() && self.binding.is_some()
+        self.node_running() && self.bindings.contains_key(&self.labels)
     }
 
     fn wait_task_exec(
@@ -323,14 +343,12 @@ impl SharedState {
         if let Some(cri) = self.cri.as_ref() {
             cri.clear()?;
         }
-        if let (Some(plane), Some(policy), Some(resource)) = (
-            self.plane.as_ref(),
-            self.policy.as_ref(),
-            self.resource.as_ref(),
-        ) {
+        if let (Some(plane), Some(policy)) = (self.plane.as_ref(), self.policy.as_ref()) {
             plane.replace_kubernetes_workload_inventory(Vec::new())?;
             let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
-            policy.reconcile(resource, NAMESPACE_UID, &[], now)?;
+            for (resource, _) in self.policies.values() {
+                policy.reconcile(resource, NAMESPACE_UID, &[], now)?;
+            }
             if self.node_task.is_some() {
                 let last = RefCell::new(String::from("<absent>"));
                 wait_for(
@@ -351,17 +369,20 @@ impl SharedState {
                 )?;
             }
         }
-        self.resource = None;
-        self.binding = None;
-        self.target = None;
-        self.revision = None;
+        self.policies.clear();
+        self.targets.clear();
+        self.bindings.clear();
         Ok(())
     }
 
     fn clean_test(&mut self) -> TestResult<()> {
         self.retire()?;
-        if let Some(cgroup) = self.cgroup.take() {
-            cgroup.cleanup()?;
+        for (_, actor) in std::mem::take(&mut self.actors) {
+            actor.cgroup.cleanup()?;
+            actor.work.cleanup()?;
+        }
+        if let Some(group) = self.cgroup.take() {
+            group.cleanup()?;
         }
         if let Some(work) = self.work.take() {
             work.cleanup()?;
@@ -507,13 +528,8 @@ impl Shared {
         let out_dir = ProbeDirectory::create(&out)?;
         let work_path = out.join("actor");
         let state_path = out.join("node");
-        let work = ProbeDirectory::create(&work_path)?;
-        let bin = work_path.join("bin");
-        fs::create_dir(&bin)?;
-        fs::copy(fs::canonicalize("/usr/bin/python3")?, bin.join("python"))?;
         let state = ProbeDirectory::create(&state_path)?;
         let admit = ProbeDirectory::create(&admit_dir)?;
-        let cgroup = ProbeCgroup::create(&cgroup_path)?;
         let mut node_cgroup = ProbeCgroup::create(&node_path)?;
         node_cgroup.enter()?;
         let inspector = NativeIdentityInspector::new(&pin_path);
@@ -521,23 +537,30 @@ impl Shared {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
+        let work = ProbeDirectory::create(&work_path)?;
+        let cgroup = ProbeCgroup::create(&cgroup_path)?;
         lifecycle.put(SharedState {
+            labels: Labels::new(),
+            actors: BTreeMap::new(),
+            policies: BTreeMap::new(),
+            targets: BTreeMap::new(),
+            bindings: BTreeMap::new(),
+            work_path,
+            cgroup_path,
+            work: Some(work),
+            cgroup: Some(cgroup),
             root,
             out,
             out_dir: Some(out_dir),
-            work_path,
             state_path,
-            cgroup_path,
             node_path,
             pin_path: pin_path.clone(),
             lease_path: lease_path.clone(),
             cri_path,
             admit_path,
             observation_path,
-            work: Some(work),
             state: Some(state),
             admit: Some(admit),
-            cgroup: Some(cgroup),
             node_cgroup: Some(node_cgroup),
             pin: Some(ProbeDirectory::new(&pin_path)),
             lease: Some(ProbeFile::new(&lease_path)),
@@ -546,11 +569,6 @@ impl Shared {
             plane: None,
             policy: None,
             policy_generation: 0,
-            resource: None,
-            policy_path: None,
-            binding: None,
-            target: None,
-            revision: None,
             cri: None,
             node_stop: None,
             node_task: None,
@@ -732,7 +750,7 @@ impl Shared {
         })
     }
 
-    pub(super) fn install_policy(&mut self, name: &str) -> TestResult<()> {
+    pub(super) fn install_policy(&mut self, name: &str) -> TestResult<Labels> {
         let path = policy_path(&self.root, name)?;
         let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
         let value: serde_json::Value =
@@ -740,67 +758,104 @@ impl Shared {
         if value.get("kind").and_then(serde_json::Value::as_str)
             == Some("WorkloadProtectionException")
         {
-            return self.install_exception(&bytes, &path);
+            self.install_exception(&bytes, &path)?;
+            return Ok(self.labels.clone());
         }
         let mut resource: WorkloadProtectionPolicy =
             serde_json::from_slice(&bytes).context(JsonSnafu { path: &path })?;
+        let labels = policy_labels(&resource)?;
         if self
-            .resource
-            .as_ref()
-            .is_some_and(|current| current.spec == resource.spec)
+            .policies
+            .get(&labels)
+            .is_some_and(|(current, _)| current.spec == resource.spec)
         {
-            return Ok(());
+            return Ok(labels);
         }
         self.policy_generation = self
             .policy_generation
             .checked_add(1)
             .ok_or("the test policy generation overflowed")?;
-        resource.metadata.name = Some("scenario".to_owned());
+        let index = self.policies.len();
+        resource.metadata.name = Some(
+            self.policies
+                .get(&labels)
+                .and_then(|(current, _)| current.metadata.name.clone())
+                .unwrap_or_else(|| {
+                    if index == 0 {
+                        "scenario".to_owned()
+                    } else {
+                        format!("scenario-{index}")
+                    }
+                }),
+        );
         resource.metadata.namespace = Some("default".to_owned());
-        resource.metadata.uid = Some(POLICY_UID.to_owned());
+        resource.metadata.uid = Some(
+            self.policies
+                .get(&labels)
+                .and_then(|(current, _)| current.metadata.uid.clone())
+                .unwrap_or_else(|| {
+                    if index == 0 {
+                        POLICY_UID.to_owned()
+                    } else {
+                        uuid::Uuid::new_v4().to_string()
+                    }
+                }),
+        );
         resource.metadata.generation = Some(self.policy_generation);
         resource.metadata.resource_version = Some(self.policy_generation.to_string());
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
-        self.resource = Some(resource);
-        self.policy_path = Some(path);
-        if self.node_task.is_some() {
-            self.sync_policy()?;
+        self.policies.insert(labels.clone(), (resource, path));
+        let previous = self.labels.clone();
+        self.prepare_actor(&labels)?;
+        let result = if self.node_task.is_some() {
+            self.sync_policy()
         } else {
+            let (resource, path) = self
+                .policies
+                .get(&labels)
+                .ok_or("the policy is not installed")?;
             let policy = self
                 .policy
                 .as_ref()
                 .ok_or("Control policy is not running")?;
-            let resource = self
-                .resource
-                .as_ref()
-                .ok_or("the policy is not installed")?;
-            let path = self
-                .policy_path
-                .as_ref()
-                .ok_or("the policy path is not installed")?;
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
             let result = policy.reconcile(resource, NAMESPACE_UID, &[], now)?;
             ensure!(
                 result.bundles.is_empty(),
                 InvalidInputSnafu {
                     path,
-                    reason: "Control produced a policy bundle without a workload target",
+                    reason: "Control produced a policy bundle without a workload target"
                 }
             );
-            self.revision = Some(result.source_revision.policy_source_revision_id);
+            Ok(())
+        };
+        if self.actors.contains_key(&previous) {
+            self.labels = previous;
         }
-        Ok(())
+        result?;
+        Ok(labels)
     }
 
     fn install_exception(&mut self, bytes: &[u8], path: &Path) -> TestResult<()> {
         let mut resource: WorkloadProtectionException =
             serde_json::from_slice(bytes).context(JsonSnafu { path })?;
-        resource.spec.policy_ref.name = "scenario".to_owned();
+        resource.metadata.namespace = Some("default".to_owned());
+        resource.spec.policy_ref.name = self
+            .policies
+            .get(&self.labels)
+            .and_then(|(policy, _)| policy.metadata.name.clone())
+            .ok_or("the actor policy is missing")?;
         resource.spec.target.pod.name = "pid-reuse".to_owned();
-        resource.spec.target.pod.uid = POD_UID.to_owned();
+        resource.spec.target.pod.uid = self
+            .actors
+            .get(&self.labels)
+            .ok_or("the actor is missing")?
+            .pod_uid
+            .clone();
         resource.spec.target.container_name = "worker".to_owned();
         let target = self
-            .target
-            .clone()
+            .targets
+            .get(&self.labels)
+            .cloned()
             .ok_or("the exception has no active workload target")?;
         let policy = self
             .policy
@@ -870,14 +925,16 @@ impl Shared {
             || "Control has no ready Kubernetes Node session".to_owned(),
         )?;
 
-        let path = self
-            .policy_path
-            .as_ref()
-            .ok_or("the policy is not installed")?;
-        let resource = self
-            .resource
-            .as_ref()
-            .ok_or("the policy is not installed")?;
+        let (resource, path) = self
+            .policies
+            .get(&self.labels)
+            .ok_or("the actor policy is not installed")?;
+        let pod_uid = self
+            .actors
+            .get(&self.labels)
+            .ok_or("the actor resources are missing")?
+            .pod_uid
+            .clone();
         let document = lower_kubernetes_policy(resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID)?;
         let source = PolicySourceRevisionV1::from_resource(
             resource,
@@ -890,24 +947,21 @@ impl Shared {
         let profile_id = document.metadata.profile_id.clone();
         let scope_id = document.protected_universe.protected_scope_ids[0].clone();
         let selector_id = document.workload_selectors[0].workload_selector_id.clone();
-        let authority = ScheduledRuntimeBindingV1::authority_binding_id(POD_UID, "worker");
+        let authority = ScheduledRuntimeBindingV1::authority_binding_id(&pod_uid, "worker");
         let mut target = WorkloadTargetFactV1 {
             node_id: session.node_id.clone(),
             workload_binding_generation_digest: String::new(),
-            execution_set_id: "44444444-4444-4444-8444-444444444444".to_owned(),
+            execution_set_id: pod_uid.clone(),
             cluster_uid: CLUSTER_UID.to_owned(),
             namespace_uid: NAMESPACE_UID.to_owned(),
             controller_uid: "77777777-7777-4777-8777-777777777777".to_owned(),
             service_account_uid: "88888888-8888-4888-8888-888888888888".to_owned(),
-            pod_uid: POD_UID.to_owned(),
-            container_id: format!("scheduled:{}", "a".repeat(64)),
+            pod_uid: pod_uid.clone(),
+            container_id: format!("scheduled:{}", pod_uid),
             container_name: "worker".to_owned(),
             container_kind: ControlContainerKind::Application,
             image_digest: format!("sha256:{}", "b".repeat(64)),
-            pod_labels: BTreeMap::from([(
-                "app.kubernetes.io/name".to_owned(),
-                "pid-reuse".to_owned(),
-            )]),
+            pod_labels: self.labels.clone(),
             kubernetes: Some(KubernetesWorkloadIdentityV1 {
                 namespace_name: "default".to_owned(),
                 pod_name: "pid-reuse".to_owned(),
@@ -923,7 +977,14 @@ impl Shared {
             }),
         };
         target.workload_binding_generation_digest = workload_target_fact_digest(&target)?;
-        plane.replace_kubernetes_workload_inventory(vec![target.clone()])?;
+        let targets = self
+            .targets
+            .iter()
+            .filter(|(labels, _)| *labels != &self.labels)
+            .map(|(_, target)| target.clone())
+            .chain(std::iter::once(target.clone()))
+            .collect();
+        plane.replace_kubernetes_workload_inventory(targets)?;
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
         let policy = self
             .policy
@@ -951,40 +1012,63 @@ impl Shared {
         let profile_generation = ack
             .profile_generation_ref_id
             .ok_or("the active policy has no profile generation reference")?;
-        self.revision = Some(revision.clone());
-        self.target = Some(target.clone());
-        self.binding = Some(WorkloadBindingConfig {
-            binding_id: ScheduledRuntimeBindingV1::runtime_binding_id(&authority, &container_id),
-            scheduled_binding_authority_id: Some(authority),
-            scheduled_target_digest: Some(digest.clone()),
-            execution_set_id: target.execution_set_id,
-            protected_scope_id: scope_id,
-            workload_selector_id: selector_id,
-            profile_id,
-            container_id,
-            namespace: "default".to_owned(),
-            cluster_uid: CLUSTER_UID.to_owned(),
-            namespace_uid: NAMESPACE_UID.to_owned(),
-            controller_uid: target.controller_uid,
-            service_account_uid: target.service_account_uid,
-            pod_labels: target.pod_labels,
-            pod_uid: POD_UID.to_owned(),
-            sandbox_id: "d".repeat(64),
-            container_name: "worker".to_owned(),
-            image_digest: target.image_digest,
-            container_kind: ContainerKindV1::Application,
-            container_generation: generation,
-            root_cgroup_path: Some(self.cgroup_path.clone()),
-            lifecycle_generation: generation,
-            active_profile_generation_ref_id: profile_generation,
-            initial_role_id: 1,
-            external_role_id: 2,
-            arm_initial_root: true,
-        });
+        let labels = self.labels.clone();
+        self.targets.insert(labels.clone(), target.clone());
+        let cgroup = self.cgroup().to_owned();
+        self.bindings.insert(
+            labels,
+            WorkloadBindingConfig {
+                binding_id: ScheduledRuntimeBindingV1::runtime_binding_id(
+                    &authority,
+                    &container_id,
+                ),
+                scheduled_binding_authority_id: Some(authority),
+                scheduled_target_digest: Some(digest.clone()),
+                execution_set_id: target.execution_set_id,
+                protected_scope_id: scope_id,
+                workload_selector_id: selector_id,
+                profile_id,
+                container_id,
+                namespace: "default".to_owned(),
+                cluster_uid: CLUSTER_UID.to_owned(),
+                namespace_uid: NAMESPACE_UID.to_owned(),
+                controller_uid: target.controller_uid,
+                service_account_uid: target.service_account_uid,
+                pod_labels: target.pod_labels,
+                pod_uid: pod_uid.clone(),
+                sandbox_id: "d".repeat(64),
+                container_name: "worker".to_owned(),
+                image_digest: target.image_digest,
+                container_kind: ContainerKindV1::Application,
+                container_generation: generation,
+                root_cgroup_path: Some(cgroup),
+                lifecycle_generation: generation,
+                active_profile_generation_ref_id: profile_generation,
+                initial_role_id: 1,
+                external_role_id: 2,
+                arm_initial_root: true,
+            },
+        );
         Ok(())
     }
 
     fn wait_policy(&self, revision: &str, digest: &str) -> TestResult<()> {
+        let mut expected = vec![(revision, digest)];
+        expected.extend(
+            self.targets
+                .iter()
+                .filter(|(labels, _)| *labels != &self.labels)
+                .filter_map(|(_, target)| {
+                    Some((
+                        target
+                            .kubernetes
+                            .as_ref()?
+                            .policy_source_revision_id
+                            .as_str(),
+                        target.workload_binding_generation_digest.as_str(),
+                    ))
+                }),
+        );
         let last = RefCell::new(String::from("<absent>"));
         Ok(wait_for(
             &self.state_path,
@@ -993,14 +1077,17 @@ impl Shared {
             || {
                 let status =
                     mithril_node::policy_delivery_status(&self.state_path).context(NodeSnafu)?;
-                let active = status.active_targets.iter().any(|target| {
-                    target.policy_source_revision_id == revision
-                        && target.workload_binding_generation_digest == digest
+                let active = expected.iter().all(|(revision, digest)| {
+                    status.active_targets.iter().any(|target| {
+                        target.policy_source_revision_id == *revision
+                            && target.workload_binding_generation_digest == *digest
+                    })
                 });
                 let ready = active
-                    && status.active_target_count == 1
+                    && status.active_target_count as usize == expected.len()
                     && !status.active_targets_truncated
-                    && status.scheduled_binding_count + status.runtime_binding_count == 1
+                    && (status.scheduled_binding_count + status.runtime_binding_count) as usize
+                        == expected.len()
                     && !status.activation_pending
                     && status.control_acknowledged;
                 *last.borrow_mut() = format!("{status:?}");
@@ -1018,10 +1105,11 @@ impl Shared {
     pub(super) fn node_ready(&mut self) -> TestResult<()> {
         let ready = self.ready.as_ref().ok_or("Node is not running")?;
         let task = self.node_task.as_ref().ok_or("Node is not running")?;
-        let prevention = self
-            .resource
-            .as_ref()
-            .is_none_or(|policy| policy.spec.mode != KubernetesPolicyModeV1::Observe);
+        let prevention = self.policies.is_empty()
+            || self
+                .policies
+                .values()
+                .any(|(policy, _)| policy.spec.mode != KubernetesPolicyModeV1::Observe);
         let last = RefCell::new(String::from("<absent>"));
         Ok(wait_stable(
             &self.pin_path,
@@ -1059,8 +1147,9 @@ impl Shared {
         let plane = self.plane.clone().ok_or("Control is not running")?;
         let binding = self.binding()?.clone();
         let role = self
-            .resource
-            .as_ref()
+            .policies
+            .get(&self.labels)
+            .map(|(policy, _)| policy)
             .and_then(|policy| {
                 policy
                     .spec
@@ -1143,7 +1232,7 @@ impl Shared {
     }
 
     pub(super) fn place(&mut self, pid: u32) -> TestResult<()> {
-        let path = self.cgroup_path.join("cgroup.procs");
+        let path = self.cgroup().join("cgroup.procs");
         fs::write(&path, pid.to_string()).context(IoSnafu { path: &path })?;
         Ok(())
     }
@@ -1265,7 +1354,9 @@ impl Shared {
     }
 
     pub(super) fn work(&self) -> &Path {
-        &self.work_path
+        self.actors
+            .get(&self.labels)
+            .map_or(&self.work_path, |actor| actor.work.path())
     }
 
     pub(super) fn output(&self) -> &Path {
@@ -1316,6 +1407,58 @@ mod tests {
 
     #[test]
     #[ignore = "requires its physical test environment"]
+    fn image_identity_is_required() -> TestResult<()> {
+        test_lifecycle::<Host, _>("image-identity", || {
+            let mut env = Shared::setup("image-identity")?;
+            env.start_control()?;
+            env.start_node()?;
+            env.install_policy("actor_policy.json")?;
+            env.node_ready()?;
+            let script = env
+                .source()
+                .join(crate::platform::PROCESS_FIXTURES)
+                .join("ready.py");
+            let mut actor = ProcessFixture::held_pidns(
+                Path::new("/usr/bin/python3"),
+                [script.as_path(), env.work()],
+                env.cgroup(),
+                Path::new("/"),
+                &script,
+            )?;
+            env.observe()?;
+            assert!(env.stage()?.allowed);
+            let mut observed = crate::runtime_input::runtime_observation(
+                env.binding()?,
+                0,
+                k8s_cri::v1::ContainerState::ContainerCreated,
+            )?;
+            // CRI reports a manifest digest that differs from the signed image digest.
+            observed.status.status.as_mut().ok_or("CRI status is missing")?.image_ref =
+                "docker.io/library/python@sha256:92d838fe88b56f5b9c8b001e7460e7da819b40110d8bc7fbdb9a6241f1006520".to_owned();
+            env.cri
+                .as_ref()
+                .ok_or("CRI is not running")?
+                .set(observed)?;
+            let denied = env.prepare(actor.id())?;
+            assert!(!denied.allowed, "{denied:?}");
+            assert_eq!(denied.reason_code, "RUNTIME_ADMISSION_REJECTED");
+            assert!(denied.receipt_token.is_empty());
+            assert_eq!(
+                mithril_node::policy_delivery_status(&env.state_path)?.runtime_binding_count,
+                0
+            );
+
+            env.observe()?;
+            let allowed = env.prepare(actor.id())?;
+            assert!(allowed.allowed, "{allowed:?}");
+            assert_eq!(allowed.reason_code, "ACTIVE_POLICY_AND_BINDING_VERIFIED");
+            actor.stop()?;
+            env.stop()
+        })
+    }
+
+    #[test]
+    #[ignore = "requires its physical test environment"]
     fn unconfirmed_prepare_rolls_back() -> TestResult<()> {
         test_lifecycle::<Host, _>("admission-rollback", || {
             let mut env = Shared::setup("admission-rollback")?;
@@ -1330,7 +1473,7 @@ mod tests {
             let mut actor = ProcessFixture::held_pidns(
                 Path::new("/usr/bin/python3"),
                 [script.as_path(), env.work()],
-                &env.cgroup_path,
+                env.cgroup(),
                 Path::new("/"),
                 &script,
             )?;
@@ -1353,7 +1496,7 @@ mod tests {
             assert!(decision.allowed, "{decision:?}");
             assert_eq!(decision.reason_code, "ACTIVE_POLICY_AND_BINDING_VERIFIED");
             assert!(!decision.receipt_token.is_empty());
-            let key = fs::metadata(&env.cgroup_path)?.ino().to_ne_bytes();
+            let key = fs::metadata(env.cgroup())?.ino().to_ne_bytes();
             let bytes = env
                 .reader
                 .lookup("execution_set_bindings", &key)?

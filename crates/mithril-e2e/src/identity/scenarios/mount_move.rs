@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
@@ -10,7 +12,11 @@ use std::{collections::BTreeSet, fs, time::Duration};
 fn moved_mount_keeps_policy<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("mount-move")?;
     env.start_control()?;
-    let mut actor = env.start_actor("mount_alias.py", &["move"])?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../../fixtures/process/mount_alias_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut actor = env.start_actor("mount_alias.py", &["move"], &labels)?;
     let pid = actor.id();
     env.place(pid)?;
     env.install_policy("mount_alias_policy.json")?;

@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use std::{cell::RefCell, collections::BTreeSet, os::unix::fs::MetadataExt as _, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
@@ -12,7 +14,11 @@ use crate::platform::{platform_test, Platform, TestResult};
 fn late_bind_keeps_policy<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("mount-late")?;
     env.start_control()?;
-    let mut actor = env.start_actor("mount_alias.py", &["late"])?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../../fixtures/process/mount_alias_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut actor = env.start_actor("mount_alias.py", &["late"], &labels)?;
     let pid = actor.id();
     env.place(pid)?;
     env.install_policy("mount_alias_policy.json")?;

@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use std::{cell::RefCell, collections::BTreeSet, os::unix::fs::MetadataExt, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
@@ -12,7 +14,11 @@ fn future_mount_namespace_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("mount-future")?;
     env.start_control()?;
     let host_ns = std::fs::metadata("/proc/self/ns/mnt")?.ino();
-    let mut actor = env.start_actor("mount_alias.py", &["future"])?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../../fixtures/process/mount_alias_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut actor = env.start_actor("mount_alias.py", &["future"], &labels)?;
     let pid = actor.id();
     env.place(pid)?;
     env.install_policy("mount_alias_policy.json")?;

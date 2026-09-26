@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use std::{cell::RefCell, collections::BTreeSet, fs, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
@@ -12,7 +14,11 @@ fn protected_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("process-ptrace")?;
     env.start_control()?;
     env.stop_node()?;
-    let mut actor = env.start_actor("process_control.py", &["ptrace"])?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../fixtures/process/process_control_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut actor = env.start_actor("process_control.py", &["ptrace"], &labels)?;
     env.install_policy("process_control_policy.json")?;
     env.start_node()?;
     env.sync_policy()?;
@@ -103,7 +109,11 @@ fn signal_zero_is_allowed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("process-signal-zero")?;
     env.start_control()?;
     env.stop_node()?;
-    let mut actor = env.start_actor("process_control.py", &["signal-zero"])?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../fixtures/process/process_control_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut actor = env.start_actor("process_control.py", &["signal-zero"], &labels)?;
     env.install_policy("process_control_policy.json")?;
     env.start_node()?;
     env.sync_policy()?;
@@ -190,9 +200,9 @@ fn signal_cont_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("process-signal-cont")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("process_control_policy.json")?;
+    let labels = env.install_policy("process_control_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("process_control.py", &["signal-cont"])?;
+    let mut actor = env.start_actor("process_control.py", &["signal-cont"], &labels)?;
     let parent = env.task(actor.id(), "signal controller")?;
 
     fs::write(env.work().join("spawn"), b"spawn\n")?;
@@ -284,7 +294,10 @@ fn unmatched_signal_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("process-signal-unmatched")?;
     env.start_control()?;
     env.stop_node()?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let policy: Policy =
+        serde_json::from_str(include_str!("../../fixtures/process/python_policy.json"))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     env.place(init.id())?;
     let args = [
         "/fixtures/process_control.py",
@@ -380,7 +393,10 @@ fn unmatched_ptrace_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("process-ptrace-unmatched")?;
     env.start_control()?;
     env.stop_node()?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let policy: Policy =
+        serde_json::from_str(include_str!("../../fixtures/process/python_policy.json"))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     env.place(init.id())?;
     let args = [
         "/fixtures/process_control.py",

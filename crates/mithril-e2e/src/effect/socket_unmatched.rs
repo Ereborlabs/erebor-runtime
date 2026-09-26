@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use std::{fs, time::Duration};
 
 use erebor_interceptor_abi::{
@@ -12,7 +14,11 @@ use crate::platform::{platform_test, Platform, TestResult};
 fn new_peer_needs_relation<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("socket-unmatched")?;
     env.start_control()?;
-    let mut main = env.start_actor("socket_pass.py", &["main-unmatched"])?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../fixtures/process/socket_unmatched_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut main = env.start_actor("socket_pass.py", &["main-unmatched"], &labels)?;
     env.install_policy("socket_unmatched_policy.json")?;
     env.start_node()?;
     env.sync_policy()?;

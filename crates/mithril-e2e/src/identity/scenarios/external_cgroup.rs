@@ -17,9 +17,9 @@ fn cgroup_exec_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("external-cgroup")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("actor_policy.json")?;
+    let labels = env.install_policy("actor_policy.json")?;
     env.node_ready()?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
 
     let script = actor_script(env.source(), "exec_on_release.py")?;
     let mut actor = ProcessFixture::python(&script, ["/usr/bin/true"])?;

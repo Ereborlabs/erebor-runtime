@@ -15,7 +15,7 @@ fn entry_roles_are_isolated<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("entry-isolation")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("entry_isolation_policy.json")?;
+    let labels = env.install_policy("entry_isolation_policy.json")?;
     env.node_ready()?;
 
     fs::create_dir(env.work().join("secret"))?;
@@ -37,7 +37,7 @@ fn entry_roles_are_isolated<P: Platform>() -> TestResult<()> {
         ("liveness", "wc", wc.as_slice()),
     ];
 
-    let mut main = env.start_actor("runtime_exec.py", &[])?;
+    let mut main = env.start_actor("runtime_exec.py", &[], &labels)?;
     let app = env.task(main.id(), "application identity")?;
     let path = env.maps().0.to_owned();
     for (name, command, args) in entries {

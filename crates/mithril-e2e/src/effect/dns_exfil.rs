@@ -8,10 +8,10 @@ fn tcp_dns_exfil_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("dns-exfil")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("dns_exfil_policy.json")?;
+    let labels = env.install_policy("dns_exfil_policy.json")?;
     env.node_ready()?;
 
-    let mut actor = env.start_actor("dns_exfil.py", &[])?;
+    let mut actor = env.start_actor("dns_exfil.py", &[], &labels)?;
     let task = env.task(actor.id(), "DNS actor")?;
     assert_ne!(task.snapshot.admitted_entry_rule_id, 0);
 
@@ -30,10 +30,10 @@ fn udp_dns_exfil_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("dns-exfil")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("dns_exfil_policy.json")?;
+    let labels = env.install_policy("dns_exfil_policy.json")?;
     env.node_ready()?;
 
-    let mut actor = env.start_actor("dns_exfil.py", &[])?;
+    let mut actor = env.start_actor("dns_exfil.py", &[], &labels)?;
     let task = env.task(actor.id(), "DNS actor")?;
     assert_ne!(task.snapshot.admitted_entry_rule_id, 0);
 

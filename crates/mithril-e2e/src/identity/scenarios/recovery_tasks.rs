@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use crate::platform::{platform_test, Platform, TestResult};
 use std::fs;
 
@@ -6,7 +8,10 @@ use std::fs;
 fn four_tasks_recover<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("four-task-recovery")?;
     env.start_control()?;
-    let mut app = env.start_actor("recovery_tree.py", &[])?;
+    let policy: Policy =
+        serde_json::from_str(include_str!("../../../fixtures/process/actor_policy.json"))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut app = env.start_actor("recovery_tree.py", &[], &labels)?;
     env.place(app.id())?;
     let mut ext = env.add_actor("python", &["/fixtures/recovery_tree.py", "/work"])?;
     env.place(ext.id())?;

@@ -8,9 +8,9 @@ fn prestop_uses_literal_path<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("prestop-path")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("runtime_entries_policy.json")?;
+    let labels = env.install_policy("runtime_entries_policy.json")?;
     env.node_ready()?;
-    let mut main = env.start_actor("ready.py", &[])?;
+    let mut main = env.start_actor("ready.py", &[], &labels)?;
     let root = env.task(main.id(), "application before Node restart")?;
     env.stop_node()?;
     env.start_node()?;

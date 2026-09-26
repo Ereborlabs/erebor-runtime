@@ -58,9 +58,24 @@ pub(crate) struct Kubernetes {
 }
 
 pub(crate) struct KubernetesState {
+    namespace: String,
+    work_path: PathBuf,
+    work: Option<ProbeDirectory>,
+    directories: Vec<ProbeDirectory>,
+    move_group: Option<ProbeCgroup>,
+    groups: Vec<ProbeCgroup>,
+    work_up: bool,
+    post_sleep: Option<i64>,
+    actor_name: String,
+    actor_id: Option<String>,
+    actor_pid: Option<u32>,
+    actor_cgroup: Option<PathBuf>,
+    labels: super::Labels,
+    policies: BTreeMap<super::Labels, String>,
+    actors: BTreeMap<super::Labels, u32>,
+    policy_name: Option<String>,
     root: PathBuf,
     out: Option<ProbeDirectory>,
-    work_path: PathBuf,
     state_path: PathBuf,
     identity_path: PathBuf,
     config_path: PathBuf,
@@ -80,9 +95,7 @@ pub(crate) struct KubernetesState {
     actor_image: String,
     actor_python: String,
     actor_entry: String,
-    post_sleep: Option<i64>,
     system: String,
-    namespace: String,
     token: String,
     node_name: String,
     client: Client,
@@ -91,7 +104,6 @@ pub(crate) struct KubernetesState {
     inspector: NativeIdentityInspector,
     reader: KernelStateReader,
     approval: KubernetesApproval,
-    work: Option<ProbeDirectory>,
     state: Option<ProbeDirectory>,
     identity: Option<ProbeDirectory>,
     config: Option<ProbeFile>,
@@ -102,16 +114,10 @@ pub(crate) struct KubernetesState {
     socket: Option<ProbeFile>,
     observation: Option<ProbeFile>,
     seccomp: Option<ProbeFile>,
-    move_group: Option<ProbeCgroup>,
     system_up: bool,
-    work_up: bool,
     helm_up: bool,
     hook_up: bool,
     runtime_up: bool,
-    actor_id: Option<String>,
-    actor_pid: Option<u32>,
-    actor_cgroup: Option<PathBuf>,
-    policy_name: Option<String>,
 }
 
 impl Deref for Kubernetes {
@@ -135,17 +141,9 @@ impl DerefMut for Kubernetes {
 }
 
 impl KubernetesState {
-    fn start_oidc(&mut self) -> TestResult<()> {
-        self.approval.start_oidc(&self.runtime)
-    }
-
-    fn start_forward(&mut self) -> TestResult<()> {
-        self.approval.start_forward(&self.runtime, &self.system)
-    }
-
     fn approve_entry(&mut self, command: &str, args: &[&str]) -> TestResult<()> {
         self.ready_node()?;
-        self.start_forward()?;
+        self.approval.start_forward(&self.runtime, &self.system)?;
         self.approval.approve(
             &self.runtime,
             &self.work_path,
@@ -153,6 +151,18 @@ impl KubernetesState {
             command,
             args,
         )
+    }
+
+    fn diagnostics(&self) -> String {
+        let pod = self.pod().map(|pod| pod.status);
+        let logs = self.logs(&self.namespace, &format!("pod/{}", self.actor_name));
+        let node = self.logs(&self.system, "daemonset/mithril-node");
+        let events = self.snapshot().map(|mut snapshot| {
+            snapshot.recent_effects.reverse();
+            snapshot.recent_effects.truncate(16);
+            snapshot.recent_effects
+        });
+        format!("Pod: {pod:?}; logs: {logs:?}; Node logs: {node:?}; effects: {events:?}")
     }
 
     fn fixture(&self, name: &str) -> PathBuf {
@@ -240,7 +250,7 @@ impl KubernetesState {
             .policy_name
             .clone()
             .ok_or("the exception has no installed policy")?;
-        resource.spec.target.pod.name = ACTOR.to_owned();
+        resource.spec.target.pod.name = self.actor_name.clone();
         resource.spec.target.pod.uid = pod.metadata.uid.ok_or("the actor Pod has no UID")?;
         resource.spec.target.container_name = CONTAINER.to_owned();
         let resources =
@@ -295,7 +305,7 @@ impl KubernetesState {
 
     fn pod(&self) -> TestResult<Pod> {
         let pods = Api::<Pod>::namespaced(self.client.clone(), &self.namespace);
-        Ok(self.runtime.block_on(pods.get(ACTOR))?)
+        Ok(self.runtime.block_on(pods.get(&self.actor_name))?)
     }
 
     fn container_id(&self) -> TestResult<String> {
@@ -692,36 +702,28 @@ impl KubernetesState {
 
     fn create_work(&mut self) -> TestResult<()> {
         let namespaces = Api::<Namespace>::all(self.client.clone());
-        let namespace = Namespace {
-            metadata: ObjectMeta {
-                name: Some(self.namespace.clone()),
-                ..ObjectMeta::default()
-            },
-            ..Namespace::default()
-        };
+        let mut namespace = Namespace::default();
+        namespace.metadata.name = Some(self.namespace.clone());
         self.runtime
             .block_on(namespaces.create(&PostParams::default(), &namespace))?;
         self.work_up = true;
-
         let accounts = Api::<ServiceAccount>::namespaced(self.client.clone(), &self.namespace);
-        let account = Self::resource(&self.namespace, "serviceaccount", "default");
+        let path = Self::resource(&self.namespace, "serviceaccount", "default");
         wait_for(
-            &account,
+            &path,
             "default ServiceAccount readiness",
             READY_LIMIT,
             || {
-                Ok(self
-                    .runtime
+                self.runtime
                     .block_on(accounts.get_opt("default"))
+                    .map(|account| account.map(|_| ()))
                     .map_err(|source| {
                         InvalidInputSnafu {
-                            path: &self.values_path,
+                            path: &path,
                             reason: source.to_string(),
                         }
                         .build()
-                    })?
-                    .is_some()
-                    .then_some(()))
+                    })
             },
             || "the default ServiceAccount is absent".to_owned(),
         )?;
@@ -929,7 +931,7 @@ impl KubernetesState {
                 .arg("--namespace")
                 .arg(&self.namespace)
                 .arg("--pod")
-                .arg(ACTOR)
+                .arg(&self.actor_name)
                 .arg("--container")
                 .arg(CONTAINER);
             command
@@ -944,7 +946,7 @@ impl KubernetesState {
                     &self.namespace,
                     "exec",
                     "-i",
-                    ACTOR,
+                    &self.actor_name,
                     "-c",
                     CONTAINER,
                     "--",
@@ -983,12 +985,9 @@ impl KubernetesState {
             return Err("the previous Kubernetes scenario is not clean".into());
         }
         self.namespace = format!("mithril-work-{name}-{}", self.token);
+        self.work_path = self.work_path.with_file_name("actor");
         self.work = Some(ProbeDirectory::create(&self.work_path)?);
-        self.post_sleep = None;
-        self.actor_id = None;
-        self.actor_pid = None;
-        self.actor_cgroup = None;
-        self.policy_name = None;
+        self.actor_name = ACTOR.to_owned();
         self.create_work()
     }
 
@@ -997,42 +996,58 @@ impl KubernetesState {
         self.approval.clear();
         if self.work_up {
             Self::retain(&mut failed, self.delete_ns(&self.namespace));
-            if self.hook_up {
-                let last = RefCell::new(String::from("<absent>"));
-                Self::retain(
-                    &mut failed,
-                    wait_for(
-                        &self.state_path,
-                        "scenario retirement",
-                        READY_LIMIT,
-                        || {
-                            let status = mithril_node::policy_delivery_status(&self.state_path)
-                                .context(NodeSnafu)?;
-                            *last.borrow_mut() = format!("{status:?}");
-                            Ok((status.active_target_count == 0
-                                && status.scheduled_binding_count == 0
-                                && status.runtime_binding_count == 0
-                                && !status.activation_pending)
-                                .then_some(()))
-                        },
-                        || format!("last policy delivery: {}", last.borrow()),
-                    )
-                    .map_err(Into::into),
-                );
-            }
-            self.work_up = false;
         }
-        if let Some(group) = self.move_group.take() {
+        if self.hook_up {
+            let last = RefCell::new(String::from("<absent>"));
+            Self::retain(
+                &mut failed,
+                wait_for(
+                    &self.state_path,
+                    "scenario retirement",
+                    READY_LIMIT,
+                    || {
+                        let status = mithril_node::policy_delivery_status(&self.state_path)
+                            .context(NodeSnafu)?;
+                        *last.borrow_mut() = format!("{status:?}");
+                        Ok((status.active_target_count == 0
+                            && status.scheduled_binding_count == 0
+                            && status.runtime_binding_count == 0
+                            && !status.activation_pending)
+                            .then_some(()))
+                    },
+                    || format!("last policy delivery: {}", last.borrow()),
+                )
+                .map_err(Into::into),
+            );
+        }
+        if let Some(source) = failed {
+            return Err(source);
+        }
+        self.work_up = false;
+        for group in self
+            .move_group
+            .take()
+            .into_iter()
+            .chain(self.groups.drain(..))
+        {
             Self::retain(&mut failed, group.cleanup().map_err(Into::into));
         }
-        if let Some(work) = self.work.take() {
-            Self::retain(&mut failed, work.cleanup().map_err(Into::into));
+        for directory in self
+            .work
+            .take()
+            .into_iter()
+            .chain(self.directories.drain(..))
+        {
+            Self::retain(&mut failed, directory.cleanup().map_err(Into::into));
         }
         self.post_sleep = None;
         self.actor_id = None;
         self.actor_pid = None;
         self.actor_cgroup = None;
         self.policy_name = None;
+        self.labels.clear();
+        self.policies.clear();
+        self.actors.clear();
         match failed {
             Some(source) => Err(source),
             None => Ok(()),
@@ -1168,7 +1183,6 @@ impl Platform for Kubernetes {
         let work_path = out.join("actor");
         let state_path = out.join("node");
         let identity_path = out.join("identity");
-        let work = ProbeDirectory::create(&work_path)?;
         let state = ProbeDirectory::create(&state_path)?;
         let identity = ProbeDirectory::create(&identity_path)?;
         let config_path = out.join("node.json");
@@ -1289,9 +1303,24 @@ impl Platform for Kubernetes {
         let inspector = NativeIdentityInspector::new(&pin_path);
         let reader = KernelStateReader::new(&pin_path);
         let mut fixture = KubernetesState {
+            namespace,
+            work: Some(ProbeDirectory::create(&work_path)?),
+            work_path,
+            directories: Vec::new(),
+            move_group: None,
+            groups: Vec::new(),
+            work_up: false,
+            post_sleep: None,
+            actor_name: ACTOR.to_owned(),
+            actor_id: None,
+            actor_pid: None,
+            actor_cgroup: None,
+            labels: super::Labels::new(),
+            policies: BTreeMap::new(),
+            actors: BTreeMap::new(),
+            policy_name: None,
             root,
             out: Some(out_dir),
-            work_path,
             state_path,
             identity_path,
             config_path,
@@ -1311,9 +1340,7 @@ impl Platform for Kubernetes {
             actor_image,
             actor_python,
             actor_entry,
-            post_sleep: None,
             system,
-            namespace,
             token,
             node_name,
             client,
@@ -1322,7 +1349,6 @@ impl Platform for Kubernetes {
             inspector,
             reader,
             approval,
-            work: Some(work),
             state: Some(state),
             identity: Some(identity),
             config: Some(config),
@@ -1333,16 +1359,10 @@ impl Platform for Kubernetes {
             socket: Some(socket),
             observation: Some(observation),
             seccomp: Some(seccomp),
-            move_group: None,
             system_up: false,
-            work_up: false,
             helm_up: false,
             hook_up: false,
             runtime_up: false,
-            actor_id: None,
-            actor_pid: None,
-            actor_cgroup: None,
-            policy_name: None,
         };
         fixture.write_inputs()?;
         fixture.create_work()?;
@@ -1356,7 +1376,8 @@ impl Platform for Kubernetes {
         if self.helm_up {
             return self.wait_control();
         }
-        self.start_oidc()?;
+        let state: &mut KubernetesState = self;
+        state.approval.start_oidc(&state.runtime)?;
         KubernetesState::require_image(&self.k3s_path, &self.control_image)?;
         KubernetesState::require_image(&self.k3s_path, &self.node_image)?;
         self.create_system()?;
@@ -1394,20 +1415,22 @@ impl Platform for Kubernetes {
         KubernetesState::stop_node(self)
     }
 
-    fn install_policy(&mut self, fixture: &str) -> TestResult<()> {
+    fn install_policy(&mut self, fixture: &str) -> TestResult<super::Labels> {
         let path = policy_path(&self.root, fixture)?;
         let bytes = fs::read(&path)?;
         let value: Value = serde_json::from_slice(&bytes)?;
         if value.get("kind").and_then(Value::as_str) == Some("WorkloadProtectionException") {
-            return self.install_exception(&bytes, &path);
+            self.install_exception(&bytes, &path)?;
+            return Ok(self.labels.clone());
         }
         let mut policy: WorkloadProtectionPolicy = serde_json::from_slice(&bytes)?;
+        let labels = super::policy_labels(&policy)?;
         let fixture_name = policy
             .metadata
             .name
             .clone()
             .ok_or("the policy fixture has no metadata.name")?;
-        let name = self.policy_name.clone().unwrap_or(fixture_name);
+        let name = self.policies.get(&labels).cloned().unwrap_or(fixture_name);
         policy.metadata = ObjectMeta {
             name: Some(name.clone()),
             namespace: Some(self.namespace.clone()),
@@ -1433,7 +1456,7 @@ impl Platform for Kubernetes {
         }
         let policies =
             Api::<WorkloadProtectionPolicy>::namespaced(self.client.clone(), &self.namespace);
-        if let Some(current) = self.policy_name.as_deref() {
+        if let Some(current) = self.policies.get(&labels) {
             self.runtime.block_on(policies.patch(
                 current,
                 &PatchParams::default(),
@@ -1443,8 +1466,15 @@ impl Platform for Kubernetes {
             self.runtime
                 .block_on(policies.create(&PostParams::default(), &policy))?;
         }
-        self.policy_name = Some(name);
-        self.wait_policy(u32::from(self.hook_up && self.actor_id.is_some()))
+        self.policy_name = Some(name.clone());
+        self.policies.insert(labels.clone(), name);
+        let active = if self.hook_up {
+            self.actors.get(&labels).copied().unwrap_or(0)
+        } else {
+            0
+        };
+        self.wait_policy(active)?;
+        Ok(labels)
     }
 
     fn sync_policy(&mut self) -> TestResult<()> {
@@ -1455,11 +1485,29 @@ impl Platform for Kubernetes {
         self.ready_node()
     }
 
-    fn start_actor(&mut self, name: &str, extra: &[&str]) -> TestResult<ProcessFixture> {
+    fn start_actor(
+        &mut self,
+        name: &str,
+        extra: &[&str],
+        labels: &super::Labels,
+    ) -> TestResult<ProcessFixture> {
         KubernetesState::require_image(&self.k3s_path, &self.actor_image)?;
         if self.actor_id.is_some() {
-            return Err("the Kubernetes actor is already running".into());
+            if let Some(work) = self.work.take() {
+                self.directories.push(work);
+            }
+            if let Some(group) = self.move_group.take() {
+                self.groups.push(group);
+            }
+            self.actor_name = format!("{ACTOR}-{}", self.directories.len());
+            self.work_path = self.work_path.with_file_name(&self.actor_name);
+            self.work = Some(ProbeDirectory::create(&self.work_path)?);
         }
+        self.labels = labels.clone();
+        self.policy_name = self.policies.get(labels).cloned();
+        self.actor_id = None;
+        self.actor_pid = None;
+        self.actor_cgroup = None;
         let fixtures = self.root.join(PROCESS_FIXTURES);
         let script = fixtures.join(name);
         let mut args = vec![format!("/fixtures/{name}"), "/work".to_owned()];
@@ -1467,6 +1515,8 @@ impl Platform for Kubernetes {
         let mut pod: Pod =
             serde_saphyr::from_slice(&fs::read(self.fixture("pid-reuse-pod-v1.yaml"))?)?;
         pod.metadata.namespace = Some(self.namespace.clone());
+        pod.metadata.name = Some(self.actor_name.clone());
+        pod.metadata.labels = Some(labels.clone());
         let spec = pod.spec.as_mut().ok_or("the actor Pod has no spec")?;
         let sleep = self.post_sleep.take();
         if let Some(seconds) = sleep {
@@ -1529,10 +1579,7 @@ impl Platform for Kubernetes {
                 }
             },
             || {
-                let pod = self
-                    .pod()
-                    .map(|pod| format!("{:?}", pod.status))
-                    .unwrap_or_else(|source| source.to_string());
+                let pod = self.diagnostics();
                 format!("last runtime state: {}; Pod state: {pod}", last_id.borrow())
             },
         )?;
@@ -1556,30 +1603,11 @@ impl Platform for Kubernetes {
                         .and_then(|state| state.state)
                         .and_then(|state| state.terminated);
                     if let Some(exit) = exit {
-                        let logs = self
-                            .logs(&self.namespace, &format!("pod/{ACTOR}"))
-                            .unwrap_or_else(|error| error.to_string());
-                        let node = self
-                            .logs(&self.system, "daemonset/mithril-node")
-                            .unwrap_or_else(|error| error.to_string());
-                        let effects = self
-                            .snapshot()
-                            .map(|snapshot| {
-                                format!(
-                                    "{:?}",
-                                    snapshot
-                                        .recent_effects
-                                        .into_iter()
-                                        .rev()
-                                        .take(16)
-                                        .collect::<Vec<_>>()
-                                )
-                            })
-                            .unwrap_or_else(|error| error.to_string());
+                        let diagnostics = self.diagnostics();
                         return Err(InvalidInputSnafu {
                             path: &script,
                             reason: format!(
-                                "Kubernetes actor exited with code {}; reason: {:?}; message: {:?}; logs: {logs:?}; Node logs: {node}; effects: {effects}",
+                                "Kubernetes actor exited with code {}; reason: {:?}; message: {:?}; {diagnostics}",
                                 exit.exit_code, exit.reason, exit.message
                             ),
                         }
@@ -1590,10 +1618,7 @@ impl Platform for Kubernetes {
                 }
             },
             || {
-                let pod = self
-                    .pod()
-                    .map(|pod| format!("{:?}", pod.status))
-                    .unwrap_or_else(|source| source.to_string());
+                let pod = self.diagnostics();
                 format!(
                     "last runtime state: {}; Pod state: {pod}",
                     last_pid.borrow()
@@ -1608,10 +1633,7 @@ impl Platform for Kubernetes {
                 READY_LIMIT,
                 || Ok(ready.is_file().then_some(())),
                 || {
-                    let pod = self
-                        .pod()
-                        .map(|pod| format!("{:?}", pod.status))
-                        .unwrap_or_else(|source| source.to_string());
+                    let pod = self.diagnostics();
                     format!("ready file exists: {}; Pod state: {pod}", ready.exists())
                 },
             )?;
@@ -1621,7 +1643,7 @@ impl Platform for Kubernetes {
                 &script,
                 "Kubernetes actor readiness",
                 READY_LIMIT,
-                || match self.logs(&self.namespace, &format!("pod/{ACTOR}")) {
+                || match self.logs(&self.namespace, &format!("pod/{}", self.actor_name)) {
                     Ok(logs) => {
                         *last.borrow_mut() = logs.clone();
                         Ok(logs
@@ -1635,17 +1657,8 @@ impl Platform for Kubernetes {
                     }
                 },
                 || {
-                    let pod = self
-                        .pod()
-                        .map(|pod| format!("{:?}", pod.status))
-                        .unwrap_or_else(|source| source.to_string());
-                    let node = self
-                        .logs(&self.system, "daemonset/mithril-node")
-                        .unwrap_or_else(|source| source.to_string());
-                    format!(
-                        "last Pod state: {pod}; last logs: {:?}; Node logs: {node}",
-                        last.borrow()
-                    )
+                    let pod = self.diagnostics();
+                    format!("last actor state: {pod}; last logs: {:?}", last.borrow())
                 },
             )?;
         }
@@ -1653,6 +1666,7 @@ impl Platform for Kubernetes {
         let k3s = self.k3s_path.clone();
         let kube = self.kube_path.clone();
         let namespace = self.namespace.clone();
+        let actor_name = self.actor_name.clone();
         let mut actor = if self.hook_up {
             let mut command = Command::new(&self.k3s_path);
             command
@@ -1664,7 +1678,7 @@ impl Platform for Kubernetes {
                     &self.namespace,
                     "attach",
                     "-i",
-                    ACTOR,
+                    &self.actor_name,
                     "-c",
                     CONTAINER,
                 ]);
@@ -1684,7 +1698,7 @@ impl Platform for Kubernetes {
                 .arg("kubectl")
                 .args(["--kubeconfig"])
                 .arg(&kube)
-                .args(["-n", &namespace, "get", "pod", ACTOR, "-o"])
+                .args(["-n", &namespace, "get", "pod", &actor_name, "-o"])
                 .arg("jsonpath={.status.containerStatuses[0].state.terminated.exitCode}")
                 .output()?;
             if !output.status.success() {
@@ -1703,6 +1717,7 @@ impl Platform for Kubernetes {
         self.actor_id = Some(id);
         self.actor_pid = Some(pid);
         self.actor_cgroup = Some(cgroup);
+        *self.actors.entry(labels.clone()).or_default() += 1;
         Ok(actor)
     }
 
@@ -1854,7 +1869,7 @@ impl Platform for Kubernetes {
     }
 
     fn move_task(&mut self, pid: u32, name: &str) -> TestResult<Task> {
-        let path = PathBuf::from(format!("/sys/fs/cgroup/mithril-move-{}", self.token));
+        let path = PathBuf::from(format!("/sys/fs/cgroup/{}-move", self.namespace));
         let group = ProbeCgroup::create(&path)?;
         group.move_in(pid)?;
         self.move_group = Some(group);

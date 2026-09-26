@@ -16,9 +16,9 @@ fn fatal_exec_is_terminal<P: Platform>() -> TestResult<()> {
     ProcessFixture::fatal_exec(&target)?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("fatal_exec_policy.json")?;
+    let labels = env.install_policy("fatal_exec_policy.json")?;
     env.node_ready()?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     let mut actor = env.add_actor(
         "python",
         &[

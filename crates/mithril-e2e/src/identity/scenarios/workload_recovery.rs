@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use std::time::Duration;
 
 use rustix::io::Errno;
@@ -10,7 +12,11 @@ fn workload_recovers<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("workload-recovery")?;
     env.start_control()?;
 
-    let mut actor = env.start_actor("native_recovery.py", &[])?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../../fixtures/process/workload_recovery_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut actor = env.start_actor("native_recovery.py", &[], &labels)?;
     let pid = actor.id();
     env.place(pid)?;
 

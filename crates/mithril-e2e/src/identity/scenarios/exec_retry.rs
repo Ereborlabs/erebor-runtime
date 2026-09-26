@@ -27,9 +27,9 @@ fn failed_exec_restores<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("exec-retry")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("actor_sleep_policy.json")?;
+    let labels = env.install_policy("actor_sleep_policy.json")?;
     env.node_ready()?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
     let mut actor = env.add_actor("python", &["/fixtures/native_exec_retry.py", "/work"])?;
 
     let root_pid = actor.id();

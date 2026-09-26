@@ -41,9 +41,9 @@ fn bounded_exception_is_exact<P: Platform>() -> TestResult<()> {
     for name in FILES {
         fs::write(env.work().join(name), b"")?;
     }
-    env.install_policy("exception_policy.json")?;
+    let labels = env.install_policy("exception_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("exception.py", &["race"])?;
+    let mut actor = env.start_actor("exception.py", &["race"], &labels)?;
     let text = actor.wait_text(&env.work().join("thread-ids"), "exception worker IDs")?;
     let tids: Vec<u32> = serde_json::from_str(&text)?;
     let root = env.task(actor.id(), "exception actor identity")?;
@@ -141,9 +141,9 @@ fn exhaustion_survives_restart<P: Platform>() -> TestResult<()> {
     for name in FILES {
         fs::write(env.work().join(name), b"")?;
     }
-    env.install_policy("exception_policy.json")?;
+    let labels = env.install_policy("exception_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("exception.py", &["race"])?;
+    let mut actor = env.start_actor("exception.py", &["race"], &labels)?;
     let old: BTreeSet<_> = env.maps().1.keys(STATE_MAP)?.into_iter().collect();
     env.install_policy("restart_exception.json")?;
     let keys = env.maps().1.keys(STATE_MAP)?;
@@ -237,9 +237,9 @@ fn unused_exception_expires<P: Platform>() -> TestResult<()> {
     for name in FILES {
         fs::write(env.work().join(name), b"")?;
     }
-    env.install_policy("exception_policy.json")?;
+    let labels = env.install_policy("exception_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("exception.py", &["expired"])?;
+    let mut actor = env.start_actor("exception.py", &["expired"], &labels)?;
     let task = env.task(actor.id(), "exception actor identity")?;
     let old: BTreeSet<_> = env.maps().1.keys(STATE_MAP)?.into_iter().collect();
     env.install_policy("expired_exception.json")?;

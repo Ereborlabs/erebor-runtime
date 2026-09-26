@@ -15,9 +15,9 @@ fn terminal_evidence_survives_retirement<P: Platform>() -> TestResult<()> {
     ProcessFixture::fatal_exec(&bin.join("post-ponr-execfail"))?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("actor_policy.json")?;
+    let labels = env.install_policy("actor_policy.json")?;
     env.node_ready()?;
-    let mut init = env.start_actor("ready.py", &[])?;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
 
     env.install_policy("fatal_exec_policy.json")?;
     env.node_ready()?;

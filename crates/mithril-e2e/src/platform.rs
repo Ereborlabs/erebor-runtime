@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -35,6 +36,7 @@ pub(crate) use self::lifecycle::test_lifecycle;
 pub(crate) use self::runc::Runc;
 pub(crate) use mithril_e2e_macros::platform_test;
 pub(crate) type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
+pub(crate) type Labels = BTreeMap<String, String>;
 const TASK_LIMIT: Duration = Duration::from_secs(30);
 pub(crate) const PROCESS_FIXTURES: &str = "crates/mithril-e2e/fixtures/process";
 
@@ -63,6 +65,16 @@ pub(crate) fn actor_script(root: &Path, name: &str) -> crate::Result<PathBuf> {
 
 pub(crate) fn policy_path(root: &Path, name: &str) -> crate::Result<PathBuf> {
     fixture_path(root, name, "policy fixture")
+}
+
+pub(super) fn policy_labels(
+    policy: &mithril_control::WorkloadProtectionPolicy,
+) -> TestResult<Labels> {
+    let selector = &policy.spec.pod_selector;
+    if !selector.match_expressions.is_empty() {
+        return Err("actor labels require a policy with matchLabels only".into());
+    }
+    Ok(selector.match_labels.clone())
 }
 
 pub(crate) struct Task {
@@ -136,7 +148,7 @@ pub(crate) trait Platform: Sized {
     fn stop_node(&mut self) -> TestResult<()> {
         pending("stop Node")
     }
-    fn install_policy(&mut self, _name: &str) -> TestResult<()> {
+    fn install_policy(&mut self, _name: &str) -> TestResult<Labels> {
         pending("install policy")
     }
     fn sync_policy(&mut self) -> TestResult<()> {
@@ -149,6 +161,7 @@ pub(crate) trait Platform: Sized {
         &mut self,
         _name: &str,
         _args: &[&str],
+        _labels: &Labels,
     ) -> TestResult<crate::process::ProcessFixture> {
         pending("start actor")
     }

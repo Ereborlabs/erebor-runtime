@@ -13,9 +13,9 @@ fn node_restart_keeps_actor<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("node-restart")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("runtime_entries_policy.json")?;
+    let labels = env.install_policy("runtime_entries_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("ready.py", &[])?;
+    let mut actor = env.start_actor("ready.py", &[], &labels)?;
     let before = env.task(actor.id(), "actor before Node restart")?;
     env.stop_node()?;
     env.start_node()?;
@@ -52,7 +52,7 @@ fn poststart_keeps_its_role<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("poststart-role")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("runtime_entries_policy.json")?;
+    let labels = env.install_policy("runtime_entries_policy.json")?;
     env.node_ready()?;
     fs::write(env.work().join("application.denied"), b"application\n")?;
     fs::write(env.work().join("poststart.denied"), b"poststart\n")?;
@@ -60,7 +60,7 @@ fn poststart_keeps_its_role<P: Platform>() -> TestResult<()> {
     let gate = env.work().join("copy-gate");
     mkfifoat(CWD, &gate, Mode::RUSR | Mode::WUSR)?;
 
-    let mut main = env.start_actor("runtime_exec.py", &[])?;
+    let mut main = env.start_actor("runtime_exec.py", &[], &labels)?;
     let root = env.task(main.id(), "application before Node restart")?;
     env.stop_node()?;
     env.start_node()?;
@@ -143,9 +143,9 @@ fn poststart_uses_literal_path<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("poststart-path")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("runtime_entries_policy.json")?;
+    let labels = env.install_policy("runtime_entries_policy.json")?;
     env.node_ready()?;
-    let mut main = env.start_actor("ready.py", &[])?;
+    let mut main = env.start_actor("ready.py", &[], &labels)?;
     env.stop_node()?;
     env.start_node()?;
     env.node_ready()?;

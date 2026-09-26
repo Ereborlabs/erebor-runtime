@@ -12,9 +12,9 @@ fn denied_read_is_observed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("file-observe")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("actor_policy.json")?;
+    let labels = env.install_policy("actor_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("exception.py", &["read"])?;
+    let mut actor = env.start_actor("exception.py", &["read"], &labels)?;
     let task = env.task(actor.id(), "Observe file actor")?;
     assert_eq!(
         task.snapshot.installed_role_class.as_deref(),

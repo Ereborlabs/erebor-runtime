@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use std::{fs, os::unix::fs::MetadataExt, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
@@ -11,7 +13,11 @@ fn cross_namespace_socket_is_allowed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("socket-cross-allowed")?;
     env.start_control()?;
     env.stop_node()?;
-    let mut main = env.start_actor("socket_pass.py", &["main-approved-net"])?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../fixtures/process/socket_cross_allowed_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut main = env.start_actor("socket_pass.py", &["main-approved-net"], &labels)?;
     env.place(main.id())?;
     let mut holder = env.add_actor(
         "python",

@@ -43,6 +43,8 @@ mod mount_recursive;
 #[cfg(test)]
 mod moved_exec;
 #[cfg(test)]
+mod multi_policy;
+#[cfg(test)]
 mod namespace_init;
 #[cfg(test)]
 mod non_leader_exec;

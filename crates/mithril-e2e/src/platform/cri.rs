@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,9 +20,9 @@ const WAIT_LIMIT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Default)]
 struct CriService {
-    value: Arc<RwLock<Option<(u64, CriRuntimeContainerObservationV1)>>>,
+    value: Arc<RwLock<BTreeMap<String, (u64, CriRuntimeContainerObservationV1)>>>,
     next: Arc<AtomicU64>,
-    seen: Arc<AtomicU64>,
+    seen: Arc<RwLock<BTreeSet<u64>>>,
     list_delay_ms: Arc<AtomicU64>,
     delayed_lists: Arc<AtomicU64>,
 }
@@ -72,11 +73,11 @@ impl CriFixture {
 
     pub(crate) fn set(&self, value: CriRuntimeContainerObservationV1) -> TestResult<u64> {
         let revision = self.service.next.fetch_add(1, Ordering::Relaxed) + 1;
-        *self
-            .service
+        self.service
             .value
             .write()
-            .map_err(|_error| "CRI fixture state is poisoned")? = Some((revision, value));
+            .map_err(|_error| "CRI fixture state is poisoned")?
+            .insert(value.listed.id.clone(), (revision, value));
         Ok(revision)
     }
 
@@ -85,22 +86,34 @@ impl CriFixture {
             &self.path,
             "CRI observation",
             WAIT_LIMIT,
-            || Ok((self.service.seen.load(Ordering::Acquire) >= revision).then_some(())),
+            || {
+                Ok(self
+                    .service
+                    .seen
+                    .read()
+                    .is_ok_and(|seen| seen.contains(&revision))
+                    .then_some(()))
+            },
             || {
                 format!(
-                    "revision {revision} is not observed; last observed revision is {}",
-                    self.service.seen.load(Ordering::Relaxed)
+                    "revision {revision} is not observed; observed revisions: {:?}",
+                    self.service.seen.read()
                 )
             },
         )?)
     }
 
     pub(crate) fn clear(&self) -> TestResult<()> {
-        *self
-            .service
+        self.service
             .value
             .write()
-            .map_err(|_error| "CRI fixture state is poisoned")? = None;
+            .map_err(|_error| "CRI fixture state is poisoned")?
+            .clear();
+        self.service
+            .seen
+            .write()
+            .map_err(|_| "CRI observation state is poisoned")?
+            .clear();
         Ok(())
     }
 
@@ -182,7 +195,7 @@ impl cri::runtime_service_server::RuntimeService for CriService {
             .map_err(|_error| Status::internal("CRI fixture state is poisoned"))?;
         Ok(Response::new(cri::ListContainersResponse {
             containers: value
-                .iter()
+                .values()
                 .map(|(_revision, value)| value.listed.clone())
                 .collect(),
         }))
@@ -198,11 +211,13 @@ impl cri::runtime_service_server::RuntimeService for CriService {
             .read()
             .map_err(|_error| Status::internal("CRI fixture state is poisoned"))?;
         let (revision, value) = value
-            .as_ref()
-            .filter(|(_revision, value)| value.listed.id == id)
+            .get(&id)
             .ok_or_else(|| Status::not_found("container is absent"))?;
         let response = value.status.clone();
-        self.seen.store(*revision, Ordering::Release);
+        self.seen
+            .write()
+            .map_err(|_| Status::internal("CRI observation state is poisoned"))?
+            .insert(*revision);
         Ok(Response::new(response))
     }
 
@@ -373,5 +388,84 @@ impl cri::runtime_service_server::RuntimeService for CriService {
         _request: Request<cri::GetEventsRequest>,
     ) -> Result<Response<Self::GetContainerEventsStream>, Status> {
         Err(Self::unused())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use k8s_cri::v1::runtime_service_server::RuntimeService as _;
+
+    use super::*;
+
+    #[test]
+    fn observations_are_independent() -> TestResult<()> {
+        let dir = tempfile::tempdir()?;
+        let mut fixture = CriFixture::start(&dir.path().join("cri.sock"))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let mut revisions = Vec::new();
+        for id in ["first", "second"] {
+            revisions.push(fixture.set(CriRuntimeContainerObservationV1 {
+                listed: cri::Container {
+                    id: id.to_owned(),
+                    ..Default::default()
+                },
+                status: cri::ContainerStatusResponse {
+                    status: Some(cri::ContainerStatus {
+                        id: id.to_owned(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            })?);
+        }
+        let service = &fixture.service;
+        let inventory = runtime
+            .block_on(service.list_containers(Request::new(Default::default())))?
+            .into_inner();
+        assert_eq!(
+            inventory
+                .containers
+                .iter()
+                .map(|value| value.id.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+        for index in [1, 0] {
+            let id = &inventory.containers[index].id;
+            let status = runtime
+                .block_on(
+                    service.container_status(Request::new(cri::ContainerStatusRequest {
+                        container_id: id.clone(),
+                        verbose: true,
+                    })),
+                )?
+                .into_inner();
+            assert_eq!(status.status.ok_or("missing status")?.id, *id);
+            fixture.wait_seen(revisions[index])?;
+            if index == 1 {
+                assert!(!service
+                    .seen
+                    .read()
+                    .map_err(|_| "poisoned observations")?
+                    .contains(&revisions[0]));
+            }
+        }
+        fixture.clear()?;
+        assert!(runtime
+            .block_on(service.list_containers(Request::new(Default::default())))?
+            .into_inner()
+            .containers
+            .is_empty());
+        assert!(runtime
+            .block_on(
+                service.container_status(Request::new(cri::ContainerStatusRequest {
+                    container_id: "first".to_owned(),
+                    verbose: true,
+                }))
+            )
+            .is_err());
+        fixture.stop()
     }
 }

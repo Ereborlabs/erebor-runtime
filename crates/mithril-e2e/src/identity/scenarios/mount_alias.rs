@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -13,7 +15,11 @@ use crate::platform::{platform_test, Platform, TestResult};
 fn preexisting_bind_keeps_policy<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("mount-alias")?;
     env.start_control()?;
-    let mut actor = env.start_actor("mount_alias.py", &[])?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../../fixtures/process/mount_alias_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut actor = env.start_actor("mount_alias.py", &[], &labels)?;
     let pid = actor.id();
     env.place(pid)?;
     env.install_policy("mount_alias_policy.json")?;

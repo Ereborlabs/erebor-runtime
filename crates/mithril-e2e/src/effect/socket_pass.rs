@@ -1,3 +1,5 @@
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
 use std::{fs, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
@@ -11,7 +13,11 @@ fn passed_socket_stays_restricted<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("socket-pass")?;
     env.start_control()?;
     env.stop_node()?;
-    let mut main = env.start_actor("socket_pass.py", &["main"])?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../fixtures/process/socket_pass_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut main = env.start_actor("socket_pass.py", &["main"], &labels)?;
     env.place(main.id())?;
     let mut receiver =
         env.add_actor("python", &["/fixtures/socket_pass.py", "/work", "receiver"])?;

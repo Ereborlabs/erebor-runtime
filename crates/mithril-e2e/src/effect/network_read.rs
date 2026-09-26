@@ -12,9 +12,9 @@ fn read_results_stay_separate<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("network-read")?;
     env.start_control()?;
     env.start_node()?;
-    env.install_policy("actor_policy.json")?;
+    let labels = env.install_policy("actor_policy.json")?;
     env.node_ready()?;
-    let mut actor = env.start_actor("network_read.py", &[])?;
+    let mut actor = env.start_actor("network_read.py", &[], &labels)?;
     let pid = actor.id();
     let task = env.task(pid, "network read actor")?;
     assert_ne!(task.snapshot.admitted_entry_rule_id, 0);
