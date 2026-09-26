@@ -148,8 +148,9 @@ retained floor 2, one retained witness, and backup revision 8.
 `cargo test -p araphor-data --lib` passed 19 tests with two ignored.
 These tests include tenant and corrupt-body checks in
 `analysis_store_result_progress`.
-Workspace formatting, compilation, and strict Clippy passed. The full workspace
-test run is still running.
+`bash .github/scripts/verify-rust-ci.sh` passed for commit `658c16c3`:
+workspace formatting, compilation, strict Clippy, and workspace tests.
+This result does not cover subsequent uncommitted startup changes.
 Tests use temporary databases; no retention call ran on an existing deployment.
 Default startup still selects the old writer. Fresh-store activation, bounded
 admission, capacity and processor health, Control context projection, crash
