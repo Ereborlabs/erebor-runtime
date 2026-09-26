@@ -1063,6 +1063,13 @@ impl DataStoreQualification {
 mod tests {
     use super::*;
 
+    #[derive(Clone, Copy)]
+    enum IntakeFault<'a> {
+        Quota,
+        FullDisk(&'a Path),
+        CommitLimit,
+    }
+
     #[tokio::test]
     async fn data_load_contract() -> Result<()> {
         let directory = tempfile::tempdir()?;
@@ -1484,11 +1491,17 @@ mod tests {
             Ok(())
         }
 
-        async fn capacity_recovery(&self, disk: Option<&Path>) -> Result<()> {
+        async fn capacity_recovery(&self, fault: IntakeFault<'_>) -> Result<()> {
+            use rustix::process::{getrlimit, setrlimit, Resource, Rlimit};
             use std::io::{Seek as _, SeekFrom, Write as _};
             use std::os::unix::fs::MetadataExt as _;
 
             const GIB: u64 = 1024 * 1024 * 1024;
+            let disk = match fault {
+                IntakeFault::FullDisk(root) => Some(root),
+                _ => None,
+            };
+            let native = matches!(fault, IntakeFault::CommitLimit);
             let directory = match disk {
                 Some(root) => {
                     assert_eq!(root.parent(), Some(Path::new("/tmp")));
@@ -1565,6 +1578,7 @@ mod tests {
             fs::DirBuilder::new().mode(0o700).create(&restore_root)?;
             let before = data.meta()?;
             let status = data.source_status(&identity)?;
+            let changed = data.subscribe_revision();
             Self::record(&observations, 2);
             let pending = observations.next_evidence_batch().ok_or("batch absent")?;
             let padding_file = if disk.is_some() {
@@ -1585,11 +1599,11 @@ mod tests {
                 padding.seek(SeekFrom::End(0))?;
                 assert!(matches!(padding.write_all(b"full"),
                     Err(error) if error.raw_os_error() == Some(libc::ENOSPC)));
-            } else {
+            } else if !native {
                 padding.set_len(GIB)?;
             }
             let full = data.storage_health()?;
-            assert!(!full.intake_capacity);
+            assert_eq!(full.intake_capacity, native);
             assert_eq!(full.maintenance_capacity, disk.is_none());
             let allocated = padding.metadata()?.blocks() * 512;
             if disk.is_some() {
@@ -1624,12 +1638,44 @@ mod tests {
                 ));
                 assert!(!restore_root.join("analysis.duckdb").exists());
             }
-            connection.send_evidence_batch(pending.clone()).await?;
-            let rejected =
-                tokio::time::timeout(Duration::from_secs(5), connection.next_message()).await?;
-            assert!(matches!(rejected,
-                Err(mithril_node::Error::ControlRpc { source, .. })
-                    if source.code() == tonic::Code::ResourceExhausted));
+            let _signal = if native {
+                Some(tokio::signal::unix::signal(
+                    tokio::signal::unix::SignalKind::from_raw(libc::SIGXFSZ),
+                )?)
+            } else {
+                None
+            };
+            let prior = getrlimit(Resource::Fsize);
+            if native {
+                setrlimit(
+                    Resource::Fsize,
+                    Rlimit {
+                        current: Some(64),
+                        ..prior
+                    },
+                )?;
+            }
+            let received: Result<_> = async {
+                connection.send_evidence_batch(pending.clone()).await?;
+                Ok(tokio::time::timeout(Duration::from_secs(5), connection.next_message()).await?)
+            }
+            .await;
+            if native {
+                setrlimit(Resource::Fsize, prior)?;
+            }
+            let error = received?.err().ok_or("failed write received an ACK")?;
+            let mithril_node::Error::ControlRpc { source, .. } = error else {
+                return Err(error.into());
+            };
+            if native {
+                assert_eq!(source.code(), tonic::Code::Internal);
+                assert!(source.message().contains("commit evidence"), "{source}");
+                assert!(source.message().contains("File too large"), "{source}");
+                assert!(source.message().contains("analysis.duckdb.wal"), "{source}");
+            } else {
+                assert_eq!(source.code(), tonic::Code::ResourceExhausted);
+            }
+            assert!(!changed.has_changed()?);
             assert_eq!(observations.pending_evidence_records(), 1);
             assert_eq!(data.meta()?, before);
             assert_eq!(data.source_status(&identity)?, status);
@@ -1687,6 +1733,7 @@ mod tests {
                 serde_json::json!({
                     "case": "data-capacity-recovery", "result": "PASS",
                     "filesystem_full": disk.is_some(), "padding_allocated_bytes": allocated,
+                    "native_commit_failure": native,
                     "copy_reserve_rejected": disk.is_some(),
                     "rejected_health": full, "recovered_usage": data.storage_usage()?,
                     "source_identity": identity, "commit_revision": after.commit_revision,
@@ -1702,7 +1749,7 @@ mod tests {
     async fn data_capacity_recovery() -> Result<()> {
         let directory = tempfile::tempdir()?;
         DataStoreQualification::new(directory.path().join("result"))
-            .capacity_recovery(None)
+            .capacity_recovery(IntakeFault::Quota)
             .await
     }
 
@@ -1711,7 +1758,32 @@ mod tests {
     async fn data_full_disk() -> Result<()> {
         let root = PathBuf::from(std::env::var("ARAPHOR_TEST_DATA_DISK")?);
         DataStoreQualification::new(root.join("result"))
-            .capacity_recovery(Some(&root))
+            .capacity_recovery(IntakeFault::FullDisk(&root))
+            .await
+    }
+
+    #[tokio::test]
+    async fn data_intake_failure() -> Result<()> {
+        let mut child = tokio::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "discovery::data_store::tests::data_intake_child",
+                "--ignored",
+                "--nocapture",
+            ])
+            .kill_on_drop(true)
+            .spawn()?;
+        let status = tokio::time::timeout(Duration::from_secs(20), child.wait()).await??;
+        assert!(status.success(), "{status}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "subprocess helper; applies a process-wide native file-size limit"]
+    async fn data_intake_child() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        DataStoreQualification::new(directory.path().join("result"))
+            .capacity_recovery(IntakeFault::CommitLimit)
             .await
     }
 
