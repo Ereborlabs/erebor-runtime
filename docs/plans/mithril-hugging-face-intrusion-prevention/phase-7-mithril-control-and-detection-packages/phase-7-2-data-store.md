@@ -54,6 +54,10 @@ Store recovery fails
 4. Publish a Tokio watch revision only after commit. The transaction updates
    affected relation revisions, including coverage/context and retention.
    Expose fixed prepared bounded reads: 256 records or 1 MiB per page.
+   Limit the SQL cursor range to the first cursor plus 256, or the earlier
+   accepted or expiry boundary. Use saturating addition. This range contains
+   at most 256 returned records and one look-ahead record. Keep the look-ahead
+   continuity check; a missing accepted cursor is an error, not end of input.
    Return explicit range expiry. Never hold a reader during client I/O.
    End a retained page before the next expired interval. Return that interval's
    first cursor as `next_cursor`; a read at that cursor returns explicit expiry.
@@ -768,3 +772,23 @@ ignored; Mithril e2e passed 117 with 250 ignored; Node passed 256 with one ignor
 Backup quota accounting, larger and
 multi-tenant load, required reserve sizing, old-writer removal, and physical
 qualification remain **Not done**.
+
+The bounded evidence read now limits its SQL cursor range to one page and
+one look-ahead record. It retains expiry, continuity, digest, row, and byte
+checks. No index, cache, schema, or public API changes are added.
+`analysis_store_bounded_read`, all 45 enabled data-owner tests, and all ten
+enabled data-store mTLS tests passed. The full workspace gate is pending.
+The repeated 262,144-record load passed with 30,113,740 input bytes, exact
+frame digests, duplicate replay, ACK application, checkpoint, and restart.
+Results are in `/tmp/araphor-read-qualification.Vslc6u5B/load/result.json` and
+the adjacent `resources.log`. The measured binary SHA-256 is
+`9d9989c6191c7f7da28f5fd8cc6371f4571e9d8b6c7d84de78e4920de97393a2`.
+Reading took 32.024 seconds, compared with the earlier 48.787 seconds.
+These two debug runs do not establish a production performance limit.
+Intake took 32.199 seconds, checkpoint 1.519 seconds, and restart 0.985 seconds.
+ACK p95 was 256.413 ms; the maximum policy inventory RPC time was 3.608 ms.
+Sampled peak data files used 60,596,224 bytes. The checkpointed database used
+23,605,248 bytes and its WAL used zero bytes. Whole-process wall time was
+67.21 seconds, user CPU time 86.41 seconds, system CPU time 2.61 seconds,
+and peak RSS 223,536 KiB. Capacity, remaining load, old-writer removal, and
+physical qualification requirements remain **Not done**.

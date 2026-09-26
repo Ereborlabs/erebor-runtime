@@ -1311,7 +1311,7 @@ mod tests {
         let identity = identity();
         let mut changed = store.subscribe_revision();
         assert_eq!(*changed.borrow_and_update(), 0);
-        let records = vec![b"one".as_slice(); MAX_ANALYSIS_PAGE_RECORDS + 1];
+        let records = vec![b"one".as_slice(); 2 * MAX_ANALYSIS_PAGE_RECORDS + 1];
         assert_eq!(
             store.accept_validated_batch(identity.clone(), batch(1, &records))?,
             EvidenceStoreOutcomeV1::Accepted
@@ -1326,11 +1326,19 @@ mod tests {
         assert_eq!(page.records[0].position.commit_revision, 1);
         assert_eq!(page.records[0].position.ordinal, 0);
         assert_eq!(page.records[255].position.ordinal, 255);
-        let last = store.read_page(&identity, 257)?;
+        let middle = store.read_page(&identity, 257)?;
+        assert_eq!(middle.records.len(), MAX_ANALYSIS_PAGE_RECORDS);
+        assert_eq!(middle.records[0].cursor, 257);
+        assert_eq!(middle.records[255].cursor, 512);
+        assert_eq!(middle.next_cursor, Some(513));
+        let last = store.read_page(&identity, 513)?;
         assert_eq!(last.records.len(), 1);
         assert_eq!(last.next_cursor, None);
+        let empty = store.read_page(&identity, 514)?;
+        assert!(empty.records.is_empty());
+        assert_eq!(empty.next_cursor, None);
         assert!(store.read_page(&identity, 0).is_err());
-        assert!(store.read_page(&identity, 259).is_err());
+        assert!(store.read_page(&identity, 515).is_err());
         let mut foreign = identity.clone();
         foreign.tenant_id = [4; 16];
         assert!(store.read_page(&foreign, 1).is_err());
@@ -1342,7 +1350,33 @@ mod tests {
         drop(store);
         let reopened = AnalysisStore::open(&root)?;
         assert_eq!(*reopened.subscribe_revision().borrow(), 1);
-        assert_eq!(reopened.read_page(&identity, 257)?, last);
+        assert_eq!(reopened.read_page(&identity, 257)?, middle);
+        assert_eq!(reopened.read_page(&identity, 513)?, last);
+        let mut large = identity.clone();
+        large.source_epoch = 2;
+        let frame = vec![42; MAX_ANALYSIS_PAGE_BYTES / 8];
+        let frames = vec![frame.as_slice(); 9];
+        reopened.accept_validated_batch(large.clone(), batch(1, &frames))?;
+        let page = reopened.read_page(&large, 1)?;
+        assert_eq!(page.records.len(), 8);
+        assert_eq!(page.encoded_bytes, MAX_ANALYSIS_PAGE_BYTES);
+        assert_eq!(page.next_cursor, Some(9));
+        assert_eq!(
+            reopened.read_page(&large, 9)?.records[0].framed_record,
+            frame
+        );
+        {
+            let writer = reopened.writer()?;
+            writer.get()?.execute(
+                "DELETE FROM events WHERE stream_key = ? AND durable_cursor = 257",
+                params![source_key(&identity).as_slice()],
+            )?;
+        }
+        assert!(matches!(
+            reopened.read_page(&identity, 1),
+            Err(crate::Error::AnalysisState { reason, .. })
+                if reason == "the accepted evidence range has a missing record"
+        ));
         Ok(())
     }
 
