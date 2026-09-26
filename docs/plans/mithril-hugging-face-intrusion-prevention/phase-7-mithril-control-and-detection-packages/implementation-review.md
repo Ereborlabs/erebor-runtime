@@ -109,6 +109,14 @@ the owner explicitly. The startup case uses ControlConfig and the default owner.
 -> [EvidenceIntakeOwner::receive_group](../../../../crates/mithril-control/src/evidence.rs) Blocking validation checks all records, source, CPU, continuity, and the 4,096-record group limit before the store writer lock.<br>
 -> [AnalysisStore::accept_validated_batch](../../../../crates/araphor-data/src/analysis/mod.rs) A durable commit precedes the ACK. The blocking closure releases its admission guard before client output can wait.
 
+[AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/mod.rs)
+reads retained SHA-256 digests for the admitted cursor range in one statement.
+The range contains at most 4,096 rows. The pinned DuckDB appender inserts new
+rows. An explicit flush precedes the contiguous-cursor scan. The same transaction
+commits rows, receipt, and revisions. A conflict rolls back all appended rows.
+`analysis_store_bulk_rollback` checks a conflict at the last row of a full batch,
+then retry and restart. An exact retry does not send a revision notification.
+
 [EvidenceWal::next_batches](../../../../crates/mithril-node/src/observation/wal.rs)
 uses the same byte and record limits. `wal_bounds_group_records` checks the
 Node split. `intake_bounds_group_records` checks rejection without a commit.
@@ -722,8 +730,8 @@ not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
 
-This review covers `codex/mithril-ui` at `99b494f1` plus the bounded-intake and
-lease-lifecycle changes. The startup command passed 16 checks; recovery passed 19 checks again.
+This review covers `codex/mithril-ui` at `be877df` plus the native batch-insert
+change. The startup command passed 16 checks; recovery passed 19 checks again.
 Their results are in `/tmp/araphor-integrity.K3NdoS/`. QueryOwner and trace API
 frames are not qualified by these changes.
 
@@ -744,10 +752,17 @@ The full workspace procedure passed for `658c16c3`. The run for `5c86f3d`
 failed in the old SQLite 50,000-atom replay test with `OperationInterrupted`
 while decoding atom samples. The integrity runs passed that test but failed
 startup during a data-lease race. The qualification now waits for that lease;
-startup and recovery passed again. The current-source final gate is running.
+startup and recovery passed again. The `be877df` gate passed formatting,
+compilation, and strict Clippy but failed the unchanged SQLite 50,000-atom test
+with `OperationInterrupted`. The concurrent Mithril e2e suite passed 110 tests
+with 247 ignored. The current-source final gate is running.
 The four current data e2e tests passed, including `data_stream_flushes_without_tail`
 and `data_reopen_preserves_errors`. The Node and Control record-bound tests
 passed. `admission_releases_exact_capacity` passed with canonical tenant keys.
+The 13 data-store tests passed with native batch insertion, including
+`analysis_store_bulk_rollback`. The 4,096-record Control test passed in 0.52
+seconds. Its prior per-record implementation took 31.46 seconds in an earlier
+run. These timings are local test observations, not a release capacity claim.
 The data-owner suite passed 21 tests with two ignored. The
 `analysis_rejects_broken_state` test changes 16 receipt, source, context, result,
 reference, and revision fields in temporary stores. Reopen rejects each change.

@@ -544,6 +544,33 @@ impl AnalysisStore {
             .commit_revision
             .checked_add(1)
             .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
+        let retained = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT durable_cursor, frame_sha256 FROM events
+                     WHERE stream_key = ? AND durable_cursor BETWEEN ? AND ?",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare duplicate evidence",
+                })?;
+            statement
+                .query_map(
+                    params![key.as_slice(), batch.first_cursor, batch.last_cursor],
+                    |row| Ok((row.get::<_, u64>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read duplicate evidence",
+                })?
+                .collect::<duckdb::Result<std::collections::BTreeMap<_, _>>>()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "decode duplicate evidence",
+                })?
+        };
+        let mut appender = transaction
+            .appender("events")
+            .context(AnalysisDatabaseSnafu {
+                operation: "open evidence appender",
+            })?;
         let mut new_records = 0_u32;
         let mut frame_start = 0;
         for (index, frame_end) in batch.frame_ends.iter().copied().enumerate() {
@@ -553,18 +580,9 @@ impl AnalysisStore {
                 .first_cursor
                 .checked_add(index as u64)
                 .ok_or_else(|| self.state_error("the evidence cursor is exhausted"))?;
-            let existing: Option<Vec<u8>> = transaction
-                .query_row(
-                    "SELECT framed_record FROM events WHERE stream_key = ? AND durable_cursor = ?",
-                    params![key.as_slice(), cursor],
-                    |row| row.get(0),
-                )
-                .optional()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read duplicate evidence",
-                })?;
-            if let Some(existing) = existing {
-                if existing != frame {
+            let frame_digest: [u8; 32] = Sha256::digest(frame).into();
+            if let Some(existing) = retained.get(&cursor) {
+                if existing != frame_digest.as_slice() {
                     return self.reject("an evidence retry has conflicting record content");
                 }
                 continue;
@@ -572,27 +590,27 @@ impl AnalysisStore {
             if cursor <= contiguous {
                 return self.reject("an acknowledged evidence record is not retained");
             }
-            let frame_digest: [u8; 32] = Sha256::digest(frame).into();
-            transaction
-                .execute(
-                    "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![
-                        key.as_slice(),
-                        identity.tenant_id.as_slice(),
-                        cursor,
-                        batch.cpu_id,
-                        frame,
-                        frame_digest.as_slice(),
-                        revision,
-                        new_records,
-                        batch.intake_utc_ns,
-                    ],
-                )
+            appender
+                .append_row(params![
+                    key.as_slice(),
+                    identity.tenant_id.as_slice(),
+                    cursor,
+                    batch.cpu_id,
+                    frame,
+                    frame_digest.as_slice(),
+                    revision,
+                    new_records,
+                    batch.intake_utc_ns,
+                ])
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert evidence",
                 })?;
             new_records += 1;
         }
+        appender.flush().context(AnalysisDatabaseSnafu {
+            operation: "flush evidence appender",
+        })?;
+        drop(appender);
         if new_records == 0 {
             return Ok(if contiguous >= batch.last_cursor {
                 EvidenceStoreOutcomeV1::Accepted
@@ -1184,6 +1202,48 @@ mod tests {
         assert!(reopened
             .accept_validated_batch(relabeled, batch(1, &[b"first"]))
             .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_store_bulk_rollback() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let identity = identity();
+        let maximum = MAX_EVIDENCE_BATCH_RECORDS;
+        store.accept_validated_batch(identity.clone(), batch(maximum as u64, &[b"frame"]))?;
+        let before = store.meta()?;
+        let mut changes = store.subscribe_revision();
+        let _revision = *changes.borrow_and_update();
+        let mut records = vec![b"frame".as_slice(); maximum];
+        records[maximum - 1] = b"conflict";
+        assert!(store
+            .accept_validated_batch(identity.clone(), batch(1, &records))
+            .is_err());
+        assert_eq!(store.meta()?, before);
+        assert!(!changes.has_changed()?);
+        assert_eq!(
+            store
+                .source_status(&identity)?
+                .ok_or("source absent")?
+                .retained_event_count,
+            1
+        );
+        records[maximum - 1] = b"frame";
+        assert_eq!(
+            store.accept_validated_batch(identity.clone(), batch(1, &records))?,
+            EvidenceStoreOutcomeV1::Accepted
+        );
+        assert_eq!(store.meta()?.commit_revision, before.commit_revision + 1);
+        let revision = store.meta()?.commit_revision;
+        store.accept_validated_batch(identity.clone(), batch(1, &records))?;
+        assert_eq!(store.meta()?.commit_revision, revision);
+        drop(store);
+        let reopened = AnalysisStore::open(&root)?;
+        let status = reopened.source_status(&identity)?.ok_or("source absent")?;
+        assert_eq!(status.retained_event_count, maximum as u64);
+        assert_eq!(status.receipt.contiguous_cursor, maximum as u64);
         Ok(())
     }
 
