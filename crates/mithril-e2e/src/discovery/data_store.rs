@@ -23,6 +23,8 @@ use mithril_node::{
 };
 use zerocopy::IntoBytes as _;
 
+mod inspection;
+
 use crate::control_fixture::{
     reopen_control_store, ControlServerFixture, MtlsFixture, OutagePolicyFixture,
     OUTAGE_NAMESPACE_UID,

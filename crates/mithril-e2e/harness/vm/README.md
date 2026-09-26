@@ -119,6 +119,7 @@ two-node environment only after the lightweight outage tests pass:
 ```bash
 crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh \
   --environment /tmp/mithril-two-node/retained-environment.json \
+  --data-check target/debug/mithril_discovery_test \
   --output-directory /tmp/mithril-outage-recovery
 ```
 
@@ -128,6 +129,22 @@ RuntimeClass, Node fixture labels, marker files, and scoped network rule. The
 lane stops and restores Control, partitions one worker from Control, updates a
 policy during the partition, and stops and restores the K3s API. It writes the
 measured policy candidates and rollout result to `result.json`.
+
+Build `mithril_discovery_test` from the same source as the installed release.
+The lane runs its startup and recovery cases before cluster changes. The lane
+copies that binary to a private guest directory and records its SHA-256 digest.
+The binary must run on the guest. The retained Control volume must use the
+standard K3s local-path directory on Node A and the current data schema.
+Unsupported layouts fail before the outage. No data import runs.
+
+At each data check, Control has zero replicas and no Pod. The checker uses
+Control's numeric user 65532 and opens the existing AnalysisStore under its
+exclusive lease. It compares retained frame digests, source cursors, and counts
+before and after replay. It does not compare DuckDB file bytes or copy a live
+database. The storage fault makes only `evidence/analysis` read-only. Policy
+storage remains writable. Node sessions and policy acknowledgements must work
+while evidence ACKs stop. Cleanup removes the fault mount and checker files;
+it does not remove the retained data volume.
 
 Use the retained environment from the host with:
 

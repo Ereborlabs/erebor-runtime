@@ -10,6 +10,8 @@ source "$directory/../kubernetes-oracles.sh"
 environment=
 provider=
 output_directory=
+data_check=
+remote_check=
 system_namespace=mithril-system
 scenario_namespace=mithril-outage-recovery
 policy_name=outage-policy
@@ -18,14 +20,16 @@ watch_table=mithril_watch_relist_qualification
 marker_root=/var/lib/mithril-convergence/markers
 owns_namespace=false
 owns_node_labels=false
+owns_markers=false
 network_blocked=false
 watch_blocked=false
 watch_vm=
 api_stopped=false
 control_storage_read_only=false
+control_managed=false
 
 usage() {
-  echo "usage: $0 --environment PATH [--provider PATH] [--output-directory PATH]" >&2
+  echo "usage: $0 --environment PATH --data-check PATH [--provider PATH] [--output-directory PATH]" >&2
 }
 
 while (($#)); do
@@ -43,6 +47,11 @@ while (($#)); do
     --output-directory)
       (($# >= 2)) || { usage; exit 2; }
       output_directory=$2
+      shift 2
+      ;;
+    --data-check)
+      (($# >= 2)) || { usage; exit 2; }
+      data_check=$2
       shift 2
       ;;
     --help|-h)
@@ -88,6 +97,15 @@ known_hosts=$(jq -er '.known_hosts' "$environment")
   exit 2
 }
 export MITHRIL_VM_KNOWN_HOSTS=$known_hosts
+[[ -n $data_check && -x $data_check ]] || {
+  echo "--data-check requires the current mithril_discovery_test executable" >&2
+  exit 2
+}
+read -r retained_state state_claim config_secret tls_secret < <(retained_mithril_state "$environment")
+[[ $retained_state == retained ]] || {
+  echo "outage qualification requires retained Mithril storage" >&2
+  exit 2
+}
 
 if [[ -z $output_directory ]]; then
   output_directory=/tmp/mithril-kubernetes-outage-recovery-$(date -u +%Y%m%dT%H%M%SZ)-$$
@@ -111,26 +129,34 @@ remote_kubectl() {
   "$provider" run "$vm_a" "$command"
 }
 
-control_segment_manifest() {
-  remote_kubectl -n "$system_namespace" exec deployment/mithril-control -- \
-    sh -c "find /var/lib/mithril-control/store/evidence/segments-v2 -type f -name '*.seg' \
-      -exec sh -c 'for path do printf \"%s \" \"\$(stat -c %s \"\$path\")\"; sha256sum \"\$path\"; done' sh '{}' +"
+inspect_control_data() {
+  local label=$1
+  local baseline=${2:-}
+  local command
+  local args=(--case data-store-inspect --data-directory "$data_path"
+    --tenant-id aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+    --output-directory "$remote_check/results/$label")
+  [[ $(remote_kubectl -n "$system_namespace" get deployment mithril-control \
+    -o jsonpath='{.spec.replicas}') == 0 ]]
+  [[ $(remote_kubectl -n "$system_namespace" get pods \
+    -l app.kubernetes.io/name=mithril-control -o json | jq '.items | length') == 0 ]]
+  if [[ -n $baseline ]]; then
+    args+=(--baseline "$remote_check/results/$baseline/result.json")
+  fi
+  printf -v command '%q ' sudo setpriv --reuid=65532 --regid=65532 \
+    --clear-groups -- "$remote_check/check" "${args[@]}"
+  "$provider" run "$vm_a" "$command"
+  "$provider" run "$vm_a" sudo cat "$remote_check/results/$label/result.json" \
+    >"$output_directory/$label.json"
 }
 
-verify_control_segment_prefixes() {
-  local manifest=$1
-  local size
-  local expected
-  local path
-  local actual
-  while read -r size expected path; do
-    actual=$(remote_kubectl -n "$system_namespace" exec deployment/mithril-control -- \
-      sh -c "head -c '$size' '$path' | sha256sum" | sed -n '1s/[[:space:]].*//p')
-    [[ $actual == "$expected" ]] || {
-      echo "Control changed or removed an unconsumed evidence prefix: $path" >&2
-      return 1
-    }
-  done <"$manifest"
+require_replayed_data() {
+  jq -e --slurpfile prior "$1" --argjson node_a "$3" --argjson node_b "$4" '
+    def records($node):
+      [.sources[] | select(.identity.node_id == $node) | .record_count] | add // 0;
+    records("mithril-node-a") >= ($prior[0] | records("mithril-node-a")) + $node_a and
+    records("mithril-node-b") >= ($prior[0] | records("mithril-node-b")) + $node_b
+  ' "$2" >/dev/null
 }
 
 remove_network_block() {
@@ -150,7 +176,7 @@ remove_watch_block() {
 restore_control_storage() {
   if [[ $control_storage_read_only == true ]]; then
     remote_kubectl -n "$system_namespace" patch deployment mithril-control \
-      --type=strategic -p '{"spec":{"template":{"spec":{"containers":[{"name":"mithril-control","volumeMounts":[{"name":"state","mountPath":"/var/lib/mithril-control","readOnly":false}]}]}}}}' \
+      --type=strategic -p '{"spec":{"template":{"spec":{"containers":[{"name":"mithril-control","volumeMounts":[{"mountPath":"/var/lib/mithril-control/evidence/analysis","$patch":"delete"}]}]}}}}' \
       >/dev/null
     control_storage_read_only=false
   fi
@@ -158,7 +184,7 @@ restore_control_storage() {
 
 block_control_storage() {
   remote_kubectl -n "$system_namespace" patch deployment mithril-control \
-    --type=strategic -p '{"spec":{"template":{"spec":{"containers":[{"name":"mithril-control","volumeMounts":[{"name":"state","mountPath":"/var/lib/mithril-control","readOnly":true}]}]}}}}' \
+    --type=strategic -p '{"spec":{"template":{"spec":{"containers":[{"name":"mithril-control","volumeMounts":[{"name":"state","mountPath":"/var/lib/mithril-control/evidence/analysis","subPath":"evidence/analysis","readOnly":true}]}]}}}}' \
     >/dev/null
   control_storage_read_only=true
 }
@@ -225,8 +251,10 @@ cleanup() {
       capture_failure_diagnostics
     fi
     restore_control_storage || cleanup_failed=true
-    remote_kubectl -n "$system_namespace" scale deployment/mithril-control \
-      --replicas=1 >/dev/null 2>&1 || cleanup_failed=true
+    if [[ $control_managed == true ]]; then
+      remote_kubectl -n "$system_namespace" scale deployment/mithril-control \
+        --replicas=1 >/dev/null 2>&1 || cleanup_failed=true
+    fi
     if [[ $owns_namespace == true ]]; then
       remote_kubectl delete namespace "$scenario_namespace" --ignore-not-found=true \
         --wait=true --timeout=180s >/dev/null 2>&1 || cleanup_failed=true
@@ -243,7 +271,14 @@ cleanup() {
   else
     cleanup_failed=true
   fi
-  remove_markers || cleanup_failed=true
+  if [[ $owns_markers == true ]]; then
+    remove_markers || cleanup_failed=true
+  fi
+  if [[ $remote_check =~ ^/var/tmp/mithril-data-check\.[A-Za-z0-9]+$ ]]; then
+    "$provider" run "$vm_a" sudo rm -rf -- "$remote_check" || cleanup_failed=true
+  elif [[ -n $remote_check ]]; then
+    cleanup_failed=true
+  fi
   if [[ $work_directory == /tmp/mithril-outage-recovery.* ]]; then
     rm -rf -- "$work_directory" || cleanup_failed=true
   else
@@ -595,6 +630,12 @@ wait_application_started() {
   return 1
 }
 
+"$data_check" --case data-store-startup \
+  --output-directory "$output_directory/lightweight-startup"
+"$data_check" --case data-store-recovery \
+  --output-directory "$output_directory/lightweight-recovery"
+sha256sum "$data_check" >"$output_directory/data-check.sha256"
+
 wait_api
 remote_kubectl -n "$system_namespace" rollout status deployment/mithril-control \
   --timeout=180s >/dev/null
@@ -633,9 +674,48 @@ node_b_name=$(jq -er --arg address "$address_b" '
   echo "retained VMs do not map to two exact Kubernetes Nodes" >&2
   exit 1
 }
+control_deployment=$(remote_kubectl -n "$system_namespace" get deployment mithril-control -o json)
+jq -e --arg claim "$state_claim" --arg node "$node_a_name" '
+  .spec.replicas == 1 and
+  .spec.template.spec.nodeSelector["kubernetes.io/hostname"] == $node and
+  any(.spec.template.spec.volumes[];
+    .name == "state" and .persistentVolumeClaim.claimName == $claim) and
+  any(.spec.template.spec.containers[];
+    .name == "mithril-control" and
+    any(.volumeMounts[]; .name == "state" and
+      .mountPath == "/var/lib/mithril-control" and .readOnly != true) and
+    all(.volumeMounts[]; .mountPath != "/var/lib/mithril-control/evidence/analysis"))
+' <<<"$control_deployment" >/dev/null
+claim_json=$(remote_kubectl -n "$system_namespace" get pvc "$state_claim" -o json)
+claim_uid=$(jq -er '.metadata.uid' <<<"$claim_json")
+volume_name=$(jq -er '.spec.volumeName' <<<"$claim_json")
+volume_json=$(remote_kubectl get pv "$volume_name" -o json)
+data_base=$(jq -er --arg claim "$state_claim" --arg uid "$claim_uid" \
+  --arg node "$node_a_name" --arg namespace "$system_namespace" '
+  select(.spec.claimRef.name == $claim and .spec.claimRef.uid == $uid and
+    .spec.claimRef.namespace == $namespace) |
+  select(any(.spec.nodeAffinity.required.nodeSelectorTerms[].matchExpressions[];
+    .key == "kubernetes.io/hostname" and .operator == "In" and .values == [$node])) |
+  .spec.hostPath.path
+' <<<"$volume_json")
+[[ $data_base == "/var/lib/rancher/k3s/storage/pvc-${claim_uid}_${system_namespace}_${state_claim}" ]] || {
+  echo "Control data path does not match its retained local-path volume" >&2
+  exit 2
+}
+data_path=$data_base/evidence/analysis
+[[ $("$provider" run "$vm_a" sudo realpath -e -- "$data_path") == "$data_path" ]]
+remote_check=$("$provider" run "$vm_a" mktemp -d /var/tmp/mithril-data-check.XXXXXXXX)
+[[ $remote_check =~ ^/var/tmp/mithril-data-check\.[A-Za-z0-9]+$ ]]
+"$provider" put "$vm_a" "$data_check" "$remote_check/check"
+"$provider" run "$vm_a" chmod 755 "$remote_check" "$remote_check/check"
+"$provider" run "$vm_a" sudo install -d -m 700 -o 65532 -g 65532 "$remote_check/results"
+"$provider" run "$vm_a" "$remote_check/check" --help >/dev/null
+remote_digest=$("$provider" run "$vm_a" sha256sum "$remote_check/check" | cut -d ' ' -f1)
+[[ $remote_digest == $(cut -d ' ' -f1 "$output_directory/data-check.sha256") ]]
 wait_policy_delivery_empty "$node_a_name"
 wait_policy_delivery_empty "$node_b_name"
 
+owns_markers=true
 remove_markers
 for vm in "$vm_a" "$vm_b"; do
   "$provider" run "$vm" sudo mkfifo \
@@ -690,12 +770,8 @@ request_denial "$vm_a" outage-a baseline-a
 request_denial "$vm_b" outage-b baseline-b
 wait_node_wal_empty "$node_a_name"
 wait_node_wal_empty "$node_b_name"
-control_segment_manifest >"$work_directory/control-segments-before-outage.txt"
-[[ -s $work_directory/control-segments-before-outage.txt ]] || {
-  echo "Control retained no evidence segments before its outage" >&2
-  exit 1
-}
 
+control_managed=true
 remote_kubectl -n "$system_namespace" scale deployment/mithril-control \
   --replicas=0 >/dev/null
 control_stop_deadline=$((SECONDS + 120))
@@ -712,6 +788,7 @@ if [[ $control_stopped != true ]]; then
   echo "Control did not stop" >&2
   exit 1
 fi
+inspect_control_data data-before-outage
 for sequence in 1 2 3 4; do
   request_denial "$vm_a" outage-a "control-outage-a-$sequence"
   request_denial "$vm_b" outage-b "control-outage-b-$sequence"
@@ -764,17 +841,7 @@ wait_node_control_acknowledgement "$node_a_name"
 wait_node_control_acknowledgement "$node_b_name"
 wait_node_wal_empty "$node_a_name"
 wait_node_wal_empty "$node_b_name"
-control_segment_manifest >"$work_directory/control-segments-after-outage.txt"
-if ! verify_control_segment_prefixes \
-    "$work_directory/control-segments-before-outage.txt"; then
-  cp "$work_directory/control-segments-before-outage.txt" \
-    "$output_directory/control-segments-before-outage.txt"
-  cp "$work_directory/control-segments-after-outage.txt" \
-    "$output_directory/control-segments-after-outage.txt"
-  exit 1
-fi
 
-control_segment_manifest >"$work_directory/control-segments-before-storage-outage.txt"
 remote_kubectl -n "$system_namespace" scale deployment/mithril-control \
   --replicas=0 >/dev/null
 storage_stop_deadline=$((SECONDS + 120))
@@ -791,6 +858,11 @@ done
   echo "Control did not stop before its storage outage" >&2
   exit 1
 }
+inspect_control_data data-after-outage data-before-outage
+records_before=$(jq '[.sources[].record_count] | add' "$output_directory/data-before-outage.json")
+records_after=$(jq '[.sources[].record_count] | add' "$output_directory/data-after-outage.json")
+require_replayed_data "$output_directory/data-before-outage.json" \
+  "$output_directory/data-after-outage.json" "$retained_records_a_after_restart" "$retained_records_b"
 block_control_storage
 remote_kubectl -n "$system_namespace" scale deployment/mithril-control \
   --replicas=1 >/dev/null
@@ -809,6 +881,12 @@ done
   echo "Control did not report its unavailable evidence store" >&2
   exit 1
 }
+remote_kubectl -n "$system_namespace" rollout status deployment/mithril-control \
+  --timeout=180s >/dev/null
+wait_control_session mithril-node-a
+wait_control_session mithril-node-b
+wait_node_control_acknowledgement "$node_a_name"
+wait_node_control_acknowledgement "$node_b_name"
 request_denial "$vm_a" outage-a storage-outage-a
 request_denial "$vm_b" outage-b storage-outage-b
 storage_retained_records_a=$(wait_node_wal_count "$node_a_name" 1)
@@ -822,15 +900,20 @@ wait_node_control_acknowledgement "$node_a_name"
 wait_node_control_acknowledgement "$node_b_name"
 wait_node_wal_empty "$node_a_name"
 wait_node_wal_empty "$node_b_name"
-control_segment_manifest >"$work_directory/control-segments-after-storage-outage.txt"
-if ! verify_control_segment_prefixes \
-    "$work_directory/control-segments-before-storage-outage.txt"; then
-  cp "$work_directory/control-segments-before-storage-outage.txt" \
-    "$output_directory/control-segments-before-storage-outage.txt"
-  cp "$work_directory/control-segments-after-storage-outage.txt" \
-    "$output_directory/control-segments-after-storage-outage.txt"
-  exit 1
-fi
+remote_kubectl -n "$system_namespace" scale deployment/mithril-control \
+  --replicas=0 >/dev/null
+remote_kubectl -n "$system_namespace" wait --for=delete pod \
+  -l app.kubernetes.io/name=mithril-control --timeout=120s >/dev/null
+inspect_control_data data-after-storage data-after-outage
+records_storage=$(jq '[.sources[].record_count] | add' "$output_directory/data-after-storage.json")
+require_replayed_data "$output_directory/data-after-outage.json" \
+  "$output_directory/data-after-storage.json" "$storage_retained_records_a" "$storage_retained_records_b"
+remote_kubectl -n "$system_namespace" scale deployment/mithril-control \
+  --replicas=1 >/dev/null
+remote_kubectl -n "$system_namespace" rollout status deployment/mithril-control \
+  --timeout=300s >/dev/null
+wait_node_control_acknowledgement "$node_a_name"
+wait_node_control_acknowledgement "$node_b_name"
 refresh_policy_status control-recovered
 wait_rollout 2 0
 candidate_a_pre_partition=$(active_candidate "$node_a_name")
@@ -1037,21 +1120,10 @@ for node_name in "$node_a_name" "$node_b_name"; do
 done
 request_denial "$vm_a" outage-a relist-recreated-a
 request_denial "$vm_b" outage-b relist-recreated-b
-cp "$work_directory/control-segments-before-outage.txt" \
-  "$output_directory/control-segments-before-outage.txt"
-cp "$work_directory/control-segments-after-outage.txt" \
-  "$output_directory/control-segments-after-outage.txt"
-cp "$work_directory/control-segments-before-storage-outage.txt" \
-  "$output_directory/control-segments-before-storage-outage.txt"
-cp "$work_directory/control-segments-after-storage-outage.txt" \
-  "$output_directory/control-segments-after-storage-outage.txt"
 cp "$work_directory/node-a-wal-before-restart.txt" \
   "$output_directory/node-a-wal-before-restart.txt"
 cp "$work_directory/node-a-wal-after-restart.txt" \
   "$output_directory/node-a-wal-after-restart.txt"
-segments_before_outage=$(wc -l <"$work_directory/control-segments-before-outage.txt")
-segments_after_outage=$(wc -l <"$work_directory/control-segments-after-outage.txt")
-
 jq -n \
   --arg node_a "$node_a_name" \
   --arg node_b "$node_b_name" \
@@ -1061,8 +1133,9 @@ jq -n \
   --arg candidate_b_v2 "$candidate_b_v2" \
   --arg candidate_a_recovered "$candidate_a_recovered" \
   --arg candidate_b_recovered "$candidate_b_recovered" \
-  --argjson segments_before_outage "$segments_before_outage" \
-  --argjson segments_after_outage "$segments_after_outage" \
+  --argjson records_before "$records_before" \
+  --argjson records_after "$records_after" \
+  --argjson records_storage "$records_storage" \
   --argjson retained_records_a "$retained_records_a" \
   --argjson retained_records_a_after_restart "$retained_records_a_after_restart" \
   --argjson retained_records_b "$retained_records_b" \
@@ -1073,8 +1146,9 @@ jq -n \
     nodes: [$node_a, $node_b],
     control_outage_kept_local_denial: true,
     control_outage_blocked_new_protected_work: true,
-    control_restart_retained_unconsumed_evidence: true,
+    control_restart_retained_evidence: true,
     storage_failure_withheld_acknowledgement: true,
+    storage_failure_kept_policy_service: true,
     storage_recovery_replayed_retained_evidence: true,
     storage_outage_retained_node_records: {
       node_a: $storage_retained_records_a,
@@ -1088,9 +1162,10 @@ jq -n \
       node_a_after_restart: $retained_records_a_after_restart,
       node_b: $retained_records_b
     },
-    evidence_segments: {
-      before_outage: $segments_before_outage,
-      after_outage: $segments_after_outage
+    retained_data_records: {
+      before_outage: $records_before,
+      after_outage: $records_after,
+      after_storage_outage: $records_storage
     },
     network_partition_kept_predecessor: true,
     mixed_rollout: {desired: 2, active: 1, updating: 1, failed: 0},

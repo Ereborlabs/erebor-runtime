@@ -139,17 +139,6 @@ grep -Fq 'verify_node_wal_prefixes' \
   "$directory/two-node-outage-recovery.sh"
 grep -Fq "\\( -name '*.open' -o -name '*.seg' \\)" \
   "$directory/two-node-outage-recovery.sh"
-control_segments=$test_root/control-segments
-mkdir -p -- "$control_segments"
-sealed_segment=$control_segments/0000000000000001.r.0000000000000001.0000000000000001.0000000000000001.seg
-active_segment=$control_segments/0000000000000002.r.0000000000000001.0000000000000002.open
-printf durable >"$sealed_segment"
-printf transient >"$active_segment"
-control_manifest=$(find "$control_segments" -type f -name '*.seg' -exec \
-  sh -c 'for path do printf "%s " "$(stat -c %s "$path")"; sha256sum "$path"; done' \
-  sh '{}' +)
-[[ $control_manifest == *"$sealed_segment" ]]
-[[ $control_manifest != *"$active_segment"* ]]
 if grep -Fq 'delete namespace "$system_namespace"' \
     "$directory/two-node-convergence.sh"; then
   echo "the retained convergence lane deletes durable Control evidence" >&2
@@ -163,16 +152,45 @@ fi
 outage_help=$("$directory/two-node-outage-recovery.sh" --help 2>&1)
 [[ $outage_help == *--environment* ]]
 [[ $outage_help == *--output-directory* ]]
+[[ $outage_help == *--data-check* ]]
 grep -Fq 'systemctl show' "$directory/two-node-outage-recovery.sh"
-grep -Fq 'verify_control_segment_prefixes' "$directory/two-node-outage-recovery.sh"
-grep -Fq 'Control changed or removed an unconsumed evidence prefix' \
+grep -Fq 'inspect_control_data data-after-outage data-before-outage' \
   "$directory/two-node-outage-recovery.sh"
+grep -Fq 'inspect_control_data data-after-storage data-after-outage' \
+  "$directory/two-node-outage-recovery.sh"
+grep -Fq -- '--case data-store-startup' "$directory/two-node-outage-recovery.sh"
+grep -Fq -- '--case data-store-recovery' "$directory/two-node-outage-recovery.sh"
+source <(sed -n '/^require_replayed_data() {$/,/^}$/p' "$directory/two-node-outage-recovery.sh")
+jq -n '{sources: [
+  {identity: {node_id: "mithril-node-a"}, record_count: 3},
+  {identity: {node_id: "mithril-node-b"}, record_count: 2}
+]}' >"$test_root/prior.json"
+jq '.sources[0].record_count += 4 | .sources[1].record_count += 5' \
+  "$test_root/prior.json" >"$test_root/replayed.json"
+require_replayed_data "$test_root/prior.json" "$test_root/replayed.json" 4 5
+jq '.sources[0].record_count += 9' \
+  "$test_root/prior.json" >"$test_root/one-node.json"
+if require_replayed_data "$test_root/prior.json" "$test_root/one-node.json" 4 5; then
+  echo "one Node's records hid the other Node's missing replay" >&2
+  exit 1
+fi
+jq '.sources |= map(select(.identity.node_id == "mithril-node-a"))' \
+  "$test_root/replayed.json" >"$test_root/missing-node.json"
+if require_replayed_data "$test_root/prior.json" "$test_root/missing-node.json" 4 5; then
+  echo "the replay check accepted a missing Node" >&2
+  exit 1
+fi
+if grep -Fq 'segments-v2' "$directory/two-node-outage-recovery.sh"; then
+  echo "the outage harness still reads the retired Control evidence segments" >&2
+  exit 1
+fi
 grep -Fq 'storage_failure_withheld_acknowledgement: true' \
   "$directory/two-node-outage-recovery.sh"
 grep -Fq 'restore_control_storage || cleanup_failed=true' \
   "$directory/two-node-outage-recovery.sh"
 grep -Fq '"readOnly":true' "$directory/two-node-outage-recovery.sh"
-grep -Fq '"readOnly":false' "$directory/two-node-outage-recovery.sh"
+grep -Fq '"subPath":"evidence/analysis"' "$directory/two-node-outage-recovery.sh"
+grep -Fq '"$patch":"delete"' "$directory/two-node-outage-recovery.sh"
 grep -Fq -- "-name '*.seg'" "$directory/two-node-outage-recovery.sh"
 grep -Fq -- '--property ActiveState --value k3s' \
   "$directory/two-node-outage-recovery.sh"
