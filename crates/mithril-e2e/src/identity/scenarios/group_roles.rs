@@ -1,6 +1,6 @@
 use crate::platform::{platform_test, GroupActor, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn container_roles_are_distinct<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("group-roles")?;

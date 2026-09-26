@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, File};
 use std::ops::{Deref, DerefMut};
-use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -14,8 +13,7 @@ use erebor_runtime_client::MithrilObservationClient;
 use erebor_runtime_ipc::v1::MithrilObservationSnapshot;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment};
 use k8s_openapi::api::core::v1::{
-    Lifecycle, LifecycleHandler, Namespace, Node, PersistentVolumeClaim, Pod, Secret,
-    ServiceAccount, SleepAction,
+    Namespace, Node, PersistentVolumeClaim, Pod, Secret, ServiceAccount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::api::{DeleteParams, ListParams, Patch, PatchParams, PostParams};
@@ -38,7 +36,7 @@ use zerocopy::TryFromBytes as _;
 
 use super::kubernetes_approval::KubernetesApproval;
 use super::lifecycle::{enter, LifecycleGuard};
-use super::{policy_path, Platform, Task, TestResult, PROCESS_FIXTURES};
+use super::{policy_path, GroupActor, Platform, Task, TestResult};
 use crate::control_fixture::MtlsFixture;
 use crate::error::{InvalidInputSnafu, IoSnafu, NodeSnafu};
 use crate::physical::{
@@ -52,6 +50,8 @@ const SELECTOR: &str = "mithril.erebor.dev/pid-reuse";
 const ACTOR: &str = "pid-reuse";
 const CONTAINER: &str = "worker";
 const NODE_ID: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+mod actor;
 
 pub(crate) struct Kubernetes {
     lifecycle: Option<LifecycleGuard<'static, KubernetesState>>,
@@ -228,6 +228,16 @@ impl KubernetesState {
         Self::run(&mut command, "read Kubernetes logs")
     }
 
+    fn logs_for(&self, name: &str) -> TestResult<String> {
+        let mut command = Command::new(&self.k3s_path);
+        command
+            .arg("kubectl")
+            .arg("--kubeconfig")
+            .arg(&self.kube_path)
+            .args(["-n", &self.namespace, "logs", &self.actor_name, "-c", name]);
+        Self::run(&mut command, "read Kubernetes actor logs")
+    }
+
     fn snapshot(&self) -> TestResult<MithrilObservationSnapshot> {
         let client = MithrilObservationClient::new(self.observation_path.clone(), "/".to_owned());
         Ok(self.runtime.block_on(client.snapshot())?)
@@ -309,13 +319,17 @@ impl KubernetesState {
     }
 
     fn container_id(&self) -> TestResult<String> {
+        self.container_id_for(CONTAINER)
+    }
+
+    fn container_id_for(&self, name: &str) -> TestResult<String> {
         self.pod()?
             .status
             .and_then(|status| status.container_statuses)
-            .and_then(|statuses| statuses.into_iter().find(|status| status.name == CONTAINER))
+            .and_then(|statuses| statuses.into_iter().find(|status| status.name == name))
             .and_then(|status| status.container_id)
             .and_then(|id| id.strip_prefix("containerd://").map(str::to_owned))
-            .ok_or_else(|| "the Kubernetes actor has no containerd ID".into())
+            .ok_or_else(|| format!("Kubernetes container {name} has no containerd ID").into())
     }
 
     fn runtime_id(&self) -> TestResult<String> {
@@ -1436,12 +1450,19 @@ impl Platform for Kubernetes {
             namespace: Some(self.namespace.clone()),
             ..ObjectMeta::default()
         };
-        let container = policy
+        if policy.spec.containers.is_empty() {
+            return Err("the policy has no container".into());
+        }
+        for image in policy
             .spec
             .containers
-            .first_mut()
-            .ok_or("the policy has no container")?;
-        container.images = vec![self.actor_image.clone()];
+            .iter_mut()
+            .flat_map(|container| &mut container.images)
+        {
+            if image.starts_with("fixture/python@") {
+                image.clone_from(&self.actor_image);
+            }
+        }
         for rule in policy
             .spec
             .roles
@@ -1478,7 +1499,7 @@ impl Platform for Kubernetes {
     }
 
     fn sync_policy(&mut self) -> TestResult<()> {
-        self.wait_policy(1)
+        self.wait_policy(self.actors.get(&self.labels).copied().unwrap_or(0))
     }
 
     fn node_ready(&mut self) -> TestResult<()> {
@@ -1491,236 +1512,23 @@ impl Platform for Kubernetes {
         extra: &[&str],
         labels: &super::Labels,
     ) -> TestResult<ProcessFixture> {
-        KubernetesState::require_image(&self.k3s_path, &self.actor_image)?;
-        if self.actor_id.is_some() {
-            if let Some(work) = self.work.take() {
-                self.directories.push(work);
-            }
-            if let Some(group) = self.move_group.take() {
-                self.groups.push(group);
-            }
-            self.actor_name = format!("{ACTOR}-{}", self.directories.len());
-            self.work_path = self.work_path.with_file_name(&self.actor_name);
-            self.work = Some(ProbeDirectory::create(&self.work_path)?);
-        }
-        self.labels = labels.clone();
-        self.policy_name = self.policies.get(labels).cloned();
-        self.actor_id = None;
-        self.actor_pid = None;
-        self.actor_cgroup = None;
-        let fixtures = self.root.join(PROCESS_FIXTURES);
-        let script = fixtures.join(name);
-        let mut args = vec![format!("/fixtures/{name}"), "/work".to_owned()];
-        args.extend(extra.iter().map(|arg| (*arg).to_owned()));
-        let mut pod: Pod =
-            serde_saphyr::from_slice(&fs::read(self.fixture("pid-reuse-pod-v1.yaml"))?)?;
-        pod.metadata.namespace = Some(self.namespace.clone());
-        pod.metadata.name = Some(self.actor_name.clone());
-        pod.metadata.labels = Some(labels.clone());
-        let spec = pod.spec.as_mut().ok_or("the actor Pod has no spec")?;
-        let sleep = self.post_sleep.take();
-        if let Some(seconds) = sleep {
-            spec.termination_grace_period_seconds = Some(seconds + 10);
-        }
-        spec.node_selector = Some(BTreeMap::from([(
-            "kubernetes.io/hostname".to_owned(),
-            self.node_name.clone(),
-        )]));
-        let container = spec
-            .containers
-            .iter_mut()
-            .find(|container| container.name == CONTAINER)
-            .ok_or("the actor Pod has no worker container")?;
-        container.image = Some(self.actor_image.clone());
-        container.command = Some(vec![self.actor_python.clone()]);
-        container.args = Some(args);
-        if let Some(seconds) = sleep {
-            container.lifecycle = Some(Lifecycle {
-                post_start: Some(LifecycleHandler {
-                    sleep: Some(SleepAction { seconds }),
-                    ..LifecycleHandler::default()
-                }),
-                ..Lifecycle::default()
-            });
-        }
-        let volumes = spec
-            .volumes
-            .as_mut()
-            .ok_or("the actor Pod has no volumes")?;
-        for (name, path) in [
-            ("fixtures", fixtures.as_path()),
-            ("work", self.work_path.as_path()),
-        ] {
-            let source = volumes
-                .iter_mut()
-                .find(|volume| volume.name == name)
-                .and_then(|volume| volume.host_path.as_mut())
-                .ok_or_else(|| format!("the actor Pod has no {name} hostPath"))?;
-            source.path = path.display().to_string();
-        }
-        let pods = Api::<Pod>::namespaced(self.client.clone(), &self.namespace);
-        self.runtime
-            .block_on(pods.create(&PostParams::default(), &pod))?;
-
-        let last_id = RefCell::new(String::from("<absent>"));
-        let id = wait_for(
-            &script,
-            "Kubernetes actor container identity",
-            READY_LIMIT,
-            || match if sleep.is_some() {
-                self.runtime_id()
-            } else {
-                self.container_id()
-            } {
-                Ok(value) => Ok(Some(value)),
-                Err(source) => {
-                    *last_id.borrow_mut() = source.to_string();
-                    Ok(None)
-                }
-            },
-            || {
-                let pod = self.diagnostics();
-                format!("last runtime state: {}; Pod state: {pod}", last_id.borrow())
-            },
-        )?;
-        let last_pid = RefCell::new(String::from("<absent>"));
-        let (pid, cgroup) = wait_for(
-            &script,
-            "Kubernetes actor runtime identity",
-            READY_LIMIT,
-            || match self
-                .inspect_pid(&id)
-                .and_then(|pid| KubernetesState::cgroup(pid).map(|group| (pid, group)))
-            {
-                Ok(value) => Ok(Some(value)),
-                Err(source) => {
-                    let exit = self
-                        .pod()
-                        .ok()
-                        .and_then(|pod| pod.status)
-                        .and_then(|status| status.container_statuses)
-                        .and_then(|states| states.into_iter().find(|state| state.name == CONTAINER))
-                        .and_then(|state| state.state)
-                        .and_then(|state| state.terminated);
-                    if let Some(exit) = exit {
-                        let diagnostics = self.diagnostics();
-                        return Err(InvalidInputSnafu {
-                            path: &script,
-                            reason: format!(
-                                "Kubernetes actor exited with code {}; reason: {:?}; message: {:?}; {diagnostics}",
-                                exit.exit_code, exit.reason, exit.message
-                            ),
-                        }
-                        .build());
-                    }
-                    *last_pid.borrow_mut() = source.to_string();
-                    Ok(None)
-                }
-            },
-            || {
-                let pod = self.diagnostics();
-                format!(
-                    "last runtime state: {}; Pod state: {pod}",
-                    last_pid.borrow()
-                )
-            },
-        )?;
-        if sleep.is_some() {
-            let ready = self.work_path.join("ready");
-            wait_for(
-                &ready,
-                "Kubernetes actor readiness",
-                READY_LIMIT,
-                || Ok(ready.is_file().then_some(())),
-                || {
-                    let pod = self.diagnostics();
-                    format!("ready file exists: {}; Pod state: {pod}", ready.exists())
-                },
-            )?;
-        } else {
-            let last = RefCell::new(String::from("<absent>"));
-            wait_for(
-                &script,
-                "Kubernetes actor readiness",
-                READY_LIMIT,
-                || match self.logs(&self.namespace, &format!("pod/{}", self.actor_name)) {
-                    Ok(logs) => {
-                        *last.borrow_mut() = logs.clone();
-                        Ok(logs
-                            .lines()
-                            .any(|line| line == "native-fixture-ready")
-                            .then_some(()))
-                    }
-                    Err(source) => {
-                        *last.borrow_mut() = source.to_string();
-                        Ok(None)
-                    }
-                },
-                || {
-                    let pod = self.diagnostics();
-                    format!("last actor state: {pod}; last logs: {:?}", last.borrow())
-                },
-            )?;
-        }
-
-        let k3s = self.k3s_path.clone();
-        let kube = self.kube_path.clone();
-        let namespace = self.namespace.clone();
-        let actor_name = self.actor_name.clone();
-        let mut actor = if self.hook_up {
-            let mut command = Command::new(&self.k3s_path);
-            command
-                .arg("kubectl")
-                .args(["--kubeconfig"])
-                .arg(&self.kube_path)
-                .args([
-                    "-n",
-                    &self.namespace,
-                    "attach",
-                    "-i",
-                    &self.actor_name,
-                    "-c",
-                    CONTAINER,
-                ]);
-            let mut actor = ProcessFixture::spawn(&mut command, &script)?;
-            actor.ensure_running("Kubernetes actor attach")?;
-            actor
-        } else {
-            let input_path = PathBuf::from(format!("/proc/{pid}/fd/0"));
-            let input = File::options()
-                .write(true)
-                .open(&input_path)
-                .context(IoSnafu { path: &input_path })?;
-            ProcessFixture::from_pid(pid, input, &script)
+        let actor = GroupActor {
+            name: CONTAINER,
+            script: Some(name),
+            args: extra,
         };
-        actor.set_exit_probe(move || {
-            let output = Command::new(&k3s)
-                .arg("kubectl")
-                .args(["--kubeconfig"])
-                .arg(&kube)
-                .args(["-n", &namespace, "get", "pod", &actor_name, "-o"])
-                .arg("jsonpath={.status.containerStatuses[0].state.terminated.exitCode}")
-                .output()?;
-            if !output.status.success() {
-                return Ok(None);
-            }
-            let value = String::from_utf8_lossy(&output.stdout);
-            let value = value.trim();
-            if value.is_empty() {
-                return Ok(None);
-            }
-            let code = value.parse::<i32>().map_err(std::io::Error::other)?;
-            Ok(Some(std::process::ExitStatus::from_raw(code << 8)))
-        });
-        actor.set_init(pid)?;
-        actor.set_group(&cgroup);
-        self.actor_id = Some(id);
-        self.actor_pid = Some(pid);
-        self.actor_cgroup = Some(cgroup);
-        *self.actors.entry(labels.clone()).or_default() += 1;
-        Ok(actor)
+        let mut group = self.start_actor_group("pid-reuse-pod-v1.yaml", &[actor], labels)?;
+        Ok(group.remove(0).0)
     }
 
+    fn start_actor_group(
+        &mut self,
+        manifest: &str,
+        actors: &[GroupActor<'_>],
+        labels: &super::Labels,
+    ) -> TestResult<Vec<(ProcessFixture, PathBuf)>> {
+        self.start_group(manifest, actors, labels)
+    }
     fn add_actor(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         self.start_entry(command, args)
     }
