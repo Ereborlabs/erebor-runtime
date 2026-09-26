@@ -804,3 +804,21 @@ Sampled peak data files used 60,596,224 bytes. The checkpointed database used
 67.21 seconds, user CPU time 86.41 seconds, system CPU time 2.61 seconds,
 and peak RSS 223,536 KiB. Capacity, remaining load, old-writer removal, and
 physical qualification requirements remain **Not done**.
+
+`data_intake_failure` now passes through production mTLS intake in an isolated
+child process. The existing capacity-recovery scenario selects the native
+commit fault without a production hook. Storage admission succeeds. DuckDB then
+reports `File too large` for the WAL commit. Control returns Internal without
+an ACK. The watch revision, metadata, source receipt, and accepted bytes remain
+unchanged. Node retains the rejected batch. After the child restores its file
+limit, a policy RPC and evidence replay succeed without a Control restart.
+Duplicate replay has no second effect. Reopen retains two records at cursor 2.
+All eleven enabled data-store tests passed; four helpers or environment-specific
+cases remain ignored. The first run lacked the required filesystem reserve.
+Removing only stale generated binaries allowed the unchanged test to pass.
+The shared capacity pair passed in a private 1-GiB tmpfs. Its log is
+`/tmp/araphor-intake-qualification.hEEgehKt/disk-full.log`. The log records
+the working-tree source and binary digest. The full-filesystem case reached
+zero free bytes, rejected intake and copy operations, retained Node input,
+and recovered at cursor 2. The full workspace gate is pending.
+Other phase requirements remain **Not done**.

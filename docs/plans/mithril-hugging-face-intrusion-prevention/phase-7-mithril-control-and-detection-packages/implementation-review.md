@@ -236,6 +236,25 @@ workspace checks, strict Clippy, and workspace tests. The data crate passed
 45 tests with two ignored; Control passed 196 with two ignored; Node passed
 256 with one ignored. No Rust source changed after this gate.
 
+[data_intake_failure](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The parent starts an isolated test process with a 20-second wait limit.<br>
+-> [data_intake_child](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The child selects the native commit fault in the existing capacity-recovery scenario.<br>
+-> [DataStoreQualification::capacity_recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs) Production Node and Control owners accept one record through mTLS and prepare the next Node batch.<br>
+-> [DataStoreQualification::capacity_recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs) A 64-byte process file-size limit causes the next native WAL commit to fail after storage admission.<br>
+-> [EvidenceIntakeOwner::data_status](../../../../crates/mithril-control/src/evidence.rs) The evidence stream returns Internal with the native commit error, not an ACK.<br>
+-> [DataStoreQualification::capacity_recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The child restores its limit, checks unchanged data, retries without restarting Control, and reopens the store.
+
+The fault uses the existing Rustix and Tokio APIs in the child only. It adds
+no production hook or dependency. The test requires `commit evidence`,
+`File too large`, and `analysis.duckdb.wal` in the error. It checks no watch
+notification, unchanged metadata and source status, readable prior bytes,
+retained Node input, and a working policy RPC. Successful retry advances the
+receipt once. A duplicate does not add a revision. Restart retains two records
+at cursor 2. All eleven enabled data-store tests passed; four helpers or
+environment-specific cases remain ignored. The full workspace gate is pending.
+The first run stopped at the existing filesystem-reserve check. After removal
+of stale generated binaries, the unchanged test reached the native commit fault
+and passed. This case does not prove ENOSPC during commit or hardware power loss.
+
 [DataStoreQualification::load](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The qualification CLI selects 64 groups of 4,096 synthetic records.<br>
 -> [EffectObservationStore::bounded_ingestion_queue](../../../../crates/mithril-node/src/observation.rs) The fixture queues each group and runs the production Node worker on a blocking thread.<br>
 -> [ControlConnection::send_evidence_group](../../../../crates/mithril-node/src/control.rs) Node sends its durable frames through the authenticated stream.<br>
