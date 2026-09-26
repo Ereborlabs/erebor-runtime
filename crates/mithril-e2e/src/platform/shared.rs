@@ -1289,17 +1289,128 @@ mod tests {
     use std::env;
     use std::ffi::OsStr;
     use std::fs;
+    use std::os::unix::fs::MetadataExt as _;
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
+    use erebor_interceptor_abi::{
+        BindingLifecycleStateV1, ExecutionSetBindingStateV1, InitialRootStateV1,
+    };
+    use erebor_runtime_ipc::{
+        transport::connect_unix,
+        v1::{
+            runtime_admission_service_client::RuntimeAdmissionServiceClient,
+            RuntimeAdmissionPrepareRequest, RuntimeAdmissionReceipt,
+        },
+    };
     use mithril_node::RuntimeAdmissionClient;
     use rustix::process::{kill_process, Pid, Signal};
+    use snafu::ResultExt as _;
+    use zerocopy::TryFromBytes as _;
 
     use super::{Shared, READY_LIMIT};
     use crate::physical::{wait_for, ProbeFile};
     use crate::platform::{test_lifecycle, CriFixture, Host, TestResult};
     use crate::process::ProcessFixture;
+
+    #[test]
+    #[ignore = "requires its physical test environment"]
+    fn unconfirmed_prepare_rolls_back() -> TestResult<()> {
+        test_lifecycle::<Host, _>("admission-rollback", || {
+            let mut env = Shared::setup("admission-rollback")?;
+            env.start_control()?;
+            env.start_node()?;
+            env.install_policy("actor_policy.json")?;
+            env.node_ready()?;
+            let script = env
+                .source()
+                .join(crate::platform::PROCESS_FIXTURES)
+                .join("ready.py");
+            let mut actor = ProcessFixture::held_pidns(
+                Path::new("/usr/bin/python3"),
+                [script.as_path(), env.work()],
+                &env.cgroup_path,
+                Path::new("/"),
+                &script,
+            )?;
+            env.observe()?;
+            assert!(env.stage()?.allowed);
+            let request = RuntimeAdmissionPrepareRequest {
+                container_id: env.binding()?.container_id.clone(),
+                annotations: env.annotations()?.into_iter().collect(),
+                initial_pid: actor.id(),
+            };
+            let mut client = env.runtime.block_on(async {
+                connect_unix(&env.admit_path)
+                    .await
+                    .map(RuntimeAdmissionServiceClient::new)
+            })?;
+            let decision = env
+                .runtime
+                .block_on(client.prepare_container(request))?
+                .into_inner();
+            assert!(decision.allowed, "{decision:?}");
+            assert_eq!(decision.reason_code, "ACTIVE_POLICY_AND_BINDING_VERIFIED");
+            assert!(!decision.receipt_token.is_empty());
+            let key = fs::metadata(&env.cgroup_path)?.ino().to_ne_bytes();
+            let bytes = env
+                .reader
+                .lookup("execution_set_bindings", &key)?
+                .ok_or("binding missing")?;
+            let binding = ExecutionSetBindingStateV1::try_read_from_bytes(&bytes)
+                .map_err(|error| format!("invalid prepared binding: {error}"))?;
+            assert_eq!(binding.lifecycle_state, BindingLifecycleStateV1::Prepared);
+            assert_eq!(binding.prepared_container_initial_host_tgid, actor.id());
+            assert!(!binding.prepared_container_entry_instance_id.is_zero());
+            assert_eq!(
+                mithril_node::policy_delivery_status(&env.state_path)?.runtime_binding_count,
+                1
+            );
+
+            // Do not confirm the receipt. Node must remove the published authority.
+            wait_for(
+                &env.state_path,
+                "unconfirmed binding rollback",
+                READY_LIMIT,
+                || {
+                    let status = mithril_node::policy_delivery_status(&env.state_path)
+                        .context(crate::error::NodeSnafu)?;
+                    Ok(
+                        (status.runtime_binding_count == 0 && status.scheduled_binding_count == 1)
+                            .then_some(()),
+                    )
+                },
+                || {
+                    format!(
+                        "delivery: {:?}",
+                        mithril_node::policy_delivery_status(&env.state_path)
+                    )
+                },
+            )?;
+            let bytes = env
+                .reader
+                .lookup("execution_set_bindings", &key)?
+                .ok_or("retired binding missing")?;
+            let binding = ExecutionSetBindingStateV1::try_read_from_bytes(&bytes)
+                .map_err(|error| format!("invalid retired binding: {error}"))?;
+            assert_eq!(
+                binding.lifecycle_state,
+                BindingLifecycleStateV1::Terminating
+            );
+            assert_eq!(binding.initial_root_state, InitialRootStateV1::Consumed);
+            assert_eq!(binding.prepared_container_exec_task_cookie, 0);
+            assert!(env
+                .runtime
+                .block_on(client.confirm(RuntimeAdmissionReceipt {
+                    token: decision.receipt_token,
+                }))
+                .is_err());
+            env.node_ready()?;
+            actor.stop()?;
+            env.stop()
+        })
+    }
 
     #[test]
     #[ignore = "requires its physical test environment"]

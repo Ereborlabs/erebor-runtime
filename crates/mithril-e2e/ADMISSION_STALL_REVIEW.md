@@ -212,3 +212,75 @@ reconnect test and all 250 Node library tests passed. Each test retained its
 internal concurrency. The earlier parallel-run stall remains unexplained.
 
 Direct runc and Kubernetes qualification were not rerun for this refactor.
+
+## Runtime preparation review
+
+This section covers the runtime preparation working tree after `82c4fee1`.
+The intended result is one preparation owner that records each completed
+publication and provides one explicit rollback operation.
+
+[NodeChassis::answer_runtime_preparation](../mithril-node/src/node.rs) checks whether the request can wait for policy convergence.
+  -> [RuntimePreparation::prepare](../mithril-node/src/node/admission.rs) validates readiness, staged identity, CRI Created state, and the resolved configuration.
+  -> [RuntimePreparation::publish](../mithril-node/src/node/admission.rs) retires the previous lifetime, publishes the held root, and verifies its kernel identity.
+  -> [RuntimePreparation::persist](../mithril-node/src/node/admission.rs) stores the runtime binding and replaces the live configuration.
+  -> [RuntimeAdmissionCall::deliver](../mithril-node/src/runtime_admission.rs) sends the response and waits for the authenticated receipt.
+  -> [RuntimeAdmissionGrpc::confirm](../mithril-node/src/runtime_admission.rs) checks the receipt token, peer process, and deadline before completing delivery.
+
+[RuntimePreparation::rollback](../mithril-node/src/node/admission.rs) handles a preparation failure or an unconfirmed response.
+  -> [WorkloadBindingOwner::retire_binding_id](../mithril-node/src/identity/binding.rs) closes published kernel authority.
+  -> [NodePolicyDeliveryOwner::rollback_runtime_binding](../mithril-node/src/policy_delivery.rs) restores the preceding durable lifetime.
+  -> [NodeChassis::reconcile_runtime_exact_bindings](../mithril-node/src/node.rs) runs only after kernel and durable cleanup succeed.
+
+The preparation owner borrows the chassis for one serialized admission.
+The chassis creates this owner before preparation. The owner records the
+kernel binding only after publication succeeds. After persistence succeeds,
+the owner retains the durable rollback record and previous configuration
+together. These records do not introduce another durable store.
+
+| Completed publication | Rollback work |
+| --- | --- |
+| None | No cleanup |
+| Kernel only | Retire the new kernel binding |
+| Kernel and durable | Retire the kernel binding, restore durable state, restore configuration, and reconcile exact bindings |
+
+Rollback attempts durable cleanup even if kernel cleanup fails. Configuration
+is restored only when durable cleanup succeeds. Cleanup errors remain fatal
+and visible with the preparation error. Kernel publication and readback
+errors retain their fatal classification. Cancellation checks remain before
+publication and after kernel and durable publication. No `Drop` method
+performs rollback.
+
+The Node tests `rollback_tracks_kernel_publication` and
+`rollback_errors_remain_fatal` check publication-dependent cleanup and error
+visibility. The physical `unconfirmed_prepare_rolls_back` test uses the
+generated gRPC client to receive an allow decision without confirming it.
+The test checks both the prepared kernel binding and durable runtime record
+before expiry. It then requires kernel termination, durable restoration,
+receipt rejection, and continued Node readiness. It uses the existing
+process fixture and `ready.py`; the actor remains held.
+
+No BPF program, kernel ABI, wire message, or durable format changes.
+
+### Preparation verification
+
+The preparation refactor is implemented. All 252 Node library tests passed.
+The following privileged tests passed in the retained VM with the rebuilt
+test binary:
+
+| Test | Result |
+| --- | --- |
+| `unconfirmed_prepare_rolls_back` | Pass, 76.28 seconds |
+| `application_read_uses_default::identity_host` | Pass, 59.40 seconds |
+| `application_read_uses_default::identity_runc` | Pass, 46.13 seconds |
+
+The first runc command lacked `MITHRIL_TEST_RUNC`. A later command omitted
+`--ignored` and did not execute the test. The successful command supplied
+`MITHRIL_TEST_RUNC=/usr/sbin/runc`, the rebuilt `MITHRIL_TEST_OCI_HOOK`, and
+`--exact --ignored --nocapture --test-threads=1`. No assertion or timeout
+changed.
+
+The final `RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh` run
+passed after the last Rust edit. It includes formatting, workspace checks,
+clippy with warnings denied, and workspace tests. The partition reconnect
+test passed in this run. Kubernetes qualification was not rerun for this
+preparation refactor.

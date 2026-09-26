@@ -1,6 +1,5 @@
 use erebor_interceptor::{EffectObservationReader, KernelHost, KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::Id128V1;
-use erebor_runtime_ipc::v1::RuntimeAdmissionPrepareRequest;
 use mithril_control::{
     AdministrativeExecArmResult, AdministrativeExecResolution, AdministrativeFileObject,
     CapabilityRecord, NodeRegistration, PolicyBundleV1, RegisteredWorkloadTarget,
@@ -27,8 +26,10 @@ use crate::{
     NodeDecommissionOwner, ObservationCanonicalizer, Result, TrustCache, WorkloadBindingOwner,
 };
 
+mod admission;
 mod run;
 mod sync;
+use admission::RuntimePreparation;
 use run::NodeRun;
 #[cfg(feature = "test-support")]
 pub use sync::PolicyControlPacingOwner;
@@ -299,35 +300,6 @@ enum ReconciliationOutcome {
     EvidenceUnhealthy(String),
     IdentityUnhealthy { owner: &'static str, reason: String },
     KernelUnhealthy(String),
-}
-
-struct CommittedRuntimePreparationV1 {
-    runtime_binding_id: String,
-    previous_config: NodeConfig,
-    durable_rollback: crate::policy_delivery::RuntimeBindingRollbackV1,
-}
-
-struct RuntimeAdmissionFailureV1 {
-    source: crate::Error,
-    fatal: bool,
-}
-
-impl RuntimeAdmissionFailureV1 {
-    const fn fatal(source: crate::Error) -> Self {
-        Self {
-            source,
-            fatal: true,
-        }
-    }
-}
-
-impl From<crate::Error> for RuntimeAdmissionFailureV1 {
-    fn from(source: crate::Error) -> Self {
-        Self {
-            source,
-            fatal: false,
-        }
-    }
 }
 
 pub struct NodeChassis {
@@ -928,8 +900,9 @@ impl NodeChassis {
             }
             return Ok(());
         }
-        match self.prepare_runtime_start(&call, &request).await {
-            Ok(commit) => {
+        let mut preparation = RuntimePreparation::new(self);
+        match preparation.prepare(&call, &request).await {
+            Ok(()) => {
                 let delivered = call
                     .deliver(crate::RuntimeAdmissionResponseV1 {
                         allowed: true,
@@ -937,7 +910,7 @@ impl NodeChassis {
                     })
                     .await;
                 if delivered.is_err() {
-                    self.rollback_runtime_preparation(commit)?;
+                    preparation.rollback()?;
                 } else {
                     // Log allow only after the hook receives it and no rollback is required.
                     log_runtime_admission_decision(
@@ -948,8 +921,11 @@ impl NodeChassis {
                     );
                 }
             }
-            Err(error) if error.fatal => return Err(error.source),
             Err(error) => {
+                let error = error.with_rollback(preparation.rollback());
+                if error.fatal {
+                    return Err(error.source);
+                }
                 let delivered = call
                     .deliver(crate::RuntimeAdmissionResponseV1 {
                         allowed: false,
@@ -1149,191 +1125,6 @@ impl NodeChassis {
             }
         }
         Ok(())
-    }
-
-    async fn prepare_runtime_start(
-        &mut self,
-        call: &RuntimeAdmissionCall,
-        request: &RuntimeAdmissionPrepareRequest,
-    ) -> std::result::Result<CommittedRuntimePreparationV1, RuntimeAdmissionFailureV1> {
-        call.ensure_active()?;
-        snafu::ensure!(
-            request.initial_pid > 0,
-            IdentityStateSnafu {
-                reason: "OCI runtime admission has no initial process",
-            }
-        );
-        let readiness = *self.readiness.borrow();
-        snafu::ensure!(
-            readiness.admits_protected_runtime_start(self.policy.is_some()),
-            IdentityStateSnafu {
-                reason: "runtime admission has no healthy active prevention generation",
-            }
-        );
-        let (scheduled, observation) = self
-            .bindings
-            .verify_runtime_preparation(&self.config.workload_bindings, request)
-            .await?;
-        let mut dynamic = self.config.clone();
-        dynamic.workload_bindings[scheduled.binding_index] = scheduled.resolved.clone();
-        dynamic.validate()?;
-        call.ensure_active()?;
-        let policy_authority_present =
-            self.policy.is_some() || self.policy_delivery.inventory_retirement().is_some();
-        let Some(host) = self.host.as_mut() else {
-            return Err(IdentityStateSnafu {
-                reason: "runtime admission has no live kernel host".to_owned(),
-            }
-            .build()
-            .into());
-        };
-        // Cancellation must be visible before any existing or new kernel authority changes.
-        call.ensure_active()?;
-        if let Some(previous) = scheduled.previous_binding_id.as_deref() {
-            // Retire a prior container lifetime before this replacement gains authority.
-            if let Err(error) = self.bindings.retire_binding_id(host, previous) {
-                return Err(RuntimeAdmissionFailureV1::fatal(error));
-            }
-        }
-        call.ensure_active()?;
-        if let Err(error) = self.bindings.publish_held_activated_root(
-            host,
-            &scheduled.resolved,
-            request.initial_pid,
-            &observation,
-        ) {
-            return Err(RuntimeAdmissionFailureV1::fatal(error));
-        }
-        // The held task must own the prepared entry before the runtime can
-        // receive an allow response. This closes the publication-to-use gap.
-        let identity_readback = self
-            .identity
-            .activate_prepared_runtime_roots(host, policy_authority_present)
-            .and_then(|_report| {
-                self.bindings.verify_prepared_initial_root(
-                    host,
-                    &scheduled.resolved.binding_id,
-                    request.initial_pid,
-                )
-            });
-        if let Err(error) = identity_readback {
-            let rollback = self
-                .bindings
-                .retire_binding_id(host, &scheduled.resolved.binding_id);
-            return match rollback {
-                Ok(()) => Err(RuntimeAdmissionFailureV1::fatal(error)),
-                Err(rollback) => Err(RuntimeAdmissionFailureV1::fatal(
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "prepared runtime identity readback failed: {error}; kernel rollback failed: {rollback}"
-                        ),
-                    }
-                    .build(),
-                )),
-            };
-        }
-        if let Err(error) = call.ensure_active() {
-            let rollback = self
-                .bindings
-                .retire_binding_id(host, &scheduled.resolved.binding_id);
-            return match rollback {
-                Ok(()) => Err(error.into()),
-                Err(rollback) => Err(RuntimeAdmissionFailureV1::fatal(
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "runtime admission was cancelled after publication: {error}; kernel rollback failed: {rollback}"
-                        ),
-                    }
-                    .build(),
-                )),
-            };
-        }
-        // Do not return allow until the runtime binding is durable. Remove the
-        // new kernel binding if the durable write fails.
-        let durable_rollback = match self
-            .policy_delivery
-            .record_runtime_binding(&scheduled.resolved)
-        {
-            Ok(rollback) => rollback,
-            Err(error) => {
-                let rollback = self
-                    .bindings
-                    .retire_binding_id(host, &scheduled.resolved.binding_id);
-                return match rollback {
-                    Ok(()) => Err(error.into()),
-                    Err(rollback) => Err(RuntimeAdmissionFailureV1::fatal(
-                        IdentityStateSnafu {
-                            reason: format!(
-                                "runtime binding persistence failed: {error}; kernel rollback failed: {rollback}"
-                            ),
-                        }
-                        .build(),
-                    )),
-                };
-            }
-        };
-        let previous_config = std::mem::replace(&mut self.config, dynamic);
-        let commit = CommittedRuntimePreparationV1 {
-            runtime_binding_id: scheduled.resolved.binding_id,
-            previous_config,
-            durable_rollback,
-        };
-        if let Err(error) = call.ensure_active() {
-            return match self.rollback_runtime_preparation(commit) {
-                Ok(()) => Err(error.into()),
-                Err(rollback) => Err(RuntimeAdmissionFailureV1::fatal(
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "runtime admission was cancelled after durable publication: {error}; rollback failed: {rollback}"
-                        ),
-                    }
-                    .build(),
-                )),
-            };
-        }
-        Ok(commit)
-    }
-
-    fn rollback_runtime_preparation(
-        &mut self,
-        commit: CommittedRuntimePreparationV1,
-    ) -> Result<()> {
-        let CommittedRuntimePreparationV1 {
-            runtime_binding_id,
-            previous_config,
-            durable_rollback,
-        } = commit;
-        let kernel = self.host.as_ref().map_or_else(
-            || {
-                IdentityStateSnafu {
-                    reason: "runtime admission rollback has no live kernel host".to_owned(),
-                }
-                .fail()
-            },
-            |host| self.bindings.retire_binding_id(host, &runtime_binding_id),
-        );
-        let durable = self
-            .policy_delivery
-            .rollback_runtime_binding(durable_rollback);
-        let mut exact = Ok(());
-        if durable.is_ok() {
-            self.config = previous_config;
-            if kernel.is_ok() {
-                exact = self.reconcile_runtime_exact_bindings();
-            }
-        }
-        match (kernel, durable, exact) {
-            (Ok(()), Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(()), Ok(()))
-            | (Ok(()), Err(error), Ok(()))
-            | (Ok(()), Ok(()), Err(error)) => Err(error),
-            (kernel, durable, exact) => IdentityStateSnafu {
-                reason: format!(
-                    "runtime admission rollback is incomplete: kernel={kernel:?}; durable={durable:?}; exact_filesystem={exact:?}"
-                ),
-            }
-            .fail(),
-        }
     }
 
     fn reconcile_runtime_exact_bindings(&mut self) -> Result<()> {
@@ -2542,68 +2333,14 @@ mod tests {
 
     #[tokio::test]
     async fn pending_control_unary_still_answers_runtime_admission() -> crate::Result<()> {
-        let state = tempfile::tempdir().map_err(|source| crate::Error::Io {
-            path: PathBuf::from("temporary node admission state"),
-            source,
-            location: snafu::Location::default(),
-        })?;
-        let config = admission_test_config(state.path());
-        let base_config = config.clone();
-        let node_boot_id = Id128V1::new(1, 2);
-        let connector = NodeControlConnector::new(
-            config.control.clone(),
-            config.node_id.clone(),
-            node_boot_id.to_be_bytes(),
-        );
+        let mut fixture = AdmissionFixture::new()?;
         let (runtime_admission_requests, mut response) =
             crate::runtime_admission::RuntimeAdmissionReceiver::test_request(
                 admission_test_request(),
                 Duration::from_secs(1),
             );
-        let (readiness, _readiness_receiver) = watch::channel(NodeReadinessV1 {
-            kernel_ready: true,
-            identity_ready: true,
-            control_ready: true,
-            admission_ready: true,
-            effect_prevention_claims_enabled: true,
-        });
-        let mut chassis = NodeChassis {
-            base_config,
-            config,
-            effect_reader: None,
-            effect_worker: None,
-            host: None,
-            decommission: None,
-            connector,
-            registration: NodeRegistration {
-                platform_digest: "a".repeat(64),
-                program_digest: "b".repeat(64),
-                label_epoch: 1,
-                kernel_ready: true,
-                effect_prevention_claims_enabled: true,
-                kubernetes_node_name: String::new(),
-                startup_absence_proof_digest: "c".repeat(64),
-                policy_authority_absent: true,
-                exception_authority_absent: true,
-                capabilities: Vec::new(),
-                workload_targets: Vec::new(),
-            },
-            local_server: None,
-            runtime_admission_server: None,
-            runtime_admission_requests: Some(runtime_admission_requests),
-            runtime_seccomp_server: None,
-            runtime_seccomp_notifications: None,
-            trust: TrustCache::load(state.path())?,
-            bindings: WorkloadBindingOwner::system(node_boot_id, 1)?,
-            identity: NativeSecurityStateOwner::new(node_boot_id, 1),
-            policy: None,
-            policy_delivery: crate::policy_delivery::NodePolicyDeliveryOwner::load(state.path())?,
-            administrative: None,
-            readiness,
-            observations: EffectObservationStore::new(8),
-            node_boot_id,
-            label_epoch: 1,
-        };
+        let chassis = &mut fixture.node;
+        chassis.runtime_admission_requests = Some(runtime_admission_requests);
         let waiting = chassis.await_control_rpc(std::future::pending::<crate::Result<()>>());
         tokio::pin!(waiting);
 
@@ -2637,6 +2374,79 @@ mod tests {
                 .is_err()
         );
         Ok(())
+    }
+
+    pub(super) struct AdmissionFixture {
+        pub(super) node: NodeChassis,
+        _state: tempfile::TempDir,
+    }
+
+    impl AdmissionFixture {
+        pub(super) fn new() -> crate::Result<Self> {
+            let state = tempfile::tempdir().map_err(|source| crate::Error::Io {
+                path: PathBuf::from("temporary node admission state"),
+                source,
+                location: snafu::Location::default(),
+            })?;
+            let config = admission_test_config(state.path());
+            let base_config = config.clone();
+            let node_boot_id = Id128V1::new(1, 2);
+            let connector = NodeControlConnector::new(
+                config.control.clone(),
+                config.node_id.clone(),
+                node_boot_id.to_be_bytes(),
+            );
+            let (readiness, _readiness_receiver) = watch::channel(NodeReadinessV1 {
+                kernel_ready: true,
+                identity_ready: true,
+                control_ready: true,
+                admission_ready: true,
+                effect_prevention_claims_enabled: true,
+            });
+            let node = NodeChassis {
+                base_config,
+                config,
+                effect_reader: None,
+                effect_worker: None,
+                host: None,
+                decommission: None,
+                connector,
+                registration: NodeRegistration {
+                    platform_digest: "a".repeat(64),
+                    program_digest: "b".repeat(64),
+                    label_epoch: 1,
+                    kernel_ready: true,
+                    effect_prevention_claims_enabled: true,
+                    kubernetes_node_name: String::new(),
+                    startup_absence_proof_digest: "c".repeat(64),
+                    policy_authority_absent: true,
+                    exception_authority_absent: true,
+                    capabilities: Vec::new(),
+                    workload_targets: Vec::new(),
+                },
+                local_server: None,
+                runtime_admission_server: None,
+                runtime_admission_requests: None,
+                runtime_seccomp_server: None,
+                runtime_seccomp_notifications: None,
+                trust: TrustCache::load(state.path())?,
+                bindings: WorkloadBindingOwner::system(node_boot_id, 1)?,
+                identity: NativeSecurityStateOwner::new(node_boot_id, 1),
+                policy: None,
+                policy_delivery: crate::policy_delivery::NodePolicyDeliveryOwner::load(
+                    state.path(),
+                )?,
+                administrative: None,
+                readiness,
+                observations: EffectObservationStore::new(8),
+                node_boot_id,
+                label_epoch: 1,
+            };
+            Ok(Self {
+                node,
+                _state: state,
+            })
+        }
     }
 
     fn admission_test_config(state_directory: &Path) -> NodeConfig {
