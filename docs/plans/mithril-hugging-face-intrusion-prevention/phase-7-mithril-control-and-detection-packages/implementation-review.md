@@ -335,7 +335,7 @@ Output limits remain 256 records and 1 MiB.
 two full pages, a final row, an empty tail, foreign scope, restart, the exact
 byte boundary, and a missing look-ahead cursor. The regression, all 45 enabled
 data-owner tests, and all ten enabled data-store mTLS tests passed. The full
-workspace gate is pending. The repeated load result is recorded in the
+workspace gate passed for `a604315a`. The repeated load result is recorded in the
 data-store phase result.
 
 The [retirement tests](../../../../crates/araphor-data/src/analysis/retirement.rs)

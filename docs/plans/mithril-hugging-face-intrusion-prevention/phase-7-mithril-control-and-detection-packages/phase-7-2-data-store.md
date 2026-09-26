@@ -221,6 +221,14 @@ retry, and persistent state after another reopen. The result case must retain
 its exact witness past raw expiry. These checks do not prove a torn write,
 ENOSPC during commit, hardware power loss, or the mTLS failure response.
 
+Use `data_intake_failure` to check the native write failure through mTLS.
+Run the server and Node client in an isolated child process. Apply the file-size
+limit only after startup and one accepted record. Require a native WAL commit
+error instead of an ACK, unchanged data revision and receipt, and retained Node
+input. Remove the limit. Require a policy RPC and exact replay without restarting
+Control. Reopen the store and check the accepted frames and receipt. This case
+does not qualify hardware power loss or an actual full filesystem during commit.
+
 Add `data-store-recovery` to the discovery e2e binary. Through the production
 mTLS service, submit data, lose ACK, resend, restart, process and expire input.
 This is the production counterpart to the offline `storage-contract` case in
@@ -777,7 +785,11 @@ The bounded evidence read now limits its SQL cursor range to one page and
 one look-ahead record. It retains expiry, continuity, digest, row, and byte
 checks. No index, cache, schema, or public API changes are added.
 `analysis_store_bounded_read`, all 45 enabled data-owner tests, and all ten
-enabled data-store mTLS tests passed. The full workspace gate is pending.
+enabled data-store mTLS tests passed. The full workspace gate passed for
+`a604315a` with `CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh`:
+formatting, workspace checks, strict Clippy, and workspace tests. Control
+passed 196 tests with two ignored; Mithril e2e passed 117 with 250 ignored;
+Node passed 256 with one ignored.
 The repeated 262,144-record load passed with 30,113,740 input bytes, exact
 frame digests, duplicate replay, ACK application, checkpoint, and restart.
 Results are in `/tmp/araphor-read-qualification.Vslc6u5B/load/result.json` and
