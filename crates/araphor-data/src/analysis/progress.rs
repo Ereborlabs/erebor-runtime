@@ -170,6 +170,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "register processor",
             })?;
+        self.check_logical(&transaction, scope.identity.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &["processor_progress"])?;
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit processor registration",
@@ -275,6 +276,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "advance optional resume floor",
             })?;
+        self.check_logical(&transaction, scope.identity.tenant_id, true)?;
         Self::record_revision(
             &transaction,
             revision,
@@ -525,6 +527,12 @@ impl AnalysisStore {
         if !input.context_refs.is_empty() {
             relations.push("context_refs");
         }
+        self.check_logical(&transaction, input.scope.identity.tenant_id, true)?;
+        self.check_witnesses(
+            &transaction,
+            input.scope.identity.tenant_id,
+            input.created_utc_ns,
+        )?;
         Self::record_revision(&transaction, revision, &relations)?;
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit analysis result",

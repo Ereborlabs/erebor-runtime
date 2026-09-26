@@ -150,6 +150,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "insert context version",
             })?;
+        self.check_logical(&transaction, key.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &["context_versions"])?;
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit context version",

@@ -103,7 +103,7 @@ the owner explicitly. The startup case uses ControlConfig and the default owner.
 -> [serve](../../../../crates/mithril-control/src/server.rs) Control runs retention with the existing service. Shutdown drops the timer; a bounded blocking pass can finish and release its data handle.<br>
 -> [EvidenceIntakeOwner::run_retention](../../../../crates/mithril-control/src/evidence.rs) A one-second timer calls the data owner through the existing clock seam. A failed pass retries without stopping policy service.<br>
 -> [EvidenceRetentionOwner::sweep](../../../../crates/araphor-data/src/analysis/retention.rs) One pass visits at most 16 sources and removes at most 256 eligible rows per source. The pass checkpoints after deletion. Failure blocks intake until a later pass and checkpoint succeed.<br>
--> Partial [AnalysisStore::check_required](../../../../crates/araphor-data/src/analysis/retention.rs) A new batch cannot exceed the required-input age or tenant byte reservation. Complete tenant quotas remain open.
+-> [AnalysisStore::check_required](../../../../crates/araphor-data/src/analysis/retention.rs) A new batch cannot exceed the required-input age or tenant byte reservation.
 
 [NodeEvidence::open](../../../../crates/mithril-control/src/service.rs) An authenticated Node sends evidence on an open stream.<br>
 -> [ControlPlane::admit_evidence](../../../../crates/mithril-control/src/service.rs) The service checks the session and current trust before group assembly. Evidence and coverage use eight permits per process and two per tenant UUID.<br>
@@ -137,9 +137,17 @@ no shared queue or fairness guarantee between those two connections.
 permit release, and writes during read saturation. `analysis_store_snapshot_maintenance`
 checks a stable snapshot during append and expiry, checkpoint wait, and restart.
 
+[AnalysisLease::drop](../../../../crates/araphor-data/src/analysis/connection.rs)
+explicitly unlocks the data lease after the native connections close. Closing
+only the file descriptor is insufficient when another process inherited a
+duplicate. The guard records its acquiring process ID. An inherited guard
+cannot unlock the parent's active lease. `analysis_store_lease_release` checks
+duplicate-descriptor release and the process-ID guard. This rule matches the
+existing ControlStore lease; it adds no new persistence format.
+
 [ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Configuration supplies the data-file budget and policy free-space reserve.<br>
 -> [AnalysisStore::open_with_limits](../../../../crates/araphor-data/src/analysis/mod.rs) The owner sets native memory, thread, temporary-file, and WAL checkpoint limits.<br>
--> Partial [AnalysisStore::require_capacity](../../../../crates/araphor-data/src/analysis/capacity.rs) Writer admission checks directory usage and available filesystem bytes. It does not reserve physical blocks or enforce complete tenant quotas.<br>
+-> Partial [AnalysisStore::require_capacity](../../../../crates/araphor-data/src/analysis/capacity.rs) Writer admission checks directory usage and available filesystem bytes. It does not reserve physical blocks.<br>
 -> [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/mod.rs) A new row requires ordinary capacity. An exact durable retry can use maintenance admission without a new commit.<br>
 -> [EvidenceIntakeOwner::data_status](../../../../crates/mithril-control/src/evidence.rs) Capacity rejection returns ResourceExhausted. Node keeps unacknowledged input.<br>
 -> [data_capacity_retry](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The mTLS test checks unchanged revision, available policy RPCs, restart with normal limits, and durable retry ACK.
@@ -162,6 +170,32 @@ separate destination-space check; no aggregate external-backup quota exists.
 `analysis_store_capacity_bounds` uses a sparse temporary file, not a full disk.
 `analysis_store_native_limits` reads the actual DuckDB settings. Physical
 reclamation and reserve adequacy still require the physical storage case.
+
+[AnalysisStore::logical_usage](../../../../crates/araphor-data/src/analysis/quota.rs) DuckDB totals variable bytes and a fixed 256-byte charge for each tenant-owned row.<br>
+-> [AnalysisStore::check_logical](../../../../crates/araphor-data/src/analysis/quota.rs) A mutating transaction checks global and tenant bytes and per-family revision counts before commit.<br>
+-> [AnalysisStore::check_witnesses](../../../../crates/araphor-data/src/analysis/quota.rs) A result transaction checks unique live raw witnesses and pinned context against the tenant witness budget.<br>
+-> [AnalysisStore::logical_pressure](../../../../crates/araphor-data/src/analysis/quota.rs) Logical usage reaches 90 percent of the ordinary limit.<br>
+-> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) The existing bounded pass removes eligible raw rows while it preserves required progress and live witnesses.
+
+All twelve tenant-owned relations contribute to logical bytes, including
+source metadata, references, and gaps. Ordinary writes leave 25 percent of
+the configured 8-GiB global and 2-GiB tenant budgets for results and maintenance.
+The 512-MiB witness limit charges shared dependencies once. Reference rows
+also have ordinary logical charges. Context, results, and coverage each have
+a 1,024-revision tenant bound and a 4,096-revision global bound.
+The owner computes usage from native columns inside the write transaction;
+there is no separate accounting ledger to recover. A quota failure rolls back
+rows, references, progress, and receipts together. Size-reducing raw retention
+does not need logical admission. The aggregate scan is proportional to retained
+rows; performance qualification is still required.
+`analysis_store_logical_limits` proves tenant/global boundaries, isolation,
+no-op retry, and restart through context commits. `analysis_store_witness_limits`
+proves exact raw/context charges, shared references, result rollback, reserved
+processor capacity, and logical-pressure cleanup after witness expiry.
+`analysis_store_revision_limits` uses an uncommitted count fixture to check
+1,024/1,025 and 4,096/4,097. It is not a recovery or digest-validation proof.
+The mTLS `data_capacity_retry` test also rejects a one-byte tenant quota, then
+restarts with normal limits and accepts the same Node batch.
 
 [EvidenceWal::next_batches](../../../../crates/mithril-node/src/observation/wal.rs)
 uses the same byte and record limits. `wal_bounds_group_records` checks the
@@ -794,8 +828,8 @@ not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
 
-This review covers `codex/mithril-ui` at `d806c2dd` plus storage admission
-and native resource limits. The startup command passed 16 checks; recovery
+This review covers `codex/mithril-ui` at `abab59fc` plus logical quotas
+and quota-driven retention. The startup command passed 16 checks; recovery
 passed 23 checks. Their results are in `/tmp/araphor-retention.NH24lk/`. QueryOwner and trace API
 frames are not qualified by these changes.
 
@@ -839,8 +873,14 @@ reference, and revision fields in temporary stores. Reopen rejects each change.
 The 20 `analysis_store_` tests passed with storage admission. All five data e2e
 tests passed, including `data_capacity_retry`. The final workspace gate passed
 formatting, compilation, strict Clippy, and 29 data-crate tests with two ignored.
-The remaining workspace tests are running. Complete tenant quotas, crash injection,
-and physical qualification remain open.
+That workspace run failed at the capacity test's second startup assertion.
+A concurrent rerun exposed a held data lease. The data owner now uses the
+existing process-owned explicit unlock rule. The 24 `analysis_store_` tests
+passed with logical quotas, quota-driven retention, and duplicate-descriptor
+lease release. The full concurrent Mithril e2e suite then passed 111 tests with
+247 ignored. The final workspace gate for those changes is running. Aggregate
+scan performance, trace reservation, crash injection, and physical qualification
+remain open.
 The 16 `analysis_store_` tests passed with scheduled retention and required-input
 limits. The current mTLS `data_store_startup` and `data_store_recovery` tests
 passed. The recovery test checks automatic expiry and rejected-input retry

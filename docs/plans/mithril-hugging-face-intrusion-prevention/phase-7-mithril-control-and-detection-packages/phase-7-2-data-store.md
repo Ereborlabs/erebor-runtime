@@ -68,6 +68,14 @@ Store recovery fails
    Database corruption stops data ACK. Supervise analysis failures without
    exiting Control's policy service. Enforce per-tenant and global queue/disk
    quotas. Query-worker health and failure isolation belong to 7.3.
+   Charge each retained row 256 logical bytes plus its variable payload and
+   key bytes. Use 8 GiB per store and 2 GiB per tenant by default. Ordinary
+   writes leave one quarter of each limit for result and maintenance commits.
+   At 90 percent of the ordinary limit, bounded retention removes eligible
+   raw rows. Required progress and witness checks still apply. Limit each
+   context, result, and coverage family to 1,024 revisions per tenant and
+   4,096 per store. Charge unique pinned raw/context rows to a separate
+   512-MiB tenant witness limit. Check these bounds before transaction commit.
 7. Implement checkpoint, backup and restore through the data owner. Measure
    physical disk reuse after DELETE. Reserve maintenance space before work.
    Stop writes when reclamation fails; never unlink the native WAL. Recovery
@@ -271,7 +279,41 @@ Node keeps the rejected batch, policy RPCs work, and a restart with normal
 limits permits the same batch. These tests use temporary stores, not an
 existing deployment. The final workspace gate passed formatting, compilation,
 strict Clippy, and all 29 enabled data-crate tests; two tests are ignored.
-The remaining workspace tests are running. Physical capacity, complete tenant quotas,
+That workspace run failed at the capacity test's second startup assertion.
+The concurrent rerun exposed a held data lease. A duplicated descriptor could
+retain the lock after the owner closed its descriptor. AnalysisLease now
+explicitly unlocks after native connection closure. The acquiring process ID
+prevents a child guard from unlocking an active parent. This is the existing
+ControlStore lease rule. The assertion retains the exact startup error.
+Logical quotas now cover all twelve tenant-owned DuckDB relations. Each row
+has a 256-byte charge plus its variable payload and key bytes. The native
+aggregate runs in the same transaction as the mutation. No cached ledger or
+schema migration is used. Physical file accounting remains separate.
+`data_storage` also accepts `logical_max_bytes`, `tenant_max_bytes`, and
+`witness_max_bytes`. Defaults are 8 GiB, 2 GiB, and 512 MiB. Omitted fields use
+their defaults; unknown fields fail configuration validation.
+Ordinary writes leave one quarter of the logical budgets for result commits
+and maintenance. Native quota checks precede receipt/revision commit and ACK.
+Context, result, and coverage families have separate 1,024-tenant and
+4,096-store revision limits. Shared exact raw or context dependencies count
+once toward the witness budget. Reference records still count toward the
+overall logical budget. An unchanged retry does not add a charge.
+Retention checks logical usage in its existing bounded pass. At 90 percent
+of the ordinary logical limit, eligible raw data can expire before its age
+limit. Required input and live witnesses remain protected. Retention does
+not require spare logical space; each removed row releases at least its
+replacement expiry-record charge. Native physical maintenance checks remain.
+The 24 `analysis_store_` tests passed, including tenant/global limits,
+unchanged commits after rejection, restart, exact revision boundaries,
+shared raw/context witnesses, reserved processor space, and quota-driven
+cleanup after witness expiry, and duplicate-descriptor lease release.
+`data_capacity_retry` now checks both an
+impossible physical reserve and a one-byte tenant quota through mTLS.
+After the lease fix, the full concurrent Mithril e2e suite passed 111 tests;
+247 physical or explicit qualification tests remained ignored.
+The final workspace gate for these quota changes is running. The aggregate
+scan cost still needs load qualification; passing small fixtures does not
+prove the declared intake budget. Physical capacity and trace reservation,
 processor health, Control context projection, crash injection, removal of
 the remaining old library writer, and physical disk reuse remain open.
 Production enablement is not qualified.

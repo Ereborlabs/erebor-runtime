@@ -799,57 +799,63 @@ mod tests {
 
     #[tokio::test]
     async fn data_capacity_retry() -> Result<()> {
-        let tls = MtlsFixture::new(false)?;
-        let case = DataStoreQualification::new(tls.path().join("result"));
-        let mut config = tls.configuration()?;
-        config.data_storage.policy_reserve_bytes = u64::MAX / 4;
-        let parts = config.into_parts()?;
-        assert!(parts.data_error.is_none());
-        let data = parts.control.analysis_store().ok_or("data owner absent")?;
-        let server = tls.start(parts.control).await?;
-        let observations = EffectObservationStore::durable(
-            8,
-            tls.path().join("wal"),
-            EvidenceWalLimits::default(),
-            ObservationCanonicalizer::new(
-                EvidenceIdV1::new(1, 2),
-                EvidenceIdV1::new(3, 4),
-                1,
-                [7; 16].into(),
-            )?,
-        )?;
-        DataStoreQualification::record(&observations, 1);
-        let batch = observations.next_evidence_batch().ok_or("batch absent")?;
-        let mut connection = case.connect(&tls, &server).await?;
-        connection.report_readiness(true, true).await?;
-        connection.send_evidence_batch(batch.clone()).await?;
-        let rejected =
-            tokio::time::timeout(Duration::from_secs(5), connection.next_message()).await?;
-        assert!(
-            matches!(rejected, Err(mithril_node::Error::ControlRpc { source, .. }) if source.code() == tonic::Code::ResourceExhausted)
-        );
-        assert_eq!(observations.pending_evidence_records(), 1);
-        assert_eq!(data.meta()?.commit_revision, 0);
-        connection.policy_inventory(None, Vec::new()).await?;
-        drop(connection);
-        server.shutdown().await?;
-        drop(data);
-        drop(DataStoreQualification::reopen_data(&tls.path().join("evidence/analysis")).await?);
-        drop(reopen_control_store(&tls.path().join("control-store")).await?);
+        for logical in [false, true] {
+            let tls = MtlsFixture::new(false)?;
+            let case = DataStoreQualification::new(tls.path().join("result"));
+            let mut config = tls.configuration()?;
+            if logical {
+                config.data_storage.tenant_max_bytes = 1;
+            } else {
+                config.data_storage.policy_reserve_bytes = u64::MAX / 4;
+            }
+            let parts = config.into_parts()?;
+            assert!(parts.data_error.is_none());
+            let data = parts.control.analysis_store().ok_or("data owner absent")?;
+            let server = tls.start(parts.control).await?;
+            let observations = EffectObservationStore::durable(
+                8,
+                tls.path().join("wal"),
+                EvidenceWalLimits::default(),
+                ObservationCanonicalizer::new(
+                    EvidenceIdV1::new(1, 2),
+                    EvidenceIdV1::new(3, 4),
+                    1,
+                    [7; 16].into(),
+                )?,
+            )?;
+            DataStoreQualification::record(&observations, 1);
+            let batch = observations.next_evidence_batch().ok_or("batch absent")?;
+            let mut connection = case.connect(&tls, &server).await?;
+            connection.report_readiness(true, true).await?;
+            connection.send_evidence_batch(batch.clone()).await?;
+            let rejected =
+                tokio::time::timeout(Duration::from_secs(5), connection.next_message()).await?;
+            assert!(
+                matches!(rejected, Err(mithril_node::Error::ControlRpc { source, .. }) if source.code() == tonic::Code::ResourceExhausted)
+            );
+            assert_eq!(observations.pending_evidence_records(), 1);
+            assert_eq!(data.meta()?.commit_revision, 0);
+            connection.policy_inventory(None, Vec::new()).await?;
+            drop(connection);
+            server.shutdown().await?;
+            drop(data);
+            drop(DataStoreQualification::reopen_data(&tls.path().join("evidence/analysis")).await?);
+            drop(reopen_control_store(&tls.path().join("control-store")).await?);
 
-        let parts = tls.configuration()?.into_parts()?;
-        assert!(parts.data_error.is_none());
-        let data = parts.control.analysis_store().ok_or("data owner absent")?;
-        let server = tls.start(parts.control).await?;
-        let mut connection = case.connect(&tls, &server).await?;
-        connection.send_evidence_batch(batch).await?;
-        let ack = DataStoreQualification::ack(&mut connection).await?;
-        assert_eq!(ack.contiguous_cursor, 1);
-        observations.acknowledge_evidence(ack)?;
-        assert_eq!(observations.pending_evidence_records(), 0);
-        assert_eq!(data.meta()?.commit_revision, 1);
-        drop(connection);
-        server.shutdown().await?;
+            let parts = tls.configuration()?.into_parts()?;
+            assert!(parts.data_error.is_none(), "{:?}", parts.data_error);
+            let data = parts.control.analysis_store().ok_or("data owner absent")?;
+            let server = tls.start(parts.control).await?;
+            let mut connection = case.connect(&tls, &server).await?;
+            connection.send_evidence_batch(batch).await?;
+            let ack = DataStoreQualification::ack(&mut connection).await?;
+            assert_eq!(ack.contiguous_cursor, 1);
+            observations.acknowledge_evidence(ack)?;
+            assert_eq!(observations.pending_evidence_records(), 0);
+            assert_eq!(data.meta()?.commit_revision, 1);
+            drop(connection);
+            server.shutdown().await?;
+        }
         Ok(())
     }
 }

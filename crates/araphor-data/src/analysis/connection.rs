@@ -7,6 +7,29 @@ use tokio::sync::SemaphorePermit;
 use super::AnalysisStore;
 use crate::{AnalysisBusySnafu, Result};
 
+pub(super) struct AnalysisLease {
+    file: std::fs::File,
+    process_id: u32,
+}
+
+impl From<std::fs::File> for AnalysisLease {
+    fn from(file: std::fs::File) -> Self {
+        Self {
+            file,
+            process_id: std::process::id(),
+        }
+    }
+}
+
+impl Drop for AnalysisLease {
+    fn drop(&mut self) {
+        // A child descriptor must not retain or release the parent's lease.
+        if self.process_id == std::process::id() {
+            let _result = self.file.unlock();
+        }
+    }
+}
+
 pub(super) struct AnalysisConnection<'a> {
     connection: MutexGuard<'a, Connection>,
     _snapshot: Option<RwLockReadGuard<'a, ()>>,
@@ -125,6 +148,25 @@ mod tests {
             framed_records: b"frame".to_vec().into(),
             frame_ends: vec![5],
         }
+    }
+
+    #[test]
+    fn analysis_store_lease_release() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let duplicate = store._lease.file.try_clone()?;
+        let mut inherited = AnalysisLease::from(store._lease.file.try_clone()?);
+        inherited.process_id = std::process::id().wrapping_add(1);
+        drop(inherited);
+        assert!(AnalysisStore::open(&root).is_err());
+        drop(store);
+        let reopened = AnalysisStore::open(&root)?;
+        drop(duplicate);
+        assert!(AnalysisStore::open(&root).is_err());
+        drop(reopened);
+        drop(AnalysisStore::open(root)?);
+        Ok(())
     }
 
     #[test]

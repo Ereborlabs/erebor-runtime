@@ -81,6 +81,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "record unrecoverable source range",
                 })?;
+            self.check_logical(&transaction, identity.tenant_id, true)?;
             Self::record_revision(&transaction, revision, &["recovery_gaps"])?;
             transaction.commit().context(AnalysisDatabaseSnafu {
                 operation: "commit source recovery",

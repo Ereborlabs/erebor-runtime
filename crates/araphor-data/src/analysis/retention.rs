@@ -154,6 +154,9 @@ impl<'a> EvidenceRetentionOwner<'a> {
             .context(AnalysisDatabaseSnafu {
                 operation: "count tenant raw bytes",
             })?;
+        let logical_pressure = self
+            .store
+            .logical_pressure(&transaction, identity.tenant_id)?;
         let mut selected = Vec::new();
         {
             let mut statement = transaction
@@ -186,7 +189,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
                         receipt.contiguous_cursor,
                         now_utc_ns,
                         cutoff,
-                        tenant_bytes > self.limits.raw_max_bytes,
+                        tenant_bytes > self.limits.raw_max_bytes || logical_pressure,
                         RETENTION_BATCH as u32,
                     ],
                     |row| {
@@ -206,6 +209,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
                 })?;
                 if intake.is_some_and(|time| time <= cutoff)
                     || tenant_bytes > self.limits.raw_max_bytes
+                    || logical_pressure
                 {
                     tenant_bytes = tenant_bytes
                         .checked_sub(bytes)
