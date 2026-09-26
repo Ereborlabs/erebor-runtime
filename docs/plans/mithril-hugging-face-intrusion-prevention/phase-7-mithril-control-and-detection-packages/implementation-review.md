@@ -115,8 +115,13 @@ checks both copy entry points, no output database, retained restore marker,
 startup refusal, usable source connections, and restore into a fresh destination.
 The boundary test and eight enabled data-store tests passed. The existing tmpfs
 harness passed both capacity cases on Linux 6.8.0-139-generic, x86_64. The log is
-`/tmp/araphor-copy-qualification.iqcH0TQ0/disk-full.log`; it records the working
-tree and test-binary digest. The final workspace gate is pending.
+`/tmp/araphor-copy-qualification.iqcH0TQ0/disk-full-committed.log`; it records
+clean commit `e7c771d2` and the test-binary digest. The full workspace gate passed
+for that commit with `CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh`.
+Formatting, compilation, strict Clippy, and tests passed. The data crate passed
+45 tests with two ignored; Control passed 196 with two ignored; Mithril e2e
+passed 115 with 249 ignored; Node passed 256 with one ignored. These checks do
+not prove a native commit failure after admission or worst-case reserve sizing.
 
 Backup closes the two cloned readers before their owning writer. Normal owner
 drop uses the same order. Private connection guards return a typed error for
