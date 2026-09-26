@@ -560,6 +560,9 @@ The rebuilt CLI passed startup (16 checks) and recovery (29 checks). Results
 are in `/tmp/araphor-data-qualification.MtrjRy/floor-{startup,recovery}/result.json`.
 Recovery now sends the actual Node floor through mTLS after stale restore.
 It retries after restart and verifies the same missing range without creating
-an accepted receipt. The full workspace gate is running after the final source
-edit. Kubernetes scheduling of the new periodic report remains unqualified.
+an accepted receipt. The full workspace gate passed for `a50c42d9`: formatting,
+workspace checks, strict Clippy, and workspace tests. The data crate passed
+41 tests with two ignored; Control passed 196 with two ignored; Mithril e2e
+passed 114 with 248 ignored; Node passed 256 with one ignored.
+Kubernetes scheduling of the new periodic report remains unqualified.
 The complete phase remains **Not done**.
