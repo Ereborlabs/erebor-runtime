@@ -124,6 +124,7 @@ use the first one reached.
 | Exact atoms | 50,000/profile | Partial or explicit limit; no wildcard substitution. |
 | Data disk | 8 GiB/process and 2 GiB/tenant logical data; reserve at least 25% free maintenance capacity | Count actual DB, native WAL, temp, backups and pending writes. Reject configurations without measured recovery headroom. |
 | Raw/profile/finding retention | 24 hours / 30 days / 90 days | Apply byte limits and exact reference rules as well as age. No unlimited history. |
+| Raw retention pass | 16 sources/pass, 256 rows/source, one-second timer | Keep required input and exact witnesses. Checkpoint after deletion; stop intake on failure. This bound does not prove physical disk capacity. |
 | Pending-review witnesses | 7 days, 512 MiB/tenant | Reserve exact dependencies before review; reject or explicitly expire. |
 | Required security input | Raw retention age (24 hours initially) and reserved bytes within the tenant's 2-GiB data budget | Raise health on failure. Pause affected intake before protected expiry or reserved-byte exhaustion, not at a separate lag timer. Explicit retirement records missing coverage. |
 | Optional discovery progress | No raw-history reservation | Resume retained input; commit gaps for expired ranges. Existing exact witness pins keep their own bounds. |

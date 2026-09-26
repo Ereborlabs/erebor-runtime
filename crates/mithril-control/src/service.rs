@@ -156,6 +156,14 @@ pub struct ControlPlane {
 }
 
 impl ControlPlane {
+    pub(crate) async fn run_retention(&self) -> std::convert::Infallible {
+        if let Some(evidence) = &self.evidence {
+            evidence.run_retention().await
+        } else {
+            std::future::pending().await
+        }
+    }
+
     #[must_use]
     pub fn new(allowed: Vec<AllowedNodeIdentity>, trust: TrustGenerationV1) -> Self {
         Self {

@@ -207,6 +207,76 @@ pub(crate) struct CoverageReportInputV1 {
 }
 
 impl EvidenceIntakeOwner {
+    pub(crate) async fn run_retention(&self) -> std::convert::Infallible {
+        let Some(data) = &self.data else {
+            return std::future::pending().await;
+        };
+        let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut after = None;
+        let mut failed = false;
+        loop {
+            timer.tick().await;
+            let data = data.clone();
+            let clock = self.clock.clone();
+            let result = tokio::task::spawn_blocking(move || -> crate::Result<_> {
+                let now = clock.now().duration_since(UNIX_EPOCH).map_err(|_| {
+                    crate::error::InvalidConfigurationSnafu {
+                        reason: "the retention clock precedes the Unix epoch",
+                    }
+                    .build()
+                })?;
+                let now = u64::try_from(now.as_nanos()).map_err(|_| {
+                    crate::error::InvalidConfigurationSnafu {
+                        reason: "the retention clock exceeds its durable range",
+                    }
+                    .build()
+                })?;
+                araphor_data::EvidenceRetentionOwner::new(&data, data.retention_limits())
+                    .and_then(|owner| owner.sweep(after, now))
+                    .map_err(|source| crate::Error::DataStore {
+                        source: Box::new(source),
+                        location: snafu::Location::default(),
+                    })
+            })
+            .await;
+            match result {
+                Ok(Ok(sweep)) => {
+                    after = sweep.next_source;
+                    if failed {
+                        erebor_telemetry::info!("data retention recovered");
+                    }
+                    failed = false;
+                }
+                Ok(Err(error)) => {
+                    if !failed {
+                        erebor_telemetry::warn!("data retention failed; intake has no retention guarantee", error = %error);
+                    }
+                    failed = true;
+                }
+                Err(error) => {
+                    if !failed {
+                        erebor_telemetry::warn!("data retention worker failed", error = %error);
+                    }
+                    failed = true;
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn data_status(error: araphor_data::Error) -> Status {
+        match error {
+            araphor_data::Error::ProtectedInputCapacity { .. } => {
+                Status::resource_exhausted(error.to_string())
+            }
+            araphor_data::Error::RetentionUnavailable { .. } => {
+                Status::unavailable(error.to_string())
+            }
+            _ => Status::internal(error.to_string()),
+        }
+    }
+
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         Ok(Self::from_store(crate::ControlStore::open(root)?))
     }
@@ -379,7 +449,7 @@ impl EvidenceIntakeOwner {
                     frame_ends: stored.frame_ends,
                 },
             )
-            .map_err(|error| Status::internal(error.to_string()))?
+            .map_err(Self::data_status)?
         } else {
             self.store
                 .accept_evidence_batch(identity.clone(), stored)
@@ -564,7 +634,7 @@ impl EvidenceIntakeOwner {
                 revision: report.revision,
                 encoded_report: report.encode_to_vec(),
             })
-            .map_err(|error| Status::internal(error.to_string()))?;
+            .map_err(Self::data_status)?;
         } else {
             self.store
                 .accept_coverage_report(CoverageReportInputV1 {

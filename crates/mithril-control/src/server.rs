@@ -45,8 +45,9 @@ pub async fn serve(
     let tls = ServerTlsConfig::new()
         .identity(Identity::from_pem(certificate, private_key))
         .client_ca_root(Certificate::from_pem(node_ca));
+    let maintenance = control.clone();
     // Policy transfer has a separate message limit because one bundle can be larger than evidence batches.
-    Server::builder()
+    let server = Server::builder()
         .tcp_keepalive(Some(Duration::from_secs(30)))
         .http2_keepalive_interval(Some(Duration::from_secs(15)))
         .http2_keepalive_timeout(Some(Duration::from_secs(10)))
@@ -78,9 +79,11 @@ pub async fn serve(
         .add_service(NodeAdministrativeResolutionServer::new(control.clone()))
         .add_service(NodeAdministrativeArmServer::new(control.clone()))
         .add_service(NodeDecommissionServer::new(control))
-        .serve_with_shutdown(address, shutdown)
-        .await
-        .context(ServeSnafu { address })
+        .serve_with_shutdown(address, shutdown);
+    tokio::select! {
+        result = server => result.context(ServeSnafu { address }),
+        never = maintenance.run_retention() => match never {},
+    }
 }
 
 fn read(path: &PathBuf) -> Result<Vec<u8>> {

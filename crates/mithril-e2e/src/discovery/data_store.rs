@@ -470,6 +470,28 @@ impl DataStoreQualification {
                 == 0,
             "required input was deleted",
         )?;
+        let protected_revision = data.meta()?.commit_revision;
+        Self::record(&observations, 4);
+        let blocked = observations
+            .next_evidence_batch()
+            .ok_or("fourth record absent")?;
+        connection.report_readiness(true, true).await?;
+        connection.send_evidence_batch(blocked.clone()).await?;
+        let rejected =
+            tokio::time::timeout(Duration::from_secs(5), connection.next_message()).await?;
+        self.check(
+            matches!(rejected, Err(mithril_node::Error::ControlRpc { source, .. })
+            if source.code() == tonic::Code::ResourceExhausted),
+            "required age bound did not backpressure intake",
+        )?;
+        self.check(
+            observations.pending_evidence_records() == 1
+                && data.meta()?.commit_revision == protected_revision,
+            "backpressure lost Node input or committed a partial batch",
+        )?;
+        connection.policy_inventory(None, Vec::new()).await?;
+        drop(connection);
+        let mut connection = self.connect(&tls, &server).await?;
         let result = AnalysisResultCommitV1 {
             scope: required,
             expected_cursor: 0,
@@ -499,12 +521,27 @@ impl DataStoreQualification {
             ),
             "stale progress was accepted",
         )?;
-        let expired =
-            EvidenceRetentionOwner::new(&data, limits)?.retain(&identity, START + 48 * HOUR)?;
+        connection.send_evidence_batch(blocked).await?;
+        let ack = Self::ack(&mut connection).await?;
         self.check(
-            expired.removed_records == 2 && expired.retained_floor == 2,
-            "expiry did not preserve the exact witness",
+            ack.contiguous_cursor == 4,
+            "caught-up processor did not release intake",
         )?;
+        observations.acknowledge_evidence(ack)?;
+        let mut revisions = data.subscribe_revision();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while data
+                .source_receipt(&identity)?
+                .ok_or("receipt absent")?
+                .retained_floor
+                != 2
+            {
+                revisions.changed().await?;
+            }
+            Ok::<_, Box<dyn StdError>>(())
+        })
+        .await??;
+        self.check(data.retention_healthy(), "automatic retention failed")?;
         self.check(
             matches!(
                 data.read_page(&identity, 1),
@@ -518,7 +555,9 @@ impl DataStoreQualification {
         )?;
         let witness = data.read_page(&identity, 3)?;
         self.check(
-            witness.records.len() == 1 && witness.records[0].cursor == 3,
+            witness.records.len() == 2
+                && witness.records[0].cursor == 3
+                && witness.records[1].cursor == 4,
             "the exact witness is not readable",
         )?;
         let gap = data
@@ -567,10 +606,10 @@ impl DataStoreQualification {
         let stale = AnalysisStore::restore(&stale_path, &tls.path().join("stale-restored"))?;
         self.check(
             observations.pending_evidence_records() == 0
-                && stale.record_recovery_floor(&identity, 3)?
+                && stale.record_recovery_floor(&identity, 4)?
                     == AnalysisRecoveryStatusV1::Partial {
                         first_cursor: 1,
-                        last_cursor: 3,
+                        last_cursor: 4,
                     },
             "stale backup hid purged Node input",
         )?;
@@ -586,6 +625,10 @@ impl DataStoreQualification {
             "durable-ack-purges-node-wal",
             "disabled-discovery-intake",
             "required-progress-protection",
+            "required-age-backpressure",
+            "protected-input-retry",
+            "policy-rpc-during-backpressure",
+            "automatic-retention",
             "atomic-result-progress-conflict",
             "exact-witness-retention",
             "explicit-expired-range",
@@ -604,12 +647,12 @@ impl DataStoreQualification {
                 "schema_version": 1, "case": "data-store-recovery", "result": "PASS",
                 "production_intake": true, "proof_kind": "synthetic",
                 "assertion_count": checks.len(), "asserted_contracts": checks,
-                "source_identity": identity, "contiguous_cursor": 3, "retained_floor": 2,
-                "retained_event_count": 1, "backup_revision": backup.commit_revision,
+                "source_identity": identity, "contiguous_cursor": 4, "retained_floor": 2,
+                "retained_event_count": 2, "backup_revision": backup.commit_revision,
                 "batch_commit_us": commit_us, "durable_ack_us": ack_us,
                 "checkpoint_us": checkpoint_us, "database_bytes": database_bytes,
                 "wal_bytes_after_checkpoint": wal_bytes,
-                "remaining_qualification": ["capacity-backpressure", "crash-injection", "physical-disk-reuse"],
+                "remaining_qualification": ["physical-capacity-backpressure", "crash-injection", "physical-disk-reuse"],
             }),
         )?;
         Ok(())

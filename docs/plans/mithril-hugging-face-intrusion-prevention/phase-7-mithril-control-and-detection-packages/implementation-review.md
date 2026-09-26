@@ -93,14 +93,17 @@ the owner explicitly. The startup case uses ControlConfig and the default owner.
 
 [EvidenceIntakeOwner::new](../../../../crates/mithril-control/src/evidence.rs) The explicit data-backed constructor rejects accepted, pending, or coverage state in the old Control evidence store. The owner validates Node batches and commits evidence and coverage only to AnalysisStore. Its component tests check exact frames, replay, old Control-store isolation, and restart.<br>
 -> [ControlPlane::from_intake](../../../../crates/mithril-control/src/service.rs) The service accepts the selected intake owner and keeps the same Control policy and trust store.<br>
--> [DataStoreQualification::recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The mTLS case submits Node WAL records, leaves an ACK unread, restarts the owners, and retries the same bytes. The case passed 19 checks with the selected data owner.<br>
+-> [DataStoreQualification::recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The mTLS case submits Node WAL records, leaves an ACK unread, restarts the owners, and retries the same bytes. The case passed 23 checks with the selected data owner.<br>
 
 [ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Control starts with its existing policy store and refuses old evidence receipts before it creates the data store.<br>
 -> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) One private writer opens at `evidence_directory/analysis`. Restart checks the schema version and required tables and columns. Restart does not create missing tables.<br>
 -> [AnalysisStore::validate_state](../../../../crates/araphor-data/src/analysis/schema.rs) Before intake, recovery checks source bindings, receipts, coverage, frame and result digests, context versions, progress, references, expiry ranges, and relation revisions. An acknowledged position must have a retained row or a recorded expiry.<br>
 -> [EvidenceIntakeOwner::new](../../../../crates/mithril-control/src/evidence.rs) Intake shares that data handle. The default process does not start the superseded discovery projection.<br>
 -> [DataStoreQualification::startup](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The test uses configuration loading and mTLS to check exact frames, durable ACK, replay, and unchanged policy state.<br>
--> Not implemented [retention scheduling](phase-7-2-data-store.md) Production retention scheduling and capacity enforcement remain open.
+-> [serve](../../../../crates/mithril-control/src/server.rs) Control runs retention with the existing service. Shutdown drops the timer; a bounded blocking pass can finish and release its data handle.<br>
+-> [EvidenceIntakeOwner::run_retention](../../../../crates/mithril-control/src/evidence.rs) A one-second timer calls the data owner through the existing clock seam. A failed pass retries without stopping policy service.<br>
+-> [EvidenceRetentionOwner::sweep](../../../../crates/araphor-data/src/analysis/retention.rs) One pass visits at most 16 sources and removes at most 256 eligible rows per source. The pass checkpoints after deletion. Failure blocks intake until a later pass and checkpoint succeed.<br>
+-> Partial [AnalysisStore::check_required](../../../../crates/araphor-data/src/analysis/retention.rs) A new batch cannot exceed the required-input age or tenant byte reservation. Physical capacity enforcement remains open.
 
 [NodeEvidence::open](../../../../crates/mithril-control/src/service.rs) An authenticated Node sends evidence on an open stream.<br>
 -> [ControlPlane::admit_evidence](../../../../crates/mithril-control/src/service.rs) The service checks the session and current trust before group assembly. Evidence and coverage use eight permits per process and two per tenant UUID.<br>
@@ -137,7 +140,9 @@ coordination; it is not a production corruption retry or an empty-store fallback
 -> [DataStoreQualification::startup](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The test checks that Node retains unacknowledged input and policy inventory remains available under unsupported schema, missing table, and corrupt file failures.
 
 [DataStoreQualification::recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The test clock advances while optional discovery remains disabled.<br>
--> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) Required progress protects raw input. A result transaction advances that progress and retains one exact witness.<br>
+-> [AnalysisStore::check_required](../../../../crates/araphor-data/src/analysis/retention.rs) Required progress protects raw input. The age bound rejects a new batch without a receipt change. Node retains the batch, and policy RPCs remain available.<br>
+-> [AnalysisStore::commit_result](../../../../crates/araphor-data/src/analysis/progress.rs) A result transaction advances required progress and retains one exact witness. Node retries its retained batch and receives a durable ACK.<br>
+-> [EvidenceRetentionOwner::sweep](../../../../crates/araphor-data/src/analysis/retention.rs) The service timer removes eligible rows without a manual retention call.<br>
 -> [AnalysisStore::resume_optional](../../../../crates/araphor-data/src/analysis/progress.rs) The optional processor records the expired range before resuming.<br>
 -> [AnalysisStore::read_result](../../../../crates/araphor-data/src/analysis/progress.rs) A tenant-scoped read checks the retained result digest.<br>
 -> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) The case checks result, witness, coverage, and receipt preservation after expiry. A stale backup reports purged Node input as Partial.
@@ -146,6 +151,22 @@ coordination; it is not a production corruption retry or an empty-store fallback
 `SystemIntakeClock`. The e2e case uses an atomic test clock. Control still owns
 authentication and ACK. The test calls production store, processor, retention,
 and backup methods. It does not implement their transactions.
+
+[RetentionLimitsV1](../../../../crates/araphor-data/src/analysis/retention.rs)
+defaults to 24 hours and 2 GiB of raw data per tenant. Control configuration
+exposes these limits as `data_retention.raw_max_age_ns` and
+`data_retention.raw_max_bytes`. AnalysisStore checks required-input protection
+after appender flush and before receipt commit. An exact retained retry remains
+valid at the bound. Pending rows count toward protected bytes; an old pending
+gap alone does not age-block gap repair. This check does not enforce all-family
+logical quotas or a physical filesystem reserve.
+
+`analysis_store_sweep_pages` checks a 16-source page and its continuation.
+`analysis_store_sweep_failure` checks intake rejection after a failed pass and
+recovery after repair. It also holds a read transaction that blocks native
+checkpointing. A pass with no further deletion cannot clear that failure.
+`analysis_store_required_limits` checks age, protected
+bytes across two sources, exact retry, and gap repair. All use temporary stores.
 
 [inspect_read_only_shape](../../../../crates/araphor-data/src/analysis/admission.rs) DuckDB-dialect parser rejects unauthorized SQL shape and external access.<br>
 -> [ReadOnlyGuard::parse](../../../../crates/araphor-data/src/analysis/admission.rs) The bound check reuses the admitted syntax tree; it does not parse the statement a second time.<br>
@@ -730,9 +751,9 @@ not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
 
-This review covers `codex/mithril-ui` at `be877df` plus the native batch-insert
-change. The startup command passed 16 checks; recovery passed 19 checks again.
-Their results are in `/tmp/araphor-integrity.K3NdoS/`. QueryOwner and trace API
+This review covers `codex/mithril-ui` at `666d1c99` plus retention scheduling
+and required-input protection. The startup command passed 16 checks; recovery
+passed 23 checks. Their results are in `/tmp/araphor-retention.NH24lk/`. QueryOwner and trace API
 frames are not qualified by these changes.
 
 The current offline runs are `storage-contract` and `offline-exact` under
@@ -741,9 +762,9 @@ test passed with `--ignored`. The storage case reports three retained events,
 contiguous cursor 3, coverage revision 1, and commit revision 2. Physical
 diagnostic results above are prior recorded runs, not fresh runs for this
 offline proof.
-The current `data-store-recovery` command passed 19 checks. Its result is
-`/tmp/araphor-live-store.M3z6hl/recovery/result.json`. It records cursor 3,
-retained floor 2, one retained witness, and backup revision 8. The database
+The current `data-store-recovery` command passed 23 checks. Its result is
+`/tmp/araphor-retention.NH24lk/recovery/result.json`. It records cursor 4,
+retained floor 2, one retained witness plus one new event, and backup revision 9. The database
 uses 8,663,040 bytes after checkpoint; its native WAL is absent. These small
 fixture measurements are not a throughput or physical-reuse qualification.
 `cargo test -p araphor-data --lib` passed 19 tests with two ignored.
@@ -755,7 +776,8 @@ startup during a data-lease race. The qualification now waits for that lease;
 startup and recovery passed again. The `be877df` gate passed formatting,
 compilation, and strict Clippy but failed the unchanged SQLite 50,000-atom test
 with `OperationInterrupted`. The concurrent Mithril e2e suite passed 110 tests
-with 247 ignored. The current-source final gate is running.
+with 247 ignored. The final workspace gate passed for `666d1c99`.
+The current-source final gate is running.
 The four current data e2e tests passed, including `data_stream_flushes_without_tail`
 and `data_reopen_preserves_errors`. The Node and Control record-bound tests
 passed. `admission_releases_exact_capacity` passed with canonical tenant keys.
@@ -767,3 +789,7 @@ The data-owner suite passed 21 tests with two ignored. The
 `analysis_rejects_broken_state` test changes 16 receipt, source, context, result,
 reference, and revision fields in temporary stores. Reopen rejects each change.
 Capacity, crash injection, and physical qualification remain open.
+The 16 `analysis_store_` tests passed with scheduled retention and required-input
+limits. The current mTLS `data_store_startup` and `data_store_recovery` tests
+passed. The recovery test checks automatic expiry and rejected-input retry
+while policy RPCs remain available. These tests do not qualify physical disk reuse.
