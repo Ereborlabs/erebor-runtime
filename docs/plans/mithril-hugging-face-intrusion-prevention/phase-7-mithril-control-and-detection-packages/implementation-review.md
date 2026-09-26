@@ -157,6 +157,15 @@ proof.
 -> [analysis_store_restore_crashes](../../../../crates/araphor-data/src/analysis/crash.rs) Four process exits prove repeated startup refusal for incomplete copies and a durable new epoch for the ready copy. Each case preserves the backup and permits restore into a fresh destination.<br>
 -> [DataStoreQualification::startup](../../../../crates/mithril-e2e/src/discovery/data_store.rs) A pending-marker fixture disables data ACK through mTLS. Node retains input while policy RPCs work. The database bytes and marker remain unchanged.
 
+The full workspace gate passed for `3121ea7d`. The data crate passed 44 tests
+with two ignored; Control passed 196 with two ignored; Mithril e2e passed 114
+with 248 ignored; Node passed 256 with one ignored. All 22 cases in the four
+crash tests passed. The rebuilt CLI passed startup (18 checks) and recovery
+(29 checks). Results are in
+`/tmp/araphor-data-qualification.MtrjRy/restore-{startup,recovery}/result.json`.
+These checks use temporary stores. Control process interruption before ACK,
+native commit failure after admission, and physical qualification remain open.
+
 The full workspace gate passed for `cb8417f8`, including all twelve cases in
 `analysis_store_commit_crashes` and `analysis_store_input_crashes`. The data
 crate passed 42 tests with two ignored; Control passed 196 with two ignored;
