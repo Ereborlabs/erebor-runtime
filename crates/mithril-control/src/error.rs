@@ -14,6 +14,12 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Stored coverage report is invalid: {source}"))]
+    CoverageDecode {
+        source: prost::DecodeError,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Araphor trace rejected {code:?}: {reason}"))]
     Observability {
         code: crate::TraceErrorCodeV1,
@@ -152,6 +158,7 @@ impl ErrorExt for Error {
                 crate::TraceErrorCodeV1::Integrity => StatusCode::IllegalState,
             },
             Self::RetainedRangeExpired { .. } => StatusCode::NotFound,
+            Self::CoverageDecode { .. } => StatusCode::IllegalState,
             Self::Discovery { .. }
             | Self::InvalidConfiguration { .. }
             | Self::Json { .. }
@@ -190,7 +197,8 @@ impl ErrorExt for Error {
             }
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Serve { .. } => RetryHint::Retryable,
-            Self::DataStore { .. }
+            Self::CoverageDecode { .. }
+            | Self::DataStore { .. }
             | Self::RetainedRangeExpired { .. }
             | Self::Discovery { .. }
             | Self::InvalidConfiguration { .. }

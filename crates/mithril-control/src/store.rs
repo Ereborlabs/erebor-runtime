@@ -1214,6 +1214,7 @@ impl ControlStore {
         node_boot_id: [u8; 16],
         source_id: [u8; 16],
         source_epoch: u64,
+        bound_label: Option<u64>,
     ) -> Result<DurableNodeSessionV1> {
         let inner = self.evidence_lock()?;
         let known_label = inner
@@ -1225,10 +1226,18 @@ impl ControlStore {
                 source_id,
                 source_epoch,
             });
+        if known_label.is_some_and(|known| bound_label.is_some_and(|bound| *known != bound)) {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "the data and Control source labels disagree".to_owned(),
+            }
+            .fail();
+        }
+        let label = bound_label.or(known_label.copied());
         let mut matches = inner.state.node_session_history.values().filter(|session| {
             session.node_id == node_id
                 && session.node_boot_id == node_boot_id
-                && known_label.is_none_or(|label| session.label_epoch == *label)
+                && label.is_none_or(|label| session.label_epoch == label)
         });
         let session = matches.next().cloned().ok_or_else(|| {
             ControlStoreSnafu {
