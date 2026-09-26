@@ -9,14 +9,10 @@ use mithril_control::{
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use snafu::{OptionExt as _, ResultExt as _};
-use std::cmp;
-use std::collections::VecDeque;
 use std::future::Future;
 use std::os::fd::AsRawFd as _;
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Component, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 
@@ -24,16 +20,15 @@ use crate::administrative_exec::{
     AdministrativeExecOwner, AdministrativeResolutionV1, AdministrativeResolveRequestV1,
 };
 use crate::epoch::NodeEpochs;
-use crate::error::{
-    EvidenceStateSnafu, IdentityStateSnafu, InterceptorSnafu, JsonSnafu, LocalTaskSnafu,
-};
+use crate::error::{EvidenceStateSnafu, IdentityStateSnafu, InterceptorSnafu, JsonSnafu};
 use crate::runtime_admission::{KubernetesRuntimeIdentityV1, RuntimeAdmissionCall};
 use crate::{
-    AdministrativeControlRequest, CoverageGapReasonV1, NativeSecurityStateOwner, NodeConfig,
-    NodeControlConnector, NodeControlMessage, NodeDecommissionAcceptanceV1, NodeDecommissionOwner,
-    ObservationCanonicalizer, Result, RuntimeIntegrationDecommissionV1, RuntimeIntegrationOwner,
-    TrustCache, WorkloadBindingOwner,
+    CoverageGapReasonV1, NativeSecurityStateOwner, NodeConfig, NodeControlConnector,
+    NodeDecommissionOwner, ObservationCanonicalizer, Result, TrustCache, WorkloadBindingOwner,
 };
+
+mod run;
+use run::NodeRun;
 
 /// Borrows the production owners for one policy or runtime reconciliation operation.
 pub struct NodeBindingReconciliation<'a> {
@@ -666,11 +661,8 @@ impl NodeChassis {
         };
         bindings.read_back_recovered_activations(&host)?;
         let observations = if policy_observation_enabled {
-            let evidence = config.evidence.as_ref().ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "effect policy has no durable evidence configuration".to_owned(),
-                }
-                .build()
+            let evidence = config.evidence.as_ref().context(IdentityStateSnafu {
+                reason: "effect policy has no durable evidence configuration",
             })?;
             let source_epoch = NodeEpochs::source_epoch(&config.state_directory, recover_identity)?;
             let (tenant_id, source_id) = evidence.identities()?;
@@ -887,997 +879,8 @@ impl NodeChassis {
         Ok(recovery_barrier_observed)
     }
 
-    pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
-        let mut prevention_enabled = self
-            .policy
-            .as_ref()
-            .is_some_and(crate::NodePolicyGenerationOwner::prevention_enabled);
-        let effect_stop = Arc::new(AtomicBool::new(false));
-        let mut effect_task = self.effect_reader.take().map(|reader| {
-            let stop = Arc::clone(&effect_stop);
-            tokio::task::spawn_blocking(move || -> erebor_interceptor::Result<()> {
-                while !stop.load(Ordering::Acquire) {
-                    reader.poll(Duration::from_millis(100))?;
-                }
-                Ok(())
-            })
-        });
-        let mut effect_worker_task = self.effect_worker.take().map(|worker| {
-            tokio::task::spawn_blocking(move || {
-                worker.run();
-            })
-        });
-        let mut local_task = self.local_server.take().map(|server| {
-            let local_shutdown = shutdown.clone();
-            tokio::spawn(server.serve(local_shutdown))
-        });
-        let mut runtime_admission_task = self.runtime_admission_server.take().map(|server| {
-            let runtime_shutdown = shutdown.clone();
-            tokio::spawn(server.serve(runtime_shutdown))
-        });
-        let mut runtime_seccomp_task = self.runtime_seccomp_server.take().map(|server| {
-            let runtime_shutdown = shutdown.clone();
-            tokio::spawn(server.serve(runtime_shutdown))
-        });
-        let mut backoff = self.config.control.reconnect_minimum();
-        let mut kernel_healthy = true;
-        let mut identity_healthy = true;
-        let mut evidence_healthy = self
-            .registration
-            .capabilities
-            .iter()
-            .find(|capability| capability.capability_id == "LOCAL_EFFECT_OBSERVATION")
-            .is_none_or(|capability| capability.state != "UNHEALTHY");
-        let mut control_disconnected_since = tokio::time::Instant::now();
-        let mut run_error = None;
-        let mut control_failure_reported = false;
-        let mut healthy_identity_capabilities = self.registration.capabilities.clone();
-        let mut healthy_effect_prevention_claims =
-            self.registration.effect_prevention_claims_enabled;
-        'running: loop {
-            if *shutdown.borrow() {
-                break;
-            }
-            let evidence_control_deadline =
-                control_disconnected_since + self.evidence_control_delay();
-            let evidence_configured =
-                self.effect_reader.is_some() || self.config.evidence.is_some();
-            // A reconnect must not reuse an absence claim from before policy activation.
-            self.refresh_registration_authority_state()?;
-            let mut trust_candidate = self.trust.connection_candidate();
-            let connection = {
-                let connector = self.connector.clone();
-                let connection_attempt = connector.connect(
-                    self.registration.clone(),
-                    kernel_healthy && identity_healthy && evidence_healthy,
-                    &mut trust_candidate,
-                );
-                tokio::pin!(connection_attempt);
-                // A hook can arrive after registration but before readiness. Keep that one
-                // handshake alive while the held task receives its fail-closed response.
-                loop {
-                    tokio::select! {
-                        result = &mut connection_attempt => break result,
-                        _instant = tokio::time::sleep_until(evidence_control_deadline),
-                            if evidence_healthy && evidence_configured => {
-                            let _result = self.observations.mark_coverage_gapped(
-                                CoverageGapReasonV1::ControlDelay,
-                            );
-                            evidence_healthy = false;
-                            close_evidence_claims(&mut self.registration);
-                            continue 'running;
-                        }
-                        changed = shutdown.changed() => {
-                            let _result = changed;
-                            break 'running;
-                        }
-                        request = next_runtime_admission(&mut self.runtime_admission_requests) => {
-                            self.answer_runtime_admission(request).await?;
-                        }
-                        notification = next_runtime_seccomp(
-                            &mut self.runtime_seccomp_notifications
-                        ) => {
-                            self.answer_runtime_seccomp(notification).await?;
-                        }
-                        result = effect_reader_finished(&mut effect_task) => {
-                            let _result = self.observations.mark_coverage_gapped(
-                                CoverageGapReasonV1::ReaderStopped,
-                            );
-                            run_error = result.err();
-                            effect_task = None;
-                            break 'running;
-                        }
-                        result = effect_worker_finished(&mut effect_worker_task) => {
-                            let _result = self.observations.mark_coverage_gapped(
-                                CoverageGapReasonV1::ReaderStopped,
-                            );
-                            run_error = result.err();
-                            effect_worker_task = None;
-                            break 'running;
-                        }
-                        result = runtime_admission_finished(&mut runtime_admission_task) => {
-                            runtime_admission_task = None;
-                            run_error = runtime_admission_exit(
-                                &self.readiness,
-                                result,
-                                *shutdown.borrow(),
-                            );
-                            break 'running;
-                        }
-                        result = runtime_admission_finished(&mut runtime_seccomp_task) => {
-                            runtime_seccomp_task = None;
-                            run_error = runtime_seccomp_exit(
-                                &self.readiness,
-                                result,
-                                *shutdown.borrow(),
-                            );
-                            break 'running;
-                        }
-                    }
-                }
-            };
-            self.trust = trust_candidate;
-            match connection {
-                Ok(mut connection) => {
-                    erebor_telemetry::info!(
-                        "connected to Mithril Control",
-                        node_id = %self.config.node_id,
-                        label_epoch = %self.label_epoch
-                    );
-                    control_failure_reported = false;
-                    self.policy_delivery.begin_control_session();
-                    self.readiness.send_replace(NodeReadinessV1 {
-                        kernel_ready: kernel_healthy,
-                        identity_ready: identity_healthy,
-                        control_ready: true,
-                        admission_ready: kernel_healthy && identity_healthy && evidence_healthy,
-                        effect_prevention_claims_enabled:
-                            NodeReadinessV1::prevention_claims_enabled(
-                                kernel_healthy,
-                                identity_healthy && evidence_healthy,
-                                prevention_enabled,
-                            ),
-                    });
-                    backoff = self.config.control.reconnect_minimum();
-                    let mut evidence_in_flight = false;
-                    let mut coverage_in_flight = Vec::new();
-                    let mut coverage_snapshot = None;
-                    let mut coverage_pending = VecDeque::new();
-                    let mut acknowledged_coverage = None;
-                    let mut evidence_upload = tokio::time::interval(Duration::from_millis(100));
-                    evidence_upload
-                        .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                    let mut policy_poll = tokio::time::interval(Duration::from_millis(250));
-                    policy_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                    let mut policy_work = PolicyControlWorkV1::default();
-                    'control: loop {
-                        tokio::select! {
-                            result = connection.next_message() => {
-                                let message = match result {
-                                    Ok(message) => message,
-                                    Err(error) => {
-                                        erebor_telemetry::warn!(
-                                            error;
-                                            "lost the Mithril Control stream",
-                                            node_id = %self.config.node_id,
-                                            retry = %"reconnect"
-                                        );
-                                        control_failure_reported = true;
-                                        break;
-                                    }
-                                };
-                                match message {
-                                    NodeControlMessage::Administrative(AdministrativeControlRequest::Resolve(request)) => {
-                                        let response = self.resolve_administrative(request);
-                                        if let Err(error) = connection.send_resolution(response).await {
-                                            erebor_telemetry::warn!(
-                                                error;
-                                                "failed to return an administrative resolution",
-                                                node_id = %self.config.node_id,
-                                                retry = %"reconnect"
-                                            );
-                                            break;
-                                        }
-                                    }
-                                    NodeControlMessage::Administrative(AdministrativeControlRequest::Arm(request)) => {
-                                        let response = self.arm_administrative(request);
-                                        if let Err(error) = connection.send_arm_result(response).await {
-                                            erebor_telemetry::warn!(
-                                                error;
-                                                "failed to return an administrative arm result",
-                                                node_id = %self.config.node_id,
-                                                retry = %"reconnect"
-                                            );
-                                            break;
-                                        }
-                                    }
-                                    NodeControlMessage::Decommission(command) => {
-                                        let artifact_sha256: [u8; 32] =
-                                            Sha256::digest(&command.artifact).into();
-                                        if !command.execute {
-                                            let live_bindings =
-                                                self.policy_delivery.status().runtime_binding_count;
-                                            let result = self.decommission.as_mut().ok_or_else(|| {
-                                                IdentityStateSnafu {
-                                                    reason: "node decommission is not configured"
-                                                        .to_owned(),
-                                                }
-                                                .build()
-                                            }).and_then(|owner| {
-                                                owner.accept(
-                                                    &command.artifact,
-                                                    live_bindings,
-                                                    crate::policy::current_utc_ns()?,
-                                                )
-                                            });
-                                            let (state, reason_code) = match result {
-                                                Ok(acceptance) => {
-                                                    erebor_telemetry::info!(
-                                                        "accepted a signed node decommission",
-                                                        node_id = %self.config.node_id,
-                                                        artifact_sha256 = %hex::encode(artifact_sha256),
-                                                        acceptance = %format!("{acceptance:?}")
-                                                    );
-                                                    ("ACCEPTED", String::new())
-                                                }
-                                                Err(error) => {
-                                                    erebor_telemetry::warn!(
-                                                        error;
-                                                        "rejected a signed node decommission",
-                                                        node_id = %self.config.node_id,
-                                                        artifact_sha256 = %hex::encode(artifact_sha256)
-                                                    );
-                                                    ("REJECTED", "AUTHORIZATION_REJECTED".to_owned())
-                                                }
-                                            };
-                                            if let Err(error) = connection
-                                                .send_decommission_result(
-                                                    artifact_sha256,
-                                                    state,
-                                                    reason_code,
-                                                )
-                                                .await
-                                            {
-                                                erebor_telemetry::warn!(
-                                                    error;
-                                                    "failed to return node decommission acceptance",
-                                                    node_id = %self.config.node_id,
-                                                    retry = %"reconnect"
-                                                );
-                                                break;
-                                            }
-                                            continue;
-                                        }
-
-                                        if let Some(task) = runtime_admission_task.take() {
-                                            task.abort();
-                                            let _result = task.await;
-                                        }
-                                        if let Some(task) = runtime_seccomp_task.take() {
-                                            task.abort();
-                                            let _result = task.await;
-                                        }
-                                        self.runtime_admission_requests = None;
-                                        self.runtime_seccomp_notifications = None;
-                                        if let Some(admission) = &self.config.runtime_admission {
-                                            for socket_path in [
-                                                admission.socket_path.clone(),
-                                                crate::runtime_admission::seccomp_listener_path(
-                                                    &admission.socket_path,
-                                                ),
-                                            ] {
-                                                match std::fs::remove_file(&socket_path) {
-                                                    Ok(()) => {}
-                                                    Err(error)
-                                                        if error.kind()
-                                                            == std::io::ErrorKind::NotFound => {}
-                                                    Err(source) => {
-                                                        run_error = Some(crate::Error::Io {
-                                                            path: socket_path,
-                                                            source,
-                                                            location: snafu::Location::default(),
-                                                        });
-                                                        break 'running;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        let live_bindings =
-                                            self.policy_delivery.status().runtime_binding_count;
-                                        let acceptance = self
-                                            .decommission
-                                            .as_mut()
-                                            .ok_or_else(|| {
-                                                IdentityStateSnafu {
-                                                    reason: "node decommission is not configured"
-                                                        .to_owned(),
-                                                }
-                                                .build()
-                                            })
-                                            .and_then(|owner| {
-                                                owner.accept(
-                                                    &command.artifact,
-                                                    live_bindings,
-                                                    crate::policy::current_utc_ns()?,
-                                                )
-                                            });
-                                        let acceptance = match acceptance {
-                                            Ok(acceptance) => acceptance,
-                                            Err(error) => {
-                                                erebor_telemetry::warn!(
-                                                    error;
-                                                    "deferred physical node decommission",
-                                                    node_id = %self.config.node_id,
-                                                    artifact_sha256 = %hex::encode(artifact_sha256),
-                                                    retry = %"after_restart"
-                                                );
-                                                run_error = Some(error);
-                                                break 'running;
-                                            }
-                                        };
-                                        if acceptance != NodeDecommissionAcceptanceV1::Completed {
-                                            let config = self.config.decommission.as_ref().ok_or_else(|| {
-                                                IdentityStateSnafu {
-                                                    reason: "node decommission is not configured"
-                                                        .to_owned(),
-                                                }
-                                                .build()
-                                            })?;
-                                            let runtime = RuntimeIntegrationDecommissionV1 {
-                                                owner: config.runtime_integration_owner.clone(),
-                                                hook_directory: config.runtime_hook_directory.clone(),
-                                                containerd_config_directory:
-                                                    config.containerd_config_directory.clone(),
-                                                containerd_drop_in_directory: config
-                                                    .containerd_drop_in_directory
-                                                    .clone(),
-                                                runtime_services: config.runtime_services.clone(),
-                                            };
-                                            RuntimeIntegrationOwner::decommission(&runtime).map_err(
-                                                |source| crate::Error::Io {
-                                                    path: runtime.containerd_config_directory.clone(),
-                                                    source,
-                                                    location: snafu::Location::default(),
-                                                },
-                                            )?;
-                                            erebor_telemetry::info!(
-                                                "removed the owned Mithril runtime integration",
-                                                node_id = %self.config.node_id,
-                                                artifact_sha256 = %hex::encode(artifact_sha256)
-                                            );
-
-                                            if let Some(task) = local_task.take() {
-                                                task.abort();
-                                                let _result = task.await;
-                                            }
-                                            effect_stop.store(true, Ordering::Release);
-                                            if let Some(task) = effect_task.take() {
-                                                task.await
-                                                    .context(LocalTaskSnafu)?
-                                                    .context(InterceptorSnafu)?;
-                                            }
-                                            if let Some(task) = effect_worker_task.take() {
-                                                task.await.context(LocalTaskSnafu)?;
-                                            }
-                                            self.host
-                                                .take()
-                                                .ok_or_else(|| {
-                                                    IdentityStateSnafu {
-                                                        reason: "node decommission has no kernel owner"
-                                                            .to_owned(),
-                                                    }
-                                                    .build()
-                                                })?
-                                                .decommission()
-                                                .context(InterceptorSnafu)?;
-                                            erebor_telemetry::info!(
-                                                "removed the owned Mithril kernel attachments",
-                                                node_id = %self.config.node_id,
-                                                artifact_sha256 = %hex::encode(artifact_sha256)
-                                            );
-                                            self.decommission
-                                                .as_mut()
-                                                .ok_or_else(|| {
-                                                    IdentityStateSnafu {
-                                                        reason: "node decommission owner disappeared"
-                                                            .to_owned(),
-                                                    }
-                                                    .build()
-                                                })?
-                                                .complete(&command.artifact)?;
-                                        }
-                                        connection
-                                            .send_decommission_result(
-                                                artifact_sha256,
-                                                "COMPLETED",
-                                                String::new(),
-                                            )
-                                            .await?;
-                                        erebor_telemetry::info!(
-                                            "completed a Mithril node decommission",
-                                            node_id = %self.config.node_id,
-                                            artifact_sha256 = %hex::encode(artifact_sha256)
-                                        );
-                                        break 'running;
-                                    }
-                                    NodeControlMessage::EvidenceAck(ack) => {
-                                        match self
-                                            .observations
-                                            .acknowledge_evidence(ack)
-                                        {
-                                            Ok(complete) => evidence_in_flight = !complete,
-                                            Err(error) => {
-                                                erebor_telemetry::warn!(
-                                                    error;
-                                                    "Control returned a stale evidence acknowledgement",
-                                                    node_id = %self.config.node_id,
-                                                    retry = %"reconnect"
-                                                );
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    NodeControlMessage::CoverageAck(ack) => {
-                                        let Some(position) = coverage_in_flight
-                                            .iter()
-                                            .position(|expected| expected == &ack)
-                                        else {
-                                            erebor_telemetry::warn!(
-                                                "Control returned a stale coverage acknowledgement",
-                                                node_id = %self.config.node_id,
-                                                source_epoch = %ack.source_epoch,
-                                                revision = %ack.revision,
-                                                retry = %"reconnect"
-                                            );
-                                            break;
-                                        };
-                                        coverage_in_flight.swap_remove(position);
-                                        if coverage_in_flight.is_empty()
-                                            && coverage_pending.is_empty()
-                                        {
-                                            acknowledged_coverage =
-                                                Some((ack.source_epoch, ack.revision));
-                                            coverage_snapshot = None;
-                                        }
-                                    }
-                                }
-                            }
-                            _instant = evidence_upload.tick() => {
-                                if self.observations.evidence_errors() > 0 {
-                                    if evidence_healthy {
-                                        erebor_telemetry::warn!(
-                                            "durable evidence became unhealthy",
-                                            node_id = %self.config.node_id,
-                                            error = %self.observations
-                                                .first_evidence_error()
-                                                .unwrap_or_else(|| "the exact error is unavailable".to_owned()),
-                                            retry = %"after_reconciliation"
-                                        );
-                                        evidence_healthy = false;
-                                        close_evidence_claims(&mut self.registration);
-                                        self.readiness.send_modify(|readiness| {
-                                            readiness.admission_ready = false;
-                                            readiness.effect_prevention_claims_enabled = false;
-                                        });
-                                        if let Err(error) = self
-                                            .await_control_rpc(
-                                                connection.report_readiness(kernel_healthy, false),
-                                            )
-                                            .await
-                                        {
-                                            let reuse_session =
-                                                error.control_rpc_can_reuse_session();
-                                            erebor_telemetry::warn!(
-                                                error;
-                                                "failed to close Mithril node readiness",
-                                                node_id = %self.config.node_id,
-                                                retry = %if reuse_session { "same_session" } else { "reconnect" }
-                                            );
-                                            if !reuse_session {
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    continue;
-                                }
-                                if !evidence_in_flight {
-                                    let batches = self.observations.next_evidence_batches();
-                                    if !batches.is_empty() {
-                                        match self
-                                            .await_control_rpc(
-                                                connection.send_evidence_group(batches),
-                                            )
-                                            .await
-                                        {
-                                            Ok(()) => evidence_in_flight = true,
-                                            Err(error) => {
-                                                let reuse_session =
-                                                    error.control_rpc_can_reuse_session();
-                                                erebor_telemetry::warn!(
-                                                    error;
-                                                    "failed to upload an evidence commit group",
-                                                    node_id = %self.config.node_id,
-                                                    retry = %if reuse_session { "same_session" } else { "after_registration" }
-                                                );
-                                                if !reuse_session {
-                                                    break 'control;
-                                                }
-                                            }
-                                        }
-                                        continue;
-                                    }
-                                }
-                                if coverage_snapshot.is_none()
-                                    && coverage_in_flight.is_empty()
-                                    && coverage_pending.is_empty()
-                                {
-                                    if let Some(snapshot) = self.observations.coverage_snapshot() {
-                                        let key = (snapshot.source_epoch, snapshot.revision);
-                                        if acknowledged_coverage != Some(key) {
-                                            coverage_pending = snapshot.current_intervals().into();
-                                            if coverage_pending.is_empty() {
-                                                erebor_telemetry::warn!(
-                                                    "evidence coverage has no current source",
-                                                    node_id = %self.config.node_id,
-                                                    retry = %"after_reconciliation"
-                                                );
-                                                break;
-                                            }
-                                            coverage_snapshot = Some(snapshot);
-                                        }
-                                    }
-                                }
-                                if coverage_in_flight.is_empty() {
-                                    if let (Some(snapshot), Some(current)) =
-                                        (coverage_snapshot.as_ref(), coverage_pending.front())
-                                    {
-                                        match self
-                                            .await_control_rpc(connection.send_coverage_report(
-                                                snapshot,
-                                                current,
-                                            ))
-                                            .await
-                                        {
-                                            Ok(expected) => {
-                                                coverage_in_flight.push(expected);
-                                                coverage_pending.pop_front();
-                                            }
-                                            Err(error) => {
-                                                let reuse_session =
-                                                    error.control_rpc_can_reuse_session();
-                                                erebor_telemetry::warn!(
-                                                    error;
-                                                    "failed to report evidence coverage",
-                                                    node_id = %self.config.node_id,
-                                                    retry = %if reuse_session { "same_session" } else { "after_registration" }
-                                                );
-                                                if !reuse_session {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            () = policy_work.pacing.wait_until_ready(&mut policy_poll) => {
-                                match (self.policy.as_ref(), self.host.as_mut()) {
-                                    (Some(policy), Some(host)) if policy.retirement_pending() =>
-                                    {
-                                        policy.reconcile_policy_lifecycle(host)?;
-                                    }
-                                    _ => {}
-                                }
-                                // Ready-only policy RPCs wait while the same session reports
-                                // a local identity or evidence readiness failure.
-                                if !identity_healthy || !evidence_healthy {
-                                    policy_work.pacing.mark_idle();
-                                    continue;
-                                }
-                                policy_work.pacing.mark_pending();
-                                match self
-                                    .advance_policy_control_step(
-                                        &mut connection,
-                                        &mut policy_work,
-                                        evidence_healthy,
-                                    )
-                                    .await?
-                                {
-                                    PolicyControlStepV1::Continue => {}
-                                    PolicyControlStepV1::Idle => policy_work.pacing.mark_idle(),
-                                    PolicyControlStepV1::Reconnect => {
-                                        break;
-                                    }
-                                    PolicyControlStepV1::Activated => {
-                                        prevention_enabled = self.policy.as_ref().is_some_and(
-                                            crate::NodePolicyGenerationOwner::prevention_enabled,
-                                        );
-                                        healthy_identity_capabilities =
-                                            self.registration.capabilities.clone();
-                                        healthy_effect_prevention_claims =
-                                            self.registration.effect_prevention_claims_enabled;
-                                    }
-                                }
-                            }
-                            changed = shutdown.changed() => {
-                                let _result = changed;
-                                break 'running;
-                            }
-                            request = next_runtime_admission(&mut self.runtime_admission_requests) => {
-                                self.answer_runtime_admission(request).await?;
-                            }
-                            notification = next_runtime_seccomp(
-                                &mut self.runtime_seccomp_notifications
-                            ) => {
-                                self.answer_runtime_seccomp(notification).await?;
-                            }
-                            result = effect_reader_finished(&mut effect_task) => {
-                                let _result = self.observations.mark_coverage_gapped(
-                                    CoverageGapReasonV1::ReaderStopped,
-                                );
-                                run_error = result.err();
-                                effect_task = None;
-                                break 'running;
-                            }
-                            result = effect_worker_finished(&mut effect_worker_task) => {
-                                let _result = self.observations.mark_coverage_gapped(
-                                    CoverageGapReasonV1::ReaderStopped,
-                                );
-                                run_error = result.err();
-                                effect_worker_task = None;
-                                break 'running;
-                            }
-                            result = runtime_admission_finished(&mut runtime_admission_task) => {
-                                runtime_admission_task = None;
-                                run_error = runtime_admission_exit(
-                                    &self.readiness,
-                                    result,
-                                    *shutdown.borrow(),
-                                );
-                                break 'running;
-                            }
-                            result = runtime_admission_finished(&mut runtime_seccomp_task) => {
-                                runtime_seccomp_task = None;
-                                run_error = runtime_seccomp_exit(
-                                    &self.readiness,
-                                    result,
-                                    *shutdown.borrow(),
-                                );
-                                break 'running;
-                            }
-                            () = self.bindings.wait_for_runtime_change() => {
-                                match self.reconcile_bindings(true).await {
-                                    ReconciliationOutcome::Healthy => {
-                                        let recovered = !evidence_healthy
-                                            || (!identity_healthy && kernel_healthy);
-                                        if !evidence_healthy {
-                                            evidence_healthy = true;
-                                            restore_evidence_claims(
-                                                &mut self.registration,
-                                                &mut healthy_identity_capabilities,
-                                                prevention_enabled,
-                                            );
-                                            healthy_effect_prevention_claims = prevention_enabled;
-                                            self.readiness.send_modify(|readiness| {
-                                                readiness.admission_ready =
-                                                    kernel_healthy && identity_healthy;
-                                                readiness.effect_prevention_claims_enabled =
-                                                    NodeReadinessV1::prevention_claims_enabled(
-                                                        kernel_healthy,
-                                                        identity_healthy,
-                                                        prevention_enabled,
-                                                    );
-                                            });
-                                        }
-                                        if !identity_healthy && kernel_healthy {
-                                            identity_healthy = true;
-                                            restore_identity_claims(
-                                                &mut self.registration,
-                                                &healthy_identity_capabilities,
-                                                healthy_effect_prevention_claims
-                                                    && evidence_healthy,
-                                            );
-                                            self.readiness.send_replace(NodeReadinessV1 {
-                                                kernel_ready: true,
-                                                identity_ready: true,
-                                                control_ready: true,
-                                                admission_ready: true,
-                                                effect_prevention_claims_enabled:
-                                                    healthy_effect_prevention_claims,
-                                                });
-                                        }
-                                        if recovered {
-                                            erebor_telemetry::info!(
-                                                "recovered Mithril Node readiness",
-                                                node_id = %self.config.node_id,
-                                                evidence_ready = %evidence_healthy,
-                                                identity_ready = %identity_healthy
-                                            );
-                                            if let Err(error) = self
-                                                .await_control_rpc(connection.report_readiness(
-                                                    kernel_healthy,
-                                                    kernel_healthy
-                                                        && identity_healthy
-                                                        && evidence_healthy,
-                                                ))
-                                                .await
-                                            {
-                                                let reuse_session =
-                                                    error.control_rpc_can_reuse_session();
-                                                erebor_telemetry::warn!(
-                                                    error;
-                                                    "failed to restore Mithril node readiness",
-                                                    node_id = %self.config.node_id,
-                                                    retry = %if reuse_session { "same_session" } else { "reconnect" }
-                                                );
-                                                if !reuse_session {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    ReconciliationOutcome::EvidenceUnhealthy(reason) => {
-                                        if evidence_healthy {
-                                            erebor_telemetry::warn!(
-                                                "evidence reconciliation became unhealthy",
-                                                node_id = %self.config.node_id,
-                                                error = %reason,
-                                                retry = %"after_reconciliation"
-                                            );
-                                            evidence_healthy = false;
-                                            close_evidence_claims(&mut self.registration);
-                                            self.readiness.send_modify(|readiness| {
-                                                readiness.admission_ready = false;
-                                                readiness.effect_prevention_claims_enabled = false;
-                                            });
-                                            if let Err(error) = self
-                                                .await_control_rpc(
-                                                    connection.report_readiness(kernel_healthy, false),
-                                                )
-                                                .await
-                                            {
-                                                let reuse_session =
-                                                    error.control_rpc_can_reuse_session();
-                                                erebor_telemetry::warn!(
-                                                    error;
-                                                    "failed to close Mithril node readiness",
-                                                    node_id = %self.config.node_id,
-                                                    retry = %if reuse_session { "same_session" } else { "reconnect" }
-                                                );
-                                                if !reuse_session {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    ReconciliationOutcome::IdentityUnhealthy { owner, reason } => {
-                                        if identity_healthy {
-                                            erebor_telemetry::warn!(
-                                                "identity reconciliation became unhealthy",
-                                                node_id = %self.config.node_id,
-                                                owner = %owner,
-                                                error = %reason,
-                                                retry = %"after_reconciliation"
-                                            );
-                                            identity_healthy = false;
-                                            close_identity_claims(&mut self.registration);
-                                            self.readiness.send_replace(NodeReadinessV1 {
-                                                kernel_ready: kernel_healthy,
-                                                identity_ready: false,
-                                                control_ready: true,
-                                                admission_ready: false,
-                                                effect_prevention_claims_enabled: false,
-                                            });
-                                            if let Err(error) = self
-                                                .await_control_rpc(
-                                                    connection.report_readiness(kernel_healthy, false),
-                                                )
-                                                .await
-                                            {
-                                                let reuse_session =
-                                                    error.control_rpc_can_reuse_session();
-                                                erebor_telemetry::warn!(
-                                                    error;
-                                                    "failed to close Mithril node readiness",
-                                                    node_id = %self.config.node_id,
-                                                    retry = %if reuse_session { "same_session" } else { "reconnect" }
-                                                );
-                                                if !reuse_session {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    ReconciliationOutcome::KernelUnhealthy(reason) => {
-                                        erebor_telemetry::error!(
-                                            "kernel reconciliation became unhealthy",
-                                            node_id = %self.config.node_id,
-                                            error = %reason
-                                        );
-                                        kernel_healthy = false;
-                                        identity_healthy = false;
-                                        self.close_kernel_claims();
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(error) if control_failure_reported => {
-                    erebor_telemetry::debug!(
-                        "Mithril Control connection retry failed",
-                        node_id = %self.config.node_id,
-                        error = %error
-                    );
-                }
-                Err(error) => {
-                    erebor_telemetry::warn!(
-                        error;
-                        "failed to connect to Mithril Control",
-                        node_id = %self.config.node_id,
-                        retry = %"backoff"
-                    );
-                    control_failure_reported = true;
-                }
-            }
-            if let (Some(administrative), Some(host)) =
-                (self.administrative.as_mut(), self.host.as_mut())
-            {
-                if administrative.cancel_armed_slots(host).is_err() {
-                    identity_healthy = false;
-                    close_identity_claims(&mut self.registration);
-                }
-            }
-            // Control loss closes new admission but keeps the last valid local generation active.
-            self.readiness.send_replace(NodeReadinessV1 {
-                kernel_ready: kernel_healthy,
-                identity_ready: identity_healthy,
-                control_ready: false,
-                admission_ready: false,
-                effect_prevention_claims_enabled: NodeReadinessV1::prevention_claims_enabled(
-                    kernel_healthy,
-                    identity_healthy && evidence_healthy,
-                    prevention_enabled,
-                ),
-            });
-            control_disconnected_since = tokio::time::Instant::now();
-            let reconnect = tokio::time::sleep(backoff);
-            tokio::pin!(reconnect);
-            loop {
-                tokio::select! {
-                    () = &mut reconnect => break,
-                    changed = shutdown.changed() => {
-                        let _result = changed;
-                        break 'running;
-                    }
-                    request = next_runtime_admission(&mut self.runtime_admission_requests) => {
-                        self.answer_runtime_admission(request).await?;
-                    }
-                    notification = next_runtime_seccomp(
-                        &mut self.runtime_seccomp_notifications
-                    ) => {
-                        self.answer_runtime_seccomp(notification).await?;
-                    }
-                    result = effect_reader_finished(&mut effect_task) => {
-                        let _result = self.observations.mark_coverage_gapped(
-                            CoverageGapReasonV1::ReaderStopped,
-                        );
-                        run_error = result.err();
-                        effect_task = None;
-                        break 'running;
-                    }
-                    result = effect_worker_finished(&mut effect_worker_task) => {
-                        let _result = self.observations.mark_coverage_gapped(
-                            CoverageGapReasonV1::ReaderStopped,
-                        );
-                        run_error = result.err();
-                        effect_worker_task = None;
-                        break 'running;
-                    }
-                    result = runtime_admission_finished(&mut runtime_admission_task) => {
-                        runtime_admission_task = None;
-                        run_error = runtime_admission_exit(
-                            &self.readiness,
-                            result,
-                            *shutdown.borrow(),
-                        );
-                        break 'running;
-                    }
-                    result = runtime_admission_finished(&mut runtime_seccomp_task) => {
-                        runtime_seccomp_task = None;
-                        run_error = runtime_seccomp_exit(
-                            &self.readiness,
-                            result,
-                            *shutdown.borrow(),
-                        );
-                        break 'running;
-                    }
-                    () = self.bindings.wait_for_runtime_change() => {
-                        match self.reconcile_bindings(false).await {
-                            ReconciliationOutcome::Healthy => {
-                                // A disconnected node cannot reopen the Control-backed
-                                // evidence claim. The connected recovery path owns that step.
-                                if !identity_healthy && kernel_healthy {
-                                    identity_healthy = true;
-                                    restore_identity_claims(
-                                        &mut self.registration,
-                                        &healthy_identity_capabilities,
-                                        healthy_effect_prevention_claims && evidence_healthy,
-                                    );
-                                    self.readiness.send_replace(NodeReadinessV1 {
-                                        kernel_ready: true,
-                                        identity_ready: true,
-                                        control_ready: false,
-                                        admission_ready: false,
-                                        effect_prevention_claims_enabled: false,
-                                    });
-                                }
-                            }
-                            ReconciliationOutcome::EvidenceUnhealthy(_reason) => {
-                                evidence_healthy = false;
-                                close_evidence_claims(&mut self.registration);
-                            }
-                            ReconciliationOutcome::IdentityUnhealthy { .. } => {
-                                identity_healthy = false;
-                                close_identity_claims(&mut self.registration);
-                            }
-                            ReconciliationOutcome::KernelUnhealthy(_reason) => {
-                                kernel_healthy = false;
-                                identity_healthy = false;
-                                self.close_kernel_claims();
-                            }
-                        }
-                    }
-                }
-            }
-            backoff = cmp::min(
-                backoff.saturating_mul(2),
-                self.config.control.reconnect_maximum(),
-            );
-        }
-        let _result = self
-            .observations
-            .mark_coverage_gapped(CoverageGapReasonV1::ReaderStopped);
-        effect_stop.store(true, Ordering::Release);
-        if let Some(task) = effect_task {
-            task.await
-                .context(LocalTaskSnafu)?
-                .context(InterceptorSnafu)?;
-        }
-        if let Some(task) = effect_worker_task {
-            task.await.context(LocalTaskSnafu)?;
-        }
-        if let Some(host) = self.host.take() {
-            host.shutdown().context(InterceptorSnafu)?;
-        }
-        if run_error.is_some() {
-            if let Some(task) = local_task.take() {
-                task.abort();
-                let _result = task.await;
-            }
-        } else if let Some(task) = local_task {
-            task.await.context(LocalTaskSnafu)??;
-        }
-        if run_error.is_some() {
-            if let Some(task) = runtime_admission_task.take() {
-                task.abort();
-                let _result = task.await;
-            }
-        } else if let Some(task) = runtime_admission_task {
-            task.await.context(LocalTaskSnafu)??;
-        }
-        if run_error.is_some() {
-            if let Some(task) = runtime_seccomp_task.take() {
-                task.abort();
-                let _result = task.await;
-            }
-        } else if let Some(task) = runtime_seccomp_task {
-            task.await.context(LocalTaskSnafu)??;
-        }
-        if let Some(error) = run_error {
-            return Err(error);
-        }
-        Ok(())
+    pub async fn run(self, shutdown: watch::Receiver<bool>) -> Result<()> {
+        NodeRun::run(self, shutdown).await
     }
 
     async fn answer_runtime_admission(&mut self, call: RuntimeAdmissionCall) -> Result<()> {
@@ -2046,11 +1049,8 @@ impl NodeChassis {
             let policy = self.policy.as_mut().context(IdentityStateSnafu {
                 reason: "declared-entry preparation has no active policy owner",
             })?;
-            let host = self.host.as_mut().ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "declared-entry preparation has no live kernel host".to_owned(),
-                }
-                .build()
+            let host = self.host.as_mut().context(IdentityStateSnafu {
+                reason: "declared-entry preparation has no live kernel host",
             })?;
             policy.reconcile_cri_exact_bindings_for_oci_entries(
                 &self.config,
@@ -2132,11 +1132,8 @@ impl NodeChassis {
                 return Ok::<Option<String>, crate::Error>(None);
             }
             finalized_binding_id = Some(binding_id.clone());
-            let host = self.host.as_mut().ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "initial exec finalization has no live kernel host".to_owned(),
-                }
-                .build()
+            let host = self.host.as_mut().context(IdentityStateSnafu {
+                reason: "initial exec finalization has no live kernel host",
             })?;
             self.bindings
                 .verify_prepared_initial_root(host, &binding_id, notification_pid)?;
@@ -2144,11 +1141,8 @@ impl NodeChassis {
             let policy = self.policy.as_ref().context(IdentityStateSnafu {
                 reason: "initial exec finalization has no active policy owner",
             })?;
-            let host = self.host.as_mut().ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "initial exec finalization lost its kernel host".to_owned(),
-                }
-                .build()
+            let host = self.host.as_mut().context(IdentityStateSnafu {
+                reason: "initial exec finalization lost its kernel host",
             })?;
             snafu::ensure!(
                 policy.reconcile_policy_lifecycle(host)?,
@@ -2412,11 +1406,8 @@ impl NodeChassis {
         let Some(policy) = self.policy.as_mut() else {
             return Ok(());
         };
-        let host = self.host.as_mut().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "exact filesystem reconciliation has no live kernel host".to_owned(),
-            }
-            .build()
+        let host = self.host.as_mut().context(IdentityStateSnafu {
+            reason: "exact filesystem reconciliation has no live kernel host",
         })?;
         policy.reconcile_cri_exact_bindings(&self.config, host, &self.bindings)
     }
@@ -2424,11 +1415,8 @@ impl NodeChassis {
     fn refresh_registration_authority_state(&mut self) -> Result<()> {
         let absence =
             self.policy_delivery
-                .startup_authority_absence(self.host.as_ref().ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: "startup authority proof has no live kernel host".to_owned(),
-                    }
-                    .build()
+                .startup_authority_absence(self.host.as_ref().context(IdentityStateSnafu {
+                    reason: "startup authority proof has no live kernel host",
                 })?)?;
         self.registration.policy_authority_absent = absence.policy_authority_absent;
         self.registration.exception_authority_absent = absence.exception_authority_absent;
@@ -2452,11 +1440,8 @@ impl NodeChassis {
         }
         self.policy_delivery
             .omit_inventory_retirement_from_config(&mut self.config)?;
-        let host = self.host.as_mut().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "stale policy retirement has no live kernel host".to_owned(),
-            }
-            .build()
+        let host = self.host.as_mut().context(IdentityStateSnafu {
+            reason: "stale policy retirement has no live kernel host",
         })?;
         if let Some(administrative) = self.administrative.as_mut() {
             administrative.cancel_armed_slots(host)?;
@@ -2614,11 +1599,8 @@ impl NodeChassis {
         &self,
         bundle: &PolicyBundleV1,
     ) -> Result<crate::policy_delivery::PreparedPolicyActivationV1> {
-        let host = self.host.as_ref().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "the policy activation owner has no live kernel host".to_owned(),
-            }
-            .build()
+        let host = self.host.as_ref().context(IdentityStateSnafu {
+            reason: "the policy activation owner has no live kernel host",
         })?;
         // Reserve a node-local handle only after durable and live-map reconciliation.
         let generation = crate::NodePolicyGenerationOwner::next_generation_ref_id(
@@ -2811,11 +1793,8 @@ impl NodeChassis {
             return Ok(PolicyControlStepV1::Continue);
         }
         let node_boot_id = self.node_boot_id.to_be_bytes();
-        let host = self.host.as_ref().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "exception delivery has no live kernel host".to_owned(),
-            }
-            .build()
+        let host = self.host.as_ref().context(IdentityStateSnafu {
+            reason: "exception delivery has no live kernel host",
         })?;
         if let Some(prepared) = self.policy_delivery.reconcile_exception_candidate(
             host,
@@ -2855,11 +1834,8 @@ impl NodeChassis {
         &mut self,
         prepared: crate::policy_delivery::PreparedExceptionDeliveryV1,
     ) -> Result<()> {
-        let host = self.host.as_ref().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "exception delivery has no live kernel host".to_owned(),
-            }
-            .build()
+        let host = self.host.as_ref().context(IdentityStateSnafu {
+            reason: "exception delivery has no live kernel host",
         })?;
         let Some(policy) = self.policy.as_ref() else {
             if prepared.candidate.operation == mithril_control::ExceptionDeliveryOperationV1::Revoke
@@ -3062,11 +2038,8 @@ fn ensure_evidence_owner_healthy(observations: &crate::EffectObservationStore) -
 fn effect_health_bytes(host: &KernelHost) -> Result<Vec<u8>> {
     host.lookup_map("effect_observation_health", &0_u32.to_ne_bytes())
         .context(InterceptorSnafu)?
-        .ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "effect observation health map has no per-CPU state".to_owned(),
-            }
-            .build()
+        .context(IdentityStateSnafu {
+            reason: "effect observation health map has no per-CPU state",
         })
 }
 
@@ -3251,74 +2224,6 @@ fn restore_identity_claims(
             capability.clone_from(healthy);
         }
     }
-}
-
-async fn effect_reader_finished(
-    task: &mut Option<tokio::task::JoinHandle<std::result::Result<(), erebor_interceptor::Error>>>,
-) -> Result<()> {
-    let outcome = match task.as_mut() {
-        Some(task) => task.await.context(LocalTaskSnafu)?,
-        None => std::future::pending().await,
-    };
-    outcome.context(InterceptorSnafu)?;
-    IdentityStateSnafu {
-        reason: "effect observation reader stopped before node shutdown",
-    }
-    .fail()
-}
-
-async fn effect_worker_finished(task: &mut Option<tokio::task::JoinHandle<()>>) -> Result<()> {
-    match task.as_mut() {
-        Some(task) => task.await.context(LocalTaskSnafu)?,
-        None => std::future::pending().await,
-    }
-    IdentityStateSnafu {
-        reason: "effect observation worker stopped before node shutdown",
-    }
-    .fail()
-}
-
-async fn runtime_admission_finished(
-    task: &mut Option<tokio::task::JoinHandle<Result<()>>>,
-) -> Result<()> {
-    match task.as_mut() {
-        Some(task) => task.await.context(LocalTaskSnafu)?,
-        None => std::future::pending().await,
-    }
-}
-
-fn runtime_admission_exit(
-    readiness: &watch::Sender<NodeReadinessV1>,
-    result: Result<()>,
-    shutdown_requested: bool,
-) -> Option<crate::Error> {
-    if shutdown_requested {
-        return result.err();
-    }
-    readiness.send_modify(|readiness| readiness.admission_ready = false);
-    Some(result.err().unwrap_or_else(|| {
-        IdentityStateSnafu {
-            reason: "runtime admission listener stopped before node shutdown".to_owned(),
-        }
-        .build()
-    }))
-}
-
-fn runtime_seccomp_exit(
-    readiness: &watch::Sender<NodeReadinessV1>,
-    result: Result<()>,
-    shutdown_requested: bool,
-) -> Option<crate::Error> {
-    if shutdown_requested {
-        return result.err();
-    }
-    readiness.send_modify(|readiness| readiness.admission_ready = false);
-    Some(result.err().unwrap_or_else(|| {
-        IdentityStateSnafu {
-            reason: "runtime seccomp listener stopped before node shutdown".to_owned(),
-        }
-        .build()
-    }))
 }
 
 async fn next_runtime_admission(
@@ -3519,9 +2424,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        close_identity_claims, close_kernel_claims, effect_reader_finished, effect_worker_finished,
-        restore_evidence_claims, restore_identity_claims, runtime_admission_exit,
-        runtime_admission_finished, sample_effect_health_bytes_without_reader_wait, NodeChassis,
+        close_identity_claims, close_kernel_claims, restore_evidence_claims,
+        restore_identity_claims, sample_effect_health_bytes_without_reader_wait, NodeChassis,
         NodeReadinessV1, PolicyControlRpcV1,
     };
     use erebor_interceptor_abi::{EffectObservationHealthV1, EffectObservationV1, Id128V1};
@@ -3939,42 +2843,6 @@ mod tests {
         }));
         assert_eq!(registration.capabilities[3].state, "SUPPORTED");
         assert_eq!(registration.capabilities[4].state, "UNSUPPORTED");
-    }
-
-    #[tokio::test]
-    async fn an_effect_reader_exit_is_a_node_failure() {
-        let mut task = Some(tokio::spawn(async { Ok(()) }));
-        assert!(effect_reader_finished(&mut task)
-            .await
-            .is_err_and(|error| error.to_string().contains("stopped before node shutdown")));
-    }
-
-    #[tokio::test]
-    async fn an_effect_worker_exit_is_a_node_failure() {
-        let mut task = Some(tokio::spawn(async {}));
-        assert!(effect_worker_finished(&mut task)
-            .await
-            .is_err_and(|error| error.to_string().contains("stopped before node shutdown")));
-    }
-
-    #[tokio::test]
-    async fn a_runtime_admission_listener_exit_closes_admission_readiness() {
-        let (readiness, receiver) = watch::channel(NodeReadinessV1 {
-            kernel_ready: true,
-            identity_ready: true,
-            control_ready: true,
-            admission_ready: true,
-            effect_prevention_claims_enabled: true,
-        });
-        let mut task = Some(tokio::spawn(async { Ok(()) }));
-        let result = runtime_admission_finished(&mut task).await;
-        assert!(
-            runtime_admission_exit(&readiness, result, false).is_some_and(|error| error
-                .to_string()
-                .contains("listener stopped before node shutdown"))
-        );
-        assert!(!receiver.borrow().admission_ready);
-        assert!(!receiver.borrow().admits_new_work());
     }
 
     #[tokio::test]

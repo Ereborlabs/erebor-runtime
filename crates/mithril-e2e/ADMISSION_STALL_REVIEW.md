@@ -79,7 +79,7 @@ field.
 
 ## Proof and limit
 
-The current working tree passed the exact privileged Host test in 42.88
+The typed gRPC revision `e44978d8` passed the exact privileged Host test in 42.88
 seconds with typed gRPC and Mithril-owned limits. The repository Rust
 verification script passed after the final Rust edit. It includes all 249 Node
 library tests, three OCI hook tests, and the Protobuf descriptor contract. The
@@ -98,3 +98,46 @@ The lightweight test reproduces a live Node with a timed-out production Stage
 request. The Kubernetes test uses the real OCI hook and actor. Neither result
 identifies the cause of the earlier intermittent Kubernetes stall. The test
 does not replace the actor scenario or prove that CRI caused that stall.
+
+## Node loop review
+
+[NodeChassis::run](../mithril-node/src/node.rs) transfers the chassis to its run owner.
+  -> [NodeRun::start](../mithril-node/src/node/run.rs) starts the local services and effect tasks.
+  -> [NodeRun::run](../mithril-node/src/node/run.rs) selects Control, runtime, timer, task-exit, and shutdown events.
+  -> [NodeChassis::answer_runtime_admission](../mithril-node/src/node.rs) handles the typed admission call.
+  -> [NodeRun::finish](../mithril-node/src/node/run.rs) stops the effect tasks, kernel host, and local services.
+
+`NodeRun` owns connection attempts, reconnect delay, readiness state, upload
+acknowledgements, and task handles. It does not add another policy owner.
+One connection attempt remains active while the loop handles admission.
+A failed connection closes admission and schedules a bounded retry. The last
+valid local policy remains installed.
+
+`NodeChassis::await_control_rpc` continues to handle admission and seccomp
+requests while a Control operation waits. This inner wait is necessary:
+the main select loop cannot run while its selected handler awaits that operation.
+The test `pending_control_unary_still_answers_runtime_admission` checks this
+case. It is distinct from the delayed CRI test above.
+
+`NodeRun::listener_exit` handles both admission and seccomp listener exits.
+An unexpected exit closes admission and returns an error. A requested shutdown
+preserves any listener error. The test `listener_exit_closes_admission` checks
+both listeners. The effect-reader and effect-worker exit tests still require
+an unexpected exit to fail Node.
+
+The loop stores one pending coverage acknowledgement because it sends only
+one coverage interval at a time. A stale acknowledgement still closes the
+Control session. The refactor changes no wire message, BPF map, or kernel ABI.
+
+This section covers the uncommitted Node loop refactor on 2026-09-26.
+`bash .github/scripts/verify-rust-ci.sh` passed after the final Rust edit.
+This run includes formatting, workspace checks, clippy, and workspace tests.
+All 249 Node library tests passed. The privileged
+`platform::shared::tests::live_node_stall_is_closed` test passed in 52.61
+seconds in the retained VM with the rebuilt Rust test binary.
+
+The VM's old copied test binary did not contain this test. A later setup
+attempt lacked `MITHRIL_TEST_PIN`. Neither attempt exercised admission.
+The successful run used the new binary from `target/debug/deps` and explicit
+Host output, pin, lease, and cgroup paths. It changed no scenario assertions
+or deadlines. Kubernetes qualification was not rerun for this loop refactor.
