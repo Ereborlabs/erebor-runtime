@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory as _, Parser, ValueEnum};
 
-#[derive(Clone, ValueEnum)]
+#[derive(Clone, PartialEq, ValueEnum)]
 enum Case {
     OfflineExact,
     StorageContract,
@@ -12,6 +12,7 @@ enum Case {
     DataStoreStartup,
     DataStoreLoad,
     DataStoreTenants,
+    DataStoreInspect,
 }
 
 #[derive(Parser)]
@@ -21,11 +22,40 @@ struct Cli {
     case: Case,
     #[arg(long)]
     output_directory: PathBuf,
+    #[arg(
+        long,
+        required_if_eq("case", "data-store-inspect"),
+        requires = "tenant_id"
+    )]
+    data_directory: Option<PathBuf>,
+    #[arg(
+        long,
+        required_if_eq("case", "data-store-inspect"),
+        requires = "data_directory"
+    )]
+    tenant_id: Option<uuid::Uuid>,
+    #[arg(long, requires_all = ["data_directory", "tenant_id"])]
+    baseline: Option<PathBuf>,
+}
+
+impl Cli {
+    fn validate(&self) -> Result<(), clap::Error> {
+        if self.case != Case::DataStoreInspect && self.data_directory.is_some() {
+            return Err(Self::command().error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "inspection inputs require --case data-store-inspect",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    if let Err(error) = cli.validate() {
+        error.exit();
+    }
     let result = match cli.case {
         Case::OfflineExact => mithril_e2e::run_discovery_offline(&cli.output_directory)
             .map_err(Box::<dyn std::error::Error>::from),
@@ -50,6 +80,13 @@ async fn main() {
                 .tenant_load()
                 .await
         }
+        Case::DataStoreInspect => match (cli.data_directory, cli.tenant_id) {
+            (Some(root), Some(tenant)) => mithril_e2e::DataStoreQualification::new(
+                cli.output_directory,
+            )
+            .inspect(&root, *tenant.as_bytes(), cli.baseline.as_deref()),
+            _ => Err("inspection requires a data directory and tenant".into()),
+        },
         Case::ProfileRestart => {
             mithril_e2e::DiscoveryQualificationRunner::new(cli.output_directory)
                 .profile_restart()
@@ -69,5 +106,53 @@ async fn main() {
             eprintln!("{error}");
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inspection_arguments_are_scoped() {
+        let tenant = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let base = [
+            "qualification",
+            "--case",
+            "data-store-inspect",
+            "--output-directory",
+            "/tmp/result",
+        ];
+        assert!(Cli::try_parse_from(base).is_err());
+        assert!(
+            Cli::try_parse_from(base.into_iter().chain(["--data-directory", "/tmp/data"])).is_err()
+        );
+        assert!(Cli::try_parse_from(base.into_iter().chain(["--tenant-id", tenant])).is_err());
+        let complete =
+            base.into_iter()
+                .chain(["--data-directory", "/tmp/data", "--tenant-id", tenant]);
+        assert!(Cli::try_parse_from(complete.clone())
+            .unwrap()
+            .validate()
+            .is_ok());
+        assert!(
+            Cli::try_parse_from(complete.chain(["--baseline", "/tmp/baseline.json"]))
+                .unwrap()
+                .validate()
+                .is_ok()
+        );
+        let wrong = Cli::try_parse_from([
+            "qualification",
+            "--case",
+            "data-store-startup",
+            "--output-directory",
+            "/tmp/result",
+            "--data-directory",
+            "/tmp/data",
+            "--tenant-id",
+            tenant,
+        ])
+        .unwrap();
+        assert!(wrong.validate().is_err());
     }
 }

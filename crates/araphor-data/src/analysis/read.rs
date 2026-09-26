@@ -3,12 +3,67 @@ use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use super::{
-    source_key, AnalysisReadPageV1, AnalysisRecordV1, AnalysisStore, StorePositionV1,
-    MAX_ANALYSIS_PAGE_BYTES, MAX_ANALYSIS_PAGE_RECORDS,
+    source_key, valid_source_identity, AnalysisReadPageV1, AnalysisRecordV1, AnalysisStore,
+    StorePositionV1, MAX_ANALYSIS_PAGE_BYTES, MAX_ANALYSIS_PAGE_RECORDS,
 };
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result, RetainedRangeExpiredSnafu};
 
 impl AnalysisStore {
+    pub fn source_page(
+        &self,
+        tenant_id: [u8; 16],
+        after: Option<&EvidenceIntakeIdentityV1>,
+    ) -> Result<Vec<EvidenceIntakeIdentityV1>> {
+        if tenant_id == [0; 16]
+            || after.is_some_and(|source| {
+                source.tenant_id != tenant_id || !valid_source_identity(source)
+            })
+        {
+            return self.reject("the source page tenant or cursor is invalid");
+        }
+        let after = after.map(source_key);
+        let reader_guard = self.reader()?;
+        let reader = reader_guard.get()?;
+        let mut statement = reader
+            .prepare(
+                "SELECT stream_key, identity_json FROM source_receipts
+                 WHERE tenant_id = ? AND (CAST(? AS BLOB) IS NULL OR stream_key > ?)
+                 ORDER BY stream_key LIMIT ?",
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare source page",
+            })?;
+        let rows = statement
+            .query_map(
+                params![
+                    tenant_id.as_slice(),
+                    after.as_ref().map(|key| key.as_slice()),
+                    after.as_ref().map(|key| key.as_slice()),
+                    MAX_ANALYSIS_PAGE_RECORDS as u32,
+                ],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "read source page",
+            })?;
+        let mut sources = Vec::new();
+        for row in rows {
+            let (key, json) = row.context(AnalysisDatabaseSnafu {
+                operation: "decode source page",
+            })?;
+            let identity: EvidenceIntakeIdentityV1 =
+                serde_json::from_str(&json).context(crate::JsonSnafu { path: &self.root })?;
+            if identity.tenant_id != tenant_id
+                || !valid_source_identity(&identity)
+                || source_key(&identity).as_slice() != key
+            {
+                return self.reject("the source page identity does not match its key or tenant");
+            }
+            sources.push(identity);
+        }
+        Ok(sources)
+    }
+
     pub fn read_page(
         &self,
         identity: &EvidenceIntakeIdentityV1,
@@ -179,5 +234,75 @@ impl AnalysisStore {
     ) -> Result<T> {
         self.check_expired(writer, key, identity, cursor)?;
         self.reject("the accepted evidence range has a missing record")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn analysis_store_source_pages() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let identity = EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "node-a".into(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        };
+        assert!(store.source_page(identity.tenant_id, None)?.is_empty());
+        let mut expected = Vec::new();
+        for index in 0..MAX_ANALYSIS_PAGE_RECORDS + 2 {
+            let source = EvidenceIntakeIdentityV1 {
+                source_epoch: index as u64 + 1,
+                ..identity.clone()
+            };
+            store.accept_validated_coverage(crate::ValidatedCoverageV1 {
+                identity: source.clone(),
+                cpu_id: 0,
+                revision: 1,
+                encoded_report: vec![1],
+            })?;
+            expected.push(source);
+        }
+        let foreign = EvidenceIntakeIdentityV1 {
+            tenant_id: [4; 16],
+            ..identity.clone()
+        };
+        store.accept_validated_coverage(crate::ValidatedCoverageV1 {
+            identity: foreign.clone(),
+            cpu_id: 0,
+            revision: 1,
+            encoded_report: vec![2],
+        })?;
+        expected.sort_by_key(source_key);
+        let before = store.meta()?;
+        let changed = store.subscribe_revision();
+        let first = store.source_page(identity.tenant_id, None)?;
+        assert_eq!(first, expected[..MAX_ANALYSIS_PAGE_RECORDS]);
+        let second = store.source_page(identity.tenant_id, first.last())?;
+        assert_eq!(second, expected[MAX_ANALYSIS_PAGE_RECORDS..]);
+        assert!(store
+            .source_page(identity.tenant_id, second.last())?
+            .is_empty());
+        assert_eq!(
+            store.source_page(foreign.tenant_id, None)?,
+            vec![foreign.clone()]
+        );
+        assert!(store
+            .source_page(identity.tenant_id, Some(&foreign))
+            .is_err());
+        assert!(store.source_page([0; 16], None).is_err());
+        assert_eq!(store.meta()?, before);
+        assert!(!changed.has_changed()?);
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(store.source_page(identity.tenant_id, None)?, first);
+        assert_eq!(store.source_page(identity.tenant_id, first.last())?, second);
+        Ok(())
     }
 }

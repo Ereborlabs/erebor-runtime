@@ -270,6 +270,31 @@ and explicit refusal of old evidence receipts or an unsupported schema.
 Do not require a live Kubernetes cluster for either case. Rerun both before
 the physical storage/partition case in the existing mithril-e2e harness.
 
+Use `data-store-inspect` for retained-data proof while Control is stopped.
+Require an existing current-format data file and the exclusive AnalysisStore
+lease. Use `source_page` to list one tenant's sources in pages of at most 256.
+Use `read_page` to hash each exact retained range. A baseline must match the
+store, recovery epoch, tenant, source identities, cursor ranges, counts, and
+frame digests. New records can follow the baseline. Missing or expired baseline
+records fail the check. Inspection must not advance a receipt or revision.
+Limit a run to 1,024 sources, one million records per source, 256 MiB of reads,
+and a one-MiB proof file. Record database, WAL, total file, and allocated bytes.
+Reject an existing output path, a missing store, or a live store owner.
+The `data_inspection_recovery` mTLS test checks restart, appended data,
+changed evidence proofs, tenant isolation, and expiry. CLI tests reject
+incomplete or conflicting inspection inputs.
+
+The two-node outage harness accepts `--data-check PATH` for this qualification
+binary. Run its startup and recovery cases before cluster changes. Validate
+the retained PVC identity and its standard K3s local-path directory on Node A.
+Stop Control before each inspection and run the checker as numeric user 65532.
+Compare retained data before and after Node replay. Keep the Node WAL checks.
+Make only the `evidence/analysis` mount read-only for the storage fault. Require
+working Node sessions and policy acknowledgements while evidence ACKs stop.
+Restore the mount, drain Node input, and compare the retained baseline again.
+Do not compare DuckDB file prefixes or import old evidence. Local shell checks
+do not replace this physical run.
+
 Use `data_capacity_recovery` and `data_full_disk` for paired capacity proof.
 Both call the same production-owner scenario. The first uses a sparse file to
 reach the data-file quota. The second requires an empty, task-owned 1-GiB tmpfs.
@@ -788,10 +813,8 @@ workspace checks, strict Clippy, and all workspace tests. The data crate passed
 256 with one ignored. These cases do not prove torn writes, ENOSPC
 during commit, hardware power loss, or Control's mTLS failure response. Other
 capacity, load, old-writer removal, and physical requirements remain **Not done**.
-The physical outage harness still uses `control_segment_manifest` and
-`verify_control_segment_prefixes` in
-`crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh`. These checks inspect
-`segments-v2`, not AnalysisStore. They do not qualify the new storage contract.
+The physical outage harness now uses `data-store-inspect` instead of Control
+segment-file checks. The updated two-node run remains unqualified.
 
 `data_load_contract` passed with 8,192 records. The CLI load case passed for
 `769ddefb` with 262,144 records and 30,113,740 input bytes. Exact frame digests,
@@ -953,3 +976,14 @@ The CLI SHA-256 is
 No Rust source changed after the gate. Old-writer removal, full-quota and
 reserve measurements, and Kubernetes storage/partition qualification remain
 open. The complete phase remains **Not done**.
+
+The offline inspection command and outage-harness conversion are implemented.
+The source-page test passed with 258 same-tenant sources and one foreign source.
+The mTLS inspection regression and CLI argument test passed before the final
+addition of file-byte fields and the proof-output size check. The final shell
+smoke test passed, including rejection when one Node's extra records hide the
+other Node's missing replay. Shell syntax and `git diff --check` passed.
+The final workspace gate is still running after the last harness edit. It is
+rebuilding native DuckDB code. This result is **Not done** for final workspace
+verification and physical qualification. No retained two-node environment has
+been selected or changed. The unrelated running VM remains unchanged.

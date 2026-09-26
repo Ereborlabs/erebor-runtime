@@ -74,6 +74,32 @@ Control intake or the SQLite discovery projection.
 -> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) Reopen preserves store identity, revisions, receipt, report, and count.<br>
 -> [storage-contract result](../../../../crates/mithril-e2e/src/discovery/storage_contract.rs) Case records nonzero cursors, revisions, counts, and digests; the independent Control policy state remains unchanged.
 
+### Offline retained-data inspection
+
+[two-node outage harness](../../../../crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh) The harness runs the lightweight startup and recovery cases and validates the retained local-path volume.<br>
+-> [inspect_control_data](../../../../crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh) Control has zero replicas and no Pod. The checker runs with Control's numeric user.<br>
+-> [DataStoreQualification::inspect](../../../../crates/mithril-e2e/src/discovery/data_store/inspection.rs) The checker requires an existing data file and obtains the production owner's exclusive lease.<br>
+-> [AnalysisStore::source_page](../../../../crates/araphor-data/src/analysis/read.rs) One fixed query returns at most 256 source identities for the requested tenant. Each identity must match its stored key.<br>
+-> [SourceProof::read](../../../../crates/mithril-e2e/src/discovery/data_store/inspection.rs) Bounded owner reads check continuity and hash the exact retained frames.<br>
+-> [DataStoreQualification::inspect](../../../../crates/mithril-e2e/src/discovery/data_store/inspection.rs) A baseline check requires the same store, epoch, tenant, source range, count, and digest. New appended records remain allowed.<br>
+-> [DataStoreQualification::inspect](../../../../crates/mithril-e2e/src/discovery/data_store/inspection.rs) The checker verifies unchanged metadata, drops the owner, and writes a new proof with measured file usage.
+
+This checker is a qualification command, not a public query service. It does
+not copy a live database or claim that native database bytes stay unchanged.
+Normal owner open can recover DuckDB's WAL. A live lease, missing store,
+expired baseline, changed digest, foreign tenant, or exhausted bound fails the
+check. A run reads at most 256 MiB across baseline and current evidence. The
+source and proof limits are 1,024 sources and one MiB. Each source range has at
+most one million records. No reader handle crosses a public owner call.
+
+`analysis_store_source_pages` checks pagination, tenant isolation, unchanged
+revisions, and restart. `data_inspection_recovery` sends 300 records through
+mTLS, stops Control, records a proof, appends one record after restart, and
+checks the original prefix. It also checks live-owner refusal, invalid proofs,
+missing data, read limits, and expired input. `inspection_arguments_are_scoped`
+checks the CLI boundary. The shell smoke test checks wiring only. The updated
+physical storage/partition run remains **Not done**.
+
 The next route covers the data-owner implementation. The recovery case selects
 the owner explicitly. The startup case uses ControlConfig and the default owner.
 
