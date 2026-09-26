@@ -102,6 +102,19 @@ Store recovery fails
    physical disk reuse after DELETE. Reserve maintenance space before work.
    Stop writes when reclamation fails; never unlink the native WAL. Recovery
    after an older backup reports source ranges no longer retained on Node.
+   Add `NodeEvidence.ReportFloor` to the existing Node mTLS service. Each
+   request carries the current session and one source's boot ID, source ID,
+   source epoch, and durable acknowledged cursor. This cursor is the last
+   record excluded from Node replay, not the first retained record. Node walks
+   its ordered WAL sources at one report per second, including empty sources.
+   Restart the walk on reconnect and after its last source. Advance the walk
+   only after a successful report. Hold no WAL lock during network I/O.
+   Control checks current mTLS, session, and trust, then resolves the source's
+   original durable session. Use the existing shared intake admission limit.
+   Commit missing ranges through `AnalysisStore::record_recovery_floor`.
+   Retry is idempotent. The reply accepts the report; it is not an evidence
+   ACK and cannot advance Node truncation, accepted receipts, or processors.
+   A missing or corrupt data owner rejects the report without a fallback.
    Keep the data-directory lease throughout backup. Close readers before the
    writer. Attempt validated reopen after a copy error. If reopen fails, keep
    data access closed until restart; do not create an empty replacement store.
@@ -384,8 +397,8 @@ retention failure from sampled physical intake and maintenance capacity.
 Neither capacity field checks a tenant's logical quota or reserves space.
 Exact recovery-gap reads return at most 256 source-scoped ranges. A stale
 restore retains those ranges across restart without creating a source receipt.
-No read advances an ACK or processor progress. The Node protocol does not
-provide an authenticated purge-floor report; this change adds no cursor skip.
+No read advances an ACK or processor progress. Authenticated Node floor reports
+now use the protocol route described below; this route adds no cursor skip.
 The 26 `analysis_store_` tests and all five data e2e tests passed. The recovery
 case now passes 26 checks, including required lag, optional missing coverage,
 and recovery-gap restart. These runs use temporary stores and synthetic input.
@@ -529,3 +542,24 @@ passed 114 with 248 ignored; Node passed 255 with one ignored.
 Full-disk admission is qualified for this isolated fixture, not
 for native failure during commit, hardware power loss, reserve sizing, or the
 Kubernetes storage/partition case. The complete phase remains **Not done**.
+
+Authenticated floor reporting is implemented through `NodeEvidence.ReportFloor`.
+Node reads one ordered WAL source and its durable acknowledged cursor under
+the WAL lock. It releases that lock before the RPC. Control uses current mTLS,
+session and trust checks, shared intake admission, and the batch path's original
+source-session lookup. The data owner records only recovery gaps. No source
+receipt, processor progress, Node truncation, schema, or policy state changes.
+The report reply is separate from `EvidenceAck`.
+`wal_floor_replay` passed. It checks empty and nonempty sources, pending input,
+rejected ACKs, ordered iteration, protocol conversion, and current-format
+restart. All eight targeted data/mTLS tests passed. The raw mTLS intake test
+checks rejected missing trust ACK, absent report/session, stale nonce, foreign
+Node, changed boot, malformed source ID, and zero epoch. Valid reports record
+the exact gap; retry has no second effect or cross-tenant visibility.
+The rebuilt CLI passed startup (16 checks) and recovery (29 checks). Results
+are in `/tmp/araphor-data-qualification.MtrjRy/floor-{startup,recovery}/result.json`.
+Recovery now sends the actual Node floor through mTLS after stale restore.
+It retries after restart and verifies the same missing range without creating
+an accepted receipt. The full workspace gate is running after the final source
+edit. Kubernetes scheduling of the new periodic report remains unqualified.
+The complete phase remains **Not done**.

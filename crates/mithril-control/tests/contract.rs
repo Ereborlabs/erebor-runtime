@@ -78,6 +78,14 @@ fn descriptor_has_the_approved_grpc_inventory() -> Result<(), Box<dyn std::error
         ),
         method(
             "NodeEvidence",
+            "ReportFloor",
+            "EvidenceFloorRequest",
+            "EvidenceFloorAccepted",
+            false,
+            false,
+        ),
+        method(
+            "NodeEvidence",
             "Open",
             "EvidenceStreamRequest",
             "EvidenceAck",

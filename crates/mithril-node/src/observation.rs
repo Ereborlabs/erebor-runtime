@@ -31,8 +31,8 @@ pub use model::{
 };
 use wal::EvidenceWalOwner;
 pub use wal::{
-    EvidenceAckV1, EvidenceBatchV1, EvidenceRecordV1, EvidenceWal, EvidenceWalCapacityPolicyV1,
-    EvidenceWalLimits,
+    EvidenceAckV1, EvidenceBatchV1, EvidenceFloorV1, EvidenceRecordV1, EvidenceWal,
+    EvidenceWalCapacityPolicyV1, EvidenceWalLimits,
 };
 pub use window::{
     DeterministicLocalWindowOwner, LocalFindingWindowSpecV1, LocalFindingWindowStateV1,
@@ -390,6 +390,16 @@ impl EffectObservationStore {
                 batch_capacity,
             },
         ))
+    }
+
+    pub fn evidence_floor(
+        &self,
+        after: Option<&EvidenceFloorV1>,
+    ) -> crate::Result<Option<EvidenceFloorV1>> {
+        if self.inner.durable.is_none() {
+            return Ok(None);
+        }
+        Ok(self.lock_durable()?.wal.next_floor(after))
     }
 
     pub fn next_evidence_batch(&self) -> Option<EvidenceBatchV1> {

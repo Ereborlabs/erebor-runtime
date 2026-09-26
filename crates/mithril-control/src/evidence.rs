@@ -321,23 +321,42 @@ impl EvidenceIntakeOwner {
         node_id: &str,
         batch: &EvidenceBatch,
     ) -> std::result::Result<AuthenticatedEvidenceNodeV1, Status> {
-        let node_boot_id: [u8; 16] = batch
-            .node_boot_id
-            .as_slice()
+        self.authenticate_source(
+            tenant_id,
+            node_id,
+            &batch.node_boot_id,
+            &batch.source_id,
+            batch.source_epoch,
+        )
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn authenticate_source(
+        &self,
+        tenant_id: [u8; 16],
+        node_id: &str,
+        boot: &[u8],
+        source: &[u8],
+        source_epoch: u64,
+    ) -> std::result::Result<AuthenticatedEvidenceNodeV1, Status> {
+        let node_boot_id: [u8; 16] = boot
             .try_into()
             .map_err(|_| Status::invalid_argument("evidence boot identity is not Id128"))?;
-        let source_id: [u8; 16] = batch
-            .source_id
-            .as_slice()
+        let source_id: [u8; 16] = source
             .try_into()
             .map_err(|_| Status::invalid_argument("evidence source identity is not Id128"))?;
+        if node_boot_id == [0; 16] || source_id == [0; 16] || source_epoch == 0 {
+            return Err(Status::invalid_argument(
+                "evidence source identity is invalid",
+            ));
+        }
         // Current mTLS and trust authenticate the sender. The retained record selects
         // the exact durable session that originally owned its immutable stream.
         let bound = self
             .data
             .as_ref()
             .map(|data| {
-                data.source_binding(tenant_id, node_id, source_id, batch.source_epoch)
+                data.source_binding(tenant_id, node_id, source_id, source_epoch)
                     .map_err(Self::data_status)
             })
             .transpose()?
@@ -357,7 +376,7 @@ impl EvidenceIntakeOwner {
                 node_id,
                 node_boot_id,
                 source_id,
-                batch.source_epoch,
+                source_epoch,
                 bound.map(|identity| identity.label_epoch),
             )
             .map_err(|_| {
@@ -371,6 +390,40 @@ impl EvidenceIntakeOwner {
             node_boot_id,
             label_epoch: session.label_epoch,
         })
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn receive_floor(
+        &self,
+        tenant_id: [u8; 16],
+        node_id: &str,
+        floor: &crate::EvidenceFloor,
+    ) -> std::result::Result<crate::EvidenceFloorAccepted, Status> {
+        let data = self
+            .data
+            .as_ref()
+            .ok_or_else(|| Status::unavailable("Control data intake is unavailable"))?;
+        let authenticated = self.authenticate_source(
+            tenant_id,
+            node_id,
+            &floor.node_boot_id,
+            &floor.source_id,
+            floor.source_epoch,
+        )?;
+        let identity =
+            EvidenceIntakeIdentityV1 {
+                tenant_id,
+                node_id: node_id.to_owned(),
+                node_boot_id: authenticated.node_boot_id,
+                label_epoch: authenticated.label_epoch,
+                source_id: floor.source_id.as_slice().try_into().map_err(|_| {
+                    Status::invalid_argument("evidence source identity is not Id128")
+                })?,
+                source_epoch: floor.source_epoch,
+            };
+        data.record_recovery_floor(&identity, floor.purged_cursor)
+            .map_err(Self::data_status)?;
+        Ok(crate::EvidenceFloorAccepted {})
     }
 
     #[allow(clippy::result_large_err)]

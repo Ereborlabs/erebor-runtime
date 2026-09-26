@@ -49,8 +49,9 @@ const OUTAGE_NOW: i64 = 1_800_000_000_000_000_000;
 async fn data_stream_flushes_without_tail() -> Result<(), Box<dyn StdError>> {
     use mithril_control::{
         node_evidence_client::NodeEvidenceClient, node_registry_client::NodeRegistryClient,
-        node_trust_client::NodeTrustClient, EvidenceStreamRequest, NodeRegistrationRequest,
-        NodeSessionContext, TrustGenerationAck, TrustGenerationAckRequest,
+        node_trust_client::NodeTrustClient, EvidenceFloor, EvidenceFloorRequest,
+        EvidenceStreamRequest, NodeRegistrationRequest, NodeSessionContext, TrustGenerationAck,
+        TrustGenerationAckRequest,
     };
     use mithril_control::{EvidenceBatch, EvidenceIntakeIdentityV1};
     use mithril_node::{EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, ObservationCanonicalizer};
@@ -100,6 +101,19 @@ async fn data_stream_flushes_without_tail() -> Result<(), Box<dyn StdError>> {
             registration: Some(registration()),
         })
         .await?;
+    assert!(NodeEvidenceClient::new(channel.clone())
+        .report_floor(EvidenceFloorRequest {
+            session: Some(session.clone()),
+            floor: Some(EvidenceFloor {
+                node_boot_id: vec![7; 16],
+                source_id: vec![1; 16],
+                source_epoch: 1,
+                purged_cursor: 2,
+            }),
+        })
+        .await
+        .is_err());
+    assert_eq!(data.meta()?.commit_revision, baseline);
     let mut trust_stream = NodeTrustClient::new(channel.clone())
         .watch(session.clone())
         .await?
@@ -178,6 +192,118 @@ async fn data_stream_flushes_without_tail() -> Result<(), Box<dyn StdError>> {
             .is_none()
     );
     drop(replies);
+    let floor = EvidenceFloor {
+        node_boot_id: batch.node_boot_id.clone(),
+        source_id: batch.source_id.clone(),
+        source_epoch: batch.source_epoch,
+        purged_cursor: 2,
+    };
+    let report = EvidenceFloorRequest {
+        session: Some(session.clone()),
+        floor: Some(floor.clone()),
+    };
+    let before = data.meta()?;
+    let mut failures = vec![
+        (
+            EvidenceFloorRequest {
+                session: None,
+                ..report.clone()
+            },
+            tonic::Code::InvalidArgument,
+        ),
+        (
+            EvidenceFloorRequest {
+                floor: None,
+                ..report.clone()
+            },
+            tonic::Code::InvalidArgument,
+        ),
+    ];
+    for foreign in [false, true] {
+        let mut changed = session.clone();
+        if foreign {
+            changed.node_id = "node-b".into();
+        } else {
+            changed.connection_nonce = vec![9; 16];
+        }
+        failures.push((
+            EvidenceFloorRequest {
+                session: Some(changed),
+                ..report.clone()
+            },
+            if foreign {
+                tonic::Code::PermissionDenied
+            } else {
+                tonic::Code::Unauthenticated
+            },
+        ));
+    }
+    for (changed, code) in [
+        (
+            EvidenceFloor {
+                node_boot_id: vec![9; 16],
+                ..floor.clone()
+            },
+            tonic::Code::PermissionDenied,
+        ),
+        (
+            EvidenceFloor {
+                node_boot_id: vec![0; 16],
+                ..floor.clone()
+            },
+            tonic::Code::InvalidArgument,
+        ),
+        (
+            EvidenceFloor {
+                source_id: vec![1; 15],
+                ..floor.clone()
+            },
+            tonic::Code::InvalidArgument,
+        ),
+        (
+            EvidenceFloor {
+                source_epoch: 0,
+                ..floor.clone()
+            },
+            tonic::Code::InvalidArgument,
+        ),
+    ] {
+        failures.push((
+            EvidenceFloorRequest {
+                floor: Some(changed),
+                ..report.clone()
+            },
+            code,
+        ));
+    }
+    for (request, code) in failures {
+        let status = client
+            .report_floor(request)
+            .await
+            .err()
+            .ok_or("invalid floor accepted")?;
+        assert_eq!(status.code(), code);
+        assert_eq!(data.meta()?, before);
+        assert!(data.recovery_gaps(&identity, 0)?.is_empty());
+    }
+    client.report_floor(report.clone()).await?;
+    let gaps = data.recovery_gaps(&identity, 0)?;
+    assert_eq!(gaps.len(), 1);
+    assert_eq!((gaps[0].first_cursor, gaps[0].last_cursor), (2, 2));
+    assert_eq!(
+        data.source_receipt(&identity)?
+            .ok_or("receipt absent")?
+            .contiguous_cursor,
+        1
+    );
+    assert_eq!(data.meta()?.commit_revision, before.commit_revision + 1);
+    client.report_floor(report).await?;
+    assert_eq!(data.meta()?.commit_revision, before.commit_revision + 1);
+    assert_eq!(data.read_page(&identity, 1)?.records, page.records);
+    assert_eq!(observations.pending_evidence_records(), 1);
+    let mut foreign = identity;
+    foreign.tenant_id = [9; 16];
+    assert!(data.recovery_gaps(&foreign, 0)?.is_empty());
     drop(client);
     server.shutdown().await?;
     Ok(())

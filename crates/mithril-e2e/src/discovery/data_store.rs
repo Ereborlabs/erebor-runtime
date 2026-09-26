@@ -11,9 +11,9 @@ use std::{
 };
 
 use araphor_data::{
-    AnalysisRecoveryStatusV1, AnalysisResultCommitV1, AnalysisStore, AnalysisWitnessV1,
-    EvidenceIntakeIdentityV1, EvidenceRetentionOwner, ProcessorClassV1, ProcessorScopeV1,
-    ProcessorStateV1, RetentionLimitsV1,
+    AnalysisResultCommitV1, AnalysisStore, AnalysisWitnessV1, EvidenceIntakeIdentityV1,
+    EvidenceRetentionOwner, ProcessorClassV1, ProcessorScopeV1, ProcessorStateV1,
+    RetentionLimitsV1,
 };
 use mithril_control::{
     ControlStore, EvidenceIdV1, EvidenceIntakeOwner, IntakeClock, NodeRegistration,
@@ -628,20 +628,32 @@ impl DataStoreQualification {
             restored.meta()?.recovery_epoch == data.meta()?.recovery_epoch + 1,
             "restore did not change the recovery epoch",
         )?;
-        let stale = AnalysisStore::restore(&stale_path, &tls.path().join("stale-restored"))?;
+        drop(connection);
+        server.shutdown().await?;
+        let stale = Arc::new(AnalysisStore::restore(
+            &stale_path,
+            &tls.path().join("stale-restored"),
+        )?);
+        let intake = EvidenceIntakeOwner::new(control.clone(), stale.clone(), clock)?;
+        let server = tls.start(tls.control_from_intake(intake, 1)?).await?;
+        let mut connection = self.connect(&tls, &server).await?;
+        let floor = observations
+            .evidence_floor(None)?
+            .ok_or("Node floor absent")?;
+        connection.report_evidence_floor(&floor).await?;
         self.check(
             observations.pending_evidence_records() == 0
-                && stale.record_recovery_floor(&identity, 4)?
-                    == AnalysisRecoveryStatusV1::Partial {
-                        first_cursor: 1,
-                        last_cursor: 4,
-                    },
+                && observations.next_evidence_batch().is_none()
+                && floor.purged_cursor == 4
+                && stale.source_receipt(&identity)?.is_none(),
             "stale backup hid purged Node input",
         )?;
         let gaps = stale.recovery_gaps(&identity, 0)?;
+        drop(connection);
+        server.shutdown().await?;
         let before = stale.meta()?;
         drop(stale);
-        let stale = AnalysisStore::open(tls.path().join("stale-restored"))?;
+        let stale = Arc::new(Self::reopen_data(&tls.path().join("stale-restored")).await?);
         self.check(
             gaps.len() == 1
                 && gaps[0].first_cursor == 1
@@ -650,6 +662,21 @@ impl DataStoreQualification {
                 && stale.meta()? == before
                 && stale.source_receipt(&identity)?.is_none(),
             "recovery gap restart lost evidence or invented an accepted receipt",
+        )?;
+        let intake = EvidenceIntakeOwner::new(
+            control.clone(),
+            stale.clone(),
+            Arc::new(TestClock(AtomicU64::new(START))),
+        )?;
+        let server = tls.start(tls.control_from_intake(intake, 1)?).await?;
+        let mut connection = self.connect(&tls, &server).await?;
+        connection.report_evidence_floor(&floor).await?;
+        self.check(
+            stale.meta()? == before
+                && stale.recovery_gaps(&identity, 0)? == gaps
+                && observations.evidence_floor(None)? == Some(floor)
+                && observations.pending_evidence_records() == 0,
+            "floor retry changed recovery state or Node truncation",
         )?;
         drop(connection);
         server.shutdown().await?;
@@ -681,6 +708,8 @@ impl DataStoreQualification {
             "restore-recovery-epoch",
             "stale-backup-partial",
             "recovery-gap-restart",
+            "authenticated-node-floor",
+            "floor-retry-noop",
         ];
         fs::create_dir(&self.output)?;
         super::write_json(

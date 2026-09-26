@@ -201,6 +201,23 @@ impl From<EvidenceBatchV1> for mithril_control::EvidenceBatch {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EvidenceFloorV1 {
+    identity: EvidenceWalStreamIdentityV1,
+    pub purged_cursor: u64,
+}
+
+impl From<&EvidenceFloorV1> for mithril_control::EvidenceFloor {
+    fn from(floor: &EvidenceFloorV1) -> Self {
+        Self {
+            node_boot_id: floor.identity.node_boot_id.to_vec(),
+            source_id: floor.identity.source_id.to_vec(),
+            source_epoch: floor.identity.source_epoch,
+            purged_cursor: floor.purged_cursor,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EvidenceAckV1 {
     pub contiguous_cursor: u64,
 }
@@ -777,6 +794,20 @@ impl EvidenceWalOwner {
                 .sync_active()?;
         }
         Ok(())
+    }
+
+    pub(super) fn next_floor(&self, after: Option<&EvidenceFloorV1>) -> Option<EvidenceFloorV1> {
+        use std::ops::Bound::{Excluded, Unbounded};
+        self.streams
+            .range((
+                after.map_or(Unbounded, |floor| Excluded(floor.identity)),
+                Unbounded,
+            ))
+            .next()
+            .map(|(identity, wal)| EvidenceFloorV1 {
+                identity: *identity,
+                purged_cursor: wal.acknowledged_cursor(),
+            })
     }
 
     pub(super) fn next_batch(&mut self) -> Option<EvidenceBatchV1> {
@@ -1630,6 +1661,53 @@ mod tests {
             contiguous_cursor: 5,
         })?);
         assert!(owner.next_batches().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn wal_floor_replay() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let mut owner = EvidenceWalOwner::open(directory.path(), limits())?;
+        assert!(owner.next_floor(None).is_none());
+        owner
+            .append_classified(&observation(1)?)
+            .map_err(|failure| failure.error)?;
+        let first = owner.next_floor(None).ok_or("floor absent")?;
+        assert_eq!(first.purged_cursor, 0);
+        assert!(owner.next_floor(Some(&first)).is_none());
+        assert_eq!(owner.next_batch().ok_or("batch absent")?.last_cursor, 1);
+        assert_eq!(owner.next_floor(None), Some(first));
+        assert!(owner
+            .acknowledge(EvidenceAckV1 {
+                contiguous_cursor: 2
+            })
+            .is_err());
+        assert_eq!(owner.next_floor(None), Some(first));
+        owner.acknowledge(EvidenceAckV1 {
+            contiguous_cursor: 1,
+        })?;
+        let first = owner.next_floor(None).ok_or("floor absent")?;
+        assert_eq!(first.purged_cursor, 1);
+        assert!(owner.next_batch().is_none());
+        let mut other = observation(1)?;
+        other.node_boot_id = [9; 16].into();
+        owner
+            .append_classified(&other)
+            .map_err(|failure| failure.error)?;
+        let second = owner
+            .next_floor(Some(&first))
+            .ok_or("second floor absent")?;
+        assert_eq!(second.purged_cursor, 0);
+        assert!(owner.next_floor(Some(&second)).is_none());
+        drop(owner);
+        let owner = EvidenceWalOwner::open(directory.path(), limits())?;
+        assert_eq!(owner.next_floor(None), Some(first));
+        assert_eq!(owner.next_floor(Some(&first)), Some(second));
+        let wire = mithril_control::EvidenceFloor::from(&first);
+        assert_eq!(wire.node_boot_id, first.identity.node_boot_id);
+        assert_eq!(wire.source_id, first.identity.source_id);
+        assert_eq!(wire.source_epoch, first.identity.source_epoch);
+        assert_eq!(wire.purged_cursor, 1);
         Ok(())
     }
 

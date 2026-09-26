@@ -15,6 +15,7 @@ service NodeTrust {
 service NodeEvidence {
   rpc Upload(EvidenceBatchRequest) returns (EvidenceAck);
   rpc Open(stream EvidenceStreamRequest) returns (stream EvidenceAck);
+  rpc ReportFloor(EvidenceFloorRequest) returns (EvidenceFloorAccepted);
 }
 
 service NodeCoverage {
@@ -92,6 +93,22 @@ message EvidenceStreamRequest {
   NodeSessionContext session = 1;
   EvidenceBatch batch = 2;
 }
+
+message EvidenceFloorRequest {
+  NodeSessionContext session = 1;
+  EvidenceFloor floor = 2;
+}
+
+// The cursor is the last record excluded from Node replay after durable ACK.
+message EvidenceFloor {
+  bytes node_boot_id = 1;
+  bytes source_id = 2;
+  uint64 source_epoch = 3;
+  uint64 purged_cursor = 4;
+}
+
+// Accepts a floor report. This reply cannot authorize Node truncation.
+message EvidenceFloorAccepted {}
 
 message CoverageReportRequest {
   NodeSessionContext session = 1;

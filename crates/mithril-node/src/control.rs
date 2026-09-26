@@ -53,6 +53,7 @@ pub struct ControlConnection {
     decommission_input: Streaming<NodeDecommissionCommand>,
     evidence_output: mpsc::Sender<EvidenceStreamRequest>,
     evidence_input: Streaming<EvidenceAck>,
+    evidence: NodeEvidenceClient<Channel>,
     coverage: NodeCoverageClient<Channel>,
     policy: NodePolicyClient<Channel>,
     diagnostics: mithril_control::node_diagnostics_client::NodeDiagnosticsClient<Channel>,
@@ -245,9 +246,10 @@ impl NodeControlConnector {
             .into_inner();
 
         let (evidence_output, evidence_receiver) = mpsc::channel(EVIDENCE_PIPELINE_BATCHES);
-        let evidence_input = NodeEvidenceClient::new(channel.clone())
+        let mut evidence = NodeEvidenceClient::new(channel.clone())
             .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
-            .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES);
+        let evidence_input = evidence
             .open(Request::new(ReceiverStream::new(evidence_receiver)))
             .await
             .context(ControlRpcSnafu)?
@@ -263,6 +265,7 @@ impl NodeControlConnector {
             decommission_input,
             evidence_output,
             evidence_input,
+            evidence,
             coverage: NodeCoverageClient::new(channel.clone())
                 .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
                 .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
@@ -542,6 +545,17 @@ impl ControlConnection {
                 }
                 .build()
             })
+    }
+
+    pub async fn report_evidence_floor(&mut self, floor: &crate::EvidenceFloorV1) -> Result<()> {
+        bounded_response(self.evidence.report_floor(bounded_request(
+            mithril_control::EvidenceFloorRequest {
+                session: Some(self.identity.clone()),
+                floor: Some(floor.into()),
+            },
+        )))
+        .await?;
+        Ok(())
     }
 
     pub async fn send_evidence_batch(&mut self, batch: crate::EvidenceBatchV1) -> Result<()> {
