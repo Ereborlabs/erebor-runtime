@@ -87,6 +87,9 @@ Store recovery fails
    physical disk reuse after DELETE. Reserve maintenance space before work.
    Stop writes when reclamation fails; never unlink the native WAL. Recovery
    after an older backup reports source ranges no longer retained on Node.
+   Keep the data-directory lease throughout backup. Close readers before the
+   writer. Attempt validated reopen after a copy error. If reopen fails, keep
+   data access closed until restart; do not create an empty replacement store.
 8. Activate the data owner in a clean development deployment. Control opens
    a private AnalysisStore with the current schema and selects it as the only
    evidence writer before Node intake starts. Reject an unsupported schema
@@ -333,9 +336,30 @@ provide an authenticated purge-floor report; this change adds no cursor skip.
 The 26 `analysis_store_` tests and all five data e2e tests passed. The recovery
 case now passes 26 checks, including required lag, optional missing coverage,
 and recovery-gap restart. These runs use temporary stores and synthetic input.
-The final workspace gate for the health changes is running. The aggregate
+The final workspace gate passed for `4c9fca1f`: formatting, compilation,
+strict Clippy, and workspace tests. The data crate passed 35 tests with two
+ignored. Control passed 195 tests with two ignored, including the SQLite
+50,000-atom case. The aggregate
 scan cost still needs load qualification; passing small fixtures does not
 prove the declared intake budget. Physical capacity and trace reservation,
 processor runtime-failure reporting, Control context projection, crash injection, removal of
 the remaining old library writer, and physical disk reuse remain open.
 Production enablement is not qualified.
+
+Backup now drains native access under the existing maintenance lock. It
+checkpoints, closes both readers and the writer, copies and syncs the database
+and manifest, then validates the original store before resuming. The directory
+lease remains held. A copy or manifest error still attempts reopen. A reopen
+failure leaves all native slots closed; data operations return an error.
+Startup and reopen share the same native resource settings. Neither path adds
+an importer, migration, fallback database, or additional persistence owner.
+The 28 `analysis_store_` tests passed. `analysis_store_backup_window` checks
+reader drain, unchanged revision, post-backup writes, and recovery after copy
+and manifest errors. It also checks that a prior backup remains unchanged.
+`analysis_store_closed_access` checks rejected reads, writes, and health after
+connection closure, a held lease, rejected identity change, and restart.
+All five data e2e tests passed with the post-backup mTLS replay assertion.
+The recovery case now passes 27 checks. The same authenticated connection
+retries the retained batch after backup; ACK and store revision stay unchanged.
+The final workspace gate passed formatting, compilation, strict Clippy, and
+37 data-crate tests with two ignored. The remaining workspace tests are running.

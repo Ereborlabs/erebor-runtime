@@ -186,7 +186,8 @@ mod tests {
     fn analysis_store_native_limits() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
-        let reader = store.reader()?;
+        let reader_guard = store.reader()?;
+        let reader = reader_guard.get()?;
         let settings: (String, String, String, u64) = reader.query_row(
             "SELECT current_setting('memory_limit'), current_setting('wal_autocheckpoint'), current_setting('max_temp_directory_size'), current_setting('threads')",
             [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),

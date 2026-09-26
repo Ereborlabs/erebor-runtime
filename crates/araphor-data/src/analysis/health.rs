@@ -231,7 +231,8 @@ impl AnalysisStore {
         if !valid_source_identity(identity) {
             return self.reject("the recovery gap source identity is invalid");
         }
-        let reader = self.reader()?;
+        let reader_guard = self.reader()?;
+        let reader = reader_guard.get()?;
         let mut statement = reader
             .prepare(
                 "SELECT first_cursor, last_cursor, commit_revision FROM recovery_gaps
@@ -272,7 +273,8 @@ impl AnalysisStore {
         }
         let key = source_key(&scope.identity);
         let tenant = scope.identity.tenant_id.as_slice();
-        let mut reader = self.reader()?;
+        let mut reader_guard = self.reader()?;
+        let reader = reader_guard.get_mut()?;
         let snapshot = reader.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin processor health snapshot",
         })?;

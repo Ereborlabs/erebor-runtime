@@ -307,7 +307,8 @@ impl AnalysisStore {
         {
             return Self::reject_path(&self.root, "the source epoch lookup is invalid");
         }
-        let writer = self.reader()?;
+        let writer_guard = self.reader()?;
+        let writer = writer_guard.get()?;
         let saved: Option<(Vec<u8>, Vec<u8>, u64)> = writer
             .query_row(
                 "SELECT tenant_id, node_boot_id, label_epoch FROM source_bindings WHERE epoch_key = ?",
@@ -327,7 +328,7 @@ impl AnalysisStore {
         identity.label_epoch = label;
         if tenant != identity.tenant_id
             || !valid_source_identity(&identity)
-            || Self::read_receipt_from(&writer, &self.root, &identity, &source_key(&identity))?
+            || Self::read_receipt_from(writer, &self.root, &identity, &source_key(&identity))?
                 .is_none()
         {
             return Self::reject_path(
@@ -493,7 +494,7 @@ mod tests {
             })?;
             drop(store);
             let store = AnalysisStore::open(&root)?;
-            store.writer()?.execute_batch(fault)?;
+            store.writer()?.get()?.execute_batch(fault)?;
             drop(store);
             assert!(AnalysisStore::open(&root).is_err(), "accepted {fault}");
         }
@@ -538,7 +539,7 @@ mod tests {
             store.source_binding([4; 16], &identity.node_id, identity.source_id, 9)?,
             None
         );
-        store.writer()?.execute(
+        store.writer()?.get()?.execute(
             "UPDATE source_bindings SET node_boot_id = ? WHERE epoch_key = ?",
             params![[5_u8; 16].as_slice(), identity.epoch_key().as_slice()],
         )?;
@@ -553,6 +554,7 @@ mod tests {
         let store = AnalysisStore::open(&root)?;
         store
             .writer()?
+            .get()?
             .execute("UPDATE store_meta SET schema_version = 2", [])?;
         drop(store);
         assert!(AnalysisStore::open(&root).is_err());
@@ -572,6 +574,7 @@ mod tests {
         let store = AnalysisStore::open(&root)?;
         store
             .writer()?
+            .get()?
             .execute("ALTER TABLE events RENAME TO missing_events", [])?;
         drop(store);
         assert!(AnalysisStore::open(&root).is_err());

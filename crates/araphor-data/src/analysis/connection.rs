@@ -1,11 +1,12 @@
-use std::ops::{Deref, DerefMut};
+use std::path::Path;
 use std::sync::{atomic::Ordering, MutexGuard, RwLockReadGuard, TryLockError};
 
-use duckdb::Connection;
+use duckdb::{Config, Connection};
+use snafu::ResultExt as _;
 use tokio::sync::SemaphorePermit;
 
 use super::AnalysisStore;
-use crate::{AnalysisBusySnafu, Result};
+use crate::{AnalysisBusySnafu, AnalysisDatabaseSnafu, AnalysisStateSnafu, Result};
 
 pub(super) struct AnalysisLease {
     file: std::fs::File,
@@ -31,26 +32,56 @@ impl Drop for AnalysisLease {
 }
 
 pub(super) struct AnalysisConnection<'a> {
-    connection: MutexGuard<'a, Connection>,
+    pub(super) connection: MutexGuard<'a, Option<Connection>>,
+    root: &'a Path,
     _snapshot: Option<RwLockReadGuard<'a, ()>>,
     _permit: SemaphorePermit<'a>,
 }
 
-impl Deref for AnalysisConnection<'_> {
-    type Target = Connection;
-
-    fn deref(&self) -> &Connection {
-        &self.connection
+impl AnalysisConnection<'_> {
+    pub(super) fn get(&self) -> Result<&Connection> {
+        self.connection.as_ref().ok_or_else(|| {
+            AnalysisStateSnafu {
+                path: self.root,
+                reason: "the analysis connections are closed",
+            }
+            .build()
+        })
     }
-}
 
-impl DerefMut for AnalysisConnection<'_> {
-    fn deref_mut(&mut self) -> &mut Connection {
-        &mut self.connection
+    pub(super) fn get_mut(&mut self) -> Result<&mut Connection> {
+        self.connection.as_mut().ok_or_else(|| {
+            AnalysisStateSnafu {
+                path: self.root,
+                reason: "the analysis connections are closed",
+            }
+            .build()
+        })
     }
 }
 
 impl AnalysisStore {
+    pub(super) fn open_native(path: &Path) -> Result<Connection> {
+        let config = Config::default()
+            .enable_autoload_extension(false)
+            .context(AnalysisDatabaseSnafu {
+                operation: "disable extension loading",
+            })?
+            .enable_external_access(false)
+            .context(AnalysisDatabaseSnafu {
+                operation: "disable external access",
+            })?
+            .max_memory("128MiB")
+            .and_then(|config| config.threads(2))
+            .and_then(|config| config.with("wal_autocheckpoint", "64MiB"))
+            .and_then(|config| config.with("max_temp_directory_size", "128MiB"))
+            .context(AnalysisDatabaseSnafu {
+                operation: "bound native data resources",
+            })?;
+        Connection::open_with_flags(path, config)
+            .context(AnalysisDatabaseSnafu { operation: "open" })
+    }
+
     pub(super) fn writer(&self) -> Result<AnalysisConnection<'_>> {
         let connection = self.writer_access()?;
         self.require_capacity(false)?;
@@ -74,6 +105,7 @@ impl AnalysisStore {
             .map_err(|_| self.state_error("the analysis writer lock is poisoned"))?;
         Ok(AnalysisConnection {
             connection,
+            root: &self.root,
             _snapshot: None,
             _permit: permit,
         })
@@ -94,6 +126,7 @@ impl AnalysisStore {
                 Ok(connection) => {
                     return Ok(AnalysisConnection {
                         connection,
+                        root: &self.root,
                         _snapshot: Some(snapshot),
                         _permit: permit,
                     });
@@ -110,6 +143,7 @@ impl AnalysisStore {
             .map_err(|_| self.state_error("the analysis reader lock is poisoned"))?;
         Ok(AnalysisConnection {
             connection,
+            root: &self.root,
             _snapshot: Some(snapshot),
             _permit: permit,
         })
@@ -242,7 +276,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         thread::scope(|scope| -> TestResult {
             let mut reader = store.reader()?;
-            let snapshot = reader.transaction()?;
+            let snapshot = reader.get_mut()?.transaction()?;
             assert_eq!(
                 snapshot.query_row("SELECT COUNT(*) FROM events", [], |row| row
                     .get::<_, u64>(0))?,

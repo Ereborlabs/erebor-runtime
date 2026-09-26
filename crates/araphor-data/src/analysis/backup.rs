@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 use uuid::Uuid;
 
-use super::{source_key, valid_source_identity, AnalysisStore, ANALYSIS_SCHEMA_VERSION};
+use super::{
+    source_key, valid_source_identity, AnalysisStore, AnalysisStoreMetaV1, ANALYSIS_SCHEMA_VERSION,
+};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, JsonSnafu, Result};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -39,9 +41,12 @@ impl AnalysisStore {
         }
         let key = source_key(identity);
         let mut writer = self.maintenance_writer()?;
-        let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
-            operation: "begin source recovery",
-        })?;
+        let transaction = writer
+            .get_mut()?
+            .transaction()
+            .context(AnalysisDatabaseSnafu {
+                operation: "begin source recovery",
+            })?;
         let stored = Self::read_receipt_from(&transaction, &self.root, identity, &key)?
             .map_or(0, |receipt| receipt.contiguous_cursor);
         if node_retained_floor <= stored {
@@ -101,6 +106,7 @@ impl AnalysisStore {
             .write()
             .map_err(|_| self.state_error("the analysis maintenance lock is poisoned"))?;
         writer
+            .get()?
             .execute_batch("CHECKPOINT")
             .context(AnalysisDatabaseSnafu {
                 operation: "checkpoint analysis database",
@@ -118,17 +124,75 @@ impl AnalysisStore {
         if !parent_meta.is_dir() || parent_meta.permissions().mode() & 0o077 != 0 {
             return self.reject("the backup directory is not private");
         }
-        let writer = self.maintenance_writer()?;
+        let mut writer = self.maintenance_writer()?;
         let _maintenance = self
             .maintenance
             .write()
             .map_err(|_| self.state_error("the analysis maintenance lock is poisoned"))?;
+        let mut readers = [
+            self.readers[0]
+                .lock()
+                .map_err(|_| self.state_error("the analysis reader lock is poisoned"))?,
+            self.readers[1]
+                .lock()
+                .map_err(|_| self.state_error("the analysis reader lock is poisoned"))?,
+        ];
         writer
+            .get()?
             .execute_batch("CHECKPOINT")
             .context(AnalysisDatabaseSnafu {
                 operation: "checkpoint before backup",
             })?;
         let source = self.root.join("analysis.duckdb");
+        let meta = Self::read_meta_from(writer.get()?, &source)?;
+        for reader in &mut readers {
+            drop(reader.take());
+        }
+        drop(writer.connection.take());
+        let result = self.copy_backup(destination, &meta);
+        let connection = self.reopen_backup(&meta)?;
+        let first = connection.try_clone().context(AnalysisDatabaseSnafu {
+            operation: "reopen first trusted reader",
+        })?;
+        let second = connection.try_clone().context(AnalysisDatabaseSnafu {
+            operation: "reopen second trusted reader",
+        })?;
+        *readers[0] = Some(first);
+        *readers[1] = Some(second);
+        *writer.connection = Some(connection);
+        result
+    }
+
+    fn reopen_backup(&self, meta: &AnalysisStoreMetaV1) -> Result<duckdb::Connection> {
+        let source = self.root.join("analysis.duckdb");
+        let saved = fs::symlink_metadata(&source).context(IoSnafu { path: &source })?;
+        if !saved.is_file() || saved.permissions().mode() & 0o077 != 0 {
+            return self.reject("the analysis database file is not private");
+        }
+        let connection = Self::open_native(&source)?;
+        if Self::read_meta_from(&connection, &source)? != *meta {
+            return self.reject("the analysis identity changed during backup");
+        }
+        Self::validate_tables(&connection)?;
+        Self::validate_state(&connection, &self.root)?;
+        Ok(connection)
+    }
+
+    fn copy_backup(
+        &self,
+        destination: &Path,
+        meta: &AnalysisStoreMetaV1,
+    ) -> Result<AnalysisBackupManifestV1> {
+        let parent = destination
+            .parent()
+            .ok_or_else(|| self.state_error("the backup path has no parent"))?;
+        let source = self.root.join("analysis.duckdb");
+        let wal = self.root.join("analysis.duckdb.wal");
+        match fs::symlink_metadata(&wal) {
+            Ok(_) => return self.reject("the closed database still has a native WAL"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => return Err(source).context(IoSnafu { path: &wal }),
+        }
         let source_bytes = fs::metadata(&source)
             .context(IoSnafu { path: &source })?
             .len();
@@ -157,7 +221,6 @@ impl AnalysisStore {
             .context(IoSnafu { path: destination })?;
         std::io::copy(&mut source_file, &mut output).context(IoSnafu { path: destination })?;
         output.sync_all().context(IoSnafu { path: destination })?;
-        let meta = Self::read_meta_from(&writer, &source)?;
         let manifest = AnalysisBackupManifestV1 {
             store_uuid: meta.store_uuid.to_string(),
             schema_version: meta.schema_version,
@@ -271,9 +334,12 @@ impl AnalysisStore {
         }
         {
             let mut writer = store.writer()?;
-            let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
-                operation: "begin restore epoch",
-            })?;
+            let transaction = writer
+                .get_mut()?
+                .transaction()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "begin restore epoch",
+                })?;
             let epoch = meta
                 .recovery_epoch
                 .checked_add(1)
@@ -319,6 +385,80 @@ mod tests {
             framed_records: b"frame".to_vec().into(),
             frame_ends: vec![5],
         }
+    }
+
+    #[test]
+    fn analysis_store_backup_window() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use std::{sync::mpsc, thread, time::Duration};
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        store.accept_validated_batch(identity(), batch(1))?;
+        let meta = store.meta()?;
+        let backups = directory.path().join("backups");
+        DirBuilder::new().mode(0o700).create(&backups)?;
+        let destination = backups.join("saved.duckdb");
+        let reader = store.reader()?;
+        let (sender, receiver) = mpsc::channel();
+        thread::scope(
+            |scope| -> std::result::Result<(), Box<dyn std::error::Error>> {
+                let worker = scope.spawn(|| sender.send(store.backup(&destination)));
+                let pending = receiver.recv_timeout(Duration::from_millis(50));
+                drop(reader);
+                assert!(matches!(pending, Err(mpsc::RecvTimeoutError::Timeout)));
+                let manifest = receiver.recv_timeout(Duration::from_secs(10))??;
+                assert_eq!(manifest.commit_revision, meta.commit_revision);
+                worker.join().map_err(|_| "backup panicked")??;
+                Ok(())
+            },
+        )?;
+        assert_eq!(store.meta()?, meta);
+        assert_eq!(store.read_page(&identity(), 1)?.records.len(), 1);
+        let saved_digest = AnalysisStore::file_digest(&destination)?;
+        assert!(AnalysisStore::open(&root).is_err());
+        assert!(store.backup(&destination).is_err());
+        assert_eq!(store.meta()?, meta);
+        store.accept_validated_batch(identity(), batch(2))?;
+        let restored = AnalysisStore::restore(&destination, &directory.path().join("restored"))?;
+        assert_eq!(restored.read_page(&identity(), 1)?.records.len(), 1);
+        assert_eq!(store.read_page(&identity(), 1)?.records.len(), 2);
+        let blocked = backups.join("blocked.duckdb");
+        DirBuilder::new()
+            .mode(0o700)
+            .create(blocked.with_extension("manifest.json"))?;
+        assert!(store.backup(&blocked).is_err());
+        assert_eq!(store.read_page(&identity(), 1)?.records.len(), 2);
+        assert!(AnalysisStore::restore(&blocked, &directory.path().join("invalid")).is_err());
+        assert_eq!(AnalysisStore::file_digest(&destination)?, saved_digest);
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_store_closed_access() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        store.accept_validated_batch(identity(), batch(1))?;
+        store.checkpoint()?;
+        let mut meta = store.meta()?;
+        for reader in &store.readers {
+            drop(reader.lock().map_err(|_| "reader poisoned")?.take());
+        }
+        drop(store.writer.lock().map_err(|_| "writer poisoned")?.take());
+        assert!(store.meta().is_err());
+        assert!(store.checkpoint().is_err());
+        assert!(store.accept_validated_batch(identity(), batch(2)).is_err());
+        assert!(store.read_page(&identity(), 1).is_err());
+        assert!(store.storage_health().is_err());
+        assert!(AnalysisStore::open(&root).is_err());
+        meta.commit_revision += 1;
+        assert!(store.reopen_backup(&meta).is_err());
+        assert!(store.meta().is_err());
+        drop(store);
+        let reopened = AnalysisStore::open(&root)?;
+        assert_eq!(reopened.read_page(&identity(), 1)?.records.len(), 1);
+        Ok(())
     }
 
     #[test]

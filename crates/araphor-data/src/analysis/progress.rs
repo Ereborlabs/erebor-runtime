@@ -101,7 +101,7 @@ impl AnalysisStore {
         if tenant == [0; 16] || result_id.is_empty() || result_id.len() > 256 {
             return self.reject("the analysis result identity is invalid");
         }
-        let stored: Option<(Vec<u8>, Vec<u8>)> = self.reader()?.query_row(
+        let stored: Option<(Vec<u8>, Vec<u8>)> = self.reader()?.get()?.query_row(
             "SELECT body, body_sha256 FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
             params![tenant.as_slice(), result_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -125,7 +125,8 @@ impl AnalysisStore {
             return self.reject("the processor scope or start cursor is invalid");
         }
         let key = source_key(&scope.identity);
-        let mut writer = self.writer()?;
+        let mut writer_guard = self.writer()?;
+        let writer = writer_guard.get_mut()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin processor registration",
         })?;
@@ -196,7 +197,8 @@ impl AnalysisStore {
             return self.reject("the optional processor scope is invalid");
         }
         let key = source_key(&scope.identity);
-        let mut writer = self.maintenance_writer()?;
+        let mut writer_guard = self.maintenance_writer()?;
+        let writer = writer_guard.get_mut()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin optional processor resume",
         })?;
@@ -342,7 +344,8 @@ impl AnalysisStore {
         let request_digest: [u8; 32] = Sha256::digest(&request).into();
         let body_digest: [u8; 32] = Sha256::digest(&input.body).into();
         let key = source_key(&input.scope.identity);
-        let mut writer = self.maintenance_writer()?;
+        let mut writer_guard = self.maintenance_writer()?;
+        let writer = writer_guard.get_mut()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin analysis result",
         })?;
@@ -666,7 +669,7 @@ mod tests {
         input.witnesses[0].identity = identity(4);
         assert!(store.commit_result(&input).is_err());
         assert_eq!(store.meta()?.commit_revision, 4);
-        store.writer()?.execute(
+        store.writer()?.get()?.execute(
             "UPDATE analysis_results SET body = ? WHERE result_id = ?",
             params![b"changed".as_slice(), "finding-1"],
         )?;

@@ -322,7 +322,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let mut writer = store.writer()?;
-        let transaction = writer.transaction()?;
+        let transaction = writer.get_mut()?.transaction()?;
         // Only relation counts are under test. The fixture transaction is not committed.
         for tenant in 1_u8..=4 {
             transaction.execute(

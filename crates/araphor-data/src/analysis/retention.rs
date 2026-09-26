@@ -64,7 +64,8 @@ impl<'a> EvidenceRetentionOwner<'a> {
 
     fn sweep_page(&self, after: Option<[u8; 32]>, now_utc_ns: u64) -> Result<RetentionSweepV1> {
         let sources = {
-            let reader = self.store.reader()?;
+            let reader_guard = self.store.reader()?;
+            let reader = reader_guard.get()?;
             let mut statement = reader
                 .prepare(
                     "SELECT stream_key, identity_json FROM source_receipts
@@ -126,7 +127,8 @@ impl<'a> EvidenceRetentionOwner<'a> {
             return self.store.reject("the retention source or time is invalid");
         }
         let key = source_key(identity);
-        let mut writer = self.store.maintenance_writer()?;
+        let mut writer_guard = self.store.maintenance_writer()?;
+        let writer = writer_guard.get_mut()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin evidence retention",
         })?;
@@ -604,6 +606,7 @@ mod tests {
         let owner = EvidenceRetentionOwner::new(&store, Default::default())?;
         store
             .writer()?
+            .get()?
             .execute_batch("ALTER TABLE expired_ranges RENAME TO missing_expiry")?;
         assert!(owner.sweep(None, u64::MAX).is_err());
         assert!(!store.retention_healthy());
@@ -621,11 +624,12 @@ mod tests {
         );
         store
             .writer()?
+            .get()?
             .execute_batch("ALTER TABLE missing_expiry RENAME TO expired_ranges")?;
         assert_eq!(owner.sweep(None, 100)?.removed_records, 0);
         assert!(store.retention_healthy());
         store.accept_validated_batch(source.clone(), batch(2, b"b"))?;
-        let reader = store.writer()?.try_clone()?;
+        let reader = store.writer()?.get()?.try_clone()?;
         reader.execute_batch("BEGIN TRANSACTION; SELECT * FROM events")?;
         assert!(owner.sweep(None, u64::MAX).is_err());
         assert!(!store.retention_healthy());
