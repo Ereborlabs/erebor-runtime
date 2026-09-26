@@ -174,6 +174,21 @@ and explicit refusal of old evidence receipts or an unsupported schema.
 Do not require a live Kubernetes cluster for either case. Rerun both before
 the physical storage/partition case in the existing mithril-e2e harness.
 
+Use `data_capacity_recovery` and `data_full_disk` for paired capacity proof.
+Both call the same production-owner scenario. The first uses a sparse file to
+reach the data-file quota. The second requires an empty, task-owned 1-GiB tmpfs.
+Allocate all free blocks and require an `ENOSPC` result. Through mTLS, require
+ResourceExhausted, an unchanged receipt and revision, readable accepted data,
+retained Node input, and a working policy RPC. Release only the test padding.
+Reconnect the evidence stream without restarting Control. Require one commit,
+an unchanged duplicate retry, and exact retained records after store reopen.
+The harness is `crates/mithril-e2e/harness/discovery/disk-full.sh`. It accepts
+the built Mithril e2e test binary and a new absolute output-log path. Run it
+inside `unshare --user --map-root-user --mount`, or as root. The harness runs
+the lightweight case first and removes its temporary mount at exit. This test
+does not qualify hardware failure, native commit failure after admission,
+reserve adequacy, or Kubernetes partition recovery.
+
 ```sh
 cargo test -p mithril-control
 cargo test -p araphor-data
@@ -494,3 +509,20 @@ checkpoint times are 97,903, 45,958, and 13,232 microseconds. These single-run
 fixture measurements do not establish throughput or reserve adequacy.
 The explicit ignored SQL-worker isolation test also passed on this source.
 No physical storage/partition qualification ran in this verification batch.
+
+The paired `data_capacity_recovery` and `data_full_disk` checks now pass.
+The final harness log is `/tmp/araphor-data-qualification.MtrjRy/disk-full-final.log`.
+It covers the test additions above `37324d30` and records the dirty paths and
+test-binary digest. The platform is Linux 6.8.0-139-generic, x86_64. A private
+1-GiB tmpfs reached zero free bytes with 1,070,059,520 allocated padding bytes.
+The exact evidence stream received ResourceExhausted. The prior receipt and
+revision remained unchanged; the pending Node batch survived. Accepted data
+remained readable and a policy inventory RPC succeeded. After padding release,
+a new stream obtained cursor 2 without a Control restart. Duplicate replay
+did not add a commit. Reopen retained two records at commit revision 3.
+The seven enabled data-store tests passed; the explicit full-filesystem test
+also passed. Formatting, workspace checks, strict Clippy, and all 41 enabled
+data-crate tests passed after the final test edit. The full workspace run is
+still active. Full-disk admission is qualified for this isolated fixture, not
+for native failure during commit, hardware power loss, reserve sizing, or the
+Kubernetes storage/partition case. The complete phase remains **Not done**.

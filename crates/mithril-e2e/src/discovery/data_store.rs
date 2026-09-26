@@ -797,6 +797,193 @@ impl DataStoreQualification {
 mod tests {
     use super::*;
 
+    impl DataStoreQualification {
+        async fn capacity_recovery(&self, disk: Option<&Path>) -> Result<()> {
+            use std::io::{Seek as _, SeekFrom, Write as _};
+            use std::os::unix::fs::MetadataExt as _;
+
+            const GIB: u64 = 1024 * 1024 * 1024;
+            let directory = match disk {
+                Some(root) => {
+                    assert_eq!(root.parent(), Some(Path::new("/tmp")));
+                    assert!(root
+                        .file_name()
+                        .ok_or("filesystem name absent")?
+                        .to_string_lossy()
+                        .starts_with("araphor-data-disk-"));
+                    assert!(!fs::symlink_metadata(root)?.file_type().is_symlink());
+                    assert_eq!(rustix::fs::statfs(root)?.f_type, libc::TMPFS_MAGIC);
+                    let volume = rustix::fs::statvfs(root)?;
+                    assert_eq!(volume.f_blocks * volume.f_frsize, GIB);
+                    assert_eq!(fs::read_dir(root)?.count(), 0);
+                    tempfile::tempdir_in(root)?
+                }
+                None => tempfile::tempdir()?,
+            };
+            let tls = MtlsFixture::new(false)?;
+            let mut config = tls.configuration()?;
+            config.evidence_directory = directory.path().join("evidence");
+            config.data_storage.disk_max_bytes = GIB;
+            let parts = config.into_parts()?;
+            assert!(parts.data_error.is_none(), "{:?}", parts.data_error);
+            let data = parts.control.analysis_store().ok_or("data owner absent")?;
+            let trust = parts.control.trust_bundle_owner().current()?;
+            let server = tls.start(parts.control).await?;
+            ControlServerFixture::wait_context(
+                &data,
+                &araphor_data::AnalysisContextKeyV1 {
+                    tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+                    owner_id: "mithril-control/trust".into(),
+                    entity_key: b"trust".to_vec(),
+                    lifetime_key: trust.bundle_digest.into_bytes(),
+                    owner_revision: trust.generation,
+                },
+            )
+            .await?;
+            let observations = EffectObservationStore::durable(
+                8,
+                tls.path().join("wal"),
+                EvidenceWalLimits::default(),
+                ObservationCanonicalizer::new(
+                    EvidenceIdV1::new(1, 2),
+                    EvidenceIdV1::new(3, 4),
+                    1,
+                    [7; 16].into(),
+                )?,
+            )?;
+            Self::record(&observations, 1);
+            let first = observations.next_evidence_batch().ok_or("batch absent")?;
+            let wire: mithril_control::EvidenceBatch = first.clone().into();
+            let identity = EvidenceIntakeIdentityV1 {
+                tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+                node_id: "node-a".into(),
+                node_boot_id: [7; 16],
+                label_epoch: 1,
+                source_id: wire.source_id.as_slice().try_into()?,
+                source_epoch: wire.source_epoch,
+            };
+            let mut connection = self.connect(&tls, &server).await?;
+            connection.report_readiness(true, true).await?;
+            connection.send_evidence_batch(first).await?;
+            let ack = Self::ack(&mut connection).await?;
+            assert_eq!(ack.contiguous_cursor, 1);
+            observations.acknowledge_evidence(ack)?;
+            data.checkpoint()?;
+            let before = data.meta()?;
+            let status = data.source_status(&identity)?;
+            Self::record(&observations, 2);
+            let pending = observations.next_evidence_batch().ok_or("batch absent")?;
+            let padding_file = if disk.is_some() {
+                tempfile::NamedTempFile::new_in(directory.path())?
+            } else {
+                tempfile::NamedTempFile::new_in(directory.path().join("evidence/analysis"))?
+            };
+            let mut padding = padding_file.as_file();
+            if disk.is_some() {
+                let volume = rustix::fs::statvfs(directory.path())?;
+                rustix::fs::fallocate(
+                    padding,
+                    rustix::fs::FallocateFlags::empty(),
+                    0,
+                    volume.f_bavail * volume.f_frsize,
+                )?;
+                assert_eq!(rustix::fs::statvfs(directory.path())?.f_bavail, 0);
+                padding.seek(SeekFrom::End(0))?;
+                assert!(matches!(padding.write_all(b"full"),
+                    Err(error) if error.raw_os_error() == Some(libc::ENOSPC)));
+            } else {
+                padding.set_len(GIB)?;
+            }
+            let full = data.storage_health()?;
+            assert!(!full.intake_capacity);
+            assert_eq!(full.maintenance_capacity, disk.is_none());
+            let allocated = padding.metadata()?.blocks() * 512;
+            if disk.is_some() {
+                assert!(allocated > GIB / 2);
+            }
+            connection.send_evidence_batch(pending.clone()).await?;
+            let rejected =
+                tokio::time::timeout(Duration::from_secs(5), connection.next_message()).await?;
+            assert!(matches!(rejected,
+                Err(mithril_node::Error::ControlRpc { source, .. })
+                    if source.code() == tonic::Code::ResourceExhausted));
+            assert_eq!(observations.pending_evidence_records(), 1);
+            assert_eq!(data.meta()?, before);
+            assert_eq!(data.source_status(&identity)?, status);
+            assert_eq!(
+                data.read_page(&identity, 1)?.records[0].framed_record,
+                wire.framed_records
+            );
+            connection.policy_inventory(None, Vec::new()).await?;
+            padding.set_len(0)?;
+            padding.sync_all()?;
+            drop(connection);
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let health = data.storage_health()?;
+                    if health.retention_healthy && health.intake_capacity {
+                        break Ok::<_, araphor_data::Error>(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await??;
+            let mut connection = self.connect(&tls, &server).await?;
+            connection.send_evidence_batch(pending.clone()).await?;
+            let ack = Self::ack(&mut connection).await?;
+            assert_eq!(ack.contiguous_cursor, 2);
+            observations.acknowledge_evidence(ack)?;
+            assert_eq!(observations.pending_evidence_records(), 0);
+            assert_eq!(data.meta()?.commit_revision, before.commit_revision + 1);
+            connection.send_evidence_batch(pending).await?;
+            assert_eq!(Self::ack(&mut connection).await?.contiguous_cursor, 2);
+            assert_eq!(data.meta()?.commit_revision, before.commit_revision + 1);
+            data.checkpoint()?;
+            drop(connection);
+            server.shutdown().await?;
+            let after = data.meta()?;
+            drop(data);
+            let data = Self::reopen_data(&directory.path().join("evidence/analysis")).await?;
+            assert_eq!(data.meta()?, after);
+            assert_eq!(data.read_page(&identity, 1)?.records.len(), 2);
+            assert_eq!(
+                data.source_receipt(&identity)?
+                    .ok_or("receipt absent")?
+                    .contiguous_cursor,
+                2
+            );
+            println!(
+                "{}",
+                serde_json::json!({
+                    "case": "data-capacity-recovery", "result": "PASS",
+                    "filesystem_full": disk.is_some(), "padding_allocated_bytes": allocated,
+                    "rejected_health": full, "recovered_usage": data.storage_usage()?,
+                    "source_identity": identity, "commit_revision": after.commit_revision,
+                    "contiguous_cursor": 2, "retained_count": 2,
+                    "proof_kind": "synthetic-mtls", "kernel_evidence": false,
+                })
+            );
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn data_capacity_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        DataStoreQualification::new(directory.path().join("result"))
+            .capacity_recovery(None)
+            .await
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the task-owned, empty 1 GiB tmpfs"]
+    async fn data_full_disk() -> Result<()> {
+        let root = PathBuf::from(std::env::var("ARAPHOR_TEST_DATA_DISK")?);
+        DataStoreQualification::new(root.join("result"))
+            .capacity_recovery(Some(&root))
+            .await
+    }
+
     #[tokio::test]
     async fn data_context_projection() -> Result<()> {
         use araphor_data::AnalysisContextKeyV1;
