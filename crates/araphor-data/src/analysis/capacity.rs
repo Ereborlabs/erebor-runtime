@@ -1,5 +1,6 @@
 use std::fs;
 use std::os::unix::fs::MetadataExt as _;
+use std::path::Path;
 
 use snafu::ResultExt as _;
 
@@ -69,6 +70,20 @@ impl StorageLimitsV1 {
     pub(super) fn maintenance_bytes(&self) -> u64 {
         self.policy_reserve_bytes + WRITE_RESERVE
     }
+
+    pub(super) fn check_copy(&self, available: u64, bytes: u64) -> Result<()> {
+        let required = bytes
+            .checked_add(bytes / 4)
+            .and_then(|size| size.checked_add(self.policy_reserve_bytes))
+            .and_then(|size| size.checked_add(WRITE_RESERVE));
+        if required.is_none_or(|size| available < size) {
+            return StorageCapacitySnafu {
+                resource: "copy reserve",
+            }
+            .fail();
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -78,6 +93,25 @@ mod tests {
         EvidenceIntakeIdentityV1, EvidenceStoreOutcomeV1, RetentionLimitsV1,
         ValidatedEvidenceBatchV1,
     };
+
+    #[test]
+    fn analysis_store_copy_limits() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let limits = StorageLimitsV1::default();
+        for bytes in [0, 1, 3, 4, 1024 * 1024] {
+            let required = bytes + bytes / 4 + limits.maintenance_bytes();
+            limits.check_copy(required, bytes)?;
+            assert!(matches!(
+                limits.check_copy(required - 1, bytes),
+                Err(crate::Error::StorageCapacity {
+                    resource: "copy reserve",
+                    ..
+                })
+            ));
+        }
+        assert!(limits.check_copy(u64::MAX, u64::MAX).is_err());
+        assert!(limits.check_copy(u64::MAX, u64::MAX / 5 * 4).is_err());
+        Ok(())
+    }
 
     #[test]
     fn analysis_store_capacity_bounds() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -213,17 +247,25 @@ pub struct StorageUsageV1 {
     pub available_bytes: u64,
 }
 
+impl StorageUsageV1 {
+    pub(super) fn free_bytes(root: &Path) -> Result<u64> {
+        let volume = rustix::fs::statvfs(root)
+            .map_err(std::io::Error::from)
+            .context(IoSnafu { path: root })?;
+        volume.f_bavail.checked_mul(volume.f_frsize).ok_or_else(|| {
+            crate::AnalysisStateSnafu {
+                path: root,
+                reason: "the available storage size is invalid",
+            }
+            .build()
+        })
+    }
+}
+
 impl AnalysisStore {
     pub fn storage_usage(&self) -> Result<StorageUsageV1> {
-        let volume = rustix::fs::statvfs(&self.root)
-            .map_err(std::io::Error::from)
-            .context(IoSnafu { path: &self.root })?;
-        let available_bytes = volume
-            .f_bavail
-            .checked_mul(volume.f_frsize)
-            .ok_or_else(|| self.state_error("the available storage size is invalid"))?;
         let mut usage = StorageUsageV1 {
-            available_bytes,
+            available_bytes: StorageUsageV1::free_bytes(&self.root)?,
             ..Default::default()
         };
         let mut pending = vec![self.root.clone()];

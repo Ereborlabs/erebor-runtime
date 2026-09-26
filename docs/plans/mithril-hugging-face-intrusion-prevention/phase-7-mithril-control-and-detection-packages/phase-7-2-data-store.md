@@ -120,7 +120,13 @@ Store recovery fails
    data access closed until restart; do not create an empty replacement store.
    Restore holds the destination lease before it checks that the directory is
    empty except for that lease file. Create and sync `restore.pending` before
-   copying the backup. Normal startup rejects that marker before it opens the
+   copying the backup. Before backup or restore copies bytes, check destination
+   free space with one shared rule. Require the database size, one quarter of
+   that size, the policy reserve, and the write allowance. Reject arithmetic
+   overflow or insufficient space with a storage-capacity error. A rejected
+   restore retains its pending marker and creates no database file. This check
+   samples capacity; it does not reserve blocks against other writers.
+   Normal startup rejects that marker before it opens the
    database. Keep the marker until validation and the new recovery-epoch commit
    succeed. Remove the marker and sync the directory before returning the
    restored owner. A copy with a pending marker remains unavailable. Retry from the
@@ -239,6 +245,15 @@ inside `unshare --user --map-root-user --mount`, or as root. The harness runs
 the lightweight case first and removes its temporary mount at exit. This test
 does not qualify hardware failure, native commit failure after admission,
 reserve adequacy, or Kubernetes partition recovery.
+
+Use `analysis_store_copy_limits` for exact copy-reserve boundaries and overflow.
+The capacity scenario also makes a current-format backup and restores it outside
+the constrained filesystem. In the full-tmpfs case, require rejected backup and
+restore copies with the `copy reserve` error. A rejected backup creates neither
+database nor manifest and leaves its source usable. A rejected restore creates
+no database, retains its pending marker, and rejects normal startup. The same
+backup must still restore into a new directory with sufficient space. This case
+does not prove capacity that changes after the admission check.
 
 ```sh
 cargo test -p mithril-control
@@ -665,3 +680,16 @@ e2e passed 115 with 249 ignored; Node passed 256 with one ignored.
 These tests do not qualify hardware power loss, native commit failure after
 admission, reserve adequacy, load, or Kubernetes behavior.
 The complete phase remains **Not done**.
+
+Backup and restore now share the checked destination-space rule. Restore checks
+capacity after syncing its pending marker and before creating the database.
+`analysis_store_copy_limits` passed exact boundaries and overflow checks. All
+eight enabled data-store tests passed. The tmpfs harness passed both cases on
+Linux 6.8.0-139-generic, x86_64. With zero available bytes, both copy entry points
+return the copy-reserve error. No destination database is created. Restore
+retains its marker and rejects startup. Backup reopens its source connections.
+The unchanged backup restores into a fresh directory. The log is
+`/tmp/araphor-copy-qualification.iqcH0TQ0/disk-full.log` and records the working
+tree and binary digest. The final workspace gate is pending for this change.
+Concurrent space loss after admission, aggregate backup quotas, reserve sizing,
+load limits, and Kubernetes qualification remain open. The phase is **Not done**.

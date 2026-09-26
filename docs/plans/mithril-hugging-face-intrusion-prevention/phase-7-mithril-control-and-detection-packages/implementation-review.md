@@ -86,12 +86,14 @@ the owner explicitly. The startup case uses ControlConfig and the default owner.
 -> [AnalysisStore::resume_optional](../../../../crates/araphor-data/src/analysis/progress.rs) An optional processor records an expired gap before it resumes. Its consumed cursor does not advance for the skipped input.<br>
 -> [AnalysisStore::processor_health](../../../../crates/araphor-data/src/analysis/health.rs) One snapshot returns accepted and effective progress, lag, missing input, and its revision. An optional resume keeps the missing-coverage flag.<br>
 -> [AnalysisStore::backup](../../../../crates/araphor-data/src/analysis/backup.rs) Maintenance drains readers, checkpoints, and closes all native connections while the directory lease remains held.<br>
+-> [StorageLimitsV1::check_copy](../../../../crates/araphor-data/src/analysis/capacity.rs) The closed source size and destination free space must leave copy headroom plus policy and write reserves.<br>
 -> [AnalysisStore::copy_backup](../../../../crates/araphor-data/src/analysis/backup.rs) A closed database has no native WAL. A new synced copy and digest manifest preserve the committed revision.<br>
 -> [AnalysisStore::reopen_backup](../../../../crates/araphor-data/src/analysis/backup.rs) The owner validates identity, schema, receipts, and references before it publishes reopened native connections.<br>
 -> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) A validated copy opens in an empty private directory with a new recovery epoch.
 
 [AnalysisLease::acquire](../../../../crates/araphor-data/src/analysis/connection.rs) Restore obtains the same exclusive directory lease used by normal startup.<br>
 -> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) Restore requires no entry except the lease file, then creates and syncs `restore.pending` before copying.<br>
+-> [StorageLimitsV1::check_copy](../../../../crates/araphor-data/src/analysis/capacity.rs) The same destination-space rule runs before restore creates the database file. Rejection retains the marker and blocks normal startup.<br>
 -> [AnalysisStore::open_leased](../../../../crates/araphor-data/src/analysis/mod.rs) The internal restore path validates the copied store while retaining its lease.<br>
 -> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) Restore commits the new recovery epoch, removes the marker, and syncs the directory before returning the owner.<br>
 -> [AnalysisStore::open_with_limits](../../../../crates/araphor-data/src/analysis/mod.rs) Normal startup rejects any pending marker before native open. An interrupted restore cannot expose the old epoch or create an empty fallback.
@@ -101,6 +103,20 @@ A copy, validation, or epoch-commit error leaves the marker and blocks startup.
 Restore the unchanged backup into a new empty directory. Do not delete the
 marker to activate the partial copy. An error after marker removal cannot
 expose the old epoch; the epoch commit has already completed.
+
+The copy check uses `statvfs` available bytes and checked arithmetic. It requires
+the database size plus one quarter of that size, the configured policy reserve,
+and the fixed write allowance. Restore uses its default storage limits. An
+overflow or insufficient space returns `StorageCapacity` with `copy reserve`.
+This sample does not reserve blocks against concurrent external writers.
+`analysis_store_copy_limits` checks exact boundaries and overflow. The full-tmpfs
+case in [capacity_recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs)
+checks both copy entry points, no output database, retained restore marker,
+startup refusal, usable source connections, and restore into a fresh destination.
+The boundary test and eight enabled data-store tests passed. The existing tmpfs
+harness passed both capacity cases on Linux 6.8.0-139-generic, x86_64. The log is
+`/tmp/araphor-copy-qualification.iqcH0TQ0/disk-full.log`; it records the working
+tree and test-binary digest. The final workspace gate is pending.
 
 Backup closes the two cloned readers before their owning writer. Normal owner
 drop uses the same order. Private connection guards return a typed error for

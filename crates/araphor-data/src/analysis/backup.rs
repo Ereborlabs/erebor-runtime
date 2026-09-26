@@ -9,6 +9,7 @@ use snafu::ResultExt as _;
 use uuid::Uuid;
 
 use super::{
+    capacity::{StorageLimitsV1, StorageUsageV1},
     source_key, valid_source_identity, AnalysisStore, AnalysisStoreMetaV1, ANALYSIS_SCHEMA_VERSION,
 };
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, JsonSnafu, Result};
@@ -200,22 +201,8 @@ impl AnalysisStore {
         let source_bytes = fs::metadata(&source)
             .context(IoSnafu { path: &source })?
             .len();
-        let volume = rustix::fs::statfs(parent)
-            .map_err(std::io::Error::from)
-            .context(IoSnafu { path: parent })?;
-        let block_bytes = u64::try_from(volume.f_bsize)
-            .map_err(|_| self.state_error("the backup block size is invalid"))?;
-        let available = volume
-            .f_bavail
-            .checked_mul(block_bytes)
-            .ok_or_else(|| self.state_error("the backup available space is invalid"))?;
-        let required = source_bytes
-            .checked_add(source_bytes / 4)
-            .and_then(|bytes| bytes.checked_add(self.storage.maintenance_bytes()))
-            .ok_or_else(|| self.state_error("the backup maintenance reserve is invalid"))?;
-        if available < required {
-            return self.reject("the backup cannot preserve maintenance free space");
-        }
+        self.storage
+            .check_copy(StorageUsageV1::free_bytes(parent)?, source_bytes)?;
         let mut source_file = File::open(&source).context(IoSnafu { path: &source })?;
         let mut output = OpenOptions::new()
             .write(true)
@@ -316,6 +303,8 @@ impl AnalysisStore {
             .context(IoSnafu { path: root })?;
         #[cfg(test)]
         Self::crash_path(root, "restore.marked");
+        let storage = StorageLimitsV1::default();
+        storage.check_copy(StorageUsageV1::free_bytes(root)?, manifest.database_bytes)?;
         let target = root.join("analysis.duckdb");
         let mut input = File::open(backup).context(IoSnafu { path: backup })?;
         let mut output = OpenOptions::new()
@@ -330,12 +319,7 @@ impl AnalysisStore {
             .context(IoSnafu { path: root })?
             .sync_all()
             .context(IoSnafu { path: root })?;
-        let store = Self::open_leased(
-            root.to_path_buf(),
-            Default::default(),
-            Default::default(),
-            lease,
-        )?;
+        let store = Self::open_leased(root.to_path_buf(), Default::default(), storage, lease)?;
         let meta = store.meta()?;
         if meta.store_uuid.to_string() != manifest.store_uuid
             || meta.schema_version != manifest.schema_version
