@@ -72,14 +72,13 @@ Store recovery fails
    physical disk reuse after DELETE. Reserve maintenance space before work.
    Stop writes when reclamation fails; never unlink the native WAL. Recovery
    after an older backup reports source ranges no longer retained on Node.
-8. Implement a bounded offline upgrade under the exclusive lease. Pause
-   intake and analysis; preserve a backup. Import accepted evidence and
-   canonical referenced analysis/trace records by stable identity and digest.
-   Do not treat unchecked index rows as evidence. Validate counts, references
-   and receipt floors before selecting the new store. Persist an upgrade
-   marker; retries resume or fail without dual writes. Preserve old input
-   until validation and operator cleanup. After new ACKs, rollback requires
-   recovery, not reopening a stale backup. Reject unsupported downgrades.
+8. Activate the data owner in a clean development deployment. Control opens
+   a private AnalysisStore with the current schema and selects it as the only
+   evidence writer before Node intake starts. Reject an unsupported schema
+   or a Control store that still has accepted evidence. Start each Node with
+   a new source identity so an old ACK or cursor cannot enter the new store.
+   There is no old-store import, schema migration, dual write, or rollback
+   path. Backup and restore remain required for data written after activation.
 9. Keep policy/trust/rollout state outside this conversion. Reconcile their
    committed versions into context with idempotent reads; unavailable context
    stays Pending or Unknown. Do not hold both stores' locks or claim a shared
@@ -88,11 +87,11 @@ Store recovery fails
 
 ## Unit tests and end-to-end proof
 
-Add `analysis_store_`, `control_retention_` and `analysis_upgrade_` tests:
+Add `analysis_store_`, `control_retention_` and `analysis_startup_` tests:
 commit/rollback, post-commit lost ACK, conflicting duplicates, out-of-order
 batches, explicit gaps, checked overflow, cross-tenant references, required
 processor stall, review pins, retirement, expiry, late context, WAL recovery,
-disk full, unsupported schema and interrupted upgrade.
+disk full, unsupported schema and rejected old evidence state.
 
 Add `data-store-recovery` to the discovery e2e binary. Through the production
 mTLS service, submit data, lose ACK, resend, restart, process and expire input.
@@ -113,8 +112,9 @@ One-hour lag alone does not pause intake. Reach its protected age/byte bound
 and require backpressure without deleting protected input. Keep a review witness through
 optional expiry; no source-wide pin is permitted.
 
-Add `data-store-upgrade` using retained-format fixture bytes. Validate all
-imported IDs/digests, preserve policy bytes, and restart at each upgrade step.
+Add `data-store-startup` with an empty development Control evidence state.
+Require one selected writer, a fresh Node source, unchanged policy state,
+and explicit refusal of old evidence receipts or an unsupported schema.
 Do not require a live Kubernetes cluster for either case. Rerun both before
 the physical storage/partition case in the existing mithril-e2e harness.
 
@@ -122,7 +122,7 @@ the physical storage/partition case in the existing mithril-e2e harness.
 cargo test -p mithril-control
 cargo test -p araphor-data
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-recovery --output-directory /tmp/araphor-data-recovery
-cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-upgrade --output-directory /tmp/araphor-data-upgrade
+cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-startup --output-directory /tmp/araphor-data-startup
 bash .github/scripts/verify-rust-ci.sh
 ```
 
@@ -135,36 +135,12 @@ required here. Stop before enabling a data path whose recovery case fails.
 
 ## Implementation result
 
-**Not done.** The working tree contains an AnalysisStore writer, bounded reads,
-exact context versions, processor results and references, guarded raw expiry,
-optional gap records, backup, restore, and an analysis-schema upgrade. The retention owner
-deletes only eligible raw rows. Required progress and live exact witnesses
-protect rows. The tests use temporary databases. No retention call ran on an
-existing deployment.
-
-`cargo test -p araphor-data --lib` passed 19 tests with two ignored.
-`RUST_TEST_THREADS=1 cargo test -p mithril-control --lib` passed 193 tests with
-two ignored. Strict Clippy passed for `araphor-data` and `mithril-control` on all
-targets. The repository Rust CI procedure passed before the offline import
-change and must be rerun for the current source. The parallel run at that time
-failed one existing 500 ms Control reconnect timing assertion. That test passed
-alone and in the serialized run. The offline `storage-contract` case passed nine
-assertions. That case
-does not use production intake. The old Control store now exports bounded,
-length- and checksum-checked original frame pages; its focused test passed.
-An offline copy now moves accepted original frames and coverage into AnalysisStore.
-Per-source markers preserve old retained floors, leave old intake time unknown,
-and check exact digests after restart. A component test passed with an expired
-old prefix, retained frame, coverage report, and unchanged Control commit index.
-The current Control intake still writes its chunked store. A complete offline
-upgrade, single-writer cutover, capacity admission,
-context projection from Control, data-store recovery/upgrade cases, and physical disk reuse
-remain unverified. Do not enable the new data path yet.
-AnalysisStore can now read a source's committed boot and label binding. The
-lookup checks the matching receipt and rejects changed bindings. The focused
-test and the data-owner library suite passed with 20 tests and two ignored.
-The explicit data-backed EvidenceIntakeOwner path now writes validated batches
-and coverage only to AnalysisStore. A component test passed for replay, exact
-frames, coverage, unchanged old Control evidence, and restart. Strict Control
-Clippy passed. Server startup still selects the old writer, pending the upgrade
-and recovery gates.
+**Not done.** AnalysisStore has a writer, bounded reads, exact context
+versions, processor results and references, guarded raw expiry, backup and
+restore. Source bindings and an explicit data-backed EvidenceIntakeOwner path
+have component tests. The data-owner library suite passed 20 tests with two
+ignored, and strict Clippy passed for both changed crates. Tests use temporary
+databases; no retention call ran on an existing deployment. Server startup
+still selects the old writer. Fresh-store activation, capacity admission,
+Control context projection, mTLS recovery and startup cases, and physical disk
+reuse remain unverified. Do not enable the new data path yet.
