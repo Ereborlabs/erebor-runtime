@@ -1058,5 +1058,28 @@ reproduced the private-parent failure before the fix. The corrected launcher
 uses a private mount and starts the checker as user 65532. The regression now
 passes on temporary files, including unchanged parent permissions, file
 ownership, and removal of the mount on success and failure. The VM shell suite
-and syntax checks also pass. The final full gate and physical retry remain open.
-The physical storage/partition result remains **Not done**.
+and syntax checks also pass.
+
+The physical storage/partition run passed on `47edef4c`, including cleanup.
+Its result is `/tmp/araphor-two-node-storage.ChbP3Nmp/outage-mount/result.json`.
+The harness ran the startup and recovery CLI cases before injecting faults.
+The Node and Control images contain the same Rust source as this commit; only
+the qualification scripts and documents changed after the image build.
+
+| Inspection | Retained events | Commit revision | Database bytes | WAL bytes | Total file bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Before outage | 82,007 | 1,012 | 12,288 | 27,906,497 | 27,926,528 |
+| After outage | 82,822 | 1,027 | 14,692,352 | 286,318 | 14,979,072 |
+| After storage fault | 83,014 | 1,047 | 18,886,656 | 94,355 | 18,989,056 |
+
+Both later inspections preserve the exact earlier frame digests. The storage
+fault stops evidence ACK while Node sessions and policy acknowledgements work.
+Each Node retains at least 90 records during that fault and replays its own
+input after recovery. Node restart preserves unacknowledged input. Durable
+Control ACK permits Node WAL truncation. A network partition keeps the old
+policy on the isolated Node; reconnection completes the two-Node rollout.
+API recovery and watch relist also converge. Control and both Nodes are Running
+after cleanup. This result does not replace the failed mount-cache check.
+It does not prove full-quota throughput, reserve adequacy, or pilot capacity.
+The final full Rust gate is running after this physical test. The complete
+phase remains **Not done**.
