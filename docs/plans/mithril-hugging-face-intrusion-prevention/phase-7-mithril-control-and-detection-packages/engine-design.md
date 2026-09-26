@@ -687,7 +687,15 @@ data store blocks data ACK and dependent reads; it is not a disposable index.
 Use a maintenance window for a consistent backup: pause new data writes,
 drain bounded accepted work, checkpoint, close connections, copy the database,
 sync the copy and its manifest, reopen, then resume. Never copy only a live DB
-file while omitting its WAL. Restore into an empty owned directory; validate
+file while omitting its WAL. Managed copies use `.duckdb` files directly in the
+private `AnalysisStore/backups` directory. Complete and incomplete copies count
+in the existing data-file budget. Reserve copy bytes, one quarter of that size,
+4,096 manifest bytes, and two file entries before copying. Reserve one more
+entry when the backup directory is absent. Preserve the
+ordinary free-space reserve. Never overwrite or automatically delete a backup.
+Operators can copy both completed files outside this directory. Restore accepts
+such external copies; their storage remains the operator's responsibility.
+Restore into an empty owned directory; validate
 schema, digests, references, receipts and processor progress before activation.
 A restore uses a new recovery epoch so pre-restore query cursors fail explicitly.
 Keep the previous valid copy until the restored store passes checks.

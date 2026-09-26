@@ -402,7 +402,6 @@ impl AnalysisStore {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::DirBuilderExt as _;
 
     use super::*;
     use crate::{
@@ -960,8 +959,7 @@ mod tests {
         assert!(reopened
             .register_processor(&scope, ProcessorClassV1::Required, 2)
             .is_err());
-        let backup_dir = directory.path().join("backups");
-        std::fs::DirBuilder::new().mode(0o700).create(&backup_dir)?;
+        let backup_dir = reopened.root.join("backups");
         let backup = backup_dir.join("retained.backup.duckdb");
         let manifest = reopened.backup(&backup)?;
         let restored = AnalysisStore::restore(&backup, &directory.path().join("restored"))?;

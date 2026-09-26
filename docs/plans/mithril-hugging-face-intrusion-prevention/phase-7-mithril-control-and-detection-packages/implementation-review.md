@@ -86,7 +86,7 @@ the owner explicitly. The startup case uses ControlConfig and the default owner.
 -> [AnalysisStore::resume_optional](../../../../crates/araphor-data/src/analysis/progress.rs) An optional processor records an expired gap before it resumes. Its consumed cursor does not advance for the skipped input.<br>
 -> [AnalysisStore::processor_health](../../../../crates/araphor-data/src/analysis/health.rs) One snapshot returns accepted and effective progress, lag, missing input, and its revision. An optional resume keeps the missing-coverage flag.<br>
 -> [AnalysisStore::backup](../../../../crates/araphor-data/src/analysis/backup.rs) Maintenance drains readers, checkpoints, and closes all native connections while the directory lease remains held.<br>
--> [StorageLimitsV1::check_copy](../../../../crates/araphor-data/src/analysis/capacity.rs) The closed source size and destination free space must leave copy headroom plus policy and write reserves.<br>
+-> [StorageLimitsV1::check_backup](../../../../crates/araphor-data/src/analysis/capacity.rs) The closed source size and manifest allowance must fit the data-file budget and ordinary free-space reserve.<br>
 -> [AnalysisStore::copy_backup](../../../../crates/araphor-data/src/analysis/backup.rs) A closed database has no native WAL. A new synced copy and digest manifest preserve the committed revision.<br>
 -> [AnalysisStore::reopen_backup](../../../../crates/araphor-data/src/analysis/backup.rs) The owner validates identity, schema, receipts, and references before it publishes reopened native connections.<br>
 -> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) A validated copy opens in an empty private directory with a new recovery epoch.
@@ -111,7 +111,7 @@ overflow or insufficient space returns `StorageCapacity` with `copy reserve`.
 This sample does not reserve blocks against concurrent external writers.
 `analysis_store_copy_limits` checks exact boundaries and overflow. The full-tmpfs
 case in [capacity_recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs)
-checks both copy entry points, no output database, retained restore marker,
+checks both backup and restore admission, no output database, retained restore marker,
 startup refusal, usable source connections, and restore into a fresh destination.
 The boundary test and eight enabled data-store tests passed. The existing tmpfs
 harness passed both capacity cases on Linux 6.8.0-139-generic, x86_64. The log is
@@ -551,9 +551,24 @@ proof, not full-disk, throughput, or Kubernetes qualification.
 
 `storage_usage` visits at most 4,096 directory entries and rejects non-file,
 non-directory entries. It reports logical-or-allocated file bytes, allocated
-bytes, and available filesystem bytes. Native WAL, temporary files, and backups
-below the data directory count toward usage. External backup copies have a
-separate destination-space check; no aggregate external-backup quota exists.
+bytes, and available filesystem bytes. Native WAL, temporary files, and managed
+backups count toward usage. `backup` accepts only `.duckdb` files directly in
+the private `AnalysisStore/backups` directory. The owner creates this directory
+under the writer lock. The directory scan reserves two new file entries, plus
+one entry when the backup directory is absent. `check_backup` charges the
+database size, one quarter of that size, and 4,096 manifest bytes before copying.
+The projected usage must pass ordinary file and free-space admission. The copy
+does not replace an existing file. A failed partial copy stays charged on the
+next scan and after restart. No backup registry, deletion task, or configuration
+option is added. Operators can copy both completed files outside the managed
+directory. Restore accepts such an external copy without changing its format.
+`analysis_store_backup_quota` checks destination scope, charged copies, quota
+rejection without new output, unchanged prior backup, restart, and external
+restore. `analysis_store_copy_limits` checks exact projected limits and overflow.
+`analysis_store_backup_window` checks that a failed manifest write leaves the
+partial database copy charged. The mTLS full-filesystem case now rejects managed
+backup at filesystem admission; external restore rejects at the copy-reserve
+check. Verification of this change is pending.
 `analysis_store_capacity_bounds` uses a sparse temporary file, not a full disk.
 `analysis_store_native_limits` reads the actual DuckDB settings. Physical
 reclamation and reserve adequacy still require the physical storage case.

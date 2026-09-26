@@ -1,7 +1,6 @@
 use std::{
     error::Error as StdError,
     fs,
-    os::unix::fs::DirBuilderExt as _,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -637,10 +636,9 @@ impl DataStoreQualification {
     pub async fn recovery(&self) -> Result<()> {
         self.check(!self.output.exists(), "the output directory already exists")?;
         let tls = MtlsFixture::new(false)?;
-        let backup_root = tls.path().join("backups");
-        fs::DirBuilder::new().mode(0o700).create(&backup_root)?;
         let control_root = tls.path().join("control-store");
         let data_root = tls.path().join("analysis");
+        let backup_root = data_root.join("backups");
         let control = ControlStore::open(&control_root)?;
         let policy_id = {
             let fixture = OutagePolicyFixture::new(control.clone());
@@ -1192,6 +1190,8 @@ impl DataStoreQualification {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::DirBuilderExt as _;
+
     use super::*;
 
     #[derive(Clone, Copy)]
@@ -1735,7 +1735,15 @@ mod tests {
             let backup_root = tls.path().join("backups");
             fs::DirBuilder::new().mode(0o700).create(&backup_root)?;
             let backup_path = backup_root.join("saved.duckdb");
-            let manifest = data.backup(&backup_path)?;
+            let managed = directory
+                .path()
+                .join("evidence/analysis/backups/saved.duckdb");
+            let manifest = data.backup(&managed)?;
+            fs::copy(&managed, &backup_path)?;
+            fs::copy(
+                managed.with_extension("manifest.json"),
+                backup_path.with_extension("manifest.json"),
+            )?;
             let saved = AnalysisStore::restore(&backup_path, &backup_root.join("source"))?;
             let saved_meta = saved.meta()?;
             let restore_root = directory.path().join("restore");
@@ -1772,11 +1780,13 @@ mod tests {
             let allocated = padding.metadata()?.blocks() * 512;
             if disk.is_some() {
                 assert!(allocated > GIB / 2);
-                let destination = restore_root.join("blocked.duckdb");
+                let destination = directory
+                    .path()
+                    .join("evidence/analysis/backups/blocked.duckdb");
                 assert!(matches!(
-                    saved.backup(&destination),
+                    data.backup(&destination),
                     Err(araphor_data::Error::StorageCapacity {
-                        resource: "copy reserve",
+                        resource: "filesystem reserve",
                         ..
                     })
                 ));

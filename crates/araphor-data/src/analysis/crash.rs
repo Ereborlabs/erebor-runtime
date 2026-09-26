@@ -21,7 +21,7 @@ fn analysis_store_restore_crashes() -> std::result::Result<(), Box<dyn std::erro
         let backup = root
             .parent()
             .ok_or("restore parent absent")?
-            .join("backup.duckdb");
+            .join("original/backups/backup.duckdb");
         AnalysisStore::restore(&backup, &root)?;
         return Err("the requested restore crash did not occur".into());
     }
@@ -55,7 +55,7 @@ fn analysis_store_restore_crashes() -> std::result::Result<(), Box<dyn std::erro
             },
         )?;
         let before = store.meta()?;
-        let backup = directory.path().join("backup.duckdb");
+        let backup = original.join("backups/backup.duckdb");
         let manifest = store.backup(&backup)?;
         assert!(AnalysisStore::restore(&backup, &original).is_err());
         assert!(!original.join("restore.pending").exists());
