@@ -152,7 +152,23 @@ These tests include tenant and corrupt-body checks in
 workspace formatting, compilation, strict Clippy, and workspace tests.
 This result does not cover subsequent uncommitted startup changes.
 Tests use temporary databases; no retention call ran on an existing deployment.
-Default startup still selects the old writer. Fresh-store activation, bounded
-admission, capacity and processor health, Control context projection, crash
-injection, the startup case, and physical disk reuse remain open.
-Do not enable the new default data path yet.
+Default startup now opens `evidence_directory/analysis` and shares its data
+handle with intake. Policy/trust/rollout persistence stays in ControlStore.
+Old accepted, pending, or coverage state prevents activation before data-store
+creation. Data recovery failure leaves evidence and coverage unavailable;
+the policy service keeps its durable owner. There is no old-writer fallback.
+The default process no longer starts the superseded discovery projection or
+accepts its configuration. Its replacement belongs to Phase 7.4.
+The `data-store-startup` command passed 15 checks. Its result is
+`/tmp/araphor-startup.Sxc096/startup/result.json`. The case checks fresh intake,
+restart, exact frames, policy persistence, old-receipt refusal, and policy RPCs
+under unsupported schema, missing table, and corrupt file failures. All three
+failures stop evidence and coverage ACK while Node retains its pending input.
+The `data-store-recovery` command passed its 19 checks again at
+`/tmp/araphor-startup.Sxc096/recovery/result.json`.
+`analysis_startup_is_independent` passed. The final workspace gate is running.
+Restart rejects missing tables and columns without creating them. Complete
+stored-reference validation, bounded admission, retention scheduling, capacity
+and processor health, Control context projection, crash injection, removal of
+the remaining old library writer, and physical disk reuse remain open.
+Production enablement is not qualified.

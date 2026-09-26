@@ -50,6 +50,231 @@ impl DataStoreQualification {
         Self { output }
     }
 
+    pub async fn startup(&self) -> Result<()> {
+        self.check(!self.output.exists(), "the output directory already exists")?;
+        let tls = MtlsFixture::new(false)?;
+        let control_root = tls.path().join("control-store");
+        let control = ControlStore::open(&control_root)?;
+        let policy_id = {
+            let fixture = OutagePolicyFixture::new(control.clone());
+            let resource = fixture.resource(1)?;
+            fixture
+                .owner
+                .reconcile(
+                    &resource,
+                    OUTAGE_NAMESPACE_UID,
+                    &fixture.inventory(&resource)?,
+                    i64::try_from(START)?,
+                )?
+                .source_revision
+                .policy_source_revision_id
+        };
+        let policy = control
+            .policy_document(&policy_id)?
+            .ok_or("policy is absent")?;
+        drop(control);
+        let parts = tls.configuration()?.into_parts()?;
+        self.check(parts.data_error.is_none(), "default data owner failed")?;
+        let data = parts
+            .control
+            .analysis_store()
+            .ok_or("data owner is absent")?;
+        let server = tls.start(parts.control).await?;
+        let observations = EffectObservationStore::durable(
+            8,
+            tls.path().join("wal"),
+            EvidenceWalLimits::default(),
+            ObservationCanonicalizer::new(
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(3, 4),
+                1,
+                [7; 16].into(),
+            )?,
+        )?;
+        Self::record(&observations, 1);
+        let batch = observations
+            .next_evidence_batch()
+            .ok_or("Node batch is absent")?;
+        let wire: mithril_control::EvidenceBatch = batch.clone().into();
+        let identity = EvidenceIntakeIdentityV1 {
+            tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+            node_id: "node-a".into(),
+            node_boot_id: [7; 16],
+            label_epoch: 1,
+            source_id: wire.source_id.as_slice().try_into()?,
+            source_epoch: wire.source_epoch,
+        };
+        let mut connection = self.connect(&tls, &server).await?;
+        connection.send_evidence_batch(batch.clone()).await?;
+        let ack = Self::ack(&mut connection).await?;
+        self.check(
+            ack.contiguous_cursor == 1,
+            "default intake did not acknowledge",
+        )?;
+        observations.acknowledge_evidence(ack)?;
+        let page = data.read_page(&identity, 1)?;
+        self.check(
+            page.records.len() == 1 && page.records[0].framed_record == wire.framed_records,
+            "default intake did not retain the exact frame",
+        )?;
+        let before = data.meta()?;
+        drop(connection);
+        server.shutdown().await?;
+        drop(data);
+        let control = reopen_control_store(&control_root).await?;
+        self.check(
+            control.health()?.evidence_cursors == 0
+                && control.policy_document(&policy_id)?.as_ref() == Some(&policy),
+            "default intake changed policy or used the old evidence writer",
+        )?;
+        drop(control);
+
+        let parts = tls.configuration()?.into_parts()?;
+        self.check(parts.data_error.is_none(), "default data restart failed")?;
+        let data = parts
+            .control
+            .analysis_store()
+            .ok_or("data owner is absent")?;
+        self.check(
+            data.meta()? == before,
+            "restart changed data identity or revision",
+        )?;
+        let server = tls.start(parts.control).await?;
+        let mut connection = self.connect(&tls, &server).await?;
+        connection.send_evidence_batch(batch.clone()).await?;
+        self.check(
+            Self::ack(&mut connection).await?.contiguous_cursor == 1,
+            "restart lost the durable ACK",
+        )?;
+        self.check(data.meta()? == before, "retry changed committed data")?;
+        drop(connection);
+        server.shutdown().await?;
+        drop(data);
+        drop(reopen_control_store(&control_root).await?);
+
+        let database = tls.path().join("evidence/analysis/analysis.duckdb");
+        Self::record(&observations, 2);
+        let faults = [
+            Some("UPDATE store_meta SET schema_version = 99"),
+            Some("UPDATE store_meta SET schema_version = 3; ALTER TABLE events RENAME TO missing_events"),
+            None,
+        ];
+        for fault in faults {
+            match fault {
+                Some(sql) => duckdb::Connection::open(&database)?.execute_batch(sql)?,
+                None => fs::write(&database, b"invalid database")?,
+            }
+            let parts = tls.configuration()?.into_parts()?;
+            self.check(
+                parts.data_error.is_some() && parts.control.analysis_store().is_none(),
+                "corrupt data enabled intake",
+            )?;
+            let server = tls.start(parts.control).await?;
+            let mut connection = self.connect(&tls, &server).await?;
+            connection.report_readiness(true, true).await?;
+            connection.policy_inventory(None, Vec::new()).await?;
+            connection
+                .send_evidence_batch(
+                    observations
+                        .next_evidence_batch()
+                        .ok_or("Node batch is absent")?,
+                )
+                .await?;
+            let error =
+                tokio::time::timeout(Duration::from_secs(5), connection.next_message()).await?;
+            self.check(
+                matches!(error, Err(mithril_node::Error::ControlRpc { source, .. })
+                if source.code() == tonic::Code::Unavailable),
+                "corrupt data did not return Unavailable",
+            )?;
+            self.check(
+                observations.pending_evidence_records() == 1,
+                "Node purged unacknowledged input",
+            )?;
+            let snapshot = observations
+                .coverage_snapshot()
+                .ok_or("Node coverage is absent")?;
+            let interval = snapshot
+                .current_intervals()
+                .into_iter()
+                .find(|interval| interval.source_id.to_be_bytes() == identity.source_id)
+                .ok_or("source coverage is absent")?;
+            let coverage = connection.send_coverage_report(&snapshot, &interval).await;
+            self.check(
+                matches!(coverage, Err(mithril_node::Error::ControlRpc { source, .. })
+                if source.code() == tonic::Code::Unavailable),
+                "unavailable data acknowledged coverage",
+            )?;
+            connection.policy_inventory(None, Vec::new()).await?;
+            drop(connection);
+            server.shutdown().await?;
+            let control = reopen_control_store(&control_root).await?;
+            self.check(
+                control.health()?.evidence_cursors == 0
+                    && control.policy_document(&policy_id)?.as_ref() == Some(&policy),
+                "data failure changed policy or selected the old writer",
+            )?;
+            drop(control);
+        }
+        self.check(
+            fs::read(&database)? == b"invalid database",
+            "corrupt data was rewritten",
+        )?;
+
+        let old = MtlsFixture::new(false)?;
+        let control = ControlStore::open(old.path().join("control-store"))?;
+        let intake = EvidenceIntakeOwner::from_store(control.clone());
+        intake.receive(
+            &mithril_control::AuthenticatedEvidenceNodeV1 {
+                tenant_id: identity.tenant_id,
+                node_id: identity.node_id.clone(),
+                node_boot_id: identity.node_boot_id,
+                label_epoch: identity.label_epoch,
+            },
+            wire,
+        )?;
+        drop(intake);
+        drop(control);
+        self.check(
+            old.configuration()?.into_parts().is_err(),
+            "old receipts were accepted",
+        )?;
+        self.check(
+            !old.path().join("evidence/analysis").exists(),
+            "old receipts created a new data store",
+        )?;
+
+        let checks = [
+            "default-data-owner",
+            "exact-frame",
+            "durable-ack",
+            "single-writer",
+            "unchanged-policy",
+            "current-format-restart",
+            "duplicate-noop",
+            "corrupt-data-unavailable",
+            "unsupported-schema-unavailable",
+            "missing-table-unavailable",
+            "coverage-unavailable",
+            "policy-rpc-survives",
+            "node-keeps-unacknowledged-input",
+            "no-empty-store-fallback",
+            "old-receipt-refusal",
+        ];
+        fs::create_dir(&self.output)?;
+        super::write_json(
+            &self.output.join("result.json"),
+            &serde_json::json!({
+                "schema_version": 1, "case": "data-store-startup", "result": "PASS",
+                "proof_kind": "synthetic", "production_intake": true,
+                "assertion_count": checks.len(), "asserted_contracts": checks,
+                "source_identity": identity, "store_uuid": before.store_uuid.to_string(),
+                "commit_revision": before.commit_revision,
+            }),
+        )?;
+        Ok(())
+    }
+
     pub async fn recovery(&self) -> Result<()> {
         self.check(!self.output.exists(), "the output directory already exists")?;
         let tls = MtlsFixture::new(false)?;
@@ -460,6 +685,14 @@ impl DataStoreQualification {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn data_store_startup() -> Result<()> {
+        let output = tempfile::tempdir()?;
+        DataStoreQualification::new(output.path().join("result"))
+            .startup()
+            .await
+    }
 
     #[tokio::test]
     async fn data_store_recovery() -> Result<()> {

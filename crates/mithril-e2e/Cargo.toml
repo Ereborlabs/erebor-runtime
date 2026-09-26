@@ -11,6 +11,7 @@ araphor-data = { path = "../araphor-data" }
 clap.workspace = true
 containerd-client.workspace = true
 crc32c.workspace = true
+duckdb.workspace = true
 ed25519-dalek.workspace = true
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-interceptor = { path = "../erebor-interceptor" }
@@ -44,6 +45,7 @@ sha2.workspace = true
 snafu.workspace = true
 tempfile = "3.23.0"
 tokio.workspace = true
+tonic.workspace = true
 uuid.workspace = true
 zerocopy.workspace = true
 
@@ -59,7 +61,6 @@ reqwest.workspace = true
 serde-saphyr.workspace = true
 tokio.workspace = true
 tokio-stream = { workspace = true, features = ["net"] }
-tonic.workspace = true
 tower.workspace = true
 
 [build-dependencies]

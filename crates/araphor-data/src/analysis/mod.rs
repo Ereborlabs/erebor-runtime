@@ -227,11 +227,13 @@ impl AnalysisStore {
                 }
                 .fail();
             }
+            Self::validate_tables(&writer)?;
         }
-        let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
-            operation: "begin schema",
-        })?;
-        transaction
+        if !existing {
+            let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
+                operation: "begin schema",
+            })?;
+            transaction
             .execute_batch(
                 "CREATE TABLE IF NOT EXISTS store_meta (
                     singleton BOOLEAN PRIMARY KEY CHECK (singleton),
@@ -367,27 +369,21 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "create schema",
             })?;
-        let initial_uuid = Uuid::new_v4().hyphenated().to_string();
-        transaction
-            .execute(
-                "INSERT INTO store_meta
+            let initial_uuid = Uuid::new_v4().hyphenated().to_string();
+            transaction
+                .execute(
+                    "INSERT INTO store_meta
                  SELECT true, ?, ?, 1, 0 WHERE NOT EXISTS (SELECT 1 FROM store_meta)",
-                params![initial_uuid, ANALYSIS_SCHEMA_VERSION],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "initialize store identity",
+                    params![initial_uuid, ANALYSIS_SCHEMA_VERSION],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "initialize store identity",
+                })?;
+            transaction.commit().context(AnalysisDatabaseSnafu {
+                operation: "commit schema",
             })?;
-        let meta = Self::read_meta_from(&transaction, &path)?;
-        if meta.schema_version != ANALYSIS_SCHEMA_VERSION as u32 {
-            return AnalysisStateSnafu {
-                path,
-                reason: "the analysis schema version is unsupported".to_owned(),
-            }
-            .fail();
         }
-        transaction.commit().context(AnalysisDatabaseSnafu {
-            operation: "commit schema",
-        })?;
+        let meta = Self::read_meta_from(&writer, &path)?;
         let (revision, _) = watch::channel(meta.commit_revision);
         Ok(Self {
             root,

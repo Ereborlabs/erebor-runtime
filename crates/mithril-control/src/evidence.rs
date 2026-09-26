@@ -222,15 +222,7 @@ impl EvidenceIntakeOwner {
         data: Arc<araphor_data::AnalysisStore>,
         clock: Arc<dyn IntakeClock>,
     ) -> Result<Self> {
-        let health = store.health()?;
-        snafu::ensure!(
-            health.evidence_cursors == 0
-                && health.pending_evidence_batches == 0
-                && health.coverage_cursors == 0,
-            crate::error::InvalidConfigurationSnafu {
-                reason: "AnalysisStore requires a Control store without old evidence receipts",
-            }
-        );
+        store.require_empty_evidence()?;
         Ok(Self {
             store,
             data: Some(data),
@@ -241,6 +233,10 @@ impl EvidenceIntakeOwner {
     #[must_use]
     pub fn store(&self) -> crate::ControlStore {
         self.store.clone()
+    }
+
+    pub fn analysis_store(&self) -> Option<Arc<araphor_data::AnalysisStore>> {
+        self.data.clone()
     }
 
     #[allow(clippy::result_large_err)]

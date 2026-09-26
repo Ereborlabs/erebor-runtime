@@ -279,6 +279,31 @@ impl MtlsFixture {
         }
     }
 
+    pub(crate) fn configuration(
+        &self,
+    ) -> Result<mithril_control::ControlConfig, Box<dyn StdError>> {
+        let path = self.path().join("control.json");
+        let source = serde_json::json!({
+            "listen": "127.0.0.1:0",
+            "tls": {
+                "certificate_path": self.files.server_certificate,
+                "private_key_path": self.files.server_key,
+                "node_ca_path": self.files.ca
+            },
+            "allowed_nodes": [{
+                "node_id": "node-a",
+                "certificate_sha256": self.certificates.node_digest(),
+                "tenant_id": OUTAGE_TENANT_ID
+            }],
+            "trust": { "generation": 1, "bundle_digest": "d".repeat(64),
+                "policy_issuer_sequence_epoch": 0, "policy_signers": [] },
+            "evidence_directory": self.path().join("evidence"),
+            "control_store_directory": self.path().join("control-store")
+        });
+        fs::write(&path, serde_json::to_vec(&source)?)?;
+        Ok(mithril_control::ControlConfig::load(&path)?)
+    }
+
     #[cfg(test)]
     pub(crate) fn node_digest(&self) -> String {
         self.certificates.node_digest()

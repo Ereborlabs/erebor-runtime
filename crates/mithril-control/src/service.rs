@@ -201,6 +201,23 @@ impl ControlPlane {
         evidence: crate::EvidenceIntakeOwner,
     ) -> crate::Result<Self> {
         let store = evidence.store();
+        Self::assemble(allowed, trust, store, Some(evidence))
+    }
+
+    pub fn without_intake(
+        allowed: Vec<AllowedNodeIdentity>,
+        trust: TrustGenerationV1,
+        store: crate::ControlStore,
+    ) -> crate::Result<Self> {
+        Self::assemble(allowed, trust, store, None)
+    }
+
+    fn assemble(
+        allowed: Vec<AllowedNodeIdentity>,
+        trust: TrustGenerationV1,
+        store: crate::ControlStore,
+        evidence: Option<crate::EvidenceIntakeOwner>,
+    ) -> crate::Result<Self> {
         let trust = crate::TrustBundleOwner::open(store.clone(), trust)?;
         Ok(Self {
             allowed_nodes: Arc::new(
@@ -211,13 +228,19 @@ impl ControlPlane {
             ),
             trust,
             state: Arc::new(Mutex::new(ControlState::default())),
-            evidence: Some(evidence),
+            evidence,
             policy_store: Some(store),
             policy_rollout: None,
             policy_desired_state: None,
             trace_signer: None,
             trace_admission: Arc::new(tokio::sync::Semaphore::new(2)),
         })
+    }
+
+    pub fn analysis_store(&self) -> Option<Arc<araphor_data::AnalysisStore>> {
+        self.evidence
+            .as_ref()
+            .and_then(crate::EvidenceIntakeOwner::analysis_store)
     }
 
     #[must_use]
@@ -1410,9 +1433,10 @@ impl ControlPlane {
         node_id: &str,
         requests: Vec<EvidenceStreamRequest>,
     ) -> Result<EvidenceAck, Status> {
-        let evidence = self.evidence.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Control has no durable evidence intake owner")
-        })?;
+        let evidence = self
+            .evidence
+            .as_ref()
+            .ok_or_else(|| Status::unavailable("Control data intake is unavailable"))?;
         let mut batches = Vec::with_capacity(requests.len());
         let mut first_cursor = None;
         let mut framed_bytes = 0_usize;
@@ -1496,9 +1520,10 @@ impl ControlPlane {
             .report
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("coverage report is required"))?;
-        let evidence = self.evidence.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Control has no durable evidence intake owner")
-        })?;
+        let evidence = self
+            .evidence
+            .as_ref()
+            .ok_or_else(|| Status::unavailable("Control data intake is unavailable"))?;
         let acknowledgement = evidence.receive_coverage(&authenticated, report)?;
         debug!(
             "accepted a Mithril coverage report",
