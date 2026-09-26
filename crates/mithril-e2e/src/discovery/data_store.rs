@@ -57,148 +57,247 @@ impl DataStoreQualification {
     }
 
     pub async fn load(&self) -> Result<()> {
-        self.load_groups(64).await
+        self.load_tenants(64, 1).await
     }
 
-    async fn load_groups(&self, groups: u64) -> Result<()> {
+    async fn load_group(
+        &self,
+        observations: &EffectObservationStore,
+        group: u64,
+    ) -> Result<Vec<mithril_node::EvidenceBatchV1>> {
+        let (ingress, worker) = observations.bounded_ingestion_queue(4096, 1024)?;
+        for cursor in group * 4096 + 1..=(group + 1) * 4096 {
+            ingress.record_bytes(Self::event(cursor).as_bytes());
+        }
+        drop(ingress);
+        tokio::task::spawn_blocking(move || worker.run()).await?;
+        self.check(
+            observations.evidence_errors() == 0,
+            "Node dropped load input",
+        )?;
+        let batches = observations.next_evidence_batches();
+        self.check(
+            batches
+                .iter()
+                .map(|batch| batch.record_count())
+                .sum::<usize>()
+                == 4096,
+            "Node did not return one complete load group",
+        )?;
+        Ok(batches)
+    }
+
+    pub async fn tenant_load(&self) -> Result<()> {
+        self.load_tenants(32, 2).await
+    }
+
+    async fn load_tenants(&self, groups: u64, tenants: usize) -> Result<()> {
         use sha2::{Digest as _, Sha256};
 
         self.check(!self.output.exists(), "the output directory already exists")?;
+        self.check(matches!(tenants, 1 | 2), "the tenant count is invalid")?;
         self.check(
-            (1..=64).contains(&groups),
+            (1..=64 / tenants as u64).contains(&groups),
             "the load group count is invalid",
         )?;
-        let tls = MtlsFixture::new(false)?;
-        let root = tls.path().join("analysis");
-        let control = ControlStore::open(tls.path().join("control-store"))?;
+        let fixtures = (0..tenants)
+            .map(|_| MtlsFixture::new(false))
+            .collect::<Result<Vec<_>>>()?;
+        let mut roots = String::new();
+        for tls in &fixtures {
+            roots.push_str(&fs::read_to_string(&tls.files.ca)?);
+        }
+        let mut allowed = Vec::new();
+        for (index, tls) in fixtures.iter().enumerate() {
+            fs::write(&tls.files.ca, &roots)?;
+            let mut node = tls.configuration()?.allowed_nodes.remove(0);
+            node.node_id = format!("node-{index}");
+            node.tenant_id =
+                uuid::Uuid::from_bytes(EvidenceIdV1::new(1, 2 + index as u64).to_be_bytes())
+                    .to_string();
+            allowed.push(node);
+        }
+        let root = fixtures[0].path().join("analysis");
+        let control = ControlStore::open(fixtures[0].path().join("control-store"))?;
         let data = Arc::new(AnalysisStore::open(&root)?);
         let intake = EvidenceIntakeOwner::new(
             control.clone(),
             data.clone(),
             Arc::new(TestClock(AtomicU64::new(START))),
         )?;
-        let server = tls.start(tls.control_from_intake(intake, 1)?).await?;
-        let observations = EffectObservationStore::durable(
-            4096,
-            tls.path().join("wal"),
-            EvidenceWalLimits::default(),
-            ObservationCanonicalizer::new(
-                EvidenceIdV1::new(1, 2),
-                EvidenceIdV1::new(3, 4),
-                1,
-                [7; 16].into(),
-            )?,
+        let plane = mithril_control::ControlPlane::from_intake(
+            allowed.clone(),
+            mithril_control::TrustGenerationV1 {
+                generation: 1,
+                bundle_digest: "d".repeat(64),
+                policy_issuer_sequence_epoch: 0,
+                policy_signers: Vec::new(),
+            },
+            intake,
         )?;
-        let mut connection = self.connect(&tls, &server).await?;
-        connection.report_readiness(true, true).await?;
-        let mut identity = None;
-        let mut input_digest = Sha256::new();
-        let mut input_bytes = 0_usize;
+        let trust = plane.trust_bundle_owner().current()?;
+        let server = fixtures[0].start(plane).await?;
+        for index in 0..tenants {
+            ControlServerFixture::wait_context(
+                &data,
+                &araphor_data::AnalysisContextKeyV1 {
+                    tenant_id: EvidenceIdV1::new(1, 2 + index as u64).to_be_bytes(),
+                    owner_id: "mithril-control/trust".into(),
+                    entity_key: b"trust".to_vec(),
+                    lifetime_key: trust.bundle_digest.as_bytes().to_vec(),
+                    owner_revision: trust.generation,
+                },
+            )
+            .await?;
+        }
+        let mut connections = Vec::new();
+        let mut observations = Vec::new();
+        for (index, tls) in fixtures.iter().enumerate() {
+            let boot = [7 + index as u8; 16];
+            observations.push(EffectObservationStore::durable(
+                4096,
+                tls.path().join("wal"),
+                EvidenceWalLimits::default(),
+                ObservationCanonicalizer::new(
+                    EvidenceIdV1::new(1, 2 + index as u64),
+                    EvidenceIdV1::new(3, 4),
+                    1,
+                    boot.into(),
+                )?,
+            )?);
+            let connection = self
+                .connect_at(tls, server.address(), &allowed[index].node_id, boot)
+                .await?;
+            connection.report_readiness(true, true).await?;
+            connections.push(connection);
+        }
+        let mut identities = Vec::new();
+        let mut digests = vec![Sha256::new(); tenants];
+        let mut input_bytes = vec![0_usize; tenants];
         let mut samples = Vec::new();
         let mut peak_bytes = 0;
         let started = Instant::now();
         for group in 0..groups {
-            let generated = Instant::now();
-            let (ingress, worker) = observations.bounded_ingestion_queue(4096, 1024)?;
-            for cursor in group * 4096 + 1..=(group + 1) * 4096 {
-                ingress.record_bytes(Self::event(cursor).as_bytes());
+            let mut batches = Vec::new();
+            let mut node_times = Vec::new();
+            for index in 0..tenants {
+                let generated = Instant::now();
+                let input = self.load_group(&observations[index], group).await?;
+                node_times.push(generated.elapsed().as_micros());
+                for batch in &input {
+                    let wire: mithril_control::EvidenceBatch = batch.clone().into();
+                    if identities.len() <= index {
+                        identities.push(EvidenceIntakeIdentityV1 {
+                            tenant_id: EvidenceIdV1::new(1, 2 + index as u64).to_be_bytes(),
+                            node_id: allowed[index].node_id.clone(),
+                            node_boot_id: [7 + index as u8; 16],
+                            label_epoch: 1,
+                            source_id: wire.source_id.as_slice().try_into()?,
+                            source_epoch: wire.source_epoch,
+                        });
+                    }
+                    input_bytes[index] += wire.framed_records.len();
+                    digests[index].update(&wire.framed_records);
+                }
+                batches.push(input);
             }
-            drop(ingress);
-            tokio::task::spawn_blocking(move || worker.run()).await?;
-            self.check(
-                observations.evidence_errors() == 0,
-                "Node dropped load input",
-            )?;
-            let batches = observations.next_evidence_batches();
-            self.check(
-                batches
-                    .iter()
-                    .map(|batch| batch.record_count())
-                    .sum::<usize>()
-                    == 4096,
-                "Node did not return one complete load group",
-            )?;
-            for batch in &batches {
-                let wire: mithril_control::EvidenceBatch = batch.clone().into();
-                identity.get_or_insert(EvidenceIntakeIdentityV1 {
-                    tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
-                    node_id: "node-a".into(),
-                    node_boot_id: [7; 16],
-                    label_epoch: 1,
-                    source_id: wire.source_id.as_slice().try_into()?,
-                    source_epoch: wire.source_epoch,
-                });
-                input_bytes += wire.framed_records.len();
-                input_digest.update(&wire.framed_records);
-            }
-            let node_us = generated.elapsed().as_micros();
-            let replay = batches.clone();
             let sent = Instant::now();
-            connection.send_evidence_group(batches).await?;
-            let policy = Instant::now();
-            connection.policy_inventory(None, Vec::new()).await?;
-            let policy_us = policy.elapsed().as_micros();
+            for index in 0..tenants {
+                connections[index]
+                    .send_evidence_group(batches[index].clone())
+                    .await?;
+            }
             let expected = (group + 1) * 4096;
-            loop {
-                let ack = Self::ack(&mut connection).await?;
-                let cursor = ack.contiguous_cursor;
-                observations.acknowledge_evidence(ack)?;
-                if cursor == expected {
-                    break;
+            let replies = match connections.as_mut_slice() {
+                [one] => vec![self.load_reply(one, expected, sent).await?],
+                [one, two] => {
+                    let (one, two) = tokio::try_join!(
+                        self.load_reply(one, expected, sent),
+                        self.load_reply(two, expected, sent),
+                    )?;
+                    vec![one, two]
                 }
-                self.check(cursor < expected, "ACK exceeds the submitted load group")?;
-            }
-            let ack_us = sent.elapsed().as_micros();
-            self.check(
-                observations.next_evidence_batch().is_none(),
-                "Node retained acknowledged input",
-            )?;
-            let meta = data.meta()?;
-            connection.send_evidence_group(replay).await?;
-            loop {
-                let ack = Self::ack(&mut connection).await?;
-                if ack.contiguous_cursor == expected {
-                    break;
-                }
-            }
-            self.check(
-                data.meta()? == meta,
-                "duplicate load changed the data revision",
-            )?;
+                _ => return Err("the load connection count is invalid".into()),
+            };
             let usage = data.storage_usage()?;
-            peak_bytes = peak_bytes.max(usage.file_bytes);
-            samples.push(serde_json::json!({
-                "accepted_cursor": expected, "node_us": node_us,
-                "durable_ack_us": ack_us, "policy_rpc_us": policy_us,
-                "database_bytes": Self::file_size(&root.join("analysis.duckdb"))?,
-                "wal_bytes": Self::file_size(&root.join("analysis.duckdb.wal"))?,
-                "usage": usage,
-            }));
+            let database_bytes = Self::file_size(&root.join("analysis.duckdb"))?;
+            let wal_bytes = Self::file_size(&root.join("analysis.duckdb.wal"))?;
+            for (index, (ack, policy_us, ack_us)) in replies.into_iter().enumerate() {
+                observations[index].acknowledge_evidence(ack)?;
+                self.check(
+                    observations[index].next_evidence_batch().is_none(),
+                    "Node retained acknowledged input",
+                )?;
+                samples.push(serde_json::json!({ "tenant": index,
+                    "node_us": node_times[index],
+                    "accepted_cursor": expected, "durable_ack_us": ack_us,
+                    "policy_rpc_us": policy_us, "database_bytes": database_bytes,
+                    "wal_bytes": wal_bytes, "usage": usage }));
+            }
+            let before = data.meta()?;
+            for (index, input) in batches.into_iter().enumerate() {
+                connections[index].send_evidence_group(input).await?;
+            }
+            for connection in &mut connections {
+                self.load_ack(connection, expected).await?;
+            }
+            self.check(
+                data.meta()? == before,
+                "tenant replay changed data metadata",
+            )?;
+            peak_bytes = peak_bytes.max(data.storage_usage()?.file_bytes);
         }
         let intake_us = started.elapsed().as_micros();
-        let identity = identity.ok_or("load source absent")?;
-        let mut cursor = 1;
-        let mut read_count = 0_u64;
-        let mut output_digest = Sha256::new();
+        let mut sources = Vec::new();
+        let mut statuses = Vec::new();
         let read_start = Instant::now();
-        loop {
-            let page = data.read_page(&identity, cursor)?;
-            for record in page.records {
-                output_digest.update(&record.framed_record);
-                read_count += 1;
+        for (index, identity) in identities.iter().enumerate() {
+            let mut cursor = 1;
+            let mut count = 0_u64;
+            let mut digest = Sha256::new();
+            loop {
+                let page = data.read_page(identity, cursor)?;
+                for record in page.records {
+                    digest.update(&record.framed_record);
+                    count += 1;
+                }
+                match page.next_cursor {
+                    Some(next) => cursor = next,
+                    None => break,
+                }
             }
-            match page.next_cursor {
-                Some(next) => cursor = next,
-                None => break,
-            }
+            self.check(count == groups * 4096, "tenant record count differs")?;
+            let expected = digests[index].clone().finalize();
+            self.check(digest.finalize() == expected, "tenant frame digest differs")?;
+            let mut foreign = identity.clone();
+            foreign.tenant_id = if tenants == 2 {
+                identities[1 - index].tenant_id
+            } else {
+                [9; 16]
+            };
+            self.check(
+                matches!(data.read_page(&foreign, 1),
+                Err(araphor_data::Error::AnalysisState { reason, .. })
+                    if reason == "the evidence source is absent"),
+                "foreign tenant read succeeded",
+            )?;
+            let status = data
+                .source_status(identity)?
+                .ok_or("tenant source absent")?;
+            self.check(
+                status.receipt.contiguous_cursor == count && status.retained_event_count == count,
+                "tenant source state differs",
+            )?;
+            sources.push(
+                serde_json::json!({ "identity": identity, "record_count": count,
+                "input_bytes": input_bytes[index], "input_sha256": hex::encode(expected),
+                "status": { "contiguous_cursor": status.receipt.contiguous_cursor,
+                    "retained_floor": status.receipt.retained_floor,
+                    "retained_event_count": status.retained_event_count } }),
+            );
+            statuses.push(status);
         }
         let read_us = read_start.elapsed().as_micros();
-        let digest = input_digest.finalize();
-        self.check(read_count == groups * 4096, "load record count differs")?;
-        self.check(
-            output_digest.finalize() == digest,
-            "load record bytes differ",
-        )?;
         self.check(
             control.health()?.evidence_cursors == 0,
             "load used the old evidence writer",
@@ -208,39 +307,68 @@ impl DataStoreQualification {
         let checkpoint_us = checkpoint.elapsed().as_micros();
         let usage = data.storage_usage()?;
         let meta = data.meta()?;
-        let status = data.source_status(&identity)?;
-        drop(connection);
+        drop(connections);
         server.shutdown().await?;
         drop(data);
         let restart = Instant::now();
         let data = Self::reopen_data(&root).await?;
         let restart_us = restart.elapsed().as_micros();
-        self.check(data.meta()? == meta, "load restart changed metadata")?;
-        self.check(
-            data.source_status(&identity)? == status,
-            "load restart changed source state",
-        )?;
-        let status = status.ok_or("load source status absent")?;
+        self.check(data.meta()? == meta, "tenant restart changed metadata")?;
+        for (identity, status) in identities.iter().zip(statuses) {
+            self.check(
+                data.source_status(identity)? == Some(status),
+                "tenant restart changed source",
+            )?;
+        }
         fs::create_dir(&self.output)?;
         super::write_json(
             &self.output.join("result.json"),
             &serde_json::json!({
-                "schema_version": 1, "case": "data-store-load", "result": "PASS",
+                "schema_version": 1, "case": if tenants == 1 { "data-store-load" } else { "data-store-tenants" }, "result": "PASS",
                 "proof_kind": "synthetic-mtls", "kernel_evidence": false,
-                "groups": groups, "record_count": read_count, "input_bytes": input_bytes,
-                "input_sha256": hex::encode(digest), "source_identity": identity,
-                "commit_revision": meta.commit_revision, "recovery_epoch": meta.recovery_epoch,
-                "contiguous_cursor": status.receipt.contiguous_cursor,
-                "retained_floor": status.receipt.retained_floor,
-                "retained_count": status.retained_event_count, "intake_us": intake_us,
+                "groups_per_tenant": groups, "record_count": groups * 4096 * tenants as u64,
+                "input_bytes": input_bytes.iter().sum::<usize>(),
+                "sources": sources, "samples": samples, "intake_us": intake_us,
                 "read_us": read_us, "checkpoint_us": checkpoint_us, "restart_us": restart_us,
-                "sampled_peak_bytes": peak_bytes, "after_checkpoint": usage, "samples": samples,
+                "sampled_peak_bytes": peak_bytes, "after_checkpoint": usage,
+                "commit_revision": meta.commit_revision,
+                "recovery_epoch": meta.recovery_epoch,
                 "database_bytes": Self::file_size(&root.join("analysis.duckdb"))?,
                 "wal_bytes": Self::file_size(&root.join("analysis.duckdb.wal"))?,
-                "qualification": "measurement only; no production throughput or reserve claim",
+                "qualification": "measurement only; no rollout, full-quota, or reserve claim",
             }),
         )?;
         Ok(())
+    }
+
+    async fn load_reply(
+        &self,
+        connection: &mut ControlConnection,
+        expected: u64,
+        sent: Instant,
+    ) -> Result<(mithril_node::EvidenceAckV1, u128, u128)> {
+        let policy = Instant::now();
+        connection.policy_inventory(None, Vec::new()).await?;
+        let policy_us = policy.elapsed().as_micros();
+        let ack = self.load_ack(connection, expected).await?;
+        Ok((ack, policy_us, sent.elapsed().as_micros()))
+    }
+
+    async fn load_ack(
+        &self,
+        connection: &mut ControlConnection,
+        expected: u64,
+    ) -> Result<mithril_node::EvidenceAckV1> {
+        loop {
+            let ack = Self::ack(connection).await?;
+            if ack.contiguous_cursor == expected {
+                return Ok(ack);
+            }
+            self.check(
+                ack.contiguous_cursor < expected,
+                "ACK exceeds the load group",
+            )?;
+        }
     }
 
     fn file_size(path: &Path) -> Result<u64> {
@@ -995,19 +1123,22 @@ impl DataStoreQualification {
         tls: &MtlsFixture,
         server: &ControlServerFixture,
     ) -> Result<ControlConnection> {
-        self.connect_at(tls, server.address()).await
+        self.connect_at(tls, server.address(), "node-a", [7; 16])
+            .await
     }
 
     async fn connect_at(
         &self,
         tls: &MtlsFixture,
         address: std::net::SocketAddr,
+        node_id: &str,
+        boot: [u8; 16],
     ) -> Result<ControlConnection> {
         let mut trust = TrustCache::load(&tls.path().join("trust"))?;
         Ok(mithril_node::NodeControlConnector::new(
             tls.node_config(address),
-            "node-a".to_owned(),
-            [7; 16],
+            node_id.to_owned(),
+            boot,
         )
         .connect(
             NodeRegistration {
@@ -1018,7 +1149,7 @@ impl DataStoreQualification {
                 effect_prevention_claims_enabled: false,
                 kubernetes_node_name: String::new(),
                 startup_absence_proof_digest: mithril_control::startup_absence_proof_digest(
-                    "node-a", &[7; 16], 1, true, true,
+                    node_id, &boot, 1, true, true,
                 ),
                 policy_authority_absent: true,
                 exception_authority_absent: true,
@@ -1075,7 +1206,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let output = directory.path().join("load");
         DataStoreQualification::new(output.clone())
-            .load_groups(2)
+            .load_tenants(2, 1)
             .await?;
         let result: serde_json::Value =
             serde_json::from_slice(&fs::read(output.join("result.json"))?)?;
@@ -1085,6 +1216,39 @@ mod tests {
             2
         );
         assert!(result["input_bytes"].as_u64().ok_or("bytes absent")? > 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn data_tenant_load() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let output = directory.path().join("tenants");
+        let case = DataStoreQualification::new(output.clone());
+        for (groups, tenants) in [(0, 2), (33, 2), (65, 1), (1, 0), (1, 3)] {
+            assert!(case.load_tenants(groups, tenants).await.is_err());
+            assert!(!output.exists());
+        }
+        tokio::time::timeout(Duration::from_secs(30), case.load_tenants(2, 2)).await??;
+        let result: serde_json::Value =
+            serde_json::from_slice(&fs::read(output.join("result.json"))?)?;
+        assert_eq!(result["record_count"], 16384);
+        let sources = result["sources"].as_array().ok_or("sources absent")?;
+        assert_eq!(sources.len(), 2);
+        assert_ne!(
+            sources[0]["identity"]["tenant_id"],
+            sources[1]["identity"]["tenant_id"]
+        );
+        for source in sources {
+            assert_eq!(source["record_count"], 8192);
+            assert_eq!(source["status"]["retained_event_count"], 8192);
+        }
+        assert_eq!(
+            result["samples"].as_array().ok_or("samples absent")?.len(),
+            4
+        );
+        for sample in result["samples"].as_array().ok_or("samples absent")? {
+            assert!(sample["node_us"].as_u64().ok_or("Node time absent")? > 0);
+        }
         Ok(())
     }
 
@@ -1337,7 +1501,7 @@ mod tests {
         })
         .await??;
         let case = DataStoreQualification::new(tls.path().join("result"));
-        let mut connection = case.connect_at(&tls, address).await?;
+        let mut connection = case.connect_at(&tls, address, "node-a", [7; 16]).await?;
         connection.report_readiness(true, true).await?;
         connection.policy_inventory(None, Vec::new()).await?;
         let mut invalid = batch.clone();
@@ -1352,7 +1516,7 @@ mod tests {
         assert!(child.try_wait()?.is_none());
         assert_eq!(observations.pending_evidence_records(), 1);
         drop(connection);
-        let mut connection = case.connect_at(&tls, address).await?;
+        let mut connection = case.connect_at(&tls, address, "node-a", [7; 16]).await?;
         connection.send_evidence_batch(batch).await?;
         assert!(
             DataStoreQualification::ack(&mut connection).await.is_err(),

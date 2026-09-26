@@ -375,7 +375,6 @@ impl MtlsFixture {
 }
 
 impl ControlServerFixture {
-    #[cfg(test)]
     pub(crate) async fn wait_context(
         data: &araphor_data::AnalysisStore,
         key: &araphor_data::AnalysisContextKeyV1,

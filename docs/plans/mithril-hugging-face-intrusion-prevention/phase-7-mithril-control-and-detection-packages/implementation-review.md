@@ -264,7 +264,7 @@ retained Node input, withheld ACK, and recovered two records at cursor 2.
 [DataStoreQualification::load](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The qualification CLI selects 64 groups of 4,096 synthetic records.<br>
 -> [EffectObservationStore::bounded_ingestion_queue](../../../../crates/mithril-node/src/observation.rs) The fixture queues each group and runs the production Node worker on a blocking thread.<br>
 -> [ControlConnection::send_evidence_group](../../../../crates/mithril-node/src/control.rs) Node sends its durable frames through the authenticated stream.<br>
--> [DataStoreQualification::load_groups](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The fixture checks a policy inventory RPC, durable ACK, empty Node pending input, and duplicate replay.<br>
+-> [DataStoreQualification::load_tenants](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The shared load runner checks policy inventory RPCs, durable ACKs, empty Node pending input, and duplicate replay.<br>
 -> [AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/read.rs) Bounded reads reproduce the exact ordered input digest.<br>
 -> [AnalysisStore::checkpoint](../../../../crates/araphor-data/src/analysis/backup.rs) The owner checkpoints before shutdown and validated reopen.
 
@@ -279,6 +279,27 @@ formatting, workspace checks, strict Clippy, and all workspace tests. Mithril
 e2e passed 117 tests with 250 ignored. No Rust source changed after the gate.
 This case does not qualify multi-tenant load, policy rollout under load,
 worst-case payloads, full storage quotas, or maintenance reserve sizing.
+
+[DataStoreQualification::tenant_load](../../../../crates/mithril-e2e/src/discovery/data_store.rs)
+selects two tenants and 32 groups per tenant. Both CLI load cases now use
+`load_tenants`. Each Node has a distinct certificate, tenant, and boot ID.
+The fixture combines its temporary certificate roots for the shared server.
+It waits for each tenant's exact trust-context record through
+[ControlServerFixture::wait_context](../../../../crates/mithril-e2e/src/control_fixture.rs).
+Control projects one tenant per timer pass. Starting the replay check before
+that projection finished caused a valid context commit to change its metadata
+baseline. The fixture now waits for the actual records, not a fixed delay.
+Both groups are sent before concurrent policy RPC and ACK waits. After both
+commits, duplicate replay must leave all metadata unchanged. Each tenant's
+bounded reads must reproduce its own input digest. Foreign-tenant reads must
+report an absent source. Checkpoint and reopen preserve both source states.
+The result has one source entry per tenant and one sample per group and tenant.
+ACK times include the policy RPC and both group-send calls. File sizes are
+samples, not continuous peaks. `data_tenant_load` uses 16,384 total records and
+checks invalid group and tenant counts. Each sample also records Node generation
+time. No production owner or API changes are added. The final workspace gate
+is running after the generation-time field was restored. The earlier gate
+passed before that final measurement edit.
 
 The full workspace gate passed for `cb8417f8`, including all twelve cases in
 `analysis_store_commit_crashes` and `analysis_store_input_crashes`. The data
