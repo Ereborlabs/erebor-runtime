@@ -187,7 +187,11 @@ unary request shape, hardware power loss, or interruption inside native commit.
 `data_control_crash` passed alone and with all eight enabled data-store tests.
 Two tests remain ignored: the child helper and the separate tmpfs case. This
 source state adds the optional fixture callback, shared TLS fixture entry, and
-test-only Tokio process support. The final workspace gate is pending.
+test-only Tokio process support. The full workspace gate passed for `6ec1afed`
+with `CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh`. Formatting,
+workspace checks, strict Clippy, and workspace tests passed. The data crate
+passed 44 tests with two ignored; Control passed 196 with two ignored; Mithril
+e2e passed 115 with 249 ignored; Node passed 256 with one ignored.
 
 The full workspace gate passed for `cb8417f8`, including all twelve cases in
 `analysis_store_commit_crashes` and `analysis_store_input_crashes`. The data
