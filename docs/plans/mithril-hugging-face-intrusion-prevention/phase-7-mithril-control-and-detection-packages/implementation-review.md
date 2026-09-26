@@ -574,7 +574,14 @@ restore. `analysis_store_copy_limits` checks exact projected limits and overflow
 `analysis_store_backup_window` checks that a failed manifest write leaves the
 partial database copy charged. The mTLS full-filesystem case now rejects managed
 backup at filesystem admission; external restore rejects at the copy-reserve
-check. Verification of this change is pending.
+check. On `4ca9827f`, all 37 selected component tests, twelve enabled storage
+e2e cases, and the full Rust CI gate passed. The physical harness also passed
+with retention unhealthy and zero available bytes. Its log is
+`/tmp/araphor-backup-qualification.mL74XGfq/disk-full-retention.log`.
+The rebuilt CLI passed startup (18 checks) and recovery (29 checks); its
+results are in `retention-startup/result.json` and `retention-recovery/result.json`
+under the same directory. These checks cover managed backup admission and
+the shared retention-status correction, not the whole storage phase.
 `analysis_store_capacity_bounds` uses a sparse temporary file, not a full disk.
 `analysis_store_native_limits` reads the actual DuckDB settings. Physical
 reclamation and reserve adequacy still require the physical storage case.
