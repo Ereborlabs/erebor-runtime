@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::ops::{Deref, DerefMut};
@@ -20,11 +20,11 @@ use k8s_cri::v1::ContainerState;
 use mithril_control::{
     lower_kubernetes_policy, workload_target_fact_digest, AdministrativeApprovalConfigV1,
     AdministrativeApprovalOwner, AdministrativeExecRequestV1, AllowedNodeIdentity,
-    ContainerKindV1 as ControlContainerKind, ControlPlane, ControlStore, KubernetesPolicyModeV1,
-    KubernetesWorkloadIdentityV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
-    PolicySignerConfigV1, PolicySignerTrustV1, PolicySourceRevisionV1, PolicySourceStateV1,
-    TrustGenerationV1, WorkloadProtectionException, WorkloadProtectionExceptionStateV1,
-    WorkloadProtectionPolicy, WorkloadTargetFactV1,
+    ContainerKindV1 as ControlContainerKind, ControlPlane, ControlStore, EntryKindV1,
+    KubernetesPolicyModeV1, KubernetesWorkloadIdentityV1, PolicyDesiredStateConfigV1,
+    PolicyDesiredStateOwner, PolicyDocumentV1, PolicySignerConfigV1, PolicySignerTrustV1,
+    PolicySourceRevisionV1, PolicySourceStateV1, TrustGenerationV1, WorkloadProtectionException,
+    WorkloadProtectionExceptionStateV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
 };
 use mithril_node::{
     AdministrativeAuthorizationConfig, ContainerKindV1, ContainerRuntimeConfig, EvidenceConfig,
@@ -64,14 +64,18 @@ struct ActorFiles {
     work: ProbeDirectory,
     cgroup: ProbeCgroup,
     pod_uid: String,
+    execution_set_id: String,
 }
+
+type ActorKey = (Labels, String);
 
 pub(super) struct SharedState {
     labels: Labels,
-    actors: BTreeMap<Labels, ActorFiles>,
+    actor: String,
+    actors: BTreeMap<ActorKey, ActorFiles>,
     policies: BTreeMap<Labels, (WorkloadProtectionPolicy, PathBuf)>,
-    targets: BTreeMap<Labels, WorkloadTargetFactV1>,
-    bindings: BTreeMap<Labels, WorkloadBindingConfig>,
+    targets: BTreeMap<ActorKey, WorkloadTargetFactV1>,
+    bindings: BTreeMap<ActorKey, WorkloadBindingConfig>,
     work_path: PathBuf,
     cgroup_path: PathBuf,
     work: Option<ProbeDirectory>,
@@ -131,6 +135,43 @@ impl DerefMut for Shared {
 }
 
 impl SharedState {
+    fn role_handle(
+        document: &PolicyDocumentV1,
+        selector: &str,
+        kind: EntryKindV1,
+    ) -> TestResult<u32> {
+        let roles = document
+            .entry_role_assignments
+            .iter()
+            .filter(|entry| {
+                entry.workload_selector_ids.iter().any(|id| id == selector)
+                    && entry.entry_kinds.contains(&kind)
+                    && entry
+                        .container_kinds
+                        .contains(&ControlContainerKind::Application)
+            })
+            .map(|entry| entry.resulting_role_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if roles.len() != 1 {
+            return Err(format!("the actor selector has no unique {kind:?} role").into());
+        }
+        let role = roles
+            .iter()
+            .next()
+            .copied()
+            .ok_or("the signed role is missing")?;
+        document
+            .roles
+            .iter()
+            .map(|role| role.role_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .position(|candidate| candidate == role)
+            .map(|index| u32::try_from(index + 1))
+            .transpose()?
+            .ok_or_else(|| format!("the signed role {role} is missing").into())
+    }
+
     fn path(name: &'static str) -> TestResult<PathBuf> {
         env::var_os(name)
             .map(PathBuf::from)
@@ -141,56 +182,83 @@ impl SharedState {
         self.work = Some(ProbeDirectory::create(&self.work_path)?);
         self.cgroup = Some(ProbeCgroup::create(&self.cgroup_path)?);
         self.labels.clear();
+        self.actor = "worker".to_owned();
         Ok(())
     }
 
     pub(super) fn prepare_actor(&mut self, labels: &Labels) -> TestResult<()> {
-        if !self.actors.contains_key(labels) {
+        self.prepare_member(labels, "worker")
+    }
+
+    fn key(&self) -> ActorKey {
+        (self.labels.clone(), self.actor.clone())
+    }
+
+    pub(super) fn prepare_member(&mut self, labels: &Labels, name: &str) -> TestResult<()> {
+        let key = (labels.clone(), name.to_owned());
+        if !self.actors.contains_key(&key) {
             let first = self.actors.is_empty();
-            let pod_uid = if first {
-                POD_UID.to_owned()
-            } else {
-                uuid::Uuid::new_v4().to_string()
-            };
+            let pod_uid = self
+                .actors
+                .iter()
+                .find(|((known, _), _)| known == labels)
+                .map(|(_, files)| files.pod_uid.clone())
+                .unwrap_or_else(|| {
+                    if first {
+                        POD_UID.to_owned()
+                    } else {
+                        uuid::Uuid::new_v4().to_string()
+                    }
+                });
             let work = if first {
                 self.work
                     .take()
                     .ok_or("the initial actor directory is missing")?
             } else {
-                ProbeDirectory::create(&self.out.join(format!("actor-{pod_uid}")))?
+                ProbeDirectory::create(&self.out.join(format!("actor-{}", self.actors.len())))?
             };
             let cgroup = if first {
                 self.cgroup
                     .take()
                     .ok_or("the initial actor cgroup is missing")?
             } else {
-                ProbeCgroup::create(&self.node_path.with_file_name(format!("actor-{pod_uid}")))?
+                ProbeCgroup::create(
+                    &self
+                        .node_path
+                        .with_file_name(format!("actor-{}", self.actors.len())),
+                )?
             };
             let bin = work.path().join("bin");
             fs::create_dir(&bin)?;
             fs::copy(fs::canonicalize("/usr/bin/python3")?, bin.join("python"))?;
             self.actors.insert(
-                labels.clone(),
+                key,
                 ActorFiles {
                     work,
                     cgroup,
+                    execution_set_id: if name == "worker" {
+                        pod_uid.clone()
+                    } else {
+                        uuid::Uuid::new_v4().to_string()
+                    },
                     pod_uid,
                 },
             );
         }
         self.labels = labels.clone();
+        self.actor = name.to_owned();
         Ok(())
     }
 
     fn binding(&self) -> TestResult<&WorkloadBindingConfig> {
         self.bindings
-            .get(&self.labels)
+            .get(&self.key())
             .ok_or_else(|| "the actor has no installed binding".into())
     }
 
     pub(super) fn cgroup(&self) -> &Path {
         self.actors
-            .get(&self.labels)
+            .get(&self.key())
             .map_or(&self.cgroup_path, |actor| actor.cgroup.path())
     }
 
@@ -211,7 +279,7 @@ impl SharedState {
     }
 
     pub(super) fn actor_id(&self) -> TestResult<String> {
-        if let Some(binding) = self.bindings.get(&self.labels) {
+        if let Some(binding) = self.bindings.get(&self.key()) {
             return Ok(binding.container_id.clone());
         }
         let generation = self
@@ -222,14 +290,18 @@ impl SharedState {
     }
 
     pub(super) fn has_policy(&self) -> bool {
-        self.bindings.contains_key(&self.labels)
+        self.bindings.contains_key(&self.key())
+    }
+
+    pub(super) fn policy_installed(&self) -> bool {
+        self.policies.contains_key(&self.labels)
     }
 
     pub(super) fn annotations(&self) -> TestResult<BTreeMap<String, String>> {
         let binding = self.binding()?;
         let revision = &self
             .targets
-            .get(&self.labels)
+            .get(&self.key())
             .and_then(|target| target.kubernetes.as_ref())
             .ok_or("the policy revision is not installed")?
             .policy_source_revision_id;
@@ -295,7 +367,7 @@ impl SharedState {
     }
 
     pub(super) fn protected(&self) -> bool {
-        self.node_running() && self.bindings.contains_key(&self.labels)
+        self.node_running() && self.bindings.contains_key(&self.key())
     }
 
     fn wait_task_exec(
@@ -541,6 +613,7 @@ impl Shared {
         let cgroup = ProbeCgroup::create(&cgroup_path)?;
         lifecycle.put(SharedState {
             labels: Labels::new(),
+            actor: "worker".to_owned(),
             actors: BTreeMap::new(),
             policies: BTreeMap::new(),
             targets: BTreeMap::new(),
@@ -804,7 +877,7 @@ impl Shared {
         resource.metadata.generation = Some(self.policy_generation);
         resource.metadata.resource_version = Some(self.policy_generation.to_string());
         self.policies.insert(labels.clone(), (resource, path));
-        let previous = self.labels.clone();
+        let previous = self.key();
         self.prepare_actor(&labels)?;
         let result = if self.node_task.is_some() {
             self.sync_policy()
@@ -829,7 +902,7 @@ impl Shared {
             Ok(())
         };
         if self.actors.contains_key(&previous) {
-            self.labels = previous;
+            (self.labels, self.actor) = previous;
         }
         result?;
         Ok(labels)
@@ -847,14 +920,14 @@ impl Shared {
         resource.spec.target.pod.name = "pid-reuse".to_owned();
         resource.spec.target.pod.uid = self
             .actors
-            .get(&self.labels)
+            .get(&self.key())
             .ok_or("the actor is missing")?
             .pod_uid
             .clone();
         resource.spec.target.container_name = "worker".to_owned();
         let target = self
             .targets
-            .get(&self.labels)
+            .get(&self.key())
             .cloned()
             .ok_or("the exception has no active workload target")?;
         let policy = self
@@ -929,12 +1002,12 @@ impl Shared {
             .policies
             .get(&self.labels)
             .ok_or("the actor policy is not installed")?;
-        let pod_uid = self
+        let files = self
             .actors
-            .get(&self.labels)
-            .ok_or("the actor resources are missing")?
-            .pod_uid
-            .clone();
+            .get(&self.key())
+            .ok_or("the actor resources are missing")?;
+        let pod_uid = files.pod_uid.clone();
+        let execution_set_id = files.execution_set_id.clone();
         let document = lower_kubernetes_policy(resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID)?;
         let source = PolicySourceRevisionV1::from_resource(
             resource,
@@ -946,21 +1019,35 @@ impl Shared {
         )?;
         let profile_id = document.metadata.profile_id.clone();
         let scope_id = document.protected_universe.protected_scope_ids[0].clone();
-        let selector_id = document.workload_selectors[0].workload_selector_id.clone();
-        let authority = ScheduledRuntimeBindingV1::authority_binding_id(&pod_uid, "worker");
+        let selector = document
+            .workload_selectors
+            .iter()
+            .find(|selector| selector.container_names.contains(&self.actor))
+            .ok_or("the policy has no selector for the actor container")?;
+        let selector_id = selector.workload_selector_id.clone();
+        let initial_role =
+            SharedState::role_handle(&document, &selector_id, EntryKindV1::ContainerStart)?;
+        let external_role =
+            SharedState::role_handle(&document, &selector_id, EntryKindV1::ExternalRuntimeUnknown)?;
+        let image_digest = selector
+            .image_digests
+            .first()
+            .ok_or("the actor selector has no pinned image")?
+            .clone();
+        let authority = ScheduledRuntimeBindingV1::authority_binding_id(&pod_uid, &self.actor);
         let mut target = WorkloadTargetFactV1 {
             node_id: session.node_id.clone(),
             workload_binding_generation_digest: String::new(),
-            execution_set_id: pod_uid.clone(),
+            execution_set_id,
             cluster_uid: CLUSTER_UID.to_owned(),
             namespace_uid: NAMESPACE_UID.to_owned(),
             controller_uid: "77777777-7777-4777-8777-777777777777".to_owned(),
             service_account_uid: "88888888-8888-4888-8888-888888888888".to_owned(),
             pod_uid: pod_uid.clone(),
             container_id: format!("scheduled:{}", pod_uid),
-            container_name: "worker".to_owned(),
+            container_name: self.actor.clone(),
             container_kind: ControlContainerKind::Application,
-            image_digest: format!("sha256:{}", "b".repeat(64)),
+            image_digest,
             pod_labels: self.labels.clone(),
             kubernetes: Some(KubernetesWorkloadIdentityV1 {
                 namespace_name: "default".to_owned(),
@@ -980,10 +1067,15 @@ impl Shared {
         let targets = self
             .targets
             .iter()
-            .filter(|(labels, _)| *labels != &self.labels)
+            .filter(|(key, _)| *key != &self.key())
             .map(|(_, target)| target.clone())
             .chain(std::iter::once(target.clone()))
-            .collect();
+            .collect::<Vec<_>>();
+        let matched = targets
+            .iter()
+            .filter(|fact| fact.pod_labels == self.labels)
+            .cloned()
+            .collect::<Vec<_>>();
         plane.replace_kubernetes_workload_inventory(targets)?;
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as i64;
         let policy = self
@@ -991,17 +1083,33 @@ impl Shared {
             .as_ref()
             .ok_or("Control policy is not running")?
             .clone();
-        let result = policy.reconcile(resource, NAMESPACE_UID, &[target.clone()], now)?;
+        let result = policy.reconcile(resource, NAMESPACE_UID, &matched, now)?;
+        let bundled = result
+            .bundles
+            .first()
+            .map(|bundle| &bundle.candidate.exact_target.workload_targets);
         ensure!(
-            result.bundles.len() == 1,
+            result.bundles.len() == 1
+                && bundled.is_some_and(|facts| {
+                    facts.len() == matched.len() && matched.iter().all(|fact| facts.contains(fact))
+                }),
             InvalidInputSnafu {
                 path: &path,
-                reason: "Control did not produce one PID-reuse policy bundle",
+                reason: format!(
+                    "Control produced {} bundles with {:?} targets for {} actor containers",
+                    result.bundles.len(),
+                    bundled.map(Vec::len),
+                    matched.len()
+                ),
             }
         );
 
         let generation = u64::try_from(self.policy_generation)?;
-        let container_id = format!("{generation:064x}");
+        let container_id = if self.actor == "worker" {
+            format!("{generation:064x}")
+        } else {
+            format!("{:064x}", uuid::Uuid::new_v4().as_u128())
+        };
         let revision = source.policy_source_revision_id;
         let digest = target.workload_binding_generation_digest.clone();
         self.wait_policy(&revision, &digest)?;
@@ -1012,11 +1120,12 @@ impl Shared {
         let profile_generation = ack
             .profile_generation_ref_id
             .ok_or("the active policy has no profile generation reference")?;
-        let labels = self.labels.clone();
-        self.targets.insert(labels.clone(), target.clone());
+        let key = self.key();
+        self.targets.insert(key.clone(), target.clone());
         let cgroup = self.cgroup().to_owned();
+        let actor = self.actor.clone();
         self.bindings.insert(
-            labels,
+            key,
             WorkloadBindingConfig {
                 binding_id: ScheduledRuntimeBindingV1::runtime_binding_id(
                     &authority,
@@ -1037,15 +1146,15 @@ impl Shared {
                 pod_labels: target.pod_labels,
                 pod_uid: pod_uid.clone(),
                 sandbox_id: "d".repeat(64),
-                container_name: "worker".to_owned(),
+                container_name: actor,
                 image_digest: target.image_digest,
                 container_kind: ContainerKindV1::Application,
                 container_generation: generation,
                 root_cgroup_path: Some(cgroup),
                 lifecycle_generation: generation,
                 active_profile_generation_ref_id: profile_generation,
-                initial_role_id: 1,
-                external_role_id: 2,
+                initial_role_id: initial_role,
+                external_role_id: external_role,
                 arm_initial_root: true,
             },
         );
@@ -1057,7 +1166,7 @@ impl Shared {
         expected.extend(
             self.targets
                 .iter()
-                .filter(|(labels, _)| *labels != &self.labels)
+                .filter(|(key, _)| *key != &self.key())
                 .filter_map(|(_, target)| {
                     Some((
                         target
@@ -1355,7 +1464,7 @@ impl Shared {
 
     pub(super) fn work(&self) -> &Path {
         self.actors
-            .get(&self.labels)
+            .get(&self.key())
             .map_or(&self.work_path, |actor| actor.work.path())
     }
 

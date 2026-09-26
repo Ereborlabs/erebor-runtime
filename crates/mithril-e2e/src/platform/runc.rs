@@ -10,7 +10,7 @@ use mithril_node::OciBaseSpecOwner;
 use serde_json::{json, Value};
 
 use super::shared::Shared;
-use super::{Labels, Platform, Task, TestResult, PROCESS_FIXTURES};
+use super::{GroupActor, Labels, Platform, Task, TestResult, PROCESS_FIXTURES};
 use crate::physical::ProbeDirectory;
 use crate::process::ProcessFixture;
 
@@ -27,6 +27,142 @@ pub(crate) struct Runc {
 }
 
 impl Runc {
+    fn start_named(
+        &mut self,
+        name: &str,
+        extra: &[&str],
+        labels: &Labels,
+        member: &str,
+    ) -> TestResult<ProcessFixture> {
+        self.shared.prepare_member(labels, member)?;
+        if self.shared.node_running() && self.shared.policy_installed() && !self.shared.has_policy()
+        {
+            self.shared.sync_policy()?;
+        }
+        if let Some(id) = self.container_id.take() {
+            self.containers.push(id);
+            self.bundle_path = self
+                .state_path
+                .parent()
+                .ok_or("runc state has no parent")?
+                .join(format!("actor-{}", self.containers.len()));
+            fs::create_dir_all(self.bundle_path.join("rootfs"))?;
+            let mut command = Command::new(&self.runc_path);
+            command.arg("spec").arg("--bundle").arg(&self.bundle_path);
+            Self::run(&mut command, &self.runc_path)?;
+        }
+        let rootfs = self.bundle_path.join("rootfs");
+        for name in ["usr", "lib", "lib64", "dev/net", "fixtures", "work"] {
+            fs::create_dir_all(rootfs.join(name))?;
+        }
+        let fixtures = self.shared.source().join(PROCESS_FIXTURES);
+
+        let path = self.bundle_path.join("config.json");
+        let mut config: Value = serde_json::from_slice(&fs::read(&path)?)?;
+        let mut args = vec![
+            "/usr/bin/python3".to_owned(),
+            format!("/fixtures/{name}"),
+            "/work".to_owned(),
+        ];
+        args.extend(extra.iter().map(|arg| (*arg).to_owned()));
+        config["process"]["terminal"] = json!(false);
+        config["process"]["args"] = json!(args);
+        config["process"]["cwd"] = json!("/work");
+        config["process"]["env"] = json!([
+            "PATH=/work/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "PYTHONDONTWRITEBYTECODE=1"
+        ]);
+        let caps = json!(["CAP_CHECKPOINT_RESTORE", "CAP_SYS_ADMIN"]);
+        config["process"]["capabilities"] = json!({
+            "bounding": caps,
+            "effective": caps,
+            "permitted": caps,
+        });
+        config["root"]["path"] = json!("rootfs");
+        config["root"]["readonly"] = json!(false);
+        let cgroup = self
+            .shared
+            .cgroup()
+            .strip_prefix("/sys/fs/cgroup")?
+            .to_string_lossy();
+        config["linux"]["cgroupsPath"] = json!(cgroup.as_ref());
+        if let Some(paths) = config["linux"]["readonlyPaths"].as_array_mut() {
+            paths.retain(|path| path.as_str() != Some("/proc/sys"));
+        }
+        for path in ["/usr", "/lib", "/lib64"] {
+            let source = Path::new(path);
+            if source.exists() {
+                Self::mount(&mut config, source, path, false)?;
+            }
+        }
+        Self::mount(&mut config, Path::new("/dev/net"), "/dev/net", true)?;
+        Self::mount(&mut config, &fixtures, "/fixtures", false)?;
+        Self::mount(&mut config, self.shared.work(), "/work", true)?;
+        let config = if self.shared.has_policy() {
+            config["annotations"] = json!(self.shared.annotations()?);
+            for (source, writable) in [
+                (
+                    self.hook_path
+                        .parent()
+                        .ok_or("the OCI hook has no parent directory")?,
+                    false,
+                ),
+                (
+                    self.shared
+                        .admit_path()
+                        .parent()
+                        .ok_or("the admission socket has no parent directory")?,
+                    true,
+                ),
+            ] {
+                let relative = source.strip_prefix("/")?;
+                fs::create_dir_all(rootfs.join(relative))?;
+                let target = source
+                    .to_str()
+                    .ok_or("a runc mount path is not valid UTF-8")?;
+                Self::mount(&mut config, source, target, writable)?;
+            }
+            self.shared.observe()?;
+            OciBaseSpecOwner::build(
+                &serde_json::to_vec(&config)?,
+                &self.hook_path,
+                &self.manifest_path,
+                self.shared.admit_path(),
+                5_000,
+                6,
+                "info",
+            )?
+        } else {
+            serde_json::to_vec_pretty(&config)?
+        };
+        fs::write(&path, config)?;
+
+        let id = self.shared.actor_id()?;
+        self.container_id = Some(id.clone());
+        let mut command = Command::new(&self.runc_path);
+        command
+            .arg("--root")
+            .arg(&self.state_path)
+            .args(["run", "--bundle"])
+            .arg(&self.bundle_path)
+            .arg(&id);
+        let mut actor = ProcessFixture::start(&mut command, Path::new(name))?;
+        let parent = actor.id();
+        let state = self.state(&id)?;
+        let pid = state["pid"]
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+            .ok_or("runc state has no actor PID")?;
+        self.shared.move_out(parent)?;
+        actor.set_init(pid)?;
+        actor.set_group(self.shared.cgroup());
+        if self.shared.has_policy() {
+            self.shared.running(pid)?;
+        }
+        Ok(actor)
+    }
+
     fn run(command: &mut Command, name: &Path) -> TestResult<Vec<u8>> {
         let output = command.output()?;
         if !output.status.success() {
@@ -232,129 +368,24 @@ impl Platform for Runc {
         extra: &[&str],
         labels: &Labels,
     ) -> TestResult<ProcessFixture> {
-        self.shared.prepare_actor(labels)?;
-        if let Some(id) = self.container_id.take() {
-            self.containers.push(id);
-            self.bundle_path = self
-                .state_path
-                .parent()
-                .ok_or("runc state has no parent")?
-                .join(format!("actor-{}", self.containers.len()));
-            fs::create_dir_all(self.bundle_path.join("rootfs"))?;
-            let mut command = Command::new(&self.runc_path);
-            command.arg("spec").arg("--bundle").arg(&self.bundle_path);
-            Self::run(&mut command, &self.runc_path)?;
-        }
-        let rootfs = self.bundle_path.join("rootfs");
-        for name in ["usr", "lib", "lib64", "dev/net", "fixtures", "work"] {
-            fs::create_dir_all(rootfs.join(name))?;
-        }
-        let fixtures = self.shared.source().join(PROCESS_FIXTURES);
+        self.start_named(name, extra, labels, "worker")
+    }
 
-        let path = self.bundle_path.join("config.json");
-        let mut config: Value = serde_json::from_slice(&fs::read(&path)?)?;
-        let mut args = vec![
-            "/usr/bin/python3".to_owned(),
-            format!("/fixtures/{name}"),
-            "/work".to_owned(),
-        ];
-        args.extend(extra.iter().map(|arg| (*arg).to_owned()));
-        config["process"]["terminal"] = json!(false);
-        config["process"]["args"] = json!(args);
-        config["process"]["cwd"] = json!("/work");
-        config["process"]["env"] = json!([
-            "PATH=/work/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "PYTHONDONTWRITEBYTECODE=1"
-        ]);
-        let caps = json!(["CAP_CHECKPOINT_RESTORE", "CAP_SYS_ADMIN"]);
-        config["process"]["capabilities"] = json!({
-            "bounding": caps,
-            "effective": caps,
-            "permitted": caps,
-        });
-        config["root"]["path"] = json!("rootfs");
-        config["root"]["readonly"] = json!(false);
-        let cgroup = self
-            .shared
-            .cgroup()
-            .strip_prefix("/sys/fs/cgroup")?
-            .to_string_lossy();
-        config["linux"]["cgroupsPath"] = json!(cgroup.as_ref());
-        if let Some(paths) = config["linux"]["readonlyPaths"].as_array_mut() {
-            paths.retain(|path| path.as_str() != Some("/proc/sys"));
+    fn start_actor_group(
+        &mut self,
+        _manifest: &str,
+        actors: &[GroupActor<'_>],
+        labels: &Labels,
+    ) -> TestResult<Vec<(ProcessFixture, PathBuf)>> {
+        let mut group = Vec::with_capacity(actors.len());
+        for actor in actors {
+            let script = actor
+                .script
+                .ok_or("runc group actor needs a Python script")?;
+            let process = self.start_named(script, actor.args, labels, actor.name)?;
+            group.push((process, self.shared.work().join(actor.name)));
         }
-        for path in ["/usr", "/lib", "/lib64"] {
-            let source = Path::new(path);
-            if source.exists() {
-                Self::mount(&mut config, source, path, false)?;
-            }
-        }
-        Self::mount(&mut config, Path::new("/dev/net"), "/dev/net", true)?;
-        Self::mount(&mut config, &fixtures, "/fixtures", false)?;
-        Self::mount(&mut config, self.shared.work(), "/work", true)?;
-        let config = if self.shared.has_policy() {
-            config["annotations"] = json!(self.shared.annotations()?);
-            for (source, writable) in [
-                (
-                    self.hook_path
-                        .parent()
-                        .ok_or("the OCI hook has no parent directory")?,
-                    false,
-                ),
-                (
-                    self.shared
-                        .admit_path()
-                        .parent()
-                        .ok_or("the admission socket has no parent directory")?,
-                    true,
-                ),
-            ] {
-                let relative = source.strip_prefix("/")?;
-                fs::create_dir_all(rootfs.join(relative))?;
-                let target = source
-                    .to_str()
-                    .ok_or("a runc mount path is not valid UTF-8")?;
-                Self::mount(&mut config, source, target, writable)?;
-            }
-            self.shared.observe()?;
-            OciBaseSpecOwner::build(
-                &serde_json::to_vec(&config)?,
-                &self.hook_path,
-                &self.manifest_path,
-                self.shared.admit_path(),
-                5_000,
-                6,
-                "info",
-            )?
-        } else {
-            serde_json::to_vec_pretty(&config)?
-        };
-        fs::write(&path, config)?;
-
-        let id = self.shared.actor_id()?;
-        self.container_id = Some(id.clone());
-        let mut command = Command::new(&self.runc_path);
-        command
-            .arg("--root")
-            .arg(&self.state_path)
-            .args(["run", "--bundle"])
-            .arg(&self.bundle_path)
-            .arg(&id);
-        let mut actor = ProcessFixture::start(&mut command, Path::new(name))?;
-        let parent = actor.id();
-        let state = self.state(&id)?;
-        let pid = state["pid"]
-            .as_u64()
-            .and_then(|pid| u32::try_from(pid).ok())
-            .filter(|pid| *pid > 0)
-            .ok_or("runc state has no actor PID")?;
-        self.shared.move_out(parent)?;
-        actor.set_init(pid)?;
-        actor.set_group(self.shared.cgroup());
-        if self.shared.has_policy() {
-            self.shared.running(pid)?;
-        }
-        Ok(actor)
+        Ok(group)
     }
 
     fn add_actor(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {

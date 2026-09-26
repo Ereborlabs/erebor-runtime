@@ -5,6 +5,9 @@ import sys
 
 
 work = pathlib.Path(sys.argv[1])
+if len(sys.argv) > 2:
+    work /= sys.argv[2]
+    work.mkdir(exist_ok=True)
 print("native-fixture-ready", flush=True)
 for index, line in enumerate(sys.stdin):
     error, size = 0, 0

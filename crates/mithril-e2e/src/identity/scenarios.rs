@@ -23,6 +23,8 @@ mod external_roots;
 #[cfg(test)]
 mod generation_state;
 #[cfg(test)]
+mod group_roles;
+#[cfg(test)]
 mod lifecycle_sleep;
 #[cfg(test)]
 mod lifetime_result;

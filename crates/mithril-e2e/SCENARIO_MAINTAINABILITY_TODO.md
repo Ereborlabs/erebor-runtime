@@ -4050,6 +4050,19 @@ setup, production actions, assertions, and focused test.
   identity retention across the Kubernetes service and Node outages, and
   fresh identity after same-name Pod and container recreation.
 - [ ] `physical_kubernetes_network_probe`
+  - [ ] Add one `Platform::start_actor_group` operation. Kubernetes starts the
+    group in one Pod from a checked YAML fixture. Host and direct `runc` start
+    separate PID-1 actors in separate cgroups. Do not implement the group as
+    repeated exec entries or reuse one container binding for several roots.
+  - [ ] Prove that one policy assigns different entry roles to two containers
+    in the same Pod. Run the same read action in both containers. Require one
+    allow result and one deny result on Host, direct `runc`, and Kubernetes.
+  - [ ] Keep native HTTP, TCP, and gRPC readiness probes. Require each
+    container to become Ready with zero restarts. Sample each exact CRI
+    container cgroup for four seconds and require only its init PID.
+  - [ ] Keep the test below 100 lines and remove the legacy probe only after
+    the replacement passes. Verify group setup and cleanup on Host and direct
+    `runc`, then run the Kubernetes case.
 
 Each Kubernetes identity case must keep the `k3s`, CRI, OCI hook, node
 process, and public production-owner operations that its physical harness

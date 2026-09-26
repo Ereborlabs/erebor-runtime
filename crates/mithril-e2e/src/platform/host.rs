@@ -9,7 +9,7 @@ use erebor_runtime_ipc::v1::MithrilObservationSnapshot;
 use snafu::{ensure, ResultExt as _};
 
 use super::shared::Shared;
-use super::{Labels, Platform, Task, TestResult, PROCESS_FIXTURES};
+use super::{GroupActor, Labels, Platform, Task, TestResult, PROCESS_FIXTURES};
 use crate::error::{InvalidInputSnafu, IoSnafu};
 use crate::physical::ProbeDirectory;
 use crate::process::ProcessFixture;
@@ -138,6 +138,52 @@ impl Host {
         Ok(actor)
     }
 
+    fn start_named(
+        &mut self,
+        name: &str,
+        extra: &[&str],
+        labels: &Labels,
+        member: &str,
+    ) -> TestResult<ProcessFixture> {
+        self.shared.prepare_member(labels, member)?;
+        if self.shared.node_running() && self.shared.policy_installed() && !self.shared.has_policy()
+        {
+            self.shared.sync_policy()?;
+        }
+        self.staged = false;
+        self.admitted = false;
+        let protected = self.shared.protected();
+        let rootfs = self.actor_root()?;
+        let mut args = vec![OsString::from("/work")];
+        args.extend(extra.iter().map(OsString::from));
+        args.insert(0, OsString::from(format!("/fixtures/{name}")));
+        let mut actor = ProcessFixture::held_pidns(
+            Path::new("/usr/bin/python3"),
+            args,
+            self.shared.cgroup(),
+            &rootfs,
+            Path::new(name),
+        )?;
+        let pid = actor.id();
+        self.init_pid = Some(pid);
+        if protected {
+            self.stage()?;
+            self.admit(pid)?;
+            self.stage_entries(&rootfs)?;
+        }
+        actor.release()?;
+        if let Err(source) = actor.ready() {
+            if protected {
+                return Err(format!("{source}; identity health: {:?}", self.health()?).into());
+            }
+            return Err(source.into());
+        }
+        if protected {
+            self.running(pid)?;
+        }
+        Ok(actor)
+    }
+
     fn close(&mut self) -> TestResult<()> {
         for target in self.mounts.drain(..).rev() {
             rustix::mount::unmount(&target, rustix::mount::UnmountFlags::DETACH)
@@ -201,39 +247,24 @@ impl Platform for Host {
         extra: &[&str],
         labels: &Labels,
     ) -> TestResult<ProcessFixture> {
-        self.shared.prepare_actor(labels)?;
-        self.staged = false;
-        self.admitted = false;
-        let protected = self.shared.protected();
-        let rootfs = self.actor_root()?;
-        let mut args = vec![OsString::from("/work")];
-        args.extend(extra.iter().map(OsString::from));
-        args.insert(0, OsString::from(format!("/fixtures/{name}")));
-        let mut actor = ProcessFixture::held_pidns(
-            Path::new("/usr/bin/python3"),
-            args,
-            self.shared.cgroup(),
-            &rootfs,
-            Path::new(name),
-        )?;
-        let pid = actor.id();
-        self.init_pid = Some(pid);
-        if protected {
-            self.stage()?;
-            self.admit(pid)?;
-            self.stage_entries(&rootfs)?;
+        self.start_named(name, extra, labels, "worker")
+    }
+
+    fn start_actor_group(
+        &mut self,
+        _manifest: &str,
+        actors: &[GroupActor<'_>],
+        labels: &Labels,
+    ) -> TestResult<Vec<(ProcessFixture, PathBuf)>> {
+        let mut group = Vec::with_capacity(actors.len());
+        for actor in actors {
+            let script = actor
+                .script
+                .ok_or("Host group actor needs a Python script")?;
+            let process = self.start_named(script, actor.args, labels, actor.name)?;
+            group.push((process, self.shared.work().join(actor.name)));
         }
-        actor.release()?;
-        if let Err(source) = actor.ready() {
-            if protected {
-                return Err(format!("{source}; identity health: {:?}", self.health()?).into());
-            }
-            return Err(source.into());
-        }
-        if protected {
-            self.running(pid)?;
-        }
-        Ok(actor)
+        Ok(group)
     }
 
     fn add_actor(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {

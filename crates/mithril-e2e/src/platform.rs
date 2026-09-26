@@ -37,6 +37,13 @@ pub(crate) use self::runc::Runc;
 pub(crate) use mithril_e2e_macros::platform_test;
 pub(crate) type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
 pub(crate) type Labels = BTreeMap<String, String>;
+
+pub(crate) struct GroupActor<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) script: Option<&'a str>,
+    pub(crate) args: &'a [&'a str],
+}
+
 const TASK_LIMIT: Duration = Duration::from_secs(30);
 pub(crate) const PROCESS_FIXTURES: &str = "crates/mithril-e2e/fixtures/process";
 
@@ -164,6 +171,14 @@ pub(crate) trait Platform: Sized {
         _labels: &Labels,
     ) -> TestResult<crate::process::ProcessFixture> {
         pending("start actor")
+    }
+    fn start_actor_group(
+        &mut self,
+        _manifest: &str,
+        _actors: &[GroupActor<'_>],
+        _labels: &Labels,
+    ) -> TestResult<Vec<(crate::process::ProcessFixture, PathBuf)>> {
+        pending("start actor group")
     }
     fn add_actor(
         &mut self,
