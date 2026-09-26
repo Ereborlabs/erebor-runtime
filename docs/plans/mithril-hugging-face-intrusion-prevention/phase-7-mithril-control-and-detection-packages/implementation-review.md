@@ -1093,13 +1093,15 @@ not qualify physical storage/partition recovery, full-disk reserves, large-index
 compaction cost, or every process-crash boundary.
 
 The paired capacity tests passed on Linux 6.8.0-139-generic, x86_64. The log at
-`/tmp/araphor-data-qualification.MtrjRy/disk-full-final.log` identifies the test
-additions above `37324d30`, dirty paths, and executable digest. Actual tmpfs
+`/tmp/araphor-data-qualification.MtrjRy/disk-full-committed.log` identifies clean
+commit `db51fcea` and the executable digest. Actual tmpfs
 exhaustion left zero free bytes; intake rejected the batch without a new
 receipt or revision. Policy reads and accepted evidence reads still worked.
 Padding release permitted retry without a Control restart. The reopened store
 contains two records at cursor 2 and commit revision 3. The seven enabled
-data-store tests also passed. The full workspace gate is still active after
-formatting, compilation, strict Clippy, and 41 enabled data-crate tests passed.
+data-store tests also passed. The full workspace gate passed for `db51fcea`:
+formatting, compilation, strict Clippy, and workspace tests. The data crate
+passed 41 tests with two ignored; Control passed 196 with two ignored;
+Mithril e2e passed 114 with 248 ignored; Node passed 255 with one ignored.
 Reserve adequacy, failure inside native commit, and Kubernetes partition
 recovery remain unqualified by these tests.
