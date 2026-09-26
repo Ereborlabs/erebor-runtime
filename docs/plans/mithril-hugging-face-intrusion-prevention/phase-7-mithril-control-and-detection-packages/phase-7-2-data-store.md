@@ -716,6 +716,14 @@ reopen preserves prior metadata, receipt, exact records, and processor progress.
 Retry commits once. A result witness prevents raw expiry, and another reopen
 preserves the successful state. All nine enabled data-store tests passed; three
 helpers or environment-specific cases remain ignored. The final workspace gate
-for this addition is pending. These cases do not prove torn writes, ENOSPC
+passed for `c67d6588` with
+`CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh`: formatting,
+workspace checks, strict Clippy, and all workspace tests. The data crate passed
+45 tests with two ignored; Control passed 196 with two ignored; Node passed
+256 with one ignored. These cases do not prove torn writes, ENOSPC
 during commit, hardware power loss, or Control's mTLS failure response. Other
 capacity, load, old-writer removal, and physical requirements remain **Not done**.
+The physical outage harness still uses `control_segment_manifest` and
+`verify_control_segment_prefixes` in
+`crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh`. These checks inspect
+`segments-v2`, not AnalysisStore. They do not qualify the new storage contract.
