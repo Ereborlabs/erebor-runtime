@@ -28,7 +28,8 @@ impl AnalysisStore {
                         256 + octet_length(encode(owner_id)) + octet_length(entity_key)
                         + octet_length(lifetime_key) + octet_length(body) FROM context_versions
                     UNION ALL SELECT tenant_id, 'progress', false,
-                        256 + octet_length(encode(processor_id)) FROM processor_progress
+                        256 + octet_length(encode(processor_id)) + octet_length(encode(retirement_id))
+                        + octet_length(encode(retirement_reason)) FROM processor_progress
                     UNION ALL SELECT tenant_id, 'witnesses', false,
                         256 + octet_length(encode(ref_id)) FROM evidence_refs
                     UNION ALL SELECT tenant_id, 'context_refs', false,

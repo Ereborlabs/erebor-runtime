@@ -1,5 +1,5 @@
 use duckdb::{params, OptionalExt as _};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
@@ -40,7 +40,8 @@ impl TryFrom<&str> for ProcessorClassV1 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProcessorScopeV1 {
     pub processor_id: String,
     pub method_version: u64,
@@ -130,9 +131,9 @@ impl AnalysisStore {
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin processor registration",
         })?;
-        let existing: Option<(String, u64)> = transaction
+        let existing: Option<(String, u64, bool)> = transaction
             .query_row(
-                "SELECT class, start_cursor FROM processor_progress
+                "SELECT class, start_cursor, retired FROM processor_progress
                  WHERE processor_id = ? AND method_version = ? AND tenant_id = ? AND stream_key = ?",
                 params![
                     scope.processor_id,
@@ -140,7 +141,7 @@ impl AnalysisStore {
                     scope.identity.tenant_id.as_slice(),
                     key.as_slice(),
                 ],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
             .context(AnalysisDatabaseSnafu {
@@ -148,7 +149,7 @@ impl AnalysisStore {
             })?;
         let meta = Self::read_meta_from(&transaction, &self.root.join("analysis.duckdb"))?;
         if let Some(existing) = existing {
-            if existing != (class.as_str().to_owned(), start_cursor) {
+            if existing != (class.as_str().to_owned(), start_cursor, false) {
                 return AnalysisConflictSnafu.fail();
             }
             return Ok(meta.commit_revision);
@@ -167,7 +168,7 @@ impl AnalysisStore {
             .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
         transaction
             .execute(
-                "INSERT INTO processor_progress VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, false)",
+                "INSERT INTO processor_progress VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, false, '', '', 0, 0)",
                 params![
                     scope.processor_id,
                     scope.method_version,

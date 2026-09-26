@@ -33,6 +33,22 @@ impl AnalysisStore {
             .fail();
         }
         self.check_expired(&writer, &key, identity, first_cursor)?;
+        let expiry: Option<u64> = writer
+            .query_row(
+                "SELECT MIN(first_cursor) FROM expired_ranges
+             WHERE stream_key = ? AND tenant_id = ? AND first_cursor > ? AND first_cursor <= ?",
+                params![
+                    key.as_slice(),
+                    identity.tenant_id.as_slice(),
+                    first_cursor,
+                    receipt.contiguous_cursor
+                ],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "bound read before expired input",
+            })?;
+        let page_end = expiry.map_or(receipt.contiguous_cursor, |cursor| cursor - 1);
         let read_revision =
             Self::read_meta_from(&writer, &self.root.join("analysis.duckdb"))?.commit_revision;
         let mut statement = writer
@@ -50,7 +66,7 @@ impl AnalysisStore {
                 key.as_slice(),
                 identity.tenant_id.as_slice(),
                 first_cursor,
-                receipt.contiguous_cursor,
+                page_end,
                 MAX_ANALYSIS_PAGE_RECORDS as u32 + 1,
             ])
             .context(AnalysisDatabaseSnafu {
@@ -108,7 +124,7 @@ impl AnalysisStore {
             });
         }
         let next_cursor = first_cursor + records.len() as u64;
-        if next_cursor <= receipt.contiguous_cursor && !bounded {
+        if next_cursor <= page_end && !bounded {
             return self.expired_or_missing(&writer, &key, identity, next_cursor);
         }
         Ok(AnalysisReadPageV1 {

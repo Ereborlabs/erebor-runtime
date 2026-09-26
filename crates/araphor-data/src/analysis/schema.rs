@@ -79,11 +79,35 @@ impl AnalysisStore {
                 OR p.resume_floor > COALESCE(s.contiguous_cursor, 0)
                 OR p.coverage_revision > COALESCE(s.coverage_revision, 0)
                 OR p.context_revision > (SELECT commit_revision FROM store_meta)"),
+            ("invalid processor retirement", "SELECT 1 FROM processor_progress p
+                LEFT JOIN source_receipts s ON s.stream_key = p.stream_key AND s.tenant_id = p.tenant_id
+                WHERE (NOT p.retired AND (p.retirement_id <> '' OR p.retirement_reason <> ''
+                    OR p.retirement_cursor <> 0 OR p.retirement_revision <> 0))
+                OR (p.retired AND (p.class <> 'required'
+                    OR NOT regexp_full_match(p.retirement_id, '[A-Za-z0-9_.:-]{1,128}')
+                    OR trim(p.retirement_reason) = '' OR octet_length(encode(p.retirement_reason)) > 512
+                    OR p.retirement_cursor < p.consumed_cursor
+                    OR p.retirement_cursor > COALESCE(s.contiguous_cursor, 0)
+                    OR p.retirement_revision = 0
+                    OR p.retirement_revision > (SELECT commit_revision FROM store_meta)
+                    OR p.retirement_revision > COALESCE((SELECT last_changed_revision
+                        FROM relation_revisions WHERE relation_name = 'processor_progress'), 0)
+                    OR (p.retirement_cursor > p.consumed_cursor AND NOT EXISTS (
+                        SELECT 1 FROM processor_gaps g WHERE g.processor_id = p.processor_id
+                            AND g.method_version = p.method_version AND g.tenant_id = p.tenant_id
+                            AND g.stream_key = p.stream_key
+                            AND g.first_cursor::HUGEINT = p.consumed_cursor::HUGEINT + 1
+                            AND g.last_cursor = p.retirement_cursor
+                            AND g.commit_revision = p.retirement_revision))))"),
             ("invalid processor gap", "SELECT 1 FROM processor_gaps g LEFT JOIN processor_progress p
                 ON p.processor_id = g.processor_id AND p.method_version = g.method_version
                     AND p.tenant_id = g.tenant_id AND p.stream_key = g.stream_key
-                WHERE p.processor_id IS NULL OR p.class <> 'optional' OR g.first_cursor = 0
-                    OR g.last_cursor < g.first_cursor OR g.last_cursor > p.resume_floor"),
+                WHERE p.processor_id IS NULL OR g.first_cursor = 0 OR g.last_cursor < g.first_cursor
+                    OR (p.class = 'optional' AND g.last_cursor > p.resume_floor)
+                    OR (p.class = 'required' AND (NOT p.retired
+                        OR g.first_cursor::HUGEINT <> p.consumed_cursor::HUGEINT + 1
+                        OR g.last_cursor <> p.retirement_cursor
+                        OR g.commit_revision <> p.retirement_revision))"),
             ("invalid recovery gap", "SELECT 1 FROM recovery_gaps WHERE octet_length(stream_key) <> 32
                 OR octet_length(tenant_id) <> 16 OR first_cursor = 0 OR last_cursor < first_cursor"),
         ];
@@ -267,7 +291,7 @@ impl AnalysisStore {
             "stream_key, tenant_id, durable_cursor, cpu_id, framed_record, frame_sha256, commit_revision, ordinal, intake_utc_ns FROM events",
             "stream_key, tenant_id, revision, report, report_sha256, commit_revision, ordinal FROM coverage",
             "tenant_id, owner_id, entity_key, lifetime_key, owner_revision, valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, content_sha256, commit_revision FROM context_versions",
-            "processor_id, method_version, tenant_id, stream_key, class, consumed_cursor, resume_floor, coverage_revision, context_revision, start_cursor, required_floor, retired FROM processor_progress",
+            "processor_id, method_version, tenant_id, stream_key, class, consumed_cursor, resume_floor, coverage_revision, context_revision, start_cursor, required_floor, retired, retirement_id, retirement_reason, retirement_cursor, retirement_revision FROM processor_progress",
             "ref_id, tenant_id, stream_key, durable_cursor, expires_utc_ns FROM evidence_refs",
             "ref_id, tenant_id, owner_id, entity_key, lifetime_key, owner_revision, content_sha256 FROM context_refs",
             "result_id, tenant_id, processor_id, body, body_sha256, request_sha256, commit_revision FROM analysis_results",

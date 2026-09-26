@@ -698,10 +698,11 @@ mod tests {
             store.read_page(&source, 2),
             Err(crate::Error::RetainedRangeExpired { .. })
         ));
-        assert!(matches!(
-            store.read_page(&source, 1),
-            Err(crate::Error::RetainedRangeExpired { .. })
-        ));
+        let witness = store.read_page(&source, 1)?;
+        assert_eq!(witness.records.len(), 1);
+        assert_eq!(witness.records[0].cursor, 1);
+        assert_eq!(witness.next_cursor, Some(2));
+        assert_eq!(store.read_page(&source, 3)?.records[0].cursor, 3);
         assert_eq!(
             store.accept_validated_batch(source.clone(), batch(2, b"b"))?,
             EvidenceStoreOutcomeV1::AlreadyAcceptedExpired
