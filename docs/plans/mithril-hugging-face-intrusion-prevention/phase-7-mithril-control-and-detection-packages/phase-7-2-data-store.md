@@ -983,7 +983,9 @@ The mTLS inspection regression and CLI argument test passed before the final
 addition of file-byte fields and the proof-output size check. The final shell
 smoke test passed, including rejection when one Node's extra records hide the
 other Node's missing replay. Shell syntax and `git diff --check` passed.
-The final workspace gate is still running after the last harness edit. It is
-rebuilding native DuckDB code. This result is **Not done** for final workspace
-verification and physical qualification. No retained two-node environment has
-been selected or changed. The unrelated running VM remains unchanged.
+The first workspace gate stopped on three forbidden `unwrap()` calls in the
+CLI test. The test now returns parse errors. The final gate passed formatting,
+workspace compilation, and strict Clippy. It is building the full test suite.
+This result is **Not done** for final workspace tests and physical qualification.
+No retained two-node environment has been selected or changed. The unrelated
+running VM remains unchanged.

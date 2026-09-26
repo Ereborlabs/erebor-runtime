@@ -114,7 +114,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn inspection_arguments_are_scoped() {
+    fn inspection_arguments_are_scoped() -> Result<(), clap::Error> {
         let tenant = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
         let base = [
             "qualification",
@@ -131,16 +131,8 @@ mod tests {
         let complete =
             base.into_iter()
                 .chain(["--data-directory", "/tmp/data", "--tenant-id", tenant]);
-        assert!(Cli::try_parse_from(complete.clone())
-            .unwrap()
-            .validate()
-            .is_ok());
-        assert!(
-            Cli::try_parse_from(complete.chain(["--baseline", "/tmp/baseline.json"]))
-                .unwrap()
-                .validate()
-                .is_ok()
-        );
+        Cli::try_parse_from(complete.clone())?.validate()?;
+        Cli::try_parse_from(complete.chain(["--baseline", "/tmp/baseline.json"]))?.validate()?;
         let wrong = Cli::try_parse_from([
             "qualification",
             "--case",
@@ -151,8 +143,8 @@ mod tests {
             "/tmp/data",
             "--tenant-id",
             tenant,
-        ])
-        .unwrap();
+        ])?;
         assert!(wrong.validate().is_err());
+        Ok(())
     }
 }
