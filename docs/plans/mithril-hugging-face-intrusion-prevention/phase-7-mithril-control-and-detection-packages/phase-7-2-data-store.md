@@ -132,3 +132,22 @@ Pass DE-STORE, DE-INDEX, DE-RETENTION, DE-BOOT, DE-GAP, DE-TENANT and DE-LIMIT.
 Record nonzero case counts, actual disk usage, source receipts, backup revision
 and retained floors. No public SQL, discovery algorithm or remote transport is
 required here. Stop before enabling a data path whose recovery case fails.
+
+## Implementation result
+
+**Not done.** The working tree contains an AnalysisStore writer, bounded reads,
+exact context versions, processor results and references, guarded raw expiry,
+optional gap records, backup, restore, and an analysis-schema upgrade. The retention owner
+deletes only eligible raw rows. Required progress and live exact witnesses
+protect rows. The tests use temporary databases. No retention call ran on an
+existing deployment.
+
+`cargo test -p araphor-data --lib` passed 18 tests. The repository Rust CI
+procedure passed formatting, workspace check, all-features Clippy, and workspace
+tests with `RUST_TEST_THREADS=1`. The parallel run failed one existing 500 ms
+Control reconnect timing assertion. That test passed alone and in the serialized
+run. The offline `storage-contract` case passed nine assertions. That case
+does not use production intake. The current Control intake still writes its
+chunked store. Offline import, a single-writer cutover, capacity admission,
+context projection from Control, data-store recovery/upgrade cases, and physical disk reuse
+remain unverified. Do not enable the new data path yet.

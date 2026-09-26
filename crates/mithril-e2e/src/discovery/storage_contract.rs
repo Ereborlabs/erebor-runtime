@@ -60,6 +60,7 @@ pub fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
                 cpu_id: coverage.cpu_id,
                 first_cursor: coverage.first_cursor,
                 last_cursor: coverage.last_cursor,
+                intake_utc_ns: 1_800_000_000_000_000_000,
                 framed_records: framed_records.clone().into(),
                 frame_ends,
             },
@@ -74,6 +75,7 @@ pub fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
         cpu_id: coverage.cpu_id,
         first_cursor: coverage.first_cursor,
         last_cursor: coverage.first_cursor,
+        intake_utc_ns: 1_800_000_000_000_000_000,
         framed_records: first_frame.clone().into(),
         frame_ends: vec![first_frame.len()],
     };
@@ -159,6 +161,7 @@ pub fn run(output: &Path) -> Result<(), Box<dyn StdError>> {
         &output.join("result.json"),
         &serde_json::json!({
             "schema_version": 1,
+            "analysis_schema_version": store_meta.schema_version,
             "case": "storage-contract",
             "result": "PASS",
             "production_intake": false,
