@@ -926,9 +926,11 @@ Expiry produces Expired. Any semantic edit needs a new preview and approval.
 Publication intent and result are durable data records; exact source and
 authority are checked through their existing Control owners.
 
-Schema changes require a validated backup and bounded maintenance. Reject an
-unsupported newer schema without modifying it. No automatic destructive repair
-or empty-database fallback is permitted. Policy/control-state bytes and Node
+Development schema changes require a fresh data store and fresh Node source
+identities. Reject every unsupported schema without modifying it. Do not add
+migrations or old-store imports. Backup and restore support the current format.
+No automatic destructive repair or empty-database fallback is permitted.
+Policy/control-state bytes and Node
 WAL formats remain governed by their existing owners. Portable replay uses
 an explicitly retained manifest and records; it never fetches current facts
 to fill a historical gap.
