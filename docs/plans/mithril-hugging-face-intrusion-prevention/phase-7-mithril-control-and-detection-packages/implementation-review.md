@@ -131,6 +131,12 @@ These cases do not cover interruption inside native commit, hardware power
 loss, or every data mutation. Existing mTLS cases remain separate integration
 proof.
 
+The full workspace gate passed for `cb8417f8`, including all twelve cases in
+`analysis_store_commit_crashes` and `analysis_store_input_crashes`. The data
+crate passed 42 tests with two ignored; Control passed 196 with two ignored;
+Mithril e2e passed 114 with 248 ignored; Node passed 256 with one ignored.
+No production data or existing deployment was used for these crash checks.
+
 [NodeChassis](../../../../crates/mithril-node/src/node.rs) The connected Node selects one WAL source per second, including sources without pending records.<br>
 -> [EffectObservationStore::evidence_floor](../../../../crates/mithril-node/src/observation.rs) The owner reads one ordered source and its durable acknowledged cursor, then releases the WAL lock.<br>
 -> [ControlConnection::report_evidence_floor](../../../../crates/mithril-node/src/control.rs) The existing mTLS connection sends a bounded NodeEvidence.ReportFloor request.<br>

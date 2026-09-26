@@ -584,5 +584,11 @@ and unchanged consumed progress. Retry and a second reopen preserve one effect.
 The hooks compile only under `cfg(test)` and require an exact temporary path.
 The first build stopped with `No space left on device`. Removing only this
 worktree's ignored incremental build cache allowed the same command to pass.
-The final workspace gate is pending for this change. The complete phase remains
-**Not done**.
+The final `bash .github/scripts/verify-rust-ci.sh` run passed for `cb8417f8`:
+formatting, workspace checks, strict Clippy, and workspace tests. The data crate
+passed 42 tests with two ignored; Control passed 196 with two ignored; Mithril
+e2e passed 114 with 248 ignored; Node passed 256 with one ignored. This run
+includes the twelve result, retention, and input commit-crash cases. Processor
+lifecycle and restore boundaries, a Control crash before ACK, and the remaining
+capacity, load, and physical requirements are not proved by these cases.
+The complete phase remains **Not done**.
