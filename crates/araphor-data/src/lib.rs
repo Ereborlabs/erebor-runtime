@@ -13,8 +13,9 @@ pub use analysis::{
     AnalysisResultCommitV1, AnalysisResultReceiptV1, AnalysisSourceReceiptV1,
     AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1, AnalysisWitnessV1,
     ContextSensitivityV1, EvidenceRetentionOwner, EvidenceStoreOutcomeV1, ProcessorClassV1,
-    ProcessorScopeV1, RetentionLimitsV1, RetentionResultV1, StorePositionV1, ValidatedCoverageV1,
-    ValidatedEvidenceBatchV1, ANALYSIS_DUCKDB_BINDING_VERSION, ANALYSIS_SQLPARSER_VERSION,
+    ProcessorScopeV1, RetentionLimitsV1, RetentionResultV1, RetentionSweepV1, StorePositionV1,
+    ValidatedCoverageV1, ValidatedEvidenceBatchV1, ANALYSIS_DUCKDB_BINDING_VERSION,
+    ANALYSIS_SQLPARSER_VERSION,
 };
 
 pub const MAX_EVIDENCE_BATCH_RECORDS: usize = 4_096;
@@ -47,6 +48,17 @@ pub struct EvidenceIntakeIdentityV1 {
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Required security input reached its {resource} budget"))]
+    ProtectedInputCapacity {
+        resource: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Analysis intake is unavailable until retention succeeds"))]
+    RetentionUnavailable {
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Analysis database operation {operation} failed: {source}"))]
     AnalysisDatabase {
         operation: &'static str,

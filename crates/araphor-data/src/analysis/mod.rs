@@ -1,6 +1,7 @@
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use duckdb::{params, Config, Connection, OptionalExt as _};
@@ -30,7 +31,9 @@ pub use progress::{
     AnalysisContextRefV1, AnalysisProcessorGapV1, AnalysisResultCommitV1, AnalysisResultReceiptV1,
     AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,
 };
-pub use retention::{EvidenceRetentionOwner, RetentionLimitsV1, RetentionResultV1};
+pub use retention::{
+    EvidenceRetentionOwner, RetentionLimitsV1, RetentionResultV1, RetentionSweepV1,
+};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.4.4";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
@@ -42,6 +45,8 @@ pub struct AnalysisStore {
     root: PathBuf,
     writer: Mutex<Connection>,
     revision: watch::Sender<u64>,
+    retention_healthy: AtomicBool,
+    retention: RetentionLimitsV1,
     // Release the lease after the database connection closes.
     _lease: File,
 }
@@ -120,7 +125,21 @@ pub enum EvidenceStoreOutcomeV1 {
 
 impl AnalysisStore {
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_retention(root, Default::default())
+    }
+
+    pub fn open_with_retention(
+        root: impl AsRef<Path>,
+        retention: RetentionLimitsV1,
+    ) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
+        if retention.raw_max_age_ns == 0 || retention.raw_max_bytes == 0 {
+            return AnalysisStateSnafu {
+                path: root,
+                reason: "the raw retention limits must be positive".to_owned(),
+            }
+            .fail();
+        }
         if !root.is_absolute() {
             return AnalysisStateSnafu {
                 path: root,
@@ -392,7 +411,24 @@ impl AnalysisStore {
             _lease: lease,
             writer: Mutex::new(writer),
             revision,
+            retention_healthy: AtomicBool::new(true),
+            retention,
         })
+    }
+
+    pub fn retention_healthy(&self) -> bool {
+        self.retention_healthy.load(Ordering::Acquire)
+    }
+
+    pub fn retention_limits(&self) -> RetentionLimitsV1 {
+        self.retention
+    }
+
+    fn require_retention(&self) -> Result<()> {
+        if !self.retention_healthy() {
+            return crate::RetentionUnavailableSnafu.fail();
+        }
+        Ok(())
     }
 
     pub fn subscribe_revision(&self) -> watch::Receiver<u64> {
@@ -469,6 +505,7 @@ impl AnalysisStore {
         identity: EvidenceIntakeIdentityV1,
         batch: ValidatedEvidenceBatchV1,
     ) -> Result<EvidenceStoreOutcomeV1> {
+        self.require_retention()?;
         if batch.intake_utc_ns == 0 {
             return self.reject("live evidence has no intake time");
         }
@@ -486,6 +523,7 @@ impl AnalysisStore {
             path: self.root.join("analysis.duckdb"),
         })?;
         let mut writer = self.writer()?;
+        self.require_retention()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin evidence",
         })?;
@@ -618,6 +656,7 @@ impl AnalysisStore {
                 EvidenceStoreOutcomeV1::Pending
             });
         }
+        self.check_required(&transaction, &identity, batch.intake_utc_ns)?;
         let mut next_contiguous = contiguous;
         {
             let mut statement = transaction
@@ -687,6 +726,7 @@ impl AnalysisStore {
     }
 
     pub fn accept_validated_coverage(&self, input: ValidatedCoverageV1) -> Result<u64> {
+        self.require_retention()?;
         let identity = &input.identity;
         if !valid_source_identity(identity)
             || input.revision == 0
@@ -698,6 +738,7 @@ impl AnalysisStore {
         let bytes = &input.encoded_report;
         let key = source_key(identity);
         let mut writer = self.writer()?;
+        self.require_retention()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin coverage",
         })?;

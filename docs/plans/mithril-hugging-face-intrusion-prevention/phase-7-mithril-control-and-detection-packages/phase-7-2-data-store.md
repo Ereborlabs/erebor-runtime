@@ -138,13 +138,15 @@ required here. Stop before enabling a data path whose recovery case fails.
 **Not done.** AnalysisStore has a writer, bounded reads, exact context
 versions, processor results and references, guarded raw expiry, backup and
 restore. Source bindings and an explicit data-backed EvidenceIntakeOwner path
-have component tests. `data-store-recovery` passed 19 checks through the
+have component tests. `data-store-recovery` passed 23 checks through the
 production mTLS service with an explicitly selected data owner. The case proves
 lost-ACK replay, owner restart, exact frames and coverage, required-progress
 protection, optional expiry, an exact witness, tenant-scoped result reads,
 backup after expiry, and Partial recovery from a stale backup.
-The result is `/tmp/araphor-live-store.M3z6hl/recovery/result.json`: cursor 3,
-retained floor 2, one retained witness, and backup revision 8.
+The result is `/tmp/araphor-retention.NH24lk/recovery/result.json`: cursor 4,
+retained floor 2, one retained witness plus one new event, and backup revision 9.
+After checkpoint, the database uses 8,663,040 bytes and its native WAL is absent.
+This small fixture does not qualify physical disk reuse.
 `cargo test -p araphor-data --lib` passed 19 tests with two ignored.
 These tests include tenant and corrupt-body checks in
 `analysis_store_result_progress`.
@@ -202,8 +204,32 @@ remains in this path. `analysis_store_bulk_rollback` checks a conflict at record
 The 13 data-store tests passed. The existing 4,096-record Control test passed
 in 0.52 seconds; the earlier per-record path took 31.46 seconds in this workspace.
 These single runs are not a throughput qualification. The final workspace gate
-for the appender change is running. Physical disk capacity remains unqualified.
-General data-owner admission, retention scheduling, capacity
+passed for the appender change at `666d1c99`. Physical disk capacity remains unqualified.
+Control now runs one retention task with its existing service and clock.
+Each one-second pass checks at most 16 sources. Each source transaction removes
+at most 256 eligible rows with one parameterized DELETE. Raw byte pressure uses
+the tenant total, not a separate allowance for each source. Required progress
+and exact witness checks remain in the transaction. A pass checkpoints after
+deletion. A failed pass stops evidence and coverage intake until a later pass
+and checkpoint succeed. Policy RPCs continue.
+`data_retention` in Control configuration accepts `raw_max_age_ns` and
+`raw_max_bytes`. Both values must be positive. Defaults are 86,400,000,000,000
+nanoseconds and 2,147,483,648 bytes. The age limit applies to accepted required
+input on the affected source. The byte reservation counts protected raw input
+across that tenant's sources. This reservation is not a complete data-disk quota.
+An over-budget batch rolls back and returns ResourceExhausted. Exact retries
+remain valid at the bound. An old pending gap alone does not age-block gap repair.
+The 16 `analysis_store_` tests passed, including paged sweeps, failure/recovery,
+required-input limits, and tenant-scoped protected bytes. The mTLS startup and
+recovery tests passed. Recovery now checks automatic expiry, required-age
+backpressure, policy RPC availability, and retry after processor progress.
+The startup command passed 16 checks at
+`/tmp/araphor-retention.NH24lk/startup/result.json`. The sweep-failure test also
+holds a native read transaction across deletion. Intake stays unavailable while
+that transaction blocks checkpointing, including a retry with no rows to remove.
+Intake recovers only after the read transaction ends and checkpoint succeeds.
+The final workspace gate for this retention change is running.
+General data-owner admission, physical capacity
 and processor health, Control context projection, crash injection, removal of
 the remaining old library writer, and physical disk reuse remain open.
 Production enablement is not qualified.
