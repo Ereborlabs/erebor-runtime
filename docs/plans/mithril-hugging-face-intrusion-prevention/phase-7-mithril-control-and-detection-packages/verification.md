@@ -234,7 +234,7 @@ Do not choose tests from whichever services happen to be available.
 | Mithril 8 | Extend the shared context with qualified cross-node evidence; prove the bounded exception request/approval/use/expiry path | Response execution remains Unsupported. |
 | Mithril 9 | Agent and console use the same authorized local/Kubernetes response with physical readback and healthy watch | Unqualified provider actions remain Unsupported. |
 | Mithril 10 | Extend the same loop for each advertised provider source and typed action | Unqualified actions do not inherit another capability's result. |
-| Mithril 11 | Rerun all advertised cases, installation, migration, load, and complete HF conformance on the release revision | Optional Phase 12 work cannot satisfy a missing core result. |
+| Mithril 11 | Rerun all advertised cases, installation, current-format restart, load, and complete HF conformance on the release revision | Optional Phase 12 work cannot satisfy a missing core result. |
 
 For the first bounded release, `DE-LOOP` ends in the qualified policy-change
 result, not a simulated response. Every delivery gate retains negative

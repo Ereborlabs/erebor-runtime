@@ -139,8 +139,10 @@ required here. Stop before enabling a data path whose recovery case fails.
 versions, processor results and references, guarded raw expiry, backup and
 restore. Source bindings and an explicit data-backed EvidenceIntakeOwner path
 have component tests. The data-owner library suite passed 19 tests with two
-ignored, two focused Control tests passed, and strict Clippy passed for both
-changed crates. Tests use temporary
+ignored. The evidence-owner suite passed 12 tests, including old-state
+rejection and cursor-overflow rejection. Workspace formatting, compilation,
+and strict Clippy passed; the full workspace test run is not yet complete.
+Tests use temporary
 databases; no retention call ran on an existing deployment. Server startup
 still selects the old writer. Fresh-store activation, capacity admission,
 Control context projection, mTLS recovery and startup cases, and physical disk

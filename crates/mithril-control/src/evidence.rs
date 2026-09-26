@@ -28,7 +28,7 @@ pub const MAX_EVIDENCE_SEGMENT_BYTES: usize = 16 * 1_024 * 1_024;
 const MAX_COVERAGE_INTERVALS: usize = 8_192;
 
 #[derive(Clone)]
-/// Owns evidence validation and delegates atomic persistence to the Control store.
+/// Owns source validation and acknowledges committed evidence.
 pub struct EvidenceIntakeOwner {
     store: crate::ControlStore,
     data: Option<Arc<araphor_data::AnalysisStore>>,
@@ -200,14 +200,20 @@ impl EvidenceIntakeOwner {
         Self { store, data: None }
     }
 
-    pub fn with_data_store(
-        store: crate::ControlStore,
-        data: Arc<araphor_data::AnalysisStore>,
-    ) -> Self {
-        Self {
+    pub fn new(store: crate::ControlStore, data: Arc<araphor_data::AnalysisStore>) -> Result<Self> {
+        let health = store.health()?;
+        snafu::ensure!(
+            health.evidence_cursors == 0
+                && health.pending_evidence_batches == 0
+                && health.coverage_cursors == 0,
+            crate::error::InvalidConfigurationSnafu {
+                reason: "AnalysisStore requires a Control store without old evidence receipts",
+            }
+        );
+        Ok(Self {
             store,
             data: Some(data),
-        }
+        })
     }
 
     #[must_use]
@@ -444,9 +450,13 @@ impl EvidenceIntakeOwner {
                 EvidenceRecord::decode(batch.framed_records.slice(length_end..payload_end))
                     .map_err(|_| Status::invalid_argument("evidence record protobuf is invalid"))?;
             let index = frame_ends.len();
-            let cursor = batch.first_cursor
-                + u64::try_from(index).map_err(|_| {
+            let cursor = batch
+                .first_cursor
+                .checked_add(u64::try_from(index).map_err(|_| {
                     Status::invalid_argument("evidence batch record index exceeds u64")
+                })?)
+                .ok_or_else(|| {
+                    Status::invalid_argument("evidence batch cursor range overflowed")
                 })?;
             ObservationEnvelopeV1::from_wire_record(
                 authenticated.tenant_id.into(),
@@ -1011,7 +1021,7 @@ mod tests {
         let data = Arc::new(araphor_data::AnalysisStore::open(
             directory.path().join("analysis"),
         )?);
-        let intake = EvidenceIntakeOwner::with_data_store(control.clone(), data.clone());
+        let intake = EvidenceIntakeOwner::new(control.clone(), data.clone())?;
         let first = batch(1, 2)?;
         let original = first.framed_records.clone();
         assert_eq!(
@@ -1047,8 +1057,49 @@ mod tests {
         let reopened = Arc::new(araphor_data::AnalysisStore::open(
             directory.path().join("analysis"),
         )?);
-        let intake = EvidenceIntakeOwner::with_data_store(control, reopened);
+        let intake = EvidenceIntakeOwner::new(control, reopened)?;
         assert_eq!(intake.contiguous_cursor(&identity())?, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_startup_rejects_receipts() -> Result<(), Box<dyn std::error::Error>> {
+        for kind in ["accepted", "pending", "coverage"] {
+            let directory = tempfile::tempdir()?;
+            let control = crate::ControlStore::open(directory.path().join("control"))?;
+            let old = EvidenceIntakeOwner::from_store(control.clone());
+            match kind {
+                "accepted" => {
+                    old.receive(&authenticated(), batch(1, 1)?)?;
+                }
+                "pending" => {
+                    assert!(old.receive(&authenticated(), batch(2, 1)?).is_err());
+                }
+                _ => {
+                    old.receive_coverage(&authenticated(), &coverage_report(1, "HEALTHY"))?;
+                }
+            }
+            let data = Arc::new(araphor_data::AnalysisStore::open(
+                directory.path().join("analysis"),
+            )?);
+            assert!(EvidenceIntakeOwner::new(control, data.clone()).is_err());
+            assert_eq!(data.meta()?.commit_revision, 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn intake_rejects_cursor_overflow() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let intake = EvidenceIntakeOwner::open(directory.path())?;
+        let mut input = batch(1, 2)?;
+        input.first_cursor = u64::MAX;
+        let error = intake
+            .receive(&authenticated(), input)
+            .err()
+            .ok_or("overflow accepted")?;
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(intake.contiguous_cursor(&identity())?, 0);
         Ok(())
     }
 
