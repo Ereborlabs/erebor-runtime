@@ -150,6 +150,8 @@ for node in "$vm_a" "$vm_b"; do
   "$provider" put "$node" "$directory/guest.sh" "$remote/harness/guest.sh"
   "$provider" put "$node" "$directory/k3s-config-v1.yaml" \
     "$remote/harness/k3s-config-v1.yaml"
+  "$provider" put "$node" "$directory/k3s-auth-webhook-v1.yaml" \
+    "$remote/harness/k3s-auth-webhook-v1.yaml"
   for fixture in protect-policy-v1.yaml observe-profile-seal-request.json \
     test-signing-key.hex test-public-key.hex; do
     "$provider" put "$node" \
@@ -171,7 +173,8 @@ boot_b=$(awk -F= '$1 == "boot_id" {print $2}' "$output_directory/$vm_b-platform.
 }
 
 "$provider" run "$vm_a" sudo bash "$remote_a/harness/guest.sh" \
-  k3s-install "$k3s_version" "$remote_a/harness/k3s-config-v1.yaml" "$remote_a"
+  k3s-install "$k3s_version" "$remote_a/harness/k3s-config-v1.yaml" \
+  "$remote_a/harness/k3s-auth-webhook-v1.yaml" "$remote_a"
 node_token=$("$provider" run "$vm_a" sudo cat /var/lib/rancher/k3s/server/node-token)
 "$provider" run "$vm_b" sudo bash "$remote_b/harness/guest.sh" \
   k3s-agent-install "$k3s_version" "https://$address_a:6443" "$node_token" "$remote_b"

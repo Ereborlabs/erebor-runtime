@@ -313,6 +313,29 @@ status=$?
 set -e
 [[ $status -eq 2 && $invalid == "invalid k3s version: latest" ]]
 
+(
+  k3s_version=latest
+  remote_a=/var/tmp/mithril-runtime-qualification-1
+  k3s-install() {
+    [[ $# -eq 4 && $2 == "$remote_a/harness/k3s-config-v1.yaml" &&
+       $3 == "$remote_a/harness/k3s-auth-webhook-v1.yaml" && $4 == "$remote_a" ]] || return 1
+    "$directory/guest.sh" k3s-install "$@"
+  }
+  for harness in two-node-convergence.sh two-node-network.sh; do
+    set +e
+    invalid=$(source <(awk '
+      /^[[:space:]]*k3s-install / { copying = 1 }
+      copying { print; if ($0 !~ /\\$/) exit }
+    ' "$directory/$harness") 2>&1)
+    status=$?
+    set -e
+    [[ $status -eq 2 && $invalid == "invalid k3s version: latest" ]] || {
+      echo "$harness does not pass the guest installer arguments" >&2
+      exit 1
+    }
+  done
+)
+
 cleanup_bin=$test_root/cleanup-bin
 mkdir "$cleanup_bin"
 cat >"$cleanup_bin/helm" <<'EOF'

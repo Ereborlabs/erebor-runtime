@@ -76,6 +76,15 @@ Control intake or the SQLite discovery projection.
 
 ### Offline retained-data inspection
 
+[two-node setup](../../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh)
+copies the checked K3s configuration and authentication file before calling
+[the guest installer](../../../../crates/mithril-e2e/harness/vm/guest.sh).
+The installer requires both files. The
+[shell regression](../../../../crates/mithril-e2e/harness/vm/test.sh) passes the
+actual installer argument lists from both two-node callers to the guest parser.
+An invalid version stops the check before host changes. This regression
+reproduces the missing argument found during fresh physical setup.
+
 [two-node outage harness](../../../../crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh) The harness runs the lightweight startup and recovery cases and validates the retained local-path volume.<br>
 -> [inspect_control_data](../../../../crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh) Control has zero replicas and no Pod. The checker runs with Control's numeric user.<br>
 -> [DataStoreQualification::inspect](../../../../crates/mithril-e2e/src/discovery/data_store/inspection.rs) The checker requires an existing data file and obtains the production owner's exclusive lease.<br>
