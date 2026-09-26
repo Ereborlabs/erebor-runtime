@@ -6,6 +6,7 @@ use std::sync::{Mutex, MutexGuard};
 use duckdb::{params, Config, Connection, OptionalExt as _};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
+use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::{AnalysisDatabaseSnafu, AnalysisStateSnafu, IoSnafu, JsonSnafu};
@@ -16,15 +17,32 @@ use crate::{
 };
 
 mod admission;
+mod backup;
+mod context;
+mod progress;
+mod read;
+mod retention;
+mod schema;
+
+pub use backup::{AnalysisBackupManifestV1, AnalysisRecoveryStatusV1};
+pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
+pub use progress::{
+    AnalysisContextRefV1, AnalysisProcessorGapV1, AnalysisResultCommitV1, AnalysisResultReceiptV1,
+    AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,
+};
+pub use retention::{EvidenceRetentionOwner, RetentionLimitsV1, RetentionResultV1};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.4.4";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-const ANALYSIS_SCHEMA_VERSION: i64 = 1;
+const ANALYSIS_SCHEMA_VERSION: i64 = 2;
+pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
+pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
 pub struct AnalysisStore {
     root: PathBuf,
     _lease: File,
     writer: Mutex<Connection>,
+    revision: watch::Sender<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,6 +57,22 @@ pub struct AnalysisStoreMetaV1 {
 pub struct StorePositionV1 {
     pub commit_revision: u64,
     pub ordinal: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnalysisRecordV1 {
+    pub cursor: u64,
+    pub framed_record: Vec<u8>,
+    pub position: StorePositionV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnalysisReadPageV1 {
+    pub first_cursor: u64,
+    pub records: Vec<AnalysisRecordV1>,
+    pub encoded_bytes: usize,
+    pub next_cursor: Option<u64>,
+    pub read_revision: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,6 +96,7 @@ pub struct ValidatedEvidenceBatchV1 {
     pub cpu_id: u32,
     pub first_cursor: u64,
     pub last_cursor: u64,
+    pub intake_utc_ns: u64,
     pub framed_records: prost::bytes::Bytes,
     pub frame_ends: Vec<usize>,
 }
@@ -78,6 +113,7 @@ pub struct ValidatedCoverageV1 {
 pub enum EvidenceStoreOutcomeV1 {
     Accepted,
     Pending,
+    AlreadyAcceptedExpired,
 }
 
 impl AnalysisStore {
@@ -179,9 +215,31 @@ impl AnalysisStore {
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
                 .context(IoSnafu { path: &path })?;
         }
+        let prior = existing
+            .then(|| Self::read_meta_from(&writer, &path))
+            .transpose()?;
+        if let Some(meta) = &prior {
+            if !matches!(meta.schema_version, 1 | 2) {
+                return AnalysisStateSnafu {
+                    path,
+                    reason: "the analysis schema version is unsupported".to_owned(),
+                }
+                .fail();
+            }
+            if meta.schema_version == 1 {
+                Self::prepare_upgrade(&writer, &root, &path, meta)?;
+            }
+        }
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin schema",
         })?;
+        if prior.as_ref().is_some_and(|meta| meta.schema_version == 1) {
+            transaction
+                .execute_batch("ALTER TABLE events ADD COLUMN intake_utc_ns UBIGINT")
+                .context(AnalysisDatabaseSnafu {
+                    operation: "upgrade event intake time",
+                })?;
+        }
         transaction
             .execute_batch(
                 "CREATE TABLE IF NOT EXISTS store_meta (
@@ -204,6 +262,12 @@ impl AnalysisStore {
                     coverage_revision UBIGINT NOT NULL,
                     retained_floor UBIGINT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS source_bindings (
+                    epoch_key BLOB PRIMARY KEY,
+                    tenant_id BLOB NOT NULL,
+                    node_boot_id BLOB NOT NULL,
+                    label_epoch UBIGINT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS events (
                     stream_key BLOB NOT NULL,
                     tenant_id BLOB NOT NULL,
@@ -213,6 +277,7 @@ impl AnalysisStore {
                     frame_sha256 BLOB NOT NULL,
                     commit_revision UBIGINT NOT NULL,
                     ordinal UINTEGER NOT NULL,
+                    intake_utc_ns UBIGINT,
                     PRIMARY KEY (stream_key, durable_cursor)
                 );
                 CREATE TABLE IF NOT EXISTS coverage (
@@ -224,6 +289,88 @@ impl AnalysisStore {
                     commit_revision UBIGINT NOT NULL,
                     ordinal UINTEGER NOT NULL,
                     PRIMARY KEY (stream_key, revision)
+                );
+                CREATE TABLE IF NOT EXISTS context_versions (
+                    tenant_id BLOB NOT NULL,
+                    owner_id VARCHAR NOT NULL,
+                    entity_key BLOB NOT NULL,
+                    lifetime_key BLOB NOT NULL,
+                    owner_revision UBIGINT NOT NULL,
+                    valid_from_utc_ns UBIGINT NOT NULL,
+                    valid_until_utc_ns UBIGINT,
+                    sensitivity VARCHAR NOT NULL,
+                    body BLOB NOT NULL,
+                    content_sha256 BLOB NOT NULL,
+                    commit_revision UBIGINT NOT NULL,
+                    PRIMARY KEY (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)
+                );
+                CREATE TABLE IF NOT EXISTS processor_progress (
+                    processor_id VARCHAR NOT NULL,
+                    method_version UBIGINT NOT NULL,
+                    tenant_id BLOB NOT NULL,
+                    stream_key BLOB NOT NULL,
+                    class VARCHAR NOT NULL,
+                    consumed_cursor UBIGINT NOT NULL,
+                    resume_floor UBIGINT NOT NULL,
+                    coverage_revision UBIGINT NOT NULL,
+                    context_revision UBIGINT NOT NULL,
+                    start_cursor UBIGINT NOT NULL,
+                    required_floor UBIGINT NOT NULL,
+                    retired BOOLEAN NOT NULL,
+                    PRIMARY KEY (processor_id, method_version, tenant_id, stream_key)
+                );
+                CREATE TABLE IF NOT EXISTS evidence_refs (
+                    ref_id VARCHAR NOT NULL,
+                    tenant_id BLOB NOT NULL,
+                    stream_key BLOB NOT NULL,
+                    durable_cursor UBIGINT NOT NULL,
+                    expires_utc_ns UBIGINT NOT NULL,
+                    PRIMARY KEY (ref_id, stream_key, durable_cursor)
+                );
+                CREATE TABLE IF NOT EXISTS context_refs (
+                    ref_id VARCHAR NOT NULL,
+                    tenant_id BLOB NOT NULL,
+                    owner_id VARCHAR NOT NULL,
+                    entity_key BLOB NOT NULL,
+                    lifetime_key BLOB NOT NULL,
+                    owner_revision UBIGINT NOT NULL,
+                    content_sha256 BLOB NOT NULL,
+                    PRIMARY KEY (ref_id, tenant_id, owner_id, entity_key, lifetime_key, owner_revision)
+                );
+                CREATE TABLE IF NOT EXISTS analysis_results (
+                    result_id VARCHAR PRIMARY KEY,
+                    tenant_id BLOB NOT NULL,
+                    processor_id VARCHAR NOT NULL,
+                    body BLOB NOT NULL,
+                    body_sha256 BLOB NOT NULL,
+                    request_sha256 BLOB NOT NULL,
+                    commit_revision UBIGINT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS processor_gaps (
+                    processor_id VARCHAR NOT NULL,
+                    method_version UBIGINT NOT NULL,
+                    tenant_id BLOB NOT NULL,
+                    stream_key BLOB NOT NULL,
+                    first_cursor UBIGINT NOT NULL,
+                    last_cursor UBIGINT NOT NULL,
+                    commit_revision UBIGINT NOT NULL,
+                    PRIMARY KEY (processor_id, method_version, tenant_id, stream_key, first_cursor)
+                );
+                CREATE TABLE IF NOT EXISTS recovery_gaps (
+                    stream_key BLOB NOT NULL,
+                    tenant_id BLOB NOT NULL,
+                    first_cursor UBIGINT NOT NULL,
+                    last_cursor UBIGINT NOT NULL,
+                    commit_revision UBIGINT NOT NULL,
+                    PRIMARY KEY (stream_key, first_cursor)
+                );
+                CREATE TABLE IF NOT EXISTS expired_ranges (
+                    stream_key BLOB NOT NULL,
+                    tenant_id BLOB NOT NULL,
+                    first_cursor UBIGINT NOT NULL,
+                    last_cursor UBIGINT NOT NULL,
+                    commit_revision UBIGINT NOT NULL,
+                    PRIMARY KEY (stream_key, first_cursor)
                 );",
             )
             .context(AnalysisDatabaseSnafu {
@@ -239,6 +386,17 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "initialize store identity",
             })?;
+        Self::populate_bindings(&transaction, &root)?;
+        if prior.as_ref().is_some_and(|meta| meta.schema_version == 1) {
+            transaction
+                .execute(
+                    "UPDATE store_meta SET schema_version = ? WHERE singleton = true",
+                    params![ANALYSIS_SCHEMA_VERSION],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "advance analysis schema",
+                })?;
+        }
         let meta = Self::read_meta_from(&transaction, &path)?;
         if meta.schema_version != ANALYSIS_SCHEMA_VERSION as u32 {
             return AnalysisStateSnafu {
@@ -250,11 +408,18 @@ impl AnalysisStore {
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit schema",
         })?;
+        Self::finish_upgrade(&root, &meta)?;
+        let (revision, _) = watch::channel(meta.commit_revision);
         Ok(Self {
             root,
             _lease: lease,
             writer: Mutex::new(writer),
+            revision,
         })
+    }
+
+    pub fn subscribe_revision(&self) -> watch::Receiver<u64> {
+        self.revision.subscribe()
     }
 
     pub fn meta(&self) -> Result<AnalysisStoreMetaV1> {
@@ -336,6 +501,7 @@ impl AnalysisStore {
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin evidence",
         })?;
+        let bound = Self::bind_source(&transaction, &self.root, &identity)?;
         let previous = Self::read_receipt_from(&transaction, &self.root, &identity, &key)?;
         if previous
             .as_ref()
@@ -346,6 +512,41 @@ impl AnalysisStore {
         let contiguous = previous
             .as_ref()
             .map_or(0, |receipt| receipt.contiguous_cursor);
+        if let Some(receipt) = previous
+            .as_ref()
+            .filter(|receipt| batch.first_cursor <= receipt.retained_floor)
+        {
+            if batch.last_cursor <= receipt.retained_floor {
+                return Ok(EvidenceStoreOutcomeV1::AlreadyAcceptedExpired);
+            }
+            return self.reject("an evidence retry crosses an expired range boundary");
+        }
+        let expired: Option<(u64, u64)> = transaction
+            .query_row(
+                "SELECT first_cursor, last_cursor FROM expired_ranges
+                 WHERE stream_key = ? AND tenant_id = ?
+                 AND first_cursor <= ? AND last_cursor >= ? LIMIT 1",
+                params![
+                    key.as_slice(),
+                    identity.tenant_id.as_slice(),
+                    batch.last_cursor,
+                    batch.first_cursor,
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .context(AnalysisDatabaseSnafu {
+                operation: "check expired evidence retry",
+            })?;
+        if let Some((first, last)) = expired {
+            if first <= batch.first_cursor
+                && last >= batch.last_cursor
+                && batch.last_cursor <= contiguous
+            {
+                return Ok(EvidenceStoreOutcomeV1::AlreadyAcceptedExpired);
+            }
+            return self.reject("an evidence retry crosses an expired range boundary");
+        }
         if batch.first_cursor > contiguous.saturating_add(1)
             && batch.last_cursor > contiguous.saturating_add(MAX_PENDING_EVIDENCE_RECORDS)
         {
@@ -386,7 +587,7 @@ impl AnalysisStore {
             let frame_digest: [u8; 32] = Sha256::digest(frame).into();
             transaction
                 .execute(
-                    "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     params![
                         key.as_slice(),
                         identity.tenant_id.as_slice(),
@@ -396,6 +597,7 @@ impl AnalysisStore {
                         frame_digest.as_slice(),
                         revision,
                         new_records,
+                        batch.intake_utc_ns,
                     ],
                 )
                 .context(AnalysisDatabaseSnafu {
@@ -462,10 +664,15 @@ impl AnalysisStore {
                     operation: "insert source receipt",
                 })?;
         }
-        Self::record_revision(&transaction, revision, &["events", "source_receipts"])?;
+        let mut relations = vec!["events", "source_receipts"];
+        if bound {
+            relations.push("source_bindings");
+        }
+        Self::record_revision(&transaction, revision, &relations)?;
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit evidence",
         })?;
+        self.revision.send_replace(revision);
         Ok(if next_contiguous >= batch.last_cursor {
             EvidenceStoreOutcomeV1::Accepted
         } else {
@@ -488,6 +695,7 @@ impl AnalysisStore {
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin coverage",
         })?;
+        let bound = Self::bind_source(&transaction, &self.root, identity)?;
         let previous = Self::read_receipt_from(&transaction, &self.root, identity, &key)?;
         if previous
             .as_ref()
@@ -564,10 +772,15 @@ impl AnalysisStore {
                     operation: "insert coverage receipt",
                 })?;
         }
-        Self::record_revision(&transaction, revision, &["coverage", "source_receipts"])?;
+        let mut relations = vec!["coverage", "source_receipts"];
+        if bound {
+            relations.push("source_bindings");
+        }
+        Self::record_revision(&transaction, revision, &relations)?;
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit coverage",
         })?;
+        self.revision.send_replace(revision);
         Ok(input.revision)
     }
 
@@ -578,6 +791,7 @@ impl AnalysisStore {
     ) -> Result<()> {
         if !valid_source_identity(identity)
             || batch.first_cursor == 0
+            || batch.intake_utc_ns == 0
             || batch.frame_ends.is_empty()
             || batch.frame_ends.len() > MAX_EVIDENCE_BATCH_RECORDS
             || batch.framed_records.len() > MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES
@@ -797,6 +1011,7 @@ mod tests {
             cpu_id: 0,
             first_cursor,
             last_cursor: first_cursor + records.len() as u64 - 1,
+            intake_utc_ns: 1_000_000_000,
             framed_records: framed_records.into(),
             frame_ends,
         }
@@ -821,7 +1036,7 @@ mod tests {
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
         let initial = store.meta()?;
-        assert_eq!(initial.schema_version, 1);
+        assert_eq!(initial.schema_version, 2);
         assert_eq!(initial.commit_revision, 0);
         assert!(AnalysisStore::open(&root).is_err());
         {
@@ -855,7 +1070,7 @@ mod tests {
     #[test]
     fn analysis_store_schema_permissions() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        for version in [0, 2] {
+        for version in [0, 3] {
             let root = directory.path().join(format!("schema-{version}"));
             let store = AnalysisStore::open(&root)?;
             {
@@ -977,6 +1192,54 @@ mod tests {
                 .contiguous_cursor,
             4
         );
+        let mut relabeled = identity.clone();
+        relabeled.label_epoch += 1;
+        assert!(reopened
+            .accept_validated_batch(relabeled, batch(1, &[b"first"]))
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_store_bounded_read() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let identity = identity();
+        let mut changed = store.subscribe_revision();
+        assert_eq!(*changed.borrow_and_update(), 0);
+        let records = vec![b"one".as_slice(); MAX_ANALYSIS_PAGE_RECORDS + 1];
+        assert_eq!(
+            store.accept_validated_batch(identity.clone(), batch(1, &records))?,
+            EvidenceStoreOutcomeV1::Accepted
+        );
+        assert!(changed.has_changed()?);
+        assert_eq!(*changed.borrow_and_update(), 1);
+        let page = store.read_page(&identity, 1)?;
+        assert_eq!(page.records.len(), MAX_ANALYSIS_PAGE_RECORDS);
+        assert_eq!(page.encoded_bytes, 3 * MAX_ANALYSIS_PAGE_RECORDS);
+        assert_eq!(page.next_cursor, Some(257));
+        assert_eq!(page.read_revision, 1);
+        assert_eq!(page.records[0].position.commit_revision, 1);
+        assert_eq!(page.records[0].position.ordinal, 0);
+        assert_eq!(page.records[255].position.ordinal, 255);
+        let last = store.read_page(&identity, 257)?;
+        assert_eq!(last.records.len(), 1);
+        assert_eq!(last.next_cursor, None);
+        assert!(store.read_page(&identity, 0).is_err());
+        assert!(store.read_page(&identity, 259).is_err());
+        let mut foreign = identity.clone();
+        foreign.tenant_id = [4; 16];
+        assert!(store.read_page(&foreign, 1).is_err());
+        assert_eq!(
+            store.accept_validated_batch(identity.clone(), batch(1, &records))?,
+            EvidenceStoreOutcomeV1::Accepted
+        );
+        assert!(!changed.has_changed()?);
+        drop(store);
+        let reopened = AnalysisStore::open(&root)?;
+        assert_eq!(*reopened.subscribe_revision().borrow(), 1);
+        assert_eq!(reopened.read_page(&identity, 257)?, last);
         Ok(())
     }
 
@@ -1048,6 +1311,7 @@ mod tests {
             cpu_id: 0,
             first_cursor: 1,
             last_cursor: MAX_EVIDENCE_BATCH_RECORDS as u64,
+            intake_utc_ns: 1_000_000_000,
             framed_records: vec![1; MAX_EVIDENCE_BATCH_RECORDS].into(),
             frame_ends: (1..=MAX_EVIDENCE_BATCH_RECORDS).collect(),
         };

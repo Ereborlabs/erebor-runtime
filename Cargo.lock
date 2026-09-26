@@ -136,6 +136,7 @@ dependencies = [
  "sqlparser",
  "tempfile",
  "time",
+ "tokio",
  "uuid",
 ]
 
