@@ -45,7 +45,7 @@ calls, stock `runc` and containerd paths, and paired Kubernetes operations.
   generations and bindings on the same Node.
 - [x] Run the shared Rust test on Host, then runc, then real Kubernetes. Add each
   platform to the test attribute only after its focused test passes.
-- [ ] Verify shared fixture regressions and record the commands and results.
+- [x] Verify shared fixture regressions and record the commands and results.
 - Do not change production policy installation in this task. Independent
   per-policy installation is separate work after this proof passes.
 - The one-actor rule permits multiple actors when the requested behavior is
@@ -67,6 +67,20 @@ Current verification:
 - The final Rust CI gate passed. The full physical platform matrix is not yet
   qualified for this change. See [MULTI_POLICY_REVIEW.md](MULTI_POLICY_REVIEW.md)
   for the failed attempts, retained VM, and verification limits.
+- On 2026-09-26, `cargo test -p mithril-e2e --lib process::tests` passed 12
+  tests. `cargo test -p mithril-e2e --lib platform::lifecycle::tests` passed two
+  tests. In the retained VM, run
+  `/mnt/mithril-source/target/debug/deps/mithril_e2e-2682e87779fe4fd2`
+  as root with one exact test name and
+  `--exact --ignored --test-threads=1`. The names are
+  `platform::lifecycle_tests::lifecycle_reuses_node::identity_host`,
+  `platform::lifecycle_tests::lifecycle_reuses_node::identity_runc`, and
+  `platform::lifecycle_tests::lifecycle_reuses_node::identity_kubernetes`.
+  Host passed in 47.70 seconds, direct `runc` in 59.09 seconds, and real
+  Kubernetes in 93.67 seconds. The Kubernetes cleanup left no Mithril
+  namespace or Pod. The first direct-`runc` command ran without root and
+  failed to create its test cgroup; the root rerun passed without a code
+  change.
 
 These rules control every checkmark and commit in this file.
 
