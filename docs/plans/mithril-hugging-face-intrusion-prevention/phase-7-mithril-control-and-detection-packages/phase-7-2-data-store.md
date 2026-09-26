@@ -1003,11 +1003,25 @@ cursor 4, retained floor 2, two retained events, backup revision 12, an
 The complete phase remains **Not done**. Old-writer removal, full-quota and
 reserve measurements, and Kubernetes storage/partition qualification remain
 open. The offline inspection command is verified; physical qualification is not.
-No retained two-node environment has been selected or changed. The unrelated
+This inspection run did not change a retained deployment. The unrelated
 running VM remains unchanged.
 
 The storage-fault cleanup regression failed before the correction and passed
-after it. `bash crates/mithril-e2e/harness/vm/test.sh` passed. The final workspace
-gate is running after this harness change. A fresh two-node setup is building
-current-source images for the physical test. Its output directory is
-`/tmp/araphor-two-node-storage.ChbP3Nmp/environment`. No physical pass is claimed.
+after it. `bash crates/mithril-e2e/harness/vm/test.sh` passed. The first workspace
+gate stopped when the observability output-limit test reached its deadline
+during native compilation. That test passed unchanged on a direct rerun. The
+second gate stopped in the unrelated CLI surface test. That test also passed
+alone. The full gate is running with `RUST_TEST_THREADS=1` after the final
+harness edits. No test or assertion is excluded.
+
+Current-source Node and Control release images built successfully. The fresh
+two-node setup then failed before cluster installation: both two-node callers
+omitted the authentication file required by `guest.sh k3s-install`. The local
+shell regression reproduced this argument mismatch before the correction.
+Both callers now copy and pass the existing checked authentication file.
+The regression uses each caller's actual argument list and the guest parser;
+an invalid version stops the check before host changes. The shell suite passes.
+The failed setup's two VM definitions were removed after exact UUID checks.
+Their disks remain. The corrected fresh setup is running at
+`/tmp/araphor-two-node-storage.ChbP3Nmp/retry`. The unrelated VM is unchanged.
+The physical storage/partition result remains **Not done**.

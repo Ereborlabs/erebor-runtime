@@ -592,6 +592,8 @@ for node in "$vm_a" "$vm_b"; do
     "$remote/harness/concurrent-exec-overlap.sh"
   "$provider" put "$node" "$directory/k3s-config-v1.yaml" \
     "$remote/harness/k3s-config-v1.yaml"
+  "$provider" put "$node" "$directory/k3s-auth-webhook-v1.yaml" \
+    "$remote/harness/k3s-auth-webhook-v1.yaml"
   "$provider" put "$node" "$image_archive" "$remote/mithril-images.tar"
   "$provider" put "$node" "$work_a/mithril-inspect" "$remote/mithril-inspect"
   if ! "$provider" run "$node" \
@@ -603,7 +605,8 @@ done
 
 if [[ $reusing_environment == false ]]; then
   "$provider" run "$vm_a" sudo bash "$remote_a/harness/guest.sh" \
-    k3s-install "$k3s_version" "$remote_a/harness/k3s-config-v1.yaml" "$remote_a"
+    k3s-install "$k3s_version" "$remote_a/harness/k3s-config-v1.yaml" \
+    "$remote_a/harness/k3s-auth-webhook-v1.yaml" "$remote_a"
   node_token=$("$provider" run "$vm_a" sudo cat /var/lib/rancher/k3s/server/node-token)
   "$provider" run "$vm_b" sudo bash "$remote_b/harness/guest.sh" \
     k3s-agent-install "$k3s_version" "https://$address_a:6443" "$node_token" "$remote_b"
