@@ -816,9 +816,13 @@ Duplicate replay has no second effect. Reopen retains two records at cursor 2.
 All eleven enabled data-store tests passed; four helpers or environment-specific
 cases remain ignored. The first run lacked the required filesystem reserve.
 Removing only stale generated binaries allowed the unchanged test to pass.
-The shared capacity pair passed in a private 1-GiB tmpfs. Its log is
-`/tmp/araphor-intake-qualification.hEEgehKt/disk-full.log`. The log records
-the working-tree source and binary digest. The full-filesystem case reached
+The shared capacity pair passed in a private 1-GiB tmpfs. Its committed log is
+`/tmp/araphor-intake-qualification.hEEgehKt/disk-full-committed.log`. The log
+records clean commit `d2fce24f` and the binary digest. The full-filesystem case reached
 zero free bytes, rejected intake and copy operations, retained Node input,
-and recovered at cursor 2. The full workspace gate is pending.
+and recovered at cursor 2. The full workspace gate passed for `d2fce24f` with
+`CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh`: formatting,
+workspace checks, strict Clippy, and workspace tests. Control passed 196 tests
+with two ignored; Mithril e2e passed 118 with 251 ignored; Node passed 256 with
+one ignored. No Rust source changed after this gate.
 Other phase requirements remain **Not done**.
