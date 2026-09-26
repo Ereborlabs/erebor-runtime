@@ -518,9 +518,15 @@ existing ControlStore lease; it adds no new persistence format.
 [ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Configuration supplies the data-file budget and policy free-space reserve.<br>
 -> [AnalysisStore::open_with_limits](../../../../crates/araphor-data/src/analysis/mod.rs) The owner sets native memory, thread, temporary-file, and WAL checkpoint limits.<br>
 -> Partial [AnalysisStore::require_capacity](../../../../crates/araphor-data/src/analysis/capacity.rs) Writer admission checks directory usage and available filesystem bytes. It does not reserve physical blocks.<br>
+-> [AnalysisStore::require_retention](../../../../crates/araphor-data/src/analysis/mod.rs) Unhealthy retention checks maintenance capacity first. Exhausted capacity remains a capacity error; other retention failures remain unavailable.<br>
 -> [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/mod.rs) A new row requires ordinary capacity. An exact durable retry can use maintenance admission without a new commit.<br>
 -> [EvidenceIntakeOwner::data_status](../../../../crates/mithril-control/src/evidence.rs) Capacity rejection returns ResourceExhausted. Node keeps unacknowledged input.<br>
 -> [data_capacity_retry](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The mTLS test checks unchanged revision, available policy RPCs, restart with normal limits, and durable retry ACK.
+
+The test also accepts a record before restarting with an unmet filesystem
+reserve. A production retention sweep marks retention unhealthy. Evidence and
+coverage still return ResourceExhausted without a commit or notification.
+`analysis_store_sweep_failure` keeps the non-capacity error check.
 
 [StorageLimitsV1](../../../../crates/araphor-data/src/analysis/capacity.rs)
 defaults to an 8-GiB file budget and a 256-MiB policy reserve. Ordinary work
@@ -576,14 +582,16 @@ reclamation and reserve adequacy still require the physical storage case.
 [`DataStoreQualification::capacity_recovery`](../../../../crates/mithril-e2e/src/discovery/data_store.rs)
 is the shared scenario for `data_capacity_recovery` and `data_full_disk`.
 The first creates a sparse quota file. The second allocates every free block
-on an empty, task-owned 1-GiB tmpfs and checks `ENOSPC`. Neither changes a
+on an empty, task-owned 1-GiB tmpfs and checks `ENOSPC`. A production retention
+sweep then detects the full filesystem before intake. Neither changes a
 production owner or existing deployment data. Both use Node WAL and mTLS
 intake. Rejection leaves the receipt, revision, accepted frame, and pending
 Node batch unchanged. A policy RPC still works. After padding release, a new
 evidence stream retries without a Control restart. A duplicate has no second
 effect; store reopen retains both records and cursor 2.
 The [disk-full harness](../../../../crates/mithril-e2e/harness/discovery/disk-full.sh)
-runs the lightweight case before the full-filesystem case. Its log includes
+runs the capacity-retry and lightweight quota cases before the full-filesystem
+case. Its log includes
 source state, kernel, test-binary digest, capacity samples, and exact receipts.
 The harness unmounts only its temporary filesystem. This is real filesystem
 exhaustion with synthetic mTLS input. It is not hardware power-loss, native

@@ -1771,6 +1771,14 @@ mod tests {
                 padding.seek(SeekFrom::End(0))?;
                 assert!(matches!(padding.write_all(b"full"),
                     Err(error) if error.raw_os_error() == Some(libc::ENOSPC)));
+                assert!(matches!(
+                    EvidenceRetentionOwner::new(&data, data.retention_limits())?.sweep(None, START),
+                    Err(araphor_data::Error::StorageCapacity {
+                        resource: "filesystem reserve",
+                        ..
+                    })
+                ));
+                assert!(!data.retention_healthy());
             } else if !native {
                 padding.set_len(GIB)?;
             }
@@ -2227,19 +2235,9 @@ mod tests {
 
     #[tokio::test]
     async fn data_capacity_retry() -> Result<()> {
-        for logical in [false, true] {
+        for (logical, seeded) in [(false, false), (true, false), (false, true)] {
             let tls = MtlsFixture::new(false)?;
             let case = DataStoreQualification::new(tls.path().join("result"));
-            let mut config = tls.configuration()?;
-            if logical {
-                config.data_storage.tenant_max_bytes = 1;
-            } else {
-                config.data_storage.policy_reserve_bytes = u64::MAX / 4;
-            }
-            let parts = config.into_parts()?;
-            assert!(parts.data_error.is_none());
-            let data = parts.control.analysis_store().ok_or("data owner absent")?;
-            let server = tls.start(parts.control).await?;
             let observations = EffectObservationStore::durable(
                 8,
                 tls.path().join("wal"),
@@ -2251,7 +2249,50 @@ mod tests {
                     [7; 16].into(),
                 )?,
             )?;
-            DataStoreQualification::record(&observations, 1);
+            if seeded {
+                let parts = tls.configuration()?.into_parts()?;
+                assert!(parts.data_error.is_none(), "{:?}", parts.data_error);
+                let server = tls.start(parts.control).await?;
+                let mut connection = case.connect(&tls, &server).await?;
+                DataStoreQualification::record(&observations, 1);
+                connection
+                    .send_evidence_batch(observations.next_evidence_batch().ok_or("batch absent")?)
+                    .await?;
+                let ack = DataStoreQualification::ack(&mut connection).await?;
+                assert_eq!(ack.contiguous_cursor, 1);
+                observations.acknowledge_evidence(ack)?;
+                drop(connection);
+                server.shutdown().await?;
+                drop(
+                    DataStoreQualification::reopen_data(&tls.path().join("evidence/analysis"))
+                        .await?,
+                );
+                drop(reopen_control_store(&tls.path().join("control-store")).await?);
+            }
+            let mut config = tls.configuration()?;
+            if logical {
+                config.data_storage.tenant_max_bytes = 1;
+            } else {
+                config.data_storage.policy_reserve_bytes = u64::MAX / 4;
+            }
+            let parts = config.into_parts()?;
+            assert!(parts.data_error.is_none());
+            let data = parts.control.analysis_store().ok_or("data owner absent")?;
+            if seeded {
+                assert!(matches!(
+                    EvidenceRetentionOwner::new(&data, data.retention_limits())?.sweep(None, START),
+                    Err(araphor_data::Error::StorageCapacity {
+                        resource: "filesystem reserve",
+                        ..
+                    })
+                ));
+                assert!(!data.retention_healthy());
+            }
+            let before = data.meta()?;
+            let changed = data.subscribe_revision();
+            let server = tls.start(parts.control).await?;
+            let cursor = if seeded { 2 } else { 1 };
+            DataStoreQualification::record(&observations, cursor);
             let batch = observations.next_evidence_batch().ok_or("batch absent")?;
             let mut connection = case.connect(&tls, &server).await?;
             connection.report_readiness(true, true).await?;
@@ -2261,8 +2302,22 @@ mod tests {
             assert!(
                 matches!(rejected, Err(mithril_node::Error::ControlRpc { source, .. }) if source.code() == tonic::Code::ResourceExhausted)
             );
+            if seeded {
+                let snapshot = observations.coverage_snapshot().ok_or("coverage absent")?;
+                let interval = snapshot
+                    .current_intervals()
+                    .into_iter()
+                    .next()
+                    .ok_or("source coverage absent")?;
+                let coverage = connection.send_coverage_report(&snapshot, &interval).await;
+                assert!(
+                    matches!(coverage, Err(mithril_node::Error::ControlRpc { source, .. })
+                        if source.code() == tonic::Code::ResourceExhausted)
+                );
+            }
             assert_eq!(observations.pending_evidence_records(), 1);
-            assert_eq!(data.meta()?.commit_revision, 0);
+            assert_eq!(data.meta()?, before);
+            assert!(!changed.has_changed()?);
             connection.policy_inventory(None, Vec::new()).await?;
             drop(connection);
             server.shutdown().await?;
@@ -2290,7 +2345,7 @@ mod tests {
             let mut connection = case.connect(&tls, &server).await?;
             connection.send_evidence_batch(batch).await?;
             let ack = DataStoreQualification::ack(&mut connection).await?;
-            assert_eq!(ack.contiguous_cursor, 1);
+            assert_eq!(ack.contiguous_cursor, cursor);
             observations.acknowledge_evidence(ack)?;
             assert_eq!(observations.pending_evidence_records(), 0);
             assert_eq!(data.meta()?.commit_revision, baseline + 1);
