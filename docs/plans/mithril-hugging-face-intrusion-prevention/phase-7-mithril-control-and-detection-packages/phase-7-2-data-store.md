@@ -105,7 +105,8 @@ Store recovery fails
 7. Implement checkpoint, backup and restore through the data owner. Measure
    physical disk reuse after DELETE. Reserve maintenance space before work.
    Write managed backups only as `.duckdb` files directly in the private
-   `AnalysisStore/backups` directory. Create that directory through the owner.
+   `AnalysisStore/backups` directory. Create that directory through the owner
+   and sync its parent before copying.
    Count complete and incomplete copies in the existing data-file budget.
    Before copying, reserve the database size, one quarter of that size, and
    4,096 manifest bytes against ordinary file and free-space admission. Reserve

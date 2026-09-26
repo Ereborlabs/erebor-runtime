@@ -554,7 +554,7 @@ non-directory entries. It reports logical-or-allocated file bytes, allocated
 bytes, and available filesystem bytes. Native WAL, temporary files, and managed
 backups count toward usage. `backup` accepts only `.duckdb` files directly in
 the private `AnalysisStore/backups` directory. The owner creates this directory
-under the writer lock. The directory scan reserves two new file entries, plus
+under the writer lock and syncs its parent. The directory scan reserves two new file entries, plus
 one entry when the backup directory is absent. `check_backup` charges the
 database size, one quarter of that size, and 4,096 manifest bytes before copying.
 The projected usage must pass ordinary file and free-space admission. The copy
