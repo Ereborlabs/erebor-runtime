@@ -136,6 +136,8 @@ use the first one reached.
 | Node intake admission | 8 active or queued groups/process, 2/tenant | Evidence and coverage share permits. Reject excess work with ResourceExhausted before ACK. Idle streams hold no permit. |
 | Intake batch | 4,096 records, 4 MiB encoded or 50 ms | Commit first bound reached; decoded data must fit working memory. |
 | Engine memory/WAL | 128 MiB memory target; 64 MiB WAL checkpoint threshold | Measure RSS; checkpoint before reserve exhaustion. If it fails, backpressure data writes. |
+| Native temporary files | 128 MiB/process; two engine threads | Reject over-budget native work. This setting is not an operating-system memory cap. |
+| Data admission reserve | 256 MiB policy space plus 256 MiB write allowance; ordinary writes also require 25% of the configured data budget free | Sample actual available bytes before work. Maintenance keeps access above the ordinary data-file limit. Physical tests must prove the allowance is sufficient. |
 | Trusted extraction | 256 rows/1 MiB pages; 64 MiB admitted input after safe scope/column/AST-range selection; 1 second | Complete input or explicit rejection; never truncate COUNT/joins. No unproven predicate pushdown. |
 | SQL input/result | 16 KiB SQL; 200 rows/1 MiB output | Explicit limited normal result; oversized replacement fails without changing the displayed snapshot. |
 | Isolated query workers | 2/process, 1/tenant; 256 MiB OS memory and 1 CPU each; 1-second evaluation deadline | No network/credentials/live DB; terminate over-budget evaluation. Worker memory is separate from analysis memory. |

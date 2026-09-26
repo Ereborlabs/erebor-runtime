@@ -29,6 +29,18 @@ impl DerefMut for AnalysisConnection<'_> {
 
 impl AnalysisStore {
     pub(super) fn writer(&self) -> Result<AnalysisConnection<'_>> {
+        let connection = self.writer_access()?;
+        self.require_capacity(false)?;
+        Ok(connection)
+    }
+
+    pub(super) fn maintenance_writer(&self) -> Result<AnalysisConnection<'_>> {
+        let connection = self.writer_access()?;
+        self.require_capacity(true)?;
+        Ok(connection)
+    }
+
+    fn writer_access(&self) -> Result<AnalysisConnection<'_>> {
         let permit = self
             .write_slots
             .try_acquire()

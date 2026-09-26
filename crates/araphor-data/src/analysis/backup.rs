@@ -38,7 +38,7 @@ impl AnalysisStore {
             return self.reject("the recovery source identity is invalid");
         }
         let key = source_key(identity);
-        let mut writer = self.writer()?;
+        let mut writer = self.maintenance_writer()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin source recovery",
         })?;
@@ -94,7 +94,7 @@ impl AnalysisStore {
     }
 
     pub fn checkpoint(&self) -> Result<()> {
-        let writer = self.writer()?;
+        let writer = self.maintenance_writer()?;
         let _maintenance = self
             .maintenance
             .write()
@@ -117,7 +117,7 @@ impl AnalysisStore {
         if !parent_meta.is_dir() || parent_meta.permissions().mode() & 0o077 != 0 {
             return self.reject("the backup directory is not private");
         }
-        let writer = self.writer()?;
+        let writer = self.maintenance_writer()?;
         let _maintenance = self
             .maintenance
             .write()
@@ -142,6 +142,7 @@ impl AnalysisStore {
             .ok_or_else(|| self.state_error("the backup available space is invalid"))?;
         let required = source_bytes
             .checked_add(source_bytes / 4)
+            .and_then(|bytes| bytes.checked_add(self.storage.maintenance_bytes()))
             .ok_or_else(|| self.state_error("the backup maintenance reserve is invalid"))?;
         if available < required {
             return self.reject("the backup cannot preserve maintenance free space");

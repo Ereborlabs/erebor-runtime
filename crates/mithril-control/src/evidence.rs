@@ -268,6 +268,7 @@ impl EvidenceIntakeOwner {
     pub(crate) fn data_status(error: araphor_data::Error) -> Status {
         match error {
             araphor_data::Error::ProtectedInputCapacity { .. }
+            | araphor_data::Error::StorageCapacity { .. }
             | araphor_data::Error::AnalysisBusy { .. } => {
                 Status::resource_exhausted(error.to_string())
             }

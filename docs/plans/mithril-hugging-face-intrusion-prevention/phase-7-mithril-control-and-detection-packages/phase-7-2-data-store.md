@@ -244,8 +244,34 @@ Readers can run during normal writes. No reader survives a public method return.
 The current data crate passed 27 tests with two ignored, including the exact
 16-read cap, writer queue saturation, and snapshot/maintenance checks. All four
 data e2e tests passed. `data_backed_intake_acks_only_the_analysis_commit` passed.
-Formatting, compilation, and strict Clippy passed. The final workspace tests
-are running. Physical capacity
-and processor health, Control context projection, crash injection, removal of
+The final workspace gate passed for `d806c2dd`: formatting, compilation,
+strict Clippy, and all workspace tests.
+Storage admission now checks the data directory and available filesystem bytes
+under the writer lock. `data_storage` accepts `disk_max_bytes` (8 GiB by
+default) and `policy_reserve_bytes` (256 MiB by default). Ordinary writes stop
+256 MiB below the file budget. They also require the policy reserve, a 256-MiB
+write allowance, and one quarter of the configured disk budget as free space.
+The directory scan visits at most 4,096 entries. It counts each file's larger
+logical or allocated size. Separate fields report allocated and available bytes.
+The check includes native WAL and temporary files below the data directory.
+Backups outside that directory have a separate destination-space check; they
+are not charged to the directory total.
+Retention, checkpoint, and processor catch-up retain access above the ordinary
+file limit while the policy reserve and write allowance remain available.
+Exact durable retries do not require ordinary write capacity. New evidence and
+coverage do. Rejection returns ResourceExhausted without a new receipt or ACK.
+DuckDB uses a 128-MiB memory target, two threads, a 64-MiB WAL checkpoint
+threshold, and a 128-MiB temporary-directory limit. These are native settings,
+not an operating-system memory cap or a measured recovery reserve.
+The 20 `analysis_store_` tests passed. The capacity test checks exact admission
+boundaries, a sparse temporary quota file, unchanged receipts on rejection,
+checkpoint access, and retry after capacity returns. All five data e2e tests
+passed. `data_capacity_retry` uses mTLS and an impossible free-space reserve;
+Node keeps the rejected batch, policy RPCs work, and a restart with normal
+limits permits the same batch. These tests use temporary stores, not an
+existing deployment. The final workspace gate passed formatting, compilation,
+strict Clippy, and all 29 enabled data-crate tests; two tests are ignored.
+The remaining workspace tests are running. Physical capacity, complete tenant quotas,
+processor health, Control context projection, crash injection, removal of
 the remaining old library writer, and physical disk reuse remain open.
 Production enablement is not qualified.
