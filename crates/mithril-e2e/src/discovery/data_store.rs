@@ -35,6 +35,12 @@ const HOUR: u64 = 3_600_000_000_000;
 
 struct TestClock(AtomicU64);
 
+enum StartupFault {
+    Pending,
+    Sql(&'static str),
+    Corrupt,
+}
+
 impl IntakeClock for TestClock {
     fn now(&self) -> SystemTime {
         UNIX_EPOCH + Duration::from_nanos(self.0.load(Ordering::SeqCst))
@@ -159,18 +165,31 @@ impl DataStoreQualification {
         drop(reopen_control_store(&control_root).await?);
 
         let database = tls.path().join("evidence/analysis/analysis.duckdb");
+        let pending = tls.path().join("evidence/analysis/restore.pending");
         Self::record(&observations, 2);
         let faults = [
-            Some("UPDATE source_receipts SET contiguous_cursor = 2"),
-            Some("UPDATE store_meta SET schema_version = 99"),
-            Some("UPDATE store_meta SET schema_version = 5; ALTER TABLE events RENAME TO missing_events"),
-            None,
+            StartupFault::Pending,
+            StartupFault::Sql("UPDATE source_receipts SET contiguous_cursor = 2"),
+            StartupFault::Sql("UPDATE store_meta SET schema_version = 99"),
+            StartupFault::Sql("UPDATE store_meta SET schema_version = 5; ALTER TABLE events RENAME TO missing_events"),
+            StartupFault::Corrupt,
         ];
         for fault in faults {
-            match fault {
-                Some(sql) => duckdb::Connection::open(&database)?.execute_batch(sql)?,
-                None => fs::write(&database, b"invalid database")?,
-            }
+            let saved = match fault {
+                StartupFault::Pending => {
+                    let bytes = fs::read(&database)?;
+                    fs::write(&pending, b"")?;
+                    Some(bytes)
+                }
+                StartupFault::Sql(sql) => {
+                    duckdb::Connection::open(&database)?.execute_batch(sql)?;
+                    None
+                }
+                StartupFault::Corrupt => {
+                    fs::write(&database, b"invalid database")?;
+                    None
+                }
+            };
             let parts = tls.configuration()?.into_parts()?;
             self.check(
                 parts.data_error.is_some() && parts.control.analysis_store().is_none(),
@@ -222,6 +241,13 @@ impl DataStoreQualification {
                 "data failure changed policy or selected the old writer",
             )?;
             drop(control);
+            if let Some(bytes) = saved {
+                self.check(
+                    pending.is_file() && fs::read(&database)? == bytes,
+                    "startup changed an incomplete restore",
+                )?;
+                fs::remove_file(&pending)?;
+            }
         }
         self.check(
             fs::read(&database)? == b"invalid database",
@@ -260,6 +286,8 @@ impl DataStoreQualification {
             "current-format-restart",
             "duplicate-noop",
             "corrupt-data-unavailable",
+            "incomplete-restore-unavailable",
+            "incomplete-restore-unchanged",
             "invalid-receipt-unavailable",
             "unsupported-schema-unavailable",
             "missing-table-unavailable",

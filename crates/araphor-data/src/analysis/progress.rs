@@ -186,9 +186,13 @@ impl AnalysisStore {
             })?;
         self.check_logical(&transaction, scope.identity.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &["processor_progress"])?;
+        #[cfg(test)]
+        self.crash_at("register.before");
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit processor registration",
         })?;
+        #[cfg(test)]
+        self.crash_at("register.after");
         self.revision.send_replace(revision);
         Ok(revision)
     }
@@ -294,9 +298,13 @@ impl AnalysisStore {
             revision,
             &["processor_gaps", "processor_progress"],
         )?;
+        #[cfg(test)]
+        self.crash_at("resume.before");
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit optional processor gap",
         })?;
+        #[cfg(test)]
+        self.crash_at("resume.after");
         self.revision.send_replace(revision);
         Ok(Some(AnalysisGapV1 {
             first_cursor: first,

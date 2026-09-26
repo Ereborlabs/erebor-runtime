@@ -90,6 +90,18 @@ the owner explicitly. The startup case uses ControlConfig and the default owner.
 -> [AnalysisStore::reopen_backup](../../../../crates/araphor-data/src/analysis/backup.rs) The owner validates identity, schema, receipts, and references before it publishes reopened native connections.<br>
 -> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) A validated copy opens in an empty private directory with a new recovery epoch.
 
+[AnalysisLease::acquire](../../../../crates/araphor-data/src/analysis/connection.rs) Restore obtains the same exclusive directory lease used by normal startup.<br>
+-> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) Restore requires no entry except the lease file, then creates and syncs `restore.pending` before copying.<br>
+-> [AnalysisStore::open_leased](../../../../crates/araphor-data/src/analysis/mod.rs) The internal restore path validates the copied store while retaining its lease.<br>
+-> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) Restore commits the new recovery epoch, removes the marker, and syncs the directory before returning the owner.<br>
+-> [AnalysisStore::open_with_limits](../../../../crates/araphor-data/src/analysis/mod.rs) Normal startup rejects any pending marker before native open. An interrupted restore cannot expose the old epoch or create an empty fallback.
+
+The marker contains no records. It gates restore readiness, not event delivery.
+A copy, validation, or epoch-commit error leaves the marker and blocks startup.
+Restore the unchanged backup into a new empty directory. Do not delete the
+marker to activate the partial copy. An error after marker removal cannot
+expose the old epoch; the epoch commit has already completed.
+
 Backup closes the two cloned readers before their owning writer. Normal owner
 drop uses the same order. Private connection guards return a typed error for
 a closed slot; they cannot return a dummy database. The existing writer and
@@ -123,13 +135,27 @@ until restart. This path does not change Control policy persistence.
 
 The exit hook and its module compile only under `cfg(test)`. The hook requires
 the exact requested point and temporary store path. It adds no production
-configuration, public API, or alternate writer. Twelve cases cover six commit
-boundaries. The eight input cases also check tenant isolation, unchanged
+configuration, public API, or alternate writer. Eighteen cases cover nine commit
+boundaries. Four further cases check restore readiness. The eight input cases
+also check tenant isolation, unchanged
 processor progress, no notification on duplicate retry, and a second reopen.
 Input bodies are opaque data-owner fixtures, not Node or kernel evidence.
 These cases do not cover interruption inside native commit, hardware power
 loss, or every data mutation. Existing mTLS cases remain separate integration
 proof.
+
+[AnalysisStore::register_processor](../../../../crates/araphor-data/src/analysis/progress.rs) Registration inserts the fixed processor class and initial progress.<br>
+-> [analysis_store_processor_crashes](../../../../crates/araphor-data/src/analysis/crash.rs) Before/after exits preserve either no registration or its complete state, with an exact retry.
+
+[AnalysisStore::resume_optional](../../../../crates/araphor-data/src/analysis/progress.rs) Optional resume commits a missing range and resume floor together.<br>
+-> [analysis_store_processor_crashes](../../../../crates/araphor-data/src/analysis/crash.rs) Before/after exits preserve the complete prior or new state. Consumed progress does not advance, and incomplete coverage remains explicit.
+
+[AnalysisStore::retire_required](../../../../crates/araphor-data/src/analysis/retirement.rs) Retirement commits its audit record and unprocessed range together.<br>
+-> [analysis_store_processor_crashes](../../../../crates/araphor-data/src/analysis/crash.rs) Before/after exits retain exact witnesses and consumed progress. Retry has one effect; registration cannot reactivate the retired version.
+
+[AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) Restore controls the pending marker, epoch commit, and readiness publication.<br>
+-> [analysis_store_restore_crashes](../../../../crates/araphor-data/src/analysis/crash.rs) Four process exits prove repeated startup refusal for incomplete copies and a durable new epoch for the ready copy. Each case preserves the backup and permits restore into a fresh destination.<br>
+-> [DataStoreQualification::startup](../../../../crates/mithril-e2e/src/discovery/data_store.rs) A pending-marker fixture disables data ACK through mTLS. Node retains input while policy RPCs work. The database bytes and marker remain unchanged.
 
 The full workspace gate passed for `cb8417f8`, including all twelve cases in
 `analysis_store_commit_crashes` and `analysis_store_input_crashes`. The data

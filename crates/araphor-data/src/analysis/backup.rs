@@ -1,6 +1,6 @@
-use std::fs::{self, DirBuilder, File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read as _, Write as _};
-use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::Path;
 
 use duckdb::params;
@@ -295,21 +295,27 @@ impl AnalysisStore {
         {
             return Self::reject_path(root, "the backup manifest or database differs");
         }
-        match DirBuilder::new().mode(0o700).create(root) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(source) => return Err(source).context(IoSnafu { path: root }),
+        let lease = super::connection::AnalysisLease::acquire(root)?;
+        for entry in fs::read_dir(root).context(IoSnafu { path: root })? {
+            if entry.context(IoSnafu { path: root })?.file_name() != "analysis.lock" {
+                return Self::reject_path(root, "the restore directory is not empty and private");
+            }
         }
-        let root_meta = fs::symlink_metadata(root).context(IoSnafu { path: root })?;
-        if !root_meta.is_dir()
-            || root_meta.permissions().mode() & 0o077 != 0
-            || fs::read_dir(root)
-                .context(IoSnafu { path: root })?
-                .next()
-                .is_some()
-        {
-            return Self::reject_path(root, "the restore directory is not empty and private");
-        }
+        let pending = root.join("restore.pending");
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&pending)
+            .context(IoSnafu { path: &pending })?
+            .sync_all()
+            .context(IoSnafu { path: &pending })?;
+        File::open(root)
+            .context(IoSnafu { path: root })?
+            .sync_all()
+            .context(IoSnafu { path: root })?;
+        #[cfg(test)]
+        Self::crash_path(root, "restore.marked");
         let target = root.join("analysis.duckdb");
         let mut input = File::open(backup).context(IoSnafu { path: backup })?;
         let mut output = OpenOptions::new()
@@ -324,7 +330,12 @@ impl AnalysisStore {
             .context(IoSnafu { path: root })?
             .sync_all()
             .context(IoSnafu { path: root })?;
-        let store = Self::open(root)?;
+        let store = Self::open_leased(
+            root.to_path_buf(),
+            Default::default(),
+            Default::default(),
+            lease,
+        )?;
         let meta = store.meta()?;
         if meta.store_uuid.to_string() != manifest.store_uuid
             || meta.schema_version != manifest.schema_version
@@ -356,16 +367,30 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "advance restore epoch",
                 })?;
+            #[cfg(test)]
+            store.crash_at("restore.before");
             transaction.commit().context(AnalysisDatabaseSnafu {
                 operation: "commit restore epoch",
             })?;
+            #[cfg(test)]
+            store.crash_at("restore.after");
         }
+        fs::remove_file(&pending).context(IoSnafu { path: &pending })?;
+        File::open(root)
+            .context(IoSnafu { path: root })?
+            .sync_all()
+            .context(IoSnafu { path: root })?;
+        #[cfg(test)]
+        store.crash_at("restore.ready");
         Ok(store)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs::DirBuilder;
+    use std::os::unix::fs::DirBuilderExt as _;
+
     use super::*;
     use crate::{EvidenceIntakeIdentityV1, EvidenceStoreOutcomeV1, ValidatedEvidenceBatchV1};
 
