@@ -689,7 +689,11 @@ Linux 6.8.0-139-generic, x86_64. With zero available bytes, both copy entry poin
 return the copy-reserve error. No destination database is created. Restore
 retains its marker and rejects startup. Backup reopens its source connections.
 The unchanged backup restores into a fresh directory. The log is
-`/tmp/araphor-copy-qualification.iqcH0TQ0/disk-full.log` and records the working
-tree and binary digest. The final workspace gate is pending for this change.
+`/tmp/araphor-copy-qualification.iqcH0TQ0/disk-full-committed.log` and records
+clean commit `e7c771d2` and the binary digest. The full workspace gate passed for
+that commit with `CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh`:
+formatting, workspace checks, strict Clippy, and tests. The data crate passed
+45 tests with two ignored; Control passed 196 with two ignored; Mithril e2e
+passed 115 with 249 ignored; Node passed 256 with one ignored.
 Concurrent space loss after admission, aggregate backup quotas, reserve sizing,
 load limits, and Kubernetes qualification remain open. The phase is **Not done**.
