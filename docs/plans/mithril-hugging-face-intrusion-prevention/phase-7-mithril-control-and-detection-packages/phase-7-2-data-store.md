@@ -464,5 +464,19 @@ The current data suite passed 40 tests with two ignored. All seven data mTLS
 e2e tests passed. The first workspace build stopped during linking with
 `No space left on device`. Removing only this worktree's generated incremental
 cache restored build capacity; the same focused workspace command then passed.
-The required final workspace CI procedure is running. The phase remains
-**Not done** pending that result and its other open requirements.
+The first final workspace CI run passed formatting and workspace checks. It
+stopped on a strict-Clippy needless-borrow warning in the new native setting.
+That borrow is removed. The final workspace procedure is running again with
+the crash checks below. The phase remains **Not done** pending that result and
+its other open requirements.
+
+`analysis_store_commit_crashes` passed twice. Four child processes exit without
+Rust cleanup immediately before or after the production result and retention
+commits. The hooks exist only under `cfg(test)` and match an exact temporary
+store path. Reopen checks the prior or new commit revision, source receipt,
+processor progress, result body, exact raw/context references, retained count,
+and expiry range. Result retry has one effect. Retention retry preserves the
+live witness and the accepted source cursor. A second reopen keeps that state.
+The test calls production mutations; it does not reproduce their SQL writes.
+This proof does not cover interruption inside the native commit, hardware power
+loss, every other mutation boundary, or a Control process crash during mTLS.
