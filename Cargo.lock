@@ -3690,6 +3690,7 @@ dependencies = [
  "clap",
  "containerd-client",
  "crc32c",
+ "duckdb",
  "ed25519-dalek 3.0.0",
  "erebor-interceptor",
  "erebor-interceptor-abi",

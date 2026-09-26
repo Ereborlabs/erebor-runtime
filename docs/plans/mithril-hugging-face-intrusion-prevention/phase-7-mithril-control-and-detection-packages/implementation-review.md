@@ -19,7 +19,8 @@ crate in Control. Agents and the console will use the same owners. Neither a
 query nor a diagnostic measurement grants policy authority.
 
 Current scope: Discovery contracts, durable derivation, and offline AnalysisStore
-proof are implemented. Default Control startup still uses its existing store.
+proof are implemented. Default Control startup selects AnalysisStore for data
+and keeps ControlStore for policy authority.
 Diagnostic contracts, execution, transport, and projection are implemented.
 Diagnostic physical qualification is incomplete. Public SQL,
 trace CLI/API, assessment submission, classification, proposal generation, and
@@ -73,8 +74,8 @@ Control intake or the SQLite discovery projection.
 -> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) Reopen preserves store identity, revisions, receipt, report, and count.<br>
 -> [storage-contract result](../../../../crates/mithril-e2e/src/discovery/storage_contract.rs) Case records nonzero cursors, revisions, counts, and digests; the independent Control policy state remains unchanged.
 
-The next route covers the data-owner implementation. The mTLS qualification
-below selects this owner explicitly. Default startup does not select it.
+The next route covers the data-owner implementation. The recovery case selects
+the owner explicitly. The startup case uses ControlConfig and the default owner.
 
 [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) The owner opens one private DuckDB writer and rejects unsupported stored schemas under its lease.<br>
 -> [AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/read.rs) A bounded read checks frame digests and reports a recorded expired range.<br>
@@ -93,7 +94,17 @@ below selects this owner explicitly. Default startup does not select it.
 [EvidenceIntakeOwner::new](../../../../crates/mithril-control/src/evidence.rs) The explicit data-backed constructor rejects accepted, pending, or coverage state in the old Control evidence store. The owner validates Node batches and commits evidence and coverage only to AnalysisStore. Its component tests check exact frames, replay, old Control-store isolation, and restart.<br>
 -> [ControlPlane::from_intake](../../../../crates/mithril-control/src/service.rs) The service accepts the selected intake owner and keeps the same Control policy and trust store.<br>
 -> [DataStoreQualification::recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The mTLS case submits Node WAL records, leaves an ACK unread, restarts the owners, and retries the same bytes. The case passed 19 checks with the selected data owner.<br>
--> Not implemented [Control startup](phase-7-2-data-store.md) Default startup still selects the old writer. Fresh-store activation and production retention scheduling remain open.
+
+[ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Control starts with its existing policy store and refuses old evidence receipts before it creates the data store.<br>
+-> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) One private writer opens at `evidence_directory/analysis`. Restart checks the schema version and required tables and columns. Restart does not create missing tables.<br>
+-> [EvidenceIntakeOwner::new](../../../../crates/mithril-control/src/evidence.rs) Intake shares that data handle. The default process does not start the superseded discovery projection.<br>
+-> [DataStoreQualification::startup](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The test uses configuration loading and mTLS to check exact frames, durable ACK, replay, and unchanged policy state.<br>
+-> Not implemented [retention scheduling](phase-7-2-data-store.md) Production retention scheduling, capacity enforcement, and complete stored-reference validation remain open.
+
+[ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Data recovery fails.<br>
+-> [ControlPlane::without_intake](../../../../crates/mithril-control/src/service.rs) Policy and trust retain their durable owner. No old evidence writer replaces the failed data owner.<br>
+-> [ControlPlane::receive_evidence_stream_group](../../../../crates/mithril-control/src/service.rs) Evidence returns Unavailable without an ACK. Coverage uses the same unavailable result.<br>
+-> [DataStoreQualification::startup](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The test checks that Node retains unacknowledged input and policy inventory remains available under unsupported schema, missing table, and corrupt file failures.
 
 [DataStoreQualification::recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The test clock advances while optional discovery remains disabled.<br>
 -> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) Required progress protects raw input. A result transaction advances that progress and retains one exact witness.<br>
@@ -113,10 +124,11 @@ and backup methods. It does not implement their transactions.
 
 ### Durable evidence, profiles, and context
 
-This route describes the current source. The
+This route describes the superseded library path. Default startup does not run
+this path. Its replacement uses the shared data owner. The
 [data-store plan](phase-7-2-data-store.md) defines the target storage contract.
 
-[main](../../../../crates/mithril-control/src/main.rs) Control starts configured discovery.<br>
+[DiscoveryOwner::run](../../../../crates/mithril-control/src/discovery/runtime.rs) A direct library caller starts the old discovery owner.<br>
 -> [DiscoveryOwner::open](../../../../crates/mithril-control/src/discovery/live.rs) DiscoveryOwner validates scope, supported sources, and quotas.<br>
 -> [runtime checkpoint recovery](../../../../crates/mithril-control/src/discovery/runtime.rs) ControlStore opens the bounded derivation checkpoint.<br>
 -> [ControlStore::read_evidence_page](../../../../crates/mithril-control/src/store/evidence_read.rs) bounded reader supplies committed evidence and pinned context.<br>
@@ -688,9 +700,10 @@ not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
 
-This review covers `codex/mithril-ui` at `52c322a` plus the mTLS recovery
-changes. The new route qualifies the selected data-backed intake owner.
-It does not qualify default startup, QueryOwner, or trace API frames.
+This review covers `codex/mithril-ui` at `9478d8cd` plus the default-startup
+changes. The startup command passed 15 checks; recovery passed 19 checks again.
+Their results are in `/tmp/araphor-startup.Sxc096/`. QueryOwner and trace API
+frames are not qualified by these changes.
 
 The current offline runs are `storage-contract` and `offline-exact` under
 `/tmp/araphor-simplify.bO8mk9/`. Both report `PASS`. The isolated SQL worker
@@ -705,6 +718,6 @@ uses 8,663,040 bytes after checkpoint; its native WAL is absent. These small
 fixture measurements are not a throughput or physical-reuse qualification.
 `cargo test -p araphor-data --lib` passed 19 tests with two ignored.
 `analysis_store_result_progress` includes tenant and corrupt-body checks.
-Workspace formatting, compilation, and strict Clippy passed. The full workspace
-test run is still running. Startup, capacity, crash injection, and physical qualification
-remain open.
+The full workspace procedure passed for `658c16c3`. The final startup run is
+in progress. Capacity, complete stored-reference validation, crash injection, and
+physical qualification remain open.

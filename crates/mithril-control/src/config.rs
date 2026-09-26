@@ -1,8 +1,10 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::net::SocketAddr;
+use std::os::unix::fs::DirBuilderExt as _;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::Deserialize;
 use snafu::{ensure, ResultExt as _};
@@ -10,9 +12,9 @@ use snafu::{ensure, ResultExt as _};
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, JsonSnafu};
 use crate::{
     AdministrativeHttpConfigV1, AllowedNodeIdentity, ControlPlane, ControlServerTls, ControlStore,
-    DiscoveryRuntimeConfigV1, EvidenceStoreLimitsV1, KubernetesAdmissionHttpConfigV1,
+    EvidenceIntakeOwner, EvidenceStoreLimitsV1, KubernetesAdmissionHttpConfigV1,
     KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner, PolicyDesiredStateConfigV1,
-    PolicyDesiredStateOwner, Result, TrustGenerationV1,
+    PolicyDesiredStateOwner, Result, SystemIntakeClock, TrustGenerationV1,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -34,18 +36,6 @@ pub struct ControlConfig {
     pub kubernetes_nodes: Option<KubernetesNodeControlConfigV1>,
     #[serde(default)]
     pub kubernetes_admission: Option<KubernetesAdmissionHttpConfigV1>,
-    #[serde(default)]
-    pub discovery: Option<DiscoveryRuntimeConfigV1>,
-    #[serde(default)]
-    pub diagnostics: Option<TraceSignerConfigV1>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TraceSignerConfigV1 {
-    pub signing_key_id: String,
-    pub signing_key_path: PathBuf,
-    pub issuer_epoch: u64,
 }
 
 pub struct ControlRuntimeParts {
@@ -55,7 +45,7 @@ pub struct ControlRuntimeParts {
     pub administrative_exec: Option<AdministrativeHttpConfigV1>,
     pub kubernetes_nodes: Option<KubernetesNodeReadinessOwner>,
     pub kubernetes_admission: Option<KubernetesAdmissionHttpConfigV1>,
-    pub discovery: Option<(DiscoveryRuntimeConfigV1, ControlStore)>,
+    pub data_error: Option<crate::Error>,
 }
 
 impl ControlConfig {
@@ -67,23 +57,31 @@ impl ControlConfig {
     }
 
     pub fn into_parts(self) -> Result<ControlRuntimeParts> {
-        // Policy metadata and evidence references share one atomic current state.
+        self.validate()?;
         let store_directory = self
             .control_store_directory
-            .unwrap_or_else(|| self.evidence_directory.clone());
+            .as_ref()
+            .unwrap_or(&self.evidence_directory);
         let store = ControlStore::open_with_evidence_limits(store_directory, self.evidence_store)?;
-        let mut control = ControlPlane::with_control_store(
-            self.allowed_nodes,
-            self.trust.clone(),
-            store.clone(),
-        )?;
-        if let Some(signer) = self.diagnostics {
-            control = control.with_trace_signer(
-                signer.signing_key_id,
-                signer.issuer_epoch,
-                crate::policy::read_signing_key(&signer.signing_key_path)?,
-            )?;
-        }
+        store.require_empty_evidence()?;
+        let (mut control, data_error) = match self.open_analysis() {
+            Ok(data) => (
+                ControlPlane::from_intake(
+                    self.allowed_nodes,
+                    self.trust.clone(),
+                    EvidenceIntakeOwner::new(store.clone(), data, Arc::new(SystemIntakeClock))?,
+                )?,
+                None,
+            ),
+            Err(error) => (
+                ControlPlane::without_intake(
+                    self.allowed_nodes,
+                    self.trust.clone(),
+                    store.clone(),
+                )?,
+                Some(error),
+            ),
+        };
         if let Some(policy) = self.kubernetes_policy {
             let owner = PolicyDesiredStateOwner::open(policy, store.clone())?;
             let (key_id, public_key, issuer_epoch) = owner.signer_identity();
@@ -112,16 +110,11 @@ impl ControlConfig {
             administrative_exec: self.administrative_exec,
             kubernetes_nodes,
             kubernetes_admission: self.kubernetes_admission,
-            discovery: self.discovery.map(|config| (config, store)),
+            data_error,
         })
     }
 
     fn validate(&self) -> Result<()> {
-        if let Some(signer) = &self.diagnostics {
-            ensure!(self.discovery.is_some() && signer.signing_key_path.is_absolute()
-                && !signer.signing_key_id.is_empty() && signer.signing_key_id.len() <= 128 && signer.issuer_epoch > 0,
-                InvalidConfigurationSnafu { reason: "diagnostics require Discovery storage and an absolute trusted signing key path" });
-        }
         ensure!(
             !self.allowed_nodes.is_empty(),
             InvalidConfigurationSnafu {
@@ -135,9 +128,6 @@ impl ControlConfig {
             }
         );
         self.evidence_store.validate()?;
-        if let Some(discovery) = &self.discovery {
-            discovery.validate()?;
-        }
         ensure!(
             self.control_store_directory
                 .as_ref()
@@ -200,6 +190,22 @@ impl ControlConfig {
         }
         Ok(())
     }
+
+    fn open_analysis(&self) -> Result<Arc<araphor_data::AnalysisStore>> {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&self.evidence_directory)
+            .context(IoSnafu {
+                path: &self.evidence_directory,
+            })?;
+        araphor_data::AnalysisStore::open(self.evidence_directory.join("analysis"))
+            .map(Arc::new)
+            .map_err(|source| crate::Error::DataStore {
+                source: Box::new(source),
+                location: snafu::Location::default(),
+            })
+    }
 }
 
 fn is_sha256_hex(value: &str) -> bool {
@@ -214,8 +220,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn discovery_derivation_configuration_is_disabled_until_selected(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn analysis_startup_is_independent() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("control.json");
         let mut source = serde_json::json!({
@@ -236,34 +241,39 @@ mod tests {
         });
         fs::write(&path, serde_json::to_vec(&source)?)?;
         let config = ControlConfig::load(&path)?;
-        assert!(config.discovery.is_none());
         let parts = config.into_parts()?;
-        assert!(parts.discovery.is_none());
+        assert!(parts.data_error.is_none());
+        let initial = parts
+            .control
+            .analysis_store()
+            .ok_or("data owner absent")?
+            .meta()?;
         drop(parts);
-        source["discovery"] = serde_json::json!({});
-        fs::write(&path, serde_json::to_vec(&source)?)?;
         let parts = ControlConfig::load(&path)?.into_parts()?;
+        assert!(parts.data_error.is_none());
         assert_eq!(
             parts
-                .discovery
-                .as_ref()
-                .ok_or("configuration absent")?
-                .0
-                .checkpoint_seconds,
-            60
+                .control
+                .analysis_store()
+                .ok_or("data owner absent")?
+                .meta()?,
+            initial
         );
         assert!(!directory.path().join("discovery-index.sqlite").exists());
         drop(parts);
-        source["discovery"] = serde_json::json!({ "checkpoint_seconds": 0 });
+
+        let database = directory.path().join("analysis/analysis.duckdb");
+        fs::write(&database, b"invalid database")?;
+        let parts = ControlConfig::load(&path)?.into_parts()?;
+        assert!(parts.data_error.is_some());
+        assert!(parts.control.analysis_store().is_none());
+        assert_eq!(parts.control.allowed_nodes().len(), 1);
+        assert_eq!(fs::read(&database)?, b"invalid database");
+        drop(parts);
+
+        source["discovery"] = serde_json::json!({});
         fs::write(&path, serde_json::to_vec(&source)?)?;
         assert!(ControlConfig::load(&path).is_err());
-        source["discovery"] = serde_json::Value::Null;
-        fs::write(&path, serde_json::to_vec(&source)?)?;
-        assert!(ControlConfig::load(&path)?
-            .into_parts()?
-            .discovery
-            .is_none());
-        assert!(!directory.path().join("discovery-index.sqlite").exists());
         Ok(())
     }
 }

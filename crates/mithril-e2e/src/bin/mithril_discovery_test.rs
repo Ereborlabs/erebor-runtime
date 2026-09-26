@@ -9,6 +9,7 @@ enum Case {
     ProfileRestart,
     ContextRoundtrip,
     DataStoreRecovery,
+    DataStoreStartup,
 }
 
 #[derive(Parser)]
@@ -30,6 +31,11 @@ async fn main() {
         Case::DataStoreRecovery => {
             mithril_e2e::DataStoreQualification::new(cli.output_directory)
                 .recovery()
+                .await
+        }
+        Case::DataStoreStartup => {
+            mithril_e2e::DataStoreQualification::new(cli.output_directory)
+                .startup()
                 .await
         }
         Case::ProfileRestart => {

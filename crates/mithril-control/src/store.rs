@@ -850,6 +850,19 @@ impl ControlStore {
         })
     }
 
+    pub(crate) fn require_empty_evidence(&self) -> Result<()> {
+        let health = self.health()?;
+        snafu::ensure!(
+            health.evidence_cursors == 0
+                && health.pending_evidence_batches == 0
+                && health.coverage_cursors == 0,
+            crate::error::InvalidConfigurationSnafu {
+                reason: "AnalysisStore requires a Control store without old evidence receipts",
+            }
+        );
+        Ok(())
+    }
+
     pub fn health(&self) -> Result<ControlStoreHealthV1> {
         let inner = self.lock()?;
         Ok(ControlStoreHealthV1 {
