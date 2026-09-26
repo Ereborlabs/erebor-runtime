@@ -88,9 +88,13 @@ impl AnalysisStore {
                 })?;
             self.check_logical(&transaction, identity.tenant_id, true)?;
             Self::record_revision(&transaction, revision, &["recovery_gaps"])?;
+            #[cfg(test)]
+            self.crash_at("recovery.before");
             transaction.commit().context(AnalysisDatabaseSnafu {
                 operation: "commit source recovery",
             })?;
+            #[cfg(test)]
+            self.crash_at("recovery.after");
             self.revision.send_replace(revision);
         }
         Ok(AnalysisRecoveryStatusV1::Partial {

@@ -759,9 +759,13 @@ impl AnalysisStore {
         }
         self.check_logical(&transaction, identity.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &relations)?;
+        #[cfg(test)]
+        self.crash_at("evidence.before");
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit evidence",
         })?;
+        #[cfg(test)]
+        self.crash_at("evidence.after");
         self.revision.send_replace(revision);
         Ok(if next_contiguous >= batch.last_cursor {
             EvidenceStoreOutcomeV1::Accepted
@@ -872,9 +876,13 @@ impl AnalysisStore {
         }
         self.check_logical(&transaction, identity.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &relations)?;
+        #[cfg(test)]
+        self.crash_at("coverage.before");
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit coverage",
         })?;
+        #[cfg(test)]
+        self.crash_at("coverage.after");
         self.revision.send_replace(revision);
         Ok(input.revision)
     }
