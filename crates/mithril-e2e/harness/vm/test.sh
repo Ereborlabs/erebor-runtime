@@ -153,6 +153,12 @@ outage_help=$("$directory/two-node-outage-recovery.sh" --help 2>&1)
 [[ $outage_help == *--environment* ]]
 [[ $outage_help == *--output-directory* ]]
 [[ $outage_help == *--data-check* ]]
+if bash "$directory/inspect-data.sh" >/dev/null 2>&1; then
+  echo "the inspection launcher accepted missing arguments" >&2
+  exit 1
+fi
+grep -Fq '"$directory/inspect-data.sh" "$remote_check/inspect-data.sh"' \
+  "$directory/two-node-outage-recovery.sh"
 grep -Fq 'systemctl show' "$directory/two-node-outage-recovery.sh"
 grep -Fq 'inspect_control_data data-after-outage data-before-outage' \
   "$directory/two-node-outage-recovery.sh"
