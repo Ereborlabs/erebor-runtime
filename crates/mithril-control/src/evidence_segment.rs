@@ -233,28 +233,21 @@ impl EvidenceSegmentReadV1 {
         self.frames.len()
     }
 
+    pub(crate) fn frames(&self) -> Result<(Vec<u8>, Vec<usize>)> {
+        let mut bytes = Vec::with_capacity(self.encoded_bytes);
+        let mut ends = Vec::with_capacity(self.frames.len());
+        for frame in &self.frames {
+            bytes.extend_from_slice(&self.read_frame(frame)?);
+            ends.push(bytes.len());
+        }
+        Ok((bytes, ends))
+    }
+
     pub(crate) fn decode<M: Message + Default>(self) -> Result<Vec<M>> {
         let mut records = Vec::with_capacity(self.frames.len());
-        for frame in self.frames {
-            let start = frame.payload_start - 4;
-            let mut bytes = vec![0; frame.end - start];
-            self.file
-                .read_exact_at(&mut bytes, start as u64)
-                .context(IoSnafu { path: &self.path })?;
-            let length = u32::from_be_bytes(bytes[..4].try_into().unwrap_or_default()) as usize;
-            let checksum_start = bytes.len() - 4;
-            let checksum =
-                u32::from_be_bytes(bytes[checksum_start..].try_into().unwrap_or_default());
-            if length != frame.payload_end - frame.payload_start
-                || crc32c::crc32c(&bytes[..checksum_start]) != checksum
-            {
-                return ControlStoreSnafu {
-                    path: self.path,
-                    reason: "a frozen evidence frame changed length or checksum".to_owned(),
-                }
-                .fail();
-            }
-            records.push(M::decode(&bytes[4..checksum_start]).map_err(|error| {
+        for frame in &self.frames {
+            let bytes = self.read_frame(frame)?;
+            records.push(M::decode(&bytes[4..bytes.len() - 4]).map_err(|error| {
                 ControlStoreSnafu {
                     path: self.path.clone(),
                     reason: format!("a frozen evidence frame failed decoding: {error}"),
@@ -263,6 +256,27 @@ impl EvidenceSegmentReadV1 {
             })?);
         }
         Ok(records)
+    }
+
+    fn read_frame(&self, frame: &EvidenceFrameIndexV1) -> Result<Vec<u8>> {
+        let start = frame.payload_start - 4;
+        let mut bytes = vec![0; frame.end - start];
+        self.file
+            .read_exact_at(&mut bytes, start as u64)
+            .context(IoSnafu { path: &self.path })?;
+        let length = u32::from_be_bytes(bytes[..4].try_into().unwrap_or_default()) as usize;
+        let checksum_start = bytes.len() - 4;
+        let checksum = u32::from_be_bytes(bytes[checksum_start..].try_into().unwrap_or_default());
+        if length != frame.payload_end - frame.payload_start
+            || crc32c::crc32c(&bytes[..checksum_start]) != checksum
+        {
+            return ControlStoreSnafu {
+                path: self.path.clone(),
+                reason: "a frozen evidence frame changed length or checksum".to_owned(),
+            }
+            .fail();
+        }
+        Ok(bytes)
     }
 }
 
