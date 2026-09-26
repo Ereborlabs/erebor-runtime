@@ -190,8 +190,19 @@ Other open failures return immediately. AnalysisStore releases its lease only
 after the database connection closes. Startup and recovery passed with that
 wait. The four current data e2e tests passed, including the open-stream deadline
 case and the lease/error case. The semaphore quota test passed. The final
-workspace gate is running. These changes do not prove physical disk capacity
-or throughput.
+workspace gate for `be877df` passed formatting, compilation, and strict Clippy.
+It failed the unchanged SQLite 50,000-atom test with `OperationInterrupted`
+during atom-sample decoding. The concurrent Mithril e2e suite passed 110 tests;
+247 physical or explicit qualification tests remained ignored.
+AnalysisStore now reads at most one batch of retained digests and uses the
+pinned DuckDB appender for new rows. Appender flush, receipt progress, and
+revision updates remain in one transaction. No per-record SQL insert or lookup
+remains in this path. `analysis_store_bulk_rollback` checks a conflict at record
+4,096, unchanged receipt/revision and notification state, retry, and reopen.
+The 13 data-store tests passed. The existing 4,096-record Control test passed
+in 0.52 seconds; the earlier per-record path took 31.46 seconds in this workspace.
+These single runs are not a throughput qualification. The final workspace gate
+for the appender change is running. Physical disk capacity remains unqualified.
 General data-owner admission, retention scheduling, capacity
 and processor health, Control context projection, crash injection, removal of
 the remaining old library writer, and physical disk reuse remain open.
