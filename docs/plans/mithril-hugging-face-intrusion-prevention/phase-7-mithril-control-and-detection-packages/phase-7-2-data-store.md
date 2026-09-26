@@ -657,7 +657,11 @@ without a second record or revision. Applying that ACK clears Node pending
 input. The next cursor commits once and survives another reopen. Policy state
 remains unchanged, and the Control evidence cursor count remains zero.
 All eight enabled `discovery::data_store::tests` cases passed; two are ignored
-helpers or environment-specific cases. The full workspace gate is pending for
-this deliverable. These tests do not qualify hardware power loss, native commit
-failure after admission, reserve adequacy, load, or Kubernetes behavior.
+helpers or environment-specific cases. The full workspace gate passed for
+`6ec1afed` with `CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh`:
+formatting, workspace checks, strict Clippy, and workspace tests. The data crate
+passed 44 tests with two ignored; Control passed 196 with two ignored; Mithril
+e2e passed 115 with 249 ignored; Node passed 256 with one ignored.
+These tests do not qualify hardware power loss, native commit failure after
+admission, reserve adequacy, load, or Kubernetes behavior.
 The complete phase remains **Not done**.
