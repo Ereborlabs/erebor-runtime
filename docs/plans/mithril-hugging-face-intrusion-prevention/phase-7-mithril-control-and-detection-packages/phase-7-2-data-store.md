@@ -266,11 +266,28 @@ no database, retains its pending marker, and rejects normal startup. The same
 backup must still restore into a new directory with sufficient space. This case
 does not prove capacity that changes after the admission check.
 
+Use `data-store-load` to measure the production data path without a cluster.
+Submit 64 groups of 4,096 synthetic records through Node's bounded ingestion
+queue, durable WAL, and the real mTLS intake. Use 1,024 records per Node worker
+batch. Keep the production data quotas. Send a policy inventory RPC while each
+group is in flight. Record Node generation time, time to observe the durable
+ACK, policy RPC time, and sampled database, WAL, and aggregate file bytes.
+The ACK measurement includes the intervening policy RPC. Retry each group and
+require no new revision. Read every retained frame through bounded owner pages
+and compare the ordered SHA-256 digest. Checkpoint, restart, and require unchanged
+metadata, source receipt, and retained count. Record elapsed intake, read,
+checkpoint, and restart times. Run `data_load_contract` with two groups in CI.
+Run the CLI with `/usr/bin/time -v -o resources.log` on the qualification host
+to record whole-process CPU time and peak RSS. This fixed single-source workload
+does not prove multi-tenant contention, concurrent policy rollout, worst-case
+payloads, disk-reserve adequacy, or full-quota throughput.
+
 ```sh
 cargo test -p mithril-control
 cargo test -p araphor-data
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-recovery --output-directory /tmp/araphor-data-recovery
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-startup --output-directory /tmp/araphor-data-startup
+cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-load --output-directory /tmp/araphor-data-load
 bash .github/scripts/verify-rust-ci.sh
 ```
 

@@ -56,6 +56,201 @@ impl DataStoreQualification {
         Self { output }
     }
 
+    pub async fn load(&self) -> Result<()> {
+        self.load_groups(64).await
+    }
+
+    async fn load_groups(&self, groups: u64) -> Result<()> {
+        use sha2::{Digest as _, Sha256};
+
+        self.check(!self.output.exists(), "the output directory already exists")?;
+        self.check(
+            (1..=64).contains(&groups),
+            "the load group count is invalid",
+        )?;
+        let tls = MtlsFixture::new(false)?;
+        let root = tls.path().join("analysis");
+        let control = ControlStore::open(tls.path().join("control-store"))?;
+        let data = Arc::new(AnalysisStore::open(&root)?);
+        let intake = EvidenceIntakeOwner::new(
+            control.clone(),
+            data.clone(),
+            Arc::new(TestClock(AtomicU64::new(START))),
+        )?;
+        let server = tls.start(tls.control_from_intake(intake, 1)?).await?;
+        let observations = EffectObservationStore::durable(
+            4096,
+            tls.path().join("wal"),
+            EvidenceWalLimits::default(),
+            ObservationCanonicalizer::new(
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(3, 4),
+                1,
+                [7; 16].into(),
+            )?,
+        )?;
+        let mut connection = self.connect(&tls, &server).await?;
+        connection.report_readiness(true, true).await?;
+        let mut identity = None;
+        let mut input_digest = Sha256::new();
+        let mut input_bytes = 0_usize;
+        let mut samples = Vec::new();
+        let mut peak_bytes = 0;
+        let started = Instant::now();
+        for group in 0..groups {
+            let generated = Instant::now();
+            let (ingress, worker) = observations.bounded_ingestion_queue(4096, 1024)?;
+            for cursor in group * 4096 + 1..=(group + 1) * 4096 {
+                ingress.record_bytes(Self::event(cursor).as_bytes());
+            }
+            drop(ingress);
+            tokio::task::spawn_blocking(move || worker.run()).await?;
+            self.check(
+                observations.evidence_errors() == 0,
+                "Node dropped load input",
+            )?;
+            let batches = observations.next_evidence_batches();
+            self.check(
+                batches
+                    .iter()
+                    .map(|batch| batch.record_count())
+                    .sum::<usize>()
+                    == 4096,
+                "Node did not return one complete load group",
+            )?;
+            for batch in &batches {
+                let wire: mithril_control::EvidenceBatch = batch.clone().into();
+                identity.get_or_insert(EvidenceIntakeIdentityV1 {
+                    tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+                    node_id: "node-a".into(),
+                    node_boot_id: [7; 16],
+                    label_epoch: 1,
+                    source_id: wire.source_id.as_slice().try_into()?,
+                    source_epoch: wire.source_epoch,
+                });
+                input_bytes += wire.framed_records.len();
+                input_digest.update(&wire.framed_records);
+            }
+            let node_us = generated.elapsed().as_micros();
+            let replay = batches.clone();
+            let sent = Instant::now();
+            connection.send_evidence_group(batches).await?;
+            let policy = Instant::now();
+            connection.policy_inventory(None, Vec::new()).await?;
+            let policy_us = policy.elapsed().as_micros();
+            let expected = (group + 1) * 4096;
+            loop {
+                let ack = Self::ack(&mut connection).await?;
+                let cursor = ack.contiguous_cursor;
+                observations.acknowledge_evidence(ack)?;
+                if cursor == expected {
+                    break;
+                }
+                self.check(cursor < expected, "ACK exceeds the submitted load group")?;
+            }
+            let ack_us = sent.elapsed().as_micros();
+            self.check(
+                observations.next_evidence_batch().is_none(),
+                "Node retained acknowledged input",
+            )?;
+            let meta = data.meta()?;
+            connection.send_evidence_group(replay).await?;
+            loop {
+                let ack = Self::ack(&mut connection).await?;
+                if ack.contiguous_cursor == expected {
+                    break;
+                }
+            }
+            self.check(
+                data.meta()? == meta,
+                "duplicate load changed the data revision",
+            )?;
+            let usage = data.storage_usage()?;
+            peak_bytes = peak_bytes.max(usage.file_bytes);
+            samples.push(serde_json::json!({
+                "accepted_cursor": expected, "node_us": node_us,
+                "durable_ack_us": ack_us, "policy_rpc_us": policy_us,
+                "database_bytes": Self::file_size(&root.join("analysis.duckdb"))?,
+                "wal_bytes": Self::file_size(&root.join("analysis.duckdb.wal"))?,
+                "usage": usage,
+            }));
+        }
+        let intake_us = started.elapsed().as_micros();
+        let identity = identity.ok_or("load source absent")?;
+        let mut cursor = 1;
+        let mut read_count = 0_u64;
+        let mut output_digest = Sha256::new();
+        let read_start = Instant::now();
+        loop {
+            let page = data.read_page(&identity, cursor)?;
+            for record in page.records {
+                output_digest.update(&record.framed_record);
+                read_count += 1;
+            }
+            match page.next_cursor {
+                Some(next) => cursor = next,
+                None => break,
+            }
+        }
+        let read_us = read_start.elapsed().as_micros();
+        let digest = input_digest.finalize();
+        self.check(read_count == groups * 4096, "load record count differs")?;
+        self.check(
+            output_digest.finalize() == digest,
+            "load record bytes differ",
+        )?;
+        self.check(
+            control.health()?.evidence_cursors == 0,
+            "load used the old evidence writer",
+        )?;
+        let checkpoint = Instant::now();
+        data.checkpoint()?;
+        let checkpoint_us = checkpoint.elapsed().as_micros();
+        let usage = data.storage_usage()?;
+        let meta = data.meta()?;
+        let status = data.source_status(&identity)?;
+        drop(connection);
+        server.shutdown().await?;
+        drop(data);
+        let restart = Instant::now();
+        let data = Self::reopen_data(&root).await?;
+        let restart_us = restart.elapsed().as_micros();
+        self.check(data.meta()? == meta, "load restart changed metadata")?;
+        self.check(
+            data.source_status(&identity)? == status,
+            "load restart changed source state",
+        )?;
+        let status = status.ok_or("load source status absent")?;
+        fs::create_dir(&self.output)?;
+        super::write_json(
+            &self.output.join("result.json"),
+            &serde_json::json!({
+                "schema_version": 1, "case": "data-store-load", "result": "PASS",
+                "proof_kind": "synthetic-mtls", "kernel_evidence": false,
+                "groups": groups, "record_count": read_count, "input_bytes": input_bytes,
+                "input_sha256": hex::encode(digest), "source_identity": identity,
+                "commit_revision": meta.commit_revision, "recovery_epoch": meta.recovery_epoch,
+                "contiguous_cursor": status.receipt.contiguous_cursor,
+                "retained_floor": status.receipt.retained_floor,
+                "retained_count": status.retained_event_count, "intake_us": intake_us,
+                "read_us": read_us, "checkpoint_us": checkpoint_us, "restart_us": restart_us,
+                "sampled_peak_bytes": peak_bytes, "after_checkpoint": usage, "samples": samples,
+                "database_bytes": Self::file_size(&root.join("analysis.duckdb"))?,
+                "wal_bytes": Self::file_size(&root.join("analysis.duckdb.wal"))?,
+                "qualification": "measurement only; no production throughput or reserve claim",
+            }),
+        )?;
+        Ok(())
+    }
+
+    fn file_size(path: &Path) -> Result<u64> {
+        match fs::metadata(path) {
+            Ok(meta) => Ok(meta.len()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     pub async fn startup(&self) -> Result<()> {
         self.check(!self.output.exists(), "the output directory already exists")?;
         let tls = MtlsFixture::new(false)?;
@@ -776,7 +971,11 @@ impl DataStoreQualification {
     }
 
     fn record(observations: &EffectObservationStore, sequence: u64) {
-        let raw = erebor_interceptor_abi::EffectObservationV1 {
+        observations.record_bytes(Self::event(sequence).as_bytes());
+    }
+
+    fn event(sequence: u64) -> erebor_interceptor_abi::EffectObservationV1 {
+        erebor_interceptor_abi::EffectObservationV1 {
             observed_boottime_ns: sequence + 100,
             source_sequence: sequence,
             source_cpu_id: 3,
@@ -788,8 +987,7 @@ impl DataStoreQualification {
             effect_family: 1,
             operation: 1,
             ..Default::default()
-        };
-        observations.record_bytes(raw.as_bytes());
+        }
     }
 
     async fn connect(
@@ -864,6 +1062,24 @@ impl DataStoreQualification {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn data_load_contract() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let output = directory.path().join("load");
+        DataStoreQualification::new(output.clone())
+            .load_groups(2)
+            .await?;
+        let result: serde_json::Value =
+            serde_json::from_slice(&fs::read(output.join("result.json"))?)?;
+        assert_eq!(result["record_count"], 8192);
+        assert_eq!(
+            result["samples"].as_array().ok_or("samples absent")?.len(),
+            2
+        );
+        assert!(result["input_bytes"].as_u64().ok_or("bytes absent")? > 0);
+        Ok(())
+    }
 
     #[tokio::test]
     #[ignore = "subprocess helper; requires the parent's temporary data store"]
