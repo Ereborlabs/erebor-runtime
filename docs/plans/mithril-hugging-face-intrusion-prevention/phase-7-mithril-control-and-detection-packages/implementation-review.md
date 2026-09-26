@@ -97,8 +97,17 @@ revisions, and restart. `data_inspection_recovery` sends 300 records through
 mTLS, stops Control, records a proof, appends one record after restart, and
 checks the original prefix. It also checks live-owner refusal, invalid proofs,
 missing data, read limits, and expired input. `inspection_arguments_are_scoped`
-checks the CLI boundary. The shell smoke test checks wiring only. The updated
-physical storage/partition run remains **Not done**.
+checks the CLI boundary. The
+[shell test](../../../../crates/mithril-e2e/harness/vm/test.sh) checks wiring,
+per-Node replay counts, and storage-fault cleanup with a test Kubernetes client.
+[block_control_storage](../../../../crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh)
+sets the cleanup flag before the patch. A lost reply returns an error without
+clearing that flag.
+[restore_control_storage](../../../../crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh)
+keeps the flag after a failed removal and clears it after successful removal.
+The regression checks both failures and a successful retry. This shell test
+does not prove Kubernetes behavior. The updated physical storage/partition run
+remains **Not done**.
 
 The next route covers the data-owner implementation. The recovery case selects
 the owner explicitly. The startup case uses ControlConfig and the default owner.
