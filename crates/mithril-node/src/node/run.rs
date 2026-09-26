@@ -552,14 +552,12 @@ impl NodeRun {
         let Some(connection) = self.connection.as_mut() else {
             return Ok(());
         };
-        self.policy_work.pacing.mark_pending();
         match self
-            .node
-            .advance_policy_control_step(connection, &mut self.policy_work, self.evidence_ready)
+            .policy_work
+            .advance(&mut self.node, connection, self.evidence_ready)
             .await?
         {
-            PolicyControlStepV1::Continue => {}
-            PolicyControlStepV1::Idle => self.policy_work.pacing.mark_idle(),
+            PolicyControlStepV1::Continue | PolicyControlStepV1::Idle => {}
             PolicyControlStepV1::Reconnect => self.disconnect(),
             PolicyControlStepV1::Activated => {
                 self.prevention = self

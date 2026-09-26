@@ -113,7 +113,7 @@ One connection attempt remains active while the loop handles admission.
 A failed connection closes admission and schedules a bounded retry. The last
 valid local policy remains installed.
 
-`NodeChassis::await_control_rpc` continues to handle admission and seccomp
+`NodeChassis::await_control_rpc` continues to handle admission
 requests while a Control operation waits. This inner wait is necessary:
 the main select loop cannot run while its selected handler awaits that operation.
 The test `pending_control_unary_still_answers_runtime_admission` checks this
@@ -141,3 +141,74 @@ attempt lacked `MITHRIL_TEST_PIN`. Neither attempt exercised admission.
 The successful run used the new binary from `target/debug/deps` and explicit
 Host output, pin, lease, and cgroup paths. It changed no scenario assertions
 or deadlines. Kubernetes qualification was not rerun for this loop refactor.
+
+## Policy synchronization review
+
+This section covers the policy synchronization working tree on 2026-09-26.
+The intended result is one session owner that advances policy delivery.
+The scheduler must not manage transfer steps or translate each RPC result.
+
+[NodeRun::poll_policy](../mithril-node/src/node/run.rs) checks identity and evidence readiness.
+  -> [PolicyControlWorkV1::advance](../mithril-node/src/node/sync.rs) starts one synchronization step.
+  -> [PolicyControlWorkV1::transfer](../mithril-node/src/node/sync.rs) gets inventory, stores one chunk, or prepares and activates the complete policy.
+  -> [NodeChassis::activate_control_policy](../mithril-node/src/node.rs) installs the prepared policy and completes local readback.
+  -> [PolicyControlWorkV1::acknowledge](../mithril-node/src/node/sync.rs) sends the pending acknowledgement on a later step.
+  -> [NodePolicyDeliveryOwner::acknowledge_control](../mithril-node/src/policy_delivery.rs) checks and stores the Control receipt.
+  -> [PolicyControlWorkV1::exceptions](../mithril-node/src/node/sync.rs) observes counters and delivers exception results and candidates.
+
+[NodeChassis::await_control_rpc](../mithril-node/src/node.rs) waits for each Control response and handles queued admission requests.
+  -> [PolicyControlWorkV1::finish](../mithril-node/src/node/sync.rs) handles a Control failure once and selects a delayed retry or reconnect.
+  -> [NodeRun](../mithril-node/src/node/run.rs) resets session work after a new connection succeeds.
+
+`PolicyControlWorkV1` owns session progress, retry pacing, and rejected
+candidate state. `NodeRun` creates and drops this owner. The delivery owner
+still owns durable chunks, activation records, and receipts. Reconnect does
+not delete those records. The refactor removes `PolicyControlRpcV1` and the
+repeated conversion at each call. Local errors still stop synchronization.
+
+The tests `control_failure_preserves_progress` and
+`local_failure_is_not_retried` check retry selection, retained progress,
+pacing, and local failure handling. The existing admission responsiveness
+test remains unchanged. No public API, wire message, durable format, BPF
+program, or kernel ABI changes.
+
+### Synchronization verification
+
+All 250 Node library tests passed. The focused `control_tls::` run passed
+19 tests and left its two existing release-only tests ignored.
+
+The rebuilt Rust test binary passed these unchanged privileged Host cases
+in the retained VM:
+
+| Test | Result |
+| --- | --- |
+| `live_node_stall_is_closed` | Pass, 56.22 seconds |
+| `running_task_uses_new_policy::identity_host` | Pass, 46.10 seconds |
+| `one_use_after_replace::exception_host` | Pass, 49.47 seconds |
+
+Two earlier stall runs and the first policy replacement run exceeded the
+60-second Node startup limit. These runs stopped before policy
+synchronization. A CPU profile sampled the kernel verifier under
+`KernelHostOwner::start`, through libbpf load and `bpf_check`. The unchanged
+tests passed after heavy compilation ended. These results support, but do
+not prove, a load-sensitive startup cause. No timeout or BPF code changed.
+
+The first complete Rust gate passed formatting, workspace checks, and
+clippy. Its partition reconnect test then stopped making progress for more
+than five minutes. The test process was terminated. The same test passed
+in the focused Control run. A stack trace was not available because host
+ptrace access was denied and sudo required a password. This result does
+not establish the cause of the stalled test.
+
+The final gate passed with independent tests run in sequence:
+
+```sh
+RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh
+```
+
+This command ran after the last Rust edit. It passed formatting, workspace
+checks, clippy with warnings denied, and workspace tests. The partition
+reconnect test and all 250 Node library tests passed. Each test retained its
+internal concurrency. The earlier parallel-run stall remains unexplained.
+
+Direct runc and Kubernetes qualification were not rerun for this refactor.

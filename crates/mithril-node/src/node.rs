@@ -3,8 +3,8 @@ use erebor_interceptor_abi::Id128V1;
 use erebor_runtime_ipc::v1::RuntimeAdmissionPrepareRequest;
 use mithril_control::{
     AdministrativeExecArmResult, AdministrativeExecResolution, AdministrativeFileObject,
-    CapabilityRecord, NodeRegistration, PolicyActivationAcknowledgement, PolicyBundleV1,
-    RegisteredWorkloadTarget, ResolvedAdministrativeExecutable,
+    CapabilityRecord, NodeRegistration, PolicyBundleV1, RegisteredWorkloadTarget,
+    ResolvedAdministrativeExecutable,
 };
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
@@ -28,7 +28,11 @@ use crate::{
 };
 
 mod run;
+mod sync;
 use run::NodeRun;
+#[cfg(feature = "test-support")]
+pub use sync::PolicyControlPacingOwner;
+use sync::{PolicyControlStepV1, PolicyControlWorkV1};
 
 /// Borrows the production owners for one policy or runtime reconciliation operation.
 pub struct NodeBindingReconciliation<'a> {
@@ -295,76 +299,6 @@ enum ReconciliationOutcome {
     EvidenceUnhealthy(String),
     IdentityUnhealthy { owner: &'static str, reason: String },
     KernelUnhealthy(String),
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum PolicyControlPhaseV1 {
-    #[default]
-    Transfer,
-    Exception,
-}
-
-#[derive(Default)]
-struct PolicyControlWorkV1 {
-    pacing: PolicyControlPacingOwner,
-    phase: PolicyControlPhaseV1,
-    rejected_acknowledgement: Option<PolicyActivationAcknowledgement>,
-    exception_observed: bool,
-    rejected_candidate: Option<String>,
-}
-
-#[derive(Default)]
-pub struct PolicyControlPacingOwner {
-    pending: bool,
-}
-
-impl PolicyControlPacingOwner {
-    pub fn mark_pending(&mut self) {
-        self.pending = true;
-    }
-
-    pub fn mark_idle(&mut self) {
-        self.pending = false;
-    }
-
-    pub async fn wait_until_ready(&self, poll: &mut tokio::time::Interval) {
-        // A yield can be canceled forever while the Control stream always has evidence ACKs.
-        if !self.pending {
-            let _instant = poll.tick().await;
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PolicyControlStepV1 {
-    Continue,
-    Idle,
-    Activated,
-    Reconnect,
-}
-
-enum PolicyControlRpcV1<T> {
-    Accepted(T),
-    Retry,
-    Reconnect,
-}
-
-impl<T> PolicyControlRpcV1<T> {
-    fn control_failure(error: &crate::Error) -> Self {
-        if error.control_rpc_can_reuse_session() {
-            Self::Retry
-        } else {
-            Self::Reconnect
-        }
-    }
-
-    fn into_response(self) -> std::result::Result<T, PolicyControlStepV1> {
-        match self {
-            Self::Accepted(response) => Ok(response),
-            Self::Retry => Err(PolicyControlStepV1::Idle),
-            Self::Reconnect => Err(PolicyControlStepV1::Reconnect),
-        }
-    }
 }
 
 struct CommittedRuntimePreparationV1 {
@@ -1634,202 +1568,6 @@ impl NodeChassis {
         }
     }
 
-    async fn await_policy_rpc<T>(
-        &mut self,
-        rpc: impl Future<Output = Result<T>>,
-    ) -> Result<PolicyControlRpcV1<T>> {
-        match self.await_control_rpc(rpc).await {
-            Ok(response) => Ok(PolicyControlRpcV1::Accepted(response)),
-            Err(
-                error @ (crate::Error::ControlRpc { .. } | crate::Error::ControlTransport { .. }),
-            ) => {
-                let reuse_session = error.control_rpc_can_reuse_session();
-                erebor_telemetry::debug!(
-                    "policy Control RPC failed",
-                    node_id = %self.config.node_id,
-                    error = %error,
-                    retry = %if reuse_session { "same_session" } else { "reconnect" }
-                );
-                Ok(PolicyControlRpcV1::control_failure(&error))
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    async fn advance_policy_control_step(
-        &mut self,
-        connection: &mut crate::ControlConnection,
-        work: &mut PolicyControlWorkV1,
-        evidence_healthy: bool,
-    ) -> Result<PolicyControlStepV1> {
-        if let Some(acknowledgement) = work.rejected_acknowledgement.take() {
-            let accepted = match self
-                .await_policy_rpc(connection.acknowledge_policy(acknowledgement.clone()))
-                .await?
-                .into_response()
-            {
-                Ok(accepted) => accepted,
-                Err(step) => return Ok(step),
-            };
-            self.policy_delivery
-                .acknowledge_control(&acknowledgement, &accepted)?;
-            self.policy_delivery.begin_control_session();
-            work.rejected_candidate = None;
-            return Ok(PolicyControlStepV1::Continue);
-        }
-        if work.phase == PolicyControlPhaseV1::Transfer {
-            if let Some(acknowledgement) = self.policy_delivery.pending_acknowledgement() {
-                let accepted = match self
-                    .await_policy_rpc(connection.acknowledge_policy(acknowledgement.clone()))
-                    .await?
-                    .into_response()
-                {
-                    Ok(accepted) => accepted,
-                    Err(step) => return Ok(step),
-                };
-                self.policy_delivery
-                    .acknowledge_control(&acknowledgement, &accepted)?;
-                self.policy_delivery.begin_control_session();
-                work.phase = PolicyControlPhaseV1::Exception;
-                return Ok(PolicyControlStepV1::Continue);
-            }
-            match self.policy_delivery.next_transfer_action()? {
-                crate::policy_delivery::PolicyTransferActionV1::Inventory {
-                    active_candidate_content_id,
-                    durable_bundle_digests,
-                } => {
-                    let inventory = match self
-                        .await_policy_rpc(connection.policy_inventory(
-                            active_candidate_content_id.as_deref(),
-                            durable_bundle_digests,
-                        ))
-                        .await?
-                        .into_response()
-                    {
-                        Ok(inventory) => inventory,
-                        Err(step) => return Ok(step),
-                    };
-                    if !self.policy_delivery.accept_inventory(inventory)? {
-                        self.reconcile_inventory_policy_retirement()?;
-                        work.phase = PolicyControlPhaseV1::Exception;
-                    }
-                    return Ok(PolicyControlStepV1::Continue);
-                }
-                crate::policy_delivery::PolicyTransferActionV1::Fetch {
-                    candidate_content_id,
-                    bundle_digest,
-                    chunk_index,
-                } => {
-                    let chunk = match self
-                        .await_policy_rpc(connection.fetch_policy_chunk(
-                            candidate_content_id,
-                            bundle_digest,
-                            chunk_index,
-                        ))
-                        .await?
-                        .into_response()
-                    {
-                        Ok(chunk) => chunk,
-                        Err(step) => return Ok(step),
-                    };
-                    self.policy_delivery.accept_chunk(chunk)?;
-                    return Ok(PolicyControlStepV1::Continue);
-                }
-                crate::policy_delivery::PolicyTransferActionV1::Ready(bundle) => {
-                    if work.rejected_candidate.as_deref()
-                        == Some(bundle.candidate.candidate_content_id.as_str())
-                    {
-                        return Ok(PolicyControlStepV1::Idle);
-                    }
-                    let prepared = match self.prepare_control_policy(&bundle) {
-                        Ok(prepared) => prepared,
-                        Err(_error) => {
-                            work.rejected_candidate =
-                                Some(bundle.candidate.candidate_content_id.clone());
-                            work.rejected_acknowledgement =
-                                Some(rejected_policy_acknowledgement(&bundle)?);
-                            return Ok(PolicyControlStepV1::Continue);
-                        }
-                    };
-                    // Local readback completes before a later step sends the ACTIVE ACK.
-                    self.activate_control_policy(&bundle, prepared, evidence_healthy)?;
-                    return Ok(PolicyControlStepV1::Activated);
-                }
-            }
-        }
-
-        if !work.exception_observed {
-            // Observe live counters once before this exception delivery cycle.
-            if let (Some(policy), Some(host)) = (self.policy.as_ref(), self.host.as_ref()) {
-                for candidate in self
-                    .policy_delivery
-                    .acknowledged_active_exception_candidates()?
-                {
-                    let observation = policy.observe_exception_candidate(host, &candidate)?;
-                    self.policy_delivery.observe_exception_result(
-                        &candidate,
-                        observation,
-                        crate::policy::current_utc_ns()?,
-                    )?;
-                }
-            }
-            work.exception_observed = true;
-        }
-        if let Some(acknowledgement) = self.policy_delivery.pending_exception_acknowledgement()? {
-            let candidate_content_id = acknowledgement.candidate_content_id.clone();
-            let _accepted = match self
-                .await_policy_rpc(connection.acknowledge_exception(acknowledgement))
-                .await?
-                .into_response()
-            {
-                Ok(accepted) => accepted,
-                Err(step) => return Ok(step),
-            };
-            self.policy_delivery
-                .acknowledge_exception_control(&candidate_content_id)?;
-            work.phase = PolicyControlPhaseV1::Transfer;
-            work.exception_observed = false;
-            self.policy_delivery.begin_control_session();
-            return Ok(PolicyControlStepV1::Continue);
-        }
-        let node_boot_id = self.node_boot_id.to_be_bytes();
-        let host = self.host.as_ref().context(IdentityStateSnafu {
-            reason: "exception delivery has no live kernel host",
-        })?;
-        if let Some(prepared) = self.policy_delivery.reconcile_exception_candidate(
-            host,
-            &self.trust,
-            &self.config,
-            &node_boot_id,
-            self.label_epoch,
-        )? {
-            self.apply_control_exception(prepared)?;
-            return Ok(PolicyControlStepV1::Continue);
-        }
-        let candidate_ids = self.policy_delivery.exception_inventory_candidate_ids();
-        let inventory = match self
-            .await_policy_rpc(connection.exception_inventory(candidate_ids))
-            .await?
-            .into_response()
-        {
-            Ok(inventory) => inventory,
-            Err(step) => return Ok(step),
-        };
-        if let Some(prepared) = self.policy_delivery.accept_exception_inventory(
-            inventory,
-            &self.trust,
-            &self.config,
-            &node_boot_id,
-            self.label_epoch,
-        )? {
-            self.apply_control_exception(prepared)?;
-            return Ok(PolicyControlStepV1::Continue);
-        }
-        work.phase = PolicyControlPhaseV1::Transfer;
-        work.exception_observed = false;
-        Ok(PolicyControlStepV1::Idle)
-    }
-
     fn apply_control_exception(
         &mut self,
         prepared: crate::policy_delivery::PreparedExceptionDeliveryV1,
@@ -1995,24 +1733,6 @@ impl NodeChassis {
                 .map_or(30_000, |evidence| evidence.maximum_control_delay_ms),
         )
     }
-}
-
-fn rejected_policy_acknowledgement(
-    bundle: &PolicyBundleV1,
-) -> Result<PolicyActivationAcknowledgement> {
-    Ok(PolicyActivationAcknowledgement {
-        tenant_id: bundle.candidate.tenant_id.clone(),
-        candidate_content_id: bundle.candidate.candidate_content_id.clone(),
-        policy_source_revision_id: bundle.candidate.policy_source_revision_id.clone(),
-        target_snapshot_digest: bundle.candidate.target_snapshot_digest.clone(),
-        state: "REJECTED".to_owned(),
-        node_bound_generation_digest: String::new(),
-        profile_generation_ref_id: 0,
-        readback_digest: String::new(),
-        probe_result_digest: String::new(),
-        reason_code: "NODE_POLICY_REJECTED".to_owned(),
-        observed_utc_ns: crate::policy::current_utc_ns()?,
-    })
 }
 
 fn sample_effect_health(
@@ -2426,7 +2146,7 @@ mod tests {
     use super::{
         close_identity_claims, close_kernel_claims, restore_evidence_claims,
         restore_identity_claims, sample_effect_health_bytes_without_reader_wait, NodeChassis,
-        NodeReadinessV1, PolicyControlRpcV1,
+        NodeReadinessV1,
     };
     use erebor_interceptor_abi::{EffectObservationHealthV1, EffectObservationV1, Id128V1};
     use erebor_runtime_ipc::v1::RuntimeAdmissionPrepareRequest;
@@ -2441,31 +2161,6 @@ mod tests {
         IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
         POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
     };
-
-    #[test]
-    fn kubernetes_outage_dead_policy_rpc_forces_a_new_control_session() {
-        let timeout = crate::Error::ControlRpc {
-            source: Box::new(tonic::Status::deadline_exceeded(
-                "the partitioned Control RPC did not answer",
-            )),
-            location: snafu::Location::default(),
-        };
-        assert!(matches!(
-            PolicyControlRpcV1::<()>::control_failure(&timeout),
-            PolicyControlRpcV1::Reconnect
-        ));
-
-        let backpressure = crate::Error::ControlRpc {
-            source: Box::new(tonic::Status::resource_exhausted(
-                "Control is applying backpressure",
-            )),
-            location: snafu::Location::default(),
-        };
-        assert!(matches!(
-            PolicyControlRpcV1::<()>::control_failure(&backpressure),
-            PolicyControlRpcV1::Retry
-        ));
-    }
 
     #[test]
     fn transient_reader_lag_defers_without_coverage_churn() -> Result<(), Box<dyn std::error::Error>>
