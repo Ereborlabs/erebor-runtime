@@ -491,7 +491,7 @@ mod tests {
                     lifetime_key: vec![2],
                     owner_revision: 1,
                 },
-                valid_from_utc_ns: 1,
+                valid_from_utc_ns: Some(1),
                 valid_until_utc_ns: None,
                 sensitivity: crate::ContextSensitivityV1::Tenant,
                 body: b"policy".to_vec(),

@@ -10,7 +10,7 @@ use crate::{AnalysisConflictSnafu, AnalysisDatabaseSnafu, JsonSnafu, Result};
 
 const MAX_CONTEXT_BYTES: usize = 32 * 1024;
 const MAX_CONTEXT_KEY_BYTES: usize = 256;
-type ContextRow = (u64, Option<u64>, String, Vec<u8>, Vec<u8>, u64);
+type ContextRow = (Option<u64>, Option<u64>, String, Vec<u8>, Vec<u8>, u64);
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct AnalysisContextKeyV1 {
@@ -30,7 +30,6 @@ impl AnalysisContextKeyV1 {
             && self.entity_key.len() <= MAX_CONTEXT_KEY_BYTES
             && !self.lifetime_key.is_empty()
             && self.lifetime_key.len() <= MAX_CONTEXT_KEY_BYTES
-            && self.owner_revision > 0
     }
 }
 
@@ -67,7 +66,7 @@ impl TryFrom<&str> for ContextSensitivityV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AnalysisContextVersionV1 {
     pub key: AnalysisContextKeyV1,
-    pub valid_from_utc_ns: u64,
+    pub valid_from_utc_ns: Option<u64>,
     pub valid_until_utc_ns: Option<u64>,
     pub sensitivity: ContextSensitivityV1,
     pub body: Vec<u8>,
@@ -76,10 +75,11 @@ pub struct AnalysisContextVersionV1 {
 impl AnalysisContextVersionV1 {
     fn valid(&self) -> bool {
         self.key.valid()
-            && self.valid_from_utc_ns > 0
-            && self
-                .valid_until_utc_ns
-                .is_none_or(|until| until > self.valid_from_utc_ns)
+            && match (self.valid_from_utc_ns, self.valid_until_utc_ns) {
+                (None, None) => true,
+                (Some(from), until) => from > 0 && until.is_none_or(|end| end > from),
+                (None, Some(_)) => false,
+            }
             && !self.body.is_empty()
             && self.body.len() <= MAX_CONTEXT_BYTES
     }
@@ -245,7 +245,7 @@ mod tests {
                 lifetime_key: b"pod-a".to_vec(),
                 owner_revision: 4,
             },
-            valid_from_utc_ns: 100,
+            valid_from_utc_ns: Some(100),
             valid_until_utc_ns: Some(200),
             sensitivity: ContextSensitivityV1::Tenant,
             body: b"policy-revision-4".to_vec(),
@@ -261,13 +261,28 @@ mod tests {
         ));
         let mut later = input.clone();
         later.key.owner_revision = 5;
-        later.valid_from_utc_ns = 300;
+        later.valid_from_utc_ns = Some(300);
         later.valid_until_utc_ns = None;
         store.commit_context(&later)?;
         assert_eq!(store.context_version(&input.key)?, Some(input.clone()));
+        let mut unknown = input.clone();
+        unknown.key.owner_revision = 0;
+        unknown.valid_from_utc_ns = None;
+        unknown.valid_until_utc_ns = None;
+        let zero_revision = store.commit_context(&unknown)?;
+        assert_eq!(store.commit_context(&unknown)?, zero_revision);
+        let before = store.meta()?;
+        for (from, until) in [(None, Some(200)), (Some(0), None), (Some(200), Some(200))] {
+            let mut invalid = unknown.clone();
+            invalid.valid_from_utc_ns = from;
+            invalid.valid_until_utc_ns = until;
+            assert!(store.commit_context(&invalid).is_err());
+            assert_eq!(store.meta()?, before);
+        }
         drop(store);
         let reopened = AnalysisStore::open(path)?;
         assert_eq!(reopened.context_version(&later.key)?, Some(later));
+        assert_eq!(reopened.context_version(&unknown.key)?, Some(unknown));
         let mut foreign = input.key.clone();
         foreign.tenant_id = [2; 16];
         assert_eq!(reopened.context_version(&foreign)?, None);

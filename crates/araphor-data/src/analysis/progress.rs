@@ -621,7 +621,7 @@ mod tests {
                 lifetime_key: b"pod".to_vec(),
                 owner_revision: 1,
             },
-            valid_from_utc_ns: 1,
+            valid_from_utc_ns: Some(1),
             valid_until_utc_ns: None,
             sensitivity: ContextSensitivityV1::Tenant,
             body: b"verified-context".to_vec(),

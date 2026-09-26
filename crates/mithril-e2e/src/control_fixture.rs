@@ -375,6 +375,23 @@ impl MtlsFixture {
 }
 
 impl ControlServerFixture {
+    #[cfg(test)]
+    pub(crate) async fn wait_context(
+        data: &araphor_data::AnalysisStore,
+        key: &araphor_data::AnalysisContextKeyV1,
+    ) -> Result<araphor_data::AnalysisContextVersionV1, Box<dyn StdError>> {
+        let mut changes = data.subscribe_revision();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some(context) = data.context_version(key)? {
+                    return Ok::<_, Box<dyn StdError>>(context);
+                }
+                changes.changed().await?;
+            }
+        })
+        .await?
+    }
+
     pub(crate) async fn start(
         files: &CertificateFiles,
         control: ControlPlane,

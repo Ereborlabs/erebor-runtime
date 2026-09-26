@@ -578,6 +578,13 @@ digest. A reconciler reads committed ControlStore facts and inserts them
 idempotently into context_versions. Report pending or missing context. Do not
 claim an atomic transaction across the two stores or infer activation from a
 projection. Recheck the authoritative policy owner before a policy mutation.
+Control projections preserve the owner's revision number, including zero.
+They copy bounded policy source/document pairs, trust generations, and current
+rollout transitions. Both validity bounds are null when the owner cannot prove
+an interval. A timestamp in a copied body does not prove continued activation.
+An exact context read returns no row until that version is retained. A rollout
+transition replaced before projection can remain missing. Treat that state as
+Unknown; do not substitute the latest transition or invent historical coverage.
 
 ### Commit and acknowledgement
 

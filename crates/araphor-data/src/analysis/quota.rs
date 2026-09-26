@@ -163,7 +163,7 @@ mod tests {
                 lifetime_key: vec![1],
                 owner_revision: revision,
             },
-            valid_from_utc_ns: 1,
+            valid_from_utc_ns: Some(1),
             valid_until_utc_ns: None,
             sensitivity: ContextSensitivityV1::Tenant,
             body: vec![1],

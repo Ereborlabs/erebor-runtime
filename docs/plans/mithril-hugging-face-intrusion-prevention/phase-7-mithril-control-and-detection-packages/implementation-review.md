@@ -129,7 +129,7 @@ configuration validation before either owner starts. Requests commit one at a
 time; a later request failure does not undo an earlier committed retirement.
 
 Retirement adds bounded fields to the existing processor row and uses the
-existing processor-gap relation. The current development schema is 4. Older
+existing processor-gap relation. The current development schema is 5. Older
 schemas are rejected without import or migration. The reason and change ID
 count toward the existing logical data quota.
 
@@ -151,8 +151,48 @@ scopes, the request-count bound, policy RPCs during a stale request, retained
 Node input, successful retirement, resumed intake, and restart replay.
 The six data e2e tests passed on the final rebuilt binaries. The final workspace
 gate passed formatting, compilation, strict Clippy, and 39 data-crate tests
-with two ignored after the last retained-witness assertion update. The remaining
-workspace tests are running. The complete data-store phase remains not done.
+with two ignored after the last retained-witness assertion update. The full
+gate passed for `61b6ee89`, including 195 Control tests and 112 lightweight
+e2e tests. The complete data-store phase remains not done.
+
+[ControlPlane::run_context](../../../../crates/mithril-control/src/service.rs) The server starts an independent context task when both stores are available.<br>
+-> [ControlContextOwner::reconcile](../../../../crates/mithril-control/src/store/context.rs) One blocking worker reads at most 16 entries per tick and cycles through configured tenants.<br>
+-> [ControlStore::next_context](../../../../crates/mithril-control/src/store/context.rs) Control reads an exact committed policy source/document pair, trust generation, or current rollout transition.<br>
+-> [ControlStore::encode_context](../../../../crates/mithril-control/src/store/context.rs) Serialization rejects a body above 32 KiB before allocating the body.<br>
+-> [AnalysisStore::commit_context](../../../../crates/araphor-data/src/analysis/context.rs) After the Control lock is released, the data transaction inserts an exact version or verifies its retained digest.<br>
+-> [AnalysisStore::context_version](../../../../crates/araphor-data/src/analysis/context.rs) An exact tenant-scoped read returns the retained copy or no row.
+
+Control remains the policy, trust, and rollout authority. The data crate does
+not import Control types. Policy bodies contain `source` and `document`.
+The source generation, trust generation, or rollout transition number remains
+the owner revision. A rollout can start at revision zero. A source revision ID,
+trust digest, or candidate ID gives the exact lifetime key. Both validity
+bounds are null. A copied timestamp does not prove an activation interval.
+Missing versions remain Unknown. In particular, the reconciler cannot recover
+a rollout transition that Control replaced before it read that transition.
+
+The task shares the server's lifetime. It skips missed timer ticks and runs
+blocking reads and commits outside Tokio executor threads. A failed entry
+advances the scan cursor and is retried on the next pass. Other entries can
+continue. A worker panic resets the in-memory scan. Neither failure exits the
+policy server. Restart repeats bounded reads and exact commits; it needs no
+outbox, persisted projection cursor, or cross-store transaction. The scan is
+linear per configured tenant; large multi-tenant scan performance is unqualified.
+
+Read `control_context_bounded_replay` for bounded scans, tenant isolation,
+restart, unchanged Control state, and an oversized body followed by a valid
+body. Read `data_context_projection` in
+[data_store.rs](../../../../crates/mithril-e2e/src/discovery/data_store.rs) for
+the background server route, complete policy bytes, initial rollout revision
+zero, source replacement, retained prior copies, restart, and policy RPCs.
+`analysis_store_context_versions` checks null validity, exact zero revisions,
+invalid interval rejection, digest conflicts, and restart. This review covers
+`61b6ee89` plus the context projection and schema 5 changes in this commit.
+Formatting, workspace checks, strict Clippy, and the data-crate tests passed.
+All seven data e2e tests and the context component test passed on the final
+rebuilt binaries. The full workspace test run continues. The startup baseline
+is read after server shutdown drains blocking workers. Thus an independent
+context commit before that drain is not reported as a recovery mutation.
 
 [AnalysisStore::storage_health](../../../../crates/araphor-data/src/analysis/health.rs)
 checks readable store metadata and samples physical storage usage. Its intake
