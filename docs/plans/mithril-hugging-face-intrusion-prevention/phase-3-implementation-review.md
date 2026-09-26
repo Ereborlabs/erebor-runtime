@@ -401,3 +401,81 @@ fields into support.
       source state, platform manifest, and scoped cleanup proof.
 - [ ] Unsupported and later-phase mechanisms remain explicit; no prevention
       or full-coverage claim is inferred from simulation.
+
+## Installation Refactor Review
+
+This section covers the installation working tree after `82c4fee1` on
+2026-09-26. The intended result is a complete prepared policy value followed
+by explicit kernel publication. This refactor does not change policy meaning.
+
+[NodePolicyGenerationOwner::install](../../../crates/mithril-node/src/policy.rs) accepts measured objects, routes, mount handles, and resolved binding IDs as one `PolicyMeasurements` value.
+  -> [PreparedPolicy::prepare](../../../crates/mithril-node/src/policy/installation.rs) verifies artifacts, recovers pending activations, validates anti-rollback state, and lowers each binding.
+  -> [LoweredGeneration](../../../crates/mithril-node/src/policy.rs) merges bindings that share a generation and retains complete rows and semantics.
+  -> [PreparedPolicy::prepare](../../../crates/mithril-node/src/policy/installation.rs) reserves handles, builds migration rows, and checks map capacity.
+  -> [PolicyMeasurements::prepare_views](../../../crates/mithril-node/src/policy/installation.rs) acquires or retains mount handles and checks their identities.
+  -> [PreparedPolicy::publish](../../../crates/mithril-node/src/policy/installation.rs) consumes the complete prepared value and publishes it in the order below.
+  -> [PreparedPolicy::finish](../../../crates/mithril-node/src/policy/installation.rs) retires unused state, publishes entry-admission rows, and returns the installed owner.
+
+Preparation does not write the new candidate's kernel rows. Recovery of an
+earlier pending activation can change existing kernel and anti-rollback state.
+Generation reservation still writes the durable allocator. Neither operation
+is a new publication of the prepared candidate.
+
+Each `PreparedProfile` holds its profile ID, existing `ProfileActivation`,
+and validated candidate together. Publication does not look up validation in
+a parallel map. `PreparedPolicy` also owns lowered generations, migration
+rows, declared requests, retained semantics, exception authority, and mount
+handles. Mount preparation keeps the root PID, retained flag, and handle in
+one collection. Repeated roots must agree on the PID. Each exact root still
+passes `validate_mount_view`.
+
+The kernel publication order remains:
+
+1. Prepare declared entry requests and restore exception receipts.
+2. Install and read back the global mount barrier.
+3. Install each generation, verify its rows and descriptor, and run its probes.
+4. Install process-generation migration rows.
+5. Activate each profile through the existing binding-target, pointer-readback,
+   and durable anti-rollback transaction.
+6. Reconcile exception authority and retire unreferenced generations.
+7. Retain only semantics with a kernel descriptor and retire undeclared requests.
+8. Install and verify entry-admission rows. On failure, explicitly revoke these
+   rows through the existing checked cleanup path.
+
+The installed owner receives the prepared mount handles. Failure closes local
+handles but does not treat handle destruction as kernel cleanup. Activation
+rollback, entry cleanup, and generation retirement remain explicit. No BPF
+program, map layout, public API, signed artifact, or durable format changes.
+
+`mount_views_keep_identity` checks duplicate routes, retained handles,
+conflicting root processes, and a mismatched namespace. The existing policy
+tests remain unchanged. Physical replacement and mount scenarios must verify
+the resulting kernel behavior; unit tests do not replace that proof.
+
+### Installation Verification
+
+The focused policy run passed 51 existing tests. The new mount identity test
+also passed. Its first setup tried to read all mount routes and failed on
+`/sys/fs/pstore` permissions. The corrected setup uses the real process mount
+handle and supplies only the route fields that handle preparation reads.
+
+The rebuilt test binary passed these unchanged privileged scenarios in the
+retained VM:
+
+| Scenario | Host | Direct runc |
+| --- | --- | --- |
+| `running_task_uses_new_policy` | Pass, 71.42 seconds | Pass, 75.85 seconds |
+| `preexisting_bind_keeps_policy` | Pass, 47.10 seconds | Pass, 64.23 seconds |
+
+The replacement scenario requires the running process to migrate on its next
+protected effect. It checks both a file denial and a child execution under
+the new generation. The mount scenario starts the actor before Node. It
+requires `active_recovered`, a denied bind-alias read, an allowed control read,
+and matching effect records. No scenario assertion or timeout changed.
+Kubernetes qualification was not rerun for this refactor.
+
+Result: Done for this installation refactor. The final
+`RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh` run passed after
+the last Rust edit. It passed formatting, workspace checks, clippy with
+warnings denied, and workspace tests, including all 253 Node library tests.
+The result does not extend the historical acceptance claim of this document.

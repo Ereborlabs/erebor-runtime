@@ -11,10 +11,9 @@ use std::sync::{
 use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
     AuthorityDomainStateV1, BindingActivationTargetKeyV1, BindingLifecycleStateV1,
-    CanonicalMountRootKeyV1, CanonicalMountRootV1, CanonicalPathComponentV1,
-    DeclaredEntryRequestV1, EffectDecisionKeyV1, EffectDefaultKeyV1, EntryAdmissionRuleKeyV1,
-    EntryAdmissionRuleV1, ExactExecutableCandidateV1, ExactFileObjectKeyV1,
-    ExactObjectBindingStateV1, ExactObjectBindingV1, ExceptionBindingStateV1,
+    CanonicalMountRootKeyV1, CanonicalMountRootV1, CanonicalPathComponentV1, EffectDecisionKeyV1,
+    EffectDefaultKeyV1, EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExactExecutableCandidateV1,
+    ExactFileObjectKeyV1, ExactObjectBindingStateV1, ExactObjectBindingV1, ExceptionBindingStateV1,
     ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1, ExceptionRuntimeStateKeyV1,
     ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExecutionApprovalSlotStateV1,
     ExecutionApprovalSlotV1, ExecutionSetBindingStateV1, Id128V1, IoUringRequestStateV1,
@@ -56,12 +55,14 @@ use crate::{
 mod device_process;
 mod exception_authority;
 mod generation_allocator;
+mod installation;
 mod ipc;
 mod network;
 
 use self::device_process::{lower_typed_effect, TypedEffectContext};
 use self::exception_authority::ExceptionAuthorityOwner;
 use self::generation_allocator::GenerationHandleAllocator;
+use self::installation::{PolicyMeasurements, PreparedPolicy};
 use self::ipc::lower_ipc_relationships;
 use self::network::LoweredNetworkPolicy;
 
@@ -112,13 +113,6 @@ struct MeasuredMountRouteV1 {
     mount_topology_generation: u64,
     route: crate::exact_object::LiveMountRootRouteV1,
 }
-
-type ResolvedCriExactObjectsV1 = (
-    Vec<MeasuredExactObjectV1>,
-    Vec<MeasuredMountRouteV1>,
-    BTreeMap<u32, crate::exact_object::ExactFileObjectView>,
-    BTreeSet<String>,
-);
 
 #[derive(Clone, Debug)]
 struct AdministrativePolicyPlanV1 {
@@ -706,10 +700,7 @@ impl NodePolicyGenerationOwner {
             host,
             node_boot_id,
             label_epoch,
-            Vec::new(),
-            Vec::new(),
-            BTreeMap::new(),
-            BTreeSet::new(),
+            PolicyMeasurements::default(),
             BTreeMap::new(),
             BTreeSet::new(),
         )
@@ -722,12 +713,7 @@ impl NodePolicyGenerationOwner {
         node_boot_id: Id128V1,
         label_epoch: u64,
     ) -> Result<Self> {
-        let (
-            measured_exact_objects,
-            measured_mount_routes,
-            measured_mount_views,
-            resolved_path_binding_ids,
-        ) = Self::resolve_cri_exact_objects(
+        let measured = Self::resolve_cri_exact_objects(
             config,
             host,
             bindings.exact_object_binding_targets(),
@@ -738,10 +724,7 @@ impl NodePolicyGenerationOwner {
             host,
             node_boot_id,
             label_epoch,
-            measured_exact_objects,
-            measured_mount_routes,
-            measured_mount_views,
-            resolved_path_binding_ids,
+            measured,
             BTreeMap::new(),
             bindings.held_binding_ids().map(str::to_owned).collect(),
         )
@@ -755,12 +738,7 @@ impl NodePolicyGenerationOwner {
         node_boot_id: Id128V1,
         label_epoch: u64,
     ) -> Result<Self> {
-        let (
-            measured_exact_objects,
-            measured_mount_routes,
-            measured_mount_views,
-            resolved_path_binding_ids,
-        ) = Self::resolve_cri_exact_objects(
+        let measured = Self::resolve_cri_exact_objects(
             config,
             host,
             bindings.exact_object_binding_targets(),
@@ -771,10 +749,7 @@ impl NodePolicyGenerationOwner {
             host,
             node_boot_id,
             label_epoch,
-            measured_exact_objects,
-            measured_mount_routes,
-            measured_mount_views,
-            resolved_path_binding_ids,
+            measured,
             self.generation_semantics.clone(),
             bindings.held_binding_ids().map(str::to_owned).collect(),
         )
@@ -796,10 +771,12 @@ impl NodePolicyGenerationOwner {
             host,
             node_boot_id,
             label_epoch,
-            measured_exact_objects,
-            measured_mount_routes,
-            self.mount_view_handles,
-            resolved_path_binding_ids,
+            PolicyMeasurements {
+                objects: measured_exact_objects,
+                routes: measured_mount_routes,
+                views: self.mount_view_handles,
+                resolved: resolved_path_binding_ids,
+            },
             generation_semantics,
             BTreeSet::new(),
         )
@@ -828,10 +805,12 @@ impl NodePolicyGenerationOwner {
             host,
             node_boot_id,
             label_epoch,
-            measured_exact_objects,
-            measured_mount_routes,
-            BTreeMap::new(),
-            resolved_path_binding_ids,
+            PolicyMeasurements {
+                objects: measured_exact_objects,
+                routes: measured_mount_routes,
+                views: BTreeMap::new(),
+                resolved: resolved_path_binding_ids,
+            },
             BTreeMap::new(),
             BTreeSet::new(),
         )
@@ -863,336 +842,36 @@ impl NodePolicyGenerationOwner {
             host,
             node_boot_id,
             label_epoch,
-            measured_exact_objects,
-            measured_mount_routes,
-            self.mount_view_handles,
-            resolved_path_binding_ids,
+            PolicyMeasurements {
+                objects: measured_exact_objects,
+                routes: measured_mount_routes,
+                views: self.mount_view_handles,
+                resolved: resolved_path_binding_ids,
+            },
             generation_semantics,
             BTreeSet::new(),
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn install(
         config: &NodeConfig,
         host: &mut KernelHost,
         node_boot_id: Id128V1,
         label_epoch: u64,
-        measured_exact_objects: Vec<MeasuredExactObjectV1>,
-        measured_mount_routes: Vec<MeasuredMountRouteV1>,
-        mut retained_mount_views: BTreeMap<u32, crate::exact_object::ExactFileObjectView>,
-        resolved_path_binding_ids: BTreeSet<String>,
-        mut retained_generation_semantics: BTreeMap<u64, GenerationSemantics>,
-        deferred_entry_binding_ids: BTreeSet<String>,
+        measured: PolicyMeasurements,
+        semantics: BTreeMap<u64, GenerationSemantics>,
+        deferred: BTreeSet<String>,
     ) -> Result<Self> {
-        let platform_scope_digest = format!(
-            "{:x}",
-            Sha256::digest(
-                [
-                    host.manifest().preflight.kernel_release.as_bytes(),
-                    host.manifest().preflight.runtime_btf_sha256.as_bytes(),
-                    host.manifest().object_sha256.as_bytes(),
-                ]
-                .concat()
-            )
-        );
-        let artifact_owner = PolicyArtifactOwner::default();
-        let mut artifacts = BTreeMap::new();
-        let now_utc_ns = current_utc_ns()?;
-        let now_boottime_ns = current_boottime_ns()?;
-        for candidate in &config.policy_candidates {
-            let artifact = artifact_owner
-                .load_verified_at(
-                    &candidate.artifact_path,
-                    &candidate.public_key_path,
-                    now_utc_ns,
-                )
-                .context(PolicySnafu)?;
-            let rollback = match (
-                candidate.rollback_authorization_path.as_deref(),
-                candidate.rollback_public_key_path.as_deref(),
-            ) {
-                (Some(artifact_path), Some(public_key_path)) => Some(
-                    artifact_owner
-                        .load_verified_rollback(artifact_path, public_key_path)
-                        .context(PolicySnafu)?,
-                ),
-                (None, None) => None,
-                _ => unreachable!("NodeConfig validation requires a complete rollback pair"),
-            };
-            ensure!(
-                artifacts
-                    .insert(artifact.header.profile_id.clone(), (artifact, rollback))
-                    .is_none(),
-                IdentityStateSnafu {
-                    reason: "one node candidate is allowed per profile ID",
-                }
-            );
-        }
-        let mut rollback =
-            AntiRollbackStore::load(config.state_directory.join("policy-anti-rollback-v1.json"))
-                .context(PolicySnafu)?;
-        reconcile_pending_activations(host, &mut rollback, node_boot_id, label_epoch)?;
-        let mut generations = BTreeMap::<u64, LoweredGeneration>::new();
-        let mut activations = BTreeMap::<Id128V1, ProfileActivation>::new();
-        let mut validated = BTreeMap::<Id128V1, ValidatedProfileCandidateV1>::new();
-        let mut declared_entry_requests = BTreeSet::new();
-        let node_id = stable_node_id(&config.node_id)?;
-        for binding in &config.workload_bindings {
-            let (artifact, rollback_authorization) =
-                artifacts.get(&binding.profile_id).ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: format!(
-                            "binding `{}` has no verified candidate for profile `{}`",
-                            binding.binding_id, binding.profile_id
-                        ),
-                    }
-                    .build()
-                })?;
-            let profile_id = parse_id("profile_id", &binding.profile_id)?;
-            if let std::collections::btree_map::Entry::Vacant(entry) = validated.entry(profile_id) {
-                entry.insert(
-                    rollback
-                        .validate(
-                            artifact,
-                            rollback_authorization
-                                .as_ref()
-                                .map(|(proof, key)| (proof, key)),
-                            &platform_scope_digest,
-                            now_utc_ns,
-                        )
-                        .context(PolicySnafu)?,
-                );
-            }
-            let binding_id = parse_id("binding_id", &binding.binding_id)?;
-            add_binding_activation(&mut activations, profile_id, binding_id, binding)?;
-            for selector_id in entry_admission_path_selector_ids(artifact, binding)? {
-                let selector = artifact
-                    .policy_document
-                    .path_selectors
-                    .iter()
-                    .find(|selector| selector.path_selector_id == selector_id)
-                    .context(IdentityStateSnafu {
-                        reason: "entry admission lost its declared request path",
-                    })?;
-                let request =
-                    DeclaredEntryRequestV1::from_path(selector.path_expression().as_bytes())
-                        .context(IdentityStateSnafu {
-                            reason: "entry admission request path exceeds the kernel bound",
-                        })?;
-                declared_entry_requests.insert(request.as_bytes().to_vec());
-            }
-            let measured_for_binding = measured_exact_objects
-                .iter()
-                .filter(|measured| measured.binding_id == binding.binding_id)
-                .map(|measured| measured.object.clone())
-                .collect::<Vec<_>>();
-            let mount_routes_for_binding = measured_mount_routes
-                .iter()
-                .filter(|measured| measured.binding_id == binding.binding_id)
-                .cloned()
-                .collect::<Vec<_>>();
-            let lowered = LoweredGeneration::for_binding_with_mount_routes(
-                artifact,
-                binding,
-                &measured_for_binding,
-                &mount_routes_for_binding,
-                node_boot_id,
-                node_id,
-                label_epoch,
-                now_utc_ns,
-                now_boottime_ns,
-                deferred_entry_binding_ids.contains(&binding.binding_id)
-                    && !resolved_path_binding_ids.contains(&binding.binding_id),
-            )?;
-            match generations.get_mut(&binding.active_profile_generation_ref_id) {
-                Some(existing) => existing.merge(lowered)?,
-                None => {
-                    generations.insert(binding.active_profile_generation_ref_id, lowered);
-                }
-            }
-        }
-        let mut generation_allocator = GenerationHandleAllocator::load(
-            config.state_directory.join("generation-handles-v1.json"),
+        PreparedPolicy::prepare(
+            config,
             host,
             node_boot_id,
             label_epoch,
-        )?;
-        for generation in generations.values() {
-            generation_allocator.reserve(&generation.descriptor)?;
-            if let Some(existing) = retained_generation_semantics.insert(
-                generation.descriptor.profile_generation_ref_id,
-                generation.semantics.clone(),
-            ) {
-                ensure!(
-                    existing == generation.semantics,
-                    IdentityStateSnafu {
-                        reason: "one generation handle has different retained semantics",
-                    }
-                );
-            }
-        }
-        let process_generation_migrations =
-            build_process_generation_migrations(&activations, &retained_generation_semantics)?;
-        preflight_policy_map_capacity(
-            host,
-            &generations,
-            &activations,
-            &process_generation_migrations,
-        )?;
-        prepare_declared_entry_requests(host, &declared_entry_requests)?;
-        let mut exception_authority =
-            ExceptionAuthorityOwner::load(&config.state_directory, node_id, node_boot_id)?;
-        exception_authority.restore_receipts(host)?;
-        let mount_roots = generations
-            .values()
-            .flat_map(|generation| generation.mount_reconciliation.iter().cloned())
-            .collect::<Vec<_>>();
-        let mut mount_view_root_pids = BTreeMap::new();
-        let mut mount_view_handles = BTreeMap::new();
-        let mut mount_view_is_retained = BTreeMap::new();
-        for root in &mount_roots {
-            let root_pid = root.configured.mount_view_root_pid;
-            if let Some(existing) =
-                mount_view_root_pids.insert(root.mount_namespace_inode, root_pid)
-            {
-                ensure!(
-                    existing == root_pid,
-                    IdentityStateSnafu {
-                        reason: "one mount security view has multiple live root processes",
-                    }
-                );
-                let view = mount_view_handles
-                    .get(&root.mount_namespace_inode)
-                    .ok_or_else(|| {
-                        IdentityStateSnafu {
-                            reason: "mount security view lost its retained capability".to_owned(),
-                        }
-                        .build()
-                    })?;
-                validate_mount_view(
-                    view,
-                    root,
-                    mount_view_is_retained[&root.mount_namespace_inode],
-                )?;
-                continue;
-            }
-            let retained = retained_mount_views.remove(&root.mount_namespace_inode);
-            let is_retained = retained.is_some();
-            let view = match retained {
-                Some(view) => view,
-                None => crate::exact_object::ExactFileObjectView::acquire(root_pid)?,
-            };
-            ensure!(
-                view.mount_namespace_inode()? == root.mount_namespace_inode,
-                IdentityStateSnafu {
-                    reason: "held mount namespace differs from the configured security view",
-                }
-            );
-            validate_mount_view(&view, root, is_retained)?;
-            mount_view_is_retained.insert(root.mount_namespace_inode, is_retained);
-            mount_view_handles.insert(root.mount_namespace_inode, view);
-        }
-        for route in &measured_mount_routes {
-            let mount_namespace_inode = route.route.mount_namespace_inode;
-            if let Some(existing) =
-                mount_view_root_pids.insert(mount_namespace_inode, route.mount_view_root_pid)
-            {
-                ensure!(
-                    existing == route.mount_view_root_pid,
-                    IdentityStateSnafu {
-                        reason: "one mount security view has multiple live root processes",
-                    }
-                );
-                continue;
-            }
-            let retained = retained_mount_views.remove(&mount_namespace_inode);
-            let view = match retained {
-                Some(view) => view,
-                None => {
-                    crate::exact_object::ExactFileObjectView::acquire(route.mount_view_root_pid)?
-                }
-            };
-            ensure!(
-                view.mount_namespace_inode()? == mount_namespace_inode,
-                IdentityStateSnafu {
-                    reason: "held mount namespace differs from the configured route view",
-                }
-            );
-            mount_view_handles.insert(mount_namespace_inode, view);
-        }
-        install_global_mount_barrier(host, &mount_roots)?;
-        for generation in generations.values() {
-            generation.install(host, &mut exception_authority, now_utc_ns, now_boottime_ns)?;
-            generation.probe_staged_rows(host)?;
-        }
-        install_rows(
-            host,
-            "process_generation_migrations",
-            &process_generation_migrations,
-        )?;
-        for (profile_id, activation) in &activations {
-            activate_profile(
-                host,
-                profile_id,
-                activation,
-                &mut rollback,
-                &validated[profile_id],
-                node_boot_id,
-                label_epoch,
-            )?;
-        }
-        exception_authority.reconcile(host, now_utc_ns)?;
-        let retirement_pending = reconcile_generation_retirement(host, node_boot_id, label_epoch)?;
-        let mut generation_semantics = BTreeMap::new();
-        for (generation, semantics) in retained_generation_semantics {
-            if host
-                .lookup_map("profile_generation_descriptors", &generation.to_ne_bytes())
-                .context(InterceptorSnafu)?
-                .is_some()
-            {
-                generation_semantics.insert(generation, semantics);
-            }
-        }
-        retire_undeclared_entry_requests(host, &declared_entry_requests)?;
-        let administrative_plans = generations
-            .values()
-            .flat_map(|generation| generation.administrative_plans.iter().cloned())
-            .collect();
-        let administrative_required = generations
-            .values()
-            .any(|generation| generation.administrative_required);
-        let dynamic_rows = Self::dynamic_generation_rows(&generations);
-        let owner = Self {
-            node_boot_id,
-            label_epoch,
-            mount_view_handles,
-            prevention_enabled: generations
-                .values()
-                .any(|generation| generation.descriptor.mode == PolicyGenerationModeV1::Protect),
-            administrative_required,
-            administrative_plans,
-            measured_exact_objects,
-            measured_mount_routes,
-            resolved_path_binding_ids,
-            generation_semantics,
-            dynamic_rows,
-            exception_authority: Mutex::new(exception_authority),
-            retirement_pending: AtomicBool::new(retirement_pending),
-        };
-        let publication: Result<()> = (|| {
-            for generation in generations.values() {
-                generation.install_entry_admissions(host)?;
-            }
-            Ok(())
-        })();
-        if publication.is_err() {
-            for generation in generations.values() {
-                generation.revoke_entry_admissions(host)?;
-            }
-        }
-        publication?;
-        Ok(owner)
+            measured,
+            semantics,
+            deferred,
+        )?
+        .publish(host)
     }
 
     #[must_use]
@@ -1284,12 +963,12 @@ impl NodePolicyGenerationOwner {
             .as_ref()
             .map(|(binding_id, root_pid, view)| (*binding_id, *root_pid, view));
         let refreshed_binding_id = borrowed_oci_entry_view.map(|(binding_id, _, _)| binding_id);
-        let (
-            mut measured_exact_objects,
-            mut measured_mount_routes,
-            measured_mount_views,
-            mut resolved_path_binding_ids,
-        ) = Self::resolve_cri_exact_objects(
+        let PolicyMeasurements {
+            objects: mut measured_exact_objects,
+            routes: mut measured_mount_routes,
+            views: measured_mount_views,
+            resolved: mut resolved_path_binding_ids,
+        } = Self::resolve_cri_exact_objects(
             config,
             host,
             targets.iter().copied(),
@@ -1330,10 +1009,12 @@ impl NodePolicyGenerationOwner {
             host,
             self.node_boot_id,
             self.label_epoch,
-            measured_exact_objects,
-            measured_mount_routes,
-            candidate_mount_views,
-            resolved_path_binding_ids,
+            PolicyMeasurements {
+                objects: measured_exact_objects,
+                routes: measured_mount_routes,
+                views: candidate_mount_views,
+                resolved: resolved_path_binding_ids,
+            },
             self.generation_semantics.clone(),
             deferred_entry_binding_ids,
         )?;
@@ -1438,7 +1119,7 @@ impl NodePolicyGenerationOwner {
         host: &KernelHost,
         bindings: impl IntoIterator<Item = ExactObjectBindingTargetV1<'a>>,
         oci_entry_view: Option<(&str, u32, &crate::exact_object::ExactFileObjectView)>,
-    ) -> Result<ResolvedCriExactObjectsV1> {
+    ) -> Result<PolicyMeasurements> {
         let now_utc_ns = current_utc_ns()?;
         let artifact_owner = PolicyArtifactOwner::default();
         let mut artifacts = BTreeMap::new();
@@ -1587,12 +1268,12 @@ impl NodePolicyGenerationOwner {
                 reason: "OCI entry view has no authenticated exact-object target",
             }
         );
-        Ok((
-            measured,
-            measured_mount_routes,
-            measured_mount_views,
-            resolved_path_binding_ids,
-        ))
+        Ok(PolicyMeasurements {
+            objects: measured,
+            routes: measured_mount_routes,
+            views: measured_mount_views,
+            resolved: resolved_path_binding_ids,
+        })
     }
 
     fn authoritative_mount_routes(
