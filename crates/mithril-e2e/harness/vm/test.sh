@@ -160,6 +160,25 @@ grep -Fq 'inspect_control_data data-after-storage data-after-outage' \
   "$directory/two-node-outage-recovery.sh"
 grep -Fq -- '--case data-store-startup' "$directory/two-node-outage-recovery.sh"
 grep -Fq -- '--case data-store-recovery' "$directory/two-node-outage-recovery.sh"
+source <(sed -n '/^control_data_path() {$/,/^}$/p' "$directory/two-node-outage-recovery.sh")
+volume_json='{"spec":{"claimRef":{"name":"state","uid":"claim-id","namespace":"mithril-system"},"local":{"path":"/expected/local-path"},"nodeAffinity":{"required":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"kubernetes.io/hostname","operator":"In","values":["node-a"]}]}]}}}}'
+[[ $(control_data_path state claim-id node-a mithril-system <<<"$volume_json") == /expected/local-path ]]
+for field in name uid namespace; do
+  foreign=$(jq --arg field "$field" '.spec.claimRef[$field] = "foreign"' <<<"$volume_json")
+  if control_data_path state claim-id node-a mithril-system <<<"$foreign" >/dev/null; then
+    echo "the volume check accepted a foreign claim" >&2
+    exit 1
+  fi
+done
+if control_data_path state claim-id node-b mithril-system <<<"$volume_json" >/dev/null; then
+  echo "the volume check accepted a different Node" >&2
+  exit 1
+fi
+foreign=$(jq '.spec.hostPath = .spec.local | del(.spec.local)' <<<"$volume_json")
+if control_data_path state claim-id node-a mithril-system <<<"$foreign" >/dev/null; then
+  echo "the volume check accepted an unsupported source" >&2
+  exit 1
+fi
 source <(sed -n '/^require_replayed_data() {$/,/^}$/p' "$directory/two-node-outage-recovery.sh")
 jq -n '{sources: [
   {identity: {node_id: "mithril-node-a"}, record_count: 3},

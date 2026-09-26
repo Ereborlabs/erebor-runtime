@@ -85,6 +85,13 @@ actual installer argument lists from both two-node callers to the guest parser.
 An invalid version stops the check before host changes. This regression
 reproduces the missing argument found during fresh physical setup.
 
+[control_data_path](../../../../crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh)
+reads the current K3s `.spec.local.path` after checking the claim identity and
+Node affinity. The caller then requires the exact generated local-path directory.
+The shell test checks the actual Local-volume layout, foreign claim fields,
+a different Node, and an unsupported volume source. This check does not import
+or convert data.
+
 [two-node outage harness](../../../../crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh) The harness runs the lightweight startup and recovery cases and validates the retained local-path volume.<br>
 -> [inspect_control_data](../../../../crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh) Control has zero replicas and no Pod. The checker runs with Control's numeric user.<br>
 -> [DataStoreQualification::inspect](../../../../crates/mithril-e2e/src/discovery/data_store/inspection.rs) The checker requires an existing data file and obtains the production owner's exclusive lease.<br>
