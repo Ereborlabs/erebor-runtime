@@ -132,6 +132,7 @@ use the first one reached.
 | Sealed profile set | 128 MiB | Typed failure before commit. |
 | Analysis working memory | 256 MiB/process, including queues and caches | Cancel/backpressure analysis; measure native RSS. |
 | Data engine | 1 writer, 2 trusted readers; 8 queued writes, 16 reads | Bounded admission; no wait under ControlStore locks. |
+| Node intake admission | 8 active or queued groups/process, 2/tenant | Evidence and coverage share permits. Reject excess work with ResourceExhausted before ACK. Idle streams hold no permit. |
 | Intake batch | 4,096 records, 4 MiB encoded or 50 ms | Commit first bound reached; decoded data must fit working memory. |
 | Engine memory/WAL | 128 MiB memory target; 64 MiB WAL checkpoint threshold | Measure RSS; checkpoint before reserve exhaustion. If it fails, backpressure data writes. |
 | Trusted extraction | 256 rows/1 MiB pages; 64 MiB admitted input after safe scope/column/AST-range selection; 1 second | Complete input or explicit rejection; never truncate COUNT/joins. No unproven predicate pushdown. |

@@ -19,7 +19,7 @@ pub use analysis::{
 
 pub const MAX_EVIDENCE_BATCH_RECORDS: usize = 4_096;
 pub const MAX_EVIDENCE_GRPC_MESSAGE_BYTES: usize = 4 * 1_024 * 1_024;
-pub const MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES: usize = 128 * 1_024 * 1_024;
+pub const MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES: usize = 4 * 1_024 * 1_024;
 pub const MAX_PENDING_EVIDENCE_RECORDS: u64 = 4_096;
 pub const MAX_NODE_ID_BYTES: usize = 128;
 

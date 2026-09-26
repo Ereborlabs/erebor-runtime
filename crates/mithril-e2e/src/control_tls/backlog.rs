@@ -33,7 +33,9 @@ async fn backlog_beats_previous_budget() -> TestResult<()> {
     assert!(bytes <= control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES as u64);
     let count = (512 * 1_024 * 1_024_u64).div_ceil(bytes);
     let total = count * bytes;
-    let limit = (control::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES as u64 / bytes).max(1);
+    let limit = (control::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES as u64 / bytes)
+        .min(control::MAX_EVIDENCE_BATCH_RECORDS as u64 / RECORDS)
+        .max(1);
     for path in [None, Some(tls.path().join("grpc-received.bin"))] {
         let (elapsed, rate) = GrpcTransfer::new(path.clone())
             .measure(&tls.files, total)
