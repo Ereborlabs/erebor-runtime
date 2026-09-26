@@ -8,6 +8,12 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Araphor data store failed: {source}"))]
+    DataStore {
+        source: Box<araphor_data::Error>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Araphor trace rejected {code:?}: {reason}"))]
     Observability {
         code: crate::TraceErrorCodeV1,
@@ -157,7 +163,8 @@ impl ErrorExt for Error {
             | Self::ControlStore { .. }
             | Self::Decommission { .. }
             | Self::AdministrativeApproval { .. } => StatusCode::InvalidArguments,
-            Self::DiscoveryDatabase { .. }
+            Self::DataStore { .. }
+            | Self::DiscoveryDatabase { .. }
             | Self::Io { .. }
             | Self::Tls { .. }
             | Self::Serve { .. } => StatusCode::External,
@@ -183,7 +190,8 @@ impl ErrorExt for Error {
             }
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Serve { .. } => RetryHint::Retryable,
-            Self::RetainedRangeExpired { .. }
+            Self::DataStore { .. }
+            | Self::RetainedRangeExpired { .. }
             | Self::Discovery { .. }
             | Self::InvalidConfiguration { .. }
             | Self::Json { .. }
