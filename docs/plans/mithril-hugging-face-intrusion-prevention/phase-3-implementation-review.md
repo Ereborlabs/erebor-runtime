@@ -479,3 +479,95 @@ Result: Done for this installation refactor. The final
 the last Rust edit. It passed formatting, workspace checks, clippy with
 warnings denied, and workspace tests, including all 253 Node library tests.
 The result does not extend the historical acceptance claim of this document.
+
+## Startup Refactor Review
+
+This section covers the startup working tree after `21755047` on 2026-09-26.
+The change separates startup responsibilities. It does not change the public
+startup API, policy meaning, kernel ABI, or durable formats.
+
+### Intended End State
+
+Startup is a short sequence of complete operations. Each operation returns
+usable resources. No builder or partially initialized chassis is required.
+The existing publication order, failure guards, and readback checks remain.
+
+[NodeChassis::start_with_held_initial_pids](../../../crates/mithril-node/src/node.rs) accepts configuration and optional held roots.
+  -> [NodeState::restore](../../../crates/mithril-node/src/node/startup.rs) validates configuration, restores durable authority, and selects the boot identity and label epoch.
+  -> [NodeState::acquire_kernel](../../../crates/mithril-node/src/node/startup.rs) acquires the kernel owner with that identity and epoch.
+  -> [Enforcement::restore](../../../crates/mithril-node/src/node/startup.rs) restores bindings and policy, reconciles pending authority, activates identity, and reads back recovered activations.
+  -> [Evidence::start](../../../crates/mithril-node/src/node/startup.rs) opens the durable evidence store, prepares the queue and reader, and samples coverage health.
+  -> [NodeState::create_endpoints](../../../crates/mithril-node/src/node/startup.rs) creates registration and endpoints, completes stale-policy retirement, and checks authority before returning NodeChassis.
+  -> [NodeRun::run](../../../crates/mithril-node/src/node/run.rs) starts the reader and endpoint tasks when the caller runs the chassis.
+
+`NodeState` owns the validated base and restored configuration, trust cache,
+policy delivery state, decommission state, and identity owner. It rejects an
+unmatched held root, a completed decommission, or held admission against
+retained identity pins before kernel acquisition.
+
+`Enforcement` returns the binding, installed policy, and administrative owners
+together with their startup result. Pending policy activation still requires
+exact readback. Pending exception cleanup and administrative reconciliation
+still precede identity activation. Recovered binding readback follows identity
+activation. These checks are not replaced by capability flags.
+
+`Evidence` owns the store, reader, and ingestion worker. A configuration that
+requires observation must provide durable evidence settings. The queue uses
+those validated settings. Disabled observation has no reader or worker.
+Unhealthy coverage suppresses prevention claims; it does not become a new
+startup error. `NodeRun` retains responsibility for polling and shutdown.
+
+Endpoint creation consumes these complete values and transfers their resources
+to `NodeChassis`. The chassis remains private until retirement and authority
+checks succeed. Bound endpoints do not serve during those checks. Errors
+propagate through the existing typed result. Local resource destruction does
+not revoke durable authority or remove retained BPF pins. Existing policy
+rollback and kernel shutdown owners retain those responsibilities.
+
+### Startup Verification
+
+The new `startup_rejects_unmatched_roots` test calls the public startup API.
+It requires the held-root error and verifies that no lease or pin root exists.
+The unchanged physical tests check interrupted startup, a running actor across
+Node restart, recovery of an actor that starts before Node, and two simultaneous
+policies with different physical file decisions.
+
+The final `RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh` run
+passed after the last Rust edit. Formatting, workspace checks, strict clippy,
+and workspace tests passed. This includes all 254 Node library tests.
+
+The rebuilt binary passed these unchanged privileged scenarios. Kubernetes
+used the rebuilt production Node image in the retained K3s VM.
+
+| Scenario | Host | Direct runc | Kubernetes |
+| --- | --- | --- | --- |
+| `workload_recovers` | Pass | Pass | Pass |
+| `node_restart_keeps_actor` | Pass | Pass | Pass |
+| `simultaneous_policies_are_isolated` | Pass | Pass | Pass |
+
+The Host-only `startup_sigterm_is_recoverable` check also passed. The first
+Host invocation combined different lifecycles. The harness refused the later
+lifecycles after the restart test passed. The remaining checks passed in
+separate processes. Each lifecycle requires its own test process.
+
+After Kubernetes recovery passed, libvirt paused the VM because the host
+filesystem had no free space. Removal of the transferred image archive and
+four generated Node compiler caches restored space. The same VM resumed.
+The remaining checks passed without a source, assertion, or timeout change.
+No source file, result file, or VM disk was removed.
+
+Run the focused Node regression with:
+
+```sh
+cargo test -p mithril-node --lib --all-features startup_rejects_unmatched_roots
+```
+
+Use the [VM harness](../../../crates/mithril-e2e/harness/vm/README.md) to build
+the physical test binary and prepare each platform. Run each scenario above
+in a separate process with `--ignored --test-threads=1`. Select only one
+platform per invocation. Host and direct-runc checks must precede the paired
+Kubernetes check.
+
+Result: Done for this startup refactor. The evidence covers the listed
+physical scenarios, not the complete privileged matrix. It does not extend
+the historical acceptance claim of this document.
