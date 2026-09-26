@@ -1,5 +1,6 @@
 use super::*;
 use crate::evidence_segment::EvidenceSegmentReadV1;
+use prost::Message as _;
 
 pub const MAX_EVIDENCE_READ_RECORDS: usize = 256;
 pub const MAX_EVIDENCE_READ_BYTES: usize = 1024 * 1024;
@@ -13,17 +14,23 @@ pub struct EvidenceReadMetadataV1 {
     pub last_cursor: u64,
     pub retained_floor: u64,
     pub control_commit_index: u64,
+    pub coverage_revision: u64,
     pub coverage: Option<CoverageReport>,
 }
 
 pub struct EvidenceReadV1 {
     store: ControlStore,
     metadata: EvidenceReadMetadataV1,
+    coverage_bytes: Option<Vec<u8>>,
 }
 
 impl EvidenceReadV1 {
     pub fn metadata(&self) -> &EvidenceReadMetadataV1 {
         &self.metadata
+    }
+
+    pub(crate) fn coverage_bytes(&self) -> Option<&[u8]> {
+        self.coverage_bytes.as_deref()
     }
 }
 
@@ -101,6 +108,36 @@ impl ControlStore {
             .collect())
     }
 
+    pub(crate) fn legacy_sources(
+        &self,
+        after: Option<&EvidenceIntakeIdentityV1>,
+    ) -> Result<Vec<EvidenceIntakeIdentityV1>> {
+        use std::ops::Bound;
+        let inner = self.evidence_lock()?;
+        let range = (
+            after.map_or(Bound::Unbounded, Bound::Excluded),
+            Bound::Unbounded,
+        );
+        let mut sources = BTreeSet::new();
+        sources.extend(
+            inner
+                .state
+                .evidence_cursors
+                .range(range)
+                .take(32)
+                .map(|(identity, _)| identity.clone()),
+        );
+        sources.extend(
+            inner
+                .state
+                .coverage_cursors
+                .range(range)
+                .take(32)
+                .map(|(identity, _)| identity.clone()),
+        );
+        Ok(sources.into_iter().take(32).collect())
+    }
+
     pub fn begin_evidence_read(
         &self,
         identity: &EvidenceIntakeIdentityV1,
@@ -158,31 +195,57 @@ impl ControlStore {
                     last_cursor,
                     retained_floor,
                     control_commit_index: inner.state.commit_index,
+                    coverage_revision: inner
+                        .state
+                        .coverage_cursors
+                        .get(identity)
+                        .map_or(0, |cursor| cursor.revision),
                     coverage: None,
                 },
                 coverage,
             )
         };
+        let mut coverage_bytes = None;
         if let Some(coverage) = coverage {
             let revision = coverage.first;
-            let mut reports = coverage.decode::<CoverageReport>()?;
-            let report = reports.pop().filter(|report| {
-                report.revision == revision
-                    && report.source_id.as_slice() == identity.source_id
-                    && report.source_epoch == identity.source_epoch
-            });
-            if report.is_none() || !reports.is_empty() {
+            let (frames, ends) = coverage.frames()?;
+            if ends != [frames.len()] || frames.len() < 8 {
+                return crate::error::DiscoverySnafu {
+                    code: "COVERAGE_READ",
+                    reason: "the frozen coverage report does not contain one frame",
+                }
+                .fail();
+            }
+            let length = u32::from_be_bytes(frames[..4].try_into().unwrap_or_default()) as usize;
+            if length != frames.len() - 8 {
+                return crate::error::DiscoverySnafu {
+                    code: "COVERAGE_READ",
+                    reason: "the frozen coverage frame length differs from its payload",
+                }
+                .fail();
+            }
+            let bytes = frames[4..4 + length].to_vec();
+            let report = CoverageReport::decode(bytes.as_slice())
+                .ok()
+                .filter(|report| {
+                    report.revision == revision
+                        && report.source_id.as_slice() == identity.source_id
+                        && report.source_epoch == identity.source_epoch
+                });
+            let Some(report) = report else {
                 return crate::error::DiscoverySnafu {
                     code: "COVERAGE_READ",
                     reason: "the frozen coverage reference differs from its payload",
                 }
                 .fail();
-            }
-            metadata.coverage = report;
+            };
+            metadata.coverage = Some(report);
+            coverage_bytes = Some(bytes);
         }
         Ok(EvidenceReadV1 {
             store: self.clone(),
             metadata,
+            coverage_bytes,
         })
     }
 
@@ -441,6 +504,18 @@ mod tests {
         assert_eq!(page.framed_records, expected);
         assert_eq!(page.frame_ends, ends);
         assert_eq!(page.next_cursor, None);
+        Ok(())
+    }
+
+    #[test]
+    fn evidence_coverage_export_keeps_checked_payload_bytes() -> TestResult<()> {
+        let fixture = ReadFixture::new()?;
+        fixture.append(1, 1, None)?;
+        fixture.coverage(1, false)?;
+        let read = fixture.store.begin_evidence_read(&fixture.identity, 1)?;
+        let bytes = read.coverage_bytes().ok_or("coverage bytes are absent")?;
+        let decoded = CoverageReport::decode(bytes)?;
+        assert_eq!(read.metadata().coverage.as_ref(), Some(&decoded));
         Ok(())
     }
 

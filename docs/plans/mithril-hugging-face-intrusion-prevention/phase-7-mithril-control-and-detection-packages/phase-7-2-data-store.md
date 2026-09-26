@@ -149,7 +149,11 @@ Control reconnect timing assertion. That test passed alone and in the serialized
 run. The offline `storage-contract` case passed nine assertions. That case
 does not use production intake. The old Control store now exports bounded,
 length- and checksum-checked original frame pages; its focused test passed.
-The current Control intake still writes its
-chunked store. Offline import, a single-writer cutover, capacity admission,
+An offline copy now moves accepted original frames and coverage into AnalysisStore.
+Per-source markers preserve old retained floors, leave old intake time unknown,
+and check exact digests after restart. A component test passed with an expired
+old prefix, retained frame, coverage report, and unchanged Control commit index.
+The current Control intake still writes its chunked store. A complete offline
+upgrade, single-writer cutover, capacity admission,
 context projection from Control, data-store recovery/upgrade cases, and physical disk reuse
 remain unverified. Do not enable the new data path yet.
