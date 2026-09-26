@@ -214,6 +214,23 @@ workspace checks, strict Clippy, and workspace tests passed. The data crate
 passed 44 tests with two ignored; Control passed 196 with two ignored; Mithril
 e2e passed 115 with 249 ignored; Node passed 256 with one ignored.
 
+[data_commit_failure](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The parent seeds a temporary store and starts one child for each commit and file-size limit.<br>
+-> [data_commit_child](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The child opens AnalysisStore, handles SIGXFSZ, and sets its soft file-size limit to zero or 64 bytes.<br>
+-> [AnalysisStore::accept_validated_batch](../../../../crates/araphor-data/src/analysis/mod.rs) The evidence case reaches the native transaction commit.<br>
+-> [AnalysisStore::commit_result](../../../../crates/araphor-data/src/analysis/progress.rs) The result case reaches the native transaction commit with progress and an exact witness.<br>
+-> [data_commit_child](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The child restores its limit, requires the WAL write error and no watch notification, then exits without cleanup.<br>
+-> [data_commit_failure](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The parent reopens the store, checks the prior state, retries once, checks duplicate replay, and reopens again.
+
+The child uses the existing Rustix and Tokio APIs. No production hook or new
+dependency supplies the failure. Each parent wait has a ten-second limit and
+kills the child on early return. The native error must name the commit operation,
+`File too large`, and `analysis.duckdb.wal`. The parent checks full metadata,
+source status, exact prior bytes, absent result, and unchanged consumed progress
+after failure. After successful retry, raw expiry preserves the result witness.
+The four cases passed in the focused run. This test does not prove a torn write,
+ENOSPC during commit, hardware power loss, or Control's mTLS error response.
+The full workspace gate for this test addition is pending.
+
 The full workspace gate passed for `cb8417f8`, including all twelve cases in
 `analysis_store_commit_crashes` and `analysis_store_input_crashes`. The data
 crate passed 42 tests with two ignored; Control passed 196 with two ignored;
