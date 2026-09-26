@@ -97,9 +97,10 @@ the owner explicitly. The startup case uses ControlConfig and the default owner.
 
 [ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Control starts with its existing policy store and refuses old evidence receipts before it creates the data store.<br>
 -> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) One private writer opens at `evidence_directory/analysis`. Restart checks the schema version and required tables and columns. Restart does not create missing tables.<br>
+-> [AnalysisStore::validate_state](../../../../crates/araphor-data/src/analysis/schema.rs) Before intake, recovery checks source bindings, receipts, coverage, frame and result digests, context versions, progress, references, expiry ranges, and relation revisions. An acknowledged position must have a retained row or a recorded expiry.<br>
 -> [EvidenceIntakeOwner::new](../../../../crates/mithril-control/src/evidence.rs) Intake shares that data handle. The default process does not start the superseded discovery projection.<br>
 -> [DataStoreQualification::startup](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The test uses configuration loading and mTLS to check exact frames, durable ACK, replay, and unchanged policy state.<br>
--> Not implemented [retention scheduling](phase-7-2-data-store.md) Production retention scheduling, capacity enforcement, and complete stored-reference validation remain open.
+-> Not implemented [retention scheduling](phase-7-2-data-store.md) Production retention scheduling and capacity enforcement remain open.
 
 [ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Data recovery fails.<br>
 -> [ControlPlane::without_intake](../../../../crates/mithril-control/src/service.rs) Policy and trust retain their durable owner. No old evidence writer replaces the failed data owner.<br>
@@ -700,9 +701,9 @@ not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
 
-This review covers `codex/mithril-ui` at `9478d8cd` plus the default-startup
-changes. The startup command passed 15 checks; recovery passed 19 checks again.
-Their results are in `/tmp/araphor-startup.Sxc096/`. QueryOwner and trace API
+This review covers `codex/mithril-ui` at `5c86f3d` plus the recovery-validation
+changes. The startup command passed 16 checks; recovery passed 19 checks again.
+Their results are in `/tmp/araphor-integrity.K3NdoS/`. QueryOwner and trace API
 frames are not qualified by these changes.
 
 The current offline runs are `storage-contract` and `offline-exact` under
@@ -718,6 +719,10 @@ uses 8,663,040 bytes after checkpoint; its native WAL is absent. These small
 fixture measurements are not a throughput or physical-reuse qualification.
 `cargo test -p araphor-data --lib` passed 19 tests with two ignored.
 `analysis_store_result_progress` includes tenant and corrupt-body checks.
-The full workspace procedure passed for `658c16c3`. The final startup run is
-in progress. Capacity, complete stored-reference validation, crash injection, and
-physical qualification remain open.
+The full workspace procedure passed for `658c16c3`. The run for `5c86f3d`
+failed in the old SQLite 50,000-atom replay test with `OperationInterrupted`
+while decoding atom samples. The current integrity run is in progress.
+The data-owner suite passed 21 tests with two ignored. The
+`analysis_rejects_broken_state` test changes 16 receipt, source, context, result,
+reference, and revision fields in temporary stores. Reopen rejects each change.
+Capacity, crash injection, and physical qualification remain open.

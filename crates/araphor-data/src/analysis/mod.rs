@@ -228,6 +228,7 @@ impl AnalysisStore {
                 .fail();
             }
             Self::validate_tables(&writer)?;
+            Self::validate_state(&writer, &root)?;
         }
         if !existing {
             let transaction = writer.transaction().context(AnalysisDatabaseSnafu {

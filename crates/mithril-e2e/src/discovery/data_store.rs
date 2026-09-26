@@ -155,6 +155,7 @@ impl DataStoreQualification {
         let database = tls.path().join("evidence/analysis/analysis.duckdb");
         Self::record(&observations, 2);
         let faults = [
+            Some("UPDATE source_receipts SET contiguous_cursor = 2"),
             Some("UPDATE store_meta SET schema_version = 99"),
             Some("UPDATE store_meta SET schema_version = 3; ALTER TABLE events RENAME TO missing_events"),
             None,
@@ -253,6 +254,7 @@ impl DataStoreQualification {
             "current-format-restart",
             "duplicate-noop",
             "corrupt-data-unavailable",
+            "invalid-receipt-unavailable",
             "unsupported-schema-unavailable",
             "missing-table-unavailable",
             "coverage-unavailable",

@@ -7,7 +7,7 @@ use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use super::{source_key, valid_source_identity, AnalysisStore};
-use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, Result};
+use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, JsonSnafu, Result};
 
 impl EvidenceIntakeIdentityV1 {
     fn epoch_key(&self) -> [u8; 32] {
@@ -23,6 +23,241 @@ impl EvidenceIntakeIdentityV1 {
 }
 
 impl AnalysisStore {
+    pub(super) fn validate_state(writer: &Connection, root: &Path) -> Result<()> {
+        let meta = Self::read_meta_from(writer, &root.join("analysis.duckdb"))?;
+        if meta.store_uuid.is_nil() || meta.recovery_epoch == 0 {
+            return Self::reject_path(root, "the stored identity or recovery epoch is invalid");
+        }
+        Self::validate_sources(writer, root)?;
+        Self::validate_contexts(writer, root)?;
+        let checks = [
+            ("invalid source key", "SELECT 1 FROM source_receipts WHERE octet_length(stream_key) <> 32"),
+            ("invalid event source or digest", "SELECT 1 FROM events e LEFT JOIN source_receipts s USING (stream_key)
+                WHERE s.stream_key IS NULL OR e.tenant_id <> s.tenant_id OR e.cpu_id <> s.cpu_id
+                OR e.durable_cursor = 0 OR e.durable_cursor <= s.retained_floor OR e.intake_utc_ns = 0
+                OR sha256(e.framed_record) <> lower(hex(e.frame_sha256))"),
+            ("invalid coverage source or digest", "SELECT 1 FROM coverage c LEFT JOIN source_receipts s USING (stream_key)
+                WHERE s.stream_key IS NULL OR c.tenant_id <> s.tenant_id OR c.revision = 0
+                OR c.revision > s.coverage_revision OR sha256(c.report) <> lower(hex(c.report_sha256))"),
+            ("invalid coverage receipt", "SELECT 1 FROM source_receipts s WHERE s.coverage_revision <>
+                COALESCE((SELECT MAX(c.revision) FROM coverage c WHERE c.stream_key = s.stream_key), 0)"),
+            ("invalid expiry range", "SELECT 1 FROM expired_ranges x LEFT JOIN source_receipts s USING (stream_key)
+                WHERE s.stream_key IS NULL OR x.tenant_id <> s.tenant_id OR x.first_cursor = 0
+                OR x.last_cursor < x.first_cursor OR x.last_cursor > s.contiguous_cursor
+                OR EXISTS (SELECT 1 FROM events e WHERE e.stream_key = x.stream_key
+                    AND e.durable_cursor BETWEEN x.first_cursor AND x.last_cursor)
+                OR EXISTS (SELECT 1 FROM expired_ranges y WHERE y.stream_key = x.stream_key
+                    AND y.first_cursor > x.first_cursor AND y.first_cursor <= x.last_cursor)"),
+            ("incomplete acknowledged range", "SELECT 1 FROM source_receipts s WHERE s.contiguous_cursor::HUGEINT <>
+                (SELECT COUNT(*) FROM events e WHERE e.stream_key = s.stream_key AND e.durable_cursor <= s.contiguous_cursor)
+                + COALESCE((SELECT SUM(x.last_cursor::HUGEINT - x.first_cursor + 1)
+                    FROM expired_ranges x WHERE x.stream_key = s.stream_key), 0)"),
+            ("invalid retained floor", "SELECT 1 FROM source_receipts s WHERE s.retained_floor <>
+                COALESCE((SELECT MIN(e.durable_cursor) - 1 FROM events e WHERE e.stream_key = s.stream_key
+                    AND e.durable_cursor <= s.contiguous_cursor), s.contiguous_cursor)"),
+            ("invalid result body", "SELECT 1 FROM analysis_results WHERE octet_length(tenant_id) <> 16
+                OR result_id = '' OR length(result_id) > 256 OR processor_id = ''
+                OR octet_length(body) = 0 OR octet_length(body) > 16777216 OR sha256(body) <> lower(hex(body_sha256))
+                OR octet_length(request_sha256) <> 32"),
+            ("invalid witness reference", "SELECT 1 FROM evidence_refs r
+                LEFT JOIN analysis_results a ON a.result_id = r.ref_id AND a.tenant_id = r.tenant_id
+                LEFT JOIN events e ON e.stream_key = r.stream_key AND e.durable_cursor = r.durable_cursor
+                    AND e.tenant_id = r.tenant_id
+                WHERE a.result_id IS NULL OR e.stream_key IS NULL OR r.expires_utc_ns = 0"),
+            ("invalid context reference", "SELECT 1 FROM context_refs r
+                LEFT JOIN analysis_results a ON a.result_id = r.ref_id AND a.tenant_id = r.tenant_id
+                LEFT JOIN context_versions c ON c.tenant_id = r.tenant_id AND c.owner_id = r.owner_id
+                    AND c.entity_key = r.entity_key AND c.lifetime_key = r.lifetime_key
+                    AND c.owner_revision = r.owner_revision AND c.content_sha256 = r.content_sha256
+                WHERE a.result_id IS NULL OR c.owner_id IS NULL"),
+            ("invalid processor progress", "SELECT 1 FROM processor_progress p
+                LEFT JOIN source_receipts s ON s.stream_key = p.stream_key AND s.tenant_id = p.tenant_id
+                WHERE p.class NOT IN ('required', 'optional') OR p.processor_id = '' OR p.method_version = 0
+                OR octet_length(p.tenant_id) <> 16 OR octet_length(p.stream_key) <> 32
+                OR p.start_cursor = 0 OR p.required_floor <> p.consumed_cursor
+                OR p.consumed_cursor > COALESCE(s.contiguous_cursor, 0)
+                OR p.resume_floor > COALESCE(s.contiguous_cursor, 0)
+                OR p.coverage_revision > COALESCE(s.coverage_revision, 0)
+                OR p.context_revision > (SELECT commit_revision FROM store_meta)"),
+            ("invalid processor gap", "SELECT 1 FROM processor_gaps g LEFT JOIN processor_progress p
+                ON p.processor_id = g.processor_id AND p.method_version = g.method_version
+                    AND p.tenant_id = g.tenant_id AND p.stream_key = g.stream_key
+                WHERE p.processor_id IS NULL OR p.class <> 'optional' OR g.first_cursor = 0
+                    OR g.last_cursor < g.first_cursor OR g.last_cursor > p.resume_floor"),
+            ("invalid recovery gap", "SELECT 1 FROM recovery_gaps WHERE octet_length(stream_key) <> 32
+                OR octet_length(tenant_id) <> 16 OR first_cursor = 0 OR last_cursor < first_cursor"),
+        ];
+        for (reason, query) in checks {
+            let invalid: bool = writer
+                .query_row(&format!("SELECT EXISTS ({query})"), [], |row| row.get(0))
+                .context(AnalysisDatabaseSnafu {
+                    operation: "validate retained state",
+                })?;
+            if invalid {
+                return Self::reject_path(root, reason);
+            }
+        }
+        for relation in [
+            "events",
+            "coverage",
+            "context_versions",
+            "analysis_results",
+            "processor_gaps",
+            "recovery_gaps",
+            "expired_ranges",
+        ] {
+            let invalid: bool = writer.query_row(&format!(
+                "SELECT EXISTS (SELECT 1 FROM {relation} WHERE commit_revision = 0 OR commit_revision > ?
+                    OR commit_revision > COALESCE((SELECT last_changed_revision FROM relation_revisions
+                        WHERE relation_name = ?), 0))"),
+                params![meta.commit_revision, relation], |row| row.get(0),
+            ).context(AnalysisDatabaseSnafu { operation: "validate committed revisions" })?;
+            if invalid {
+                return Self::reject_path(root, "the stored relation revision is invalid");
+            }
+        }
+        let invalid: bool = writer.query_row(
+            "SELECT EXISTS (SELECT 1 FROM relation_revisions WHERE last_changed_revision = 0 OR last_changed_revision > ?)
+                OR EXISTS (SELECT 1 FROM events e JOIN source_receipts s USING (stream_key)
+                    WHERE e.durable_cursor::HUGEINT > s.contiguous_cursor::HUGEINT + ?)",
+            params![meta.commit_revision, crate::MAX_PENDING_EVIDENCE_RECORDS], |row| row.get(0),
+        ).context(AnalysisDatabaseSnafu { operation: "validate revision and pending bounds" })?;
+        if invalid {
+            return Self::reject_path(root, "the stored revision or pending bound is invalid");
+        }
+        Ok(())
+    }
+
+    fn validate_contexts(writer: &Connection, root: &Path) -> Result<()> {
+        let mut after = -1_i64;
+        loop {
+            let mut statement = writer
+                .prepare(
+                    "SELECT rowid, tenant_id, owner_id, entity_key, lifetime_key, owner_revision
+                FROM context_versions WHERE rowid > ? ORDER BY rowid LIMIT 256",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare context validation",
+                })?;
+            let rows = statement
+                .query_map(params![after], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                        row.get::<_, Vec<u8>>(4)?,
+                        row.get::<_, u64>(5)?,
+                    ))
+                })
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read validation contexts",
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "decode validation contexts",
+                })?;
+            if rows.is_empty() {
+                break;
+            }
+            for (position, tenant, owner_id, entity_key, lifetime_key, owner_revision) in rows {
+                let tenant_id = tenant.try_into().map_err(|_| {
+                    crate::AnalysisStateSnafu {
+                        path: root,
+                        reason: "the stored context tenant is invalid",
+                    }
+                    .build()
+                })?;
+                let key = super::AnalysisContextKeyV1 {
+                    tenant_id,
+                    owner_id,
+                    entity_key,
+                    lifetime_key,
+                    owner_revision,
+                };
+                if Self::read_context_from(writer, root, &key)?.is_none() {
+                    return Self::reject_path(root, "the stored context version is absent");
+                }
+                after = position;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_sources(writer: &Connection, root: &Path) -> Result<()> {
+        let mut after = Vec::new();
+        loop {
+            let mut statement = writer
+                .prepare(
+                    "SELECT stream_key, identity_json FROM source_receipts
+                WHERE stream_key > ? ORDER BY stream_key LIMIT 256",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare receipt validation",
+                })?;
+            let rows = statement
+                .query_map(params![after], |row| {
+                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?))
+                })
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read validation receipts",
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "decode validation receipts",
+                })?;
+            if rows.is_empty() {
+                break;
+            }
+            for (key, json) in rows {
+                let identity: EvidenceIntakeIdentityV1 =
+                    serde_json::from_str(&json).context(JsonSnafu {
+                        path: root.join("analysis.duckdb"),
+                    })?;
+                if !valid_source_identity(&identity) || key != source_key(&identity) {
+                    return Self::reject_path(root, "the stored source identity or key is invalid");
+                }
+                let receipt =
+                    Self::read_receipt_from(writer, root, &identity, &source_key(&identity))?
+                        .ok_or_else(|| {
+                            crate::AnalysisStateSnafu {
+                                path: root,
+                                reason: "the stored receipt is absent",
+                            }
+                            .build()
+                        })?;
+                if receipt.retained_floor > receipt.contiguous_cursor {
+                    return Self::reject_path(root, "the retained floor exceeds accepted evidence");
+                }
+                let binding: Option<(Vec<u8>, Vec<u8>, u64)> = writer.query_row(
+                    "SELECT tenant_id, node_boot_id, label_epoch FROM source_bindings WHERE epoch_key = ?",
+                    params![identity.epoch_key().as_slice()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                ).optional().context(AnalysisDatabaseSnafu { operation: "validate source binding" })?;
+                if binding
+                    != Some((
+                        identity.tenant_id.to_vec(),
+                        identity.node_boot_id.to_vec(),
+                        identity.label_epoch,
+                    ))
+                {
+                    return Self::reject_path(
+                        root,
+                        "the stored source has no matching epoch binding",
+                    );
+                }
+                after = key;
+            }
+        }
+        let counts: (u64, u64) = writer.query_row(
+            "SELECT (SELECT COUNT(*) FROM source_receipts), (SELECT COUNT(*) FROM source_bindings)",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).context(AnalysisDatabaseSnafu { operation: "validate binding count" })?;
+        if counts.0 != counts.1 {
+            return Self::reject_path(root, "the stored epoch binding has no receipt");
+        }
+        Ok(())
+    }
+
     pub(super) fn validate_tables(writer: &Connection) -> Result<()> {
         let projections = [
             "singleton, store_uuid, schema_version, recovery_epoch, commit_revision FROM store_meta",
@@ -173,6 +408,97 @@ mod tests {
 
     use super::*;
     use crate::EvidenceIntakeIdentityV1;
+
+    #[test]
+    fn analysis_rejects_broken_state() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let faults = [
+            "UPDATE source_receipts SET contiguous_cursor = 2",
+            "UPDATE source_receipts SET retained_floor = 2",
+            "DELETE FROM source_receipts",
+            "UPDATE source_bindings SET label_epoch = 9",
+            "UPDATE events SET framed_record = 'changed'::BLOB",
+            "UPDATE events SET cpu_id = 9",
+            "UPDATE evidence_refs SET durable_cursor = 2",
+            "UPDATE evidence_refs SET tenant_id = 'foreign'::BLOB",
+            "UPDATE context_refs SET content_sha256 = 'changed'::BLOB",
+            "DELETE FROM context_versions",
+            "UPDATE context_versions SET body = 'changed'::BLOB",
+            "UPDATE processor_progress SET consumed_cursor = 2",
+            "UPDATE analysis_results SET body = 'changed'::BLOB",
+            "UPDATE events SET commit_revision = 99",
+            "UPDATE relation_revisions SET last_changed_revision = 99",
+            "UPDATE store_meta SET recovery_epoch = 0",
+        ];
+        for fault in faults {
+            let directory = tempfile::tempdir()?;
+            let root = directory.path().join("analysis");
+            let store = AnalysisStore::open(&root)?;
+            let identity = EvidenceIntakeIdentityV1 {
+                tenant_id: [1; 16],
+                node_id: "node-a".into(),
+                node_boot_id: [2; 16],
+                label_epoch: 1,
+                source_id: [3; 16],
+                source_epoch: 1,
+            };
+            let scope = crate::ProcessorScopeV1 {
+                processor_id: "required".into(),
+                method_version: 1,
+                identity: identity.clone(),
+            };
+            store.register_processor(&scope, crate::ProcessorClassV1::Required, 1)?;
+            store.accept_validated_batch(
+                identity.clone(),
+                crate::ValidatedEvidenceBatchV1 {
+                    cpu_id: 1,
+                    first_cursor: 1,
+                    last_cursor: 1,
+                    intake_utc_ns: 1,
+                    framed_records: prost::bytes::Bytes::from_static(b"frame"),
+                    frame_ends: vec![5],
+                },
+            )?;
+            let context = crate::AnalysisContextVersionV1 {
+                key: crate::AnalysisContextKeyV1 {
+                    tenant_id: identity.tenant_id,
+                    owner_id: "policy".into(),
+                    entity_key: vec![1],
+                    lifetime_key: vec![2],
+                    owner_revision: 1,
+                },
+                valid_from_utc_ns: 1,
+                valid_until_utc_ns: None,
+                sensitivity: crate::ContextSensitivityV1::Tenant,
+                body: b"policy".to_vec(),
+            };
+            let revision = store.commit_context(&context)?;
+            store.commit_result(&crate::AnalysisResultCommitV1 {
+                scope,
+                expected_cursor: 0,
+                consumed_cursor: 1,
+                coverage_revision: 0,
+                context_revision: revision,
+                result_id: "result".into(),
+                body: b"result".to_vec(),
+                created_utc_ns: 2,
+                witnesses: vec![crate::AnalysisWitnessV1 {
+                    identity,
+                    cursor: 1,
+                    expires_utc_ns: 3,
+                }],
+                context_refs: vec![crate::AnalysisContextRefV1 {
+                    content_sha256: context.content_digest()?,
+                    key: context.key,
+                }],
+            })?;
+            drop(store);
+            let store = AnalysisStore::open(&root)?;
+            store.writer()?.execute_batch(fault)?;
+            drop(store);
+            assert!(AnalysisStore::open(&root).is_err(), "accepted {fault}");
+        }
+        Ok(())
+    }
 
     #[test]
     fn source_binding_keeps_the_committed_boot_and_label(
