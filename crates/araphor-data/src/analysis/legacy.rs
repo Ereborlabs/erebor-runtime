@@ -30,21 +30,20 @@ impl AnalysisStore {
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin legacy source import",
         })?;
-        let saved: Option<(u32, u64, u64, u64, Vec<u8>, Option<Vec<u8>>, bool)> = transaction
+        let saved = transaction
             .query_row(
                 "SELECT cpu_id, accepted_cursor, retained_floor, coverage_revision,
-                        event_sha256, coverage_sha256, complete
+                        event_sha256, coverage_sha256
                  FROM legacy_import_sources WHERE stream_key = ? AND tenant_id = ?",
                 params![key.as_slice(), identity.tenant_id.as_slice()],
                 |row| {
                     Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
+                        row.get::<_, u32>(0)?,
+                        row.get::<_, u64>(1)?,
+                        row.get::<_, u64>(2)?,
+                        row.get::<_, u64>(3)?,
+                        row.get::<_, Vec<u8>>(4)?,
+                        row.get::<_, Option<Vec<u8>>>(5)?,
                     ))
                 },
             )
@@ -53,7 +52,7 @@ impl AnalysisStore {
                 operation: "read legacy import marker",
             })?;
         let receipt = Self::read_receipt_from(&transaction, &self.root, identity, &key)?;
-        if let Some((cpu, accepted, floor, coverage, events, report, _complete)) = saved {
+        if let Some((cpu, accepted, floor, coverage, events, report)) = saved {
             if cpu != input.cpu_id
                 || accepted != input.accepted_cursor
                 || floor != input.retained_floor
