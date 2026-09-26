@@ -19,6 +19,7 @@ use crate::{
 
 mod admission;
 mod backup;
+mod capacity;
 mod connection;
 mod context;
 mod progress;
@@ -27,6 +28,7 @@ mod retention;
 mod schema;
 
 pub use backup::{AnalysisBackupManifestV1, AnalysisRecoveryStatusV1};
+pub use capacity::{StorageLimitsV1, StorageUsageV1};
 pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
 pub use progress::{
     AnalysisContextRefV1, AnalysisProcessorGapV1, AnalysisResultCommitV1, AnalysisResultReceiptV1,
@@ -53,6 +55,7 @@ pub struct AnalysisStore {
     revision: watch::Sender<u64>,
     retention_healthy: AtomicBool,
     retention: RetentionLimitsV1,
+    storage: StorageLimitsV1,
     // Release the lease after the database connection closes.
     _lease: File,
 }
@@ -131,14 +134,22 @@ pub enum EvidenceStoreOutcomeV1 {
 
 impl AnalysisStore {
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
-        Self::open_with_retention(root, Default::default())
+        Self::open_with_limits(root, Default::default(), Default::default())
     }
 
-    pub fn open_with_retention(
+    pub fn open_with_limits(
         root: impl AsRef<Path>,
         retention: RetentionLimitsV1,
+        storage: StorageLimitsV1,
     ) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
+        if !storage.valid() {
+            return AnalysisStateSnafu {
+                path: root,
+                reason: "the storage capacity limits are invalid".to_owned(),
+            }
+            .fail();
+        }
         if retention.raw_max_age_ns == 0 || retention.raw_max_bytes == 0 {
             return AnalysisStateSnafu {
                 path: root,
@@ -227,6 +238,13 @@ impl AnalysisStore {
             .enable_external_access(false)
             .context(AnalysisDatabaseSnafu {
                 operation: "disable external access",
+            })?
+            .max_memory("128MiB")
+            .and_then(|config| config.threads(2))
+            .and_then(|config| config.with("wal_autocheckpoint", "64MiB"))
+            .and_then(|config| config.with("max_temp_directory_size", "128MiB"))
+            .context(AnalysisDatabaseSnafu {
+                operation: "bound native data resources",
             })?;
         let mut writer = Connection::open_with_flags(&path, config)
             .context(AnalysisDatabaseSnafu { operation: "open" })?;
@@ -432,6 +450,7 @@ impl AnalysisStore {
             revision,
             retention_healthy: AtomicBool::new(true),
             retention,
+            storage,
         })
     }
 
@@ -544,7 +563,7 @@ impl AnalysisStore {
         let identity_json = serde_json::to_string(&identity).context(JsonSnafu {
             path: self.root.join("analysis.duckdb"),
         })?;
-        let mut writer = self.writer()?;
+        let mut writer = self.maintenance_writer()?;
         self.require_retention()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin evidence",
@@ -649,6 +668,9 @@ impl AnalysisStore {
             }
             if cursor <= contiguous {
                 return self.reject("an acknowledged evidence record is not retained");
+            }
+            if new_records == 0 {
+                self.require_capacity(false)?;
             }
             appender
                 .append_row(params![
@@ -759,7 +781,7 @@ impl AnalysisStore {
         }
         let bytes = &input.encoded_report;
         let key = source_key(identity);
-        let mut writer = self.writer()?;
+        let mut writer = self.maintenance_writer()?;
         self.require_retention()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin coverage",
@@ -793,6 +815,7 @@ impl AnalysisStore {
             }
             return self.reject("coverage evidence is stale or has conflicting content");
         }
+        self.require_capacity(false)?;
         let revision = Self::read_meta_from(&transaction, &self.root.join("analysis.duckdb"))?
             .commit_revision
             .checked_add(1)

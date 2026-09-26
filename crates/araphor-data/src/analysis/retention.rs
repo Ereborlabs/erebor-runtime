@@ -64,8 +64,8 @@ impl<'a> EvidenceRetentionOwner<'a> {
 
     fn sweep_page(&self, after: Option<[u8; 32]>, now_utc_ns: u64) -> Result<RetentionSweepV1> {
         let sources = {
-            let writer = self.store.writer()?;
-            let mut statement = writer
+            let reader = self.store.reader()?;
+            let mut statement = reader
                 .prepare(
                     "SELECT stream_key, identity_json FROM source_receipts
                      WHERE CAST(? AS BLOB) IS NULL OR stream_key > ?
@@ -126,7 +126,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
             return self.store.reject("the retention source or time is invalid");
         }
         let key = source_key(identity);
-        let mut writer = self.store.writer()?;
+        let mut writer = self.store.maintenance_writer()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin evidence retention",
         })?;
@@ -426,12 +426,13 @@ mod tests {
     fn analysis_store_required_limits() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let hour = 60 * 60 * 1_000_000_000;
-        let store = AnalysisStore::open_with_retention(
+        let store = AnalysisStore::open_with_limits(
             directory.path().join("analysis"),
             RetentionLimitsV1 {
                 raw_max_age_ns: 24 * hour,
                 raw_max_bytes: 3,
             },
+            Default::default(),
         )?;
         let source = identity(1);
         let scope = ProcessorScopeV1 {

@@ -186,7 +186,7 @@ impl AnalysisStore {
             return self.reject("the optional processor scope is invalid");
         }
         let key = source_key(&scope.identity);
-        let mut writer = self.writer()?;
+        let mut writer = self.maintenance_writer()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin optional processor resume",
         })?;
@@ -331,7 +331,7 @@ impl AnalysisStore {
         let request_digest: [u8; 32] = Sha256::digest(&request).into();
         let body_digest: [u8; 32] = Sha256::digest(&input.body).into();
         let key = source_key(&input.scope.identity);
-        let mut writer = self.writer()?;
+        let mut writer = self.maintenance_writer()?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin analysis result",
         })?;

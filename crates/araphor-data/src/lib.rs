@@ -13,9 +13,9 @@ pub use analysis::{
     AnalysisResultCommitV1, AnalysisResultReceiptV1, AnalysisSourceReceiptV1,
     AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1, AnalysisWitnessV1,
     ContextSensitivityV1, EvidenceRetentionOwner, EvidenceStoreOutcomeV1, ProcessorClassV1,
-    ProcessorScopeV1, RetentionLimitsV1, RetentionResultV1, RetentionSweepV1, StorePositionV1,
-    ValidatedCoverageV1, ValidatedEvidenceBatchV1, ANALYSIS_DUCKDB_BINDING_VERSION,
-    ANALYSIS_SQLPARSER_VERSION,
+    ProcessorScopeV1, RetentionLimitsV1, RetentionResultV1, RetentionSweepV1, StorageLimitsV1,
+    StorageUsageV1, StorePositionV1, ValidatedCoverageV1, ValidatedEvidenceBatchV1,
+    ANALYSIS_DUCKDB_BINDING_VERSION, ANALYSIS_SQLPARSER_VERSION,
 };
 
 pub const MAX_EVIDENCE_BATCH_RECORDS: usize = 4_096;
@@ -48,6 +48,12 @@ pub struct EvidenceIntakeIdentityV1 {
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Analysis storage reached its {resource} limit"))]
+    StorageCapacity {
+        resource: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Analysis {resource} admission is full"))]
     AnalysisBusy {
         resource: &'static str,

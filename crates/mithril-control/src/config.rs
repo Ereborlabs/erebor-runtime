@@ -31,6 +31,8 @@ pub struct ControlConfig {
     #[serde(default)]
     pub data_retention: araphor_data::RetentionLimitsV1,
     #[serde(default)]
+    pub data_storage: araphor_data::StorageLimitsV1,
+    #[serde(default)]
     pub control_store_directory: Option<PathBuf>,
     #[serde(default)]
     pub kubernetes_policy: Option<PolicyDesiredStateConfigV1>,
@@ -131,6 +133,12 @@ impl ControlConfig {
         );
         self.evidence_store.validate()?;
         ensure!(
+            self.data_storage.valid(),
+            InvalidConfigurationSnafu {
+                reason: "data storage capacity limits are invalid"
+            }
+        );
+        ensure!(
             self.data_retention.raw_max_age_ns > 0 && self.data_retention.raw_max_bytes > 0,
             InvalidConfigurationSnafu {
                 reason: "data retention limits must be positive"
@@ -207,9 +215,10 @@ impl ControlConfig {
             .context(IoSnafu {
                 path: &self.evidence_directory,
             })?;
-        araphor_data::AnalysisStore::open_with_retention(
+        araphor_data::AnalysisStore::open_with_limits(
             self.evidence_directory.join("analysis"),
             self.data_retention,
+            self.data_storage,
         )
         .map(Arc::new)
         .map_err(|source| crate::Error::DataStore {
