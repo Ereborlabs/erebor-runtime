@@ -273,11 +273,11 @@ the physical storage/partition case in the existing mithril-e2e harness.
 Use `data_capacity_recovery` and `data_full_disk` for paired capacity proof.
 Both call the same production-owner scenario. The first uses a sparse file to
 reach the data-file quota. The second requires an empty, task-owned 1-GiB tmpfs.
-Allocate all free blocks and require an `ENOSPC` result. Through mTLS, require
+Allocate all free blocks and require an `ENOSPC` result. Make the retention
+sweep observe insufficient space before sending the next batch. Through mTLS, require
 ResourceExhausted, an unchanged receipt and revision, readable accepted data,
 retained Node input, and a working policy RPC. Release only the test padding.
-First make the retention sweep observe insufficient space. Check the same
-condition in `data_capacity_retry` with a retained source and an unmet
+Check the same condition in `data_capacity_retry` with a retained source and an unmet
 filesystem reserve. Evidence and coverage must return ResourceExhausted even
 after retention becomes unhealthy. Run this regression before the physical case.
 Reconnect the evidence stream without restarting Control. Require one commit,
@@ -924,6 +924,32 @@ storage reserves. A later full-filesystem run found a status race after
 retention became unhealthy. The lightweight capacity-retry case reproduced
 the failure before the production change. The shared retention guard now
 checks capacity before returning Unavailable. All 37 selected component tests
-and twelve enabled data-store e2e cases pass with this change. The final
-workspace gate and paired full-filesystem check are pending. The complete
-phase remains **Not done**.
+and twelve enabled data-store e2e cases pass with this change.
+
+The final gate passed on `4ca9827f` with
+`CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh`: formatting,
+workspace checks, strict Clippy, and workspace tests. The data crate passed
+46 tests with two ignored; Control passed 196 with two ignored; Mithril e2e
+passed 119 with 251 ignored; Node passed 256 with one ignored. The preceding
+run on `e11549ff` failed because the host filesystem filled. Six idle, ignored
+alternate debug binaries were removed before this successful run. Source,
+deployment data, and storage reserves were unchanged by that cleanup.
+
+The full-filesystem harness passed all three cases on clean `4ca9827f`.
+Its full-disk case reports zero available bytes, failed retention and
+maintenance capacity, and 1,066,373,120 allocated padding bytes. After padding
+release, the same Control accepts cursor 2 and retains both exact records.
+The log is `/tmp/araphor-backup-qualification.mL74XGfq/disk-full-retention.log`.
+The test binary SHA-256 is
+`87b361ae415df17bc57d6985dccd1cbd2ff08d62cb1105fbb5026ff50217f21c`.
+
+The rebuilt CLI passed startup (18 checks) and recovery (29 checks) for the
+same source. Results are in `retention-startup/result.json` and
+`retention-recovery/result.json` under that qualification directory.
+Recovery reports cursor 4, retained floor 2, two retained events, backup
+revision 12, an 8,400,896-byte database, and zero checkpointed WAL bytes.
+The CLI SHA-256 is
+`e698480bfd4fdd2cd96fe34f271420d6c8f5c1de425b8f16c429b879fe6c0e05`.
+No Rust source changed after the gate. Old-writer removal, full-quota and
+reserve measurements, and Kubernetes storage/partition qualification remain
+open. The complete phase remains **Not done**.
