@@ -114,11 +114,37 @@ configuration, public API, or alternate writer. The four cases check process
 exit at these two transaction boundaries, not hardware power loss or every
 data mutation. Existing mTLS cases remain separate integration proof.
 
-[AnalysisStore::record_recovery_floor](../../../../crates/araphor-data/src/analysis/backup.rs) A caller reports Node input no longer available after a stale restore.<br>
+[NodeChassis](../../../../crates/mithril-node/src/node.rs) The connected Node selects one WAL source per second, including sources without pending records.<br>
+-> [EffectObservationStore::evidence_floor](../../../../crates/mithril-node/src/observation.rs) The owner reads one ordered source and its durable acknowledged cursor, then releases the WAL lock.<br>
+-> [ControlConnection::report_evidence_floor](../../../../crates/mithril-node/src/control.rs) The existing mTLS connection sends a bounded NodeEvidence.ReportFloor request.<br>
+-> [NodeEvidence::report_floor](../../../../crates/mithril-control/src/service.rs) Control checks the current session and trust under shared intake admission. Blocking work runs outside the RPC executor.<br>
+-> [EvidenceIntakeOwner::receive_floor](../../../../crates/mithril-control/src/evidence.rs) The same source-authentication helper used by batches resolves the original durable session and exact data binding.<br>
+-> [AnalysisStore::record_recovery_floor](../../../../crates/araphor-data/src/analysis/backup.rs) One transaction records known missing ranges after a stale restore. It does not advance a source receipt.<br>
 -> [AnalysisStore::recovery_gaps](../../../../crates/araphor-data/src/analysis/health.rs) A source-scoped read returns at most 256 exact missing ranges after the supplied cursor.<br>
 -> [AnalysisStore::processor_health](../../../../crates/araphor-data/src/analysis/health.rs) Recovery loss takes precedence over ordinary lag or expiry. The read does not create a receipt or advance progress.
 
-These are fixed internal data-owner reads, not public SQL or gRPC methods.
+The gap and processor-health reads are fixed internal data-owner methods,
+not public SQL or gRPC reads. The report is an internal authenticated Node RPC.
+Its reply is not an evidence ACK. Only the existing evidence ACK path can
+truncate Node WAL. The floor means the last cursor excluded from Node replay,
+including acknowledged bytes that can remain in a partly retained segment.
+The ordered source walk uses constant output space. A failed report keeps its
+cursor for retry. Reconnect and end of the walk restart at the first source.
+No scan checkpoint or second durable owner is added. Reports do not authorize
+cursor skipping after loss. Exact missing ranges remain available in data health.
+
+Read `wal_floor_replay` in
+[wal.rs](../../../../crates/mithril-node/src/observation/wal.rs) for empty sources,
+unacknowledged input, rejected ACKs, source ordering, conversion, and restart.
+The existing `data_stream_flushes_without_tail` mTLS test in
+[control_tls.rs](../../../../crates/mithril-e2e/src/control_tls.rs) also checks
+missing trust ACK, malformed reports, stale nonce, foreign Node, changed boot,
+unchanged receipts, tenant isolation, and idempotent floor reports.
+`data_store_recovery` in
+[data_store.rs](../../../../crates/mithril-e2e/src/discovery/data_store.rs) restores
+an empty backup and reports the actual Node WAL floor through mTLS. It retries
+after restart and verifies the same gap without a fabricated accepted receipt.
+
 Processor health uses one bounded reader transaction. It returns no native
 connection. `cursor_lag` compares the accepted cursor with the larger of the
 consumed cursor and optional resume floor. `incomplete` remains true after a
@@ -214,8 +240,8 @@ checks readable store metadata and samples physical storage usage. Its intake
 and maintenance capacity fields reuse physical admission checks. They do not
 include tenant logical quotas or reserve space for the next operation.
 Retention health is separate. A lagging processor does not make storage
-unhealthy. The Node protocol has no authenticated purge-floor report; the
-recovery helper does not grant permission to skip input or advance an ACK.
+unhealthy. Authenticated floor reports record recovery loss but do not grant
+permission to skip input or advance an ACK.
 
 [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) A required processor has not consumed a row, or a live witness names it.<br>
 -> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) The transaction keeps that row. An expired row can be deleted on a later call after its protection ends.<br>
@@ -1105,3 +1131,12 @@ passed 41 tests with two ignored; Control passed 196 with two ignored;
 Mithril e2e passed 114 with 248 ignored; Node passed 255 with one ignored.
 Reserve adequacy, failure inside native commit, and Kubernetes partition
 recovery remain unqualified by these tests.
+
+The authenticated floor report passed `wal_floor_replay` and all eight targeted
+data/mTLS tests. Fresh CLI artifacts are in
+`/tmp/araphor-data-qualification.MtrjRy/floor-{startup,recovery}/result.json`.
+Startup passed 16 checks; recovery passed 29. The stale-backup case uses the
+actual Node WAL floor and production mTLS RPC, not a direct gap mutation.
+Repeated reporting after restart preserves the same gap and does not create
+an accepted receipt. Full workspace CI is running after the final source edit.
+These tests do not prove Kubernetes scheduling of the periodic Node report.

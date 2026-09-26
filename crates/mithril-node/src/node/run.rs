@@ -53,6 +53,8 @@ pub(super) struct NodeRun {
     coverage_pending: VecDeque<crate::CoverageIntervalV1>,
     coverage_acked: Option<(u64, u64)>,
     evidence_tick: tokio::time::Interval,
+    floor_tick: tokio::time::Interval,
+    floor_cursor: Option<crate::EvidenceFloorV1>,
     policy_tick: tokio::time::Interval,
     policy_work: PolicyControlWorkV1,
     trace_tick: tokio::time::Interval,
@@ -97,6 +99,9 @@ impl NodeRun {
                     }
                     _ = state.evidence_tick.tick(), if state.connection.is_some() => {
                         state.upload_evidence().await;
+                    }
+                    _ = state.floor_tick.tick(), if state.connection.is_some() => {
+                        state.report_floor().await;
                     }
                     () = state.policy_work.pacing.wait_until_ready(&mut state.policy_tick),
                         if state.connection.is_some() => {
@@ -203,6 +208,8 @@ impl NodeRun {
             coverage_pending: VecDeque::new(),
             coverage_acked: None,
             evidence_tick: Self::interval(Duration::from_millis(100)),
+            floor_tick: Self::interval(Duration::from_secs(1)),
+            floor_cursor: None,
             policy_tick: Self::interval(Duration::from_millis(250)),
             policy_work: PolicyControlWorkV1::default(),
             trace_tick: Self::interval(Duration::from_millis(500)),
@@ -340,6 +347,8 @@ impl NodeRun {
                 self.coverage_pending.clear();
                 self.coverage_acked = None;
                 self.evidence_tick = Self::interval(Duration::from_millis(100));
+                self.floor_tick = Self::interval(Duration::from_secs(1));
+                self.floor_cursor = None;
                 self.policy_tick = Self::interval(Duration::from_millis(250));
                 self.policy_work = PolicyControlWorkV1::default();
                 self.trace_tick = Self::interval(Duration::from_millis(500));
@@ -489,6 +498,25 @@ impl NodeRun {
             self.disconnect();
         }
         Ok(std::ops::ControlFlow::Continue(()))
+    }
+
+    async fn report_floor(&mut self) {
+        let Some(connection) = self.connection.as_mut() else {
+            return;
+        };
+        match self.node.observations.evidence_floor(self.floor_cursor.as_ref()) {
+            Ok(Some(floor)) => {
+                match self.node.await_control_rpc(connection.report_evidence_floor(&floor)).await {
+                    Ok(()) => self.floor_cursor = Some(floor),
+                    Err(error) => self.rpc_failed(error, "report evidence replay floor"),
+                }
+            }
+            Ok(None) => self.floor_cursor = None,
+            Err(error) => {
+                erebor_telemetry::warn!(error; "could not read the evidence replay floor",
+                    node_id = %self.node.config.node_id);
+            }
+        }
     }
 
     async fn upload_evidence(&mut self) {

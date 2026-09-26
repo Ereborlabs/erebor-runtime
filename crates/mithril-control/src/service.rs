@@ -1387,6 +1387,37 @@ impl NodeTrust for ControlPlane {
 impl NodeEvidence for ControlPlane {
     type OpenStream = Pin<Box<dyn Stream<Item = Result<EvidenceAck, Status>> + Send>>;
 
+    async fn report_floor(
+        &self,
+        request: Request<crate::EvidenceFloorRequest>,
+    ) -> Result<Response<crate::EvidenceFloorAccepted>, Status> {
+        let node_id = self.authenticated_node(&request)?;
+        let permit = self.admit_evidence(&node_id)?;
+        let request = request.into_inner();
+        let control = self.clone();
+        let accepted = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let context = request
+                .session
+                .as_ref()
+                .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
+            control.require_session(&node_id, context)?;
+            control.require_current_evidence_trust(&node_id, context)?;
+            let floor = request
+                .floor
+                .as_ref()
+                .ok_or_else(|| Status::invalid_argument("evidence floor is required"))?;
+            control
+                .evidence
+                .as_ref()
+                .ok_or_else(|| Status::unavailable("Control data intake is unavailable"))?
+                .receive_floor(control.evidence_tenant(&node_id)?, &node_id, floor)
+        })
+        .await
+        .map_err(|error| Status::internal(format!("evidence floor worker failed: {error}")))??;
+        Ok(Response::new(accepted))
+    }
+
     async fn upload(
         &self,
         request: Request<EvidenceBatchRequest>,
