@@ -744,3 +744,27 @@ The physical outage harness still uses `control_segment_manifest` and
 `verify_control_segment_prefixes` in
 `crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh`. These checks inspect
 `segments-v2`, not AnalysisStore. They do not qualify the new storage contract.
+
+`data_load_contract` passed with 8,192 records. The CLI load case passed for
+`769ddefb` with 262,144 records and 30,113,740 input bytes. Exact frame digests,
+duplicate replay, Node ACK application, checkpoint, and restart checks passed.
+The result is `/tmp/araphor-load-qualification.yOkYzh/load/result.json`.
+Whole-process measurements are in the adjacent `resources.log`. The binary
+SHA-256 is `820f459369ef5de5fd45c7a14309ef7eb9c5e6092b716e7a9d4fc7dcdd91525f`.
+The host is Linux x86_64. This is a debug build and a single-source synthetic
+run, not a production capacity limit. No kernel evidence was generated.
+Intake, including generation and duplicate retries, took 35.462 seconds.
+Observed ACK p95 was 302.475 ms, with a maximum of 366.727 ms. The maximum
+policy inventory RPC time was 4.441 ms. Reading all bounded pages took
+48.787 seconds. Checkpoint took 1.652 seconds; reopen took 1.101 seconds.
+Sampled peak data files used 60,596,224 bytes. After checkpoint, the database
+used 24,129,536 bytes and the WAL used zero bytes. The process used 131.39
+user CPU seconds, 2.91 system CPU seconds, and 219,188 KiB peak RSS.
+The run uses the production bounded batching worker and unchanged data quotas.
+The final `CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh` gate passed
+for `769ddefb`: formatting, workspace checks, strict Clippy, and workspace tests.
+The data crate passed 45 tests with two ignored; Control passed 196 with two
+ignored; Mithril e2e passed 117 with 250 ignored; Node passed 256 with one ignored.
+Backup quota accounting, larger and
+multi-tenant load, required reserve sizing, old-writer removal, and physical
+qualification remain **Not done**.

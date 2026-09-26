@@ -240,7 +240,7 @@ workspace checks, strict Clippy, and workspace tests. The data crate passed
 -> [EffectObservationStore::bounded_ingestion_queue](../../../../crates/mithril-node/src/observation.rs) The fixture queues each group and runs the production Node worker on a blocking thread.<br>
 -> [ControlConnection::send_evidence_group](../../../../crates/mithril-node/src/control.rs) Node sends its durable frames through the authenticated stream.<br>
 -> [DataStoreQualification::load_groups](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The fixture checks a policy inventory RPC, durable ACK, empty Node pending input, and duplicate replay.<br>
--> [AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/mod.rs) Bounded reads reproduce the exact ordered input digest.<br>
+-> [AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/read.rs) Bounded reads reproduce the exact ordered input digest.<br>
 -> [AnalysisStore::checkpoint](../../../../crates/araphor-data/src/analysis/backup.rs) The owner checkpoints before shutdown and validated reopen.
 
 The fixture uses the production quotas and one source. It samples file sizes
@@ -248,7 +248,10 @@ after each group; these samples are not a continuous peak measurement. The
 observed ACK time includes the intervening policy RPC. The result includes
 all group samples and elapsed read, checkpoint, and restart times. The
 `data_load_contract` test runs the same path with 8,192 records. Its focused run
-passed. The larger CLI measurement and final workspace gate are pending.
+passed. The larger CLI measurement passed for `769ddefb`; its result is recorded
+in the data-store phase. The final workspace gate passed for that commit:
+formatting, workspace checks, strict Clippy, and all workspace tests. Mithril
+e2e passed 117 tests with 250 ignored. No Rust source changed after the gate.
 This case does not qualify multi-tenant load, policy rollout under load,
 worst-case payloads, full storage quotas, or maintenance reserve sizing.
 
