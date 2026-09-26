@@ -318,6 +318,22 @@ separate destination-space check; no aggregate external-backup quota exists.
 `analysis_store_native_limits` reads the actual DuckDB settings. Physical
 reclamation and reserve adequacy still require the physical storage case.
 
+[`DataStoreQualification::capacity_recovery`](../../../../crates/mithril-e2e/src/discovery/data_store.rs)
+is the shared scenario for `data_capacity_recovery` and `data_full_disk`.
+The first creates a sparse quota file. The second allocates every free block
+on an empty, task-owned 1-GiB tmpfs and checks `ENOSPC`. Neither changes a
+production owner or existing deployment data. Both use Node WAL and mTLS
+intake. Rejection leaves the receipt, revision, accepted frame, and pending
+Node batch unchanged. A policy RPC still works. After padding release, a new
+evidence stream retries without a Control restart. A duplicate has no second
+effect; store reopen retains both records and cursor 2.
+The [disk-full harness](../../../../crates/mithril-e2e/harness/discovery/disk-full.sh)
+runs the lightweight case before the full-filesystem case. Its log includes
+source state, kernel, test-binary digest, capacity samples, and exact receipts.
+The harness unmounts only its temporary filesystem. This is real filesystem
+exhaustion with synthetic mTLS input. It is not hardware power-loss, native
+commit-failure, reserve-sizing, or Kubernetes partition proof.
+
 [AnalysisStore::logical_usage](../../../../crates/araphor-data/src/analysis/quota.rs) DuckDB totals variable bytes and a fixed 256-byte charge for each tenant-owned row.<br>
 -> [AnalysisStore::check_logical](../../../../crates/araphor-data/src/analysis/quota.rs) A mutating transaction checks global and tenant bytes and per-family revision counts before commit.<br>
 -> [AnalysisStore::check_witnesses](../../../../crates/araphor-data/src/analysis/quota.rs) A result transaction checks unique live raw witnesses and pinned context against the tenant witness budget.<br>
@@ -1075,3 +1091,15 @@ backup revision 12, an 8,400,896-byte database, and no native WAL after
 checkpoint. These results use temporary stores and synthetic input. They do
 not qualify physical storage/partition recovery, full-disk reserves, large-index
 compaction cost, or every process-crash boundary.
+
+The paired capacity tests passed on Linux 6.8.0-139-generic, x86_64. The log at
+`/tmp/araphor-data-qualification.MtrjRy/disk-full-final.log` identifies the test
+additions above `37324d30`, dirty paths, and executable digest. Actual tmpfs
+exhaustion left zero free bytes; intake rejected the batch without a new
+receipt or revision. Policy reads and accepted evidence reads still worked.
+Padding release permitted retry without a Control restart. The reopened store
+contains two records at cursor 2 and commit revision 3. The seven enabled
+data-store tests also passed. The full workspace gate is still active after
+formatting, compilation, strict Clippy, and 41 enabled data-crate tests passed.
+Reserve adequacy, failure inside native commit, and Kubernetes partition
+recovery remain unqualified by these tests.
