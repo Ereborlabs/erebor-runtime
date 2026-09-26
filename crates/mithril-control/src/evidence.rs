@@ -318,7 +318,7 @@ impl EvidenceIntakeOwner {
     }
 
     #[allow(clippy::result_large_err)]
-    fn validate_batch(
+    pub(crate) fn validate_batch(
         &self,
         authenticated: &AuthenticatedEvidenceNodeV1,
         batch: EvidenceBatch,

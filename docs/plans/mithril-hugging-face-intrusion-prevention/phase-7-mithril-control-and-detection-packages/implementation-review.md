@@ -90,11 +90,15 @@ production intake.
 -> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) The transaction keeps that row. An expired row can be deleted on a later call after its protection ends.<br>
 -> [AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/read.rs) A read distinguishes committed expiry from an unexplained missing row.
 
-Not implemented [Control intake](../../../../crates/mithril-control/src/evidence.rs) Control still writes the chunked evidence store. No offline import, single-writer cutover, production retention scheduler, or mTLS recovery case proves the new path.
+Not implemented [Control intake](../../../../crates/mithril-control/src/evidence.rs) Control still writes the chunked evidence store. No single-writer cutover, production retention scheduler, or mTLS recovery case proves the new path.
 
 [ControlStore::read_evidence_frames_page](../../../../crates/mithril-control/src/store/evidence_read.rs) The old store exports at most one checked evidence page with original frame bytes and cursor ends.<br>
 -> [EvidenceSegmentReadV1::read_frame](../../../../crates/mithril-control/src/evidence_segment.rs) Each frame is read from the retained segment and its length and checksum are checked again.<br>
--> Not implemented [offline import](phase-7-2-data-store.md) No caller transfers these pages into AnalysisStore or selects it for production intake yet.
+-> [ControlStore::copy_legacy_evidence](../../../../crates/mithril-control/src/store/evidence_upgrade.rs) An offline caller enumerates accepted and coverage-only sources. It reuses the production validator and copies retained original frames and coverage bytes.<br>
+-> [AnalysisStore::begin_legacy_import](../../../../crates/araphor-data/src/analysis/legacy.rs) A per-source marker fixes the accepted cursor, retained floor, CPU, and expected digests. Restart repeats the same import or fails on a changed source.<br>
+-> [AnalysisStore::import_legacy_batch](../../../../crates/araphor-data/src/analysis/mod.rs) Imported events have unknown intake time. An unfinished import rejects live event writes for that source.<br>
+-> [AnalysisStore::finish_legacy_import](../../../../crates/araphor-data/src/analysis/legacy.rs) The data owner checks exact event order, count, frame digests, coverage count, report digest, and receipt before completing the source marker.<br>
+-> Not implemented [full upgrade](phase-7-2-data-store.md) The copy has no global activation marker, backup, referenced analysis/trace migration, or production intake selection. It refuses old sources without CPU proof or with an acknowledged coverage revision whose report is absent.
 
 [inspect_read_only_shape](../../../../crates/araphor-data/src/analysis/admission.rs) DuckDB-dialect parser rejects unauthorized SQL shape and external access.<br>
 -> [ReadOnlyGuard::parse](../../../../crates/araphor-data/src/analysis/admission.rs) The bound check reuses the admitted syntax tree; it does not parse the statement a second time.<br>

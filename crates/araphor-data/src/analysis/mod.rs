@@ -19,6 +19,7 @@ use crate::{
 mod admission;
 mod backup;
 mod context;
+mod legacy;
 mod progress;
 mod read;
 mod retention;
@@ -26,6 +27,7 @@ mod schema;
 
 pub use backup::{AnalysisBackupManifestV1, AnalysisRecoveryStatusV1};
 pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
+pub use legacy::LegacySourceImportV1;
 pub use progress::{
     AnalysisContextRefV1, AnalysisProcessorGapV1, AnalysisResultCommitV1, AnalysisResultReceiptV1,
     AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,
@@ -96,6 +98,7 @@ pub struct ValidatedEvidenceBatchV1 {
     pub cpu_id: u32,
     pub first_cursor: u64,
     pub last_cursor: u64,
+    /// Positive for live intake. Zero means unknown only during legacy import.
     pub intake_utc_ns: u64,
     pub framed_records: prost::bytes::Bytes,
     pub frame_ends: Vec<usize>,
@@ -267,6 +270,17 @@ impl AnalysisStore {
                     tenant_id BLOB NOT NULL,
                     node_boot_id BLOB NOT NULL,
                     label_epoch UBIGINT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS legacy_import_sources (
+                    stream_key BLOB PRIMARY KEY,
+                    tenant_id BLOB NOT NULL,
+                    cpu_id UINTEGER NOT NULL,
+                    accepted_cursor UBIGINT NOT NULL,
+                    retained_floor UBIGINT NOT NULL,
+                    coverage_revision UBIGINT NOT NULL,
+                    event_sha256 BLOB NOT NULL,
+                    coverage_sha256 BLOB,
+                    complete BOOLEAN NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS events (
                     stream_key BLOB NOT NULL,
@@ -492,6 +506,30 @@ impl AnalysisStore {
         identity: EvidenceIntakeIdentityV1,
         batch: ValidatedEvidenceBatchV1,
     ) -> Result<EvidenceStoreOutcomeV1> {
+        if batch.intake_utc_ns == 0 {
+            return self.reject("live evidence has no intake time");
+        }
+        let intake_utc_ns = batch.intake_utc_ns;
+        self.commit_evidence(identity, batch, Some(intake_utc_ns))
+    }
+
+    pub fn import_legacy_batch(
+        &self,
+        identity: EvidenceIntakeIdentityV1,
+        batch: ValidatedEvidenceBatchV1,
+    ) -> Result<EvidenceStoreOutcomeV1> {
+        if batch.intake_utc_ns != 0 {
+            return self.reject("legacy evidence must not invent an intake time");
+        }
+        self.commit_evidence(identity, batch, None)
+    }
+
+    fn commit_evidence(
+        &self,
+        identity: EvidenceIntakeIdentityV1,
+        batch: ValidatedEvidenceBatchV1,
+        intake_utc_ns: Option<u64>,
+    ) -> Result<EvidenceStoreOutcomeV1> {
         self.validate_batch(&identity, &batch)?;
         let key = source_key(&identity);
         let identity_json = serde_json::to_string(&identity).context(JsonSnafu {
@@ -501,6 +539,26 @@ impl AnalysisStore {
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin evidence",
         })?;
+        let legacy: Option<(u64, u64, bool)> = transaction
+            .query_row(
+                "SELECT accepted_cursor, retained_floor, complete FROM legacy_import_sources
+                 WHERE stream_key = ? AND tenant_id = ?",
+                params![key.as_slice(), identity.tenant_id.as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .context(AnalysisDatabaseSnafu {
+                operation: "check legacy import state",
+            })?;
+        match (intake_utc_ns, legacy) {
+            (None, Some((accepted, floor, _)))
+                if batch.first_cursor > floor && batch.last_cursor <= accepted => {}
+            (Some(_), Some((_, _, false))) => {
+                return self.reject("live evidence cannot enter an unfinished legacy import");
+            }
+            (None, _) => return self.reject("legacy evidence is outside its import range"),
+            (Some(_), _) => {}
+        }
         let bound = Self::bind_source(&transaction, &self.root, &identity)?;
         let previous = Self::read_receipt_from(&transaction, &self.root, &identity, &key)?;
         if previous
@@ -597,7 +655,7 @@ impl AnalysisStore {
                         frame_digest.as_slice(),
                         revision,
                         new_records,
-                        batch.intake_utc_ns,
+                        intake_utc_ns,
                     ],
                 )
                 .context(AnalysisDatabaseSnafu {
@@ -791,7 +849,6 @@ impl AnalysisStore {
     ) -> Result<()> {
         if !valid_source_identity(identity)
             || batch.first_cursor == 0
-            || batch.intake_utc_ns == 0
             || batch.frame_ends.is_empty()
             || batch.frame_ends.len() > MAX_EVIDENCE_BATCH_RECORDS
             || batch.framed_records.len() > MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES
