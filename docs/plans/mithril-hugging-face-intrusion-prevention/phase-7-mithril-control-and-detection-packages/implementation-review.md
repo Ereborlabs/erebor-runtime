@@ -326,6 +326,17 @@ ends a retained page before the next recorded expiry. The page returns the
 gap's first cursor as its continuation. A read at that cursor returns explicit
 expiry. Thus a later expired row does not hide an earlier retained witness.
 An unexplained missing row still rejects the page.
+The SQL upper cursor is the minimum of that boundary and the first cursor
+plus 256, with saturating addition. The range permits one page and one
+look-ahead record. The continuity check includes that look-ahead record.
+Output limits remain 256 records and 1 MiB.
+`analysis_store_bounded_read` in
+[analysis tests](../../../../crates/araphor-data/src/analysis/mod.rs) checks
+two full pages, a final row, an empty tail, foreign scope, restart, the exact
+byte boundary, and a missing look-ahead cursor. The regression, all 45 enabled
+data-owner tests, and all ten enabled data-store mTLS tests passed. The full
+workspace gate is pending. The repeated load result is recorded in the
+data-store phase result.
 
 The [retirement tests](../../../../crates/araphor-data/src/analysis/retirement.rs)
 check expected progress and cutoff, tenant isolation, quota rollback, retained

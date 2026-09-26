@@ -66,7 +66,7 @@ impl AnalysisStore {
                 key.as_slice(),
                 identity.tenant_id.as_slice(),
                 first_cursor,
-                page_end,
+                page_end.min(first_cursor.saturating_add(MAX_ANALYSIS_PAGE_RECORDS as u64)),
                 MAX_ANALYSIS_PAGE_RECORDS as u32 + 1,
             ])
             .context(AnalysisDatabaseSnafu {
