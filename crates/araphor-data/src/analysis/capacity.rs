@@ -10,10 +10,13 @@ const WRITE_RESERVE: u64 = 256 * 1024 * 1024;
 const MAX_STORAGE_ENTRIES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct StorageLimitsV1 {
     pub disk_max_bytes: u64,
     pub policy_reserve_bytes: u64,
+    pub logical_max_bytes: u64,
+    pub tenant_max_bytes: u64,
+    pub witness_max_bytes: u64,
 }
 
 impl Default for StorageLimitsV1 {
@@ -21,6 +24,9 @@ impl Default for StorageLimitsV1 {
         Self {
             disk_max_bytes: 8 * 1024 * 1024 * 1024,
             policy_reserve_bytes: 256 * 1024 * 1024,
+            logical_max_bytes: 8 * 1024 * 1024 * 1024,
+            tenant_max_bytes: 2 * 1024 * 1024 * 1024,
+            witness_max_bytes: 512 * 1024 * 1024,
         }
     }
 }
@@ -29,6 +35,9 @@ impl StorageLimitsV1 {
     pub fn valid(&self) -> bool {
         self.disk_max_bytes >= 4 * WRITE_RESERVE
             && self.policy_reserve_bytes >= WRITE_RESERVE
+            && self.tenant_max_bytes > 0
+            && self.tenant_max_bytes <= self.logical_max_bytes
+            && self.witness_max_bytes > 0
             && self
                 .policy_reserve_bytes
                 .checked_add(self.disk_max_bytes)

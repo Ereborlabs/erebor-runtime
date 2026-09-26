@@ -1,4 +1,4 @@
-use std::fs::{self, DirBuilder, File, OpenOptions};
+use std::fs::{self, DirBuilder, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -23,6 +23,7 @@ mod capacity;
 mod connection;
 mod context;
 mod progress;
+mod quota;
 mod read;
 mod retention;
 mod schema;
@@ -57,7 +58,7 @@ pub struct AnalysisStore {
     retention: RetentionLimitsV1,
     storage: StorageLimitsV1,
     // Release the lease after the database connection closes.
-    _lease: File,
+    _lease: connection::AnalysisLease,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -213,6 +214,7 @@ impl AnalysisStore {
             }
             .build()
         })?;
+        let lease = connection::AnalysisLease::from(lease);
 
         let path = root.join("analysis.duckdb");
         let existing = match fs::symlink_metadata(&path) {
@@ -757,6 +759,7 @@ impl AnalysisStore {
         if bound {
             relations.push("source_bindings");
         }
+        self.check_logical(&transaction, identity.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &relations)?;
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit evidence",
@@ -868,6 +871,7 @@ impl AnalysisStore {
         if bound {
             relations.push("source_bindings");
         }
+        self.check_logical(&transaction, identity.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &relations)?;
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit coverage",
