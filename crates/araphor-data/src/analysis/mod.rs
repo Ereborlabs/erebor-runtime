@@ -1,5 +1,5 @@
-use std::fs::{self, DirBuilder, OpenOptions};
-use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, RwLock};
@@ -165,64 +165,27 @@ impl AnalysisStore {
             }
             .fail();
         }
-        if !root.is_absolute() {
-            return AnalysisStateSnafu {
-                path: root,
-                reason: "the analysis path is not absolute".to_owned(),
+        let lease = connection::AnalysisLease::acquire(&root)?;
+        let pending = root.join("restore.pending");
+        match fs::symlink_metadata(&pending) {
+            Ok(_) => {
+                return Self::reject_path(
+                    &root,
+                    "the analysis restore is incomplete; restore into a new directory",
+                );
             }
-            .fail();
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => return Err(source).context(IoSnafu { path: &pending }),
         }
-        match DirBuilder::new().mode(0o700).create(&root) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(source) => return Err(source).context(IoSnafu { path: &root }),
-        }
-        let metadata = fs::symlink_metadata(&root).context(IoSnafu { path: &root })?;
-        if !metadata.is_dir() || metadata.permissions().mode() & 0o077 != 0 {
-            return AnalysisStateSnafu {
-                path: root,
-                reason: "the analysis directory is not private".to_owned(),
-            }
-            .fail();
-        }
-        let filesystem = rustix::fs::statfs(&root)
-            .map_err(std::io::Error::from)
-            .context(IoSnafu { path: &root })?;
-        if !matches!(filesystem.f_type, 0xef53 | 0x0102_1994) {
-            return AnalysisStateSnafu {
-                path: root,
-                reason: "the analysis filesystem is not qualified".to_owned(),
-            }
-            .fail();
-        }
+        Self::open_leased(root, retention, storage, lease)
+    }
 
-        let lease_path = root.join("analysis.lock");
-        let lease = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .mode(0o600)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
-            .open(&lease_path)
-            .context(IoSnafu { path: &lease_path })?;
-        let lease_metadata = lease.metadata().context(IoSnafu { path: &lease_path })?;
-        if !lease_metadata.is_file() || lease_metadata.permissions().mode() & 0o077 != 0 {
-            return AnalysisStateSnafu {
-                path: lease_path,
-                reason: "the analysis lease file is not private".to_owned(),
-            }
-            .fail();
-        }
-        lease.try_lock().map_err(|error| {
-            AnalysisStateSnafu {
-                path: root.clone(),
-                reason: format!("the analysis writer is already owned: {error}"),
-            }
-            .build()
-        })?;
-        let lease = connection::AnalysisLease::from(lease);
-
+    fn open_leased(
+        root: PathBuf,
+        retention: RetentionLimitsV1,
+        storage: StorageLimitsV1,
+        lease: connection::AnalysisLease,
+    ) -> Result<Self> {
         let path = root.join("analysis.duckdb");
         let existing = match fs::symlink_metadata(&path) {
             Ok(metadata) => {

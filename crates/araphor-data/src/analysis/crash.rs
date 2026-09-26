@@ -2,13 +2,327 @@ use super::*;
 
 impl AnalysisStore {
     pub(super) fn crash_at(&self, point: &str) {
+        Self::crash_path(&self.root, point);
+    }
+
+    pub(super) fn crash_path(root: &Path, point: &str) {
         if std::env::var("ARAPHOR_CRASH_POINT").as_deref() == Ok(point)
-            && std::env::var_os("ARAPHOR_CRASH_ROOT")
-                .is_some_and(|root| Path::new(&root) == self.root)
+            && std::env::var_os("ARAPHOR_CRASH_ROOT").is_some_and(|value| Path::new(&value) == root)
         {
             std::process::exit(73);
         }
     }
+}
+
+#[test]
+fn analysis_store_restore_crashes() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
+        let root = PathBuf::from(root);
+        let backup = root
+            .parent()
+            .ok_or("restore parent absent")?
+            .join("backup.duckdb");
+        AnalysisStore::restore(&backup, &root)?;
+        return Err("the requested restore crash did not occur".into());
+    }
+    let source = EvidenceIntakeIdentityV1 {
+        tenant_id: [1; 16],
+        node_id: "node-a".into(),
+        node_boot_id: [2; 16],
+        label_epoch: 1,
+        source_id: [3; 16],
+        source_epoch: 1,
+    };
+    for point in [
+        "restore.marked",
+        "restore.before",
+        "restore.after",
+        "restore.ready",
+    ] {
+        let directory = tempfile::tempdir()?;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+        let original = directory.path().join("original");
+        let store = AnalysisStore::open(&original)?;
+        store.accept_validated_batch(
+            source.clone(),
+            ValidatedEvidenceBatchV1 {
+                cpu_id: 0,
+                first_cursor: 1,
+                last_cursor: 1,
+                intake_utc_ns: 100,
+                framed_records: b"record".to_vec().into(),
+                frame_ends: vec![6],
+            },
+        )?;
+        let before = store.meta()?;
+        let backup = directory.path().join("backup.duckdb");
+        let manifest = store.backup(&backup)?;
+        assert!(AnalysisStore::restore(&backup, &original).is_err());
+        assert!(!original.join("restore.pending").exists());
+        assert_eq!(store.meta()?, before);
+        let root = directory.path().join("restored");
+        let status = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", "analysis::crash::analysis_store_restore_crashes"])
+            .env("ARAPHOR_CRASH_ROOT", &root)
+            .env("ARAPHOR_CRASH_POINT", point)
+            .status()?;
+        assert_eq!(status.code(), Some(73), "{point}");
+        assert_eq!(
+            AnalysisStore::file_digest(&backup)?,
+            manifest.database_sha256
+        );
+        assert_eq!(store.meta()?, before, "{point}");
+        let ready = point == "restore.ready";
+        assert_eq!(root.join("restore.pending").exists(), !ready, "{point}");
+        if ready {
+            let reopened = AnalysisStore::open(&root)?;
+            let mut expected = before.clone();
+            expected.recovery_epoch += 1;
+            assert_eq!(reopened.meta()?, expected);
+            assert_eq!(
+                reopened.read_page(&source, 1)?.records[0].framed_record,
+                b"record"
+            );
+            drop(reopened);
+            assert_eq!(AnalysisStore::open(&root)?.meta()?, expected);
+        } else {
+            for _ in 0..2 {
+                assert!(
+                    matches!(AnalysisStore::open(&root), Err(crate::Error::AnalysisState { reason, .. })
+                    if reason.contains("restore is incomplete")),
+                    "{point}"
+                );
+            }
+            assert!(AnalysisStore::restore(&backup, &root).is_err());
+            assert_eq!(
+                root.join("analysis.duckdb").exists(),
+                point != "restore.marked"
+            );
+        }
+        let retry = AnalysisStore::restore(&backup, &directory.path().join("retry"))?;
+        assert_eq!(retry.meta()?.recovery_epoch, before.recovery_epoch + 1);
+        assert_eq!(retry.meta()?.commit_revision, before.commit_revision);
+        assert_eq!(
+            retry.read_page(&source, 1)?.records[0].framed_record,
+            b"record"
+        );
+        assert_eq!(
+            AnalysisStore::file_digest(&backup)?,
+            manifest.database_sha256
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn analysis_store_processor_crashes() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let scope = ProcessorScopeV1 {
+        processor_id: "processor".into(),
+        method_version: 1,
+        identity: EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "node-a".into(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        },
+    };
+    let input = ProcessorRetirementV1 {
+        scope: scope.clone(),
+        change_id: "retire-1".into(),
+        reason: "Retire this detector version.".into(),
+        expected_cursor: 1,
+        cutoff_cursor: 3,
+    };
+    let limits = RetentionLimitsV1 {
+        raw_max_age_ns: 50,
+        raw_max_bytes: 1024,
+    };
+    let apply = |store: &AnalysisStore, kind: &str| -> Result<()> {
+        match kind {
+            "register" => {
+                store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
+            }
+            "resume" => {
+                store.resume_optional(&scope)?;
+            }
+            "retire" => {
+                store.retire_required(&input)?;
+            }
+            _ => return store.reject("unknown crash case"),
+        }
+        Ok(())
+    };
+    if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
+        let store = AnalysisStore::open(PathBuf::from(root))?;
+        let point = std::env::var("ARAPHOR_CRASH_POINT")?;
+        let (kind, _) = point.split_once('.').ok_or("invalid crash point")?;
+        apply(&store, kind)?;
+        return Err("the requested processor crash did not occur".into());
+    }
+    for kind in ["register", "resume", "retire"] {
+        for boundary in ["before", "after"] {
+            let point = format!("{kind}.{boundary}");
+            let directory = tempfile::tempdir()?;
+            let root = directory.path().join("analysis");
+            let store = AnalysisStore::open(&root)?;
+            store.accept_validated_batch(
+                scope.identity.clone(),
+                ValidatedEvidenceBatchV1 {
+                    cpu_id: 0,
+                    first_cursor: 1,
+                    last_cursor: 3,
+                    intake_utc_ns: 100,
+                    framed_records: b"abc".to_vec().into(),
+                    frame_ends: vec![1, 2, 3],
+                },
+            )?;
+            if kind == "resume" {
+                store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
+                EvidenceRetentionOwner::new(&store, limits)?.retain(&scope.identity, 200)?;
+            } else if kind == "retire" {
+                store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
+                store.commit_result(&AnalysisResultCommitV1 {
+                    scope: scope.clone(),
+                    expected_cursor: 0,
+                    consumed_cursor: 1,
+                    coverage_revision: 0,
+                    context_revision: 0,
+                    result_id: "finding".into(),
+                    body: b"result".to_vec(),
+                    created_utc_ns: 101,
+                    witnesses: vec![AnalysisWitnessV1 {
+                        identity: scope.identity.clone(),
+                        cursor: 1,
+                        expires_utc_ns: 1_000,
+                    }],
+                    context_refs: vec![],
+                })?;
+            }
+            let before = store.meta()?;
+            drop(store);
+            let status = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "analysis::crash::analysis_store_processor_crashes",
+                ])
+                .env("ARAPHOR_CRASH_ROOT", &root)
+                .env("ARAPHOR_CRASH_POINT", &point)
+                .status()?;
+            assert_eq!(status.code(), Some(73), "{point}");
+            let store = AnalysisStore::open(&root)?;
+            let verify = |store: &AnalysisStore,
+                          applied: bool|
+             -> std::result::Result<(), Box<dyn std::error::Error>> {
+                let mut expected = before.clone();
+                expected.commit_revision += u64::from(applied);
+                assert_eq!(store.meta()?, expected, "{point}");
+                assert_eq!(
+                    *store.subscribe_revision().borrow(),
+                    expected.commit_revision
+                );
+                let health = store.processor_health(&scope)?;
+                if kind == "register" && !applied {
+                    assert!(health.is_none());
+                } else {
+                    let health = health.ok_or("processor absent")?;
+                    assert_eq!(health.accepted_cursor, 3);
+                    assert_eq!(health.consumed_cursor, u64::from(kind == "retire"));
+                    assert_eq!(
+                        health.resume_floor,
+                        if applied && kind == "resume" { 3 } else { 0 }
+                    );
+                    let state = match (kind, applied) {
+                        ("retire", true) => ProcessorStateV1::Retired,
+                        ("resume", true) => ProcessorStateV1::Current,
+                        ("resume", false) => ProcessorStateV1::ExpiredInput(AnalysisGapV1 {
+                            first_cursor: 1,
+                            last_cursor: 3,
+                            commit_revision: 3,
+                        }),
+                        _ => ProcessorStateV1::Lagging,
+                    };
+                    assert_eq!(health.state, state, "{point}");
+                    assert_eq!(
+                        health.incomplete,
+                        kind == "resume" || (kind == "retire" && applied)
+                    );
+                }
+                assert_eq!(
+                    store.processor_retirement(&scope)?,
+                    (kind == "retire" && applied)
+                        .then(|| (input.clone(), expected.commit_revision))
+                );
+                let gaps: (u64, Option<u64>, Option<u64>, Option<u64>) = store.reader()?.get()?.query_row(
+                    "SELECT COUNT(*), MIN(first_cursor), MAX(last_cursor), MAX(commit_revision) FROM processor_gaps",
+                    [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )?;
+                assert_eq!(
+                    gaps,
+                    if applied && kind != "register" {
+                        (
+                            1,
+                            Some(if kind == "retire" { 2 } else { 1 }),
+                            Some(3),
+                            Some(expected.commit_revision),
+                        )
+                    } else {
+                        (0, None, None, None)
+                    },
+                    "{point}"
+                );
+                let receipt = store
+                    .source_receipt(&scope.identity)?
+                    .ok_or("receipt absent")?;
+                assert_eq!(receipt.contiguous_cursor, 3);
+                assert_eq!(receipt.retained_floor, if kind == "resume" { 3 } else { 0 });
+                if kind != "resume" {
+                    assert_eq!(store.read_page(&scope.identity, 1)?.records.len(), 3);
+                }
+                if kind == "retire" {
+                    assert_eq!(
+                        store.read_result(scope.identity.tenant_id, "finding")?,
+                        Some(b"result".to_vec())
+                    );
+                    let pins: u64 = store.reader()?.get()?.query_row(
+                        "SELECT COUNT(*) FROM evidence_refs",
+                        [],
+                        |row| row.get(0),
+                    )?;
+                    assert_eq!(pins, 1);
+                }
+                let mut foreign = scope.clone();
+                foreign.identity.tenant_id = [9; 16];
+                assert!(store.processor_health(&foreign)?.is_none());
+                assert!(store.processor_retirement(&foreign)?.is_none());
+                Ok(())
+            };
+            verify(&store, boundary == "after")?;
+            apply(&store, kind)?;
+            verify(&store, true)?;
+            let watch = store.subscribe_revision();
+            apply(&store, kind)?;
+            assert!(!watch.has_changed()?);
+            verify(&store, true)?;
+            drop(store);
+            let store = AnalysisStore::open(&root)?;
+            verify(&store, true)?;
+            if kind == "retire" {
+                assert!(store
+                    .register_processor(&scope, ProcessorClassV1::Required, 1)
+                    .is_err());
+                let result =
+                    EvidenceRetentionOwner::new(&store, limits)?.retain(&scope.identity, 200)?;
+                assert_eq!(result.removed_records, 2);
+                assert_eq!(
+                    store.read_page(&scope.identity, 1)?.records[0].framed_record,
+                    b"a"
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 #[test]

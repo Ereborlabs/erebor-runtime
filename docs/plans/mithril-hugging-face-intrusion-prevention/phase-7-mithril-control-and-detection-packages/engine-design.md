@@ -691,6 +691,12 @@ file while omitting its WAL. Restore into an empty owned directory; validate
 schema, digests, references, receipts and processor progress before activation.
 A restore uses a new recovery epoch so pre-restore query cursors fail explicitly.
 Keep the previous valid copy until the restored store passes checks.
+Restore holds the destination lease throughout copy, validation, and epoch
+commit. A synced `restore.pending` marker prevents normal startup from opening
+an incomplete restore. Clear the marker only after the new epoch is durable,
+then sync the directory before exposing the owner. If the marker remains after
+interruption, keep that directory unavailable and restore the backup into a new empty
+directory. Do not remove the marker to enable an incomplete copy.
 
 After restore, a source may already have discarded input acknowledged after
 the backup. The Node's retained floor and the restored receipt expose that gap.

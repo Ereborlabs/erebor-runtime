@@ -113,9 +113,13 @@ impl AnalysisStore {
             &["processor_progress"]
         };
         Self::record_revision(&transaction, revision, relations)?;
+        #[cfg(test)]
+        self.crash_at("retire.before");
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit processor retirement",
         })?;
+        #[cfg(test)]
+        self.crash_at("retire.after");
         self.revision.send_replace(revision);
         Ok(revision)
     }

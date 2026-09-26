@@ -118,6 +118,14 @@ Store recovery fails
    Keep the data-directory lease throughout backup. Close readers before the
    writer. Attempt validated reopen after a copy error. If reopen fails, keep
    data access closed until restart; do not create an empty replacement store.
+   Restore holds the destination lease before it checks that the directory is
+   empty except for that lease file. Create and sync `restore.pending` before
+   copying the backup. Normal startup rejects that marker before it opens the
+   database. Keep the marker until validation and the new recovery-epoch commit
+   succeed. Remove the marker and sync the directory before returning the
+   restored owner. A copy with a pending marker remains unavailable. Retry from the
+   unchanged backup into a new empty directory; do not remove the marker to
+   enable the incomplete copy.
    Pin DuckDB core 1.5.5 through Rust binding 1.10505.0. Enable native
    `vacuum_rebuild_indexes` at open and reopen with the maximum unsigned
    64-bit threshold. Keep primary keys. Do not skip compaction because a
@@ -170,6 +178,17 @@ idempotent retry. A duplicate retry must not publish a revision notification.
 Reopen again after retry. Use temporary stores and test-only exit hooks.
 These checks do not prove interruption inside native commit or hardware power
 loss.
+
+Use `analysis_store_processor_crashes` for exits before and after registration,
+optional resume, and required retirement. Require atomic progress and missing
+ranges, an exact retirement record, unchanged consumed cursors, retained
+witnesses, tenant isolation, and retry without a second revision.
+Use `analysis_store_restore_crashes` after the pending marker, before and after
+the epoch commit, and after readiness publication. An incomplete copy must
+reject repeated startup without changing the backup. A ready copy must retain
+the new epoch across restart. Run the mTLS startup case with a pending-marker
+fixture and require unavailable evidence/coverage, retained Node input, and
+unchanged policy service and database bytes.
 
 Add `data-store-recovery` to the discovery e2e binary. Through the production
 mTLS service, submit data, lose ACK, resend, restart, process and expire input.
@@ -592,3 +611,23 @@ includes the twelve result, retention, and input commit-crash cases. Processor
 lifecycle and restore boundaries, a Control crash before ACK, and the remaining
 capacity, load, and physical requirements are not proved by these cases.
 The complete phase remains **Not done**.
+
+Restore now holds the destination lease from the empty-directory check until
+owner return. A synced pending marker blocks normal startup before native open.
+The marker remains through copy, validation, and the recovery-epoch commit.
+The same lease acquisition method serves normal startup and restore. No second
+writer, migration, or public configuration option is added.
+`analysis_store_processor_crashes` passed six before/after cases for
+registration, optional resume, and required retirement. The cases check atomic
+missing ranges and progress, exact retirement records, retained witnesses,
+tenant isolation, and retry. `analysis_store_restore_crashes` passed four cases
+at pending-marker creation, before and after the epoch commit, and after marker
+removal. Incomplete copies reject repeated startup. Ready copies retain the new
+epoch. The source store and backup remain unchanged, and a new destination can
+restore from that backup.
+All 44 enabled data tests and seven enabled data-store mTLS tests passed.
+The rebuilt CLI passed startup (18 checks) and recovery (29 checks). Results
+are in `/tmp/araphor-data-qualification.MtrjRy/restore-{startup,recovery}/result.json`.
+The startup case uses a pending-marker fixture to prove rejected evidence and
+coverage ACK, retained Node input, unchanged database bytes, and working policy
+RPCs. The full workspace gate is pending. The complete phase remains **Not done**.
