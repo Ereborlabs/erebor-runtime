@@ -43,7 +43,7 @@ pub use retention::{
 };
 pub use retirement::ProcessorRetirementV1;
 
-pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.4.4";
+pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
 const ANALYSIS_SCHEMA_VERSION: i64 = 5;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
@@ -1145,7 +1145,7 @@ mod tests {
             .context(AnalysisDatabaseSnafu {
                 operation: "read engine version",
             })?;
-        assert!(version.contains(ANALYSIS_DUCKDB_BINDING_VERSION));
+        assert_eq!(version, "v1.5.5");
         assert!(writer
             .execute_batch("COPY (SELECT 1) TO '/tmp/araphor-analysis-forbidden.csv'")
             .is_err());

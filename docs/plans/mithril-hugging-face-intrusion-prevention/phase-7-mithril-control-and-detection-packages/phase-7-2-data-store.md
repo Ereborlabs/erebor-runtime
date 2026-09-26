@@ -105,6 +105,14 @@ Store recovery fails
    Keep the data-directory lease throughout backup. Close readers before the
    writer. Attempt validated reopen after a copy error. If reopen fails, keep
    data access closed until restart; do not create an empty replacement store.
+   Pin DuckDB core 1.5.5 through Rust binding 1.10505.0. Enable native
+   `vacuum_rebuild_indexes` at open and reopen with the maximum unsigned
+   64-bit threshold. Keep primary keys. Do not skip compaction because a
+   table exceeds a separate row-count threshold. Existing logical quotas,
+   native resource settings, and maintenance admission still apply. This
+   native option is experimental and rebuilds affected indexes. Qualify its
+   cost and recovery before production use. Check repeated file reuse with
+   live exact witnesses; do not require each partial deletion to shrink a file.
 8. Activate the data owner in a clean development deployment. Control opens
    a private AnalysisStore with the current schema and selects it as the only
    evidence writer before Node intake starts. Reject an unsupported schema
@@ -435,5 +443,26 @@ Formatting, workspace checks, strict Clippy, and the data-crate tests passed.
 All seven data e2e tests and the context component test passed on the final
 rebuilt binaries. The startup test reads its restart baseline after server
 shutdown drains blocking workers; independent context commits can occur before
-that drain. The full workspace test run continues. Physical qualification and
+that drain. The full workspace gate passed for `ee3568ec`, including 196 Control
+tests with two ignored. Physical qualification and
 the other open phase requirements remain **Not done**.
+
+Native indexed-table compaction now uses DuckDB core 1.5.5 and Rust binding
+1.10505.0. Startup and backup reopen enable the same native option. Primary
+keys and transaction checks remain present. The shared `comfy-table` dependency
+uses 7.1.4 because this DuckDB binding requires the 7.1 release line.
+`analysis_store_physical_reuse` passed. It loads 40 MiB of deterministic,
+poorly compressible payload in five cycles through the public data owner.
+Production retention preserves one exact witness across the cycles. After two
+initial cycles, each later peak file size stays within one 8-MiB load of the
+initial maximum. Witness expiry releases native used blocks, and restart keeps
+the accepted cursor and retained floor at 2,560. This component test uses
+temporary stores and opaque data-owner input, not Node or kernel evidence.
+It does not qualify full-disk behavior, large-store index cost, or the physical
+storage/partition case.
+The current data suite passed 40 tests with two ignored. All seven data mTLS
+e2e tests passed. The first workspace build stopped during linking with
+`No space left on device`. Removing only this worktree's generated incremental
+cache restored build capacity; the same focused workspace command then passed.
+The required final workspace CI procedure is running. The phase remains
+**Not done** pending that result and its other open requirements.
