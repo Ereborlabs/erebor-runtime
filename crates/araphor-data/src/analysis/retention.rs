@@ -335,9 +335,13 @@ impl<'a> EvidenceRetentionOwner<'a> {
             relations.push("source_receipts");
         }
         AnalysisStore::record_revision(&transaction, revision, &relations)?;
+        #[cfg(test)]
+        self.store.crash_at("retention.before");
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit evidence retention",
         })?;
+        #[cfg(test)]
+        self.store.crash_at("retention.after");
         self.store.revision.send_replace(revision);
         Ok(RetentionResultV1 {
             removed_records: selected.len() as u32,

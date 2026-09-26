@@ -22,6 +22,8 @@ mod backup;
 mod capacity;
 mod connection;
 mod context;
+#[cfg(test)]
+mod crash;
 mod health;
 mod progress;
 mod quota;

@@ -547,9 +547,13 @@ impl AnalysisStore {
             input.created_utc_ns,
         )?;
         Self::record_revision(&transaction, revision, &relations)?;
+        #[cfg(test)]
+        self.crash_at("result.before");
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit analysis result",
         })?;
+        #[cfg(test)]
+        self.crash_at("result.after");
         self.revision.send_replace(revision);
         Ok(AnalysisResultReceiptV1 {
             commit_revision: revision,

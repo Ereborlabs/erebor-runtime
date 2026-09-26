@@ -99,6 +99,21 @@ lease, so another data owner cannot open the directory during maintenance.
 A copy error still attempts reopen. A failed reopen keeps data access closed
 until restart. This path does not change Control policy persistence.
 
+[AnalysisStore::commit_result](../../../../crates/araphor-data/src/analysis/progress.rs) The result, references, progress, and revisions are ready to commit.<br>
+-> [AnalysisStore::crash_at](../../../../crates/araphor-data/src/analysis/crash.rs) A test child exits immediately before or after the production commit, without Rust cleanup.<br>
+-> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) Native recovery and state validation restore either the complete prior state or the complete new state.<br>
+-> [analysis_store_commit_crashes](../../../../crates/araphor-data/src/analysis/crash.rs) The test checks result and reference presence, consumed progress, revision notification, tenant isolation, and an exact retry.
+
+[EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) Eligible deletion, expiry ranges, retained floor, and revisions are ready to commit.<br>
+-> [AnalysisStore::crash_at](../../../../crates/araphor-data/src/analysis/crash.rs) A test child exits immediately before or after the production commit.<br>
+-> [analysis_store_commit_crashes](../../../../crates/araphor-data/src/analysis/crash.rs) Reopen preserves the accepted cursor and live witness. Raw count and expiry agree with the recovered floor. Retry and a second reopen preserve the same result.
+
+The exit hook and its module compile only under `cfg(test)`. The hook requires
+the exact requested point and temporary store path. It adds no production
+configuration, public API, or alternate writer. The four cases check process
+exit at these two transaction boundaries, not hardware power loss or every
+data mutation. Existing mTLS cases remain separate integration proof.
+
 [AnalysisStore::record_recovery_floor](../../../../crates/araphor-data/src/analysis/backup.rs) A caller reports Node input no longer available after a stale restore.<br>
 -> [AnalysisStore::recovery_gaps](../../../../crates/araphor-data/src/analysis/health.rs) A source-scoped read returns at most 256 exact missing ranges after the supplied cursor.<br>
 -> [AnalysisStore::processor_health](../../../../crates/araphor-data/src/analysis/health.rs) Recovery loss takes precedence over ordinary lag or expiry. The read does not create a receipt or advance progress.
