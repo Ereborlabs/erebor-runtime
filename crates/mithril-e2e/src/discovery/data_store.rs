@@ -866,6 +866,161 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "subprocess helper; requires the parent's temporary data store"]
+    async fn data_commit_child() -> Result<()> {
+        use rustix::process::{getrlimit, setrlimit, Resource, Rlimit};
+
+        let root = PathBuf::from(std::env::var_os("ARAPHOR_COMMIT_ROOT").ok_or("root absent")?);
+        let result = match std::env::var("ARAPHOR_COMMIT_KIND")?.as_str() {
+            "evidence" => false,
+            "result" => true,
+            _ => return Err("unknown commit kind".into()),
+        };
+        let data = AnalysisStore::open(root)?;
+        let watch = data.subscribe_revision();
+        let limit = std::env::var("ARAPHOR_COMMIT_LIMIT")?.parse()?;
+        let _signal =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::from_raw(libc::SIGXFSZ))?;
+        let prior = getrlimit(Resource::Fsize);
+        setrlimit(
+            Resource::Fsize,
+            Rlimit {
+                current: Some(limit),
+                ..prior
+            },
+        )?;
+        let failure = DataStoreQualification::native_commit(&data, result);
+        setrlimit(Resource::Fsize, prior)?;
+        let error = failure
+            .err()
+            .ok_or("native commit unexpectedly succeeded")?;
+        let expected = if result {
+            "commit analysis result"
+        } else {
+            "commit evidence"
+        };
+        assert!(
+            matches!(&error,
+            araphor_data::Error::AnalysisDatabase { operation, source, .. }
+                if *operation == expected && source.to_string().contains("File too large")
+                    && source.to_string().contains("analysis.duckdb.wal")),
+            "{error}"
+        );
+        assert!(!watch.has_changed()?);
+        std::process::exit(73);
+    }
+
+    #[tokio::test]
+    async fn data_commit_failure() -> Result<()> {
+        for limit in [0, 64] {
+            for result in [false, true] {
+                let directory = tempfile::tempdir()?;
+                let root = directory.path().join("analysis");
+                let data = AnalysisStore::open(&root)?;
+                let scope = DataStoreQualification::native_scope();
+                data.register_processor(&scope, ProcessorClassV1::Required, 1)?;
+                data.accept_validated_batch(
+                    scope.identity.clone(),
+                    araphor_data::ValidatedEvidenceBatchV1 {
+                        cpu_id: 0,
+                        first_cursor: 1,
+                        last_cursor: 1,
+                        intake_utc_ns: START,
+                        framed_records: b"prior".to_vec().into(),
+                        frame_ends: vec![5],
+                    },
+                )?;
+                let before = data.meta()?;
+                let status = data.source_status(&scope.identity)?;
+                let records = data.read_page(&scope.identity, 1)?.records;
+                drop(data);
+                let mut child = tokio::process::Command::new(std::env::current_exe()?)
+                    .args([
+                        "--exact",
+                        "discovery::data_store::tests::data_commit_child",
+                        "--ignored",
+                        "--nocapture",
+                    ])
+                    .env("ARAPHOR_COMMIT_ROOT", &root)
+                    .env("ARAPHOR_COMMIT_LIMIT", limit.to_string())
+                    .env(
+                        "ARAPHOR_COMMIT_KIND",
+                        if result { "result" } else { "evidence" },
+                    )
+                    .kill_on_drop(true)
+                    .spawn()?;
+                let exit = tokio::time::timeout(Duration::from_secs(10), child.wait()).await??;
+                assert_eq!(exit.code(), Some(73));
+                let data = AnalysisStore::open(&root)?;
+                assert_eq!(data.meta()?, before);
+                assert_eq!(data.source_status(&scope.identity)?, status);
+                assert_eq!(data.read_page(&scope.identity, 1)?.records, records);
+                assert_eq!(
+                    data.read_result(scope.identity.tenant_id, "native-result")?,
+                    None
+                );
+                assert_eq!(
+                    data.processor_health(&scope)?
+                        .ok_or("processor absent")?
+                        .consumed_cursor,
+                    0
+                );
+                let mut watch = data.subscribe_revision();
+                assert_eq!(*watch.borrow_and_update(), before.commit_revision);
+                DataStoreQualification::native_commit(&data, result)?;
+                let after = data.meta()?;
+                assert_eq!(after.commit_revision, before.commit_revision + 1);
+                assert!(watch.has_changed()?);
+                assert_eq!(*watch.borrow_and_update(), after.commit_revision);
+                DataStoreQualification::native_commit(&data, result)?;
+                assert!(!watch.has_changed()?);
+                assert_eq!(data.meta()?, after);
+                assert_eq!(
+                    data.processor_health(&scope)?
+                        .ok_or("processor absent")?
+                        .consumed_cursor,
+                    u64::from(result)
+                );
+                if result {
+                    assert_eq!(
+                        data.read_result(scope.identity.tenant_id, "native-result")?,
+                        Some(b"finding".to_vec())
+                    );
+                    let retained =
+                        EvidenceRetentionOwner::new(&data, RetentionLimitsV1::default())?
+                            .retain(&scope.identity, START + 25 * HOUR)?;
+                    assert_eq!(retained.removed_records, 0);
+                } else {
+                    assert_eq!(
+                        data.source_receipt(&scope.identity)?
+                            .ok_or("receipt absent")?
+                            .contiguous_cursor,
+                        2
+                    );
+                }
+                let final_meta = data.meta()?;
+                drop(data);
+                let data = AnalysisStore::open(&root)?;
+                assert_eq!(data.meta()?, final_meta);
+                let page = data.read_page(&scope.identity, 1)?;
+                assert_eq!(page.records.len(), if result { 1 } else { 2 });
+                assert_eq!(page.records[0], records[0]);
+                assert_eq!(
+                    data.processor_health(&scope)?
+                        .ok_or("processor absent")?
+                        .consumed_cursor,
+                    u64::from(result)
+                );
+                assert_eq!(
+                    data.read_result(scope.identity.tenant_id, "native-result")?,
+                    result.then(|| b"finding".to_vec())
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     #[ignore = "subprocess helper; requires the parent's temporary Control configuration"]
     async fn data_control_child() -> Result<()> {
         let root =
@@ -1063,6 +1218,56 @@ mod tests {
     }
 
     impl DataStoreQualification {
+        fn native_scope() -> ProcessorScopeV1 {
+            ProcessorScopeV1 {
+                processor_id: "native-processor".into(),
+                method_version: 1,
+                identity: EvidenceIntakeIdentityV1 {
+                    tenant_id: [1; 16],
+                    node_id: "node-a".into(),
+                    node_boot_id: [2; 16],
+                    label_epoch: 1,
+                    source_id: [3; 16],
+                    source_epoch: 1,
+                },
+            }
+        }
+
+        fn native_commit(data: &AnalysisStore, result: bool) -> araphor_data::Result<()> {
+            let scope = Self::native_scope();
+            if result {
+                data.commit_result(&AnalysisResultCommitV1 {
+                    witnesses: vec![AnalysisWitnessV1 {
+                        identity: scope.identity.clone(),
+                        cursor: 1,
+                        expires_utc_ns: START + 48 * HOUR,
+                    }],
+                    scope,
+                    expected_cursor: 0,
+                    consumed_cursor: 1,
+                    coverage_revision: 0,
+                    context_revision: 0,
+                    result_id: "native-result".into(),
+                    body: b"finding".to_vec(),
+                    created_utc_ns: START + 1,
+                    context_refs: Vec::new(),
+                })?;
+            } else {
+                data.accept_validated_batch(
+                    scope.identity,
+                    araphor_data::ValidatedEvidenceBatchV1 {
+                        cpu_id: 0,
+                        first_cursor: 2,
+                        last_cursor: 2,
+                        intake_utc_ns: START + 1,
+                        framed_records: b"next".to_vec().into(),
+                        frame_ends: vec![4],
+                    },
+                )?;
+            }
+            Ok(())
+        }
+
         async fn capacity_recovery(&self, disk: Option<&Path>) -> Result<()> {
             use std::io::{Seek as _, SeekFrom, Write as _};
             use std::os::unix::fs::MetadataExt as _;

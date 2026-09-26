@@ -206,6 +206,17 @@ the same batch through mTLS. The replay must ACK without another record or
 revision. Apply the ACK to Node, accept the next cursor, and reopen again.
 Keep policy state unchanged. Use temporary directories and bounded child waits.
 
+Use `data_commit_failure` for a native write error during evidence and result
+commits. In a child process, open a temporary store before applying a zero-byte
+or 64-byte file-size limit. Require the native commit to report `File too large`
+for `analysis.duckdb.wal`. Do not accept an admission error as commit proof.
+Require no revision notification, then exit without owner cleanup. Reopen and
+check unchanged metadata, receipts, records, and processor progress, with no
+new result. Retry without the limit. Require one revision, an unchanged duplicate
+retry, and persistent state after another reopen. The result case must retain
+its exact witness past raw expiry. These checks do not prove a torn write,
+ENOSPC during commit, hardware power loss, or the mTLS failure response.
+
 Add `data-store-recovery` to the discovery e2e binary. Through the production
 mTLS service, submit data, lose ACK, resend, restart, process and expire input.
 This is the production counterpart to the offline `storage-contract` case in
@@ -697,3 +708,14 @@ formatting, workspace checks, strict Clippy, and tests. The data crate passed
 passed 115 with 249 ignored; Node passed 256 with one ignored.
 Concurrent space loss after admission, aggregate backup quotas, reserve sizing,
 load limits, and Kubernetes qualification remain open. The phase is **Not done**.
+
+`data_commit_failure` passed all four child cases. Evidence and result commits
+each fail inside DuckDB with file-size limits of zero and 64 bytes. The native
+error names the WAL file. No watch revision advances. After abrupt child exit,
+reopen preserves prior metadata, receipt, exact records, and processor progress.
+Retry commits once. A result witness prevents raw expiry, and another reopen
+preserves the successful state. All nine enabled data-store tests passed; three
+helpers or environment-specific cases remain ignored. The final workspace gate
+for this addition is pending. These cases do not prove torn writes, ENOSPC
+during commit, hardware power loss, or Control's mTLS failure response. Other
+capacity, load, old-writer removal, and physical requirements remain **Not done**.
