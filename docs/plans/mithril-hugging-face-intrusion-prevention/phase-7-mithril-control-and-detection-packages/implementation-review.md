@@ -250,10 +250,16 @@ notification, unchanged metadata and source status, readable prior bytes,
 retained Node input, and a working policy RPC. Successful retry advances the
 receipt once. A duplicate does not add a revision. Restart retains two records
 at cursor 2. All eleven enabled data-store tests passed; four helpers or
-environment-specific cases remain ignored. The full workspace gate is pending.
+environment-specific cases remain ignored. The full workspace gate passed for
+`d2fce24f`. It passed formatting, workspace checks, strict Clippy, and workspace
+tests, including 196 Control tests, 118 Mithril e2e tests, and 256 Node tests.
 The first run stopped at the existing filesystem-reserve check. After removal
 of stale generated binaries, the unchanged test reached the native commit fault
 and passed. This case does not prove ENOSPC during commit or hardware power loss.
+The shared capacity pair also passed on clean commit `d2fce24f`. Its log is
+`/tmp/araphor-intake-qualification.hEEgehKt/disk-full-committed.log` and includes
+the test-binary digest. The private tmpfs reached zero free bytes. The test
+retained Node input, withheld ACK, and recovered two records at cursor 2.
 
 [DataStoreQualification::load](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The qualification CLI selects 64 groups of 4,096 synthetic records.<br>
 -> [EffectObservationStore::bounded_ingestion_queue](../../../../crates/mithril-node/src/observation.rs) The fixture queues each group and runs the production Node worker on a blocking thread.<br>
