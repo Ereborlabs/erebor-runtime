@@ -307,7 +307,7 @@ impl AnalysisStore {
         {
             return Self::reject_path(&self.root, "the source epoch lookup is invalid");
         }
-        let writer = self.writer()?;
+        let writer = self.reader()?;
         let saved: Option<(Vec<u8>, Vec<u8>, u64)> = writer
             .query_row(
                 "SELECT tenant_id, node_boot_id, label_epoch FROM source_bindings WHERE epoch_key = ?",

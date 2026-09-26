@@ -1,8 +1,8 @@
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Mutex, RwLock};
 
 use duckdb::{params, Config, Connection, OptionalExt as _};
 use sha2::{Digest as _, Sha256};
@@ -19,6 +19,7 @@ use crate::{
 
 mod admission;
 mod backup;
+mod connection;
 mod context;
 mod progress;
 mod read;
@@ -44,6 +45,11 @@ pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 pub struct AnalysisStore {
     root: PathBuf,
     writer: Mutex<Connection>,
+    readers: [Mutex<Connection>; 2],
+    write_slots: tokio::sync::Semaphore,
+    read_slots: tokio::sync::Semaphore,
+    read_next: AtomicUsize,
+    maintenance: RwLock<()>,
     revision: watch::Sender<u64>,
     retention_healthy: AtomicBool,
     retention: RetentionLimitsV1,
@@ -406,10 +412,23 @@ impl AnalysisStore {
         }
         let meta = Self::read_meta_from(&writer, &path)?;
         let (revision, _) = watch::channel(meta.commit_revision);
+        let readers = [
+            Mutex::new(writer.try_clone().context(AnalysisDatabaseSnafu {
+                operation: "open first trusted reader",
+            })?),
+            Mutex::new(writer.try_clone().context(AnalysisDatabaseSnafu {
+                operation: "open second trusted reader",
+            })?),
+        ];
         Ok(Self {
             root,
             _lease: lease,
             writer: Mutex::new(writer),
+            readers,
+            write_slots: tokio::sync::Semaphore::new(9),
+            read_slots: tokio::sync::Semaphore::new(16),
+            read_next: AtomicUsize::new(0),
+            maintenance: RwLock::new(()),
             revision,
             retention_healthy: AtomicBool::new(true),
             retention,
@@ -436,7 +455,7 @@ impl AnalysisStore {
     }
 
     pub fn meta(&self) -> Result<AnalysisStoreMetaV1> {
-        let writer = self.writer()?;
+        let writer = self.reader()?;
         Self::read_meta_from(&writer, &self.root.join("analysis.duckdb"))
     }
 
@@ -445,7 +464,7 @@ impl AnalysisStore {
         identity: &EvidenceIntakeIdentityV1,
     ) -> Result<Option<AnalysisSourceReceiptV1>> {
         let key = source_key(identity);
-        let writer = self.writer()?;
+        let writer = self.reader()?;
         Self::read_receipt_from(&writer, &self.root, identity, &key)
     }
 
@@ -454,7 +473,10 @@ impl AnalysisStore {
         identity: &EvidenceIntakeIdentityV1,
     ) -> Result<Option<AnalysisSourceStatusV1>> {
         let key = source_key(identity);
-        let writer = self.writer()?;
+        let mut reader = self.reader()?;
+        let writer = reader.transaction().context(AnalysisDatabaseSnafu {
+            operation: "begin source snapshot",
+        })?;
         let Some(receipt) = Self::read_receipt_from(&writer, &self.root, identity, &key)? else {
             return Ok(None);
         };
@@ -935,16 +957,6 @@ impl AnalysisStore {
             reason: reason.to_owned(),
         }
         .build()
-    }
-
-    fn writer(&self) -> Result<MutexGuard<'_, Connection>> {
-        self.writer.lock().map_err(|_| {
-            AnalysisStateSnafu {
-                path: self.root.clone(),
-                reason: "the analysis writer lock is poisoned".to_owned(),
-            }
-            .build()
-        })
     }
 
     fn record_revision(

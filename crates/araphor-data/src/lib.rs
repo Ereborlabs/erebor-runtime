@@ -48,6 +48,12 @@ pub struct EvidenceIntakeIdentityV1 {
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Analysis {resource} admission is full"))]
+    AnalysisBusy {
+        resource: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Required security input reached its {resource} budget"))]
     ProtectedInputCapacity {
         resource: &'static str,

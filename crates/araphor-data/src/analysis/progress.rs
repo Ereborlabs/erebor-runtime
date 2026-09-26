@@ -89,7 +89,7 @@ impl AnalysisStore {
         if tenant == [0; 16] || result_id.is_empty() || result_id.len() > 256 {
             return self.reject("the analysis result identity is invalid");
         }
-        let stored: Option<(Vec<u8>, Vec<u8>)> = self.writer()?.query_row(
+        let stored: Option<(Vec<u8>, Vec<u8>)> = self.reader()?.query_row(
             "SELECT body, body_sha256 FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
             params![tenant.as_slice(), result_id],
             |row| Ok((row.get(0)?, row.get(1)?)),

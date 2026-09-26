@@ -15,7 +15,10 @@ impl AnalysisStore {
         first_cursor: u64,
     ) -> Result<AnalysisReadPageV1> {
         let key = source_key(identity);
-        let writer = self.writer()?;
+        let mut reader = self.reader()?;
+        let writer = reader.transaction().context(AnalysisDatabaseSnafu {
+            operation: "begin evidence snapshot",
+        })?;
         let receipt = Self::read_receipt_from(&writer, &self.root, identity, &key)?
             .ok_or_else(|| self.state_error("the evidence source is absent"))?;
         if first_cursor == 0 || first_cursor > receipt.contiguous_cursor.saturating_add(1) {

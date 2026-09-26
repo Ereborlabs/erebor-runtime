@@ -132,7 +132,7 @@ use the first one reached.
 | Canonical record body | 16 MiB; at most 8,192 dependencies | Split only through a bounded manifest. No growing JSON history array. |
 | Sealed profile set | 128 MiB | Typed failure before commit. |
 | Analysis working memory | 256 MiB/process, including queues and caches | Cancel/backpressure analysis; measure native RSS. |
-| Data engine | 1 writer, 2 trusted readers; 8 queued writes, 16 reads | Bounded admission; no wait under ControlStore locks. |
+| Data engine | 1 writer with 8 queued writes; 2 trusted readers with 16 active or queued reads in total | Bounded admission; no wait under ControlStore locks. Checkpoint and backup wait for read guards to close. |
 | Node intake admission | 8 active or queued groups/process, 2/tenant | Evidence and coverage share permits. Reject excess work with ResourceExhausted before ACK. Idle streams hold no permit. |
 | Intake batch | 4,096 records, 4 MiB encoded or 50 ms | Commit first bound reached; decoded data must fit working memory. |
 | Engine memory/WAL | 128 MiB memory target; 64 MiB WAL checkpoint threshold | Measure RSS; checkpoint before reserve exhaustion. If it fails, backpressure data writes. |
