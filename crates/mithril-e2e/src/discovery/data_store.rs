@@ -1134,6 +1134,14 @@ mod tests {
             assert_eq!(ack.contiguous_cursor, 1);
             observations.acknowledge_evidence(ack)?;
             data.checkpoint()?;
+            let backup_root = tls.path().join("backups");
+            fs::DirBuilder::new().mode(0o700).create(&backup_root)?;
+            let backup_path = backup_root.join("saved.duckdb");
+            let manifest = data.backup(&backup_path)?;
+            let saved = AnalysisStore::restore(&backup_path, &backup_root.join("source"))?;
+            let saved_meta = saved.meta()?;
+            let restore_root = directory.path().join("restore");
+            fs::DirBuilder::new().mode(0o700).create(&restore_root)?;
             let before = data.meta()?;
             let status = data.source_status(&identity)?;
             Self::record(&observations, 2);
@@ -1165,6 +1173,35 @@ mod tests {
             let allocated = padding.metadata()?.blocks() * 512;
             if disk.is_some() {
                 assert!(allocated > GIB / 2);
+                let destination = restore_root.join("blocked.duckdb");
+                assert!(matches!(
+                    saved.backup(&destination),
+                    Err(araphor_data::Error::StorageCapacity {
+                        resource: "copy reserve",
+                        ..
+                    })
+                ));
+                assert!(!destination.exists());
+                assert!(!destination.with_extension("manifest.json").exists());
+                assert_eq!(saved.meta()?, saved_meta);
+                assert_eq!(saved.read_page(&identity, 1)?.records.len(), 1);
+                assert!(matches!(
+                    AnalysisStore::restore(&backup_path, &restore_root),
+                    Err(araphor_data::Error::StorageCapacity {
+                        resource: "copy reserve",
+                        ..
+                    })
+                ));
+                assert!(restore_root.join("restore.pending").is_file());
+                assert!(!restore_root.join("analysis.duckdb").exists());
+                assert_eq!(fs::read_dir(&restore_root)?.count(), 2);
+                assert!(restore_root.join("analysis.lock").is_file());
+                assert!(matches!(
+                    AnalysisStore::open(&restore_root),
+                    Err(araphor_data::Error::AnalysisState { reason, .. })
+                        if reason.contains("restore is incomplete")
+                ));
+                assert!(!restore_root.join("analysis.duckdb").exists());
             }
             connection.send_evidence_batch(pending.clone()).await?;
             let rejected =
@@ -1182,6 +1219,13 @@ mod tests {
             connection.policy_inventory(None, Vec::new()).await?;
             padding.set_len(0)?;
             padding.sync_all()?;
+            let restored = AnalysisStore::restore(&backup_path, &backup_root.join("retry"))?;
+            assert_eq!(restored.meta()?, saved_meta);
+            assert_eq!(restored.meta()?.commit_revision, manifest.commit_revision);
+            assert_eq!(
+                restored.read_page(&identity, 1)?.records[0].framed_record,
+                wire.framed_records
+            );
             drop(connection);
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
@@ -1222,6 +1266,7 @@ mod tests {
                 serde_json::json!({
                     "case": "data-capacity-recovery", "result": "PASS",
                     "filesystem_full": disk.is_some(), "padding_allocated_bytes": allocated,
+                    "copy_reserve_rejected": disk.is_some(),
                     "rejected_health": full, "recovered_usage": data.storage_usage()?,
                     "source_identity": identity, "commit_revision": after.commit_revision,
                     "contiguous_cursor": 2, "retained_count": 2,
