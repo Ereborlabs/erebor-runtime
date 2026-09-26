@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
@@ -29,6 +31,7 @@ const MAX_COVERAGE_INTERVALS: usize = 8_192;
 /// Owns evidence validation and delegates atomic persistence to the Control store.
 pub struct EvidenceIntakeOwner {
     store: crate::ControlStore,
+    data: Option<Arc<araphor_data::AnalysisStore>>,
 }
 
 #[derive(Clone)]
@@ -194,7 +197,17 @@ impl EvidenceIntakeOwner {
 
     #[must_use]
     pub fn from_store(store: crate::ControlStore) -> Self {
-        Self { store }
+        Self { store, data: None }
+    }
+
+    pub fn with_data_store(
+        store: crate::ControlStore,
+        data: Arc<araphor_data::AnalysisStore>,
+    ) -> Self {
+        Self {
+            store,
+            data: Some(data),
+        }
     }
 
     #[must_use]
@@ -221,6 +234,23 @@ impl EvidenceIntakeOwner {
             .map_err(|_| Status::invalid_argument("evidence source identity is not Id128"))?;
         // Current mTLS and trust authenticate the sender. The retained record selects
         // the exact durable session that originally owned its immutable stream.
+        let bound = self
+            .data
+            .as_ref()
+            .map(|data| {
+                data.source_binding(tenant_id, node_id, source_id, batch.source_epoch)
+                    .map_err(|error| Status::internal(error.to_string()))
+            })
+            .transpose()?
+            .flatten();
+        if bound
+            .as_ref()
+            .is_some_and(|identity| identity.node_boot_id != node_boot_id)
+        {
+            return Err(Status::permission_denied(
+                "evidence source changed its bound node boot",
+            ));
+        }
         let session = self
             .store
             .evidence_session_for_stream(
@@ -229,6 +259,7 @@ impl EvidenceIntakeOwner {
                 node_boot_id,
                 source_id,
                 batch.source_epoch,
+                bound.map(|identity| identity.label_epoch),
             )
             .map_err(|_| {
                 Status::permission_denied(
@@ -299,21 +330,38 @@ impl EvidenceIntakeOwner {
             frame_ends,
         };
         // Pending batches are durable but receive no acknowledgement before the gap closes.
-        if self
-            .store
-            .accept_evidence_batch(identity.clone(), stored)
-            .map_err(internal_status)?
-            == EvidenceStoreOutcomeV1::Pending
-        {
+        let outcome = if let Some(data) = &self.data {
+            let intake_utc_ns = u64::try_from(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|_| Status::unavailable("the intake clock precedes the Unix epoch"))?
+                    .as_nanos(),
+            )
+            .map_err(|_| Status::unavailable("the intake clock exceeds its durable range"))?;
+            data.accept_validated_batch(
+                identity.clone(),
+                araphor_data::ValidatedEvidenceBatchV1 {
+                    cpu_id: stored.cpu_id,
+                    first_cursor: stored.first_cursor,
+                    last_cursor: stored.last_cursor,
+                    intake_utc_ns,
+                    framed_records: stored.framed_records,
+                    frame_ends: stored.frame_ends,
+                },
+            )
+            .map_err(|error| Status::internal(error.to_string()))?
+        } else {
+            self.store
+                .accept_evidence_batch(identity.clone(), stored)
+                .map_err(internal_status)?
+        };
+        if outcome == EvidenceStoreOutcomeV1::Pending {
             return Err(Status::unavailable(
                 "evidence batch is durable but waits for an earlier cursor range",
             ));
         }
         Ok(EvidenceAck {
-            contiguous_cursor: self
-                .store
-                .evidence_cursor(&identity)
-                .map_err(internal_status)?,
+            contiguous_cursor: self.contiguous_cursor(&identity).map_err(internal_status)?,
         })
     }
 
@@ -442,6 +490,15 @@ impl EvidenceIntakeOwner {
     }
 
     pub fn contiguous_cursor(&self, identity: &EvidenceIntakeIdentityV1) -> Result<u64> {
+        if let Some(data) = &self.data {
+            return data
+                .source_receipt(identity)
+                .map(|receipt| receipt.map_or(0, |receipt| receipt.contiguous_cursor))
+                .map_err(|source| crate::Error::DataStore {
+                    source: Box::new(source),
+                    location: snafu::Location::new(file!(), line!(), column!()),
+                });
+        }
         self.store.evidence_cursor(identity)
     }
 
@@ -466,12 +523,22 @@ impl EvidenceIntakeOwner {
             source_id,
             source_epoch: report.source_epoch,
         };
-        self.store
-            .accept_coverage_report(CoverageReportInputV1 {
+        if let Some(data) = &self.data {
+            data.accept_validated_coverage(araphor_data::ValidatedCoverageV1 {
                 identity,
-                report: report.clone(),
+                cpu_id: report.cpu_id,
+                revision: report.revision,
+                encoded_report: report.encode_to_vec(),
             })
-            .map_err(internal_status)?;
+            .map_err(|error| Status::internal(error.to_string()))?;
+        } else {
+            self.store
+                .accept_coverage_report(CoverageReportInputV1 {
+                    identity,
+                    report: report.clone(),
+                })
+                .map_err(internal_status)?;
+        }
         Ok(CoverageAck {})
     }
 
@@ -479,6 +546,25 @@ impl EvidenceIntakeOwner {
         &self,
         identity: &EvidenceIntakeIdentityV1,
     ) -> Result<Option<CoverageReport>> {
+        if let Some(data) = &self.data {
+            let status =
+                data.source_status(identity)
+                    .map_err(|source| crate::Error::DataStore {
+                        source: Box::new(source),
+                        location: snafu::Location::new(file!(), line!(), column!()),
+                    })?;
+            return status
+                .and_then(|status| status.latest_coverage_report)
+                .map(|bytes| {
+                    CoverageReport::decode(bytes.as_slice()).map_err(|source| {
+                        crate::Error::CoverageDecode {
+                            source,
+                            location: snafu::Location::new(file!(), line!(), column!()),
+                        }
+                    })
+                })
+                .transpose();
+        }
         self.store.latest_coverage_report(identity)
     }
 }
@@ -626,6 +712,8 @@ fn internal_status(error: crate::Error) -> Status {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::{
         CoverageCounters, CoverageInterval, CoverageReport, EvidenceBatch, EvidenceIdV1,
         EvidenceRecord, KernelEffectEvidenceV1, ObservationEnvelopeV1, TemporalCoverageV1,
@@ -912,6 +1000,55 @@ mod tests {
                 .len(),
             3
         );
+        Ok(())
+    }
+
+    #[test]
+    fn data_backed_intake_acks_only_the_analysis_commit() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::tempdir()?;
+        let control = crate::ControlStore::open(directory.path().join("control"))?;
+        let data = Arc::new(araphor_data::AnalysisStore::open(
+            directory.path().join("analysis"),
+        )?);
+        let intake = EvidenceIntakeOwner::with_data_store(control.clone(), data.clone());
+        let first = batch(1, 2)?;
+        let original = first.framed_records.clone();
+        assert_eq!(
+            intake
+                .receive(&authenticated(), first.clone())?
+                .contiguous_cursor,
+            2
+        );
+        assert_eq!(
+            intake.receive(&authenticated(), first)?.contiguous_cursor,
+            2
+        );
+        assert_eq!(control.evidence_cursor(&identity())?, 0);
+        assert_eq!(intake.contiguous_cursor(&identity())?, 2);
+        let read = data.read_page(&identity(), 1)?;
+        assert_eq!(read.records.len(), 2);
+        assert_eq!(
+            read.records
+                .iter()
+                .flat_map(|record| record.framed_record.iter().copied())
+                .collect::<Vec<_>>(),
+            original
+        );
+        let coverage = coverage_report(1, "HEALTHY");
+        intake.receive_coverage(&authenticated(), &coverage)?;
+        assert_eq!(
+            intake.latest_coverage_report(&coverage_identity())?,
+            Some(coverage)
+        );
+        assert_eq!(control.latest_coverage_report(&coverage_identity())?, None);
+        drop(intake);
+        drop(data);
+        let reopened = Arc::new(araphor_data::AnalysisStore::open(
+            directory.path().join("analysis"),
+        )?);
+        let intake = EvidenceIntakeOwner::with_data_store(control, reopened);
+        assert_eq!(intake.contiguous_cursor(&identity())?, 2);
         Ok(())
     }
 

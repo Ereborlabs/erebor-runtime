@@ -163,3 +163,8 @@ remain unverified. Do not enable the new data path yet.
 AnalysisStore can now read a source's committed boot and label binding. The
 lookup checks the matching receipt and rejects changed bindings. The focused
 test and the data-owner library suite passed with 20 tests and two ignored.
+The explicit data-backed EvidenceIntakeOwner path now writes validated batches
+and coverage only to AnalysisStore. A component test passed for replay, exact
+frames, coverage, unchanged old Control evidence, and restart. Strict Control
+Clippy passed. Server startup still selects the old writer, pending the upgrade
+and recovery gates.
