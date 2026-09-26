@@ -8,9 +8,13 @@ use snafu::{Location, Snafu};
 mod analysis;
 
 pub use analysis::{
-    AnalysisSourceReceiptV1, AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1,
-    EvidenceStoreOutcomeV1, StorePositionV1, ValidatedCoverageV1, ValidatedEvidenceBatchV1,
-    ANALYSIS_DUCKDB_BINDING_VERSION, ANALYSIS_SQLPARSER_VERSION,
+    AnalysisBackupManifestV1, AnalysisContextKeyV1, AnalysisContextRefV1, AnalysisContextVersionV1,
+    AnalysisProcessorGapV1, AnalysisReadPageV1, AnalysisRecordV1, AnalysisRecoveryStatusV1,
+    AnalysisResultCommitV1, AnalysisResultReceiptV1, AnalysisSourceReceiptV1,
+    AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1, AnalysisWitnessV1,
+    ContextSensitivityV1, EvidenceRetentionOwner, EvidenceStoreOutcomeV1, ProcessorClassV1,
+    ProcessorScopeV1, RetentionLimitsV1, RetentionResultV1, StorePositionV1, ValidatedCoverageV1,
+    ValidatedEvidenceBatchV1, ANALYSIS_DUCKDB_BINDING_VERSION, ANALYSIS_SQLPARSER_VERSION,
 };
 
 pub const MAX_EVIDENCE_BATCH_RECORDS: usize = 4_096;
@@ -54,6 +58,18 @@ pub enum Error {
     AnalysisState {
         path: PathBuf,
         reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Analysis evidence range {first_cursor}..={last_cursor} has expired"))]
+    RetainedRangeExpired {
+        first_cursor: u64,
+        last_cursor: u64,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Analysis progress or immutable result conflicts with committed state"))]
+    AnalysisConflict {
         #[snafu(implicit)]
         location: Location,
     },
