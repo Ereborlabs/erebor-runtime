@@ -763,8 +763,8 @@ a growing in-memory log. The pinned native code rebuilds the whole index
 after a merge changes row IDs. A merge can combine partially filled groups
 without a preceding raw-event deletion. This path is a failure hypothesis,
 not a confirmed cause. Production logging and compaction settings are unchanged.
-The diagnostic addition has not yet been compiled or run. The unchanged gRPC
-repeat must finish before another task build or load starts.
+The diagnostic addition compiles with the quota regression. Its ignored release
+run remains pending. The unchanged gRPC repeat finished as recorded below.
 The release build for `c72a3b68` passed. After the host filesystem reserve was
 restored by removing generated incremental compiler cache, the unchanged release
 data suite passed 49 tests with four ignored. The shared tenant run passed in
@@ -964,6 +964,13 @@ the configured 8-GiB global and 2-GiB tenant budgets for results and maintenance
 The 512-MiB witness limit charges shared dependencies once. Reference rows
 also have ordinary logical charges. Context, results, and coverage each have
 a 1,024-revision tenant bound and a 4,096-revision global bound.
+`check_witnesses` uses semi-joins to tenant-scoped references. The raw join uses
+the tenant, source key, and cursor. The context join uses the complete context
+identity. Multiple references do not multiply the retained-row charge. Raw
+references stop contributing at their expiry time; context references remain.
+`analysis_store_witness_limits` rejects a correlated `DELIM_JOIN` query plan.
+The assertion failed on the preceding correlated query and passes with these
+joins. This small regression does not qualify full-capacity result commits.
 The owner computes usage from native columns inside the write transaction;
 there is no separate accounting ledger to recover. A quota failure rolls back
 rows, references, progress, and receipts together. Size-reducing raw retention
