@@ -2114,7 +2114,7 @@ test does not close a row when its physical condition or an assertion changed.
       fail-closed case and detached `open_tree` activity assertion remain.
       All Mithril E2E targets compile. The 92 non-privileged library tests,
       package clippy, formatting, and whitespace checks pass.
-  - [ ] Replace the prepared `MoveMount` fail-closed check. Extend the shared
+  - [x] Replace the prepared `MoveMount` fail-closed check. Extend the shared
     mount actor to clone and hold a detached tree before policy activation.
     Recover that actor under the signed mount-race policy, which does not
     permit `SysAdmin`. Make it call `move_mount` after activation. Require a
@@ -2140,6 +2140,18 @@ test does not close a row when its physical condition or an assertion changed.
       it installs policy. A syscall trace confirms this order. Retire the
       remaining legacy checks through platform scenarios; do not treat that
       baseline failure as a prepared-move result.
+  - [ ] Replace the prepared `MountSetattr` hard-close check. Let the shared
+    mount actor prepare its mount before Node starts. After Node recovers the
+    actor under the signed policy without `SysAdmin`, call `mount_setattr` to
+    request a read-only mount. Require physical denial and fresh, attributed
+    `UNSUPPORTED_OBJECT` Privilege/Capability `-EACCES` evidence. Add no
+    Platform API or policy. Keep the standard test below 100 lines.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching old action after all three platforms pass.
+      Keep the shared syscall helper, mount propagation, and detached-tree
+      checks.
   - [x] Replace the pre-policy `mount_global_mutation_epoch` read. The
     production policy owner creates this hash-map row during policy
     installation. The old probe reads it before policy installation. The full
