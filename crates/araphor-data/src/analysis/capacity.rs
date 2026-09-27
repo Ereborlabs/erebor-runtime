@@ -288,7 +288,7 @@ mod tests {
             settings,
             (
                 "64.0 MiB".into(),
-                "64.0 MiB".into(),
+                "16.0 MiB".into(),
                 "128.0 MiB".into(),
                 2,
                 u64::MAX,

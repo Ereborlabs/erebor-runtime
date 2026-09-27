@@ -771,6 +771,12 @@ buffers. An events merge precedes the fatal checkpoint allocation failure.
 Peak process RSS is 195,076 KiB. The phase plan records the complete sample
 and logs. A lower WAL checkpoint threshold is the next hypothesis, not a
 proven remedy. The unchanged gRPC repeat finished as recorded below.
+`open_native` now selects a 16-MiB WAL checkpoint threshold at open and reopen.
+The 64-MiB engine target and 256-MiB process bound are unchanged. The native
+settings assertion and all 49 enabled release data tests pass. All 17 enabled
+release data-store gRPC tests pass. The phase plan records exact digests and
+logs. The unchanged global-capacity regression and final workspace gate remain
+pending; do not treat this setting as a qualified capacity remedy.
 The release build for `c72a3b68` passed. After the host filesystem reserve was
 restored by removing generated incremental compiler cache, the unchanged release
 data suite passed 49 tests with four ignored. The shared tenant run passed in
