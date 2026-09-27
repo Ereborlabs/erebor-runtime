@@ -2171,7 +2171,8 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The exact test passed in 97.55
       seconds through stock `runc` and the production OCI hook. The existing
       mount-setattr direct-`runc` test passed in 61.80 seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact test passed in 92.67
+      seconds with the deployed Control and Node in retained K3s.
     - [ ] Remove the matching old action, its unused stored mount path,
       and its syscall helper after all three cases pass. Keep the detached
       `open_tree` check and its mount source.
