@@ -47,7 +47,10 @@ satisfies the required bounded-window case.
 
 ## Implementation status
 
-**Not done.** Configured intake currently writes raw DuckDB rows. The selected
-design requires a code conversion and new qualification. Use fresh development
-state; no compatibility import or migration is required. This decision changes
-plans only and does not authorize removal of existing deployment data.
+**Not done.** Configured AnalysisStore intake writes raw segments and commits
+batch metadata in DuckDB. Complete-bundle backup and guarded recovery are
+implemented. Bounded extraction, old Control writer removal, and full
+qualification remain incomplete. See the current 7.2 implementation result.
+Use fresh development state; no compatibility import or migration is required.
+Tests use temporary stores. This decision does not authorize removal of
+existing deployment data.

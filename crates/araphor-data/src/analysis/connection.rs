@@ -108,6 +108,66 @@ impl AnalysisConnection<'_> {
 }
 
 impl AnalysisStore {
+    pub fn recover(&self) -> Result<()> {
+        let _permit = self
+            .write_slots
+            .try_acquire()
+            .map_err(|_| AnalysisBusySnafu { resource: "writer" }.build())?;
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| self.state_error("the analysis writer lock is poisoned"))?;
+        let _maintenance = self
+            .maintenance
+            .write()
+            .map_err(|_| self.state_error("the analysis maintenance lock is poisoned"))?;
+        self.write_ready.store(false, Ordering::Release);
+        let mut readers = [
+            self.readers[0]
+                .lock()
+                .map_err(|_| self.state_error("the analysis reader lock is poisoned"))?,
+            self.readers[1]
+                .lock()
+                .map_err(|_| self.state_error("the analysis reader lock is poisoned"))?,
+        ];
+        for reader in &mut readers {
+            drop(reader.take());
+        }
+        drop(writer.take());
+        let path = self.root.join("analysis.duckdb");
+        let file = fs::symlink_metadata(&path).context(IoSnafu { path: &path })?;
+        if !file.is_file() || file.permissions().mode() & 0o077 != 0 {
+            return self.reject("the analysis database file is not private");
+        }
+        let mut connection = Self::open_native(&path)?;
+        let meta = Self::read_meta_from(&connection, &path)?;
+        if meta.schema_version != super::ANALYSIS_SCHEMA_VERSION as u32
+            || meta.store_uuid != self.store_uuid
+            || meta.commit_revision < *self.revision.borrow()
+        {
+            return self.reject("the recovered database differs from the active store");
+        }
+        Self::validate_tables(&connection)?;
+        Self::validate_state(&connection, &self.root)?;
+        Self::recover_segments(&mut connection, &self.root)?;
+        let first = connection.try_clone().context(AnalysisDatabaseSnafu {
+            operation: "recover first trusted reader",
+        })?;
+        let second = connection.try_clone().context(AnalysisDatabaseSnafu {
+            operation: "recover second trusted reader",
+        })?;
+        *readers[0] = Some(first);
+        *readers[1] = Some(second);
+        *writer = Some(connection);
+        self.revision.send_if_modified(|revision| {
+            let changed = *revision != meta.commit_revision;
+            *revision = meta.commit_revision;
+            changed
+        });
+        self.write_ready.store(true, Ordering::Release);
+        Ok(())
+    }
+
     pub(super) fn commit_metadata(
         &self,
         transaction: duckdb::Transaction<'_>,
@@ -277,6 +337,7 @@ mod tests {
             let mut writer = store.writer()?;
             let transaction = writer.get_mut()?.transaction()?;
             transaction.execute("UPDATE store_meta SET next_segment_id = 2", [])?;
+            AnalysisStore::record_revision(&transaction, 1, &["events"])?;
             transaction.execute_batch(if applied { "COMMIT" } else { "ROLLBACK" })?;
             assert!(store
                 .commit_metadata(transaction, "test uncertain commit")
@@ -286,8 +347,9 @@ mod tests {
             assert!(store.maintenance_writer().is_err());
             assert!(store.accept_validated_batch(identity(), batch(1)).is_err());
             assert!(!notice.has_changed()?);
-            drop(store);
-            let store = AnalysisStore::open(&root)?;
+            store.recover()?;
+            assert_eq!(notice.has_changed()?, applied);
+            assert_eq!(*notice.borrow(), u64::from(applied));
             let next: u64 = store.reader()?.get()?.query_row(
                 "SELECT next_segment_id FROM store_meta",
                 [],
@@ -296,6 +358,30 @@ mod tests {
             assert_eq!(next, if applied { 2 } else { 1 });
             store.accept_validated_batch(identity(), batch(1))?;
             assert_eq!(store.read_page(&identity(), 1)?.records.len(), 1);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_recovery_rejects_corruption() -> TestResult {
+        use std::os::unix::fs::FileExt as _;
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        store.accept_validated_batch(identity(), batch(1))?;
+        let notice = store.subscribe_revision();
+        let path = super::super::segments::SegmentRange::path(&root, 1);
+        let file = OpenOptions::new().write(true).open(&path)?;
+        file.write_all_at(b"wrong", file.metadata()?.len() - 5)?;
+        file.sync_all()?;
+        let bytes = fs::read(&path)?;
+        for _ in 0..2 {
+            assert!(store.recover().is_err());
+            assert!(store.writer().is_err());
+            assert!(store.read_page(&identity(), 1).is_err());
+            assert!(AnalysisStore::open(&root).is_err());
+            assert_eq!(fs::read(&path)?, bytes);
+            assert!(!notice.has_changed()?);
         }
         Ok(())
     }

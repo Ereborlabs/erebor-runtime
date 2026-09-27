@@ -30,7 +30,7 @@ declarative captures are not delivered by these changes.
 
 ### Segment storage conversion
 
-Source state: the guard and fixture conversion after `299f8b49`. Configured AnalysisStore
+Source state: the recovery and fixture changes after `c984b5d2`. Configured AnalysisStore
 intake and reads now use segments. The target conversion remains incomplete.
 Backup and restore copy the complete metadata and segment bundle.
 Storage pass records outside this section predate this conversion
@@ -59,8 +59,10 @@ The catalog has one row per segment and one row per batch range. Frame offsets
 use a native UINTEGER array. The batch digest binds the offset count, offsets,
 and raw bytes. The writer retains no full-store event index. Reserved file IDs
 come from a durable, increasing counter. An uncertain raw publication or
-deletion commit keeps the writer unavailable. A definite pre-commit failure can
-remove only its reserved file or uncommitted tail. Other metadata owners use
+deletion commit keeps the writer unavailable. A raw file I/O failure also
+requires recovery; immediate cleanup must not hide that failure. A validation
+failure before append can remove only its reserved file or uncommitted tail.
+Other metadata owners use
 `AnalysisStore::commit_metadata` and block writes on a commit error. An eligible idle active segment is
 sealed when the deletion transaction marks it Deleting. Reader count and page
 bytes are bounded; extraction-deadline cancellation is not implemented.
@@ -70,12 +72,13 @@ reopen, and batch-proportional metadata. `segment_recovery_checks_ownership`
 checks reserved files, non-reused IDs, uncommitted tails, and unknown files.
 `segment_retention_keeps_witnesses` checks whole-segment pins and expiry holes.
 `segment_growth_keeps_budget` checks the witness budget during later appends.
-Bounded-extraction, resource, and mithril-e2e qualification remain
-incomplete. The latest required workspace command passed formatting, check,
-and Clippy. Araphor-data passed 60 tests with 4 ignored; Control passed 197
-unit tests with 3 ignored. The test step stopped in mithril-e2e with 119 passed,
-5 failed, and 251 ignored. The named segment tests and all six bundle/restore
-tests passed. Read the phase result for the remaining integration failures;
+Bounded-extraction, resource, and physical Kubernetes qualification remain
+incomplete. After the final Rust edit, the required workspace command passed
+formatting, check, strict Clippy, and all workspace tests. Araphor-data passed
+61 tests with 4 ignored; Control passed 197 unit tests with 3 ignored.
+Mithril-e2e passed 124 tests with 251 ignored. Node passed 256 unit tests with
+1 ignored. The named segment tests and bundle/restore tests passed.
+Read the phase result for the remaining implementation and qualification work;
 this is not a completed storage phase.
 
 [AnalysisStore::backup](../../../../crates/araphor-data/src/analysis/backup.rs) A caller supplies one new managed bundle directory.<br>
@@ -111,12 +114,28 @@ unlink, and catalog cleanup with a separate pinned witness segment.
 of missing or corrupt committed data. `analysis_store_snapshot_maintenance`
 checks that the read lease blocks deletion, not ordinary append.
 
-The integration failures include one production boundary gap:
-[EvidenceIntakeOwner::data_status](../../../../crates/mithril-control/src/evidence.rs)
-maps a segment-reservation database error to Internal, not Unavailable.
-The native-failure fixture must inject raw-file and metadata-commit failures
-separately. The startup and quota fixtures still contain raw-row assumptions.
-The recovery case times out; its cause is not yet verified.
+[EvidenceIntakeOwner::data_status](../../../../crates/mithril-control/src/evidence.rs) Storage fails or cannot meet capacity.<br>
+-> [EvidenceIntakeOwner::data_status](../../../../crates/mithril-control/src/evidence.rs) Control returns ResourceExhausted for capacity errors and Unavailable for storage errors. Control sends no data ACK.<br>
+-> [AnalysisStore::recover](../../../../crates/araphor-data/src/analysis/connection.rs) A trusted caller drains readers and closes native connections while the data owner keeps its directory lease.<br>
+-> [AnalysisStore::recover](../../../../crates/araphor-data/src/analysis/connection.rs) The owner checks schema, store identity, revision, metadata, and segments before it restores connections.<br>
+-> [AnalysisStore::recover](../../../../crates/araphor-data/src/analysis/connection.rs) The owner notifies readers only if the recovered committed revision changed. A failed check keeps writes unavailable.
+
+Recovery uses the startup validation and segment cleanup methods. It does not
+replace the shared data handle or restart Control. Recovery has no public RPC
+or automatic retry loop. The native-failure fixture calls this production owner
+method after it removes the file-size limit. `analysis_store_uncertain_commit`
+checks both commit outcomes. `analysis_recovery_rejects_corruption` checks that
+repeated recovery does not remove or repair corrupt committed bytes.
+
+The `test-fixtures` feature adds a one-use callback before raw append or after
+raw sync. `data_commit_failure` and `data_intake_failure` use this callback to
+fail the intended durable operation. The quota fixture now uses 64 MiB. The
+startup fixture changes `batch_ranges`, not the removed raw table. The
+retention fixture seals the disposable segment before it adds a witness to
+the next segment. All five previously failing data-store cases passed in the
+current-source workspace gate. The paired capacity harness also passed on a
+private 1-GiB tmpfs. These checks do not qualify hardware power loss or release
+performance. Read the phase result for the exact commands and evidence paths.
 
 The reusable segment path has these implemented calls:
 

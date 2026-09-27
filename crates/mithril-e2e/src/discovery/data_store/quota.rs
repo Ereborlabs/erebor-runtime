@@ -184,6 +184,7 @@ impl DataStoreQualification {
                 Some(next) => cursor = next,
                 None => break,
             }
+            tokio::task::yield_now().await;
         }
         let expected = digest.finalize();
         self.check(
@@ -216,6 +217,7 @@ impl DataStoreQualification {
         let maintenance = Instant::now();
         for _ in 0..16 {
             retention.retain(&identity, START + 25 * HOUR)?;
+            tokio::task::yield_now().await;
         }
         let retention_us = maintenance.elapsed().as_micros();
         let checkpoint = Instant::now();
@@ -332,7 +334,7 @@ mod tests {
         let output = directory.path().join("quota");
         DataStoreQualification::new(output.clone())
             .quota_with_limits(StorageLimitsV1 {
-                tenant_max_bytes: 2 * 1024 * 1024,
+                tenant_max_bytes: 64 * 1024 * 1024,
                 ..Default::default()
             })
             .await?;
@@ -343,7 +345,7 @@ mod tests {
             .ok_or("accepted count absent")?;
         assert!(accepted > 0);
         assert_eq!(result["accepted_after_recovery"], accepted + 1024);
-        assert_eq!(result["tenant_max_bytes"], 2 * 1024 * 1024);
+        assert_eq!(result["tenant_max_bytes"], 64 * 1024 * 1024);
         Ok(())
     }
 }

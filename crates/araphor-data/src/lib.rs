@@ -116,3 +116,6 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(feature = "test-fixtures")]
+pub use analysis::AnalysisCommitStage;

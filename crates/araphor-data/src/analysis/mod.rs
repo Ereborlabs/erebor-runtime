@@ -54,8 +54,22 @@ const ANALYSIS_SCHEMA_VERSION: i64 = 6;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
+#[cfg(feature = "test-fixtures")]
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum AnalysisCommitStage {
+    BeforeAppend,
+    AfterSync,
+}
+
+#[cfg(feature = "test-fixtures")]
+struct CommitHook {
+    stage: AnalysisCommitStage,
+    callback: Box<dyn FnOnce() -> Result<()> + Send>,
+}
+
 pub struct AnalysisStore {
     root: PathBuf,
+    store_uuid: Uuid,
     // Close the cloned readers before their owning writer.
     readers: [Mutex<Option<Connection>>; 2],
     writer: Mutex<Option<Connection>>,
@@ -66,6 +80,8 @@ pub struct AnalysisStore {
     revision: watch::Sender<u64>,
     retention_healthy: AtomicBool,
     write_ready: AtomicBool,
+    #[cfg(feature = "test-fixtures")]
+    commit_hook: Mutex<Option<CommitHook>>,
     retention: RetentionLimitsV1,
     storage: StorageLimitsV1,
     // Release the lease after the database connection closes.
@@ -421,6 +437,7 @@ impl AnalysisStore {
         ];
         Ok(Self {
             root,
+            store_uuid: meta.store_uuid,
             _lease: lease,
             writer: Mutex::new(Some(writer)),
             readers,
@@ -431,6 +448,8 @@ impl AnalysisStore {
             revision,
             retention_healthy: AtomicBool::new(true),
             write_ready: AtomicBool::new(true),
+            #[cfg(feature = "test-fixtures")]
+            commit_hook: Mutex::new(None),
             retention,
             storage,
         })
@@ -438,6 +457,44 @@ impl AnalysisStore {
 
     pub fn retention_healthy(&self) -> bool {
         self.retention_healthy.load(Ordering::Acquire)
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    pub fn set_commit_hook(
+        &self,
+        stage: AnalysisCommitStage,
+        callback: impl FnOnce() -> Result<()> + Send + 'static,
+    ) -> Result<()> {
+        let mut slot = self
+            .commit_hook
+            .lock()
+            .map_err(|_| self.state_error("the commit hook lock is poisoned"))?;
+        if slot.is_some() {
+            return self.reject("a commit hook is already installed");
+        }
+        *slot = Some(CommitHook {
+            stage,
+            callback: Box::new(callback),
+        });
+        Ok(())
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    fn run_commit_hook(&self, stage: AnalysisCommitStage) -> Result<()> {
+        let mut slot = self
+            .commit_hook
+            .lock()
+            .map_err(|_| self.state_error("the commit hook lock is poisoned"))?;
+        let hook = if slot.as_ref().is_some_and(|hook| hook.stage == stage) {
+            slot.take()
+        } else {
+            None
+        };
+        drop(slot);
+        if let Some(hook) = hook {
+            (hook.callback)()?;
+        }
+        Ok(())
     }
 
     pub fn retention_limits(&self) -> RetentionLimitsV1 {
@@ -705,7 +762,11 @@ impl AnalysisStore {
             self.check_witnesses(&transaction, identity.tenant_id, batch.intake_utc_ns)?;
             Self::record_revision(&transaction, revision, &relations)?;
             self.write_ready.store(false, Ordering::Release);
+            #[cfg(feature = "test-fixtures")]
+            self.run_commit_hook(AnalysisCommitStage::BeforeAppend)?;
             self.sync_append(&append, &identity, &pending.bytes)?;
+            #[cfg(feature = "test-fixtures")]
+            self.run_commit_hook(AnalysisCommitStage::AfterSync)?;
             #[cfg(test)]
             self.crash_at("evidence.before");
             commit_attempted = true;
@@ -724,6 +785,9 @@ impl AnalysisStore {
         })();
         if result.is_err() && !commit_attempted {
             self.write_ready.store(false, Ordering::Release);
+            if matches!(&result, Err(crate::Error::Io { .. })) {
+                return result;
+            }
             if append.reserved {
                 Self::remove_segment(writer, &self.root, append.segment_id, "Reserved")?;
             } else {

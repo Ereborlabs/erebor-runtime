@@ -497,7 +497,7 @@ impl DataStoreQualification {
             StartupFault::Pending,
             StartupFault::Sql("UPDATE source_receipts SET contiguous_cursor = 2"),
             StartupFault::Sql("UPDATE store_meta SET schema_version = 99"),
-            StartupFault::Sql("UPDATE store_meta SET schema_version = 5; ALTER TABLE events RENAME TO missing_events"),
+            StartupFault::Sql("ALTER TABLE batch_ranges RENAME TO missing_ranges"),
             StartupFault::Corrupt,
         ];
         for fault in faults {
@@ -788,6 +788,7 @@ impl DataStoreQualification {
             observations.pending_evidence_records() == 0,
             "Node did not purge acknowledged evidence",
         )?;
+        data.backup(&backup_root.join("before-witness"))?;
 
         clock.0.store(START + 8 * HOUR, Ordering::SeqCst);
         Self::record(&observations, 3);
@@ -902,7 +903,8 @@ impl DataStoreQualification {
             }
             Ok::<_, Box<dyn StdError>>(())
         })
-        .await??;
+        .await
+        .map_err(|_| "automatic retention did not expire the unpinned segment")??;
         self.check(data.retention_healthy(), "automatic retention failed")?;
         self.check(
             matches!(
@@ -1203,6 +1205,7 @@ mod tests {
         Quota,
         FullDisk(&'a Path),
         CommitLimit,
+        SegmentLimit,
     }
 
     #[tokio::test]
@@ -1408,27 +1411,29 @@ mod tests {
     #[tokio::test]
     #[ignore = "subprocess helper; requires the parent's temporary data store"]
     async fn data_commit_child() -> Result<()> {
-        use rustix::process::{getrlimit, setrlimit, Resource, Rlimit};
+        use rustix::process::{getrlimit, setrlimit, Resource};
 
         let root = PathBuf::from(std::env::var_os("ARAPHOR_COMMIT_ROOT").ok_or("root absent")?);
-        let result = match std::env::var("ARAPHOR_COMMIT_KIND")?.as_str() {
-            "evidence" => false,
-            "result" => true,
-            _ => return Err("unknown commit kind".into()),
-        };
+        let kind = std::env::var("ARAPHOR_COMMIT_KIND")?;
+        let result = kind == "result";
         let data = AnalysisStore::open(root)?;
         let watch = data.subscribe_revision();
         let limit = std::env::var("ARAPHOR_COMMIT_LIMIT")?.parse()?;
         let _signal =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::from_raw(libc::SIGXFSZ))?;
         let prior = getrlimit(Resource::Fsize);
-        setrlimit(
-            Resource::Fsize,
-            Rlimit {
-                current: Some(limit),
-                ..prior
-            },
-        )?;
+        match kind.as_str() {
+            "segment" | "metadata" => {
+                let stage = if kind == "segment" {
+                    araphor_data::AnalysisCommitStage::BeforeAppend
+                } else {
+                    araphor_data::AnalysisCommitStage::AfterSync
+                };
+                data.set_commit_hook(stage, move || DataStoreQualification::limit_file(limit))?;
+            }
+            "result" => DataStoreQualification::limit_file(limit)?,
+            _ => return Err("unknown commit kind".into()),
+        }
         let failure = DataStoreQualification::native_commit(&data, result);
         setrlimit(Resource::Fsize, prior)?;
         let error = failure
@@ -1439,13 +1444,22 @@ mod tests {
         } else {
             "commit evidence"
         };
-        assert!(
-            matches!(&error,
+        if kind == "segment" {
+            assert!(
+                matches!(&error, araphor_data::Error::Io { path, source, .. }
+                if path.extension().is_some_and(|extension| extension == "seg")
+                    && source.raw_os_error() == Some(libc::EFBIG)),
+                "{error}"
+            );
+        } else {
+            assert!(
+                matches!(&error,
             araphor_data::Error::AnalysisDatabase { operation, source, .. }
                 if *operation == expected && source.to_string().contains("File too large")
                     && source.to_string().contains("analysis.duckdb.wal")),
-            "{error}"
-        );
+                "{error}"
+            );
+        }
         assert!(!watch.has_changed()?);
         std::process::exit(73);
     }
@@ -1453,7 +1467,8 @@ mod tests {
     #[tokio::test]
     async fn data_commit_failure() -> Result<()> {
         for limit in [0, 64] {
-            for result in [false, true] {
+            for kind in ["segment", "metadata", "result"] {
+                let result = kind == "result";
                 let directory = tempfile::tempdir()?;
                 let root = directory.path().join("analysis");
                 let data = AnalysisStore::open(&root)?;
@@ -1483,10 +1498,7 @@ mod tests {
                     ])
                     .env("ARAPHOR_COMMIT_ROOT", &root)
                     .env("ARAPHOR_COMMIT_LIMIT", limit.to_string())
-                    .env(
-                        "ARAPHOR_COMMIT_KIND",
-                        if result { "result" } else { "evidence" },
-                    )
+                    .env("ARAPHOR_COMMIT_KIND", kind)
                     .kill_on_drop(true)
                     .spawn()?;
                 let exit = tokio::time::timeout(Duration::from_secs(10), child.wait()).await??;
@@ -1760,6 +1772,22 @@ mod tests {
     }
 
     impl DataStoreQualification {
+        fn limit_file(limit: u64) -> araphor_data::Result<()> {
+            use rustix::process::{getrlimit, setrlimit, Resource, Rlimit};
+            setrlimit(
+                Resource::Fsize,
+                Rlimit {
+                    current: Some(limit),
+                    ..getrlimit(Resource::Fsize)
+                },
+            )
+            .map_err(|source| araphor_data::Error::Io {
+                path: "<file-size-limit>".into(),
+                source: source.into(),
+                location: Default::default(),
+            })
+        }
+
         fn native_scope() -> ProcessorScopeV1 {
             ProcessorScopeV1 {
                 processor_id: "native-processor".into(),
@@ -1811,7 +1839,7 @@ mod tests {
         }
 
         async fn capacity_recovery(&self, fault: IntakeFault<'_>) -> Result<()> {
-            use rustix::process::{getrlimit, setrlimit, Resource, Rlimit};
+            use rustix::process::{getrlimit, setrlimit, Resource};
             use std::io::{Seek as _, SeekFrom, Write as _};
             use std::os::unix::fs::MetadataExt as _;
 
@@ -1820,7 +1848,7 @@ mod tests {
                 IntakeFault::FullDisk(root) => Some(root),
                 _ => None,
             };
-            let native = matches!(fault, IntakeFault::CommitLimit);
+            let native = matches!(fault, IntakeFault::CommitLimit | IntakeFault::SegmentLimit);
             let directory = match disk {
                 Some(root) => {
                     assert_eq!(root.parent(), Some(Path::new("/tmp")));
@@ -1986,13 +2014,12 @@ mod tests {
             };
             let prior = getrlimit(Resource::Fsize);
             if native {
-                setrlimit(
-                    Resource::Fsize,
-                    Rlimit {
-                        current: Some(64),
-                        ..prior
-                    },
-                )?;
+                let stage = if matches!(fault, IntakeFault::SegmentLimit) {
+                    araphor_data::AnalysisCommitStage::BeforeAppend
+                } else {
+                    araphor_data::AnalysisCommitStage::AfterSync
+                };
+                data.set_commit_hook(stage, || Self::limit_file(64))?;
             }
             let received: Result<_> = async {
                 connection.send_evidence_batch(pending.clone()).await?;
@@ -2007,15 +2034,24 @@ mod tests {
                 return Err(error.into());
             };
             if native {
-                assert_eq!(source.code(), tonic::Code::Internal);
-                assert!(source.message().contains("commit evidence"), "{source}");
+                assert_eq!(source.code(), tonic::Code::Unavailable);
                 assert!(source.message().contains("File too large"), "{source}");
-                assert!(source.message().contains("analysis.duckdb.wal"), "{source}");
+                if matches!(fault, IntakeFault::SegmentLimit) {
+                    assert!(source.message().contains(".seg"), "{source}");
+                } else {
+                    assert!(source.message().contains("commit evidence"), "{source}");
+                    assert!(source.message().contains("analysis.duckdb.wal"), "{source}");
+                }
             } else {
                 assert_eq!(source.code(), tonic::Code::ResourceExhausted);
             }
             assert!(!changed.has_changed()?);
             assert_eq!(observations.pending_evidence_records(), 1);
+            connection.policy_inventory(None, Vec::new()).await?;
+            if native {
+                data.recover()?;
+                assert!(!changed.has_changed()?);
+            }
             assert_eq!(data.meta()?, before);
             assert_eq!(data.source_status(&identity)?, status);
             assert_eq!(
@@ -2103,17 +2139,20 @@ mod tests {
 
     #[tokio::test]
     async fn data_intake_failure() -> Result<()> {
-        let mut child = tokio::process::Command::new(std::env::current_exe()?)
-            .args([
-                "--exact",
-                "discovery::data_store::tests::data_intake_child",
-                "--ignored",
-                "--nocapture",
-            ])
-            .kill_on_drop(true)
-            .spawn()?;
-        let status = tokio::time::timeout(Duration::from_secs(20), child.wait()).await??;
-        assert!(status.success(), "{status}");
+        for kind in ["segment", "metadata"] {
+            let mut child = tokio::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "discovery::data_store::tests::data_intake_child",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env("ARAPHOR_INTAKE_KIND", kind)
+                .kill_on_drop(true)
+                .spawn()?;
+            let status = tokio::time::timeout(Duration::from_secs(20), child.wait()).await??;
+            assert!(status.success(), "{status}");
+        }
         Ok(())
     }
 
@@ -2121,8 +2160,13 @@ mod tests {
     #[ignore = "subprocess helper; applies a process-wide native file-size limit"]
     async fn data_intake_child() -> Result<()> {
         let directory = tempfile::tempdir()?;
+        let fault = match std::env::var("ARAPHOR_INTAKE_KIND")?.as_str() {
+            "segment" => IntakeFault::SegmentLimit,
+            "metadata" => IntakeFault::CommitLimit,
+            _ => return Err("unknown intake fault".into()),
+        };
         DataStoreQualification::new(directory.path().join("result"))
-            .capacity_recovery(IntakeFault::CommitLimit)
+            .capacity_recovery(fault)
             .await
     }
 

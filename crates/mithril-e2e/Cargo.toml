@@ -7,7 +7,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-araphor-data = { path = "../araphor-data" }
+araphor-data = { path = "../araphor-data", features = ["test-fixtures"] }
 clap.workspace = true
 containerd-client.workspace = true
 crc32c.workspace = true
