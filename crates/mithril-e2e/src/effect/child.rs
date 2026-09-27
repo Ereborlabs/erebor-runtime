@@ -146,7 +146,6 @@ pub(super) enum PreparedOperation {
     MemfdExec,
     NonLeaderExec,
     AllowedExec,
-    SecretMmapWrite,
     SecretMmapExec,
     SecretMprotectReadExec,
     SecretMprotectWriteExec,
@@ -1849,9 +1848,6 @@ impl PreparedOperations {
                 self.allowed_exec_file.as_raw_fd(),
                 false,
             )),
-            PreparedOperation::SecretMmapWrite => {
-                mmap_protection_outcome(&self.secret_file, libc::PROT_WRITE, libc::MAP_SHARED, None)
-            }
             PreparedOperation::SecretMmapExec => {
                 mmap_protection_outcome(&self.secret_file, libc::PROT_EXEC, libc::MAP_PRIVATE, None)
             }

@@ -2765,7 +2765,13 @@ test does not close a row when its physical condition or an assertion changed.
         attributed Allow-then-deny Exec evidence.
       - [x] Pass direct `runc` and commit its registration. The exact case
         passed in 43.09 seconds through stock `runc` and the OCI hook.
-      - [ ] Pass Kubernetes and commit its registration.
+      - [ ] Pass Kubernetes and commit its registration. The first exact run
+        stopped at the actor exit check: `kubectl exec` returned status 1,
+        not 13. A transport-only `kubectl exec` diagnostic preserved status
+        13. Direct containerd used the same Python image and completed
+        file-descriptor exec without Mithril. The cause of the protected
+        Kubernetes result is not yet proven. Do not weaken this assertion or
+        rerun the case before reproducing the condition in lightweight.
     - [ ] Remove only the matching legacy action, result field, and unused
       fixture state after the `fexecve` case passes on all three platforms.
   - [x] Replace the old SQPOLL check for a restricted rule-zero actor in
@@ -2802,6 +2808,17 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Remove only the matching old action, result field, and private
       syscall helper after both modes pass on all three platforms. This
       deletes 44 lines. The 92 runnable library tests pass after removal.
+  - [x] Retire the old writable shared-map check. The existing
+    `independent_mapping_is_denied` test calls the real mapping operation,
+    checks its exact-policy denial, and checks a separate allowed mapping.
+    After removal, Host passed in 47.59 seconds, direct `runc` passed in
+    50.86 seconds, and Kubernetes passed in 150.77 seconds. The Kubernetes
+    launcher exited 0. Remove the old action, result field, and fixture arm;
+    keep the other executable-mapping checks.
+  - [ ] Replace the old SysV `IPC_STAT` check. A draft actor used the same
+    syscall, but it succeeded under `actor_policy.json` on Host. The draft
+    was removed. Do not retire the old check until a signed policy and the
+    shared scenario prove the original denial on all three platforms.
   - [x] Replace the exact Unix-stream allow relationship. Reuse the approved
     socket-pass actor and signed worker-to-worker policy. Require a completed
     descriptor transfer and payload, distinct admitted worker tasks, and

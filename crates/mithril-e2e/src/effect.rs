@@ -451,7 +451,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub exact_open_denied_before_effect: bool,
     pub inherited_fd_read_denied: bool,
     pub file_mmap_denied: bool,
-    pub writable_shared_mmap_denied: bool,
     pub executable_mmap_denied: bool,
     pub file_mprotect_exec_denied: bool,
     pub benign_read_allowed: bool,
@@ -1751,12 +1750,6 @@ impl EffectTestRunner {
         if protect {
             for (operation, family, kernel_operation, label) in [
                 (
-                    HardClosedOperation::SecretMmapWrite,
-                    KernelEffectFamilyV1::File,
-                    KernelEffectOperationV1::MmapWrite,
-                    "shared writable file mapping",
-                ),
-                (
                     HardClosedOperation::SecretMmapExec,
                     KernelEffectFamilyV1::Exec,
                     KernelEffectOperationV1::MmapExec,
@@ -2788,7 +2781,6 @@ impl EffectTestRunner {
             exact_open_denied_before_effect: protect,
             inherited_fd_read_denied: protect,
             file_mmap_denied: protect,
-            writable_shared_mmap_denied: protect,
             executable_mmap_denied: protect,
             file_mprotect_exec_denied: protect,
             benign_read_allowed: true,
