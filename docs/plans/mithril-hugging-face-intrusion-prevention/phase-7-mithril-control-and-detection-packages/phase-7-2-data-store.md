@@ -215,13 +215,16 @@ disk full, unsupported schema and rejected old evidence state.
 
 Run `analysis_store_thread_memory` alone in a release test process on Linux.
 Use four calling threads with one batch in flight and the default store limits.
-Commit 1,024 batches of 1,024 synthetic post-validation frames. Require the
+Commit batches of 1,024 synthetic post-validation frames until the default
+tenant logical quota rejects a batch. Fail if 8,192 batches do not reach that
+quota. Other capacity errors are failures, not successful stop conditions.
+Require the rejected batch to leave the receipt unchanged. Require the
 exact receipt and last retained frame after checkpoint and reopen. Read process
 high-water RSS after each batch and after reopen. Fail above 256 MiB; include
 the native memory categories in the failure. Do not treat DuckDB's configured
 buffer limit as an RSS limit. Keep this host-dependent test ignored in normal
 CI. Record the host and allocator environment when running it explicitly.
-This component test does not prove wire validation, full-quota memory,
+This component test does not prove wire validation, global-quota memory,
 concurrent readers, or the memory of embedded Node and Control owners.
 
 Use `analysis_store_input_crashes` for process exits immediately before and
@@ -1498,6 +1501,19 @@ commit failure, crash recovery, and restart cases. Its executable SHA-256 is
 `48744fcd1a134639c6c1f0fa17799839fcd2be35de3b738a3f1853df6e97ad32`;
 the log is `data-flush-e2e.log` in the memory output directory. No allocator
 environment override was set. The release build passed in 7 minutes 1 second.
-Formatting, workspace checks, and strict Clippy passed. Workspace tests and
-the matched full-quota memory diagnostic are still running. No Rust source
-changed after the workspace gate started. The phase remains **Not done**.
+Formatting, workspace checks, and strict Clippy passed for `3a03e307`.
+Workspace tests are still running for that source state.
+The matched full-quota diagnostic then crossed the 256-MiB limit at
+4,024,320 accepted rows, before reaching the tenant quota. Peak RSS was
+273,232 KiB; elapsed time was 588.50 seconds. Receipt, checkpoint, last-row
+read, and reopen checks passed. Its zero exit status reports those checks,
+not a memory qualification pass. The executable SHA-256 is
+`494beef3b5c799955ab4fa038cf9163687f6f823c12e8c259c67304ee39f7c5f`.
+The memory output directory contains `memory-flush.csv` and
+`memory-flush-resources.log`. No allocator environment override was set.
+Host workspace tests overlapped this diagnostic. The native-setting change
+does not satisfy full-capacity memory qualification.
+The repository memory regression now continues to the default tenant quota
+instead of stopping after one million rows. Its release run is pending.
+This test edit is not covered by the running workspace gate. The phase
+remains **Not done**.
