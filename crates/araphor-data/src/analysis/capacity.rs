@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(
             settings,
             (
-                "128.0 MiB".into(),
+                "64.0 MiB".into(),
                 "64.0 MiB".into(),
                 "128.0 MiB".into(),
                 2,
