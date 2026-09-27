@@ -7,13 +7,13 @@ use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{Platform, Task, TestResult};
 
-pub(super) struct EffectCheck {
+pub(crate) struct EffectCheck {
     task: Task,
     seen: BTreeSet<(u32, u64)>,
 }
 
 impl EffectCheck {
-    pub(super) fn new<P: Platform>(env: &P, task: Task) -> TestResult<Self> {
+    pub(crate) fn new<P: Platform>(env: &P, task: Task) -> TestResult<Self> {
         let seen = env
             .snapshot()?
             .recent_effects
@@ -23,7 +23,7 @@ impl EffectCheck {
         Ok(Self { task, seen })
     }
 
-    pub(super) fn wait<P: Platform>(
+    pub(crate) fn wait<P: Platform>(
         &self,
         env: &P,
         reason: &str,

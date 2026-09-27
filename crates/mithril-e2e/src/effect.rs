@@ -6,6 +6,8 @@ mod app_default;
 mod bpf;
 #[cfg(test)]
 mod check;
+#[cfg(test)]
+pub(crate) use check::EffectCheck;
 mod child;
 #[cfg(test)]
 mod descriptor;
