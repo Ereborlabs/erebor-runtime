@@ -2748,8 +2748,10 @@ test does not close a row when its physical condition or an assertion changed.
     `UNSUPPORTED_OBJECT` denial. Keep the test below 100 lines and add no
     Platform or production API.
     - [x] Pass Host and commit the test. The exact privileged case passed in
-      44.37 seconds in the retained VM with both attributed Exec decisions.
-    - [ ] Pass direct `runc` and commit its platform registration.
+      44.37 seconds in the retained VM. After same-task event pairing, Host
+      passed again in 33.11 seconds.
+    - [x] Pass direct `runc` and commit its platform registration. The exact
+      case passed in 54.60 seconds through stock `runc` and the OCI hook.
     - [ ] Pass Kubernetes and commit its platform registration.
     - [ ] Remove only the matching legacy action, result field, and unused
       fixture state after all three platforms pass.
