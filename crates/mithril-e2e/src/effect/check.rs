@@ -105,6 +105,8 @@ impl EffectCheck {
                             event.operation,
                             event.kernel_result,
                             event.task_cookie,
+                            event.active_role_id,
+                            event.admitted_entry_rule_id,
                             event.profile_generation_ref_id,
                             event.composite_atom_id,
                             event.exact_object_key_id,

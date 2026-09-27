@@ -2119,9 +2119,12 @@ test does not close a row when its physical condition or an assertion changed.
     Recover that actor under the signed mount-race policy, which does not
     permit `SysAdmin`. Make it call `move_mount` after activation. Require a
     physical `EACCES` or `EPERM` result and a fresh, task-attributed
-    `UNSUPPORTED_OBJECT` Privilege/Capability result with the same errno.
+    `UNSUPPORTED_OBJECT` Privilege/Capability result with kernel `-EACCES`.
     Keep the standard test below 100 lines and add no Platform API or policy.
-    - [ ] Pass Host and commit it.
+    - [x] Pass Host and commit it. The 76-line exact test passed in 37.41
+      seconds. The actor cloned the tree before Node started. The protected
+      `move_mount` was denied, and production reported the actor's exact
+      Privilege/Capability `-EACCES` effect.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching old prepared operation after all three

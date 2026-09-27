@@ -54,7 +54,7 @@ def move_tree(tree, target):
 
 
 args = sys.argv[2:]
-if args not in ([], ["late"], ["recursive"], ["move"], ["future"], ["race"], ["runtime"]):
+if args not in ([], ["late"], ["recursive"], ["move"], ["prepared"], ["future"], ["race"], ["runtime"]):
     sys.exit(2)
 mode = args[0] if args else "early"
 root = os.path.join(sys.argv[1], "mount")
@@ -81,6 +81,13 @@ if mode == "early":
     check(libc.mount(secret.encode(), denied_alias.encode(), None, MS_BIND, None))
 if mode not in ("recursive", "future", "runtime"):
     check(libc.mount(allowed.encode(), allowed_alias.encode(), None, MS_BIND, None))
+prepared_tree = None
+if mode == "prepared":
+    prepared_tree = open_tree(secret)
+    if prepared_tree < 0:
+        raise OSError(-prepared_tree, os.strerror(-prepared_tree))
+    with open(result_path, "w", encoding="utf-8") as output:
+        json.dump({"phase": "opened", "open": 0}, output)
 race_results = [None] * 8
 race_barrier = threading.Barrier(9)
 race_threads = []
@@ -140,6 +147,11 @@ elif mode == "move" and command == "open\n":
         )
         output.truncate()
     command = sys.stdin.readline()
+elif mode == "prepared" and command == "mount\n":
+    mount_error = move_tree(prepared_tree, denied_alias)
+    with open(result_path, "w", encoding="utf-8") as output:
+        json.dump({"phase": "mounted", "mount": mount_error}, output)
+    sys.exit(0)
 if mode in ("late", "recursive", "runtime") and command in ("mount-read\n", "mount\n"):
     flags = MS_BIND | (MS_REC if mode == "recursive" else 0)
     result = libc.mount(secret.encode(), denied_alias.encode(), None, flags, None)

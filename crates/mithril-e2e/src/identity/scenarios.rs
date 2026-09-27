@@ -47,6 +47,8 @@ mod mount_late;
 #[cfg(test)]
 mod mount_move;
 #[cfg(test)]
+mod mount_prepared;
+#[cfg(test)]
 mod mount_protected;
 #[cfg(test)]
 mod mount_race;
