@@ -673,6 +673,23 @@ overlapped this run, so its timings are not a clean performance baseline.
 Global saturation, worst-case payloads, concurrent rollout, physical reserve
 adequacy, repeated performance, and old-writer removal remain unqualified.
 
+[analysis_store_thread_memory](../../../../crates/araphor-data/src/analysis/capacity.rs)
+adds an ignored, release-only component memory check. Four scoped calling
+threads use the public batch API with one request in flight. The test checks
+receipts after each batch, checkpoint, the last frame, and reopen. It reads
+Linux process high-water RSS and reports native memory categories on failure.
+Run it alone; other tests would share its process peak. The release check
+failed with default allocator settings at cursor 804,864 and 290,000 KiB peak
+RSS. The same executable passed with `MALLOC_ARENA_MAX=1` in 47.52 seconds.
+The data-store plan records its executable digest and logs. The default
+failure remains open; the final workspace gate is pending.
+The preceding temporary diagnostic crossed 256 MiB at 804,864 rows with four
+calling threads. Its peak was 292,132 KiB. The same input reached the tenant
+quota with one calling thread at 249,792 KiB, and with four threads plus
+`MALLOC_ARENA_MAX=1` at 228,816 KiB. The data-store plan records the exact
+artifacts and limits. These are post-validation storage diagnostics, not mTLS
+proof. The allocator setting is not a production change or a qualified remedy.
+
 On the same release source, three single-tenant and three two-tenant load runs
 passed on the pilot VM. Each run submits 262,144 records to a new temporary
 store. Host build and test jobs finished before these runs; the unrelated VM
