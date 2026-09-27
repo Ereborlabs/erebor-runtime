@@ -3680,6 +3680,19 @@ test does not close a row when its physical condition or an assertion changed.
   `SIGSTOP` and cannot report completion without an external continue.
 - [ ] Recovered-container application, external, and declared-probe entries:
   keep each stock runtime action and exact role, rule, and denial assertion.
+  - [ ] Replace the recovered-container unmatched `mkdir` exec. Keep the
+    existing node-first unlisted-exec test. In a second small standard test,
+    start the actor before Node, install the signed policy, recover the live
+    actor, and call `add_actor("mkdir", ...)`. Require physical `EACCES` and
+    fresh `UNSUPPORTED_OBJECT` Exec/Execute evidence with external role and
+    rule zero. Share the result assertion with the node-first test.
+    - [x] Pass Host and commit its test registration. The recovered case
+      passed in 37.23 seconds. The unchanged node-first case passed in
+      33.87 seconds with the shared result assertion.
+    - [ ] Pass direct `runc` and commit its registration.
+    - [ ] Pass Kubernetes and commit its registration.
+    - [ ] Remove the matching old action, result field, and `run.sh` gate.
+      Keep the separate two-node convergence check.
 
 ### Direct runtime entry roles
 
