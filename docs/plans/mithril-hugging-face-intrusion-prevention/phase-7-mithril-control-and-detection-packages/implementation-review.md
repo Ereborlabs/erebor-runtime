@@ -30,7 +30,7 @@ declarative captures are not delivered by these changes.
 
 ### Segment storage conversion
 
-Source state: the bounded-read changes after `7d920a76`. Configured AnalysisStore
+Source state: the extraction changes after `40bd114b`. Configured AnalysisStore
 intake and reads now use segments. The target conversion remains incomplete.
 Backup and restore copy the complete metadata and segment bundle.
 Storage pass records outside this section predate this conversion
@@ -66,7 +66,8 @@ Other metadata owners use
 `AnalysisStore::commit_metadata` and block writes on a commit error. An eligible idle active segment is
 sealed when the deletion transaction marks it Deleting. Reader count and page
 bytes are bounded. Event pages and source listing have a one-second deadline.
-Full authorized relation extraction remains incomplete.
+Trusted selected-input extraction is implemented below. Public SQL authorization
+and complete query-service integration remain outside this implementation.
 
 [AnalysisStore::read_page_cancel](../../../../crates/araphor-data/src/analysis/read.rs) A trusted caller requests one source page with a cancellation control.<br>
 -> [AnalysisStore::read_coordinator](../../../../crates/araphor-data/src/analysis/connection.rs) The owner obtains the writer coordinator within the request deadline.<br>
@@ -74,27 +75,77 @@ Full authorized relation extraction remains incomplete.
 -> [AnalysisReadControl::run](../../../../crates/araphor-data/src/analysis/read.rs) The owner attaches a connection-local interrupt and starts a scoped deadline worker.<br>
 -> [AnalysisStore::read_page_cancel](../../../../crates/araphor-data/src/analysis/read.rs) The owner captures metadata and committed ranges, then releases the writer before segment reads.<br>
 -> [AnalysisReadControl::check](../../../../crates/araphor-data/src/analysis/read.rs) The owner checks cancellation and time between ranges and records, and before returning a complete page.<br>
--> [ReadInterrupt::drop](../../../../crates/araphor-data/src/analysis/read.rs) The owner clears the interrupt handle before the reader connection can serve another request.
+-> [ReadInterrupt::drop](../../../../crates/araphor-data/src/analysis/read.rs) The owner clears the interrupt handle after the timer joins.<br>
+-> [AnalysisReadControl::run](../../../../crates/araphor-data/src/analysis/read.rs) The owner rolls back the snapshot before reader reuse and closes a reader whose snapshot start or cleanup fails.
 
 `read_page` creates the default control. `source_page` uses the same deadline
-for its reader and metadata query. The timer joins before the connection and
-read lease return to the store. A late cancellation cannot interrupt a later
+for its reader and metadata query. The shared runner owns the transaction.
+The timer joins and cancellation detaches before explicit rollback. The runner
+checks the rollback result. A failed start or rollback closes that reader;
+`AnalysisStore::recover` restores the reader pool. The connection and read
+lease return only after cleanup. A late cancellation cannot interrupt a later
 request on that connection. Errors release admission permits and return no
 partial page. The native interrupt cannot cancel a blocked filesystem syscall;
 segment reads check the deadline before and after each bounded range.
 
 `analysis_read_lock_deadline` checks writer, reader, and maintenance lock
 timeouts, cancellation while waiting, released permits, and subsequent reads.
-`analysis_read_native_deadline` interrupts a native query in a transaction and
-checks connection reuse, unchanged metadata, and checkpoint after failure.
+`analysis_read_native_deadline` repeats a native timeout 16 times on one reader.
+Each iteration opens a new transaction and reads again. The test also checks
+unchanged metadata and checkpoint after failure. `analysis_read_cancel_cleanup`
+repeats concurrent cancellation, then checks failed rollback, reader removal,
+permit release, and owner recovery.
 `data_capacity_recovery` checks a cancelled read through the shared data owner,
 then calls a policy RPC and reads the retained frame. Both new component tests,
-the mTLS capacity case, and the private full-tmpfs harness passed. After the
-final Rust edit, `bash .github/scripts/verify-rust-ci.sh` passed with 63 data
+the mTLS capacity case, and the private full-tmpfs harness passed on `40bd114b`.
+For that revision, `bash .github/scripts/verify-rust-ci.sh` passed with 63 data
 tests, 197 Control unit tests, 124 Mithril e2e tests, and 256 Node unit tests.
 Read `/tmp/araphor-read-deadline-ci.log` and the phase result for ignored counts
 and physical evidence. These checks do not prove complete authorized
 extraction or the release scan-performance gate.
+
+[AnalysisStore::extract](../../../../crates/araphor-data/src/analysis/extraction.rs) A trusted caller supplies exact source, context, and result selections.<br>
+-> [AnalysisSelectionV1::valid](../../../../crates/araphor-data/src/analysis/extraction.rs) The owner rejects foreign, duplicate, invalid, or excessive keys.<br>
+-> [AnalysisStore::extract](../../../../crates/araphor-data/src/analysis/extraction.rs) The owner fixes one metadata snapshot and revision under the writer coordinator, then releases that coordinator.<br>
+-> [AnalysisStore::check_selected_source](../../../../crates/araphor-data/src/analysis/extraction.rs) The owner checks accepted input against retained ranges and recorded expiry.<br>
+-> [AnalysisStore::selected_ranges](../../../../crates/araphor-data/src/analysis/extraction.rs) Fixed SQL selects bounded catalog pages by exact source and proven batch intake time.<br>
+-> [SegmentRange::read](../../../../crates/araphor-data/src/analysis/segments.rs) The owner reads each selected batch within its committed end and checks its digest.<br>
+-> [AnalysisStore::extract](../../../../crates/araphor-data/src/analysis/extraction.rs) Trusted code selects permitted rows and fields before buffering output.<br>
+-> [AnalysisExtractionV1::push](../../../../crates/araphor-data/src/analysis/extraction.rs) The owner checks page and complete-input limits before adding a projected row.<br>
+-> [AnalysisStore::extract](../../../../crates/araphor-data/src/analysis/extraction.rs) The owner reads exact context and result versions from that same snapshot and closes all leases before return.
+
+The selection limit is 1,024 combined keys. Empty source selection means no
+events, not all sources. The store checks tenant identity; the trusted caller
+owns principal grants and field disclosure. The projection callback is internal
+code, not a supplied program or expression. It must finish bounded work without
+caller I/O. The one-second read control checks the complete operation.
+Native interruption does not preempt Rust callback code or a blocked filesystem
+syscall. No public query endpoint or arbitrary SQL runs against the store.
+
+The output owns in-memory pages only. It has no file or database handle.
+Each page has at most 256 rows and one MiB of row input. The 64-MiB input budget
+charges projected bytes, row descriptors, page headers, and gap metadata.
+The separate 256-MiB scan budget charges complete selected raw batch ranges.
+Time exclusion uses validated batch intake times, not cursor order. Context and
+result keys keep exact versions regardless of event-time selection. Expiry and
+recovery gaps have no proved time interval and remain in coverage metadata.
+Absent selected sources reject; absent exact context/result keys are explicit.
+No receipt, progress, revision, raw file, or database row changes during a read.
+
+The six `analysis_extract_` component tests check these paths. The snapshot test
+injects later event, context, and result commits during projection. These commits
+do not enter the earlier snapshot. The range test reads 257 batches and checks
+every cursor. File-fault tests restore their temporary files and require a later
+successful read. `data_store_recovery` decodes production Node frames, selects
+one operation field, and proves a policy RPC while its fixture holds extraction
+open. The ignored 72-MiB history test is release qualification, not completed
+proof. Read the phase result for current verification and remaining work.
+
+The extraction and cleanup deliverable passed the complete workspace gate at
+`/tmp/araphor-extraction-cleanup-ci.log`: 70 data tests, 197 Control unit tests,
+124 Mithril e2e tests, and 256 Node unit tests. The private full-disk harness
+also passed at `/tmp/araphor-extraction-cleanup-disk-full.log`. These results
+cover the staged deliverable before the next witness-accounting edits.
 
 `analysis_store_batch_receipt` checks exact retries, gaps, receipt positions,
 reopen, and batch-proportional metadata. `segment_recovery_checks_ownership`

@@ -9,15 +9,16 @@ mod analysis;
 
 pub use analysis::{
     AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisContextKeyV1, AnalysisContextRefV1,
-    AnalysisContextVersionV1, AnalysisGapV1, AnalysisReadControl, AnalysisReadPageV1,
-    AnalysisRecordV1, AnalysisRecoveryStatusV1, AnalysisResultCommitV1, AnalysisResultReceiptV1,
-    AnalysisSourceReceiptV1, AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1,
-    AnalysisWitnessV1, ContextSensitivityV1, EvidenceRetentionOwner, EvidenceStoreOutcomeV1,
-    ProcessorClassV1, ProcessorHealthV1, ProcessorRetirementV1, ProcessorScopeV1, ProcessorStateV1,
-    RetentionLimitsV1, RetentionResultV1, RetentionSweepV1, SegmentFile, StorageHealthV1,
-    StorageLimitsV1, StorageUsageV1, StorePositionV1, ValidatedCoverageV1,
-    ValidatedEvidenceBatchV1, ANALYSIS_DUCKDB_BINDING_VERSION, ANALYSIS_SQLPARSER_VERSION,
-    MAX_EVIDENCE_SEGMENT_BYTES,
+    AnalysisContextVersionV1, AnalysisExtractionV1, AnalysisGapV1, AnalysisInputPageV1,
+    AnalysisInputV1, AnalysisReadControl, AnalysisReadPageV1, AnalysisRecordV1,
+    AnalysisRecoveryStatusV1, AnalysisRelationV1, AnalysisResultCommitV1, AnalysisResultReceiptV1,
+    AnalysisSelectionV1, AnalysisSourceReceiptV1, AnalysisSourceSnapshotV1, AnalysisSourceStatusV1,
+    AnalysisStore, AnalysisStoreMetaV1, AnalysisWitnessV1, ContextSensitivityV1,
+    EvidenceRetentionOwner, EvidenceStoreOutcomeV1, ProcessorClassV1, ProcessorHealthV1,
+    ProcessorRetirementV1, ProcessorScopeV1, ProcessorStateV1, RetentionLimitsV1,
+    RetentionResultV1, RetentionSweepV1, SegmentFile, StorageHealthV1, StorageLimitsV1,
+    StorageUsageV1, StorePositionV1, ValidatedCoverageV1, ValidatedEvidenceBatchV1,
+    ANALYSIS_DUCKDB_BINDING_VERSION, ANALYSIS_SQLPARSER_VERSION, MAX_EVIDENCE_SEGMENT_BYTES,
 };
 
 pub const MAX_EVIDENCE_BATCH_RECORDS: usize = 4_096;
@@ -50,6 +51,12 @@ pub struct EvidenceIntakeIdentityV1 {
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("Analysis extraction reached its {resource} limit"))]
+    AnalysisInputTooLarge {
+        resource: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("The analysis read was cancelled"))]
     AnalysisReadCancelled {
         #[snafu(implicit)]

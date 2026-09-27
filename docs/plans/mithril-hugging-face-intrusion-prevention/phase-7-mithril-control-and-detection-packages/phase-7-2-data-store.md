@@ -14,8 +14,9 @@ Control keeps policy/trust/rollout persistence and authority. Node keeps its
 delivery WAL. The same complete data owner can later run remotely. Storage
 and trace intake do not require discovery. Entry: 7.1.
 Status: **Not done**. Segment intake, reads, recovery, and retention are under
-implementation. Complete-bundle backup is implemented. Bounded extraction,
-caller conversion, and full qualification remain incomplete.
+implementation. Complete-bundle backup and trusted bounded extraction are
+implemented. Extraction release qualification, caller conversion, and full
+qualification remain incomplete.
 Previous implementation results below are evidence for their named revisions,
 not completion of this design.
 
@@ -697,6 +698,90 @@ The native interrupt cannot cancel a blocked filesystem syscall. The owner
 checks time before and after each bounded segment range. This change does not
 complete authorized range extraction, witness cost reports, old Control writer
 removal, or the remaining release and physical qualification gates.
+
+### Trusted snapshot extraction
+
+Source state: the extraction changes after `40bd114b`. `AnalysisStore::extract`
+accepts one tenant, exact source identities, optional intake-time bounds, and
+exact context/result keys. The combined key limit is 1,024. An empty source
+list selects no events. Foreign, duplicate, invalid, or excessive keys reject
+before decoding. An absent selected source is an error. Missing context/result
+keys appear in separate result lists.
+
+One native transaction fixes the store revision, receipts, catalog ranges,
+context versions, and results. The owner releases the writer coordinator after
+it fixes the snapshot. The existing read lease prevents segment deletion.
+Each batch has a validated positive intake time. Fixed parameterized queries
+apply inclusive or exclusive bounds to each batch; they do not assume that
+time increases with cursors. Event-time bounds do not filter referenced context
+or result versions. Recorded expiry and recovery gaps remain explicit because
+those gap records cannot prove a time bound. A catalog count check rejects an
+unrecorded accepted-input gap before projection.
+
+The trusted projection callback receives exact source/CPU identity, cursor,
+store position, intake time, and checked frame bytes. It selects rows and
+fields before output admission. It is not a client callback or SQL execution
+interface. The caller must authorize this selection before the call and must
+not perform caller I/O inside projection. Public SQL binding, grants, and worker
+isolation remain in 7.3.
+
+The owner reads each selected batch once. It checks 256-MiB scanned bytes before
+reading a range. It buffers complete projected input up to 64 MiB, including
+row descriptors, page headers, and coverage metadata. Each page has at most
+256 rows and one MiB of row input. The result reports scanned bytes, projected
+payload bytes, and charged input bytes separately. A limit, cancellation,
+missing file, or digest failure returns no partial extraction. All readers and
+leases close before the result reaches the caller. No raw index, persisted
+query copy, or dependency is added.
+
+Six `analysis_extract_` component tests passed. They cover time endpoints,
+nonmonotonic time, tenant boundaries, empty scope, late commits, exact context
+and results, 257-batch pagination, missing/corrupt files, explicit gaps, request
+limits, page limits, scan/input counters, whole-request input rejection, and
+cancellation. `data_store_recovery` passed through Node WAL and mTLS. Its
+projection decodes real Node frames and returns only the selected operation.
+A bounded fixture handshake holds extraction open until a policy RPC succeeds.
+The result record includes extraction time and scan/input/payload byte counts.
+
+**Done for bounded extraction implementation and read cleanup. Not done for
+release extraction qualification or the full phase.**
+The first full gate failed `analysis_read_native_deadline`: 68 data tests
+passed, one failed, and five were ignored. The log is
+`/tmp/araphor-extraction-ci.log`. A concurrent repeat reproduced the aborted
+transaction error eight times in 80 runs at `/tmp/araphor-deadline-stress.log`.
+The timer could interrupt the transaction destructor's rollback. That destructor
+ignored the rollback error and left a failed transaction on a pooled reader.
+
+The shared read runner now owns the snapshot. It joins the timer and detaches
+cancellation before explicit rollback. It checks cleanup and closes the reader
+if snapshot start or rollback fails. Recovery restores a closed reader.
+The timeout regression repeats 16 times on one reader and opens a fresh
+transaction after each timeout. A second test repeats concurrent cancellation
+and checks reader removal after failed cleanup.
+
+The three focused read tests passed. The fixed timeout test then passed all
+80 concurrent runs, with 16 timeouts and fresh transactions per run. This is
+1,280 successful timeout-cleanup checks. Read
+`/tmp/araphor-deadline-fixed-stress.log`.
+The six extraction tests passed again on the final Rust source at
+`/tmp/araphor-extraction-cleanup-focused.log`. The mTLS recovery case passed
+at `/tmp/araphor-extraction-cleanup-recovery.log`. The required full gate passed
+formatting, workspace check, strict Clippy, and all workspace tests for this
+deliverable. Data passed 70 tests with five ignored; Control passed 197 with
+three ignored; Mithril e2e passed 124 with 251 ignored; Node passed 256 with one
+ignored. Read `/tmp/araphor-extraction-cleanup-ci.log`. This evidence covers the
+staged extraction and cleanup source, before the next witness-accounting edits.
+The private one-GiB tmpfs harness passed `data_capacity_retry`,
+`data_capacity_recovery`, and `data_full_disk` on this source. The full-disk
+case observed zero available bytes, rejected copy reserves, and recovered two
+exact records. The harness removed its temporary mount. Its log is
+`/tmp/araphor-extraction-cleanup-disk-full.log`.
+The ignored `analysis_extract_history` test adds a 72-MiB history, a four-MiB
+recent range, a sparse selection across that history, and complete-input
+rejection above 64 MiB. Run this test in release mode before closing the
+storage-choice gate. Its presence is not a pass. No release scan, memory, or
+performance result is claimed here. Witness cost reports, physical admission,
+old Control writer removal, and remaining physical qualification also remain.
 
 ### Previous implementation evidence
 

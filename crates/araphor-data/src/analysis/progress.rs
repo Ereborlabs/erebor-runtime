@@ -99,10 +99,20 @@ impl ProcessorScopeV1 {
 
 impl AnalysisStore {
     pub fn read_result(&self, tenant: [u8; 16], result_id: &str) -> Result<Option<Vec<u8>>> {
+        let reader = self.reader()?;
+        self.read_result_from(reader.get()?, tenant, result_id)
+    }
+
+    pub(super) fn read_result_from(
+        &self,
+        connection: &duckdb::Connection,
+        tenant: [u8; 16],
+        result_id: &str,
+    ) -> Result<Option<Vec<u8>>> {
         if tenant == [0; 16] || result_id.is_empty() || result_id.len() > 256 {
             return self.reject("the analysis result identity is invalid");
         }
-        let stored: Option<(Vec<u8>, Vec<u8>)> = self.reader()?.get()?.query_row(
+        let stored: Option<(Vec<u8>, Vec<u8>)> = connection.query_row(
             "SELECT body, body_sha256 FROM analysis_results WHERE tenant_id = ? AND result_id = ?",
             params![tenant.as_slice(), result_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
