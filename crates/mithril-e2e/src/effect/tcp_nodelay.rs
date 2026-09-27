@@ -184,18 +184,21 @@ fn tcp_send_variants_are_allowed<P: Platform>() -> TestResult<()> {
     let pid = actor.id();
     let task = env.task(pid, "TCP actor")?;
     assert_ne!(task.snapshot.admitted_entry_rule_id, 0);
+    let effects = EffectCheck::new(&env, task)?;
 
     actor.send(b"variants\n")?;
     let status = actor.wait_exit("TCP send variants", Duration::from_secs(5))?;
     let stderr = actor.stderr()?;
     assert!(status.success(), "TCP actor exited with {status}: {stderr}");
 
-    let snapshot = env.snapshot()?;
-    let sends = snapshot
-        .recent_effects
-        .iter()
-        .filter(|event| task.matches_effect(event, "EXACT_POLICY_ALLOW", F::Network, O::Send, 0))
-        .collect::<Vec<_>>();
+    let sends = effects.wait_many(
+        &env,
+        "EXACT_POLICY_ALLOW",
+        (F::Network, O::Send),
+        0,
+        3,
+        "TCP send variants evidence",
+    )?;
     assert_eq!(sends.len(), 3, "send evidence: {sends:?}");
     for event in &sends {
         assert_eq!(&event.network_peer_address[..4], &[127, 0, 0, 1]);
