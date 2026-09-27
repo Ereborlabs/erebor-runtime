@@ -1316,9 +1316,8 @@ restart, invalid counts, and refusal to replace a result. All 16 enabled
 data-store tests passed in 46.19 seconds; four subprocess or filesystem cases
 remain ignored. The four enabled outage tests passed in 26.07 seconds with
 the moved fixture methods. Their release-only startup case remains ignored.
-Formatting passed. Release measurements and the final workspace gate remain
-open. This case does not qualify kernel
-policy installation. The phase remains **Not done**.
+Formatting passed. The release and full-gate results follow below. This case
+does not qualify kernel policy installation. The phase remains **Not done**.
 
 The release build passed on `9ecffced` with the same locked build command
 above. It took two minutes. The binary SHA-256 is
@@ -1332,7 +1331,33 @@ Idle/loaded rollout p50 values were 100.212/107.247 milliseconds; p95 values
 were 184.967/180.281 milliseconds. The largest observed evidence ACK was
 243.827 milliseconds, including the policy operation before ACK read.
 The host workspace gate ran concurrently. This single run does not establish
-the five-percent performance gate or a repeatable regression. Repeat the
-measurements after host verification finishes. Formatting, workspace checks,
-and strict Clippy passed; workspace tests remain running. No Rust source
-changed during the gate. The complete phase remains **Not done**.
+the five-percent performance gate or a repeatable regression.
+
+The full gate passed on `9ecffced` with
+`CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh`.
+Formatting, workspace checks, strict Clippy, and all workspace tests passed.
+Data passed 49 tests with two ignored; Control passed 196 with two ignored;
+Mithril e2e passed 123 with 251 ignored; Node passed 256 with one ignored.
+No Rust source changed during that run.
+
+Three more release rollout runs passed after host build and test jobs finished.
+Each run uses a new temporary store, 32 pairs, 64 Active transitions, and
+131,072 records. The binary digest and pilot configuration are unchanged.
+The unrelated VM and desktop applications remain active. No cache is cleared.
+Results are `rollout-{1,2,3}.json` and their `-resources.log` files in the
+pilot output directory.
+
+| Run | Idle mean milliseconds | Loaded mean milliseconds | Idle / loaded p95 milliseconds | Maximum observed ACK milliseconds | Whole-case seconds | Peak RSS KiB |
+| --- | ---: | ---: | --- | ---: | ---: | ---: |
+| 1 | 76.760 | 81.531 | 115.559 / 125.721 | 129.215 | 12.60 | 184,964 |
+| 2 | 74.937 | 79.646 | 115.450 / 126.674 | 132.783 | 12.32 | 187,708 |
+| 3 | 75.665 | 80.478 | 115.026 / 121.097 | 128.614 | 12.26 | 185,460 |
+
+Loaded mean time increases by 6.2, 6.3, and 6.4 percent. This repeated increase
+needs investigation before the five-percent performance gate can close.
+The cases compare idle intake with in-flight evidence, not discovery disabled
+with discovery enabled under equal evidence load. They prove Control rollout
+completion and durable state under this synthetic load; they do not prove a
+physical activation or the later discovery-performance gate. Full-capacity
+memory, worst-case payloads, global saturation, physical reserve adequacy,
+and old-writer removal also remain open. The phase remains **Not done**.
