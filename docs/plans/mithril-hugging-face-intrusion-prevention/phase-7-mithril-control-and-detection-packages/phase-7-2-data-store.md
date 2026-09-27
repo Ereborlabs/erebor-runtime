@@ -126,6 +126,11 @@ Storage fails or cannot meet capacity
    Keep the 256-MiB data-process qualification gate. Start metadata DuckDB at
    a 64-MiB memory target and 16-MiB WAL checkpoint threshold; neither caps RSS.
    Do not carry raw-table ART rebuild or vacuum tuning into the new design.
+   Admit at most 4,096 source bindings per store. Existing source retries remain
+   valid at this limit. A new source epoch consumes a binding. Reject excess
+   bindings during admission and startup validation. Report writer readiness
+   separately from disk capacity and retention health. An uncertain commit or
+   failed recovery keeps writer readiness false.
 
 7. Back up and restore the complete segment/database bundle, not a DB file.
    Pause intake, drain work/readers, seal and sync segments, checkpoint/close
@@ -782,6 +787,104 @@ rejection above 64 MiB. Run this test in release mode before closing the
 storage-choice gate. Its presence is not a pass. No release scan, memory, or
 performance result is claimed here. Witness cost reports, physical admission,
 old Control writer removal, and remaining physical qualification also remain.
+
+### Witness accounting and physical admission
+
+The changes after `34f5e2c4` add `AnalysisStore::witness_usage`. One bounded
+metadata snapshot returns distinct referenced frame bytes, full committed
+segment bytes, extra segment bytes, context charges, and the total witness
+charge. Repeated references to one event or segment do not add another charge.
+Expired references do not pin raw input. The quota check uses the same SQL.
+This read adds no event copy, stored counter, or index. Segment bytes are file
+lengths, not filesystem allocation blocks. `storage_usage` reports allocated
+bytes separately.
+
+`StorageLimitsV1::check_append` includes pending raw bytes and a new segment
+header before file reservation or append. Checked arithmetic rejects overflow
+and insufficient free space. The existing native-WAL and maintenance reserve
+remains separate. `bind_source` rejects a new binding after 4,096 bindings;
+matching retries still succeed. Startup checks the same bound.
+
+The component and mTLS quota runners calculate their iteration limit from the
+configured allowance and encoded batch size. The old fixed iteration counts
+could stop before the configured quota. These runner changes do not establish
+a release-memory or throughput pass.
+
+`StorageHealthV1::write_ready` reports the existing writer recovery state.
+Health does not require a native database read, so a closed connection after
+failed recovery does not prevent this report. Capacity flags still describe
+disk capacity; they do not imply that the writer is ready. Filesystem inspection
+errors remain errors.
+
+Public metadata reads now use the same one-second snapshot
+runner as event extraction. These reads include store metadata, receipts,
+source status and binding, exact context and result lookup, processor health
+and retirement, and recovery gaps. The runner bounds
+lock waits and native queries and checks transaction cleanup before reuse.
+It does not preempt a blocked filesystem syscall or Rust callback. Intake maps
+a read timeout or cancellation to Unavailable and sends no ACK for that call.
+Retention lists at most 16 sources under the maintenance writer. It releases
+that writer before processing the sources. This internal read waits for backup
+maintenance; it does not use a client extraction deadline.
+
+Focused proof so far:
+
+- `analysis_store_witness_limits`, `segment_retention_keeps_witnesses`, and
+  `analysis_witness_segment_cost` passed. The new case checks unequal frame
+  sizes, repeated references, two segments, expiry, reopen, and retention.
+- `analysis_store_capacity_bounds` passed. Both an existing-segment append
+  and a new segment reject before changing metadata or file lengths when the
+  complete pending write does not fit.
+- `analysis_source_count_bound` passed. The first fixture run failed because
+  DuckDB `range` needs a signed argument. The explicit SQL cast fixes the
+  fixture. The test checks the last admitted binding, its retry, and rejection
+  of the next binding inside a rolled-back transaction.
+- `data_store_recovery` passed with witness accounting through production
+  Node frames and mTLS intake. It compares the witness charge with retained
+  segment file lengths.
+
+The first workspace run passed 71 data tests and failed the closed-access
+fixture, which still expected health reporting itself to fail. The fixture now
+sets the same not-ready state as production close and checks the health result.
+The metadata-read conversion also exposed retention's separate source-list
+reader at compile time; this reader now uses the shared bounded runner.
+Neither failure establishes a pass for the corrected source.
+
+`analysis_extract_history` now also checks 18 exact witnesses across six
+segments. It reports referenced bytes, full segment bytes, extra bytes,
+result-commit time, and accounting-read time. It requires retention to keep
+every pinned segment. This ignored release case has not yet run.
+
+One gate attempt stopped at the linker because the host filesystem was full.
+Only this worktree's regenerable Rust incremental cache was removed. No source,
+test evidence, binary, or native DuckDB build was removed. Subsequent fully
+parallel data tests passed 72 cases and timed out in the snapshot fixture.
+That fixture passed alone in 0.81 seconds. The complete gate now runs with
+`RUST_TEST_THREADS=4`; no test is skipped and production deadlines are unchanged.
+The release build is stopped until this gate finishes.
+
+The four-thread gate passed formatting, compilation, strict Clippy, 73 data
+tests, and 198 Control tests. Mithril e2e passed 123 tests and failed
+`data_store_recovery` with `RetentionUnavailable`. The log is
+`/tmp/araphor-accounting-four-ci.log`. The bounded retention source read could
+time out while backup held the maintenance lock. Retention now uses the
+maintenance writer for that internal read. `retention_waits_for_maintenance`
+checks a maintenance interval longer than the query deadline without a false
+retention failure. This regression passed in 1.45 seconds. The focused log is
+`/tmp/araphor-maintenance-read-focused.log`. The focused mTLS recovery case also
+passed in `/tmp/araphor-maintenance-recovery.log`.
+
+The final command was `RUST_TEST_THREADS=4 CARGO_BUILD_JOBS=2 bash
+.github/scripts/verify-rust-ci.sh`. It passed formatting, compilation, strict
+Clippy, and the full workspace suite. Counts include 74 data tests, 199 Control
+tests, 124 Mithril e2e tests, and 256 Node tests. The log is
+`/tmp/araphor-maintenance-final-ci.log`. This run covers the accounting,
+readiness, and maintenance correction plus the pending benchmark fixture. It
+does not cover the later intake constructor conversion.
+
+**Done for accounting, admission, readiness, and maintenance coordination. Not
+done for the full phase.** Release memory, sparse-history and many-segment
+measurements, caller conversion, and physical qualification remain required.
 
 ### Previous implementation evidence
 

@@ -93,9 +93,15 @@ impl DataStoreQualification {
         let mut digest = Sha256::new();
         let mut samples = Vec::new();
         let mut previous = None;
+        let allowance = limits.tenant_max_bytes - limits.tenant_max_bytes / 4;
+        let batch_limit = allowance
+            .checked_div(wire.framed_records.len() as u64)
+            .and_then(|count| count.checked_add(2))
+            .ok_or("the quota batch bound is invalid")?;
+        let group_limit = batch_limit.div_ceil(batches.len() as u64);
         let started = Instant::now();
         let blocked = 'fill: {
-            for group in 0..2048 {
+            for group in 0..group_limit {
                 if group > 0 {
                     batches = self.load_group(&observations, group).await?;
                 }

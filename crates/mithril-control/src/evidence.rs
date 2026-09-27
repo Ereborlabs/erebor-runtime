@@ -273,6 +273,8 @@ impl EvidenceIntakeOwner {
                 Status::resource_exhausted(error.to_string())
             }
             araphor_data::Error::RetentionUnavailable { .. }
+            | araphor_data::Error::AnalysisReadDeadline { .. }
+            | araphor_data::Error::AnalysisReadCancelled { .. }
             | araphor_data::Error::AnalysisDatabase { .. }
             | araphor_data::Error::AnalysisState { .. }
             | araphor_data::Error::Json { .. }
@@ -884,6 +886,23 @@ mod tests {
     };
 
     use super::{AuthenticatedEvidenceNodeV1, EvidenceIntakeIdentityV1, EvidenceIntakeOwner};
+
+    #[test]
+    fn intake_read_failure_status() {
+        for error in [
+            araphor_data::Error::AnalysisReadDeadline {
+                location: snafu::Location::default(),
+            },
+            araphor_data::Error::AnalysisReadCancelled {
+                location: snafu::Location::default(),
+            },
+        ] {
+            assert_eq!(
+                EvidenceIntakeOwner::data_status(error).code(),
+                tonic::Code::Unavailable
+            );
+        }
+    }
 
     fn authenticated() -> AuthenticatedEvidenceNodeV1 {
         AuthenticatedEvidenceNodeV1 {

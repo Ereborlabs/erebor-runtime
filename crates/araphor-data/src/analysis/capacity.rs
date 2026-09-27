@@ -71,6 +71,26 @@ impl StorageLimitsV1 {
         self.policy_reserve_bytes + WRITE_RESERVE
     }
 
+    pub(super) fn check_append(&self, usage: StorageUsageV1, bytes: u64) -> Result<()> {
+        let projected = usage
+            .file_bytes
+            .checked_add(bytes)
+            .and_then(|file_bytes| {
+                Some(StorageUsageV1 {
+                    file_bytes,
+                    available_bytes: usage.available_bytes.checked_sub(bytes)?,
+                    ..usage
+                })
+            })
+            .ok_or_else(|| {
+                StorageCapacitySnafu {
+                    resource: "pending segment bytes",
+                }
+                .build()
+            })?;
+        self.check(projected, false)
+    }
+
     pub(super) fn check_copy(&self, available: u64, bytes: u64) -> Result<()> {
         let required = bytes
             .checked_add(bytes / 4)
@@ -186,6 +206,33 @@ mod tests {
             available_bytes: limits.maintenance_bytes() + limits.disk_max_bytes / 4,
         };
         limits.check(usage, false)?;
+        let pending = StorageUsageV1 {
+            file_bytes: usage.file_bytes - 1024,
+            available_bytes: usage.available_bytes + 1024,
+            ..usage
+        };
+        limits.check_append(pending, 1024)?;
+        assert!(limits.check_append(pending, 1025).is_err());
+        assert!(limits
+            .check_append(
+                StorageUsageV1 {
+                    file_bytes: 0,
+                    available_bytes: 0,
+                    ..usage
+                },
+                1
+            )
+            .is_err());
+        assert!(limits
+            .check_append(
+                StorageUsageV1 {
+                    file_bytes: u64::MAX,
+                    available_bytes: u64::MAX,
+                    ..usage
+                },
+                1
+            )
+            .is_err());
         assert!(limits
             .check(
                 StorageUsageV1 {
@@ -247,13 +294,38 @@ mod tests {
             .write(true)
             .create_new(true)
             .open(root.join("quota-test"))?;
+        let mut next = first.clone();
+        next.first_cursor = 2;
+        next.last_cursor = 2;
+        let ordinary = limits.disk_max_bytes - WRITE_RESERVE;
+        let usage = store.storage_usage()?;
+        padding.set_len(ordinary - usage.file_bytes - 4)?;
+        assert!(matches!(
+            store.accept_validated_batch(identity.clone(), next.clone()),
+            Err(crate::Error::StorageCapacity {
+                resource: "data files",
+                ..
+            })
+        ));
+        assert_eq!(store.meta()?, before);
+        assert_eq!(store.storage_usage()?.file_bytes, ordinary - 4);
+        padding.set_len(ordinary - usage.file_bytes - 5)?;
+        let mut fresh = identity.clone();
+        fresh.source_epoch = 2;
+        assert!(matches!(
+            store.accept_validated_batch(fresh.clone(), first.clone()),
+            Err(crate::Error::StorageCapacity {
+                resource: "data files",
+                ..
+            })
+        ));
+        assert!(store.source_receipt(&fresh)?.is_none());
+        assert_eq!(store.meta()?, before);
+        assert_eq!(store.storage_usage()?.file_bytes, ordinary - 5);
         padding.set_len(limits.disk_max_bytes)?;
         let usage = store.storage_usage()?;
         assert!(usage.file_bytes >= limits.disk_max_bytes);
         assert!(usage.allocated_bytes < usage.file_bytes);
-        let mut next = first.clone();
-        next.first_cursor = 2;
-        next.last_cursor = 2;
         assert!(matches!(
             store.accept_validated_batch(identity.clone(), next.clone()),
             Err(crate::Error::StorageCapacity { .. })
@@ -405,13 +477,24 @@ mod tests {
                         .collect();
                 let mut cursors = vec![0_u64; identities.len()];
                 let mut sample = None;
-                for group in 0..8192 * u64::from(tenants) {
+                let limit = if tenants == 1 {
+                    store.storage.tenant_max_bytes
+                } else {
+                    store.storage.logical_max_bytes
+                };
+                let allowance = limit - limit / 4;
+                let frame_bytes = 128 * 1024;
+                let batch_limit = allowance
+                    .checked_div(frame_bytes as u64)
+                    .and_then(|count| count.checked_add(2))
+                    .ok_or("the quota batch bound overflows")?;
+                for group in 0..batch_limit {
                     if group % 64 == 0 {
                         sample = Some((group, native(&store)?, store.storage_usage()?));
                     }
                     let tenant = group as usize % identities.len();
                     let accepted = cursors[tenant];
-                    let mut frames = vec![0_u8; 128 * 1024];
+                    let mut frames = vec![0_u8; frame_bytes];
                     for index in 0..1024 {
                         let cursor = accepted + index as u64 + 1;
                         frames[index * 128..index * 128 + 8].copy_from_slice(&cursor.to_be_bytes());

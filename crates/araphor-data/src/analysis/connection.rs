@@ -249,6 +249,7 @@ impl AnalysisStore {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn reader(&self) -> Result<AnalysisConnection<'_>> {
         self.reader_wait(None)
     }
@@ -377,8 +378,10 @@ mod tests {
             assert!(store.writer().is_err());
             assert!(store.maintenance_writer().is_err());
             assert!(store.accept_validated_batch(identity(), batch(1)).is_err());
+            assert!(!store.storage_health()?.write_ready);
             assert!(!notice.has_changed()?);
             store.recover()?;
+            assert!(store.storage_health()?.write_ready);
             assert_eq!(notice.has_changed()?, applied);
             assert_eq!(*notice.borrow(), u64::from(applied));
             let next: u64 = store.reader()?.get()?.query_row(
@@ -408,6 +411,7 @@ mod tests {
         let bytes = fs::read(&path)?;
         for _ in 0..2 {
             assert!(store.recover().is_err());
+            assert!(!store.storage_health()?.write_ready);
             assert!(store.writer().is_err());
             assert!(store.read_page(&identity(), 1).is_err());
             assert!(AnalysisStore::open(&root).is_err());

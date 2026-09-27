@@ -985,6 +985,20 @@ impl DataStoreQualification {
                 && witness.records[1].cursor == 4,
             "the exact witness is not readable",
         )?;
+        let witness_usage = data.witness_usage(identity.tenant_id, START + 48 * HOUR)?;
+        let segment_bytes = fs::read_dir(data_root.join("segments"))?
+            .try_fold(0_u64, |total, entry| -> std::io::Result<u64> {
+                Ok(total + entry?.metadata()?.len())
+            })?;
+        self.check(
+            witness_usage.referenced_bytes == witness.records[0].framed_record.len() as u64
+                && witness_usage.segment_bytes == segment_bytes
+                && witness_usage.extra_segment_bytes
+                    == segment_bytes - witness_usage.referenced_bytes
+                && witness_usage.context_bytes == 0
+                && witness_usage.charged_bytes == segment_bytes,
+            "witness accounting did not separate exact frames from retained segments",
+        )?;
         let gap = data
             .resume_optional(&optional)?
             .ok_or("optional missing range is absent")?;
@@ -1101,6 +1115,7 @@ impl DataStoreQualification {
             "exact-node-frames",
             "scoped-field-extraction",
             "policy-rpc-during-extraction",
+            "whole-segment-witness-cost",
             "coverage-commit",
             "lost-ack-keeps-node-wal",
             "restart-keeps-source-state",
@@ -1143,6 +1158,7 @@ impl DataStoreQualification {
                 "extraction_scan_bytes": extracted.scanned_bytes,
                 "extraction_input_bytes": extracted.input_bytes,
                 "extraction_projected_bytes": extracted.projected_bytes,
+                "witness_usage": witness_usage,
                 "checkpoint_us": checkpoint_us, "database_bytes": database_bytes,
                 "wal_bytes_after_checkpoint": wal_bytes,
                 "remaining_qualification": ["physical-capacity-backpressure", "crash-injection", "physical-disk-reuse"],
@@ -2122,9 +2138,11 @@ mod tests {
             }
             assert!(!changed.has_changed()?);
             assert_eq!(observations.pending_evidence_records(), 1);
+            assert_eq!(data.storage_health()?.write_ready, !native);
             connection.policy_inventory(None, Vec::new()).await?;
             if native {
                 data.recover()?;
+                assert!(data.storage_health()?.write_ready);
                 assert!(!changed.has_changed()?);
             }
             assert_eq!(data.meta()?, before);
@@ -2147,7 +2165,7 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
                     let health = data.storage_health()?;
-                    if health.retention_healthy && health.intake_capacity {
+                    if health.write_ready && health.retention_healthy && health.intake_capacity {
                         break Ok::<_, araphor_data::Error>(());
                     }
                     tokio::time::sleep(Duration::from_millis(20)).await;

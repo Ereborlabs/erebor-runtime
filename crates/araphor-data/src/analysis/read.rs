@@ -154,6 +154,15 @@ impl Drop for ReadInterrupt<'_> {
 }
 
 impl AnalysisStore {
+    pub(super) fn read_snapshot<T>(
+        &self,
+        read: impl FnOnce(&duckdb::Connection) -> Result<T>,
+    ) -> Result<T> {
+        let control = AnalysisReadControl::default();
+        let mut reader = self.reader_until(&control)?;
+        control.run(&mut reader, read)
+    }
+
     pub fn source_page(
         &self,
         tenant_id: [u8; 16],
@@ -368,6 +377,66 @@ mod tests {
     use super::*;
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+    #[test]
+    fn analysis_metadata_read_deadlines() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let identity = EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "n".into(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        };
+        let processor = super::super::ProcessorScopeV1 {
+            identity: identity.clone(),
+            processor_id: "p".into(),
+            method_version: 1,
+        };
+        let context = super::super::AnalysisContextKeyV1 {
+            tenant_id: identity.tenant_id,
+            owner_id: "o".into(),
+            entity_key: vec![1],
+            lifetime_key: vec![1],
+            owner_revision: 0,
+        };
+        let reads: [&dyn Fn() -> Result<()>; 9] = [
+            &|| store.meta().map(|_| ()),
+            &|| store.source_receipt(&identity).map(|_| ()),
+            &|| store.source_status(&identity).map(|_| ()),
+            &|| {
+                store
+                    .source_binding(identity.tenant_id, "n", identity.source_id, 1)
+                    .map(|_| ())
+            },
+            &|| store.context_version(&context).map(|_| ()),
+            &|| store.read_result(identity.tenant_id, "r").map(|_| ()),
+            &|| store.recovery_gaps(&identity, 0).map(|_| ()),
+            &|| store.processor_health(&processor).map(|_| ()),
+            &|| store.processor_retirement(&processor).map(|_| ()),
+        ];
+        let before = store.meta()?;
+        for read in reads {
+            let maintenance = store
+                .maintenance
+                .write()
+                .map_err(|_| "maintenance poisoned")?;
+            let started = Instant::now();
+            assert!(matches!(
+                read(),
+                Err(crate::Error::AnalysisReadDeadline { .. })
+            ));
+            assert!(started.elapsed() < Duration::from_secs(3));
+            drop(maintenance);
+            assert_eq!(store.read_slots.available_permits(), 16);
+            read()?;
+        }
+        assert_eq!(store.meta()?, before);
+        assert!(store.maintenance.try_write().is_ok());
+        Ok(())
+    }
 
     #[test]
     fn analysis_read_lock_deadline() -> TestResult {

@@ -17,7 +17,7 @@ pub use analysis::{
     EvidenceRetentionOwner, EvidenceStoreOutcomeV1, ProcessorClassV1, ProcessorHealthV1,
     ProcessorRetirementV1, ProcessorScopeV1, ProcessorStateV1, RetentionLimitsV1,
     RetentionResultV1, RetentionSweepV1, SegmentFile, StorageHealthV1, StorageLimitsV1,
-    StorageUsageV1, StorePositionV1, ValidatedCoverageV1, ValidatedEvidenceBatchV1,
+    StorageUsageV1, StorePositionV1, ValidatedCoverageV1, ValidatedEvidenceBatchV1, WitnessUsageV1,
     ANALYSIS_DUCKDB_BINDING_VERSION, ANALYSIS_SQLPARSER_VERSION, MAX_EVIDENCE_SEGMENT_BYTES,
 };
 

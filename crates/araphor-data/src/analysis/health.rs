@@ -10,6 +10,7 @@ use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct StorageHealthV1 {
+    pub write_ready: bool,
     pub retention_healthy: bool,
     pub intake_capacity: bool,
     pub maintenance_capacity: bool,
@@ -213,9 +214,9 @@ pub struct ProcessorHealthV1 {
 
 impl AnalysisStore {
     pub fn storage_health(&self) -> Result<StorageHealthV1> {
-        self.meta()?;
         let usage = self.storage_usage()?;
         Ok(StorageHealthV1 {
+            write_ready: self.write_ready.load(std::sync::atomic::Ordering::Acquire),
             retention_healthy: self.retention_healthy(),
             intake_capacity: self.storage.check(usage, false).is_ok(),
             maintenance_capacity: self.storage.check(usage, true).is_ok(),
@@ -231,40 +232,40 @@ impl AnalysisStore {
         if !valid_source_identity(identity) {
             return self.reject("the recovery gap source identity is invalid");
         }
-        let reader_guard = self.reader()?;
-        let reader = reader_guard.get()?;
-        let mut statement = reader
-            .prepare(
-                "SELECT first_cursor, last_cursor, commit_revision FROM recovery_gaps
+        self.read_snapshot(|reader| {
+            let mut statement = reader
+                .prepare(
+                    "SELECT first_cursor, last_cursor, commit_revision FROM recovery_gaps
              WHERE tenant_id = ? AND stream_key = ? AND last_cursor > ?
              ORDER BY first_cursor LIMIT ?",
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare source recovery gaps",
-            })?;
-        statement
-            .query_map(
-                params![
-                    identity.tenant_id.as_slice(),
-                    source_key(identity).as_slice(),
-                    after_cursor,
-                    MAX_ANALYSIS_PAGE_RECORDS as u32
-                ],
-                |row| {
-                    Ok(AnalysisGapV1 {
-                        first_cursor: row.get(0)?,
-                        last_cursor: row.get(1)?,
-                        commit_revision: row.get(2)?,
-                    })
-                },
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read source recovery gaps",
-            })?
-            .collect::<duckdb::Result<Vec<_>>>()
-            .context(AnalysisDatabaseSnafu {
-                operation: "decode source recovery gaps",
-            })
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare source recovery gaps",
+                })?;
+            statement
+                .query_map(
+                    params![
+                        identity.tenant_id.as_slice(),
+                        source_key(identity).as_slice(),
+                        after_cursor,
+                        MAX_ANALYSIS_PAGE_RECORDS as u32
+                    ],
+                    |row| {
+                        Ok(AnalysisGapV1 {
+                            first_cursor: row.get(0)?,
+                            last_cursor: row.get(1)?,
+                            commit_revision: row.get(2)?,
+                        })
+                    },
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read source recovery gaps",
+                })?
+                .collect::<duckdb::Result<Vec<_>>>()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "decode source recovery gaps",
+                })
+        })
     }
 
     pub fn processor_health(&self, scope: &ProcessorScopeV1) -> Result<Option<ProcessorHealthV1>> {
@@ -273,107 +274,104 @@ impl AnalysisStore {
         }
         let key = source_key(&scope.identity);
         let tenant = scope.identity.tenant_id.as_slice();
-        let mut reader_guard = self.reader()?;
-        let reader = reader_guard.get_mut()?;
-        let snapshot = reader.transaction().context(AnalysisDatabaseSnafu {
-            operation: "begin processor health snapshot",
-        })?;
-        let progress: Option<(String, u64, u64, bool)> = snapshot
-            .query_row(
-                "SELECT class, consumed_cursor, resume_floor, retired FROM processor_progress
+        self.read_snapshot(|snapshot| {
+            let progress: Option<(String, u64, u64, bool)> = snapshot
+                .query_row(
+                    "SELECT class, consumed_cursor, resume_floor, retired FROM processor_progress
              WHERE processor_id = ? AND method_version = ? AND tenant_id = ? AND stream_key = ?",
-                params![
-                    scope.processor_id,
-                    scope.method_version,
-                    tenant,
-                    key.as_slice()
-                ],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .optional()
-            .context(AnalysisDatabaseSnafu {
-                operation: "read processor health",
-            })?;
-        let Some((class, consumed_cursor, resume_floor, retired)) = progress else {
-            return Ok(None);
-        };
-        let class = ProcessorClassV1::try_from(class.as_str())
-            .map_err(|_| self.state_error("the processor class is invalid"))?;
-        let receipt = Self::read_receipt_from(&snapshot, &self.root, &scope.identity, &key)?;
-        let accepted_cursor = receipt
-            .as_ref()
-            .map_or(0, |receipt| receipt.contiguous_cursor);
-        let effective = consumed_cursor.max(resume_floor);
-        let cursor_lag = accepted_cursor
-            .checked_sub(effective)
-            .ok_or_else(|| self.state_error("processor progress exceeds its receipt"))?;
-        let gap: Option<(AnalysisGapV1, bool)> = snapshot
-            .query_row(
-                "SELECT first_cursor, last_cursor, commit_revision, recovery FROM (
+                    params![
+                        scope.processor_id,
+                        scope.method_version,
+                        tenant,
+                        key.as_slice()
+                    ],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read processor health",
+                })?;
+            let Some((class, consumed_cursor, resume_floor, retired)) = progress else {
+                return Ok(None);
+            };
+            let class = ProcessorClassV1::try_from(class.as_str())
+                .map_err(|_| self.state_error("the processor class is invalid"))?;
+            let receipt = Self::read_receipt_from(snapshot, &self.root, &scope.identity, &key)?;
+            let accepted_cursor = receipt
+                .as_ref()
+                .map_or(0, |receipt| receipt.contiguous_cursor);
+            let effective = consumed_cursor.max(resume_floor);
+            let cursor_lag = accepted_cursor
+                .checked_sub(effective)
+                .ok_or_else(|| self.state_error("processor progress exceeds its receipt"))?;
+            let gap: Option<(AnalysisGapV1, bool)> = snapshot
+                .query_row(
+                    "SELECT first_cursor, last_cursor, commit_revision, recovery FROM (
                 SELECT first_cursor, last_cursor, commit_revision, true AS recovery
                 FROM recovery_gaps WHERE tenant_id = ? AND stream_key = ?
                 UNION ALL SELECT first_cursor, last_cursor, commit_revision, false AS recovery
                 FROM expired_ranges WHERE tenant_id = ? AND stream_key = ?
              ) WHERE last_cursor > ? ORDER BY recovery DESC, first_cursor LIMIT 1",
-                params![tenant, key.as_slice(), tenant, key.as_slice(), effective],
-                |row| {
-                    Ok((
-                        AnalysisGapV1 {
-                            first_cursor: row.get(0)?,
-                            last_cursor: row.get(1)?,
-                            commit_revision: row.get(2)?,
-                        },
-                        row.get(3)?,
-                    ))
-                },
-            )
-            .optional()
-            .context(AnalysisDatabaseSnafu {
-                operation: "read processor missing input",
-            })?;
-        let recorded_gap: bool = snapshot
-            .query_row(
-                "SELECT EXISTS (SELECT 1 FROM processor_gaps WHERE processor_id = ?
+                    params![tenant, key.as_slice(), tenant, key.as_slice(), effective],
+                    |row| {
+                        Ok((
+                            AnalysisGapV1 {
+                                first_cursor: row.get(0)?,
+                                last_cursor: row.get(1)?,
+                                commit_revision: row.get(2)?,
+                            },
+                            row.get(3)?,
+                        ))
+                    },
+                )
+                .optional()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read processor missing input",
+                })?;
+            let recorded_gap: bool = snapshot
+                .query_row(
+                    "SELECT EXISTS (SELECT 1 FROM processor_gaps WHERE processor_id = ?
                 AND method_version = ? AND tenant_id = ? AND stream_key = ?)
              OR EXISTS (SELECT 1 FROM recovery_gaps WHERE tenant_id = ? AND stream_key = ?)",
-                params![
-                    scope.processor_id,
-                    scope.method_version,
-                    tenant,
-                    key.as_slice(),
-                    tenant,
-                    key.as_slice()
-                ],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read processor coverage health",
-            })?;
-        let state = if retired {
-            ProcessorStateV1::Retired
-        } else if let Some((gap, recovery)) = gap {
-            if recovery {
-                ProcessorStateV1::RecoveryLoss(gap)
+                    params![
+                        scope.processor_id,
+                        scope.method_version,
+                        tenant,
+                        key.as_slice(),
+                        tenant,
+                        key.as_slice()
+                    ],
+                    |row| row.get(0),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read processor coverage health",
+                })?;
+            let state = if retired {
+                ProcessorStateV1::Retired
+            } else if let Some((gap, recovery)) = gap {
+                if recovery {
+                    ProcessorStateV1::RecoveryLoss(gap)
+                } else {
+                    ProcessorStateV1::ExpiredInput(gap)
+                }
+            } else if receipt.is_none() {
+                ProcessorStateV1::AwaitingSource
+            } else if cursor_lag > 0 {
+                ProcessorStateV1::Lagging
             } else {
-                ProcessorStateV1::ExpiredInput(gap)
-            }
-        } else if receipt.is_none() {
-            ProcessorStateV1::AwaitingSource
-        } else if cursor_lag > 0 {
-            ProcessorStateV1::Lagging
-        } else {
-            ProcessorStateV1::Current
-        };
-        Ok(Some(ProcessorHealthV1 {
-            class,
-            state,
-            accepted_cursor,
-            consumed_cursor,
-            resume_floor,
-            cursor_lag,
-            incomplete: recorded_gap || gap.is_some(),
-            read_revision: Self::read_meta_from(&snapshot, &self.root.join("analysis.duckdb"))?
-                .commit_revision,
-        }))
+                ProcessorStateV1::Current
+            };
+            Ok(Some(ProcessorHealthV1 {
+                class,
+                state,
+                accepted_cursor,
+                consumed_cursor,
+                resume_floor,
+                cursor_lag,
+                incomplete: recorded_gap || gap.is_some(),
+                read_revision: Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?
+                    .commit_revision,
+            }))
+        })
     }
 }

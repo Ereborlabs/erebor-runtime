@@ -10,6 +10,8 @@ use snafu::ResultExt as _;
 use super::{source_key, valid_source_identity, AnalysisStore};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, JsonSnafu, Result};
 
+const MAX_SOURCES: u64 = 4096;
+
 impl EvidenceIntakeIdentityV1 {
     fn epoch_key(&self) -> [u8; 32] {
         let mut hash = Sha256::new();
@@ -310,6 +312,9 @@ impl AnalysisStore {
             "SELECT (SELECT COUNT(*) FROM source_receipts), (SELECT COUNT(*) FROM source_bindings)",
             [], |row| Ok((row.get(0)?, row.get(1)?)),
         ).context(AnalysisDatabaseSnafu { operation: "validate binding count" })?;
+        if counts.0 > MAX_SOURCES || counts.1 > MAX_SOURCES {
+            return Self::reject_path(root, "the stored source count exceeds its limit");
+        }
         if counts.0 != counts.1 {
             return Self::reject_path(root, "the stored epoch binding has no receipt");
         }
@@ -367,8 +372,7 @@ impl AnalysisStore {
         {
             return Self::reject_path(&self.root, "the source epoch lookup is invalid");
         }
-        let writer_guard = self.reader()?;
-        let writer = writer_guard.get()?;
+        self.read_snapshot(|writer| {
         let saved: Option<(Vec<u8>, Vec<u8>, u64)> = writer
             .query_row(
                 "SELECT tenant_id, node_boot_id, label_epoch FROM source_bindings WHERE epoch_key = ?",
@@ -397,6 +401,7 @@ impl AnalysisStore {
             );
         }
         Ok(Some(identity))
+        })
     }
 
     pub(super) fn bind_source(
@@ -423,6 +428,17 @@ impl AnalysisStore {
                 return Self::reject_path(root, "one source epoch changed its boot or label");
             }
             return Ok(false);
+        }
+        let count: u64 = writer
+            .query_row("SELECT COUNT(*) FROM source_bindings", [], |row| row.get(0))
+            .context(AnalysisDatabaseSnafu {
+                operation: "check source count",
+            })?;
+        if count >= MAX_SOURCES {
+            return crate::StorageCapacitySnafu {
+                resource: "source bindings",
+            }
+            .fail();
         }
         writer
             .execute(
@@ -492,6 +508,59 @@ mod tests {
 
     use super::*;
     use crate::EvidenceIntakeIdentityV1;
+
+    #[test]
+    fn analysis_source_count_bound() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let mut writer = store.writer()?;
+        let transaction = writer.get_mut()?.transaction()?;
+        // These count-only rows remain inside an uncommitted test transaction.
+        transaction.execute(
+            "INSERT INTO source_bindings
+            SELECT encode(md5(i::VARCHAR)), ?, ?, 1 FROM range(?::BIGINT) t(i)",
+            params![
+                [1_u8; 16].as_slice(),
+                [2_u8; 16].as_slice(),
+                MAX_SOURCES - 1
+            ],
+        )?;
+        let mut identity = EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "n".into(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        };
+        assert!(AnalysisStore::bind_source(
+            &transaction,
+            &store.root,
+            &identity
+        )?);
+        assert!(!AnalysisStore::bind_source(
+            &transaction,
+            &store.root,
+            &identity
+        )?);
+        identity.source_epoch = 2;
+        assert!(matches!(
+            AnalysisStore::bind_source(&transaction, &store.root, &identity),
+            Err(crate::Error::StorageCapacity {
+                resource: "source bindings",
+                ..
+            })
+        ));
+        assert_eq!(
+            transaction.query_row("SELECT COUNT(*) FROM source_bindings", [], |row| row
+                .get::<_, u64>(0))?,
+            MAX_SOURCES
+        );
+        transaction.rollback()?;
+        drop(writer);
+        assert_eq!(store.meta()?.commit_revision, 0);
+        Ok(())
+    }
 
     #[test]
     fn analysis_rejects_broken_state() -> std::result::Result<(), Box<dyn std::error::Error>> {
