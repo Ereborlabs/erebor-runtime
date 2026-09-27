@@ -353,6 +353,20 @@ impl<'a> EvidenceRetentionOwner<'a> {
 }
 
 impl AnalysisStore {
+    const REQUIRED_BUDGET: &'static str =
+        "SELECT MIN(CASE WHEN e.stream_key = ? AND e.durable_cursor <= r.contiguous_cursor
+                        THEN e.intake_utc_ns END),
+                    CAST(COALESCE(SUM(octet_length(e.framed_record)), 0) AS UBIGINT)
+             FROM events e JOIN (
+                 SELECT tenant_id, stream_key, MIN(consumed_cursor) AS consumed_cursor
+                 FROM processor_progress WHERE tenant_id = ?
+                 AND class = 'required' AND retired = false
+                 GROUP BY tenant_id, stream_key
+             ) p ON p.stream_key = e.stream_key AND p.tenant_id = e.tenant_id
+                 AND e.durable_cursor > p.consumed_cursor
+             LEFT JOIN source_receipts r ON e.stream_key = r.stream_key
+                 AND e.tenant_id = r.tenant_id";
+
     pub(super) fn check_required(
         &self,
         transaction: &duckdb::Transaction<'_>,
@@ -375,15 +389,7 @@ impl AnalysisStore {
         }
         let (oldest, bytes): (Option<u64>, u64) = transaction
             .query_row(
-                "SELECT MIN(CASE WHEN e.stream_key = ? AND e.durable_cursor <= r.contiguous_cursor
-                        THEN e.intake_utc_ns END),
-                    CAST(COALESCE(SUM(octet_length(e.framed_record)), 0) AS UBIGINT)
-             FROM events e LEFT JOIN source_receipts r ON e.stream_key = r.stream_key
-                AND e.tenant_id = r.tenant_id
-             WHERE e.tenant_id = ? AND EXISTS (
-                 SELECT 1 FROM processor_progress p WHERE p.stream_key = e.stream_key
-                 AND p.tenant_id = e.tenant_id AND p.class = 'required' AND p.retired = false
-                 AND p.consumed_cursor < e.durable_cursor)",
+                Self::REQUIRED_BUDGET,
                 params![key.as_slice(), identity.tenant_id.as_slice()],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -429,6 +435,112 @@ mod tests {
             framed_records: prost::bytes::Bytes::from_static(bytes),
             frame_ends: (1..=bytes.len()).collect(),
         }
+    }
+
+    #[test]
+    fn analysis_store_required_plan() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let source = identity(1);
+        let scope = ProcessorScopeV1 {
+            processor_id: "required".into(),
+            method_version: 1,
+            identity: source.clone(),
+        };
+        store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
+        store.accept_validated_batch(source.clone(), batch(1, b"abc"))?;
+        let reader = store.reader()?;
+        let plan: String = reader.get()?.query_row(
+            &format!("EXPLAIN {}", AnalysisStore::REQUIRED_BUDGET),
+            params![source_key(&source).as_slice(), source.tenant_id.as_slice()],
+            |row| row.get(1),
+        )?;
+        assert!(
+            !plan.contains("DELIM_JOIN"),
+            "required budget correlates each event:\n{plan}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_store_required_scopes() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            RetentionLimitsV1 {
+                raw_max_bytes: 3,
+                ..Default::default()
+            },
+            Default::default(),
+        )?;
+        let source = identity(1);
+        let first = ProcessorScopeV1 {
+            processor_id: "first".into(),
+            method_version: 1,
+            identity: source.clone(),
+        };
+        let second = ProcessorScopeV1 {
+            processor_id: "second".into(),
+            ..first.clone()
+        };
+        let optional = ProcessorScopeV1 {
+            processor_id: "optional".into(),
+            ..first.clone()
+        };
+        let foreign = ProcessorScopeV1 {
+            identity: identity(2),
+            ..first.clone()
+        };
+        for scope in [&first, &second, &foreign] {
+            store.register_processor(scope, ProcessorClassV1::Required, 1)?;
+        }
+        store.register_processor(&optional, ProcessorClassV1::Optional, 1)?;
+        store.accept_validated_batch(foreign.identity.clone(), batch(1, b"xyz"))?;
+        store.accept_validated_batch(source.clone(), batch(1, b"abc"))?;
+        for (scope, cursor) in [(&first, 2), (&second, 3)] {
+            store.commit_result(&AnalysisResultCommitV1 {
+                scope: scope.clone(),
+                expected_cursor: 0,
+                consumed_cursor: cursor,
+                coverage_revision: 0,
+                context_revision: 0,
+                result_id: scope.processor_id.clone(),
+                body: b"checked".to_vec(),
+                created_utc_ns: 101,
+                witnesses: vec![],
+                context_refs: vec![],
+            })?;
+            if cursor == 2 {
+                let before = store.meta()?;
+                assert!(matches!(
+                    store.accept_validated_batch(source.clone(), batch(4, b"d")),
+                    Err(crate::Error::ProtectedInputCapacity {
+                        resource: "bytes",
+                        ..
+                    })
+                ));
+                assert_eq!(store.meta()?, before);
+            }
+        }
+        store.accept_validated_batch(source.clone(), batch(4, b"de"))?;
+        store.retire_required(&crate::ProcessorRetirementV1 {
+            scope: first,
+            change_id: "retire-first".into(),
+            reason: "test retirement".into(),
+            expected_cursor: 2,
+            cutoff_cursor: 5,
+        })?;
+        store.accept_validated_batch(source.clone(), batch(6, b"f"))?;
+        let before = store.meta()?;
+        assert!(matches!(
+            store.accept_validated_batch(source, batch(7, b"g")),
+            Err(crate::Error::ProtectedInputCapacity {
+                resource: "bytes",
+                ..
+            })
+        ));
+        assert_eq!(store.meta()?, before);
+        Ok(())
     }
 
     #[test]

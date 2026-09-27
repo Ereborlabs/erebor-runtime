@@ -359,6 +359,18 @@ keeps production defaults. Neither result proves global saturation, worst-case
 payloads, concurrent rollout, or a physical filesystem reserve. The runner
 uses temporary stores and leaves deployment data unchanged.
 
+[AnalysisStore::check_required](../../../../crates/araphor-data/src/analysis/retention.rs)
+groups active required processors by tenant and source before joining events.
+The minimum consumed cursor protects the union of their unprocessed input.
+Each event contributes once to the tenant byte total. The accepted-cursor check
+still limits the source age calculation. `analysis_store_required_scopes`
+checks multiple processors, unequal progress, retirement, optional processors,
+and foreign tenants. `analysis_store_required_plan` checks the actual prepared
+query with the pinned DuckDB engine. The old query produced `LEFT_DELIM_JOIN`
+and grouped by event cursor. The regression failed before the SQL change and
+passed after it. No ledger, cache, schema, quota, or timeout changes are added.
+The larger quota case must run again before throughput is qualified.
+
 The [data_control_crash](../../../../crates/mithril-e2e/src/discovery/data_store.rs)
 child always uses serial test execution. Its readiness marker starts on a new
 line because the test harness can leave its test name on the current line.
