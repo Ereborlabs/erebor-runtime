@@ -2157,6 +2157,20 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Remove only the matching old action after all three platforms pass.
       Keep the shared syscall helper, mount propagation, and detached-tree
       checks. The 92 non-privileged Mithril library tests pass after removal.
+  - [ ] Replace the prepared mount-propagation hard-close check. Let the
+    shared mount actor create its bind mount before Node starts. After Node
+    recovers the actor under the signed policy without `SysAdmin`, make the
+    actor call `mount` with `MS_SHARED | MS_REC` on that mount. Require a
+    physical `EACCES` or `EPERM` result and fresh, task-attributed
+    `UNSUPPORTED_OBJECT` Mount/Mount evidence with kernel `-EACCES`. Use the
+    existing actor and policy. Add no Platform API. Keep the test below 100
+    lines.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove the matching old action, its unused stored mount path,
+      and its syscall helper after all three cases pass. Keep the detached
+      `open_tree` check and its mount source.
   - [x] Replace the pre-policy `mount_global_mutation_epoch` read. The
     production policy owner creates this hash-map row during policy
     installation. The old probe reads it before policy installation. The full
