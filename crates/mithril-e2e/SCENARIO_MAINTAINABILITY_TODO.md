@@ -4039,7 +4039,31 @@ setup, production actions, assertions, and focused test.
     pre-readiness case, namespace-init passed in 112.56 seconds. The complete
     Kubernetes rerun is pending the test-runtime review.
 - [ ] `physical_kubernetes_containers_probe`
-  - [ ] Call `start_actor_group` once with all three actor commands. One call
+  - [x] Add an 88-line shared Rust test for one three-container group. The
+    test uses one group call and one policy. It observes a running sidecar and
+    init before it releases init, then observes the application. It requires
+    three task cookies, process states, execution sets, roles, and cgroups.
+    It requires the sidecar snapshot to stay unchanged after application
+    startup. The sidecar read succeeds, and the application read is denied.
+    The exact Host, direct-`runc`, and real Kubernetes cases passed in 35.05,
+    44.20, and 75.79 seconds. Strict Clippy passed.
+  - [x] Use the Pod manifest to classify Init, restartable Sidecar, and
+    Application in Host and direct `runc`. After the held init exits, the
+    lightweight CRI fixture reports `ContainerExited`. Without that event,
+    Node tried to read the dead init PID mount namespace during application
+    admission and denied the next entry. Real Kubernetes supplies this event.
+  - [ ] Keep the old probe's fail-closed unknown-root assertion. The new
+    protected-policy test has `initial_container_root`, not
+    `restored_or_unknown_root`. Do not remove the old probe until a small
+    production-backed test proves the conservative-root case.
+  - [x] Run the affected identity lanes after the shared platform change.
+    Host passed 59 of 59 tests in 655.68 seconds. Direct `runc` passed 54 of
+    54 tests in 1200.06 seconds. Real Kubernetes passed 55 of 55 tests in
+    1469.39 seconds. The standalone Kubernetes case passed again in 70.86
+    seconds. The earlier intermittent direct-`runc` exec failure did not
+    recur; it is not proven fixed. The repository Rust CI script passed after
+    Kubernetes registration. The complete platform suites remain open.
+  - [x] Call `start_actor_group` once with all three actor commands. One call
     must create one workload: one Pod on Kubernetes. The Pod must declare the
     sidecar, init, and application at creation. Kubernetes starts the declared
     containers in its native order. A second group call must not add a
@@ -4082,11 +4106,11 @@ setup, production actions, assertions, and focused test.
     checks separate cgroups, task cookies, process states, execution sets, and
     conservative roots. It checks that the sidecar root stays unchanged when
     the application starts.
-  - [ ] Give the shared actor group one Pod policy with a separate entry role
+  - [x] Give the shared actor group one Pod policy with a separate entry role
     for each container. Use the real `Sidecar`, `Init`, and `Application` kinds.
     Return the running init and sidecar before the Pod is Ready. Observe the
     later application through the group returned by the one start call.
-  - [ ] Resolve the paired lightweight setup before a Kubernetes run. In a
+  - [x] Resolve the paired lightweight setup before a Kubernetes run. In a
     focused Host run, the first target activated. With the second target, Node
     reported two runtime bindings but left a later policy activation pending.
     The fixture then timed out before it could check either root. An

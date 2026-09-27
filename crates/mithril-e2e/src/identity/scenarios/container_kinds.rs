@@ -1,6 +1,6 @@
 use crate::platform::{platform_test, GroupActor, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn group_kinds_are_isolated<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("container-kinds")?;
