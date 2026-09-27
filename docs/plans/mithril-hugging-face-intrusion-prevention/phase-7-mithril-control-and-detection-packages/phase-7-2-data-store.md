@@ -1211,6 +1211,17 @@ and a direct live-witness join. The same regression passes. All eight
 retention-owner tests pass, including unequal required progress, overlapping
 witnesses, optional progress, and tenant isolation. No limit, timeout, schema,
 or counter table changed. All 15 enabled data-store e2e tests passed with serial
-execution; four subprocess or filesystem cases remain ignored. The full quota
-retry and final workspace gate remain required before this correction is
-qualified. The phase remains **Not done**.
+execution; four subprocess or filesystem cases remain ignored.
+The full gate passed on `7d7b1acc` with
+`CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh`.
+Formatting, workspace checks, strict Clippy, and workspace tests passed.
+The data crate passed 49 tests with two ignored; Control passed 196 with two
+ignored; Mithril e2e passed 122 with 251 ignored; Node passed 256 with one ignored.
+No Rust source changed during that run.
+The release rebuild also passed. Its binary SHA-256 is
+`c6444b761161696108fdfb9d9fb1bd19cb0ac1e18b2974fc4d16400a376aeec0`.
+Release startup passed 18 checks and recovery passed 29 checks again.
+The pilot directory above contains their `bounded-*` results, resource logs,
+and environment record. The quota retry overlaps the host workspace tests;
+its timings are not a clean performance baseline. The retry is still running.
+Full capacity remains unqualified. The phase remains **Not done**.

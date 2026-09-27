@@ -590,7 +590,13 @@ All eight retention-owner tests pass. The progress/witness test also checks
 unequal required cursors, overlapping witnesses, optional progress, and a
 foreign tenant. All 15 enabled data-store e2e tests also passed with serial
 execution; four subprocess or filesystem cases remain ignored.
-The full workspace gate and release quota retry remain open.
+The full workspace gate passed on `7d7b1acc` with two build jobs and serial
+tests. Data passed 49 tests with two ignored; Control passed 196 with two
+ignored; Mithril e2e passed 122 with 251 ignored; Node passed 256 with one ignored.
+Formatting, workspace checks, and strict Clippy also passed. The rebuilt release
+CLI passed startup (18 checks) and recovery (29 checks) on the pilot VM.
+Their `bounded-*` results are in `/tmp/araphor-pilot-qualification.TmOyPeOh/`.
+The release quota retry remains open; these passes do not qualify full capacity.
 
 [EvidenceIntakeOwner::new](../../../../crates/mithril-control/src/evidence.rs) The explicit data-backed constructor rejects accepted, pending, or coverage state in the old Control evidence store. The owner validates Node batches and commits evidence and coverage only to AnalysisStore. Its component tests check exact frames, replay, old Control-store isolation, and restart.<br>
 -> [ControlPlane::from_intake](../../../../crates/mithril-control/src/service.rs) The service accepts the selected intake owner and keeps the same Control policy and trust store.<br>
