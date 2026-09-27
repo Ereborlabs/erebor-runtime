@@ -10,6 +10,11 @@ isolated-query checks. SQL bounds match full authorized-input results in the
 recorded proof. The corpus and expected outcomes are executable.
 Entry: Mithril 6.2 and 6.3 contracts. Status: **Done** for this offline design.
 
+This offline result does not qualify the selected segment-backed raw owner.
+7.2 reuses these public contracts and query-isolation checks, then replaces
+raw persistence and reruns recovery proof. DuckDB remains the metadata and
+derived-state engine; no new backend abstraction is required.
+
 ## Implementation flow
 
 ```text
@@ -43,14 +48,15 @@ Engineer runs storage proof
    explicit transactions and local filesystem checks. No storage trait or
    production SQLite/DuckDB switch is required.
 3. Specify how existing `EvidenceIntakeOwner::receive_group` and
-   `receive_coverage` map to one data transaction. Preserve authenticated
+   `receive_coverage` use the data owner's durability contract. Preserve authenticated
    identity, contiguous ACK, gap and retransmission rules. No generic public
    Ingest RPC or producer SDK is added. The input is the existing Node
    contract; only its durable destination changes in 7.2.
    After Control authenticates and validates a group, pass the exact
    `EvidenceIntakeIdentityV1` and `ValidatedEvidenceBatchV1` with CPU, cursor
    range, shared framed bytes, and frame ends to AnalysisStore. The store
-   computes the source key and commits new records with its source receipt.
+   computes the source key. In 7.2 it syncs raw segments before committing
+   their catalog ranges and source receipt.
    `Accepted` means the submitted end cursor is contiguous and durable;
    `Pending` means a gap remains. Control issues only the durable contiguous
    ACK. For coverage, pass the validated encoded report, CPU and revision as

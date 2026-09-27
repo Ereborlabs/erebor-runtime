@@ -21,7 +21,8 @@ TraceOwner accepts an authorized request
   -> Node records intent and revalidates each lifetime before attachment
   -> Interceptor runs the reviewed or separately privileged script
   -> Node appends output to its bounded diagnostic spool
-  -> Control commits deduplicated output, receipt and revisions in DuckDB before ACK
+  -> AnalysisStore syncs output segments, then commits ranges, receipt and revisions
+  -> Control returns an output ACK only after that metadata commit
 
 Identity changes, the lease expires, or cancellation arrives
   -> Node stops that execution without following replacements
@@ -67,7 +68,10 @@ Control or Node restarts after dispatch
 7. Add `traces`, `trace_output` and `trace_measurements` to AnalysisStore in
    `araphor-data`. Reuse Control's `observability/{model,owner,dispatch,recipe}.rs`;
    adapt `TraceOwner` to owner-qualified data commits and reads.
-   Commit output, deduplication receipt, state and table revisions together.
+   Store raw output only in diagnostic segments. After segment sync, commit
+   range metadata, deduplication receipt, state and relation revisions together.
+   Reuse 7.2 snapshot leases, exact references, whole-segment retention charges,
+   and complete-bundle backup. No duplicate raw trace table is permitted.
    Equal execution/source sequence and bytes is a retry; changed bytes reject.
    Typed measurements require reviewed schemas. Preserve cumulative/interval
    semantics, units, reset epoch, sampling and loss; do not sum snapshots.
@@ -134,7 +138,10 @@ Add lightweight `owned-capture` selection to
 `crates/mithril-e2e/src/observability.rs` or a focused child of that module.
 Call production Control, Node and Interceptor owner APIs with only external
 runtime/process/clock doubles. Include post-commit lost ACK, source conflict,
-target replacement, duplicate dispatch, Control partition and database restart.
+target replacement, duplicate dispatch, Control partition and full-store restart.
+Exit between output append, segment sync, metadata commit and ACK; require
+exact replay without a second output. Test pin/delete races, expired output,
+and a partial backup bundle. Keep diagnostic quotas separate from enforcement.
 Record accepted spec, target lifetime, source/commit positions, quota and
 cleanup state in result.json. Use `harness/observability/{owned,pods,disk-full}.sh`
 for the paired physical cases; extend them instead of creating another runner.

@@ -144,7 +144,7 @@ tests here, not keep this phase open until Mithril 10.
    and existing admission/Node mTLS services. Test discovery-disabled rendering.
    Put the embedded DB on the existing single-owner persistent store with a
    qualified local filesystem. Reject an unsupported shared/network filesystem;
-   reserve database, native WAL, temporary and backup space. No external DB Service is added.
+   reserve raw segments, metadata database/WAL, temporary work, and complete backup bundles. No external DB Service is added.
    Package the query worker with qualified OS isolation and no production
    credentials/mounts/network. No inference-provider secret is required.
    If an optional stdio adapter is delivered, package it as a CLI artifact,

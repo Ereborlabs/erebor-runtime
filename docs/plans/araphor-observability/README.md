@@ -278,7 +278,9 @@ tests are release gates, not optional tuning.
 
 ## Evidence and storage
 
-Use the shared AnalysisStore and DuckDB transactions from Mithril 7.2.
+Use the shared segment-backed AnalysisStore from Mithril 7.2. Raw trace output
+lives once in diagnostic segments. Intent, state, receipts, and reviewed derived
+measurements use the transactional metadata store.
 TraceOwner remains in Control and stores accepted source, grant, target,
 dispatch intent, output and result through that data owner. A trace requires
 healthy durable data storage, not an enabled DiscoveryOwner. A query-worker
@@ -286,9 +288,11 @@ failure does not block output upload; failure of the authoritative data store
 does block its ACK. Node keeps bounded diagnostic output until ACK or explicit
 quota loss. Reserve enforcement evidence capacity separately.
 
-Commit each batch's deduplicated output, trace state, source receipt and
-relation revisions together before ACK or reader notification. Trace output
-positions never advance the enforcement source cursor. Retain sources and
+Sync each deduplicated raw-output batch to its segment, then commit the batch
+range, trace state, source receipt, and relation revisions in one metadata
+transaction before ACK or reader notification. Use the same recovery protocol
+as evidence intake; do not create a trace-specific raw archive or journal.
+Trace output positions never advance the enforcement source cursor. Retain sources and
 measurement semantics while output references them. The same data component
 can run remotely; Control dispatch and Node expiry do not move.
 
@@ -362,7 +366,7 @@ for cross-plan sequencing.
 | Phase | Entry gate | Output |
 | --- | --- | --- |
 | [1: Contracts and backend](phase-1-contracts-and-backend.md) | Approved delegated-loader boundary | Exact source/target contracts and real bpftrace lifecycle proof. Can run alongside Mithril 7.1–7.3. |
-| [2: Owned capture](phase-2-owned-capture.md) | Observability 1 and Mithril 7.2 | Durable capture/output in shared DuckDB; discovery-disabled and physical lifecycle proof. |
+| [2: Owned capture](phase-2-owned-capture.md) | Observability 1 and Mithril 7.2 | Durable state and segment-backed output through shared AnalysisStore; discovery-disabled and physical lifecycle proof. |
 | [3: CLI, API and console](phase-3-cli-api-and-console.md) | Observability 2 and Mithril 7.3 | Shared authentication, SQL/trace streams, CLI and console integration. |
 | [4: Declarative capture](phase-4-declarative-captures.md) | Observability 3 | Optional finite Trace CRD adapter. |
 
@@ -385,8 +389,8 @@ production owners without Kubernetes; run a physical case only where listed.
 | 4 | Check CRD schema, RBAC, reconciliation identity and finalizer behavior. | Run `trace-crd` with a Kubernetes API double, then run the paired physical Kubernetes case. |
 
 Status: **Not done** for the complete target. Existing backend tests must run
-on the implementing revision; they do not prove shared DuckDB or streaming
-contracts. Each phase records its test results and an explicit completion
+on the implementing revision; they do not prove shared segment/metadata recovery
+or streaming contracts. Each phase records its test results and an explicit completion
 result in that phase.
 No separate gap-review document is required.
 

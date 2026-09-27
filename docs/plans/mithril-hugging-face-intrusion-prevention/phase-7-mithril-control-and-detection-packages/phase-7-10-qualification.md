@@ -83,7 +83,9 @@ bounded scope before those increments; it cannot claim their physical results.
 4. Run 7.9 embedded/remote parity and placement transfer if remote mode is
    advertised. Remote mode cannot pass by reusing an embedded-only result.
    Then measure engine and optional model cost while primary evidence and rollout
-   work runs. Test noisy-neighbor quotas, a slow reader, native WAL growth, backup/restore, retention reclamation,
+   work runs. Test noisy-neighbor quotas, a slow reader, segment/catalog growth,
+   metadata WAL growth, complete-bundle backup/restore, whole-segment pin cost,
+   deletion recovery, sparse-target scan limits, and retention reclamation,
    append/replace follow replay, worker failure, and count recovery after termination.
 5. Run the operator task study with raw-event review and deterministic recipes.
    Record task time, missing context, benign positives and wrong approvals.

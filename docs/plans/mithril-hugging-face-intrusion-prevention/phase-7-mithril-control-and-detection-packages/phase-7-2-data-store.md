@@ -1,237 +1,199 @@
-# Phase 7.2: Shared Data Store, Intake, And Retention
+# Phase 7.2: Shared Segment Store, Intake, And Retention
 
-Make DuckDB the durable home for retained data and analysis.
+Store raw evidence once in bounded segments. Store metadata and derived state
+in DuckDB. Reuse the existing segment code instead of building a storage engine.
 
 ## Intended end state
 
-Existing authenticated Node delivery commits directly through AnalysisStore.
-ACK, replay, retention, backup and restart have one data transaction contract.
-Policy/control state keeps its existing persistence. Discovery-disabled startup
-still accepts data. Entry: 7.1. Status: **Not done** for this design.
-The [raw-event store alternatives](segment-owned-raw-events.md) compare the
-designs. The [storage comparison](raw-event-store-decision.md) records the
-direct-store tests.
+AnalysisStore in `araphor-data` owns segments, metadata, receipts, retention,
+backup, and recovery. Existing authenticated intake ACKs only after segment
+sync and metadata commit. Discovery reads those committed records directly.
+No raw-event table or copied discovery archive is part of the target.
+
+Control keeps policy/trust/rollout persistence and authority. Node keeps its
+delivery WAL. The same complete data owner can later run remotely. Storage
+and trace intake do not require discovery. Entry: 7.1.
+Status: **Not done**. The current configured implementation writes raw events
+to DuckDB; it must be replaced and qualified against this segment contract.
+Previous implementation results below are evidence for their named revisions,
+not completion of this design.
+
+The [storage decision](segment-owned-raw-events.md) records the approved choice.
+The [comparison](raw-event-store-decision.md) is a limited benchmark, not proof
+of the combined segment and metadata implementation.
 
 ## Implementation flow
 
 ```text
 Control starts
-  -> AnalysisStore obtains the exclusive data-directory lease
-  -> DuckDB recovers its WAL and validates schema, receipts and references
-  -> writer publishes committed relation revisions
-  -> intake becomes ready independently of discovery algorithms
+  -> AnalysisStore obtains the complete data-directory lease
+  -> owner recovers metadata and validates committed segment ranges
+  -> owner completes recorded deletions and removes only uncommitted tails
+  -> owner publishes durable relation revisions and data readiness
+  -> policy service remains independent if data recovery fails
 
 Node sends an authenticated batch
   -> EvidenceIntakeOwner validates source and reserves bounded capacity
-  -> AnalysisStore commits events, context, coverage, receipt and revisions
+  -> AnalysisStore checks retries and appends framed raw records
+  -> owner syncs segment bytes and new file directory entries
+  -> one metadata transaction commits ranges, receipts, and revisions
   -> Control acknowledges the durable contiguous source position
-  -> readers and configured processors can consume the committed input
 
-Retention reaches an age or byte boundary
-  -> EvidenceRetentionOwner checks required progress and witness references
-  -> one transaction removes eligible rows and advances retained floors
-  -> checkpoint attempts physical reclamation
-  -> insufficient capacity rejects new diagnostics and backpressures intake
+A processor submits results
+  -> owner checks expected progress and retained input under the writer guard
+  -> one transaction commits results, exact references, and progress
+  -> readers receive a revision notification after commit
 
-Store recovery fails
-  -> data ACK and dependent operations stop with an explicit error
-  -> Node retains unacknowledged input under its existing quota
-  -> installed enforcement and independent policy/control owners continue
+Retention selects an eligible sealed segment
+  -> owner checks age, required progress, pins, and bounded read leases
+  -> metadata commit marks Deleting and records exact expiry intervals
+  -> owner unlinks that file, syncs the directory, and completes catalog cleanup
+  -> restart resumes incomplete deletion without deleting Live segments
+
+Storage fails or cannot meet capacity
+  -> owner returns no new data ACK and records the exact failure
+  -> Node retains bounded unacknowledged input
+  -> installed enforcement and policy/control owners continue
 ```
 
 ## Changes in implementation order
 
-1. Complete `AnalysisStore::{open,commit_evidence,read_page,commit_result,
-   retain,backup,restore}` in `crates/araphor-data/src/analysis/`.
-   Names are proposed public owner methods. Use the schema, single-writer,
-   batching and durability contract in engine-design.md. No new data service
-   is required for embedded operation.
-2. Adapt Control `evidence.rs`, `service.rs`, `server.rs`, `config.rs`
-   and `main.rs` to pass the same store handle. Validate before queuing.
-   Keep authentication and ACK meaning at EvidenceIntakeOwner. Preserve
-   `receive_group`/coverage callers; do not move policy state into DuckDB.
-3. Record tenant/source/session binding, source cursor, kernel sequence,
-   intake time, original bytes and coverage. Insert context versions by
-   exact identity/digest. Enforce uniqueness and bounded pending gaps.
-   Keep AlreadyAcceptedExpired distinct from a verified retained duplicate.
-4. Publish a Tokio watch revision only after commit. The transaction updates
-   affected relation revisions, including coverage/context and retention.
-   Expose fixed prepared bounded reads: 256 records or 1 MiB per page.
-   Limit the SQL cursor range to the first cursor plus 256, or the earlier
-   accepted or expiry boundary. Use saturating addition. This range contains
-   at most 256 returned records and one look-ahead record. Keep the look-ahead
-   continuity check; a missing accepted cursor is an error, not end of input.
-   Return explicit range expiry. Never hold a reader during client I/O.
-   End a retained page before the next expired interval. Return that interval's
-   first cursor as `next_cursor`; a read at that cursor returns explicit expiry.
-   A later gap must not hide an earlier retained witness. An unexplained missing
-   row still fails the read.
-5. Implement `EvidenceRetentionOwner` in `araphor-data` with the fixed
-   optional/required classes in engine-design.md.
-   Discovery progress does not pin raw data. Required security progress and
-   bounded exact witness references constrain expiry. Lag is a health warning;
-   backpressure starts at the protected age/byte or physical capacity bound.
-   Commit result, references and progress together; compare expected progress.
-   Return Conflict on a competing commit. Commit optional missing ranges before
-   resuming from a newer retained floor. External readers cannot pin input.
-   Required-package retirement is explicit and authorized.
-   For required-input admission, group active required processors by tenant
-   and source. Use their minimum consumed cursor as the protected-input bound.
-   Count each protected event once. Exclude optional and retired processors.
-   Check age only for accepted input on the current source; check protected
-   bytes across the tenant, including pending input. Do not build intermediate
-   query state keyed by every event cursor to find the required bound.
-   For raw expiry, read the minimum active required cursor for the exact tenant
-   and source in the retention transaction. Bound candidates by that cursor
-   and the accepted cursor. With no required processor, use the accepted cursor.
-   Exclude rows with a matching live witness. Do not build intermediate query
-   state keyed by each candidate cursor to check progress or witnesses.
-   Control applies at most 32 explicit `data_retirements` from its trusted
-   startup configuration before it admits Node data. Each request names the
-   exact processor, method version, tenant/source identity, change ID, reason,
-   expected consumed cursor, and accepted cutoff. Require an allowed Node and
-   tenant. Compare both cursors in the data transaction. Record the change,
-   cutoff, and unprocessed range with the retired state. Keep consumed progress
-   unchanged. A matching retry returns the original commit revision; a changed
-   retry conflicts. A retired scope cannot restart by registration. A new
-   method version needs its own registration. Never remove exact witness pins
-   as part of retirement. A request conflict stops data startup, not the
-   independent policy service. No public retirement RPC is added in this phase.
-6. Separate health for intake storage, each processor and trace capacity.
-   Database corruption stops data ACK. Supervise analysis failures without
-   exiting Control's policy service. Enforce per-tenant and global queue/disk
-   quotas. Query-worker health and failure isolation belong to 7.3.
-   Read processor progress, accepted cursor, missing ranges and revision from
-   one snapshot. Report lag separately from expired or lost input. Keep a
-   missing-coverage flag after an optional processor resumes. Report physical
-   storage capacity separately from retention health. A capacity sample does
-   not promise admission for a later write or for a tenant's logical quota.
-   If retention is unhealthy, check maintenance capacity before returning its
-   error. Insufficient space returns ResourceExhausted for evidence and
-   coverage. Other retention failures return Unavailable. Neither result
-   permits an ACK or a data commit.
-   Read exact recovery gaps in source-scoped pages of at most 256 ranges.
-   These health reads must not advance receipts or processor progress.
-   Charge each retained row 256 logical bytes plus its variable payload and
-   key bytes. Use 8 GiB per store and 2 GiB per tenant by default. Ordinary
-   writes leave one quarter of each limit for result and maintenance commits.
-   At 90 percent of the ordinary limit, bounded retention removes eligible
-   raw rows. Required progress and witness checks still apply. Limit each
-   context, result, and coverage family to 1,024 revisions per tenant and
-   4,096 per store. Charge unique pinned raw/context rows to a separate
-   512-MiB tenant witness limit. Check these bounds before transaction commit.
-   Match retained rows to tenant-scoped references with semi-joins. Count each
-   retained row once, even when multiple results reference that row. Exclude
-   raw references at or after their expiry time. Keep context reference charges.
-   Do not build correlated intermediate state for each retained event.
-7. Implement checkpoint, backup and restore through the data owner. Measure
-   physical disk reuse after DELETE. Reserve maintenance space before work.
-   Write managed backups only as `.duckdb` files directly in the private
-   `AnalysisStore/backups` directory. Create that directory through the owner
-   and sync its parent before copying.
-   Count complete and incomplete copies in the existing data-file budget.
-   Before copying, reserve the database size, one quarter of that size, and
-   4,096 manifest bytes against ordinary file and free-space admission. Reserve
-   two file entries in the bounded directory scan. Reserve one more entry when
-   the backup directory is absent. Keep all existing copies unchanged
-   on rejection or failure. Do not add automatic backup deletion. Operators can
-   copy a completed database and its manifest outside the managed directory;
-   restore accepts that external copy. External operator copies are not managed
-   data-store usage.
-   Stop writes when reclamation fails; never unlink the native WAL. Recovery
-   after an older backup reports source ranges no longer retained on Node.
-   Add `NodeEvidence.ReportFloor` to the existing Node mTLS service. Each
-   request carries the current session and one source's boot ID, source ID,
-   source epoch, and durable acknowledged cursor. This cursor is the last
-   record excluded from Node replay, not the first retained record. Node walks
-   its ordered WAL sources at one report per second, including empty sources.
-   Restart the walk on reconnect and after its last source. Advance the walk
-   only after a successful report. Hold no WAL lock during network I/O.
-   Control checks current mTLS, session, and trust, then resolves the source's
-   original durable session. Use the existing shared intake admission limit.
-   Commit missing ranges through `AnalysisStore::record_recovery_floor`.
-   Retry is idempotent. The reply accepts the report; it is not an evidence
-   ACK and cannot advance Node truncation, accepted receipts, or processors.
-   A missing or corrupt data owner rejects the report without a fallback.
-   Keep the data-directory lease throughout backup. Close readers before the
-   writer. Attempt validated reopen after a copy error. If reopen fails, keep
-   data access closed until restart; do not create an empty replacement store.
-   Restore holds the destination lease before it checks that the directory is
-   empty except for that lease file. Create and sync `restore.pending` before
-   copying the backup. Before backup or restore copies bytes, check destination
-   free space with one shared rule. Require the database size, one quarter of
-   that size, the policy reserve, and the write allowance. Reject arithmetic
-   overflow or insufficient space with a storage-capacity error. A rejected
-   restore retains its pending marker and creates no database file. This check
-   samples capacity; it does not reserve blocks against other writers.
-   Normal startup rejects that marker before it opens the
-   database. Keep the marker until validation and the new recovery-epoch commit
-   succeed. Remove the marker and sync the directory before returning the
-   restored owner. A copy with a pending marker remains unavailable. Retry from the
-   unchanged backup into a new empty directory; do not remove the marker to
-   enable the incomplete copy.
-   Pin DuckDB core 1.5.5 through Rust binding 1.10505.0. Enable native
-   `vacuum_rebuild_indexes` at open and reopen with the maximum unsigned
-   64-bit threshold. Keep primary keys. Do not skip compaction because a
-   table exceeds a separate row-count threshold. Existing logical quotas,
-   native resource settings, and maintenance admission still apply. This
-   native option is experimental and rebuilds affected indexes. Qualify its
-   cost and recovery before production use. Check repeated file reuse with
-   live exact witnesses; do not require each partial deletion to shrink a file.
-   Qualify native allocator release under multiple calling threads. Set the
-   native bulk-deallocation release threshold to zero. Do not change the
-   process-wide allocator policy. Set the engine memory target to 160 MiB.
-   Account for allocations outside the native buffer manager. Keep the
-   native WAL checkpoint threshold at 16 MiB. This threshold starts checkpoint
-   work earlier; it does not reserve memory or bound process RSS. Keep the
-   256-MiB process qualification limit unchanged. Require the isolated
-   memory regression and mTLS load checks before accepting this setting.
-8. Activate the data owner in a clean development deployment. Control opens
-   a private AnalysisStore with the current schema and selects it as the only
-   evidence writer before Node intake starts. Backward compatibility with
-   development data formats is not required. Reject an unsupported schema
-   or a Control store that still has accepted evidence. Start each Node with
-   a new source identity so an old ACK or cursor cannot enter the new store.
-   There is no old-store import, schema migration, dual write, or rollback
-   path. Backup and restore remain required for data written after activation.
-9. Keep policy/trust/rollout state outside this conversion. Reconcile their
-   committed versions into context with idempotent reads; unavailable context
-   stays Pending or Unknown. Do not hold both stores' locks or claim a shared
-   transaction. Control reads at most 16 entries per one-second tick. It cycles
-   through configured tenants and the policy, trust, and rollout maps. Copy the
-   source revision with its policy document, the trust generation, and the
-   current rollout transition. Bound each serialized body to 32 KiB. Never
-   truncate a body. Release the Control lock before each data commit. Retain
-   the source generation, trust generation, or rollout transition number as
-   the owner revision, including a rollout revision of zero. Use the source
-   revision ID, trust digest, or candidate ID as the exact lifetime key.
-   A projection has no claimed validity interval; store both bounds as null.
-   The body retains any time reported by its authoritative owner. Do not infer
-   activation or continuous coverage from a copied state. A missing exact key,
-   including a transition that was replaced before projection, stays Unknown.
-   Retry failed entries on the next pass. Continue other entries and keep
-   policy RPCs active. Restart the worker after a panic; never restart Control
-   to repair a projection failure. Remove the superseded event write path only
-   after cutover
-   tests prove every production caller uses AnalysisStore.
+1. Move or adapt the segment codec/writer/reader from Control
+   `evidence_segment.rs` into `crates/araphor-data/src/analysis/`.
+   Reuse its bounded frames, checksums, per-source layout, and rotation.
+   Keep one AnalysisStore API; do not add interchangeable backends or a new
+   service. Keep the existing method contracts `open`, `read_page`,
+   `commit_result`, `retain`, `backup`, and `restore` where applicable.
+   Remove the persisted raw `events` table from the desired schema.
+
+2. Implement the catalog and commit protocol in
+   [engine-design.md](engine-design.md#commit-and-acknowledgement).
+   Persist source/kind, file/range, committed end, cursor/count, digest,
+   commit/ordinal, and intake-time bounds per batch/segment. Do not keep
+   one database row or a resident index per raw event.
+   Keep DuckDB for transactional metadata, context, results, and progress.
+   It is not the raw-event owner. Raw sync must precede metadata commit.
+   Before new file creation, commit its Reserved catalog entry. Recovery can
+   then remove an uncommitted new file without guessing which files it owns.
+   This reservation occurs on rotation and advances no receipt or public revision.
+   On an uncertain metadata result, stop writes and recover before retry.
+   Reuse current source binding, gap, coverage, replay, and conflict checks.
+   AlreadyAcceptedExpired does not claim retained-byte comparison.
+
+3. Implement bounded snapshot reads over committed ranges: 256 records or
+   1 MiB per page. Capture metadata revision and committed byte ends together.
+   Use bounded read leases to prevent file deletion during extraction.
+   Release leases before caller I/O. Missing committed data is an error;
+   recorded expiry is an explicit gap. Preserve retained witness ranges below
+   newer expired ranges. No full-store decoded index is required.
+   Add trusted range extraction using conservative batch time/source metadata.
+   Prove complete authorized input under the scan and extraction limits before
+   closing this storage phase; public SQL and follow remain in 7.3.
+
+4. Retain results, exact references, and progress in one metadata transaction.
+   Recheck expected progress and input availability under the same writer
+   coordinator that selects deletion. Compute outside that coordinator.
+   Keep optional discovery progress non-pinning. Required security progress
+   protects unprocessed input; authorized retirement records its exact cutoff
+   and missing coverage. Retain the existing trusted startup retirement
+   contract: at most 32 requests; exact processor/version/tenant/source,
+   change ID, reason, expected progress, and accepted cutoff; idempotent retry;
+   no witness release and no public retirement RPC.
+
+5. Implement whole-segment retention with the Live/Deleting protocol in the
+   shared design. An exact witness pins only its containing segments. Charge
+   each distinct pinned segment's full size, plus context, to the witness
+   budget. Report useful witness bytes and extra retained bytes separately.
+   Keep age/byte, required-progress, pending-gap, and tenant checks. Seal idle
+   active segments when retention needs them. Persist exact expired intervals
+   before unlink; recover interrupted unlink idempotently.
+   No raw row deletion, compaction, per-event tree, or witness archive.
+   If the limits require any of these, report the measured failure and request
+   a design change. Do not weaken retention to finish the phase.
+
+6. Keep storage, processor, and trace health separate. Preserve the current
+   logical budgets: 8 GiB/store, 2 GiB/tenant, 512 MiB/tenant witness reserve,
+   and 25 percent for maintenance/result writes. Charge raw frames once and
+   metadata/derived rows at 256 bytes plus variable payload/key bytes.
+   Retain revision-family limits of 1,024/tenant and 4,096/store. Count pending
+   appends, segment files, native metadata WAL, backups, and temporary files
+   in physical admission. At 90 percent of ordinary allowance, attempt bounded
+   eligible segment deletion. Protected bytes are not available space.
+   Insufficient capacity returns ResourceExhausted; other storage failures
+   return Unavailable. Neither response permits ACK.
+   Keep the 256-MiB data-process qualification gate. Start metadata DuckDB at
+   a 64-MiB memory target and 16-MiB WAL checkpoint threshold; neither caps RSS.
+   Do not carry raw-table ART rebuild or vacuum tuning into the new design.
+
+7. Back up and restore the complete segment/database bundle, not a DB file.
+   Pause intake, drain work/readers, seal and sync segments, checkpoint/close
+   metadata, and copy exact files with a digest manifest. Keep the lease.
+   Reserve bundle bytes plus 25 percent, manifest space, and actual file count.
+   Count incomplete copies. Never overwrite or automatically remove backups.
+   Restore only to an empty leased directory with a synced restore.pending
+   marker. Validate every segment, receipt, reference, and progress record.
+   Commit a new recovery epoch before clearing the marker and publishing ready.
+   Retain NodeEvidence.ReportFloor on the existing mTLS service. Check current
+   session/trust, resolve original durable source binding, and commit exact
+   gaps through record_recovery_floor. Reports never advance Node truncation,
+   accepted receipts, or processor progress. Node reports one ordered source
+   per second, retries on reconnect, and holds no WAL lock during network I/O.
+
+8. Wire the same owner into Control `evidence.rs`, `service.rs`, `server.rs`,
+   `config.rs`, and `main.rs`. Keep source authorization and ACK in Control.
+   Use a fresh development data directory and new Node source identities.
+   Reject unsupported stores without changing them. No import, migration,
+   dual write, backward compatibility, or fallback raw writer is required.
+   Retire the DuckDB raw-row write path and Control-owned evidence writer after
+   caller and startup tests pass. Reuse the segment implementation under the
+   data owner; do not retire the segment format merely because ownership moves.
+   Keep the old discovery path disabled until its direct-read conversion in 7.4.
+
+9. Preserve bounded policy/trust/rollout context projection without changing
+   ControlStore persistence. Read at most 16 entries per one-second tick;
+   release the Control lock before committing bodies of at most 32 KiB.
+   Preserve exact owner revisions, including zero, and null unproved validity.
+   Missing versions stay Unknown. Retry projection failures independently of
+   policy RPCs. Never claim an atomic transaction across Control and data.
+
+## Storage choice qualification
+
+Use release builds on the same declared host. Compare the combined segment
+append plus metadata commit with the recorded old-segment and DuckDB-raw
+baselines. Measure append/sync time, metadata commit time, durable ACK p95/p99,
+RSS, restart, backup, file count, and disk use separately. Metadata still
+commits per admitted batch; the old segment benchmark does not predict the
+new ACK rate.
+
+Test a tenant history larger than 64 MiB with a small recent window, a sparse
+target distributed across many segments, and exact witnesses in many segments.
+Measure scanned versus selected bytes and physically retained versus witness
+bytes. Enforce the one-second/256-MiB scan and 64-MiB extracted-input limits.
+A limit response is correct safety behavior, but repeated rejection of the
+required bounded-window qualification case does not pass the product gate.
+If these cases fail, stop before dependent integration and propose a bounded
+change. Do not build two production raw owners or add automatic compaction.
 
 ## Unit tests and end-to-end proof
 
 Add `analysis_store_`, `control_retention_` and `analysis_startup_` tests:
-commit/rollback, post-commit lost ACK, conflicting duplicates, out-of-order
+segment-sync/metadata-commit recovery, post-commit lost ACK, conflicting duplicates, out-of-order
 batches, explicit gaps, checked overflow, cross-tenant references, required
-processor stall, review pins, retirement, expiry, late context, WAL recovery,
+processor stall, review pins, retirement, expiry, late context, segment/catalog recovery,
 disk full, unsupported schema and rejected old evidence state.
 
 Run `analysis_store_thread_memory` alone in a release test process on Linux.
 Use four calling threads with one batch in flight and the default store limits.
 Commit batches of 1,024 synthetic post-validation frames until the default
-tenant logical quota rejects a batch. Fail if 8,192 batches do not reach that
-quota. Other capacity errors are failures, not successful stop conditions.
+tenant logical quota rejects a batch. Calculate a checked maximum batch count
+from the configured allowance and this fixture's encoded batch size, with two
+extra batches for the boundary. Fail if that bound does not reach the quota.
+Other capacity errors are failures, not successful stop conditions.
 Require the rejected batch to leave the receipt unchanged. Require the
-exact receipt and last retained frame after checkpoint and reopen. Read process
+exact receipt and last retained frame after segment sync, metadata checkpoint,
+and reopen. Read process
 high-water RSS after each batch and after reopen. Fail above 256 MiB; include
-the native memory categories in the failure. Do not treat DuckDB's configured
+segment metadata, queues, native allocations, and file counts in the failure. Do not treat DuckDB's configured
 buffer limit as an RSS limit. Keep this host-dependent test ignored in normal
 CI. Record the host and allocator environment when running it explicitly.
 This component test does not prove wire validation, global-quota memory,
@@ -251,11 +213,8 @@ interval. On an unexpected write error, report that sample's batch number,
 the failed batch number, and the prior successful cursors with the exact error.
 Do not query an invalidated connection to obtain this failure context. These
 prior cursors do not establish the failed batch's final durable state.
-Enable only DuckDB's native `Checkpoint` log in this ignored test. Write the
-log to stdout, not the database's in-memory log store. Retain the output with
-the resource log. Use its row-group merge records to check whether checkpoint
-compaction precedes a failure. This diagnostic does not change production
-logging or prove that a merge caused an allocation failure.
+Record raw segment sync, metadata commit, and metadata checkpoint separately.
+Bound diagnostic samples; do not create a database-resident event log for the test.
 
 Use `data_context_bounds` for maximum-size decision context. Derive a valid
 catalog from the signed-policy fixture. Add JSON whitespace to reach exactly
@@ -276,14 +235,18 @@ changing the receipt or data revision. Accept the next valid input at the
 rejected cursor. Reopen the store and compare all accepted frames and receipts.
 This component case does not prove transport behavior or full-capacity memory.
 
-Use `analysis_store_input_crashes` for process exits immediately before and
-after evidence, coverage, context, and recovery-gap commits. Reopen through the
+Use `analysis_store_input_crashes` before/after raw append, segment sync,
+file reservation, metadata commit, coverage/context commit, and recovery-gap commit. Also exit
+after deletion marking, unlink, and deletion cleanup. Race reference admission
+with retention. Uncommitted tails must not become readable or acknowledged;
+committed missing bytes must fail readiness. Interrupted deletion must not
+erase an exact witness or be mistaken for corrupt Live input. Reopen through the
 production owner. Require the complete prior or new state, exact receipts and
 relation revisions, tenant isolation, unchanged consumed progress, and an
 idempotent retry. A duplicate retry must not publish a revision notification.
 Reopen again after retry. Use temporary stores and test-only exit hooks.
-These checks do not prove interruption inside native commit or hardware power
-loss.
+These checks do not prove hardware power loss. Add short/torn segment-tail
+fixtures and distinguish uncommitted tails from corruption of committed bytes.
 
 Use `analysis_store_processor_crashes` for exits before and after registration,
 optional resume, and required retirement. Require atomic progress and missing
@@ -306,23 +269,25 @@ the same batch through mTLS. The replay must ACK without another record or
 revision. Apply the ACK to Node, accept the next cursor, and reopen again.
 Keep policy state unchanged. Use temporary directories and bounded child waits.
 
-Use `data_commit_failure` for a native write error during evidence and result
-commits. In a child process, open a temporary store before applying a zero-byte
-or 64-byte file-size limit. Require the native commit to report `File too large`
-for `analysis.duckdb.wal`. Do not accept an admission error as commit proof.
+Use `data_commit_failure` for segment append/sync errors and metadata/result
+commit errors. Inject each boundary separately. In a child process, open a temporary store before applying a zero-byte
+or 64-byte file-size limit. Require the intended segment or metadata-WAL operation to report
+`File too large`; identify which durable step failed. Do not accept an admission error as commit proof.
 Require no revision notification, then exit without owner cleanup. Reopen and
-check unchanged metadata, receipts, records, and processor progress, with no
-new result. Retry without the limit. Require one revision, an unchanged duplicate
+check no partial result or false ACK. Recover uncertain outcomes before retry;
+require metadata to reference only complete synced frames. Retry without the limit. Require one revision, an unchanged duplicate
 retry, and persistent state after another reopen. The result case must retain
 its exact witness past raw expiry. These checks do not prove a torn write,
 ENOSPC during commit, hardware power loss, or the mTLS failure response.
 
-Use `data_intake_failure` to check the native write failure through mTLS.
-Run the server and Node client in an isolated child process. Apply the file-size
-limit only after startup and one accepted record. Require a native WAL commit
-error instead of an ACK, unchanged data revision and receipt, and retained Node
-input. Remove the limit. Require a policy RPC and exact replay without restarting
-Control. Reopen the store and check the accepted frames and receipt. This case
+Use `data_intake_failure` to check segment and metadata write failures through
+mTLS. Run the server and Node client in an isolated child process. Apply the
+file-size limit only after startup and one accepted record. For metadata failure,
+use a test boundary after segment sync to apply the limit before metadata commit.
+Run the segment failure separately before append. Require the intended error,
+not an ACK, unchanged public revision and receipt, and retained Node input.
+Remove the limit and recover the data owner. Require a policy RPC and exact
+replay without restarting Control. Reopen and check accepted frames and receipt. This case
 does not qualify hardware power loss or an actual full filesystem during commit.
 
 Add `data-store-recovery` to the discovery e2e binary. Through the production
@@ -331,7 +296,7 @@ This is the production counterpart to the offline `storage-contract` case in
 7.1. Reopen AnalysisStore and require the same source identity, receipt,
 coverage and exact counts. Require unchanged policy state and explicit expired
 reads. Stop after every transaction boundary. Record batch latency, durable
-ACK latency, checkpoint time and actual database, WAL and temporary bytes. Run
+ACK latency, segment sync, metadata checkpoint, and segment/database/WAL/temp bytes. Run
 backup/restore after raw expiry; retained findings/profile fixtures and
 references must survive. A stale backup with already-purged Node input must
 report Partial recovery.
@@ -342,7 +307,7 @@ intake and bounded AnalysisStore reads, exact retained replay, explicit expired
 gaps and no double counts. A required detector stall raises health immediately.
 One-hour lag alone does not pause intake. Reach its protected age/byte bound
 and require backpressure without deleting protected input. Keep a review witness through
-optional expiry; no source-wide pin is permitted.
+optional expiry; charge its full segment without pinning its whole source.
 
 Add `data-store-startup` with an empty development Control evidence state.
 Require one selected writer, a fresh Node source, unchanged policy state,
@@ -351,14 +316,14 @@ Do not require a live Kubernetes cluster for either case. Rerun both before
 the physical storage/partition case in the existing mithril-e2e harness.
 
 Use `data-store-inspect` for retained-data proof while Control is stopped.
-Require an existing current-format data file and the exclusive AnalysisStore
+Require an existing current-format data bundle and the exclusive AnalysisStore
 lease. Use `source_page` to list one tenant's sources in pages of at most 256.
 Use `read_page` to hash each exact retained range. A baseline must match the
 store, recovery epoch, tenant, source identities, cursor ranges, counts, and
 frame digests. New records can follow the baseline. Missing or expired baseline
 records fail the check. Inspection must not advance a receipt or revision.
 Limit a run to 1,024 sources, one million records per source, 256 MiB of reads,
-and a one-MiB proof file. Record database, WAL, total file, and allocated bytes.
+and a one-MiB proof file. Record segment, database, WAL, total file, and allocated bytes.
 Reject an existing output path, a missing store, or a live store owner.
 The `data_inspection_recovery` mTLS test checks restart, appended data,
 changed evidence proofs, tenant isolation, and expiry. CLI tests reject
@@ -410,11 +375,11 @@ does not qualify hardware failure, native commit failure after admission,
 reserve adequacy, or Kubernetes partition recovery.
 
 Use `analysis_store_copy_limits` for exact copy-reserve boundaries and overflow.
-The capacity scenario also makes a current-format managed backup, copies both
-files outside the constrained filesystem, and restores that external copy.
+The capacity scenario also makes a current-format managed backup, copies its complete
+manifest-bound bundle outside the constrained filesystem, and restores it.
 In the full-tmpfs case, require the managed backup to fail its filesystem
-reserve check and restore to fail its `copy reserve` check. A rejected backup creates neither
-database nor manifest and leaves its source usable. A rejected restore creates
+reserve check and restore to fail its `copy reserve` check. An admission-rejected backup creates no bundle and leaves its source usable.
+A copy-time failure retains a charged incomplete bundle. A rejected restore creates
 no database, retains its pending marker, and rejects normal startup. The same
 backup must still restore into a new directory with sufficient space. This case
 does not prove capacity that changes after the admission check.
@@ -424,7 +389,7 @@ Submit 64 groups of 4,096 synthetic records through Node's bounded ingestion
 queue, durable WAL, and the real mTLS intake. Use 1,024 records per Node worker
 batch. Keep the production data quotas. Send a policy inventory RPC while each
 group is in flight. Record Node generation time, time to observe the durable
-ACK, policy RPC time, and sampled database, WAL, and aggregate file bytes.
+ACK, policy RPC time, and sampled segment, metadata database, WAL, and aggregate file bytes.
 The ACK measurement includes the intervening policy RPC. Retry each group and
 require no new revision. Read every retained frame through bounded owner pages
 and compare the ordered SHA-256 digest. Checkpoint, restart, and require unchanged
@@ -445,7 +410,7 @@ require unchanged metadata. Check each Node's pending input, exact retained
 frame digest, source receipt, and rejected foreign-tenant reads. Checkpoint and
 reopen the shared store. Require unchanged metadata and both source states.
 Record per-tenant ACK and policy RPC times, aggregate elapsed time, and sampled
-database/WAL bytes. `data_tenant_load` uses two groups per Node in CI.
+segment/database/WAL bytes. `data_tenant_load` uses two groups per Node in CI.
 This case does not prove concurrent policy rollout, worst-case payloads, or
 full-quota capacity.
 
@@ -473,19 +438,23 @@ policy activation, full quotas, or filesystem reserve adequacy.
 
 Use `data-store-quota` to fill the default tenant logical quota through Node
 WAL and mTLS intake. Register a required processor before intake and leave its
-progress at zero. Send one 1,024-record batch at a time, with a maximum of
-8,192 batches. Require the tenant logical limit to reject a complete batch
+progress at zero. Send one 1,024-record batch at a time. Calculate the bounded
+batch count from encoded input bytes and the quota as in the component case.
+Require the tenant logical limit to reject a complete batch
 without an ACK, receipt change, or revision change. Node retains that input.
 Read all accepted frames and compare their ordered digest. Require a policy
 RPC and an unchanged retained duplicate retry while the quota is full.
 Commit a processor result with one exact witness through the maintenance
-allowance. Run bounded retention and checkpoint, then replay the rejected
-batch. Advance the fixture clock by 25 hours after the result commit. Keep the
+allowance. Advance the fixture clock by 25 hours after the result commit.
+Run bounded segment retention and metadata checkpoint, then replay the rejected
+batch. Keep the
 witness valid for 96 hours. Require explicit expiry, one durable acceptance,
 unchanged duplicate replay, a readable witness, and unchanged state
 after restart. Record intake, read, result, retention, checkpoint, and restart
 times with sampled file bytes. `data_quota_recovery` runs the same case with
-a two-MiB tenant quota in CI. Only the CLI uses the default two-GiB quota.
+a 64-MiB tenant quota in CI, enough for several 16-MiB segments. Only the CLI
+uses the default two-GiB quota. Put the witness in one segment and prove that
+another full eligible segment is reclaimed before replay can succeed.
 Run full-capacity measurements with `--release --locked`, as used by the
 production image build. Keep the debug-build failures in the result record.
 Record the build command and binary digest; each result also records whether
@@ -494,7 +463,7 @@ This case does not qualify global saturation, worst-case payloads, concurrent
 rollout, or a filesystem reserve at its physical boundary.
 On an unexpected ACK error, write a `FAIL` result with the last observed ACK,
 elapsed time, exact error, and the bounded samples collected before failure.
-Each sample includes ACK arrival time and database, WAL, and aggregate file
+Each sample includes ACK arrival time and segment, metadata database, WAL, and aggregate file
 bytes. Do not include Node ACK-application time in ACK arrival time. A timeout
 does not prove that a data commit failed; do not label the last observed ACK as
 the final store receipt. Reject an existing output directory.
@@ -515,10 +484,21 @@ bash .github/scripts/verify-rust-ci.sh
 
 Pass DE-STORE, DE-INDEX, DE-RETENTION, DE-BOOT, DE-GAP, DE-TENANT and DE-LIMIT.
 Record nonzero case counts, actual disk usage, source receipts, backup revision
-and retained floors. No public SQL, discovery algorithm or remote transport is
+and retained ranges. Require whole-segment pin and bounded-extraction proof,
+not only direct-store throughput. No public SQL, discovery algorithm or remote transport is
 required here. Stop before enabling a data path whose recovery case fails.
 
 ## Implementation result
+
+**Not done for the segment-backed design.** This plan update changes no code.
+Configured intake still uses DuckDB raw rows. Implement the ordered changes
+above, then rerun their component and mithril-e2e gates. The records below
+describe previous raw-DuckDB revisions only. Their native-memory settings,
+raw-table maintenance, and pass counts are not instructions or qualification
+for the selected segment design.
+
+### Previous implementation evidence
+
 
 **Not done.** AnalysisStore has a writer, bounded reads, exact context
 versions, processor results and references, guarded raw expiry, backup and

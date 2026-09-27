@@ -35,12 +35,12 @@ and has checks only when delivered.
 | `DE-GAP` | Missed startup; ring/WAL gap; intentional sampling; stale source; clock reset; delayed coverage update | Partial interval and limited claims. No clean profile from an empty stream. |
 | `DE-REPLAY` | Permuted arrival; duplicate; conflicting duplicate; changed algorithm; missing context; recorded context error; unexpected lookup; expired evidence | Equal deterministic input yields equal output. Mismatch/expiry fails explicitly. No live fallback lookup. |
 | `DE-AGGREGATE` | Duplicate page; overlapping pages; same ID/different bytes; repeated independent observation; changed page size/thread order; late event; upstream sampling; absent intake time; integer overflow | Count each accepted identity once. Preserve outcome and instance identity. Included + unresolved + excluded equals unique accepted input. Late input creates a new revision. Unknown multiplicity stays unknown. |
-| `DE-INDEX` | DuckDB WAL recovery, corrupt DB, failed backup/restore, long reader, temp/WAL limit, disk full, query-worker crash, selected-engine plans | Preserve authoritative data or stop ACK and dependent reads. Worker failure alone does not stop intake. No empty-store fallback or recovery claim after raw expiry. |
+| `DE-INDEX` | segment/catalog recovery, corrupt committed frame or metadata DB, incomplete bundle, long read lease, temp/WAL limit, disk full, query-worker crash, bounded scans | Preserve authoritative data or stop ACK and dependent reads. Worker failure alone does not stop intake. No empty-store fallback or recovery claim after raw expiry. |
 | `DE-WIDEN` | Four sibling files; `/tmp` resources; read vs write; exact vs recursive path; symlink/mount ambiguity; label group with unobserved member; changed DNS membership | Exact default. Broadening has a receipt and separate review. Unknown scope is not equivalence. |
 | `DE-PREVIEW` | Exact compiled key; missing cell; hard safety condition; incomplete policy generation; absent dynamic exception binding; held-out valid-work case; synthetic scan; unsupported TLS/provider semantics | Existing static simulator result preserved. Unsupported runtime authority stays Unknown even if a compiled cell says Allow. No physical effect claim. |
 | `DE-POISON` | Repeated credential read; attack inserted early in training; benign-looking command name; gradual behavior change; path flood; malicious tool description | No automatic allow, authority inference, or silent baseline update. Forbidden case remains visible. |
-| `DE-STORE` | Crash before/after DB commit and before ACK; result/reference/progress commit failure; unsupported schema; retained duplicate conflict; expired duplicate; stale backup | Complete prior/new transaction, no double count, exact durable ACK. Restore reports source data lost since backup. Policy/control persistence is unchanged. |
-| `DE-RETENTION` | Stall required processor; unexpired witnesses; delete/retained-floor crash; disable/retire; quota; late context; raw expiry; DELETE without physical reuse | Delete only eligible data in one transaction. Optional discovery expiry records a gap and does not block intake. Required security input blocks reclamation and intake only at protected age/byte or physical capacity bounds. Summaries and exact pinned witnesses survive raw expiry. No external cursor pins history. |
+| `DE-STORE` | Crash before/after raw append, segment sync, metadata commit, and ACK; result/reference/progress commit failure; unsupported schema; retained duplicate conflict; expired duplicate; stale backup | Only catalog-committed synced segments become visible; recover uncommitted tails and uncertain commits. No double count or false durable ACK. Restore reports source data lost since backup. Policy/control persistence is unchanged. |
+| `DE-RETENTION` | Stall required processor; unexpired witnesses; pin/delete race; mark/unlink/cleanup crash; idle-segment sealing; disable/retire; quota; late context; raw expiry; pinned-segment amplification | Commit exact expiry and Deleting state before unlink. Resume only recorded deletions. Charge each full pinned segment once. Optional discovery expiry records a gap and does not block intake. Required security input blocks reclamation and intake only at protected age/byte or physical capacity bounds. Summaries and exact pinned witnesses survive raw expiry. No external cursor pins history. |
 | `DE-TENANT` | Foreign profile ID, evidence link, cursor, client attachment, report ID, and publication request | Reject before content access. No identifier, timing-detail, or audit-content leak. |
 | `DE-LIMIT` | Every byte/row/interval/page/worker limit at N and N+1; cancellation; slow reader; concurrent policy rollout | Bounded work, clear quota result, no priority inversion or wildcard fallback. |
 | `DE-MODEL` | No external client; malformed assessment; NaN; absent evidence with high score; client timeout/refusal; forged citations; unapproved disclosure; foreign references; unverified model/cost claims | Deterministic fallback and unchanged core digests. Explicit abstention/failure and score semantics; no authority or unapproved disclosure. Retained-response replay does not rerun inference. |
@@ -122,11 +122,11 @@ use the first one reached.
 | Derivation intervals | 4 active/process, 2/tenant; 32 pending/process, 8/tenant | Bounded queue; report lag and preserve required-consumer obligations. |
 | Input per interval | 1 million records or 256 MiB decoded | Seal at exact position; continue a new interval. No hidden sampling. |
 | Exact atoms | 50,000/profile | Partial or explicit limit; no wildcard substitution. |
-| Data disk | 8 GiB/process and 2 GiB/tenant logical data; reserve at least 25% free maintenance capacity | Count actual DB, native WAL, temp, backups and pending writes. Reject configurations without measured recovery headroom. |
-| Logical admission | 256 bytes per retained tenant row plus variable payload/key bytes; ordinary writes leave 25% of logical budgets | Check all current data relations in the write transaction. At 90% of the ordinary limit, run bounded eligible raw expiry. Logical charges are not physical file sizes. |
+| Data disk | 8 GiB/process and 2 GiB/tenant logical data; reserve at least 25% free maintenance capacity | Count segments, metadata DB/WAL, temp, complete/incomplete backups and pending writes. Reject configurations without measured recovery headroom. |
+| Logical admission | Raw frame bytes once; catalog/derived rows at 256 bytes plus variable payload/key bytes; ordinary writes leave 25% of logical budgets | Check charges before append and metadata commit. At 90% of the ordinary limit, run bounded eligible segment expiry. Witness limits are an additional admission check, not a second raw charge to the store. |
 | Raw/profile/finding retention | 24 hours / 30 days / 90 days | Apply byte limits and exact reference rules as well as age. No unlimited history. |
-| Raw retention pass | 16 sources/pass, 256 rows/source, one-second timer | Keep required input and exact witnesses. Checkpoint after deletion; stop intake on failure. This bound does not prove physical disk capacity. |
-| Pending-review witnesses | 7 days, 512 MiB/tenant | Reserve exact dependencies before review; reject or explicitly expire. |
+| Raw retention pass | 16 sources/pass, one eligible segment/source, one-second timer; 16 MiB/segment | Keep required input, pending gaps, and exact witnesses. Commit Deleting before unlink, then sync and clean metadata. This bound does not prove physical disk capacity. |
+| Pending-review witnesses | 7 days, 512 MiB/tenant | Charge full distinct containing segments plus context before review. Reject new pins rather than drop existing references. |
 | Required security input | Raw retention age (24 hours initially) and reserved bytes within the tenant's 2-GiB data budget | Raise health on failure. Pause affected intake before protected expiry or reserved-byte exhaustion, not at a separate lag timer. Explicit retirement records missing coverage. |
 | Optional discovery progress | No raw-history reservation | Resume retained input; commit gaps for expired ranges. Existing exact witness pins keep their own bounds. |
 | Retained revisions | 1,024 per tenant, 4,096/process for each analysis record family | Reject new work or expire eligible revisions. Audit expiry remains explicit. |
@@ -136,11 +136,11 @@ use the first one reached.
 | Data engine | 1 writer with 8 queued writes; 2 trusted readers with 16 active or queued reads in total | Bounded admission; no wait under ControlStore locks. Checkpoint and backup wait for read guards to close. |
 | Node intake admission | 8 active or queued groups/process, 2/tenant | Evidence and coverage share permits. Reject excess work with ResourceExhausted before ACK. Idle streams hold no permit. |
 | Intake batch | 4,096 records, 4 MiB encoded or 50 ms | Commit first bound reached; decoded data must fit working memory. |
-| Engine memory/WAL | 64 MiB memory target; 64 MiB WAL checkpoint threshold | Leave space for allocations outside the native buffer manager. Measure RSS; checkpoint before reserve exhaustion. If it fails, backpressure data writes. |
+| Metadata engine memory/WAL | 64 MiB memory target; 16 MiB WAL checkpoint threshold | Leave space for allocations outside the native buffer manager. Measure RSS; checkpoint before reserve exhaustion. If it fails, backpressure data writes. |
 | Native allocator release | Zero bulk-deallocation release threshold | Keep the process-wide allocator policy unchanged. Qualify multiple calling threads; this setting is not an RSS cap. |
 | Native temporary files | 128 MiB/process; two engine threads | Reject over-budget native work. This setting is not an operating-system memory cap. |
 | Data admission reserve | 256 MiB policy space plus 256 MiB write allowance; ordinary writes also require 25% of the configured data budget free | Sample actual available bytes before work. Maintenance keeps access above the ordinary data-file limit. Physical tests must prove the allowance is sufficient. |
-| Trusted extraction | 256 rows/1 MiB pages; 64 MiB admitted input after safe scope/column/AST-range selection; 1 second | Complete input or explicit rejection; never truncate COUNT/joins. No unproven predicate pushdown. |
+| Trusted extraction | 256 rows/1 MiB pages; 256 MiB scanned segment bytes; 64 MiB admitted input after safe scope/column/AST-range selection; 1 second | Complete input or explicit rejection; never truncate COUNT/joins. No unproven predicate pushdown. |
 | SQL input/result | 16 KiB SQL; 200 rows/1 MiB output | Explicit limited normal result; oversized replacement fails without changing the displayed snapshot. |
 | Isolated query workers | 2/process, 1/tenant; 256 MiB OS memory and 1 CPU each; 1-second evaluation deadline | No network/credentials/live DB; terminate over-budget evaluation. Worker memory is separate from analysis memory. |
 | Follow | 16 streams/process, 4/tenant; one evaluation and one queued frame/stream | One dirty flag coalesces changes. No read transaction while waiting. |
@@ -157,23 +157,31 @@ These limits are pilot defaults. Freeze any measured adjustment before dependent
 phases qualify. Test N and N+1 for both encoded and decoded limits. Store record
 families include immutable revisions and idempotency receipts, not only current
 heads. Check physical free bytes before admission; logical tenant charging alone
-does not bound a shared DuckDB file. Keep a separate filesystem reserve for
+does not bound segment files, a metadata database, or its native WAL. Keep a separate filesystem reserve for
 policy/control-state commits; the data budget cannot consume that reserve.
 
-Managed backups use the private `AnalysisStore/backups` directory and the
-existing data-file budget. Reserve the copy size, one quarter of that size,
-4,096 manifest bytes, and two file entries before backup. Reserve one more entry
-when the backup directory is absent. Preserve ordinary
-free-space admission. Count incomplete copies after failure and restart. Restore
-also accepts a completed database and manifest copied to an external location.
-Never overwrite the last good backup to satisfy a disk quota. If DELETE and
-checkpoint cannot recover capacity, stop new data writes and report the reason.
+Managed backups use unique private subdirectories under AnalysisStore/backups.
+Copy the complete segment/metadata bundle and its digest manifest. Reserve
+the copy size plus 25 percent, manifest bytes, and actual file/directory entries.
+Preserve ordinary free-space admission. Count incomplete copies after failure
+and restart. Restore also accepts a complete externally copied bundle.
+Never overwrite the last good backup to satisfy a quota. If whole-segment
+unlink and metadata maintenance cannot recover capacity, stop new data writes.
 An engine setting is not an OS RSS cap or a durability proof.
+
+Charge raw bytes once, plus catalog and derived-state overhead. Charge full
+distinct witness segments to the 512-MiB tenant witness limit; report actual
+witness payload bytes and retained segment bytes separately. Test one witness
+per segment, many witnesses in one segment, and expiry with an idle active
+segment. Quota rejection must not release an existing witness. No automatic
+compaction or secondary witness archive is part of qualification.
 
 ## Performance experiment
 
-Qualify DuckDB with the sealed corpus and actual production batch schedule.
-Do not repeat backend selection or infer throughput from OLAP benchmarks.
+Qualify the combined segment writer and DuckDB metadata transactions with the
+sealed corpus and actual production batch schedule. Reuse the recorded release
+baseline; do not infer complete-system throughput from the old segment test
+or OLAP benchmarks. Measure segment sync and metadata commit separately.
 Correct counts, canonical replay, durable ACK, recovery, isolated evaluation,
 bounded cancellation and memory are gates. Compare embedded intake with analysis
 off/on and with query/trace load; record the bottleneck and configured capacity.
@@ -184,7 +192,8 @@ kernel, build profile, and background load recorded. Core measurements require
 no model. If an external-client capability is advertised, measure its additional
 load separately against the same input. Include 10,000 and 50,000 exact-atom
 profiles and the full admitted input bound. Record throughput, elapsed time,
-peak RSS, bytes written, checkpoint latency, and cancellation latency.
+peak RSS, bytes written, segment sync, metadata commit/checkpoint latency,
+and cancellation latency.
 Include committed profile list/filter/compare queries during aggregation and
 recovery. Record query plans, cold/warm p50/p95/p99, WAL peak, DB size, replay
 throughput, and time to restore query service. Proposed indexed-page gate:
@@ -223,7 +232,11 @@ evaluation and shadow results, not inherited accuracy.
 
 Also measure query admission/projection/worker startup end to end. The 500-ms
 indexed-result target includes isolation overhead; do not report only in-engine
-query time. Follow waits are measured separately from evaluation latency. Test
+query time. Include large history with a small recent window, sparse target
+selection, and dispersed witnesses. Record scanned/selected bytes, files opened,
+and pinned/actual witness bytes. Missing the required bounded-window case is
+not a pass merely because InputTooLarge is safe. Stop for design review instead
+of adding a custom index or compactor. Follow waits are measured separately from evaluation latency. Test
 read revocation during the wait, filtered progress, retention expiry, and
 projection recovery. A result-row limit is not an input or CPU limit.
 
@@ -356,7 +369,9 @@ runs. A physical mismatch must first become a failing lightweight assertion.
 ## Plan checks
 
 Check local links, anchors, code fences, whitespace and dependency order.
-The desired data store is DuckDB; policy/control-state persistence is unchanged.
+Raw events and trace output live once in segments. DuckDB holds transactional
+metadata/derived state and executes isolated SQL. Policy/control persistence
+is unchanged. Backup/remote moves include the full segment/database bundle.
 Storage, query and trace work with discovery disabled. A failed query worker
 does not stop data commits; a failed authoritative data store does stop ACK.
 Follow is a committed-change stream, not repeated long-poll responses.

@@ -14,7 +14,8 @@ the full bounded result. Entry: 7.2. Status: **Not done**.
 Caller supplies SQL, parameters, scope and optional follow/cursor
   -> QueryOwner checks current grants and binds permitted relations and fields
   -> binder derives only proven-safe time bounds from the SQL AST
-  -> AnalysisStore extracts complete bounded authorized input at one revision
+  -> AnalysisStore captures metadata revision and committed segment ends
+  -> trusted reader decodes complete bounded authorized input under short read leases
   -> isolated DuckDB worker evaluates admitted SQL
   -> QueryOwner checks output and creates an authenticated receipt
 
@@ -37,7 +38,8 @@ Reader is slow, revoked or disconnected
 1. Add `QueryOwner::{query,follow}` under `crates/araphor-data/src/query/` and
    the isolated query-worker entry point under its `src/bin/`. Reuse 7.1 admission
    and sandbox proof. Do not expose a storage handle or arbitrary SQL to
-   credentialed Control. Fixed prepared extraction runs inside AnalysisStore.
+   credentialed Control. Trusted catalog selection and segment decoding run inside AnalysisStore.
+   The events and trace_output relations are logical views, not raw DB tables.
 2. Implement typed request/result/frame/cursor records and documented
    `catalog`, `events`, `coverage` and context-version reads. Bind scope,
    redaction and export policy before evaluation. Use sqlparser-rs DuckDbDialect
@@ -50,7 +52,11 @@ Reader is slow, revoked or disconnected
    in engine-design.md. A replace snapshot must fit one 200-row/1-MiB frame.
    Reject complete-input overflow rather than calculate a partial aggregate.
    No second SQL request is needed to refresh a followed aggregate.
-4. Bind dependencies through CTEs and joins, including context and coverage.
+4. Reuse 7.2 batch/source/time bounds and metadata/segment snapshot leases.
+   Enforce both the 256-MiB scan and 64-MiB authorized-input limits within
+   one second. A sparse predicate cannot cause an unlimited raw scan. Unknown
+   metadata never excludes a batch. Do not add a raw mirror or per-event index.
+   Bind dependencies through CTEs and joins, including context and coverage.
    Register watch before snapshot capture. Read snapshot data and revision
    consistently. Recheck durable table revisions before sleep. Permit one
    active evaluation and one dirty flag per stream; no unbounded task list.
@@ -63,7 +69,7 @@ Reader is slow, revoked or disconnected
    Bind the evaluation time through a checked AST parameter, not string
    replacement. Test forward/backward wall-clock changes and report them.
    Use heartbeat for health/auth checks, not unconditional SQL polling.
-7. Close readers before response writes. Enforce worker limits, one queued
+7. Release segment leases and close metadata readers before response writes. Enforce worker limits, one queued
    frame, 10-second stalled-output timeout, grant revocation, stream lifetime
    and shutdown cancellation. Emit a typed terminal/error state when possible.
    Keep query-worker health separate from intake storage health. A worker
@@ -101,7 +107,10 @@ with no new traffic. Revoke access during a quiet
 stream. Prove reader cancellation leaves intake and policy work active.
 Kill or time out the isolated worker and prove intake, policy work and the
 authoritative AnalysisStore remain healthy.
-Record the trusted extraction plan, extracted row/byte counts, worker native
+Test a pin/delete race and concurrent segment rotation during snapshot capture.
+Require counts to match a full authorized scan at that same revision. Confirm
+no segment lease survives a cancelled read or a blocked client response.
+Record the trusted extraction plan, scanned segments/bytes, extracted row/byte counts, worker native
 RSS, temporary bytes and evaluation time for the bounded case and the complete-
 input fallback. Reject an over-budget input before returning an aggregate.
 

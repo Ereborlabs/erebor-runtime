@@ -1,5 +1,7 @@
 # Raw Event Store Comparison
 
+The selected target is now the [segment-backed design](segment-owned-raw-events.md).
+The measurements below describe the earlier raw-DuckDB and segment paths.
 The DuckDB raw owner is partway through implementation. Configured Control
 already selects it, but the full storage qualification is not complete. This
 note compares direct raw-store behavior with the old Control segment writer.
@@ -24,7 +26,7 @@ but it is not needed to calculate discovery results. A large checkpoint failed
 while DuckDB rebuilt this index. A larger native memory target then exceeded
 the 256 MiB process memory gate. Neither result compares the two store designs.
 
-## Alternative to test
+## Selected replacement and remaining proof
 
 A segment replacement that preserves the approved owner boundary would adapt
 the segment writer and reader into the portable data owner, then make
@@ -50,10 +52,9 @@ bytes. Compare at more than one retained event count. State whether the run
 includes gRPC, discovery, retention, and concurrent readers. Record failure
 limits as well as successful rates.
 
-Choose a raw owner only after the same workload meets the intake, query,
-retention, witness, and recovery contracts. A small throughput win cannot
-replace those checks. Keep the current phase plan in force until this choice
-is reviewed.
+The segment-backed owner must meet the intake, query, retention, witness,
+and recovery contracts before release. The approved choice is recorded in
+7.2. This small comparison cannot replace its complete-system checks.
 
 ## Direct store comparison
 
@@ -95,8 +96,9 @@ bytes after close at that size. The experiment does not include mTLS, multiple
 sources, concurrent readers, context, coverage, retention, discovery, SQL,
 or power-loss recovery. The prior full-capacity DuckDB memory failures remain
 separate evidence.
-The store choice is still open until the query, retention, witness, and
-recovery work for the segment alternative is estimated and tested.
+The segment design is selected, but its query, retention, witness, and
+recovery qualification is still required. These results do not establish
+its combined append-plus-metadata cost.
 
 ## Unindexed raw table check
 
