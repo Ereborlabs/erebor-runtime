@@ -117,6 +117,10 @@ Store recovery fails
    context, result, and coverage family to 1,024 revisions per tenant and
    4,096 per store. Charge unique pinned raw/context rows to a separate
    512-MiB tenant witness limit. Check these bounds before transaction commit.
+   Match retained rows to tenant-scoped references with semi-joins. Count each
+   retained row once, even when multiple results reference that row. Exclude
+   raw references at or after their expiry time. Keep context reference charges.
+   Do not build correlated intermediate state for each retained event.
 7. Implement checkpoint, backup and restore through the data owner. Measure
    physical disk reuse after DELETE. Reserve maintenance space before work.
    Write managed backups only as `.duckdb` files directly in the private
@@ -1721,3 +1725,19 @@ Logs are `/tmp/araphor-memory-probe.z1rbDjUR/headroom-quota-repeat.log` and
 `headroom-quota-repeat-resources.log`. Result commit, retention, resumed intake,
 and reopen were not qualified by this run.
 The phase remains **Not done**.
+
+The witness-quota query now uses tenant-scoped semi-joins instead of correlated
+`EXISTS` checks. The query-plan assertion in `analysis_store_witness_limits`
+failed on the unchanged query in 0.64 seconds and passed after this change.
+The test also checks shared-reference charges, the exact expiry boundary,
+and an unrelated tenant. All 49 enabled data-owner tests passed, with four
+ignored, in 117.62 seconds. The command was `CARGO_BUILD_JOBS=2 cargo test
+--locked -p araphor-data -p mithril-e2e --lib analysis:: -- --test-threads=1`.
+The paired e2e package supplies the existing dependency feature set.
+The exact `discovery::data_store::quota::tests::data_quota_recovery` case
+passed one test in 4.17 seconds with the same package selection and
+`-- --exact --test-threads=1 --nocapture`. An earlier filter omitted `quota::`
+and selected zero tests; that command provides no proof. The passing case uses
+the two-MiB fixture quota. It does not qualify the default full-capacity path.
+The final workspace gate and release capacity reruns remain pending. The
+separate global checkpoint failure is not corrected by this query change.

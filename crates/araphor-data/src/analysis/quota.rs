@@ -8,6 +8,20 @@ const TENANT_REVISIONS: u64 = 1_024;
 const GLOBAL_REVISIONS: u64 = 4_096;
 
 impl AnalysisStore {
+    const WITNESS_USAGE: &'static str = "SELECT (
+        COALESCE((SELECT SUM(256 + octet_length(e.framed_record)) FROM events e
+            SEMI JOIN (
+                SELECT tenant_id, stream_key, durable_cursor FROM evidence_refs
+                WHERE tenant_id = ? AND expires_utc_ns > ?
+            ) r USING (tenant_id, stream_key, durable_cursor)), 0)
+        + COALESCE((SELECT SUM(256 + octet_length(c.body) + octet_length(encode(c.owner_id))
+            + octet_length(c.entity_key) + octet_length(c.lifetime_key)) FROM context_versions c
+            SEMI JOIN (
+                SELECT tenant_id, owner_id, entity_key, lifetime_key, owner_revision
+                FROM context_refs WHERE tenant_id = ?
+            ) r USING (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)), 0)
+    )::UBIGINT";
+
     fn logical_usage(
         &self,
         transaction: &Transaction<'_>,
@@ -114,19 +128,7 @@ impl AnalysisStore {
     ) -> Result<()> {
         let bytes: u64 = transaction
             .query_row(
-                "SELECT (
-                    COALESCE((SELECT SUM(256 + octet_length(e.framed_record)) FROM events e
-                        WHERE e.tenant_id = ? AND EXISTS (
-                            SELECT 1 FROM evidence_refs r WHERE r.tenant_id = e.tenant_id
-                            AND r.stream_key = e.stream_key AND r.durable_cursor = e.durable_cursor
-                            AND r.expires_utc_ns > ?)), 0)
-                    + COALESCE((SELECT SUM(256 + octet_length(c.body) + octet_length(encode(c.owner_id))
-                        + octet_length(c.entity_key) + octet_length(c.lifetime_key)) FROM context_versions c
-                        WHERE c.tenant_id = ? AND EXISTS (
-                            SELECT 1 FROM context_refs r WHERE r.tenant_id = c.tenant_id
-                            AND r.owner_id = c.owner_id AND r.entity_key = c.entity_key
-                            AND r.lifetime_key = c.lifetime_key AND r.owner_revision = c.owner_revision)), 0)
-                )::UBIGINT",
+                Self::WITNESS_USAGE,
                 params![tenant.as_slice(), now, tenant.as_slice()],
                 |row| row.get(0),
             )
@@ -288,6 +290,18 @@ mod tests {
         assert!(store.read_result([1; 16], "r")?.is_none());
         store.storage.witness_max_bytes = 521;
         let receipt = store.commit_result(&input)?;
+        {
+            let reader = store.reader()?;
+            let plan: String = reader.get()?.query_row(
+                &format!("EXPLAIN {}", AnalysisStore::WITNESS_USAGE),
+                params![[1_u8; 16].as_slice(), 2_u64, [1_u8; 16].as_slice()],
+                |row| row.get(1),
+            )?;
+            assert!(
+                !plan.contains("DELIM_JOIN"),
+                "witness quota correlates each retained row:\n{plan}"
+            );
+        }
         assert_eq!(store.commit_result(&input)?, receipt);
         let mut second = input;
         second.expected_cursor = 1;
@@ -302,6 +316,17 @@ mod tests {
         store.storage.tenant_max_bytes = StorageLimitsV1::default().tenant_max_bytes;
         store.commit_result(&second)?;
         assert_eq!(store.read_result([1; 16], "s")?, Some(vec![1]));
+        {
+            let reader = store.reader()?;
+            for (tenant, now, expected) in [(1_u8, 2_u64, 521_u64), (1, 100, 260), (2, 2, 0)] {
+                let bytes: u64 = reader.get()?.query_row(
+                    AnalysisStore::WITNESS_USAGE,
+                    params![[tenant; 16].as_slice(), now, [tenant; 16].as_slice()],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(bytes, expected);
+            }
+        }
         store.storage.tenant_max_bytes = 1;
         let retention = crate::EvidenceRetentionOwner::new(&store, Default::default())?;
         assert_eq!(
