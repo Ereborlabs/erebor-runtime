@@ -27,7 +27,7 @@ pub use model::*;
 pub const DEFAULT_EVIDENCE_BATCH_RECORDS: usize = MAX_EVIDENCE_BATCH_RECORDS;
 pub const MAX_EVIDENCE_RECORD_BYTES: usize = 128 * 1_024;
 pub const MAX_EVIDENCE_BATCH_PAYLOAD_BYTES: usize = 3 * 1_024 * 1_024;
-pub const MAX_EVIDENCE_SEGMENT_BYTES: usize = 16 * 1_024 * 1_024;
+pub use araphor_data::MAX_EVIDENCE_SEGMENT_BYTES;
 const MAX_COVERAGE_INTERVALS: usize = 8_192;
 
 #[derive(Clone)]

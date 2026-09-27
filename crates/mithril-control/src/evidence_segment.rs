@@ -1,7 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::Write as _;
-use std::os::unix::fs::FileExt as _;
 use std::path::{Path, PathBuf};
 
 use prost::Message;
@@ -13,7 +11,6 @@ use crate::Result;
 
 pub(crate) const MAX_SEGMENT_BYTES: u64 = crate::MAX_EVIDENCE_SEGMENT_BYTES as u64;
 const FRAME_OVERHEAD_BYTES: usize = 8;
-const IDENTITY_FIXED_BYTES: usize = 70;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -221,7 +218,7 @@ struct EvidenceFrameIndexV1 {
 }
 
 pub(crate) struct EvidenceSegmentReadV1 {
-    file: File,
+    file: araphor_data::SegmentFile,
     path: PathBuf,
     frames: Vec<EvidenceFrameIndexV1>,
     pub(crate) first: u64,
@@ -260,10 +257,11 @@ impl EvidenceSegmentReadV1 {
 
     fn read_frame(&self, frame: &EvidenceFrameIndexV1) -> Result<Vec<u8>> {
         let start = frame.payload_start - 4;
-        let mut bytes = vec![0; frame.end - start];
-        self.file
-            .read_exact_at(&mut bytes, start as u64)
-            .context(IoSnafu { path: &self.path })?;
+        let bytes = self
+            .file
+            .read(start as u64, frame.end - start)
+            .map_err(Box::new)
+            .context(crate::error::DataStoreSnafu)?;
         let length = u32::from_be_bytes(bytes[..4].try_into().unwrap_or_default()) as usize;
         let checksum_start = bytes.len() - 4;
         let checksum = u32::from_be_bytes(bytes[checksum_start..].try_into().unwrap_or_default());
@@ -337,91 +335,6 @@ struct EvidenceSegmentStateV1 {
 }
 
 impl EvidenceSegmentStateV1 {
-    fn encode_identity(identity: &crate::EvidenceIntakeIdentityV1) -> Result<Vec<u8>> {
-        let node_id_bytes = identity.node_id.as_bytes();
-        let node_id_len = u16::try_from(node_id_bytes.len()).map_err(|error| {
-            ControlStoreSnafu {
-                path: PathBuf::from("<evidence-stream-identity>"),
-                reason: format!("the evidence stream node identity is too long: {error}"),
-            }
-            .build()
-        })?;
-        let mut bytes = Vec::with_capacity(IDENTITY_FIXED_BYTES + node_id_bytes.len());
-        bytes.extend_from_slice(&identity.tenant_id);
-        bytes.extend_from_slice(&identity.node_boot_id);
-        bytes.extend_from_slice(&identity.source_id);
-        bytes.extend_from_slice(&identity.label_epoch.to_be_bytes());
-        bytes.extend_from_slice(&identity.source_epoch.to_be_bytes());
-        bytes.extend_from_slice(&node_id_len.to_be_bytes());
-        bytes.extend_from_slice(node_id_bytes);
-        let checksum = crc32c::crc32c(&bytes);
-        bytes.extend_from_slice(&checksum.to_be_bytes());
-        Ok(bytes)
-    }
-
-    fn decode_identity(
-        bytes: &[u8],
-        path: &Path,
-    ) -> Result<(crate::EvidenceIntakeIdentityV1, usize)> {
-        if bytes.len() < IDENTITY_FIXED_BYTES {
-            return ControlStoreSnafu {
-                path: path.to_owned(),
-                reason: "the evidence segment stream identity is truncated".to_owned(),
-            }
-            .fail();
-        }
-        let node_id_len = u16::from_be_bytes(bytes[64..66].try_into().unwrap_or_default()) as usize;
-        let header_bytes = IDENTITY_FIXED_BYTES
-            .checked_add(node_id_len)
-            .ok_or_else(|| {
-                ControlStoreSnafu {
-                    path: path.to_owned(),
-                    reason: "the evidence segment stream identity size overflowed".to_owned(),
-                }
-                .build()
-            })?;
-        if bytes.len() < header_bytes {
-            return ControlStoreSnafu {
-                path: path.to_owned(),
-                reason: "the evidence segment stream identity is incomplete".to_owned(),
-            }
-            .fail();
-        }
-        let checksum_start = header_bytes - 4;
-        let expected = u32::from_be_bytes(
-            bytes[checksum_start..header_bytes]
-                .try_into()
-                .unwrap_or_default(),
-        );
-        if crc32c::crc32c(&bytes[..checksum_start]) != expected {
-            return ControlStoreSnafu {
-                path: path.to_owned(),
-                reason: "the evidence segment stream identity checksum is invalid".to_owned(),
-            }
-            .fail();
-        }
-        let node_id = std::str::from_utf8(&bytes[66..checksum_start])
-            .map_err(|error| {
-                ControlStoreSnafu {
-                    path: path.to_owned(),
-                    reason: format!("the evidence segment node identity is invalid: {error}"),
-                }
-                .build()
-            })?
-            .to_owned();
-        Ok((
-            crate::EvidenceIntakeIdentityV1 {
-                tenant_id: bytes[..16].try_into().unwrap_or_default(),
-                node_id,
-                node_boot_id: bytes[16..32].try_into().unwrap_or_default(),
-                label_epoch: u64::from_be_bytes(bytes[48..56].try_into().unwrap_or_default()),
-                source_id: bytes[32..48].try_into().unwrap_or_default(),
-                source_epoch: u64::from_be_bytes(bytes[56..64].try_into().unwrap_or_default()),
-            },
-            header_bytes,
-        ))
-    }
-
     fn active_path(root: &Path, id: u64, stream: EvidenceSegmentStreamV1, first: u64) -> PathBuf {
         root.join(format!(
             "{id:016x}.{}.{:016x}.{first:016x}.open",
@@ -514,7 +427,9 @@ impl EvidenceSegmentStateV1 {
             }
             .fail();
         }
-        let (identity, header_bytes) = Self::decode_identity(&bytes, &path)?;
+        let (identity, header_bytes) = araphor_data::SegmentFile::decode_identity(&bytes, &path)
+            .map_err(Box::new)
+            .context(crate::error::DataStoreSnafu)?;
         let active = sealed_last.is_none();
         let mut frames = Vec::new();
         let mut offset = header_bytes;
@@ -1032,7 +947,9 @@ impl EvidenceSegmentOwner {
         if frames.is_empty() {
             return Ok(None);
         }
-        let file = File::open(&state.path).context(IoSnafu { path: &state.path })?;
+        let file = araphor_data::SegmentFile::reader(&state.path)
+            .map_err(Box::new)
+            .context(crate::error::DataStoreSnafu)?;
         Ok(Some(EvidenceSegmentReadV1 {
             file,
             path: state.path.clone(),
@@ -1267,7 +1184,10 @@ impl EvidenceSegmentOwner {
         if let Some(capacity) = active_capacity {
             return Ok(capacity);
         }
-        let identity_bytes = EvidenceSegmentStateV1::encode_identity(identity)?.len();
+        let identity_bytes = araphor_data::SegmentFile::encode_identity(identity)
+            .map_err(Box::new)
+            .context(crate::error::DataStoreSnafu)?
+            .len();
         let capacity = crate::MAX_EVIDENCE_SEGMENT_BYTES
             .checked_sub(identity_bytes)
             .ok_or_else(|| {
@@ -1317,7 +1237,9 @@ impl EvidenceSegmentOwner {
             .fail();
         }
         let frame_bytes = frames.bytes.len() as u64;
-        let identity_bytes = EvidenceSegmentStateV1::encode_identity(identity)?;
+        let identity_bytes = araphor_data::SegmentFile::encode_identity(identity)
+            .map_err(Box::new)
+            .context(crate::error::DataStoreSnafu)?;
         let new_segment_bytes = frame_bytes
             .checked_add(identity_bytes.len() as u64)
             .ok_or_else(|| {
@@ -1405,26 +1327,23 @@ impl EvidenceSegmentOwner {
                 .build()
             })?;
             let start = state.descriptor.reference.offset as usize;
-            let mut file = OpenOptions::new()
-                .append(true)
-                .open(&state.path)
-                .context(IoSnafu { path: &state.path })?;
-            file.write_all(&frames.bytes)
-                .context(IoSnafu { path: &state.path })?;
+            let file = araphor_data::SegmentFile::open(&state.path)
+                .map_err(Box::new)
+                .context(crate::error::DataStoreSnafu)?;
+            file.append(state.descriptor.reference.offset, &frames.bytes)
+                .map_err(Box::new)
+                .context(crate::error::DataStoreSnafu)?;
             Self::extend_frames(&mut state.frames, start, &frames.frames);
             state.descriptor.kind = state.descriptor.kind.with_last(last);
             state.descriptor.reference.offset += frame_bytes;
         } else {
             let path = EvidenceSegmentStateV1::active_path(&self.root, id, stream, first);
-            let mut file = OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&path)
-                .context(IoSnafu { path: &path })?;
-            file.write_all(&identity_bytes)
-                .context(IoSnafu { path: &path })?;
-            file.write_all(&frames.bytes)
-                .context(IoSnafu { path: &path })?;
+            let file = araphor_data::SegmentFile::create(&path, &identity_bytes)
+                .map_err(Box::new)
+                .context(crate::error::DataStoreSnafu)?;
+            file.append(identity_bytes.len() as u64, &frames.bytes)
+                .map_err(Box::new)
+                .context(crate::error::DataStoreSnafu)?;
             let kind = match stream.kind {
                 EvidenceSegmentStreamKindV1::Records => EvidenceSegmentKindV1::Records {
                     stream_id: stream.stream_id,

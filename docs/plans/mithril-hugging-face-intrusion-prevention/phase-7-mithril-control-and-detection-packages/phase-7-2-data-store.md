@@ -490,12 +490,37 @@ required here. Stop before enabling a data path whose recovery case fails.
 
 ## Implementation result
 
-**Not done for the segment-backed design.** This plan update changes no code.
+**Not done for the segment-backed design.**
 Configured intake still uses DuckDB raw rows. Implement the ordered changes
 above, then rerun their component and mithril-e2e gates. The records below
 describe previous raw-DuckDB revisions only. Their native-memory settings,
 raw-table maintenance, and pass counts are not instructions or qualification
 for the selected segment design.
+
+### Segment primitive extraction
+
+**Not done for the full phase.** The data crate now owns SegmentFile, the
+existing CRC32C source-header codec, the 16-MiB segment bound, and checked
+positional reads/appends. The existing Control segment writer and frozen reader
+call that primitive. New files use mode 0600 and exclusive creation. Open
+rejects final-component symlinks, non-files, and non-private files. Append
+checks the exact prior length before writing. Read-only handles cannot append.
+
+The source-header byte format is unchanged. Four owner tests cover round trip,
+each truncated header length, checksum changes, read/append bounds, stale
+positions, path replacement, and read-only access. The existing Control segment
+tests remain the framing, rotation, and restart callers.
+
+Configured intake still writes raw DuckDB rows. Segment catalog, ordered
+sync/metadata commit, whole-segment retention, complete-bundle backup, bounded
+extraction, and the configured cutover remain to implement. The extracted
+primitive does not claim durability by itself; the caller still owns sync
+and commit. Do not enable the target path from this extraction alone.
+
+Verification is in progress. The first workspace segment-test build failed
+with ENOSPC while writing Rust archives. The worktree target directory was
+then removed outside this task. The required verification procedure is
+rebuilding its dependencies. No test pass is recorded for this extraction yet.
 
 ### Previous implementation evidence
 
