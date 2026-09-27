@@ -228,6 +228,16 @@ CI. Record the host and allocator environment when running it explicitly.
 This component test does not prove wire validation, global-quota memory,
 concurrent readers, or the memory of embedded Node and Control owners.
 
+Use `data_context_bounds` for maximum-size decision context. Derive a valid
+catalog from the signed-policy fixture. Add JSON whitespace to reach exactly
+16 KiB without changing the catalog content. Append 256 observations through
+the production Node WAL. Reject a 16-KiB-plus-one context without advancing
+pending input. Reopen Node WAL, send its bounded batches through mTLS, and
+require splitting at the three-MiB wire limit. Apply only durable ACKs.
+Reopen AnalysisStore and compare the complete ordered frame digest through
+bounded pages. This case proves the context and batch path, not full-quota
+memory or the separate 128-KiB record admission limit.
+
 Use `analysis_store_input_crashes` for process exits immediately before and
 after evidence, coverage, context, and recovery-gap commits. Reopen through the
 production owner. Require the complete prior or new state, exact receipts and
@@ -1553,12 +1563,28 @@ its log is `data-headroom-e2e.log` in the memory output directory.
 Host builds and tests overlapped the VM runs. These times are not a clean
 performance comparison. The result qualifies this full-tenant-quota component
 workload, not global saturation, concurrent readers, largest payloads, or
-embedded Node and Control memory. The current full workspace gate has passed
-formatting, compilation, strict Clippy, and 49 data tests with three ignored.
-The remaining workspace tests are active. The phase remains **Not done**.
+embedded Node and Control memory. The full workspace gate passed for
+`a0f620da` with `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 bash
+.github/scripts/verify-rust-ci.sh`. Formatting, compilation, strict Clippy,
+and all workspace tests passed. Data passed 49 tests with three ignored;
+Control passed 196 with two ignored; Mithril e2e passed 123 with 251 ignored;
+Node passed 256 with one ignored. Test execution was serial. This gate excludes
+the later context-boundary test addition. The phase remains **Not done**.
 
 An earlier temporary buffer experiment was invalid. It changed a separate
 native instance instead of the store's instance. The run was stopped with
 exit status 143. Its `memory-budget.csv` and resource log are retained in the
 memory output directory; they are not qualification evidence. The successful
 run above changes the actual owner and checks its native setting.
+
+The new `data_context_bounds` case passed through Node WAL and mTLS in
+3.38 seconds. The command was `CARGO_BUILD_JOBS=2 cargo test --locked -p
+mithril-e2e --lib discovery::data_store::tests::data_context_bounds -- --exact
+--test-threads=1 --nocapture`. The case checks 256 exact 16-KiB contexts,
+unchanged pending input after an oversized context, Node WAL reopen, two
+bounded wire batches, durable receipts, and the ordered retained-frame digest
+after data-store reopen. It uses a temporary database and synthetic input,
+not kernel events. Its final workspace gate is pending.
+The release `data-store-quota` case is active on `a0f620da`. Its binary
+SHA-256 is `37ce7068608cb348686f59e31d3c55b75d7cd1ce0648156ab06d562c63a8db35`.
+The CLI build passed in 5 minutes 7 seconds. No quota result is claimed yet.
