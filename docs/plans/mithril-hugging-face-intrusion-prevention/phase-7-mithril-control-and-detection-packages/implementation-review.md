@@ -754,7 +754,9 @@ reopen. The same 256-MiB process limit applies. This ignored release test has
 not passed yet. It does not prove concurrent-reader or mTLS behavior.
 The release build for `c72a3b68` passed. After the host filesystem reserve was
 restored by removing generated incremental compiler cache, the unchanged release
-data suite passed 49 tests with four ignored. The shared tenant run and final
+data suite passed 49 tests with four ignored. The shared tenant run passed in
+462.97 seconds with 204,692 KiB peak RSS. It preserves the original quota,
+receipt, checkpoint, final-frame, and reopen checks. The global run and final
 workspace gate are active. The phase plan records the earlier failed gates;
 none is a full pass. Keep builds separate from subprocess test execution.
 
