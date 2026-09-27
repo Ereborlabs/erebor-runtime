@@ -165,6 +165,15 @@ Storage fails or cannot meet capacity
 
 ## Storage choice qualification
 
+The existing `raw_event_store_comparison` fixture accepts release builds and
+1 through 4,096 batches. Modes `segments` and `analysis` select the original
+Control writer and the combined segment/metadata owner. It reports durable-call
+p95/p99 and separate raw-sync and post-sync intervals. The post-sync interval
+includes metadata commit, notification, and return; it is not native SQL time
+alone. Test hooks add measurement overhead. `raw_commit_clock` passed, and the
+fixture passed compilation and strict Clippy in
+`/tmp/araphor-maintenance-final-ci.log`. No new release measurement is claimed.
+
 Use release builds on the same declared host. Compare the combined segment
 append plus metadata commit with the recorded old-segment and DuckDB-raw
 baselines. Measure append/sync time, metadata commit time, durable ACK p95/p99,

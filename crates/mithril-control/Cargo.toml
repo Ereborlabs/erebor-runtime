@@ -7,7 +7,7 @@ repository.workspace = true
 build = "build.rs"
 
 [features]
-test-fixtures = []
+test-fixtures = ["araphor-data/test-fixtures"]
 
 [dependencies]
 araphor-data = { path = "../araphor-data" }

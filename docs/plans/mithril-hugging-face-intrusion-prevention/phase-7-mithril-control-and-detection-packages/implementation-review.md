@@ -1932,6 +1932,12 @@ not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
 
+[CommitClock](../../../../crates/mithril-control/src/store/raw_bench.rs) uses
+existing one-shot commit hooks to measure append/sync and post-sync return
+intervals. `raw_commit_clock` checks two production-owner commits and released
+callbacks. This fixture passed the gate below. It does not establish release
+throughput, memory use, or native SQL time without hook overhead.
+
 The accounting, readiness, and maintenance changes after `34f5e2c4` passed
 `RUST_TEST_THREADS=4 CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh`.
 The log is `/tmp/araphor-maintenance-final-ci.log`. It includes 74 data tests,
