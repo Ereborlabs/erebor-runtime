@@ -238,6 +238,15 @@ Reopen AnalysisStore and compare the complete ordered frame digest through
 bounded pages. This case proves the context and batch path, not full-quota
 memory or the separate 128-KiB record admission limit.
 
+Use `intake_record_bounds` for the separate 128-KiB record limit. Add a valid
+unknown protobuf field to an otherwise valid observation. Check records one
+byte below, exactly at, and one byte above the limit through the data-backed
+EvidenceIntakeOwner. Require exact retained bytes and unchanged duplicate
+replay for accepted input. Oversized input must return InvalidArgument without
+changing the receipt or data revision. Accept the next valid input at the
+rejected cursor. Reopen the store and compare all accepted frames and receipts.
+This component case does not prove transport behavior or full-capacity memory.
+
 Use `analysis_store_input_crashes` for process exits immediately before and
 after evidence, coverage, context, and recovery-gap commits. Reopen through the
 production owner. Require the complete prior or new state, exact receipts and
@@ -1588,3 +1597,16 @@ not kernel events. Its final workspace gate is pending.
 The release `data-store-quota` case is active on `a0f620da`. Its binary
 SHA-256 is `37ce7068608cb348686f59e31d3c55b75d7cd1ce0648156ab06d562c63a8db35`.
 The CLI build passed in 5 minutes 7 seconds. No quota result is claimed yet.
+
+The `intake_record_bounds` component case passed in 0.83 seconds with
+`CARGO_BUILD_JOBS=2 cargo test --locked -p mithril-control -p mithril-e2e --lib
+evidence::tests::intake_record_bounds -- --exact --test-threads=1 --nocapture`.
+One Control test ran; the selected e2e package supplied the existing dependency
+feature set and ran zero matching tests. The case checks 131,071-, 131,072-,
+and 131,073-byte protobuf records, valid frame checksums, unchanged state on
+oversized rejection, exact accepted replay, and restart. It does not qualify
+transport or full-capacity memory. No production API or limit changed.
+The first build found an ambiguous test slice conversion; the corrected test
+passed. A prior package-only build was stopped before tests because it selected
+a separate native build. The final workspace gate for this addition is pending.
+The phase remains **Not done**.

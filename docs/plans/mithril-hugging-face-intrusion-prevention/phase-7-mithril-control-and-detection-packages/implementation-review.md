@@ -357,6 +357,17 @@ the complete ordered frame digest. The focused test passed in 3.38 seconds.
 This case does not qualify full-quota memory or the separate 128-KiB record
 limit. The final workspace gate for this test addition is pending.
 
+[intake_record_bounds](../../../../crates/mithril-control/src/evidence.rs)
+calls the data-backed `EvidenceIntakeOwner::receive` with valid protobuf records
+one byte below, exactly at, and one byte above 128 KiB. An unknown field supplies
+the padding; decoding must preserve the original observation. The case checks
+exact retained bytes, unchanged duplicate replay, and oversized rejection
+without a receipt or revision change. Valid input then uses the rejected cursor.
+Store reopen must preserve all accepted frames and the receipt. This component
+case does not test mTLS transport or full-capacity memory. The focused Control
+test passed in 0.83 seconds. The final workspace gate for this addition is
+pending. No production API or limit changes.
+
 [DataStoreQualification::quota](../../../../crates/mithril-e2e/src/discovery/data_store/quota.rs) The CLI selects the default two-GiB tenant quota.<br>
 -> [AnalysisStore::register_processor](../../../../crates/araphor-data/src/analysis/progress.rs) Required progress protects the accepted raw input.<br>
 -> [ControlConnection::send_evidence_batch](../../../../crates/mithril-node/src/control.rs) Node sends one 1,024-record WAL batch through mTLS at a time.<br>
