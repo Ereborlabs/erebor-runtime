@@ -382,7 +382,9 @@ The full workspace gate passed on `020d09a2` with two build jobs and serial
 test execution. The data crate passed 49 tests with two ignored; Control passed
 196 with two ignored; Mithril e2e passed 121 with 251 ignored; Node passed 256
 with one ignored. Formatting, workspace checks, and strict Clippy also passed.
-The later failure-report change in `224c98dc` requires its own final gate.
+The same full gate also passed for the failure-report change in `224c98dc`.
+Mithril e2e passed 122 tests with 251 ignored. Other suite counts are unchanged.
+No Rust source changed during that run.
 The four-vCPU, 8-GiB pilot VM is ready, but has no release capacity result yet.
 
 The [data_control_crash](../../../../crates/mithril-e2e/src/discovery/data_store.rs)

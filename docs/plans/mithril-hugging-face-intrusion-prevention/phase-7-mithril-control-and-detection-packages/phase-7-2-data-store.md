@@ -1157,15 +1157,18 @@ qualify full capacity. The next run must retain failure samples before another
 production change is selected. Limits and the ACK deadline remain unchanged.
 The failure-report and two-MiB recovery tests now pass. The failure-report test
 also proves that an existing result is not replaced. Release capacity
-qualification and the final workspace gate remain open.
+qualification remains open.
 
 The serial workspace gate passed on `020d09a2` with
 `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh`.
 Formatting, workspace checks, strict Clippy, and workspace tests passed.
 The data crate passed 49 tests with two ignored; Control passed 196 with two
 ignored; Mithril e2e passed 121 with 251 ignored; Node passed 256 with one ignored.
-This gate does not cover the later failure-report change in `224c98dc`.
-That commit's full gate and release CLI build are still running.
+The same full gate also passed for `224c98dc`, including its failure-report
+change. Mithril e2e passed 122 tests with 251 ignored. The data, Control, and
+Node counts are unchanged. Only documentation changed during that run.
+The release CLI build is still running; this test result does not qualify
+release capacity.
 
 The isolated pilot VM is ready with four vCPUs and 8 GiB configured memory.
 The guest reports 7,941 MiB usable memory, no swap, Linux 6.8.0-142-generic,
