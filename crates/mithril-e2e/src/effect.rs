@@ -83,6 +83,8 @@ mod socket_stale;
 mod socket_unmatched;
 #[cfg(test)]
 mod sqpoll;
+#[cfg(test)]
+mod sqpoll_observe;
 mod support;
 #[cfg(test)]
 mod tcp_nodelay;

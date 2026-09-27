@@ -2738,15 +2738,24 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace the old SQPOLL check for an admitted actor in Protect and
-    Observe modes. The existing platform test covers a recovered rule-zero
-    actor. Reuse `sqpoll.py` and signed policies. Require a physical
+  - [ ] Replace the old SQPOLL check for a restricted rule-zero actor in
+    Protect and Observe modes. The old binding sets `arm_initial_root=false`.
+    The existing Protect platform test covers the same recovered rule-zero
+    condition. Reuse `sqpoll.py` and signed policies. Require a physical
     `io_uring_setup` denial and attributed `UNSUPPORTED_OBJECT`
     Privilege/IoUringSqpoll evidence. Add no Platform or production API.
-    - [ ] Pass Protect on Host, direct `runc`, and Kubernetes. Commit each
-      verified platform separately.
-    - [ ] Pass Observe on Host, direct `runc`, and Kubernetes. Commit each
-      verified platform separately.
+    - [x] Protect passed on Host, direct `runc`, and Kubernetes in separate
+      verified commits before this row was added.
+    - An admitted-actor Host draft created the ring. The BPF gate permits an
+      exact admitted application. That draft tested a different condition
+      and was removed before commit.
+    - [x] Pass Observe on Host. The 61-line test passed in 40.10 seconds in
+      the retained VM with the real syscall and attributed denial. Reuse the
+      existing `memory_observe.json` policy; `file_observe.json` needs an
+      unrelated exact file and stayed activation-pending in the first draft.
+      Protect and Observe passed together in one lifecycle in 64.89 seconds.
+    - [ ] Pass the same Observe test on direct `runc` and commit it.
+    - [ ] Pass the same Observe test on Kubernetes and commit it.
     - [ ] Remove only the matching old action, result field, and private
       syscall helper after both modes pass on all three platforms.
   - [x] Replace the exact Unix-stream allow relationship. Reuse the approved
