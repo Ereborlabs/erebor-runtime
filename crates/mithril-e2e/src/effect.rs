@@ -478,7 +478,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub io_uring_secret_read_denied_before_effect: bool,
     pub io_uring_benign_read_allowed: bool,
     pub io_uring_worker_request_attributed: bool,
-    pub io_uring_sqpoll_denied_before_ring: bool,
     pub io_uring_lifecycle_released: bool,
     pub path_tree_outside_control_allowed: bool,
     pub fsconfig_reconfigure_global_invalidation: bool,
@@ -1608,26 +1607,6 @@ impl EffectTestRunner {
             io_uring_benign_marker,
             "EXACT_POLICY_ALLOW",
             PathSelectorV1::kernel_handle_for_id("manual-benign"),
-        )?;
-        let io_uring_sqpoll_marker = observations.cursor();
-        ensure!(
-            fixture
-                .run_prepared(HardClosedOperation::IoUringSqpoll)?
-                .denied(),
-            InvalidInputSnafu {
-                path: Path::new("io_uring SQPOLL"),
-                reason: "an SQPOLL ring was created for a managed task",
-            }
-        );
-        wait_for_effect(
-            &reader,
-            &observations,
-            io_uring_sqpoll_marker,
-            "UNSUPPORTED_OBJECT",
-            (
-                KernelEffectFamilyV1::Privilege,
-                KernelEffectOperationV1::IoUringSqpoll,
-            ),
         )?;
         let io_uring_cleanup_deadline = Instant::now() + Duration::from_secs(5);
         let (
@@ -2836,7 +2815,6 @@ impl EffectTestRunner {
             io_uring_secret_read_denied_before_effect: protect,
             io_uring_benign_read_allowed: true,
             io_uring_worker_request_attributed: true,
-            io_uring_sqpoll_denied_before_ring: true,
             io_uring_lifecycle_released,
             path_tree_outside_control_allowed: protect,
             fsconfig_reconfigure_global_invalidation,

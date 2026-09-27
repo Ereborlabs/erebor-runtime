@@ -2738,7 +2738,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace the old SQPOLL check for a restricted rule-zero actor in
+  - [x] Replace the old SQPOLL check for a restricted rule-zero actor in
     Protect and Observe modes. The old binding sets `arm_initial_root=false`.
     The existing Protect platform test covers the same recovered rule-zero
     condition. Reuse `sqpoll.py` and signed policies. Require a physical
@@ -2769,8 +2769,9 @@ test does not close a row when its physical condition or an assertion changed.
       `runtime_gate_fails_closed` test reproduced that decision in 38.33
       seconds. Give Observe its own lifecycle; keep the actor-first recovery
       order and all SQPOLL assertions.
-    - [ ] Remove only the matching old action, result field, and private
-      syscall helper after both modes pass on all three platforms.
+    - [x] Remove only the matching old action, result field, and private
+      syscall helper after both modes pass on all three platforms. This
+      deletes 44 lines. The 92 runnable library tests pass after removal.
   - [x] Replace the exact Unix-stream allow relationship. Reuse the approved
     socket-pass actor and signed worker-to-worker policy. Require a completed
     descriptor transfer and payload, distinct admitted worker tasks, and

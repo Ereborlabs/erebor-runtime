@@ -17,7 +17,6 @@ const FSPICK_CLOEXEC: libc::c_uint = 0x0000_0001;
 const MOUNT_ATTR_RDONLY: u64 = 0x0000_0001;
 const OPEN_TREE_CLONE: libc::c_uint = 0x0000_0001;
 const IORING_SETUP_R_DISABLED: u32 = 1 << 6;
-const IORING_SETUP_SQPOLL: u32 = 1 << 1;
 const IORING_SETUP_SINGLE_ISSUER: u32 = 1 << 12;
 const IORING_FEAT_SINGLE_MMAP: u32 = 1;
 const IORING_REGISTER_RESTRICTIONS: libc::c_uint = 11;
@@ -535,23 +534,6 @@ pub(super) fn io_uring_read_one(fd: RawFd, expected: u8) -> io::Result<()> {
             io::ErrorKind::InvalidData,
             "io_uring read did not return the exact expected byte",
         ));
-    }
-    Ok(())
-}
-
-pub(super) fn io_uring_sqpoll_setup() -> io::Result<()> {
-    let mut parameters = IoUringParams {
-        flags: IORING_SETUP_R_DISABLED | IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_SQPOLL,
-        ..IoUringParams::default()
-    };
-    // SAFETY: parameters points to the exact Linux io_uring_params layout.
-    let fd = unsafe { libc::syscall(libc::SYS_io_uring_setup, 2_u32, &raw mut parameters) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: a successful setup result is a new descriptor.
-    unsafe {
-        libc::close(fd as RawFd);
     }
     Ok(())
 }

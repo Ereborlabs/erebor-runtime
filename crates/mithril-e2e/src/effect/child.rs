@@ -156,7 +156,6 @@ pub(super) enum PreparedOperation {
     PassedBenignRead,
     IoUringSecretRead,
     IoUringBenignRead,
-    IoUringSqpoll,
     DetachedMountOpen,
     Ioctl,
     IoctlDerivedPeer,
@@ -1895,9 +1894,6 @@ impl PreparedOperations {
             PreparedOperation::IoUringBenignRead => io_outcome(
                 fixture_syscalls::io_uring_read_one(self.benign_file.as_raw_fd(), b'b'),
             ),
-            PreparedOperation::IoUringSqpoll => {
-                io_outcome(fixture_syscalls::io_uring_sqpoll_setup())
-            }
             PreparedOperation::DetachedMountOpen => {
                 io_outcome(fixture_syscalls::open_detached_mount_file(
                     self.mount_tree.as_raw_fd(),
