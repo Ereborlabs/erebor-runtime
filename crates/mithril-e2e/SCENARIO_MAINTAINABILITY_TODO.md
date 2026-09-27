@@ -2759,6 +2759,12 @@ test does not close a row when its physical condition or an assertion changed.
       `fexecve` from a recovered external actor. Reuse the Python exec actor
       with a file-descriptor mode and require the same two decisions on all
       three platforms. The separate denied-`fexecve` case remains.
+      - [x] Pass Host and commit. The actor opened the executable before Node
+        policy activation, then tried file-descriptor exec after recovery.
+        The exact case passed in 40.68 seconds with physical `EACCES` and
+        attributed Allow-then-deny Exec evidence.
+      - [ ] Pass direct `runc` and commit its registration.
+      - [ ] Pass Kubernetes and commit its registration.
     - [ ] Remove only the matching legacy action, result field, and unused
       fixture state after the `fexecve` case passes on all three platforms.
   - [x] Replace the old SQPOLL check for a restricted rule-zero actor in
