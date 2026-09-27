@@ -2754,7 +2754,9 @@ test does not close a row when its physical condition or an assertion changed.
       existing `memory_observe.json` policy; `file_observe.json` needs an
       unrelated exact file and stayed activation-pending in the first draft.
       Protect and Observe passed together in one lifecycle in 64.89 seconds.
-    - [ ] Pass the same Observe test on direct `runc` and commit it.
+    - [x] Pass the same Observe test on direct `runc` and commit it. The exact
+      case passed in 48.70 seconds through stock `runc` and the production
+      OCI hook. Both SQPOLL cases passed in one lifecycle in 86.63 seconds.
     - [ ] Pass the same Observe test on Kubernetes and commit it.
     - [ ] Remove only the matching old action, result field, and private
       syscall helper after both modes pass on all three platforms.
