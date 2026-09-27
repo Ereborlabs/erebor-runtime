@@ -308,14 +308,20 @@ impl AnalysisStore {
             end.checked_add(bytes as u64)
                 .is_some_and(|end| end <= super::MAX_EVIDENCE_SEGMENT_BYTES as u64)
         }) {
+            self.storage
+                .check_append(self.storage_usage()?, bytes as u64)?;
             return Ok(SegmentAppend {
                 segment_id,
                 byte_start,
                 reserved: false,
             });
         }
-        self.storage_with_entries(1)?;
         let header = SegmentFile::encode_identity(identity)?;
+        let pending_bytes = (bytes as u64)
+            .checked_add(header.len() as u64)
+            .ok_or_else(|| self.state_error("pending segment bytes overflow"))?;
+        self.storage
+            .check_append(self.storage_with_entries(1)?, pending_bytes)?;
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin segment reservation",
         })?;

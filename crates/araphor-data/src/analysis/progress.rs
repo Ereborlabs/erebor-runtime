@@ -99,8 +99,7 @@ impl ProcessorScopeV1 {
 
 impl AnalysisStore {
     pub fn read_result(&self, tenant: [u8; 16], result_id: &str) -> Result<Option<Vec<u8>>> {
-        let reader = self.reader()?;
-        self.read_result_from(reader.get()?, tenant, result_id)
+        self.read_snapshot(|reader| self.read_result_from(reader, tenant, result_id))
     }
 
     pub(super) fn read_result_from(

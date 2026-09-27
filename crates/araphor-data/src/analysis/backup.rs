@@ -854,6 +854,7 @@ mod tests {
         store.accept_validated_batch(identity(), batch(1))?;
         store.checkpoint()?;
         let mut meta = store.meta()?;
+        store.write_ready.store(false, Ordering::Release);
         for reader in &store.readers {
             drop(reader.lock().map_err(|_| "reader poisoned")?.take());
         }
@@ -862,7 +863,7 @@ mod tests {
         assert!(store.checkpoint().is_err());
         assert!(store.accept_validated_batch(identity(), batch(2)).is_err());
         assert!(store.read_page(&identity(), 1).is_err());
-        assert!(store.storage_health().is_err());
+        assert!(!store.storage_health()?.write_ready);
         assert!(AnalysisStore::open(&root).is_err());
         meta.commit_revision += 1;
         assert!(store.reopen_backup(&meta).is_err());

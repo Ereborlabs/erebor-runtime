@@ -47,6 +47,7 @@ pub use progress::{
     AnalysisContextRefV1, AnalysisGapV1, AnalysisResultCommitV1, AnalysisResultReceiptV1,
     AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,
 };
+pub use quota::WitnessUsageV1;
 pub use read::AnalysisReadControl;
 pub use retention::{
     EvidenceRetentionOwner, RetentionLimitsV1, RetentionResultV1, RetentionSweepV1,
@@ -520,9 +521,9 @@ impl AnalysisStore {
     }
 
     pub fn meta(&self) -> Result<AnalysisStoreMetaV1> {
-        let writer_guard = self.reader()?;
-        let writer = writer_guard.get()?;
-        Self::read_meta_from(writer, &self.root.join("analysis.duckdb"))
+        self.read_snapshot(|reader| {
+            Self::read_meta_from(reader, &self.root.join("analysis.duckdb"))
+        })
     }
 
     pub fn source_receipt(
@@ -530,9 +531,7 @@ impl AnalysisStore {
         identity: &EvidenceIntakeIdentityV1,
     ) -> Result<Option<AnalysisSourceReceiptV1>> {
         let key = source_key(identity);
-        let writer_guard = self.reader()?;
-        let writer = writer_guard.get()?;
-        Self::read_receipt_from(writer, &self.root, identity, &key)
+        self.read_snapshot(|reader| Self::read_receipt_from(reader, &self.root, identity, &key))
     }
 
     pub fn source_status(
@@ -540,56 +539,53 @@ impl AnalysisStore {
         identity: &EvidenceIntakeIdentityV1,
     ) -> Result<Option<AnalysisSourceStatusV1>> {
         let key = source_key(identity);
-        let mut reader_guard = self.reader()?;
-        let reader = reader_guard.get_mut()?;
-        let writer = reader.transaction().context(AnalysisDatabaseSnafu {
-            operation: "begin source snapshot",
-        })?;
-        let Some(receipt) = Self::read_receipt_from(&writer, &self.root, identity, &key)? else {
-            return Ok(None);
-        };
-        let retained_event_count = writer
-            .query_row(
-                "SELECT COALESCE(SUM(b.last_cursor::HUGEINT - b.first_cursor + 1), 0)::UBIGINT
+        self.read_snapshot(|writer| {
+            let Some(receipt) = Self::read_receipt_from(writer, &self.root, identity, &key)? else {
+                return Ok(None);
+            };
+            let retained_event_count = writer
+                .query_row(
+                    "SELECT COALESCE(SUM(b.last_cursor::HUGEINT - b.first_cursor + 1), 0)::UBIGINT
                  FROM batch_ranges b JOIN segments s USING (segment_id)
                  WHERE b.stream_key = ? AND b.tenant_id = ? AND s.state = 'Live'",
-                params![key.as_slice(), identity.tenant_id.as_slice()],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "count retained source events",
-            })?;
-        let latest_coverage_report = if receipt.coverage_revision == 0 {
-            None
-        } else {
-            let stored: Option<(Vec<u8>, Vec<u8>)> = writer
-                .query_row(
-                    "SELECT report, report_sha256 FROM coverage
-                     WHERE stream_key = ? AND tenant_id = ? AND revision = ?",
-                    params![
-                        key.as_slice(),
-                        identity.tenant_id.as_slice(),
-                        receipt.coverage_revision
-                    ],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    params![key.as_slice(), identity.tenant_id.as_slice()],
+                    |row| row.get(0),
                 )
-                .optional()
                 .context(AnalysisDatabaseSnafu {
-                    operation: "read retained coverage",
+                    operation: "count retained source events",
                 })?;
-            let Some((report, digest)) = stored else {
-                return self.reject("the source coverage receipt has no retained report");
+            let latest_coverage_report = if receipt.coverage_revision == 0 {
+                None
+            } else {
+                let stored: Option<(Vec<u8>, Vec<u8>)> = writer
+                    .query_row(
+                        "SELECT report, report_sha256 FROM coverage
+                     WHERE stream_key = ? AND tenant_id = ? AND revision = ?",
+                        params![
+                            key.as_slice(),
+                            identity.tenant_id.as_slice(),
+                            receipt.coverage_revision
+                        ],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .optional()
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "read retained coverage",
+                    })?;
+                let Some((report, digest)) = stored else {
+                    return self.reject("the source coverage receipt has no retained report");
+                };
+                if Sha256::digest(&report).as_slice() != digest {
+                    return self.reject("the retained coverage digest does not match its report");
+                }
+                Some(report)
             };
-            if Sha256::digest(&report).as_slice() != digest {
-                return self.reject("the retained coverage digest does not match its report");
-            }
-            Some(report)
-        };
-        Ok(Some(AnalysisSourceStatusV1 {
-            receipt,
-            retained_event_count,
-            latest_coverage_report,
-        }))
+            Ok(Some(AnalysisSourceStatusV1 {
+                receipt,
+                retained_event_count,
+                latest_coverage_report,
+            }))
+        })
     }
 
     pub fn accept_validated_batch(
@@ -684,7 +680,6 @@ impl AnalysisStore {
             });
         }
         drop(transaction);
-        self.require_capacity(false)?;
         let append = self.reserve_segment(writer, &identity, batch.cpu_id, pending.bytes.len())?;
         let mut commit_attempted = false;
         let result = (|| {

@@ -876,7 +876,7 @@ mod tests {
                 },
             )?;
         }
-        let mut selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity]);
+        let mut selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
         selection.received_from = Bound::Included(20);
         let started = std::time::Instant::now();
         let recent = store.extract(
@@ -926,6 +926,64 @@ mod tests {
             "{full:?}"
         );
         assert!(store.maintenance.try_write().is_ok());
+        let scope = ProcessorScopeV1 {
+            processor_id: "history".into(),
+            method_version: 1,
+            identity: identity.clone(),
+        };
+        store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
+        let started = std::time::Instant::now();
+        store.commit_result(&AnalysisResultCommitV1 {
+            scope,
+            expected_cursor: 0,
+            consumed_cursor: 18 * 32,
+            coverage_revision: 0,
+            context_revision: 0,
+            result_id: "sparse-history".into(),
+            body: vec![1],
+            created_utc_ns: 21,
+            witnesses: (0..18)
+                .map(|group| crate::AnalysisWitnessV1 {
+                    identity: identity.clone(),
+                    cursor: group * 32 + 1,
+                    expires_utc_ns: 100,
+                })
+                .collect(),
+            context_refs: vec![],
+        })?;
+        let pin_commit_us = started.elapsed().as_micros();
+        let started = std::time::Instant::now();
+        let usage = store.witness_usage(identity.tenant_id, 22)?;
+        let usage_us = started.elapsed().as_micros();
+        let header_bytes = super::super::SegmentFile::encode_identity(&identity)?.len() as u64;
+        assert_eq!(std::fs::read_dir(store.root.join("segments"))?.count(), 6);
+        assert_eq!(usage.segment_bytes, 72 * 1024 * 1024 + 6 * header_bytes);
+        assert_eq!(usage.referenced_bytes, 18 * frame_bytes as u64);
+        assert_eq!(
+            usage.extra_segment_bytes,
+            usage.segment_bytes - usage.referenced_bytes
+        );
+        assert_eq!(usage.charged_bytes, usage.segment_bytes);
+        assert_eq!(
+            EvidenceRetentionOwner::new(
+                &store,
+                RetentionLimitsV1 {
+                    raw_max_age_ns: 1,
+                    raw_max_bytes: 1,
+                }
+            )?
+            .retain(&identity, 50)?
+            .removed_records,
+            0
+        );
+        eprintln!(
+            "witness_bytes={} segment_bytes={} extra_bytes={} pin_commit_us={} usage_us={}",
+            usage.referenced_bytes,
+            usage.segment_bytes,
+            usage.extra_segment_bytes,
+            pin_commit_us,
+            usage_us
+        );
         eprintln!("history_bytes={} recent_scan={} recent_input={} recent_us={} sparse_scan={} sparse_input={} sparse_us={} debug={}",
             72 * 1024 * 1024, recent.scanned_bytes, recent.input_bytes, recent_us,
             sparse.scanned_bytes, sparse.input_bytes, sparse_us, cfg!(debug_assertions));

@@ -30,7 +30,7 @@ declarative captures are not delivered by these changes.
 
 ### Segment storage conversion
 
-Source state: the extraction changes after `40bd114b`. Configured AnalysisStore
+Source state: the accounting and readiness changes after `34f5e2c4`. Configured AnalysisStore
 intake and reads now use segments. The target conversion remains incomplete.
 Backup and restore copy the complete metadata and segment bundle.
 Storage pass records outside this section predate this conversion
@@ -139,7 +139,9 @@ every cursor. File-fault tests restore their temporary files and require a later
 successful read. `data_store_recovery` decodes production Node frames, selects
 one operation field, and proves a policy RPC while its fixture holds extraction
 open. The ignored 72-MiB history test is release qualification, not completed
-proof. Read the phase result for current verification and remaining work.
+proof. It also checks 18 witnesses across six segments and reports the exact
+frame bytes, full segment charge, extra retained bytes, and operation times.
+Read the phase result for current verification and remaining work.
 
 The extraction and cleanup deliverable passed the complete workspace gate at
 `/tmp/araphor-extraction-cleanup-ci.log`: 70 data tests, 197 Control unit tests,
@@ -216,6 +218,52 @@ the next segment. All five previously failing data-store cases passed in the
 current-source workspace gate. The paired capacity harness also passed on a
 private 1-GiB tmpfs. These checks do not qualify hardware power loss or release
 performance. Read the phase result for the exact commands and evidence paths.
+
+[AnalysisStore::witness_usage](../../../../crates/araphor-data/src/analysis/quota.rs) A trusted caller requests witness costs for one tenant and time.<br>
+-> [AnalysisReadControl::run](../../../../crates/araphor-data/src/analysis/read.rs) The owner reads one bounded metadata snapshot.<br>
+-> [AnalysisStore::witness_totals](../../../../crates/araphor-data/src/analysis/quota.rs) The shared quota query counts distinct referenced frames, full segments, and context.<br>
+-> [WitnessUsageV1](../../../../crates/araphor-data/src/analysis/quota.rs) The result separates referenced bytes from extra retained segment bytes and identifies the snapshot revision.
+
+This read does not retain data or create a second archive. Committed segment
+lengths include headers and unrelated frames. They are not filesystem allocation
+blocks. Duplicate result references do not charge the same frame or segment
+twice. `analysis_witness_segment_cost` checks unequal frame sizes, two pinned
+segments, duplicate references, expiry, reopen, and deletion after pin expiry.
+`data_store_recovery` compares charges with actual retained segment lengths
+after authenticated intake. Release many-segment qualification remains pending.
+
+[AnalysisStore::reserve_segment](../../../../crates/araphor-data/src/analysis/segments.rs) An accepted batch needs segment space.<br>
+-> [StorageLimitsV1::check_append](../../../../crates/araphor-data/src/analysis/capacity.rs) Admission adds pending payload and any new header to file bytes and subtracts them from available bytes.<br>
+-> [AnalysisStore::bind_source](../../../../crates/araphor-data/src/analysis/schema.rs) The shared binding owner admits at most 4,096 source bindings while allowing existing retries.
+
+`analysis_store_capacity_bounds` checks exact pending-byte boundaries without
+changing a receipt or reserved file. `analysis_source_count_bound` checks the
+last binding and the next rejected binding. Startup validates the same count.
+The quota runners derive their iteration bound from their input size and quota;
+the runner bound is not a release-capacity result.
+
+[AnalysisStore::storage_health](../../../../crates/araphor-data/src/analysis/health.rs)
+reports writer readiness independently of disk capacity and retention health.
+It reads the existing atomic recovery state and filesystem usage, not a native
+database connection. Thus failed recovery can return `write_ready: false`
+after native connections close. Filesystem errors still prevent a complete
+health result. The uncertain-commit and corrupt-recovery tests check readiness;
+the mTLS intake-failure case checks readiness before and after owner recovery.
+Read the phase result for the exact verification state.
+
+[AnalysisStore::read_snapshot](../../../../crates/araphor-data/src/analysis/read.rs)
+routes public metadata reads through the existing deadline and snapshot
+cleanup owner. Store metadata, source receipt/status/binding, context, results,
+processor health/retirement, and recovery gaps use this method. The unbounded
+reader accessor is test-only. Retention lists its bounded source page through
+the maintenance writer and releases that writer before processing sources.
+`retention_waits_for_maintenance` checks that maintenance longer than the query
+deadline does not cause a retention failure.
+`analysis_metadata_read_deadlines` holds the maintenance lock and checks nine
+public metadata reads. Each read must time out, release its permit, and succeed
+after the lock is released. The existing native-interrupt tests cover the shared
+runner. `intake_read_failure_status` checks Unavailable for deadline and
+cancellation errors. These errors do not permit an intake ACK.
 
 The reusable segment path has these implemented calls:
 
@@ -1883,6 +1931,13 @@ WAL limit plus metadata. Qualification input is an operator-supplied record,
 not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
+
+The accounting, readiness, and maintenance changes after `34f5e2c4` passed
+`RUST_TEST_THREADS=4 CARGO_BUILD_JOBS=2 bash .github/scripts/verify-rust-ci.sh`.
+The log is `/tmp/araphor-maintenance-final-ci.log`. It includes 74 data tests,
+199 Control tests, 124 Mithril e2e tests, and 256 Node tests. The benchmark
+fixture was present in this run. Later intake constructor changes are outside
+this result. Release and physical qualification remain incomplete.
 
 This review covers `codex/mithril-ui` at `c2e4d3ed` plus explicit required
 processor retirement and retained-prefix reads. The startup command passed 16 checks; recovery

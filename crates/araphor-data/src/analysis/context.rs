@@ -169,9 +169,9 @@ impl AnalysisStore {
         if !key.valid() {
             return self.reject("the context version key is invalid");
         }
-        let writer_guard = self.reader()?;
-        let writer = writer_guard.get()?;
-        Ok(Self::read_context_from(writer, &self.root, key)?.map(|(version, _)| version))
+        self.read_snapshot(|reader| {
+            Ok(Self::read_context_from(reader, &self.root, key)?.map(|(version, _)| version))
+        })
     }
 
     pub(super) fn read_context_from(

@@ -1,28 +1,88 @@
-use duckdb::{params, Transaction};
+use duckdb::{params, Connection, Transaction};
 use snafu::ResultExt as _;
 
-use super::AnalysisStore;
+use super::{AnalysisReadControl, AnalysisStore};
 use crate::{AnalysisDatabaseSnafu, Result, StorageCapacitySnafu};
 
 const TENANT_REVISIONS: u64 = 1_024;
 const GLOBAL_REVISIONS: u64 = 4_096;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct WitnessUsageV1 {
+    pub read_revision: u64,
+    pub referenced_bytes: u64,
+    pub segment_bytes: u64,
+    pub extra_segment_bytes: u64,
+    pub context_bytes: u64,
+    pub charged_bytes: u64,
+}
+
+impl TryFrom<&duckdb::Row<'_>> for WitnessUsageV1 {
+    type Error = duckdb::Error;
+
+    fn try_from(row: &duckdb::Row<'_>) -> duckdb::Result<Self> {
+        Ok(Self {
+            charged_bytes: row.get(0)?,
+            segment_bytes: row.get(1)?,
+            context_bytes: row.get(2)?,
+            referenced_bytes: row.get(3)?,
+            extra_segment_bytes: row.get(4)?,
+            read_revision: row.get(5)?,
+        })
+    }
+}
+
 impl AnalysisStore {
-    const WITNESS_USAGE: &'static str = "SELECT (
-        COALESCE((SELECT SUM(s.committed_end) FROM segments s
-            SEMI JOIN (
-                SELECT b.segment_id FROM batch_ranges b JOIN evidence_refs r
-                    ON r.tenant_id = b.tenant_id AND r.stream_key = b.stream_key
-                    AND r.durable_cursor BETWEEN b.first_cursor AND b.last_cursor
-                WHERE r.tenant_id = ? AND r.expires_utc_ns > ?
-            ) r USING (segment_id) WHERE s.state = 'Live'), 0)
-        + COALESCE((SELECT SUM(256 + octet_length(c.body) + octet_length(encode(c.owner_id))
+    const WITNESS_USAGE: &'static str = "WITH pins AS (
+            SELECT DISTINCT b.segment_id, b.stream_key, r.durable_cursor,
+                b.frame_ends[(r.durable_cursor - b.first_cursor + 1)::BIGINT]
+                - CASE WHEN r.durable_cursor = b.first_cursor THEN 0
+                  ELSE b.frame_ends[(r.durable_cursor - b.first_cursor)::BIGINT] END AS bytes
+            FROM batch_ranges b JOIN evidence_refs r
+                ON r.tenant_id = b.tenant_id AND r.stream_key = b.stream_key
+                AND r.durable_cursor BETWEEN b.first_cursor AND b.last_cursor
+            WHERE r.tenant_id = ? AND r.expires_utc_ns > ?
+        ), usage AS (
+            SELECT COALESCE((SELECT SUM(s.committed_end) FROM segments s
+                SEMI JOIN pins p USING (segment_id) WHERE s.state = 'Live'), 0)::UBIGINT AS segments,
+            COALESCE((SELECT SUM(256 + octet_length(c.body) + octet_length(encode(c.owner_id))
             + octet_length(c.entity_key) + octet_length(c.lifetime_key)) FROM context_versions c
             SEMI JOIN (
                 SELECT tenant_id, owner_id, entity_key, lifetime_key, owner_revision
                 FROM context_refs WHERE tenant_id = ?
-            ) r USING (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)), 0)
-    )::UBIGINT";
+            ) r USING (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)), 0)::UBIGINT AS context,
+            COALESCE((SELECT SUM(bytes) FROM pins), 0)::UBIGINT AS referenced
+        ) SELECT segments + context, segments, context, referenced, segments - referenced,
+            (SELECT commit_revision FROM store_meta) FROM usage";
+
+    /// Count distinct live witnesses and their whole segments. This read does not pin data.
+    pub fn witness_usage(&self, tenant: [u8; 16], now: u64) -> Result<WitnessUsageV1> {
+        if tenant == [0; 16] || now == 0 {
+            return self.reject("the witness usage tenant or time is invalid");
+        }
+        let control = AnalysisReadControl::default();
+        let mut reader = self.reader_until(&control)?;
+        control.run(&mut reader, |snapshot| {
+            self.witness_totals(snapshot, tenant, now)
+        })
+    }
+
+    fn witness_totals(
+        &self,
+        connection: &Connection,
+        tenant: [u8; 16],
+        now: u64,
+    ) -> Result<WitnessUsageV1> {
+        connection
+            .query_row(
+                Self::WITNESS_USAGE,
+                params![tenant.as_slice(), now, tenant.as_slice()],
+                |row| WitnessUsageV1::try_from(row),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "count exact witness storage",
+            })
+    }
 
     fn logical_usage(
         &self,
@@ -130,16 +190,8 @@ impl AnalysisStore {
         tenant: [u8; 16],
         now: u64,
     ) -> Result<()> {
-        let bytes: u64 = transaction
-            .query_row(
-                Self::WITNESS_USAGE,
-                params![tenant.as_slice(), now, tenant.as_slice()],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "check exact witness quota",
-            })?;
-        if bytes > self.storage.witness_max_bytes {
+        let usage = self.witness_totals(transaction, tenant, now)?;
+        if usage.charged_bytes > self.storage.witness_max_bytes {
             return StorageCapacitySnafu {
                 resource: "tenant witness bytes",
             }
@@ -340,6 +392,21 @@ mod tests {
                     |row| row.get(0),
                 )?;
                 assert_eq!(bytes, expected);
+                let usage = store.witness_usage([tenant; 16], now)?;
+                assert_eq!(usage.charged_bytes, expected);
+                assert_eq!(usage.context_bytes, if tenant == 1 { 260 } else { 0 });
+                assert_eq!(
+                    usage.referenced_bytes,
+                    if tenant == 1 && now < 100 { 5 } else { 0 }
+                );
+                assert_eq!(
+                    usage.segment_bytes + usage.context_bytes,
+                    usage.charged_bytes
+                );
+                assert_eq!(
+                    usage.referenced_bytes + usage.extra_segment_bytes,
+                    usage.segment_bytes
+                );
             }
         }
         store.storage.tenant_max_bytes = 1;
@@ -355,6 +422,108 @@ mod tests {
             1
         );
         assert_eq!(store.read_result([1; 16], "s")?, Some(vec![1]));
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_witness_segment_cost() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let identity = EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "n".into(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        };
+        for group in 0..4 {
+            store.accept_validated_batch(
+                identity.clone(),
+                ValidatedEvidenceBatchV1 {
+                    cpu_id: 0,
+                    first_cursor: group * 1024 + 1,
+                    last_cursor: (group + 1) * 1024,
+                    intake_utc_ns: 1,
+                    framed_records: vec![7; 4 * 1024 * 1024].into(),
+                    frame_ends: (1..=1024).map(|index| index * 4096 - index % 2).collect(),
+                },
+            )?;
+        }
+        let scope = ProcessorScopeV1 {
+            processor_id: "p".into(),
+            method_version: 1,
+            identity: identity.clone(),
+        };
+        store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
+        let mut input = AnalysisResultCommitV1 {
+            scope,
+            expected_cursor: 0,
+            consumed_cursor: 4096,
+            coverage_revision: 0,
+            context_revision: 0,
+            result_id: "first".into(),
+            body: vec![1],
+            created_utc_ns: 2,
+            witnesses: [1, 2, 3073, 4096]
+                .into_iter()
+                .map(|cursor| AnalysisWitnessV1 {
+                    identity: identity.clone(),
+                    cursor,
+                    expires_utc_ns: 100,
+                })
+                .collect(),
+            context_refs: Vec::new(),
+        };
+        store.commit_result(&input)?;
+        let header_bytes = super::super::SegmentFile::encode_identity(&identity)?.len() as u64;
+        let segment_bytes = 16 * 1024 * 1024 + 2 * header_bytes;
+        let before = store.meta()?;
+        let usage = store.witness_usage(identity.tenant_id, 3)?;
+        assert_eq!(usage.read_revision, before.commit_revision);
+        assert_eq!(usage.referenced_bytes, 16 * 1024);
+        assert_eq!(usage.segment_bytes, segment_bytes);
+        assert_eq!(usage.extra_segment_bytes, segment_bytes - 16 * 1024);
+        assert_eq!(usage.charged_bytes, segment_bytes);
+        assert_eq!(usage.context_bytes, 0);
+        assert_eq!(store.meta()?, before);
+        assert_eq!(store.witness_usage([9; 16], 3)?.charged_bytes, 0);
+        assert!(store.witness_usage([0; 16], 3).is_err());
+        assert!(store.witness_usage(identity.tenant_id, 0).is_err());
+        input.result_id = "second".into();
+        input.expected_cursor = 4096;
+        input
+            .witnesses
+            .retain(|witness| matches!(witness.cursor, 1 | 4096));
+        for witness in &mut input.witnesses {
+            witness.expires_utc_ns = 200;
+        }
+        store.commit_result(&input)?;
+        let duplicate = store.witness_usage(identity.tenant_id, 3)?;
+        assert_eq!(duplicate.referenced_bytes, usage.referenced_bytes);
+        assert_eq!(duplicate.charged_bytes, usage.charged_bytes);
+        let expired = store.witness_usage(identity.tenant_id, 100)?;
+        assert_eq!(expired.referenced_bytes, 8192);
+        assert_eq!(expired.segment_bytes, segment_bytes);
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(store.witness_usage(identity.tenant_id, 100)?, expired);
+        let owner = crate::EvidenceRetentionOwner::new(
+            &store,
+            crate::RetentionLimitsV1 {
+                raw_max_age_ns: 1,
+                raw_max_bytes: 32 * 1024 * 1024,
+            },
+        )?;
+        assert_eq!(owner.retain(&identity, 100)?.removed_records, 0);
+        assert_eq!(owner.retain(&identity, 201)?.removed_records, 3072);
+        assert_eq!(owner.retain(&identity, 201)?.removed_records, 1024);
+        assert_eq!(
+            store.witness_usage(identity.tenant_id, 201)?.charged_bytes,
+            0
+        );
+        assert!(store.maintenance.try_write().is_ok());
         Ok(())
     }
 

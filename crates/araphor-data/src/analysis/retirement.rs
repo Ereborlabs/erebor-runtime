@@ -129,7 +129,7 @@ impl AnalysisStore {
         if !scope.valid() {
             return self.reject("the processor retirement scope is invalid");
         }
-        self.reader()?.get()?.query_row(
+        self.read_snapshot(|reader| reader.query_row(
             "SELECT retirement_id, retirement_reason, consumed_cursor, retirement_cursor, retirement_revision
              FROM processor_progress WHERE processor_id = ? AND method_version = ?
                 AND tenant_id = ? AND stream_key = ? AND retired = true",
@@ -138,7 +138,7 @@ impl AnalysisStore {
                 scope: scope.clone(), change_id: row.get(0)?, reason: row.get(1)?,
                 expected_cursor: row.get(2)?, cutoff_cursor: row.get(3)?,
             }, row.get(4)?)),
-        ).optional().context(AnalysisDatabaseSnafu { operation: "read processor retirement" })
+        ).optional().context(AnalysisDatabaseSnafu { operation: "read processor retirement" }))
     }
 }
 

@@ -78,8 +78,8 @@ impl<'a> EvidenceRetentionOwner<'a> {
 
     fn sweep_page(&self, after: Option<[u8; 32]>, now_utc_ns: u64) -> Result<RetentionSweepV1> {
         let sources = {
-            let reader_guard = self.store.reader()?;
-            let reader = reader_guard.get()?;
+            let writer = self.store.maintenance_writer()?;
+            let reader = writer.get()?;
             let mut statement = reader
                 .prepare(
                     "SELECT stream_key, identity_json FROM source_receipts
@@ -104,8 +104,8 @@ impl<'a> EvidenceRetentionOwner<'a> {
                 .collect::<duckdb::Result<Vec<_>>>()
                 .context(AnalysisDatabaseSnafu {
                     operation: "decode retention source page",
-                })?
-        };
+                })
+        }?;
         let mut result = RetentionSweepV1 {
             next_source: None,
             checked_sources: sources.len() as u32,
@@ -691,6 +691,39 @@ mod tests {
             );
         }
         assert_eq!(owner.sweep(None, 200)?.removed_records, 0);
+        assert!(store.retention_healthy());
+        Ok(())
+    }
+
+    #[test]
+    fn retention_waits_for_maintenance() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let writer = store.maintenance_writer()?;
+        let maintenance = store.maintenance.write().map_err(|_| "poisoned lock")?;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let (early, result) = std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                let result = EvidenceRetentionOwner::new(&store, Default::default())
+                    .and_then(|owner| owner.sweep(None, 100));
+                let _sent = sender.send(());
+                result
+            });
+            let early = receiver.recv_timeout(std::time::Duration::from_millis(1200));
+            drop(maintenance);
+            drop(writer);
+            (early, worker.join())
+        });
+        assert!(matches!(
+            early,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        assert_eq!(
+            result
+                .map_err(|_| "retention thread panicked")??
+                .checked_sources,
+            0
+        );
         assert!(store.retention_healthy());
         Ok(())
     }
