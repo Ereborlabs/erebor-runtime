@@ -31,6 +31,7 @@ mod read;
 mod retention;
 mod retirement;
 mod schema;
+mod segment_file;
 
 pub use backup::{AnalysisBackupManifestV1, AnalysisRecoveryStatusV1};
 pub use capacity::{StorageLimitsV1, StorageUsageV1};
@@ -44,6 +45,7 @@ pub use retention::{
     EvidenceRetentionOwner, RetentionLimitsV1, RetentionResultV1, RetentionSweepV1,
 };
 pub use retirement::ProcessorRetirementV1;
+pub use segment_file::{SegmentFile, MAX_EVIDENCE_SEGMENT_BYTES};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";

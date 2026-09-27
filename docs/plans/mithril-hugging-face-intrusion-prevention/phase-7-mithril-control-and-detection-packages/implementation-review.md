@@ -6,7 +6,7 @@ boundary. Araphor is the product name. Existing crate names remain unchanged.
 
 This guide describes the source implementation, not the approved target
 architecture. Use the [phase plan](README.md) for implementation order and
-the DuckDB/subscription contracts. Source tests below do not qualify that
+the segment/metadata and subscription contracts. Source tests below do not qualify that
 target until they run against its implementation.
 
 ## Intended end state
@@ -27,6 +27,54 @@ trace CLI/API, assessment submission, classification, proposal generation, and
 declarative captures are not delivered by these changes.
 
 ## Linked implementation flows
+
+### Segment storage conversion
+
+Source state: the shared segment extraction after `777b5721`. This extraction
+does not change configured AnalysisStore intake, raw retention, or backup.
+Those paths still use raw DuckDB rows. The target conversion remains incomplete.
+
+[ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Control starts.<br>
+-> Partial [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) AnalysisStore obtains the complete data-directory lease.<br>
+-> Not implemented: owner recovers metadata and validates committed segment ranges.<br>
+-> Not implemented: owner completes recorded deletions and removes only uncommitted tails.<br>
+-> Partial [AnalysisStore](../../../../crates/araphor-data/src/analysis/mod.rs) owner publishes durable relation revisions and data readiness. Current readiness covers DuckDB raw rows.
+
+[EvidenceIntakeOwner](../../../../crates/mithril-control/src/evidence.rs) Node sends an authenticated batch.<br>
+-> [receive_group](../../../../crates/mithril-control/src/evidence.rs) EvidenceIntakeOwner validates source and reserves bounded capacity.<br>
+-> Not implemented: configured AnalysisStore checks retries and appends framed raw records to segments.<br>
+-> Not implemented: owner syncs segment bytes and new file directory entries.<br>
+-> Not implemented: one metadata transaction commits ranges, receipts, and revisions.<br>
+-> Partial [receive_group](../../../../crates/mithril-control/src/evidence.rs) Control acknowledges the durable contiguous source position. The current ACK follows a raw-DuckDB commit.
+
+The reusable segment path has these implemented calls:
+
+[EvidenceSegmentOwner::append_without_sync](../../../../crates/mithril-control/src/evidence_segment.rs) The existing Control segment writer appends a bounded batch.<br>
+-> [SegmentFile::encode_identity](../../../../crates/araphor-data/src/analysis/segment_file.rs) The data crate encodes the existing source header and CRC32C checksum.<br>
+-> [SegmentFile::create](../../../../crates/araphor-data/src/analysis/segment_file.rs) A new segment is a private file created without replacing an existing path.<br>
+-> [SegmentFile::open](../../../../crates/araphor-data/src/analysis/segment_file.rs) An append opens a private regular file without following its final symlink.<br>
+-> [SegmentFile::append](../../../../crates/araphor-data/src/analysis/segment_file.rs) The file owner checks the exact prior end and 16-MiB limit before writing.<br>
+-> [EvidenceSegmentOwner::sync](../../../../crates/mithril-control/src/evidence_segment.rs) The existing segment owner retains its sync responsibility before returning the batch.
+
+[EvidenceSegmentOwner::open_read](../../../../crates/mithril-control/src/evidence_segment.rs) A frozen read opens the selected segment.<br>
+-> [SegmentFile::reader](../../../../crates/araphor-data/src/analysis/segment_file.rs) The data crate checks the private file and retains a read-only descriptor.<br>
+-> [SegmentFile::read](../../../../crates/araphor-data/src/analysis/segment_file.rs) Positional I/O reads an exact bounded range.<br>
+-> [EvidenceSegmentReadV1::read_frame](../../../../crates/mithril-control/src/evidence_segment.rs) Control checks frame length and CRC32C before returning bytes.
+
+SegmentFile owns one file descriptor and its diagnostic path. Drop closes the
+descriptor; it does not delete, truncate, sync, or acknowledge the file.
+The caller retains the directory lease, serialization, and durable commit
+responsibility. No catalog or new retention authority is implemented by this
+primitive. A partial write leaves the caller responsible for recovery; a
+second append with a stale expected end rejects.
+
+The moved header keeps its byte format: tenant, boot and source IDs, big-endian
+epochs and node-name length, UTF-8 node name, and big-endian CRC32C. Existing
+source qualification remains at intake. The tests `segment_identity_checks_integrity`,
+`segment_append_checks_position`, `segment_append_checks_bound`, and
+`segment_rejects_foreign_files` are beside the data owner. Existing Control
+segment tests still exercise framing, rotation, corruption, and restart.
+No BPF map, loader, policy, or wire-protocol boundary changes in this extraction.
 
 ### Recorded input and storage selection
 
