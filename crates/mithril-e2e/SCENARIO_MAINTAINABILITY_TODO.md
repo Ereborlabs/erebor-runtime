@@ -2152,7 +2152,8 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The exact test passed in 79.49
       seconds through stock `runc` and the production OCI hook. The existing
       prepared-move direct-`runc` test passed in 37.97 seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact test passed in 78.49
+      seconds with the deployed Control and Node in retained K3s.
     - [ ] Remove only the matching old action after all three platforms pass.
       Keep the shared syscall helper, mount propagation, and detached-tree
       checks.
