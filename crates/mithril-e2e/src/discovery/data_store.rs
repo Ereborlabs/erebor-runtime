@@ -25,6 +25,7 @@ use zerocopy::IntoBytes as _;
 
 mod inspection;
 mod quota;
+mod rollout;
 
 use crate::control_fixture::{
     reopen_control_store, ControlServerFixture, MtlsFixture, OutagePolicyFixture,
