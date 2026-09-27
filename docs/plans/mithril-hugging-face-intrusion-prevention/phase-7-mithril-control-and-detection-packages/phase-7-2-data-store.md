@@ -8,8 +8,9 @@ Existing authenticated Node delivery commits directly through AnalysisStore.
 ACK, replay, retention, backup and restart have one data transaction contract.
 Policy/control state keeps its existing persistence. Discovery-disabled startup
 still accepts data. Entry: 7.1. Status: **Not done** for this design.
-The raw storage alternative and its decision test are in
-[raw-event-store-decision.md](raw-event-store-decision.md).
+The [segment-owned alternative](segment-owned-raw-events.md) records the
+architecture discussion. The [storage comparison](raw-event-store-decision.md)
+records its decision test.
 
 ## Implementation flow
 
