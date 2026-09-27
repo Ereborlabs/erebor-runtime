@@ -2128,7 +2128,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The same exact test passed in
       40.94 seconds through stock `runc` and the production OCI hook. The
       existing positive mount-move runc test passed in 66.33 seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact test passed in 101.80
+      seconds. The existing allowed mount-move Kubernetes test passed in
+      298.58 seconds on the retained cluster.
     - [ ] Remove only the matching old prepared operation after all three
       cases pass. Keep `MountSetattr` and propagation hard-close checks.
   - [x] Replace the pre-policy `mount_global_mutation_epoch` read. The
