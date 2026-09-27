@@ -1816,3 +1816,19 @@ The staged VM copies have the same digests. Logs are
 The unchanged global-capacity regression is the next check. These small-suite
 passes do not prove that the lower threshold corrects the allocation failure.
 The final workspace gate and full-capacity gRPC rerun remain pending.
+
+The checkpoint-headroom candidate in `fdc9f982` failed the global-capacity
+regression after 1,286.24 seconds, with exit status 101. No task build or other
+task load ran alongside this test. Peak process RSS was 193,904 KiB. Batch
+7,687 failed. The prior successful cursors were 1,574,912, 1,574,912, 1,573,888,
+1,573,888, and 1,573,888, for 7,871,488 records. These cursors do not establish
+the failed batch's final durable state. The sample before batch 7,680 reported
+3,670,016 ART index bytes, 35,913,728 base-table bytes, 17,301,504 in-memory-table
+bytes, and 786,432 transaction bytes. File usage was 432,508,928 bytes; available
+filesystem space was 14,358,589,440 bytes. The checkpoint could not allocate
+a 256-KiB block with 63.7 MiB of the 64-MiB engine budget in use.
+Logs are `checkpoint-global.log` and `checkpoint-global-resources.log` in
+`/tmp/araphor-memory-probe.z1rbDjUR`. The lower threshold reduces sampled
+in-memory-table usage but does not correct the checkpoint failure. Do not
+accept this setting as a capacity remedy. Identify the failed native allocation
+before selecting another change. Global capacity remains unqualified.
