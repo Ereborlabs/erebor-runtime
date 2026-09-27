@@ -686,8 +686,8 @@ failed with default allocator settings at cursor 804,864 and 290,000 KiB peak
 RSS. The same executable passed with `MALLOC_ARENA_MAX=1` in 47.52 seconds.
 The data-store plan records its executable digest and logs.
 [AnalysisStore::open_native](../../../../crates/araphor-data/src/analysis/connection.rs)
-now sets the native bulk-deallocation release threshold to zero. The native
-buffer target stays at 128 MiB. The process-wide allocator policy is unchanged.
+sets the native bulk-deallocation release threshold to zero. The initial
+buffer target was 128 MiB. The process-wide allocator policy is unchanged.
 The earlier one-million-row regression passed without an allocator environment override:
 216,100 KiB peak RSS and 52.24 seconds. The native-setting assertion also passes.
 The release mTLS data-store suite also passes 16 tests with four ignored in
@@ -700,8 +700,17 @@ full-capacity memory qualification. The extended repository regression in
 `083212f6` failed at cursor 3,915,776 with 264,796 KiB high-water RSS in its
 failure sample. The external log reports 282,312 KiB for the whole process.
 The data-store plan records native categories, the executable digest, and logs.
-A new full workspace gate is running for that test extension. Formatting,
-compilation, and strict Clippy have passed. The memory requirement remains open.
+Its workspace gate passed formatting, compilation, strict Clippy, and 49 data
+tests, then stopped after the native target changed. It is not a full pass.
+The owner now sets a 64-MiB buffer target to leave space for other allocations.
+The unchanged full-quota regression passes in 517.52 seconds with 194,040 KiB
+peak RSS, including checkpoint and reopen. The native-setting test passes.
+All 49 non-ignored release data tests pass. The release mTLS data-store suite
+passes 16 tests with four ignored. The current full workspace gate is running;
+formatting, compilation, strict Clippy, and 49 data tests have passed.
+This result qualifies the isolated tenant-quota workload, not concurrent
+readers, global saturation, largest payloads, or embedded Node and Control
+memory. The data-store plan records the exact digests and logs.
 The preceding temporary diagnostic crossed 256 MiB at 804,864 rows with four
 calling threads. Its peak was 292,132 KiB. The same input reached the tenant
 quota with one calling thread at 249,792 KiB, and with four threads plus
@@ -795,7 +804,7 @@ requires the policy reserve, that allowance, and 25 percent of the disk budget.
 Maintenance requires the policy reserve and write allowance. Retention,
 checkpoint, and result commits use this path so processing can release input.
 The check samples space; it cannot constrain unrelated filesystem writers.
-Native limits are a 128-MiB memory target, two threads, a 64-MiB WAL checkpoint
+Native limits are a 64-MiB memory target, two threads, a 64-MiB WAL checkpoint
 threshold, and a 128-MiB temporary-directory limit. No RSS limit is claimed.
 
 `open_native` pins DuckDB core 1.5.5 through Rust binding 1.10505.0. It enables

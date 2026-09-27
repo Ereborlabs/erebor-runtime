@@ -173,8 +173,9 @@ Store recovery fails
    live exact witnesses; do not require each partial deletion to shrink a file.
    Qualify native allocator release under multiple calling threads. Set the
    native bulk-deallocation release threshold to zero. Do not change the
-   process-wide allocator policy. Keep the 128-MiB engine memory target and
-   the 256-MiB process qualification limit unchanged. Require the isolated
+   process-wide allocator policy. Set the engine memory target to 64 MiB to
+   leave space for allocations outside the native buffer manager. Keep the
+   256-MiB process qualification limit unchanged. Require the isolated
    memory regression and mTLS load checks before accepting this setting.
 8. Activate the data owner in a clean development deployment. Control opens
    a private AnalysisStore with the current schema and selects it as the only
@@ -1529,8 +1530,35 @@ exit status 101. No allocator environment override was set.
 The test executable SHA-256 is
 `d22e3caf6e9d397fd2233741590163a38556030207ad986302c8cfd715159ede`.
 The memory output directory contains `memory-quota-regression.log` and
-`memory-quota-regression-resources.log`. A new full workspace gate is running
-for `083212f6`; formatting, compilation, and strict Clippy have passed.
-A temporary diagnostic tests a 64-MiB native buffer target with the same
-tenant quota and four calling threads. Production settings remain unchanged.
-The memory requirement and the complete phase remain **Not done**.
+`memory-quota-regression-resources.log`. The workspace gate for `083212f6`
+passed formatting, compilation, strict Clippy, and 49 data tests with three
+ignored. That gate was stopped with exit status 130 after the native target
+changed. It is not a full workspace pass.
+
+The native target is now 64 MiB in `AnalysisStore::open_native`. The
+256-MiB process limit, storage quotas, two engine threads, 64-MiB WAL threshold,
+and allocator policy are unchanged. The same full-quota regression passed in
+517.52 seconds without an allocator environment override. It reached tenant
+quota rejection and passed receipt, checkpoint, last-frame, and reopen checks.
+The external resource log reports 194,040 KiB peak RSS and exit status zero.
+Its executable SHA-256 is
+`c547578f76e1ea89988d878cebb76eb2e474b115b2b44a698a39bb469ae3ce90`.
+The memory output directory contains `memory-headroom.log` and
+`memory-headroom-resources.log`. The release build passed in 7 minutes
+4 seconds. The native-setting assertion passed; all 49 non-ignored release
+data tests passed in 34.24 seconds. The release mTLS data-store suite passed
+16 tests with four ignored in 20.05 seconds. Its executable SHA-256 is
+`e9ba2038ee3283ec21b033721ae89fd99987a511a4a62dbe388345af9f90b7cc`;
+its log is `data-headroom-e2e.log` in the memory output directory.
+Host builds and tests overlapped the VM runs. These times are not a clean
+performance comparison. The result qualifies this full-tenant-quota component
+workload, not global saturation, concurrent readers, largest payloads, or
+embedded Node and Control memory. The current full workspace gate has passed
+formatting, compilation, strict Clippy, and 49 data tests with three ignored.
+The remaining workspace tests are active. The phase remains **Not done**.
+
+An earlier temporary buffer experiment was invalid. It changed a separate
+native instance instead of the store's instance. The run was stopped with
+exit status 143. Its `memory-budget.csv` and resource log are retained in the
+memory output directory; they are not qualification evidence. The successful
+run above changes the actual owner and checks its native setting.

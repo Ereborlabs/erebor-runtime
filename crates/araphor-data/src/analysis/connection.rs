@@ -118,7 +118,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "disable external access",
             })?
-            .max_memory("128MiB")
+            .max_memory("64MiB")
             .and_then(|config| config.threads(2))
             .and_then(|config| config.with("wal_autocheckpoint", "64MiB"))
             .and_then(|config| config.with("max_temp_directory_size", "128MiB"))
