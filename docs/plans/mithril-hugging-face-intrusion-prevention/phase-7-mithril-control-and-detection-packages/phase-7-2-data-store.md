@@ -1869,3 +1869,19 @@ The VM copies have the same digests. Logs are `index-headroom-build.log`,
 `index-data-release.log`, and `index-e2e-release.log` in the host evidence
 directory. Full-capacity memory, the full-capacity gRPC path, and the final
 workspace gate remain pending. These small suites do not qualify the candidate.
+
+The unchanged global-capacity test failed on `50b55a21` after 130.60 seconds,
+with exit status 101. Process peak RSS reached 266,376 KiB, above the unchanged
+256-MiB limit. Accepted cursors were 470,016 for four tenants and 468,992 for
+the fifth, for 2,349,056 records. Native categories at the failure check were
+524,288 ART index bytes and 49,807,360 base-table bytes. This post-commit sample
+does not measure the native allocation peak. The test stopped on the process
+memory check, not on quota rejection or a native allocation error. It did not
+qualify full-capacity checkpoint or reopen. No task build, competing task load,
+debugger, or allocator override ran with this test. Logs are `index-global.log`
+and `index-global-resources.log` in the host evidence directory.
+The 160-MiB candidate is not accepted as a remedy. The 64-MiB native target
+fails index rebuild at larger capacity; the 160-MiB target fails the process
+memory gate. These results do not prove that every configuration fails.
+Further memory-budget changes require a decision before implementation.
+The 256-MiB process gate remains unchanged. The phase remains **Not done**.
