@@ -242,6 +242,11 @@ interval. On an unexpected write error, report that sample's batch number,
 the failed batch number, and the prior successful cursors with the exact error.
 Do not query an invalidated connection to obtain this failure context. These
 prior cursors do not establish the failed batch's final durable state.
+Enable only DuckDB's native `Checkpoint` log in this ignored test. Write the
+log to stdout, not the database's in-memory log store. Retain the output with
+the resource log. Use its row-group merge records to check whether checkpoint
+compaction precedes a failure. This diagnostic does not change production
+logging or prove that a merge caused an allocation failure.
 
 Use `data_context_bounds` for maximum-size decision context. Derive a valid
 catalog from the signed-policy fixture. Add JSON whitespace to reach exactly
