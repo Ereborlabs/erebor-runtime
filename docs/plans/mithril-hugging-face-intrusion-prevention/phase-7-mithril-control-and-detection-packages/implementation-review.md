@@ -30,10 +30,10 @@ declarative captures are not delivered by these changes.
 
 ### Segment storage conversion
 
-Source state: the segment conversion after `293762be`. Configured AnalysisStore
+Source state: the bundle conversion after `1cbdab02`. Configured AnalysisStore
 intake and reads now use segments. The target conversion remains incomplete.
-Backup and restore still copy only the database. Do not use those paths for
-the new store. Storage pass records outside this section predate this conversion
+Backup and restore copy the complete metadata and segment bundle.
+Storage pass records outside this section predate this conversion
 and do not qualify the current storage implementation.
 
 [ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Control starts.<br>
@@ -70,11 +70,32 @@ reopen, and batch-proportional metadata. `segment_recovery_checks_ownership`
 checks reserved files, non-reused IDs, uncommitted tails, and unknown files.
 `segment_retention_keeps_witnesses` checks whole-segment pins and expiry holes.
 `segment_growth_keeps_budget` checks the witness budget during later appends.
-Full backup, bounded-extraction, resource, and mithril-e2e qualification remain
+Bounded-extraction, resource, and mithril-e2e qualification remain
 incomplete. The latest required workspace command passed formatting, check,
-and Clippy. Its test step stopped with 39 passed, 17 failed, and 4 ignored in
-araphor-data. The named segment tests passed. Read the phase result for the
-remaining backup and fixture failures; this is not a completed storage phase.
+and Clippy. Its test step stopped with 45 passed, 13 failed, and 4 ignored in
+araphor-data. The named segment tests and all six bundle/restore tests passed.
+Read the phase result for the remaining fixture failures; this is not a
+completed storage phase.
+
+[AnalysisStore::backup](../../../../crates/araphor-data/src/analysis/backup.rs) A caller supplies one new managed bundle directory.<br>
+-> [AnalysisStore::backup_segments](../../../../crates/araphor-data/src/analysis/backup.rs) The owner holds the writer, drains readers, and captures the complete Live catalog.<br>
+-> [AnalysisStore::backup](../../../../crates/araphor-data/src/analysis/backup.rs) The owner seals and syncs segments, checkpoints metadata, and closes native connections.<br>
+-> [AnalysisStore::copy_backup](../../../../crates/araphor-data/src/analysis/backup.rs) A bounded copy includes the database and all cataloged segments. Copy validation precedes manifest publication.<br>
+-> [AnalysisStore::reopen_backup](../../../../crates/araphor-data/src/analysis/backup.rs) The owner validates and reopens the source even when the copy fails.
+
+[AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) A caller supplies a complete bundle and an empty destination.<br>
+-> [AnalysisStore::validate_bundle](../../../../crates/araphor-data/src/analysis/backup.rs) The owner checks identity bounds, exact segment membership, sizes, digests, and private regular files.<br>
+-> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) The owner leases the destination and syncs `restore.pending` before copying.<br>
+-> [AnalysisStore::open_leased](../../../../crates/araphor-data/src/analysis/mod.rs) The owner validates the copied catalog and raw ranges.<br>
+-> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) The owner commits a new recovery epoch before it clears the pending marker and publishes readiness.
+
+`analysis_store_backup_crashes` exits after sealing, connection close, segment
+copy, and source reopen. `analysis_store_bundle_checks` changes or removes
+files and adds invalid manifest IDs. These cases preserve source records and
+reject incomplete bundles. `analysis_store_restore_crashes` checks that failed
+destinations remain unavailable and complete restores retain their new epoch.
+No raw index, backup registry, automatic cleanup, or compatibility reader is
+added.
 
 The reusable segment path has these implemented calls:
 

@@ -21,7 +21,7 @@ fn analysis_store_restore_crashes() -> std::result::Result<(), Box<dyn std::erro
         let backup = root
             .parent()
             .ok_or("restore parent absent")?
-            .join("original/backups/backup.duckdb");
+            .join("original/backups/backup");
         AnalysisStore::restore(&backup, &root)?;
         return Err("the requested restore crash did not occur".into());
     }
@@ -55,7 +55,7 @@ fn analysis_store_restore_crashes() -> std::result::Result<(), Box<dyn std::erro
             },
         )?;
         let before = store.meta()?;
-        let backup = original.join("backups/backup.duckdb");
+        let backup = original.join("backups/backup");
         let manifest = store.backup(&backup)?;
         assert!(AnalysisStore::restore(&backup, &original).is_err());
         assert!(!original.join("restore.pending").exists());
@@ -68,7 +68,7 @@ fn analysis_store_restore_crashes() -> std::result::Result<(), Box<dyn std::erro
             .status()?;
         assert_eq!(status.code(), Some(73), "{point}");
         assert_eq!(
-            AnalysisStore::file_digest(&backup)?,
+            AnalysisStore::file_digest(&backup.join("analysis.duckdb"))?,
             manifest.database_sha256
         );
         assert_eq!(store.meta()?, before, "{point}");
@@ -107,7 +107,7 @@ fn analysis_store_restore_crashes() -> std::result::Result<(), Box<dyn std::erro
             b"record"
         );
         assert_eq!(
-            AnalysisStore::file_digest(&backup)?,
+            AnalysisStore::file_digest(&backup.join("analysis.duckdb"))?,
             manifest.database_sha256
         );
     }

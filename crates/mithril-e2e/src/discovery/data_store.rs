@@ -664,7 +664,7 @@ impl DataStoreQualification {
             .ok_or("policy was not committed")?;
         let clock = Arc::new(TestClock(AtomicU64::new(START)));
         let data = Arc::new(AnalysisStore::open(&data_root)?);
-        let stale_path = backup_root.join("stale.duckdb");
+        let stale_path = backup_root.join("stale");
         data.backup(&stale_path)?;
         let intake = EvidenceIntakeOwner::new(control.clone(), data.clone(), clock.clone())?;
         let server = tls.start(tls.control_from_intake(intake, 1)?).await?;
@@ -960,7 +960,7 @@ impl DataStoreQualification {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
             Err(error) => return Err(error.into()),
         };
-        let backup_path = backup_root.join("after-expiry.duckdb");
+        let backup_path = backup_root.join("after-expiry");
         let backup = data.backup(&backup_path)?;
         connection.send_evidence_batch(blocked).await?;
         let ack = Self::ack(&mut connection).await?;
@@ -1889,16 +1889,20 @@ mod tests {
             data.checkpoint()?;
             let backup_root = tls.path().join("backups");
             fs::DirBuilder::new().mode(0o700).create(&backup_root)?;
-            let backup_path = backup_root.join("saved.duckdb");
-            let managed = directory
-                .path()
-                .join("evidence/analysis/backups/saved.duckdb");
+            let backup_path = backup_root.join("saved");
+            let managed = directory.path().join("evidence/analysis/backups/saved");
             let manifest = data.backup(&managed)?;
-            fs::copy(&managed, &backup_path)?;
-            fs::copy(
-                managed.with_extension("manifest.json"),
-                backup_path.with_extension("manifest.json"),
-            )?;
+            fs::DirBuilder::new().mode(0o700).create(&backup_path)?;
+            fs::DirBuilder::new()
+                .mode(0o700)
+                .create(backup_path.join("segments"))?;
+            for file in ["analysis.duckdb", "manifest.json"] {
+                fs::copy(managed.join(file), backup_path.join(file))?;
+            }
+            for segment in &manifest.segments {
+                let file = format!("segments/{:016x}.seg", segment.segment_id);
+                fs::copy(managed.join(&file), backup_path.join(&file))?;
+            }
             let saved = AnalysisStore::restore(&backup_path, &backup_root.join("source"))?;
             let saved_meta = saved.meta()?;
             let restore_root = directory.path().join("restore");
@@ -1943,9 +1947,7 @@ mod tests {
             let allocated = padding.metadata()?.blocks() * 512;
             if disk.is_some() {
                 assert!(allocated > GIB / 2);
-                let destination = directory
-                    .path()
-                    .join("evidence/analysis/backups/blocked.duckdb");
+                let destination = directory.path().join("evidence/analysis/backups/blocked");
                 assert!(matches!(
                     data.backup(&destination),
                     Err(araphor_data::Error::StorageCapacity {
@@ -1954,7 +1956,7 @@ mod tests {
                     })
                 ));
                 assert!(!destination.exists());
-                assert!(!destination.with_extension("manifest.json").exists());
+                assert!(!destination.join("manifest.json").exists());
                 assert_eq!(saved.meta()?, saved_meta);
                 assert_eq!(saved.read_page(&identity, 1)?.records.len(), 1);
                 assert!(matches!(

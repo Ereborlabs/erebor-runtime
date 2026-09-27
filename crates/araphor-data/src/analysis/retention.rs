@@ -1093,7 +1093,7 @@ mod tests {
             .register_processor(&scope, ProcessorClassV1::Required, 2)
             .is_err());
         let backup_dir = reopened.root.join("backups");
-        let backup = backup_dir.join("retained.backup.duckdb");
+        let backup = backup_dir.join("retained");
         let manifest = reopened.backup(&backup)?;
         let restored = AnalysisStore::restore(&backup, &directory.path().join("restored"))?;
         assert_eq!(restored.meta()?.recovery_epoch, manifest.recovery_epoch + 1);

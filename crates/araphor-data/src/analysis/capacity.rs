@@ -8,7 +8,7 @@ use super::AnalysisStore;
 use crate::{IoSnafu, Result, StorageCapacitySnafu};
 
 const WRITE_RESERVE: u64 = 256 * 1024 * 1024;
-const MAX_STORAGE_ENTRIES: usize = 4096;
+pub(super) const MAX_STORAGE_ENTRIES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]

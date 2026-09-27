@@ -8,12 +8,12 @@ use snafu::{Location, Snafu};
 mod analysis;
 
 pub use analysis::{
-    AnalysisBackupManifestV1, AnalysisContextKeyV1, AnalysisContextRefV1, AnalysisContextVersionV1,
-    AnalysisGapV1, AnalysisReadPageV1, AnalysisRecordV1, AnalysisRecoveryStatusV1,
-    AnalysisResultCommitV1, AnalysisResultReceiptV1, AnalysisSourceReceiptV1,
-    AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1, AnalysisWitnessV1,
-    ContextSensitivityV1, EvidenceRetentionOwner, EvidenceStoreOutcomeV1, ProcessorClassV1,
-    ProcessorHealthV1, ProcessorRetirementV1, ProcessorScopeV1, ProcessorStateV1,
+    AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisContextKeyV1, AnalysisContextRefV1,
+    AnalysisContextVersionV1, AnalysisGapV1, AnalysisReadPageV1, AnalysisRecordV1,
+    AnalysisRecoveryStatusV1, AnalysisResultCommitV1, AnalysisResultReceiptV1,
+    AnalysisSourceReceiptV1, AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1,
+    AnalysisWitnessV1, ContextSensitivityV1, EvidenceRetentionOwner, EvidenceStoreOutcomeV1,
+    ProcessorClassV1, ProcessorHealthV1, ProcessorRetirementV1, ProcessorScopeV1, ProcessorStateV1,
     RetentionLimitsV1, RetentionResultV1, RetentionSweepV1, SegmentFile, StorageHealthV1,
     StorageLimitsV1, StorageUsageV1, StorePositionV1, ValidatedCoverageV1,
     ValidatedEvidenceBatchV1, ANALYSIS_DUCKDB_BINDING_VERSION, ANALYSIS_SQLPARSER_VERSION,
