@@ -21,7 +21,8 @@ fn container_roles_are_distinct<P: Platform>() -> TestResult<()> {
             args: &["helper"],
         },
     ];
-    let mut group = env.start_actor_group("pid-reuse-pod-v1.yaml", &actors, &labels)?;
+    let mut group =
+        env.start_actor_group("pid-reuse-pod-v1.yaml", &actors, &labels, |_, _| Ok(()))?;
     let first = env.task(group[0].0.id(), "worker identity")?;
     let second = env.task(group[1].0.id(), "helper identity")?;
     assert_ne!(first.snapshot.task_cookie, second.snapshot.task_cookie);

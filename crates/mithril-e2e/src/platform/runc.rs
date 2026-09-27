@@ -33,8 +33,9 @@ impl Runc {
         extra: &[&str],
         labels: &Labels,
         member: &str,
+        kind: mithril_control::ContainerKindV1,
     ) -> TestResult<ProcessFixture> {
-        self.shared.prepare_member(labels, member)?;
+        self.shared.prepare_member(labels, member, kind)?;
         if self.shared.node_running() && self.shared.policy_installed() && !self.shared.has_policy()
         {
             self.shared.sync_policy()?;
@@ -369,22 +370,50 @@ impl Platform for Runc {
         labels: &Labels,
     ) -> TestResult<ProcessFixture> {
         self.shared.begin_pod(labels);
-        self.start_named(name, extra, labels, "worker")
+        self.start_named(
+            name,
+            extra,
+            labels,
+            "worker",
+            mithril_control::ContainerKindV1::Application,
+        )
     }
 
-    fn start_actor_group(
+    fn start_actor_group<F>(
         &mut self,
-        _manifest: &str,
+        manifest: &str,
         actors: &[GroupActor<'_>],
         labels: &Labels,
-    ) -> TestResult<Vec<(ProcessFixture, PathBuf)>> {
+        before_app: F,
+    ) -> TestResult<Vec<(ProcessFixture, PathBuf)>>
+    where
+        F: FnOnce(&mut Self, &mut Vec<(ProcessFixture, PathBuf)>) -> TestResult<()>,
+    {
+        let path = self
+            .shared
+            .source()
+            .join("crates/mithril-e2e/fixtures/kubernetes")
+            .join(manifest);
+        let pod: k8s_openapi::api::core::v1::Pod = serde_saphyr::from_slice(&fs::read(&path)?)?;
         self.shared.begin_pod(labels);
         let mut group = Vec::with_capacity(actors.len());
+        let mut before_app = Some(before_app);
         for actor in actors {
+            let kind = actor.kind(&pod)?;
+            if kind == mithril_control::ContainerKindV1::Application {
+                if let Some(check) = before_app.take() {
+                    check(self, &mut group)?;
+                    for (member, (process, _)) in actors.iter().zip(&mut group) {
+                        if member.kind(&pod)? == mithril_control::ContainerKindV1::Init {
+                            self.shared.finish_init(labels, member.name, process)?;
+                        }
+                    }
+                }
+            }
             let script = actor
                 .script
                 .ok_or("runc group actor needs a Python script")?;
-            let process = self.start_named(script, actor.args, labels, actor.name)?;
+            let process = self.start_named(script, actor.args, labels, actor.name, kind)?;
             group.push((process, self.shared.work().join(actor.name)));
         }
         Ok(group)

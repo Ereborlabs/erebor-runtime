@@ -15,11 +15,11 @@ fn each_group_is_one_workload<P: Platform>() -> TestResult<()> {
         args: &["worker"],
     }];
     let mut first = env
-        .start_actor_group("pid-reuse-pod-v1.yaml", &actors, &labels)
+        .start_actor_group("pid-reuse-pod-v1.yaml", &actors, &labels, |_, _| Ok(()))
         .map_err(|error| format!("first group: {error}"))?;
     let before = env.task(first[0].0.id(), "first group identity")?;
     let mut second = env
-        .start_actor_group("pid-reuse-pod-v1.yaml", &actors, &labels)
+        .start_actor_group("pid-reuse-pod-v1.yaml", &actors, &labels, |_, _| Ok(()))
         .map_err(|error| format!("second group: {error}"))?;
     let after = env.task(second[0].0.id(), "second group identity")?;
 

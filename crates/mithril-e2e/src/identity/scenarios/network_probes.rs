@@ -17,8 +17,12 @@ fn native_probes_keep_pid1<P: Platform>() -> TestResult<()> {
         script: None,
         args: &[],
     });
-    let mut group =
-        env.start_actor_group("network-probes-pod-v1.yaml", &actors, &Labels::default())?;
+    let mut group = env.start_actor_group(
+        "network-probes-pod-v1.yaml",
+        &actors,
+        &Labels::default(),
+        |_, _| Ok(()),
+    )?;
     assert!(env.workload_ready()?, "native probes did not become Ready");
 
     let until = Instant::now() + Duration::from_secs(4);

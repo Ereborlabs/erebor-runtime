@@ -323,13 +323,30 @@ impl KubernetesState {
     }
 
     fn container_id_for(&self, name: &str) -> TestResult<String> {
-        self.pod()?
-            .status
-            .and_then(|status| status.container_statuses)
-            .and_then(|statuses| statuses.into_iter().find(|status| status.name == name))
-            .and_then(|status| status.container_id)
+        Self::member_status(&self.pod()?, name)
+            .and_then(|status| status.container_id.clone())
             .and_then(|id| id.strip_prefix("containerd://").map(str::to_owned))
             .ok_or_else(|| format!("Kubernetes container {name} has no containerd ID").into())
+    }
+
+    fn member_status<'a>(
+        pod: &'a Pod,
+        name: &str,
+    ) -> Option<&'a k8s_openapi::api::core::v1::ContainerStatus> {
+        let status = pod.status.as_ref()?;
+        status
+            .init_container_statuses
+            .as_ref()
+            .into_iter()
+            .flat_map(|items| items.iter())
+            .chain(
+                status
+                    .container_statuses
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|items| items.iter()),
+            )
+            .find(|item| item.name == name)
     }
 
     fn runtime_id(&self) -> TestResult<String> {
@@ -1517,17 +1534,22 @@ impl Platform for Kubernetes {
             script: Some(name),
             args: extra,
         };
-        let mut group = self.start_actor_group("pid-reuse-pod-v1.yaml", &[actor], labels)?;
+        let mut group =
+            self.start_actor_group("pid-reuse-pod-v1.yaml", &[actor], labels, |_, _| Ok(()))?;
         Ok(group.remove(0).0)
     }
 
-    fn start_actor_group(
+    fn start_actor_group<F>(
         &mut self,
         manifest: &str,
         actors: &[GroupActor<'_>],
         labels: &super::Labels,
-    ) -> TestResult<Vec<(ProcessFixture, PathBuf)>> {
-        self.start_group(manifest, actors, labels)
+        before_app: F,
+    ) -> TestResult<Vec<(ProcessFixture, PathBuf)>>
+    where
+        F: FnOnce(&mut Self, &mut Vec<(ProcessFixture, PathBuf)>) -> TestResult<()>,
+    {
+        self.start_group(manifest, actors, labels, before_app)
     }
     fn add_actor(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         self.start_entry(command, args)

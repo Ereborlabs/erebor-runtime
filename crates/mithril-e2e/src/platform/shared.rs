@@ -75,6 +75,7 @@ pub(super) struct SharedState {
     pod_started: BTreeSet<String>,
     labels: Labels,
     actor: String,
+    actor_kind: ControlContainerKind,
     actors: BTreeMap<ActorKey, ActorFiles>,
     policies: BTreeMap<Labels, (WorkloadProtectionPolicy, PathBuf)>,
     targets: BTreeMap<ActorKey, WorkloadTargetFactV1>,
@@ -142,6 +143,7 @@ impl SharedState {
         document: &PolicyDocumentV1,
         selector: &str,
         kind: EntryKindV1,
+        container_kind: ControlContainerKind,
     ) -> TestResult<u32> {
         let roles = document
             .entry_role_assignments
@@ -149,9 +151,7 @@ impl SharedState {
             .filter(|entry| {
                 entry.workload_selector_ids.iter().any(|id| id == selector)
                     && entry.entry_kinds.contains(&kind)
-                    && entry
-                        .container_kinds
-                        .contains(&ControlContainerKind::Application)
+                    && entry.container_kinds.contains(&container_kind)
             })
             .map(|entry| entry.resulting_role_id.as_str())
             .collect::<BTreeSet<_>>();
@@ -188,11 +188,8 @@ impl SharedState {
         self.pod_started.clear();
         self.labels.clear();
         self.actor = "worker".to_owned();
+        self.actor_kind = ControlContainerKind::Application;
         Ok(())
-    }
-
-    pub(super) fn prepare_actor(&mut self, labels: &Labels) -> TestResult<()> {
-        self.prepare_member(labels, "worker")
     }
 
     fn key(&self) -> ActorKey {
@@ -219,7 +216,12 @@ impl SharedState {
         self.pod_started.insert(self.pod_uid.clone());
     }
 
-    pub(super) fn prepare_member(&mut self, labels: &Labels, name: &str) -> TestResult<()> {
+    pub(super) fn prepare_member(
+        &mut self,
+        labels: &Labels,
+        name: &str,
+        kind: ControlContainerKind,
+    ) -> TestResult<()> {
         let key = (self.pod_uid.clone(), labels.clone(), name.to_owned());
         if !self.actors.contains_key(&key) {
             let first = self.actors.is_empty();
@@ -262,6 +264,7 @@ impl SharedState {
         }
         self.labels = labels.clone();
         self.actor = name.to_owned();
+        self.actor_kind = kind;
         Ok(())
     }
 
@@ -627,6 +630,7 @@ impl Shared {
             pod_started: BTreeSet::new(),
             labels: Labels::new(),
             actor: "worker".to_owned(),
+            actor_kind: ControlContainerKind::Application,
             actors: BTreeMap::new(),
             policies: BTreeMap::new(),
             targets: BTreeMap::new(),
@@ -850,6 +854,22 @@ impl Shared {
         let mut resource: WorkloadProtectionPolicy =
             serde_json::from_slice(&bytes).context(JsonSnafu { path: &path })?;
         let labels = policy_labels(&resource)?;
+        let first = resource
+            .spec
+            .containers
+            .first()
+            .ok_or("the policy has no container")?;
+        let actor = first
+            .names
+            .first()
+            .ok_or("the policy container has no name")?
+            .clone();
+        let kind = ControlContainerKind::from(
+            *first
+                .kinds
+                .first()
+                .ok_or("the policy container has no kind")?,
+        );
         if self
             .policies
             .get(&labels)
@@ -891,6 +911,7 @@ impl Shared {
         resource.metadata.resource_version = Some(self.policy_generation.to_string());
         self.policies.insert(labels.clone(), (resource, path));
         let previous = self.key();
+        let previous_kind = self.actor_kind;
         self.pod_uid = self
             .actors
             .keys()
@@ -903,7 +924,7 @@ impl Shared {
                     uuid::Uuid::new_v4().to_string()
                 }
             });
-        self.prepare_actor(&labels)?;
+        self.prepare_member(&labels, &actor, kind)?;
         let result = if self.node_task.is_some() {
             self.sync_policy()
         } else {
@@ -928,6 +949,7 @@ impl Shared {
         };
         if self.actors.contains_key(&previous) {
             (self.pod_uid, self.labels, self.actor) = previous;
+            self.actor_kind = previous_kind;
         }
         result?;
         Ok(labels)
@@ -1050,10 +1072,18 @@ impl Shared {
             .find(|selector| selector.container_names.contains(&self.actor))
             .ok_or("the policy has no selector for the actor container")?;
         let selector_id = selector.workload_selector_id.clone();
-        let initial_role =
-            SharedState::role_handle(&document, &selector_id, EntryKindV1::ContainerStart)?;
-        let external_role =
-            SharedState::role_handle(&document, &selector_id, EntryKindV1::ExternalRuntimeUnknown)?;
+        let initial_role = SharedState::role_handle(
+            &document,
+            &selector_id,
+            EntryKindV1::ContainerStart,
+            self.actor_kind,
+        )?;
+        let external_role = SharedState::role_handle(
+            &document,
+            &selector_id,
+            EntryKindV1::ExternalRuntimeUnknown,
+            self.actor_kind,
+        )?;
         let image_digest = selector
             .image_digests
             .first()
@@ -1071,7 +1101,7 @@ impl Shared {
             pod_uid: pod_uid.clone(),
             container_id: format!("scheduled:{}", pod_uid),
             container_name: self.actor.clone(),
-            container_kind: ControlContainerKind::Application,
+            container_kind: self.actor_kind,
             image_digest,
             pod_labels: self.labels.clone(),
             kubernetes: Some(KubernetesWorkloadIdentityV1 {
@@ -1145,6 +1175,7 @@ impl Shared {
         self.targets.insert(key.clone(), target.clone());
         let cgroup = self.cgroup().to_owned();
         let actor = self.actor.clone();
+        let kind = self.actor_kind;
         self.bindings.insert(
             key,
             WorkloadBindingConfig {
@@ -1169,7 +1200,12 @@ impl Shared {
                 sandbox_id: format!("{:064x}", uuid::Uuid::parse_str(&pod_uid)?.as_u128()),
                 container_name: actor,
                 image_digest: target.image_digest,
-                container_kind: ContainerKindV1::Application,
+                container_kind: match kind {
+                    ControlContainerKind::Init => ContainerKindV1::Init,
+                    ControlContainerKind::Sidecar => ContainerKindV1::Sidecar,
+                    ControlContainerKind::Application => ContainerKindV1::Application,
+                    ControlContainerKind::Ephemeral => ContainerKindV1::Ephemeral,
+                },
                 container_generation: generation,
                 root_cgroup_path: Some(cgroup),
                 lifecycle_generation: generation,
@@ -1369,6 +1405,28 @@ impl Shared {
 
     pub(super) fn running(&mut self, pid: u32) -> TestResult<()> {
         let revision = self.observe_state(pid, ContainerState::ContainerRunning)?;
+        self.cri
+            .as_ref()
+            .ok_or("CRI is not running")?
+            .wait_seen(revision)
+    }
+
+    pub(super) fn finish_init(
+        &mut self,
+        labels: &Labels,
+        name: &str,
+        actor: &mut ProcessFixture,
+    ) -> TestResult<()> {
+        let status = actor.wait_exit("init container exit", READY_LIMIT)?;
+        if !status.success() {
+            return Err(format!(
+                "init container {name} exited with {status}; stderr: {:?}",
+                actor.stderr()?
+            )
+            .into());
+        }
+        self.prepare_member(labels, name, ControlContainerKind::Init)?;
+        let revision = self.observe_state(0, ContainerState::ContainerExited)?;
         self.cri
             .as_ref()
             .ok_or("CRI is not running")?

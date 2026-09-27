@@ -17,12 +17,16 @@ use crate::physical::{wait_for, ProbeDirectory};
 use crate::process::ProcessFixture;
 
 impl Kubernetes {
-    pub(super) fn start_group(
+    pub(super) fn start_group<F>(
         &mut self,
         manifest: &str,
         actors: &[GroupActor<'_>],
         labels: &Labels,
-    ) -> TestResult<Vec<(ProcessFixture, PathBuf)>> {
+        before_app: F,
+    ) -> TestResult<Vec<(ProcessFixture, PathBuf)>>
+    where
+        F: FnOnce(&mut Self, &mut Vec<(ProcessFixture, PathBuf)>) -> TestResult<()>,
+    {
         if actors.is_empty() {
             return Err("the Kubernetes actor group is empty".into());
         }
@@ -54,7 +58,7 @@ impl Kubernetes {
             return Err("post-start sleep requires one actor".into());
         }
         if let [base] = spec.containers.as_slice() {
-            if actors.len() > 1 {
+            if actors.len() > 1 && spec.init_containers.as_ref().is_none_or(Vec::is_empty) {
                 spec.containers = actors
                     .iter()
                     .map(|actor| {
@@ -65,7 +69,8 @@ impl Kubernetes {
                     .collect();
             }
         }
-        if spec.containers.len() != actors.len() {
+        let count = spec.containers.len() + spec.init_containers.as_ref().map_or(0, Vec::len);
+        if count != actors.len() {
             return Err("the actor names do not match the Pod containers".into());
         }
         if let Some(seconds) = sleep {
@@ -81,9 +86,14 @@ impl Kubernetes {
                 return Err(format!("duplicate actor name {}", actor.name).into());
             }
             let container = spec
-                .containers
-                .iter_mut()
-                .find(|container| container.name == actor.name)
+                .init_containers
+                .as_mut()
+                .and_then(|items| items.iter_mut().find(|item| item.name == actor.name))
+                .or_else(|| {
+                    spec.containers
+                        .iter_mut()
+                        .find(|item| item.name == actor.name)
+                })
                 .ok_or_else(|| format!("the actor Pod has no {} container", actor.name))?;
             if let Some(script) = actor.script {
                 actor_script(&self.root, script)?;
@@ -126,7 +136,13 @@ impl Kubernetes {
             .block_on(pods.create(&PostParams::default(), &pod))?;
 
         let mut group = Vec::with_capacity(actors.len());
+        let mut before_app = Some(before_app);
         for actor in actors {
+            if actor.kind(&pod)? == mithril_control::ContainerKindV1::Application {
+                if let Some(check) = before_app.take() {
+                    check(self, &mut group)?;
+                }
+            }
             let path = actor
                 .script
                 .map(|script| fixtures.join(script))
@@ -166,16 +182,11 @@ impl Kubernetes {
                 {
                     Ok(value) => Ok(Some(value)),
                     Err(source) => {
-                        let exit = self
-                            .pod()
-                            .ok()
-                            .and_then(|pod| pod.status)
-                            .and_then(|status| status.container_statuses)
-                            .and_then(|states| {
-                                states.into_iter().find(|state| state.name == actor.name)
-                            })
-                            .and_then(|state| state.state)
-                            .and_then(|state| state.terminated);
+                        let exit = self.pod().ok().and_then(|pod| {
+                            KubernetesState::member_status(&pod, actor.name)
+                                .and_then(|state| state.state.as_ref())
+                                .and_then(|state| state.terminated.clone())
+                        });
                         if let Some(exit) = exit {
                             return Err(InvalidInputSnafu {
                                 path: &path,
@@ -285,12 +296,9 @@ impl Kubernetes {
                 }
                 let pod: Pod =
                     serde_json::from_slice(&output.stdout).map_err(std::io::Error::other)?;
-                let exit = pod
-                    .status
-                    .and_then(|status| status.container_statuses)
-                    .and_then(|states| states.into_iter().find(|state| state.name == member))
-                    .and_then(|state| state.state)
-                    .and_then(|state| state.terminated);
+                let exit = KubernetesState::member_status(&pod, &member)
+                    .and_then(|state| state.state.as_ref())
+                    .and_then(|state| state.terminated.as_ref());
                 Ok(exit.map(|exit| std::process::ExitStatus::from_raw(exit.exit_code << 8)))
             });
             process.set_init(pid)?;
@@ -305,16 +313,19 @@ impl Kubernetes {
         if actors.len() > 1 || actors[0].script.is_none() {
             self.wait_workload_ready()?;
             let pod = self.pod()?;
-            let status = pod.status.ok_or("the actor Pod has no status")?;
-            let statuses = status
-                .container_statuses
-                .ok_or("the actor Pod has no container statuses")?;
             for actor in actors {
-                let state = statuses
-                    .iter()
-                    .find(|state| state.name == actor.name)
+                let state = KubernetesState::member_status(&pod, actor.name)
                     .ok_or_else(|| format!("the actor Pod has no {} status", actor.name))?;
-                if !state.ready || state.restart_count != 0 {
+                let ready = if actor.kind(&pod)? == mithril_control::ContainerKindV1::Init {
+                    state
+                        .state
+                        .as_ref()
+                        .and_then(|state| state.terminated.as_ref())
+                        .is_some_and(|exit| exit.exit_code == 0)
+                } else {
+                    state.ready
+                };
+                if !ready || state.restart_count != 0 {
                     return Err(format!(
                         "actor {} is not ready without restart: {state:?}",
                         actor.name

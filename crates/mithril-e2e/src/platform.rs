@@ -12,6 +12,7 @@ use erebor_interceptor_abi::{
     TASK_REFERENCE_ALL_V1,
 };
 use erebor_runtime_ipc::v1::{MithrilEffectObservation, MithrilObservationSnapshot};
+use k8s_openapi::api::core::v1::Pod;
 use mithril_node::{NativeTaskSnapshotV1, ReconciliationReportV1};
 use snafu::ResultExt as _;
 use zerocopy::{IntoBytes as _, KnownLayout, TryFromBytes};
@@ -42,6 +43,32 @@ pub(crate) struct GroupActor<'a> {
     pub(crate) name: &'a str,
     pub(crate) script: Option<&'a str>,
     pub(crate) args: &'a [&'a str],
+}
+
+impl GroupActor<'_> {
+    fn kind(&self, pod: &Pod) -> TestResult<mithril_control::ContainerKindV1> {
+        use mithril_control::ContainerKindV1;
+
+        let spec = pod.spec.as_ref().ok_or("the group Pod has no spec")?;
+        if let Some(init) = spec
+            .init_containers
+            .as_ref()
+            .and_then(|items| items.iter().find(|item| item.name == self.name))
+        {
+            return Ok(if init.restart_policy.as_deref() == Some("Always") {
+                ContainerKindV1::Sidecar
+            } else {
+                ContainerKindV1::Init
+            });
+        }
+        if spec.containers.iter().any(|item| item.name == self.name)
+            || (spec.containers.len() == 1
+                && spec.init_containers.as_ref().is_none_or(Vec::is_empty))
+        {
+            return Ok(ContainerKindV1::Application);
+        }
+        Err(format!("the group Pod has no {} container", self.name).into())
+    }
 }
 
 const TASK_LIMIT: Duration = Duration::from_secs(30);
@@ -172,12 +199,16 @@ pub(crate) trait Platform: Sized {
     ) -> TestResult<crate::process::ProcessFixture> {
         pending("start actor")
     }
-    fn start_actor_group(
+    fn start_actor_group<F>(
         &mut self,
         _manifest: &str,
         _actors: &[GroupActor<'_>],
         _labels: &Labels,
-    ) -> TestResult<Vec<(crate::process::ProcessFixture, PathBuf)>> {
+        _before_app: F,
+    ) -> TestResult<Vec<(crate::process::ProcessFixture, PathBuf)>>
+    where
+        F: FnOnce(&mut Self, &mut Vec<(crate::process::ProcessFixture, PathBuf)>) -> TestResult<()>,
+    {
         pending("start actor group")
     }
     fn add_actor(
