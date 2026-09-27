@@ -617,8 +617,8 @@ runner that still needs replacement:
 
 | Source | Current lines | Open work |
 | --- | ---: | --- |
-| `effect/runc.rs` | 6,864 | Size and runner retirement |
-| `identity.rs` | 5,425 | Size and runner retirement |
+| `effect/runc.rs` | 6,860 | Size and runner retirement |
+| `identity.rs` | 5,174 | Size and runner retirement |
 | `effect.rs` | 3,202 | Size and runner retirement |
 | `effect/child.rs` | 2,991 | Size and runner retirement |
 | `control_tls.rs` | 2,416 | Size and runner retirement |
@@ -3570,8 +3570,8 @@ setup, production actions, assertions, and focused test.
     `mount_alias.py` and `mount_alias_policy.json`. Start Node and install
     policy before the actor. Require the bind mount to succeed, the aliased
     secret read to fail with `EACCES`, the allowed read to succeed, and the
-    exact attributed path-tree denial. Pass Host, direct `runc`, and real
-    Kubernetes before removing the matching old action and result field.
+    exact attributed path-tree denial. Keep the old bind mount and read until
+    the old mount-cache and five-denial capture checks have their own tests.
     - [x] Add the 68-line Rust test and the actor's `runtime` mode. The
       runtime already gives the actor a mount namespace. A second
       `MS_PRIVATE` call returned `EACCES` after Mithril reported
@@ -3582,8 +3582,16 @@ setup, production actions, assertions, and focused test.
     - [x] Pass direct `runc`. The exact case passed in 30.07 seconds. All
       nine `mount_late_runc` cases passed in 112.70 seconds with the current
       production OCI hook. The pin root, cgroup, and lease were removed.
-    - [ ] Pass real Kubernetes and remove only the matching old action,
-      result field, and shell gate.
+    - [x] Pass real Kubernetes. The exact case passed in 67.52 seconds.
+      All nine `mount_late_kubernetes` cases passed in 264.52 seconds. The
+      test namespaces were removed.
+    - [x] Remove the duplicate result field and shell gate. Keep the old
+      action because it still drives mount-cache invalidation and the
+      five-denial capture check. The complete old direct-runc probe passed
+      after removal. Its mount-policy, capture, pin, lease, cgroup, and
+      fixture-root gates passed, and the duplicate field is absent. The VM
+      launcher passed `bash -n`. The repository Rust CI script passed after
+      the final Rust edit.
   - [x] Retire the duplicate in-container bind-mount result and shell gate.
     `late_bind_keeps_policy` requires the mount to succeed after production
     policy activation on Host, direct `runc`, and Kubernetes. Keep the legacy
