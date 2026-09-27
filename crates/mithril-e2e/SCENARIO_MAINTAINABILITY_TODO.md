@@ -3702,13 +3702,16 @@ test does not close a row when its physical condition or an assertion changed.
       build it before this focused probe. The runner's parent needed
       `SIGCONT` after its probe child exited. Do not treat that launcher
       behavior as a test assertion.
-  - [x] Replace the recovered startup entry's missing-file control. Reuse the
+  - [x] Replace the recovered startup entry's missing-file and signed-denial
+    contrast. Reuse the
     shared entry-isolation policy and `ready.py` actor. Start the actor before
     Node, recover it, then start a declared `cat` entry. Remove its protected
     file while the entry waits at a FIFO. Require `ENOENT`, a nonzero entry
-    rule, and no fresh signed-policy denial for that entry. Keep the separate
-    readiness-before-startup and signed-denial checks until their own shared
-    tests pass.
+    rule, and no fresh signed-policy denial for that entry. Restore the file,
+    start the declared entry again, and require the same role and rule, a
+    failed read, and attributed `EXACT_POLICY_DENY` File/OpenRead evidence.
+    Keep the separate readiness-before-startup check until a shared test
+    proves it.
     - [x] Host passed in 39.52 seconds. The standard test has 71 lines.
     - [x] Direct `runc` passed in 41.89 seconds through the production hook.
     - [x] Kubernetes passed in 79.15 seconds. The launcher exited 0.
@@ -3716,6 +3719,13 @@ test does not close a row when its physical condition or an assertion changed.
       assertion. The protected file remains for its signed-denial action.
       The reduced recovered-container probe passed with its remaining checks.
       Its stopped legacy sudo monitor needed `SIGCONT` after the probe exited.
+    - [x] Strengthen the same test with the restored-file signed denial. The
+      98-line test passed on Host in 30.40 seconds, direct `runc` in 38.66
+      seconds, and Kubernetes in 70.73 seconds. The Kubernetes launcher
+      exited 0.
+    - [ ] Remove only the duplicate signed-denial action, result field, and
+      `run.sh` predicate. Keep the earlier startup role and runtime-internal
+      bootstrap assertions.
 
 ### Direct runtime entry roles
 

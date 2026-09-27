@@ -3,7 +3,9 @@ use std::{collections::BTreeSet, fs, io::Write as _, time::Duration};
 use mithril_control::WorkloadProtectionPolicy as Policy;
 use rustix::fs::{mkfifoat, Mode, CWD};
 
+use crate::effect::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
+use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
 
 #[platform_test(host, runc, kubernetes)]
 #[lifecycle = recovery_entry]
@@ -65,6 +67,31 @@ fn missing_file_is_not_denied<P: Platform>() -> TestResult<()> {
         "missing file produced signed denial: {effects:?}"
     );
 
+    fs::rename(env.work().join("startup.saved"), &file)?;
+    let mut denied = env.add_actor("cat", &["/work/startup-gate", "/work/startup.denied"])?;
+    let mut release = denied.fifo_writer(&gate, "signed startup gate", Duration::from_secs(5))?;
+    let next = env.task(denied.id(), "signed startup entry")?;
+    assert_eq!(next.snapshot.active_role_id, task.snapshot.active_role_id);
+    assert_eq!(
+        next.snapshot.admitted_entry_rule_id,
+        task.snapshot.admitted_entry_rule_id
+    );
+    let check = EffectCheck::new(&env, next)?;
+    release.write_all(b"release\n")?;
+    drop(release);
+    denied.close();
+    let status = denied.wait_exit("signed startup denial", Duration::from_secs(5))?;
+    assert!(!status.success(), "protected cat succeeded: {status}");
+    check.wait(
+        &env,
+        "EXACT_POLICY_DENY",
+        KernelEffectFamilyV1::File,
+        KernelEffectOperationV1::OpenRead,
+        -libc::EACCES,
+        "recovered startup file denial",
+    )?;
+
+    denied.stop()?;
     cat.stop()?;
     main.stop()?;
     env.stop()
