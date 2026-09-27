@@ -106,7 +106,7 @@ fn unlisted_exec_is_denied<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = recovery_exec]
 fn recovered_unlisted_exec_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("recovered-runtime-exec")?;

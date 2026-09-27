@@ -3689,7 +3689,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit its test registration. The recovered case
       passed in 37.23 seconds. The unchanged node-first case passed in
       33.87 seconds with the shared result assertion.
-    - [ ] Pass direct `runc` and commit its registration.
+    - [x] Pass direct `runc` and commit its registration. The recovered case
+      passed in 89.92 seconds through stock `runc` and the OCI hook. The
+      unchanged node-first case passed in 62.58 seconds.
     - [ ] Pass Kubernetes and commit its registration.
     - [ ] Remove the matching old action, result field, and `run.sh` gate.
       Keep the separate two-node convergence check.
