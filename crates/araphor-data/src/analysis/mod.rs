@@ -34,7 +34,7 @@ mod schema;
 mod segment_file;
 mod segments;
 
-pub use backup::{AnalysisBackupManifestV1, AnalysisRecoveryStatusV1};
+pub use backup::{AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisRecoveryStatusV1};
 pub use capacity::{StorageLimitsV1, StorageUsageV1};
 pub use context::{AnalysisContextKeyV1, AnalysisContextVersionV1, ContextSensitivityV1};
 pub use health::{ProcessorHealthV1, ProcessorStateV1, StorageHealthV1};

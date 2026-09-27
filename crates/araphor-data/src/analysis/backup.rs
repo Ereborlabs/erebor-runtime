@@ -2,6 +2,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::Path;
+use std::sync::atomic::Ordering;
 
 use duckdb::params;
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,7 @@ use uuid::Uuid;
 
 use super::{
     capacity::{StorageLimitsV1, StorageUsageV1},
+    segments::SegmentRange,
     source_key, valid_source_identity, AnalysisStore, AnalysisStoreMetaV1, ANALYSIS_SCHEMA_VERSION,
 };
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, JsonSnafu, Result};
@@ -23,6 +25,37 @@ pub struct AnalysisBackupManifestV1 {
     pub commit_revision: u64,
     pub database_bytes: u64,
     pub database_sha256: [u8; 32],
+    pub segments: Vec<AnalysisBackupSegmentV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnalysisBackupSegmentV1 {
+    pub segment_id: u64,
+    pub bytes: u64,
+    pub sha256: [u8; 32],
+}
+
+const MAX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
+
+impl AnalysisBackupManifestV1 {
+    fn copy_bytes(&self, root: &Path) -> Result<u64> {
+        let volume = rustix::fs::statvfs(root)
+            .map_err(std::io::Error::from)
+            .context(IoSnafu { path: root })?;
+        std::iter::once(self.database_bytes)
+            .chain(self.segments.iter().map(|segment| segment.bytes))
+            .try_fold(0_u64, |total, bytes| {
+                total.checked_add(bytes.checked_next_multiple_of(volume.f_frsize)?)
+            })
+            .ok_or_else(|| {
+                crate::AnalysisStateSnafu {
+                    path: root,
+                    reason: "the backup allocation size is invalid",
+                }
+                .build()
+            })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -124,16 +157,25 @@ impl AnalysisStore {
             .ok_or_else(|| self.state_error("the backup path has no parent"))?;
         if parent != self.root.join("backups")
             || destination
-                .extension()
-                .is_none_or(|extension| extension != "duckdb")
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_none_or(|name| {
+                    name.is_empty()
+                        || name.len() > 128
+                        || !name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+                })
         {
-            return self.reject("the backup must be a duckdb file in the owned backups directory");
+            return self.reject(
+                "the backup must be one named directory under the owned backups directory",
+            );
         }
         let mut writer = self.maintenance_writer()?;
         match fs::symlink_metadata(parent) {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                self.storage_with_entries(3)?;
+                self.storage_with_entries(1)?;
                 fs::DirBuilder::new()
                     .mode(0o700)
                     .create(parent)
@@ -161,6 +203,21 @@ impl AnalysisStore {
                 .lock()
                 .map_err(|_| self.state_error("the analysis reader lock is poisoned"))?,
         ];
+        let files = Self::backup_segments(writer.get()?)?;
+        self.write_ready.store(false, Ordering::Release);
+        writer
+            .get()?
+            .execute("UPDATE segments SET sealed = true WHERE state = 'Live'", [])
+            .context(AnalysisDatabaseSnafu {
+                operation: "seal backup segments",
+            })?;
+        for (segment_id, bytes) in &files {
+            let file = super::SegmentFile::open(&SegmentRange::path(&self.root, *segment_id))?;
+            if file.length()? != *bytes {
+                return self.reject("the backup segment size differs from its committed end");
+            }
+            file.sync()?;
+        }
         writer
             .get()?
             .execute_batch("CHECKPOINT")
@@ -169,11 +226,15 @@ impl AnalysisStore {
             })?;
         let source = self.root.join("analysis.duckdb");
         let meta = Self::read_meta_from(writer.get()?, &source)?;
+        #[cfg(test)]
+        self.crash_at("backup.sealed");
         for reader in &mut readers {
             drop(reader.take());
         }
         drop(writer.connection.take());
-        let result = self.copy_backup(destination, &meta);
+        #[cfg(test)]
+        self.crash_at("backup.closed");
+        let result = self.copy_backup(destination, &meta, &files);
         let connection = self.reopen_backup(&meta)?;
         let first = connection.try_clone().context(AnalysisDatabaseSnafu {
             operation: "reopen first trusted reader",
@@ -184,6 +245,9 @@ impl AnalysisStore {
         *readers[0] = Some(first);
         *readers[1] = Some(second);
         *writer.connection = Some(connection);
+        self.write_ready.store(true, Ordering::Release);
+        #[cfg(test)]
+        self.crash_at("backup.ready");
         result
     }
 
@@ -193,19 +257,63 @@ impl AnalysisStore {
         if !saved.is_file() || saved.permissions().mode() & 0o077 != 0 {
             return self.reject("the analysis database file is not private");
         }
-        let connection = Self::open_native(&source)?;
+        let mut connection = Self::open_native(&source)?;
         if Self::read_meta_from(&connection, &source)? != *meta {
             return self.reject("the analysis identity changed during backup");
         }
         Self::validate_tables(&connection)?;
         Self::validate_state(&connection, &self.root)?;
+        Self::recover_segments(&mut connection, &self.root)?;
         Ok(connection)
+    }
+
+    fn backup_segments(writer: &duckdb::Connection) -> Result<Vec<(u64, u64)>> {
+        let pending: bool = writer
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM segments WHERE state <> 'Live')",
+                [],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "check complete backup catalog",
+            })?;
+        if pending {
+            return Self::reject_path(
+                Path::new("<backup-catalog>"),
+                "the backup catalog has unfinished segment work",
+            );
+        }
+        let mut statement = writer
+            .prepare("SELECT segment_id, committed_end FROM segments ORDER BY segment_id LIMIT ?")
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare backup segment list",
+            })?;
+        let files = statement
+            .query_map(
+                params![super::capacity::MAX_STORAGE_ENTRIES as u64 + 1],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "read backup segment list",
+            })?
+            .collect::<duckdb::Result<Vec<_>>>()
+            .context(AnalysisDatabaseSnafu {
+                operation: "decode backup segment list",
+            })?;
+        if files.len() > super::capacity::MAX_STORAGE_ENTRIES {
+            return Self::reject_path(
+                Path::new("<backup-catalog>"),
+                "the backup has too many segments",
+            );
+        }
+        Ok(files)
     }
 
     fn copy_backup(
         &self,
         destination: &Path,
         meta: &AnalysisStoreMetaV1,
+        files: &[(u64, u64)],
     ) -> Result<AnalysisBackupManifestV1> {
         let parent = destination
             .parent()
@@ -220,27 +328,53 @@ impl AnalysisStore {
         let source_bytes = fs::metadata(&source)
             .context(IoSnafu { path: &source })?
             .len();
-        self.storage
-            .check_backup(self.storage_with_entries(2)?, source_bytes)?;
-        let mut source_file = File::open(&source).context(IoSnafu { path: &source })?;
-        let mut output = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(destination)
-            .context(IoSnafu { path: destination })?;
-        std::io::copy(&mut source_file, &mut output).context(IoSnafu { path: destination })?;
-        output.sync_all().context(IoSnafu { path: destination })?;
-        let manifest = AnalysisBackupManifestV1 {
+        let mut manifest = AnalysisBackupManifestV1 {
             store_uuid: meta.store_uuid.to_string(),
             schema_version: meta.schema_version,
             recovery_epoch: meta.recovery_epoch,
             commit_revision: meta.commit_revision,
             database_bytes: source_bytes,
-            database_sha256: Self::file_digest(destination)?,
+            database_sha256: Self::file_digest(&source)?,
+            segments: Vec::with_capacity(files.len()),
         };
-        let manifest_path = destination.with_extension("manifest.json");
-        let mut manifest_file = OpenOptions::new()
+        for (segment_id, bytes) in files {
+            let path = SegmentRange::path(&self.root, *segment_id);
+            manifest.segments.push(AnalysisBackupSegmentV1 {
+                segment_id: *segment_id,
+                bytes: *bytes,
+                sha256: Self::file_digest(&path)?,
+            });
+        }
+        let manifest_path = destination.join("manifest.json");
+        let bytes = serde_json::to_vec(&manifest).context(JsonSnafu {
+            path: &manifest_path,
+        })?;
+        if bytes.len() as u64 > MAX_MANIFEST_BYTES {
+            return self.reject("the backup manifest exceeds its size bound");
+        }
+        let copy_bytes = manifest
+            .copy_bytes(&self.root)?
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| self.state_error("the backup reservation size is invalid"))?;
+        self.storage
+            .check_backup(self.storage_with_entries(files.len() + 4)?, copy_bytes)?;
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(destination)
+            .context(IoSnafu { path: destination })?;
+        Self::segment_directory(destination)?;
+        Self::copy_bundle_file(&source, &destination.join("analysis.duckdb"), source_bytes)?;
+        for segment in &manifest.segments {
+            Self::copy_bundle_file(
+                &SegmentRange::path(&self.root, segment.segment_id),
+                &SegmentRange::path(destination, segment.segment_id),
+                segment.bytes,
+            )?;
+        }
+        #[cfg(test)]
+        self.crash_at("backup.copied");
+        Self::validate_bundle(&manifest, destination)?;
+        let mut output = OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
@@ -248,58 +382,199 @@ impl AnalysisStore {
             .context(IoSnafu {
                 path: &manifest_path,
             })?;
-        let bytes = serde_json::to_vec(&manifest).context(JsonSnafu {
+        output.write_all(&bytes).context(IoSnafu {
             path: &manifest_path,
         })?;
-        manifest_file.write_all(&bytes).context(IoSnafu {
+        output.sync_all().context(IoSnafu {
             path: &manifest_path,
         })?;
-        manifest_file.sync_all().context(IoSnafu {
-            path: &manifest_path,
-        })?;
-        File::open(parent)
-            .context(IoSnafu { path: parent })?
-            .sync_all()
-            .context(IoSnafu { path: parent })?;
+        for directory in [
+            destination.join("segments"),
+            destination.to_owned(),
+            parent.to_owned(),
+        ] {
+            File::open(&directory)
+                .context(IoSnafu { path: &directory })?
+                .sync_all()
+                .context(IoSnafu { path: &directory })?;
+        }
         Ok(manifest)
+    }
+
+    fn copy_bundle_file(source: &Path, target: &Path, bytes: u64) -> Result<()> {
+        let input = OpenOptions::new()
+            .read(true)
+            .custom_flags(
+                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
+            )
+            .open(source)
+            .context(IoSnafu { path: source })?;
+        let metadata = input.metadata().context(IoSnafu { path: source })?;
+        if !metadata.is_file()
+            || metadata.permissions().mode() & 0o077 != 0
+            || metadata.len() != bytes
+        {
+            return Self::reject_path(
+                source,
+                "the backup input is not a private file of the declared size",
+            );
+        }
+        let bound = bytes.checked_add(1).ok_or_else(|| {
+            crate::AnalysisStateSnafu {
+                path: source,
+                reason: "the backup file size is invalid",
+            }
+            .build()
+        })?;
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(target)
+            .context(IoSnafu { path: target })?;
+        let copied =
+            std::io::copy(&mut input.take(bound), &mut output).context(IoSnafu { path: target })?;
+        if copied != bytes {
+            return Self::reject_path(target, "the backup input changed size during copy");
+        }
+        output.sync_all().context(IoSnafu { path: target })?;
+        Ok(())
+    }
+
+    fn validate_bundle(manifest: &AnalysisBackupManifestV1, root: &Path) -> Result<()> {
+        if manifest.schema_version != ANALYSIS_SCHEMA_VERSION as u32
+            || Uuid::parse_str(&manifest.store_uuid).is_err()
+            || manifest.database_bytes == 0
+            || manifest.segments.len() > super::capacity::MAX_STORAGE_ENTRIES
+            || manifest
+                .segments
+                .windows(2)
+                .any(|pair| pair[0].segment_id >= pair[1].segment_id)
+            || manifest.segments.iter().any(|segment| {
+                segment.segment_id == 0
+                    || segment.bytes < 70
+                    || segment.bytes > super::MAX_EVIDENCE_SEGMENT_BYTES as u64
+            })
+        {
+            return Self::reject_path(root, "the backup manifest identity or bounds are invalid");
+        }
+        let directory = root.join("segments");
+        for path in [root, directory.as_path()] {
+            let metadata = fs::symlink_metadata(path).context(IoSnafu { path })?;
+            if !metadata.is_dir() || metadata.permissions().mode() & 0o077 != 0 {
+                return Self::reject_path(path, "the backup directory is not private");
+            }
+        }
+        let database = root.join("analysis.duckdb");
+        let metadata = fs::symlink_metadata(&database).context(IoSnafu { path: &database })?;
+        if !metadata.is_file()
+            || metadata.permissions().mode() & 0o077 != 0
+            || metadata.len() != manifest.database_bytes
+            || Self::file_digest(&database)? != manifest.database_sha256
+        {
+            return Self::reject_path(root, "the backup database differs from its manifest");
+        }
+        let mut count = 0;
+        for entry in fs::read_dir(&directory).context(IoSnafu { path: &directory })? {
+            let entry = entry.context(IoSnafu { path: &directory })?;
+            count += 1;
+            if count > manifest.segments.len() {
+                return Self::reject_path(root, "the backup contains an unlisted segment");
+            }
+            let name = entry.file_name();
+            let segment_id = name
+                .to_str()
+                .and_then(|name| name.strip_suffix(".seg"))
+                .filter(|stem| stem.len() == 16)
+                .and_then(|stem| u64::from_str_radix(stem, 16).ok())
+                .ok_or_else(|| {
+                    crate::AnalysisStateSnafu {
+                        path: root,
+                        reason: "the backup segment name is invalid",
+                    }
+                    .build()
+                })?;
+            let index = manifest
+                .segments
+                .binary_search_by_key(&segment_id, |segment| segment.segment_id)
+                .map_err(|_| {
+                    crate::AnalysisStateSnafu {
+                        path: root,
+                        reason: "the backup segment is unlisted",
+                    }
+                    .build()
+                })?;
+            let segment = &manifest.segments[index];
+            let path = SegmentRange::path(root, segment_id);
+            if path != entry.path()
+                || super::SegmentFile::reader(&path)?.length()? != segment.bytes
+                || Self::file_digest(&path)? != segment.sha256
+            {
+                return Self::reject_path(root, "the backup segment differs from its manifest");
+            }
+        }
+        if count != manifest.segments.len() {
+            return Self::reject_path(root, "the backup is missing a listed segment");
+        }
+        Ok(())
     }
 
     pub fn restore(backup: &Path, root: &Path) -> Result<Self> {
         if !backup.is_absolute() || !root.is_absolute() {
             return Self::reject_path(root, "backup and restore paths must be absolute");
         }
-        let manifest_path = backup.with_extension("manifest.json");
+        let manifest_path = backup.join("manifest.json");
         let backup_meta = fs::symlink_metadata(backup).context(IoSnafu { path: backup })?;
         let manifest_meta = fs::symlink_metadata(&manifest_path).context(IoSnafu {
             path: &manifest_path,
         })?;
-        if !backup_meta.is_file()
+        if !backup_meta.is_dir()
             || !manifest_meta.is_file()
             || backup_meta.permissions().mode() & 0o077 != 0
             || manifest_meta.permissions().mode() & 0o077 != 0
-            || manifest_meta.len() > 4096
+            || manifest_meta.len() > MAX_MANIFEST_BYTES
         {
             return Self::reject_path(root, "the backup files are unsafe or exceed their bounds");
         }
         let mut bytes = Vec::new();
-        File::open(&manifest_path)
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(
+                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
+            )
+            .open(&manifest_path)
             .context(IoSnafu {
                 path: &manifest_path,
             })?
+            .take(MAX_MANIFEST_BYTES + 1)
             .read_to_end(&mut bytes)
             .context(IoSnafu {
                 path: &manifest_path,
             })?;
+        if bytes.len() as u64 > MAX_MANIFEST_BYTES {
+            return Self::reject_path(backup, "the backup manifest exceeds its size bound");
+        }
         let manifest: AnalysisBackupManifestV1 =
             serde_json::from_slice(&bytes).context(JsonSnafu {
                 path: &manifest_path,
             })?;
-        if manifest.schema_version != ANALYSIS_SCHEMA_VERSION as u32
-            || Uuid::parse_str(&manifest.store_uuid).is_err()
-            || backup_meta.len() != manifest.database_bytes
-            || Self::file_digest(backup)? != manifest.database_sha256
+        Self::validate_bundle(&manifest, backup)?;
+        for (index, entry) in fs::read_dir(backup)
+            .context(IoSnafu { path: backup })?
+            .enumerate()
         {
-            return Self::reject_path(root, "the backup manifest or database differs");
+            let name = entry.context(IoSnafu { path: backup })?.file_name();
+            if index >= 3
+                || !matches!(
+                    name.to_str(),
+                    Some("analysis.duckdb" | "segments" | "manifest.json")
+                )
+            {
+                return Self::reject_path(backup, "the backup contains an unlisted entry");
+            }
+        }
+        if manifest.segments.len() + 5 > super::capacity::MAX_STORAGE_ENTRIES {
+            return Self::reject_path(backup, "the restored store would exceed its entry bound");
         }
         let lease = super::connection::AnalysisLease::acquire(root)?;
         for entry in fs::read_dir(root).context(IoSnafu { path: root })? {
@@ -323,17 +598,29 @@ impl AnalysisStore {
         #[cfg(test)]
         Self::crash_path(root, "restore.marked");
         let storage = StorageLimitsV1::default();
-        storage.check_copy(StorageUsageV1::free_bytes(root)?, manifest.database_bytes)?;
-        let target = root.join("analysis.duckdb");
-        let mut input = File::open(backup).context(IoSnafu { path: backup })?;
-        let mut output = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&target)
-            .context(IoSnafu { path: &target })?;
-        std::io::copy(&mut input, &mut output).context(IoSnafu { path: &target })?;
-        output.sync_all().context(IoSnafu { path: &target })?;
+        storage.check_copy(
+            StorageUsageV1::free_bytes(root)?,
+            manifest.copy_bytes(root)?,
+        )?;
+        Self::segment_directory(root)?;
+        Self::copy_bundle_file(
+            &backup.join("analysis.duckdb"),
+            &root.join("analysis.duckdb"),
+            manifest.database_bytes,
+        )?;
+        for segment in &manifest.segments {
+            Self::copy_bundle_file(
+                &SegmentRange::path(backup, segment.segment_id),
+                &SegmentRange::path(root, segment.segment_id),
+                segment.bytes,
+            )?;
+        }
+        let segments = root.join("segments");
+        File::open(&segments)
+            .context(IoSnafu { path: &segments })?
+            .sync_all()
+            .context(IoSnafu { path: &segments })?;
+        Self::validate_bundle(&manifest, root)?;
         File::open(root)
             .context(IoSnafu { path: root })?
             .sync_all()
@@ -352,6 +639,27 @@ impl AnalysisStore {
         }
         {
             let mut writer = store.writer()?;
+            let files = Self::backup_segments(writer.get()?)?;
+            if files.iter().copied().ne(manifest
+                .segments
+                .iter()
+                .map(|segment| (segment.segment_id, segment.bytes)))
+            {
+                return store.reject("the restored catalog differs from its segment manifest");
+            }
+            let unsealed: bool = writer
+                .get()?
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM segments WHERE NOT sealed)",
+                    [],
+                    |row| row.get(0),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "validate sealed restore catalog",
+                })?;
+            if unsealed {
+                return store.reject("the backup catalog contains an unsealed segment");
+            }
             let transaction = writer
                 .get_mut()?
                 .transaction()
@@ -393,6 +701,7 @@ impl AnalysisStore {
 mod tests {
     use std::fs::DirBuilder;
     use std::os::unix::fs::DirBuilderExt as _;
+    use std::path::PathBuf;
 
     use super::*;
     use crate::{EvidenceIntakeIdentityV1, EvidenceStoreOutcomeV1, ValidatedEvidenceBatchV1};
@@ -441,7 +750,7 @@ mod tests {
         ] {
             assert!(store.backup(&invalid).is_err());
         }
-        let backup = root.join("backups/first.duckdb");
+        let backup = root.join("backups/first");
         let manifest = store.backup(&backup)?;
         let usage = store.storage_usage()?;
         assert!(usage.file_bytes >= before.file_bytes + manifest.database_bytes);
@@ -456,7 +765,7 @@ mod tests {
             .create_new(true)
             .open(root.join("quota"))?;
         padding.set_len(limits.disk_max_bytes)?;
-        let blocked = root.join("backups/blocked.duckdb");
+        let blocked = root.join("backups/blocked");
         assert!(matches!(
             store.backup(&blocked),
             Err(crate::Error::StorageCapacity {
@@ -465,10 +774,10 @@ mod tests {
             })
         ));
         assert!(!blocked.exists());
-        assert!(!blocked.with_extension("manifest.json").exists());
+        assert!(!blocked.join("manifest.json").exists());
         assert_eq!(store.meta()?, meta);
         assert_eq!(
-            AnalysisStore::file_digest(&backup)?,
+            AnalysisStore::file_digest(&backup.join("analysis.duckdb"))?,
             manifest.database_sha256
         );
         assert_eq!(store.read_page(&identity(), 1)?.records.len(), 1);
@@ -479,12 +788,8 @@ mod tests {
         let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
         assert_eq!(store.storage_usage()?.file_bytes, usage.file_bytes);
         assert_eq!(store.meta()?, meta);
-        let external = directory.path().join("external.duckdb");
-        fs::copy(&backup, &external)?;
-        fs::copy(
-            backup.with_extension("manifest.json"),
-            external.with_extension("manifest.json"),
-        )?;
+        let external = directory.path().join("external");
+        fs::rename(&backup, &external)?;
         let restored = AnalysisStore::restore(&external, &directory.path().join("restored"))?;
         assert_eq!(restored.read_page(&identity(), 1)?.records.len(), 1);
         Ok(())
@@ -500,12 +805,16 @@ mod tests {
         store.accept_validated_batch(identity(), batch(1))?;
         let meta = store.meta()?;
         let backups = root.join("backups");
-        let destination = backups.join("saved.duckdb");
+        let destination = backups.join("saved");
         let reader = store.reader()?;
         let (sender, receiver) = mpsc::channel();
         thread::scope(
             |scope| -> std::result::Result<(), Box<dyn std::error::Error>> {
-                let worker = scope.spawn(|| sender.send(store.backup(&destination)));
+                let worker = scope.spawn(|| {
+                    sender
+                        .send(store.backup(&destination))
+                        .map_err(|_| "backup receiver closed")
+                });
                 let pending = receiver.recv_timeout(Duration::from_millis(50));
                 drop(reader);
                 assert!(matches!(pending, Err(mpsc::RecvTimeoutError::Timeout)));
@@ -517,7 +826,7 @@ mod tests {
         )?;
         assert_eq!(store.meta()?, meta);
         assert_eq!(store.read_page(&identity(), 1)?.records.len(), 1);
-        let saved_digest = AnalysisStore::file_digest(&destination)?;
+        let saved_digest = AnalysisStore::file_digest(&destination.join("analysis.duckdb"))?;
         assert!(AnalysisStore::open(&root).is_err());
         assert!(store.backup(&destination).is_err());
         assert_eq!(store.meta()?, meta);
@@ -525,20 +834,19 @@ mod tests {
         let restored = AnalysisStore::restore(&destination, &directory.path().join("restored"))?;
         assert_eq!(restored.read_page(&identity(), 1)?.records.len(), 1);
         assert_eq!(store.read_page(&identity(), 1)?.records.len(), 2);
-        let blocked = backups.join("blocked.duckdb");
-        DirBuilder::new()
-            .mode(0o700)
-            .create(blocked.with_extension("manifest.json"))?;
+        let blocked = backups.join("blocked");
+        DirBuilder::new().mode(0o700).create(&blocked)?;
         store.checkpoint()?;
         let before_failure = store.storage_usage()?;
         assert!(store.backup(&blocked).is_err());
-        assert!(
-            store.storage_usage()?.file_bytes
-                >= before_failure.file_bytes + fs::metadata(&blocked)?.len()
-        );
+        assert_eq!(store.storage_usage()?.file_bytes, before_failure.file_bytes);
+        assert_eq!(fs::read_dir(&blocked)?.count(), 0);
         assert_eq!(store.read_page(&identity(), 1)?.records.len(), 2);
         assert!(AnalysisStore::restore(&blocked, &directory.path().join("invalid")).is_err());
-        assert_eq!(AnalysisStore::file_digest(&destination)?, saved_digest);
+        assert_eq!(
+            AnalysisStore::file_digest(&destination.join("analysis.duckdb"))?,
+            saved_digest
+        );
         Ok(())
     }
 
@@ -579,12 +887,16 @@ mod tests {
             EvidenceStoreOutcomeV1::Accepted
         );
         let backup_dir = store.root.join("backups");
-        let backup = backup_dir.join("analysis.duckdb");
+        let backup = backup_dir.join("saved");
         let manifest = store.backup(&backup)?;
         assert_eq!(manifest.commit_revision, 1);
         assert_eq!(manifest.recovery_epoch, 1);
-        assert_eq!(manifest.schema_version, 5);
-        assert_eq!(manifest.database_bytes, fs::metadata(&backup)?.len());
+        assert_eq!(manifest.schema_version, ANALYSIS_SCHEMA_VERSION as u32);
+        assert_eq!(
+            manifest.database_bytes,
+            fs::metadata(backup.join("analysis.duckdb"))?.len()
+        );
+        assert_eq!(manifest.segments.len(), 1);
         assert!(store.backup(&backup).is_err());
         assert_eq!(
             store.accept_validated_batch(source.clone(), batch(2))?,
@@ -626,10 +938,126 @@ mod tests {
         );
         assert!(AnalysisStore::restore(&backup, &directory.path().join("restored")).is_err());
         drop(restored);
-        let mut output = OpenOptions::new().append(true).open(&backup)?;
+        let mut output = OpenOptions::new()
+            .append(true)
+            .open(backup.join("analysis.duckdb"))?;
         output.write_all(b"corrupt")?;
         assert!(AnalysisStore::restore(&backup, &directory.path().join("corrupt")).is_err());
         assert!(!directory.path().join("corrupt").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_store_bundle_checks() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        store.accept_validated_batch(identity(), batch(1))?;
+        let backup = root.join("backups/saved");
+        let manifest = store.backup(&backup)?;
+        let segment = SegmentRange::path(&backup, manifest.segments[0].segment_id);
+        let bytes = fs::read(&segment)?;
+        let target = directory.path().join("restored");
+        let rejected = || {
+            assert!(AnalysisStore::restore(&backup, &target).is_err());
+            assert!(!target.exists());
+        };
+
+        let moved = directory.path().join("saved-segment");
+        fs::rename(&segment, &moved)?;
+        rejected();
+        symlink(&moved, &segment)?;
+        rejected();
+        fs::remove_file(&segment)?;
+        fs::rename(&moved, &segment)?;
+
+        let mut changed = bytes.clone();
+        *changed.last_mut().ok_or("segment is empty")? ^= 1;
+        fs::write(&segment, &changed)?;
+        rejected();
+        fs::write(&segment, &bytes)?;
+        fs::set_permissions(&segment, fs::Permissions::from_mode(0o644))?;
+        rejected();
+        fs::set_permissions(&segment, fs::Permissions::from_mode(0o600))?;
+
+        let unknown = backup.join("segments/unknown");
+        fs::write(&unknown, b"do not remove")?;
+        rejected();
+        assert_eq!(fs::read(&unknown)?, b"do not remove");
+        fs::remove_file(&unknown)?;
+        let manifest_path = backup.join("manifest.json");
+        let manifest_bytes = fs::read(&manifest_path)?;
+        let mut changed = manifest.clone();
+        changed.segments.push(changed.segments[0].clone());
+        fs::write(&manifest_path, serde_json::to_vec(&changed)?)?;
+        rejected();
+        fs::write(&manifest_path, &manifest_bytes)?;
+
+        let restored = AnalysisStore::restore(&backup, &target)?;
+        assert_eq!(
+            restored.read_page(&identity(), 1)?.records[0].framed_record,
+            b"frame"
+        );
+        assert_eq!(fs::read(&segment)?, bytes);
+        assert_eq!(fs::read(&manifest_path)?, manifest_bytes);
+        assert_eq!(store.read_page(&identity(), 1)?.records.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_store_backup_crashes() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
+            let root = PathBuf::from(root);
+            AnalysisStore::open(&root)?.backup(&root.join("backups/saved"))?;
+            return Err("the requested backup crash did not occur".into());
+        }
+        for point in [
+            "backup.sealed",
+            "backup.closed",
+            "backup.copied",
+            "backup.ready",
+        ] {
+            let directory = tempfile::tempdir()?;
+            let root = directory.path().join("analysis");
+            let store = AnalysisStore::open(&root)?;
+            store.accept_validated_batch(identity(), batch(1))?;
+            let meta = store.meta()?;
+            drop(store);
+            let status = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "analysis::backup::tests::analysis_store_backup_crashes",
+                ])
+                .env("ARAPHOR_CRASH_ROOT", &root)
+                .env("ARAPHOR_CRASH_POINT", point)
+                .status()?;
+            assert_eq!(status.code(), Some(73), "{point}");
+            let store = AnalysisStore::open(&root)?;
+            assert_eq!(store.meta()?, meta, "{point}");
+            assert_eq!(
+                store.read_page(&identity(), 1)?.records[0].framed_record,
+                b"frame"
+            );
+            let saved = root.join("backups/saved");
+            let restored = AnalysisStore::restore(&saved, &directory.path().join("restored"));
+            if point == "backup.ready" {
+                assert_eq!(restored?.read_page(&identity(), 1)?.records.len(), 1);
+            } else {
+                assert!(restored.is_err(), "{point}");
+            }
+            store.accept_validated_batch(identity(), batch(2))?;
+            let retry = root.join("backups/retry");
+            store.backup(&retry)?;
+            assert_eq!(
+                AnalysisStore::restore(&retry, &directory.path().join("retry"))?
+                    .read_page(&identity(), 1)?
+                    .records
+                    .len(),
+                2
+            );
+        }
         Ok(())
     }
 }

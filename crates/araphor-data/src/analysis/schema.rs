@@ -1,5 +1,6 @@
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::Read as _;
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::Path;
 
 use duckdb::{params, Connection, OptionalExt as _};
@@ -440,7 +441,26 @@ impl AnalysisStore {
     }
 
     pub(super) fn file_digest(path: &Path) -> Result<[u8; 32]> {
-        let mut input = File::open(path).context(IoSnafu { path })?;
+        let input = OpenOptions::new()
+            .read(true)
+            .custom_flags(
+                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
+            )
+            .open(path)
+            .context(IoSnafu { path })?;
+        let metadata = input.metadata().context(IoSnafu { path })?;
+        if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
+            return Self::reject_path(path, "the digest input is not a private regular file");
+        }
+        let bound = metadata.len().checked_add(1).ok_or_else(|| {
+            crate::AnalysisStateSnafu {
+                path,
+                reason: "the digest input size is invalid",
+            }
+            .build()
+        })?;
+        let mut input = input.take(bound);
+        let mut total = 0;
         let mut digest = Sha256::new();
         let mut chunk = [0_u8; 1024 * 1024];
         loop {
@@ -448,7 +468,11 @@ impl AnalysisStore {
             if bytes == 0 {
                 break;
             }
+            total += bytes as u64;
             digest.update(&chunk[..bytes]);
+        }
+        if total != metadata.len() {
+            return Self::reject_path(path, "the digest input changed size during read");
         }
         Ok(digest.finalize().into())
     }

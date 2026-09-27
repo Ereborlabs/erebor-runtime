@@ -14,8 +14,8 @@ Control keeps policy/trust/rollout persistence and authority. Node keeps its
 delivery WAL. The same complete data owner can later run remotely. Storage
 and trace intake do not require discovery. Entry: 7.1.
 Status: **Not done**. Segment intake, reads, recovery, and retention are under
-implementation. Complete-bundle backup, bounded extraction, caller conversion,
-and full qualification remain incomplete.
+implementation. Complete-bundle backup is implemented. Bounded extraction,
+caller conversion, and full qualification remain incomplete.
 Previous implementation results below are evidence for their named revisions,
 not completion of this design.
 
@@ -539,12 +539,42 @@ old per-row retention/witness assertions, and old native-memory settings.
 The required-input scope test passed after the exact-prefix accounting fix.
 The command returned 101; this result does not qualify the full phase.
 
-Complete-bundle backup and restore are not converted. The current backup
-implementation copies only the database and must not be used for a segment
-store. Apply the uncertain-commit guard to the other metadata owners as well.
+Complete-bundle backup and restore are described below. Apply the
+uncertain-commit guard to the other metadata owners as well.
 Trusted bounded extraction, pin-amplification reporting, the old Control writer
 removal, updated fault fixtures, mithril-e2e proof, and release resource and
 performance gates remain incomplete.
+
+### Complete-bundle backup
+
+Source state: the bundle conversion after `1cbdab02`. `backup` accepts one new
+directory directly under `AnalysisStore/backups`. It holds the writer and
+drains readers. It seals and syncs segments, checkpoints metadata, and closes
+native connections. It then copies `analysis.duckdb` and each committed segment.
+`manifest.json` records the store identity, schema, epoch, revision, database
+digest, and each segment ID, size, and digest. The manifest is written only
+after copied files pass validation. The owner reopens the source after a copy
+failure. It does not overwrite or remove an existing or incomplete backup.
+
+The capacity check includes rounded file allocation, manifest bytes, and entry
+count. The copy loop has a declared byte bound. Bundle checks reject duplicate
+IDs, missing or extra segments, changed bytes, non-private files, and symlinks.
+Restore copies the complete bundle into an empty leased directory. It retains
+`restore.pending` until catalog checks and the new recovery epoch are durable.
+A failed destination remains unavailable; the source bundle is unchanged.
+
+The backup tests check quota rejection, external bundle relocation, reader
+drain, snapshot contents, duplicate destinations, and four interrupted backup
+positions. Bundle corruption and restore crash checks use temporary stores.
+The existing mithril-e2e callers now copy complete bundles; their full current
+qualification remains incomplete.
+
+After the final Rust edit, `bash .github/scripts/verify-rust-ci.sh` passed
+formatting, workspace check, and Clippy. The test step returned 101 with
+45 passed, 13 failed, and 4 ignored in araphor-data. All six bundle/restore
+tests passed. The remaining failures are the raw-table corruption fixtures,
+old per-row retention and witness expectations, and old native-memory limits.
+These must be converted and verified before the phase can be Done.
 
 ### Previous implementation evidence
 
