@@ -1739,5 +1739,14 @@ passed one test in 4.17 seconds with the same package selection and
 `-- --exact --test-threads=1 --nocapture`. An earlier filter omitted `quota::`
 and selected zero tests; that command provides no proof. The passing case uses
 the two-MiB fixture quota. It does not qualify the default full-capacity path.
-The final workspace gate and release capacity reruns remain pending. The
-separate global checkpoint failure is not corrected by this query change.
+The full workspace gate passed for `38da332c` with `CARGO_BUILD_JOBS=2
+RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh`. Formatting,
+compilation, strict Clippy, and workspace tests passed. Data passed 49 tests
+with four ignored in 122.68 seconds. Control passed 197 with two ignored in
+479.01 seconds. Mithril e2e passed 124 with 251 ignored in 126.01 seconds.
+Node passed 256 with one ignored in 13.70 seconds. Tests ran serially without
+a competing task build or load. The full log is
+`/tmp/araphor-memory-probe.z1rbDjUR/witness-join-workspace.log`.
+All 442 local file links in this plan and its implementation review resolve.
+The release capacity reruns remain pending. The separate global checkpoint
+failure is not corrected by this query change. The phase remains **Not done**.

@@ -971,6 +971,12 @@ references stop contributing at their expiry time; context references remain.
 `analysis_store_witness_limits` rejects a correlated `DELIM_JOIN` query plan.
 The assertion failed on the preceding correlated query and passes with these
 joins. This small regression does not qualify full-capacity result commits.
+The full workspace gate passed for `38da332c`, including formatting,
+compilation, strict Clippy, and serial workspace tests. Data passed 49 tests
+with four ignored; Control passed 197 with two ignored; Mithril e2e passed
+124 with 251 ignored; Node passed 256 with one ignored. The phase plan records
+the command, timings, and log. The default-capacity gRPC rerun and the separate
+global checkpoint failure remain open.
 The owner computes usage from native columns inside the write transaction;
 there is no separate accounting ledger to recover. A quota failure rolls back
 rows, references, progress, and receipts together. Size-reducing raw retention
