@@ -1375,5 +1375,15 @@ comes from that defect. The runner now alternates pair order and records it.
 The order regression failed on the original runner and passed after the
 correction in 2.53 seconds. It also rejects odd pair counts. Production
 persistence, quotas, timeouts, and evidence checks are unchanged. Keep the
-original results. New release comparisons and the final workspace gate must
-run before this correction is qualified. The phase remains **Not done**.
+original results. The release build passed on `7bdf5797` in 1 minute 37 seconds.
+Its binary SHA-256 is
+`8d790a437a6f10c27b31311eda4b6f9b38f61b14a580f2703a33e5ad2c3c718d`;
+the pilot copy matches. The release case passed with 16 pairs in each order,
+64 Active transitions, and 131,072 records. Its `balanced-rollout-smoke.json`
+and resource log are in the pilot output directory. The case took 15.66 seconds
+with 186,964 KiB peak whole-process RSS. Idle/loaded mean times were
+99.198/107.309 milliseconds; the maximum observed ACK was 218.475 milliseconds.
+Host workspace tests ran concurrently. These times do not prove that the
+slowdown is removed. Formatting, workspace checks, and strict Clippy passed.
+Workspace tests and repeated post-verification comparisons remain open.
+No Rust source changed during the gate. The phase remains **Not done**.
