@@ -1,8 +1,8 @@
-use std::{collections::BTreeSet, fs, time::Duration};
+use std::{fs, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
 
-use crate::error::InvalidInputSnafu;
+use crate::effect::EffectCheck;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
@@ -16,12 +16,7 @@ fn bind_emits_mount_event<P: Platform>() -> TestResult<()> {
     env.node_ready()?;
     let mut actor = env.start_actor("mount_alias.py", &["runtime"], &labels)?;
     let task = env.task(actor.id(), "bind actor")?;
-    let seen = env
-        .snapshot()?
-        .recent_effects
-        .into_iter()
-        .map(|event| (event.source_cpu_id, event.source_sequence))
-        .collect::<BTreeSet<_>>();
+    let effects = EffectCheck::new(&env, task)?;
 
     actor.send(b"mount\n")?;
     let path = env.work().join("mount-result.json");
@@ -45,43 +40,13 @@ fn bind_emits_mount_event<P: Platform>() -> TestResult<()> {
     )?;
     assert_eq!(result["mount"], 0);
 
-    let pin = env.maps().0.to_owned();
-    wait_for(
-        &pin,
+    effects.wait(
+        &env,
+        "EXACT_POLICY_ALLOW",
+        F::Mount,
+        O::Mount,
+        0,
         "actor mount effect",
-        Duration::from_secs(30),
-        || {
-            let snapshot = env.snapshot().map_err(|source| {
-                InvalidInputSnafu {
-                    path: &pin,
-                    reason: source.to_string(),
-                }
-                .build()
-            })?;
-            Ok(snapshot
-                .recent_effects
-                .iter()
-                .any(|event| {
-                    !seen.contains(&(event.source_cpu_id, event.source_sequence))
-                        && event.task_cookie == task.snapshot.task_cookie
-                        && event.effect_family == u32::from(F::Mount as u16)
-                        && event.operation == u32::from(O::Mount as u16)
-                        && event.kernel_result == 0
-                })
-                .then_some(()))
-        },
-        || {
-            format!(
-                "recent effects: {:?}; stderr: {:?}",
-                env.snapshot().map(|snapshot| snapshot
-                    .recent_effects
-                    .into_iter()
-                    .rev()
-                    .take(8)
-                    .collect::<Vec<_>>()),
-                actor.stderr()
-            )
-        },
     )?;
 
     actor.send(b"read\n")?;

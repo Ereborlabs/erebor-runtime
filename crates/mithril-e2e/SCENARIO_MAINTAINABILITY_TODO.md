@@ -3677,6 +3677,10 @@ setup, production actions, assertions, and focused test.
         probe passed with the unchanged later mount, path-tree, reader-queue,
         and cleanup assertions. Its schema remains version 40. The new shared
         test owns the production Mount/Mount event assertion.
+      - [x] Use the existing `EffectCheck` for the signed mount allow. The
+        test now has 58 lines and requires a fresh, task-attributed
+        `EXACT_POLICY_ALLOW` Mount/Mount result. The focused Host, direct
+        `runc`, and Kubernetes cases passed again without a platform change.
   - [x] Retire the duplicate in-container bind-mount result and shell gate.
     `late_bind_keeps_policy` requires the mount to succeed after production
     policy activation on Host, direct `runc`, and Kubernetes. Keep the legacy
