@@ -30,7 +30,7 @@ declarative captures are not delivered by these changes.
 
 ### Segment storage conversion
 
-Source state: the recovery and fixture changes after `c984b5d2`. Configured AnalysisStore
+Source state: the bounded-read changes after `7d920a76`. Configured AnalysisStore
 intake and reads now use segments. The target conversion remains incomplete.
 Backup and restore copy the complete metadata and segment bundle.
 Storage pass records outside this section predate this conversion
@@ -65,7 +65,36 @@ failure before append can remove only its reserved file or uncommitted tail.
 Other metadata owners use
 `AnalysisStore::commit_metadata` and block writes on a commit error. An eligible idle active segment is
 sealed when the deletion transaction marks it Deleting. Reader count and page
-bytes are bounded; extraction-deadline cancellation is not implemented.
+bytes are bounded. Event pages and source listing have a one-second deadline.
+Full authorized relation extraction remains incomplete.
+
+[AnalysisStore::read_page_cancel](../../../../crates/araphor-data/src/analysis/read.rs) A trusted caller requests one source page with a cancellation control.<br>
+-> [AnalysisStore::read_coordinator](../../../../crates/araphor-data/src/analysis/connection.rs) The owner obtains the writer coordinator within the request deadline.<br>
+-> [AnalysisStore::reader_until](../../../../crates/araphor-data/src/analysis/connection.rs) The owner obtains a reader and a deletion-protection lease within the same deadline.<br>
+-> [AnalysisReadControl::run](../../../../crates/araphor-data/src/analysis/read.rs) The owner attaches a connection-local interrupt and starts a scoped deadline worker.<br>
+-> [AnalysisStore::read_page_cancel](../../../../crates/araphor-data/src/analysis/read.rs) The owner captures metadata and committed ranges, then releases the writer before segment reads.<br>
+-> [AnalysisReadControl::check](../../../../crates/araphor-data/src/analysis/read.rs) The owner checks cancellation and time between ranges and records, and before returning a complete page.<br>
+-> [ReadInterrupt::drop](../../../../crates/araphor-data/src/analysis/read.rs) The owner clears the interrupt handle before the reader connection can serve another request.
+
+`read_page` creates the default control. `source_page` uses the same deadline
+for its reader and metadata query. The timer joins before the connection and
+read lease return to the store. A late cancellation cannot interrupt a later
+request on that connection. Errors release admission permits and return no
+partial page. The native interrupt cannot cancel a blocked filesystem syscall;
+segment reads check the deadline before and after each bounded range.
+
+`analysis_read_lock_deadline` checks writer, reader, and maintenance lock
+timeouts, cancellation while waiting, released permits, and subsequent reads.
+`analysis_read_native_deadline` interrupts a native query in a transaction and
+checks connection reuse, unchanged metadata, and checkpoint after failure.
+`data_capacity_recovery` checks a cancelled read through the shared data owner,
+then calls a policy RPC and reads the retained frame. Both new component tests,
+the mTLS capacity case, and the private full-tmpfs harness passed. After the
+final Rust edit, `bash .github/scripts/verify-rust-ci.sh` passed with 63 data
+tests, 197 Control unit tests, 124 Mithril e2e tests, and 256 Node unit tests.
+Read `/tmp/araphor-read-deadline-ci.log` and the phase result for ignored counts
+and physical evidence. These checks do not prove complete authorized
+extraction or the release scan-performance gate.
 
 `analysis_store_batch_receipt` checks exact retries, gaps, receipt positions,
 reopen, and batch-proportional metadata. `segment_recovery_checks_ownership`
@@ -73,7 +102,7 @@ checks reserved files, non-reused IDs, uncommitted tails, and unknown files.
 `segment_retention_keeps_witnesses` checks whole-segment pins and expiry holes.
 `segment_growth_keeps_budget` checks the witness budget during later appends.
 Bounded-extraction, resource, and physical Kubernetes qualification remain
-incomplete. After the final Rust edit, the required workspace command passed
+incomplete. At `7d920a76`, the required workspace command passed
 formatting, check, strict Clippy, and all workspace tests. Araphor-data passed
 61 tests with 4 ignored; Control passed 197 unit tests with 3 ignored.
 Mithril-e2e passed 124 tests with 251 ignored. Node passed 256 unit tests with

@@ -9,8 +9,8 @@ mod analysis;
 
 pub use analysis::{
     AnalysisBackupManifestV1, AnalysisBackupSegmentV1, AnalysisContextKeyV1, AnalysisContextRefV1,
-    AnalysisContextVersionV1, AnalysisGapV1, AnalysisReadPageV1, AnalysisRecordV1,
-    AnalysisRecoveryStatusV1, AnalysisResultCommitV1, AnalysisResultReceiptV1,
+    AnalysisContextVersionV1, AnalysisGapV1, AnalysisReadControl, AnalysisReadPageV1,
+    AnalysisRecordV1, AnalysisRecoveryStatusV1, AnalysisResultCommitV1, AnalysisResultReceiptV1,
     AnalysisSourceReceiptV1, AnalysisSourceStatusV1, AnalysisStore, AnalysisStoreMetaV1,
     AnalysisWitnessV1, ContextSensitivityV1, EvidenceRetentionOwner, EvidenceStoreOutcomeV1,
     ProcessorClassV1, ProcessorHealthV1, ProcessorRetirementV1, ProcessorScopeV1, ProcessorStateV1,
@@ -50,6 +50,16 @@ pub struct EvidenceIntakeIdentityV1 {
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("The analysis read was cancelled"))]
+    AnalysisReadCancelled {
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("The analysis read reached its deadline"))]
+    AnalysisReadDeadline {
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Analysis storage reached its {resource} limit"))]
     StorageCapacity {
         resource: &'static str,

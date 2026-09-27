@@ -1914,6 +1914,14 @@ mod tests {
             let ack = Self::ack(&mut connection).await?;
             assert_eq!(ack.contiguous_cursor, 1);
             observations.acknowledge_evidence(ack)?;
+            let cancelled = araphor_data::AnalysisReadControl::default();
+            cancelled.cancel()?;
+            assert!(matches!(
+                data.read_page_cancel(&identity, 1, &cancelled),
+                Err(araphor_data::Error::AnalysisReadCancelled { .. })
+            ));
+            connection.policy_inventory(None, Vec::new()).await?;
+            assert_eq!(data.read_page(&identity, 1)?.records.len(), 1);
             data.checkpoint()?;
             let backup_root = tls.path().join("backups");
             fs::DirBuilder::new().mode(0o700).create(&backup_root)?;

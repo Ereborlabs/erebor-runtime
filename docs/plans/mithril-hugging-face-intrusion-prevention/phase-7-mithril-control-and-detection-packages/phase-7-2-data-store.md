@@ -666,6 +666,38 @@ These results do not qualify hardware power loss, Kubernetes outage, release
 memory, or full-capacity performance. Bounded extraction, witness cost reports,
 old Control writer removal, and those qualification gates remain incomplete.
 
+### Bounded read cancellation
+
+Source state: the read changes after `7d920a76`. `AnalysisReadControl` applies
+one deadline of one second to lock waits, metadata queries, and page decoding.
+`read_page_cancel` accepts this control; `read_page` creates its default.
+`source_page` also uses the deadline. The owner releases the writer coordinator
+after snapshot capture. A scoped timer interrupts only the selected native
+reader. The timer joins and the interrupt handle clears before reader reuse.
+Cancellation or timeout returns a typed error, not a partial page.
+
+`analysis_read_lock_deadline` checks three blocked lock paths, cancellation
+while waiting, permit release, and later reads. `analysis_read_native_deadline`
+checks interruption inside a native transaction, unchanged metadata, connection
+reuse, and checkpoint. Both focused tests passed on the current source.
+The mTLS capacity case passed with a cancelled read, a working policy RPC, and
+the unchanged retained frame before backup and recovery. The private 1-GiB
+tmpfs harness passed `data_capacity_retry`, `data_capacity_recovery`, and
+`data_full_disk`. The full-disk case observed zero free bytes and retained two
+exact records after recovery. Its result is
+`/tmp/araphor-read-deadline-disk-full.log`.
+
+**Done for page deadlines and cancellation. Not done for the full phase.**
+After the final Rust edit, `bash .github/scripts/verify-rust-ci.sh` passed
+formatting, workspace check, strict Clippy, and all workspace tests.
+Araphor-data passed 63 tests with 4 ignored. Control passed 197 unit tests with
+3 ignored. Mithril-e2e passed 124 tests with 251 ignored. Node passed 256 unit
+tests with 1 ignored. The log is `/tmp/araphor-read-deadline-ci.log`.
+The native interrupt cannot cancel a blocked filesystem syscall. The owner
+checks time before and after each bounded segment range. This change does not
+complete authorized range extraction, witness cost reports, old Control writer
+removal, or the remaining release and physical qualification gates.
+
 ### Previous implementation evidence
 
 
