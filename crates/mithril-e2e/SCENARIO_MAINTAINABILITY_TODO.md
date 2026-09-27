@@ -2114,6 +2114,18 @@ test does not close a row when its physical condition or an assertion changed.
       fail-closed case and detached `open_tree` activity assertion remain.
       All Mithril E2E targets compile. The 92 non-privileged library tests,
       package clippy, formatting, and whitespace checks pass.
+  - [ ] Replace the prepared `MoveMount` fail-closed check. Extend the shared
+    mount actor to clone and hold a detached tree before policy activation.
+    Recover that actor under the signed mount-race policy, which does not
+    permit `SysAdmin`. Make it call `move_mount` after activation. Require a
+    physical `EACCES` or `EPERM` result and a fresh, task-attributed
+    `UNSUPPORTED_OBJECT` Privilege/Capability result with the same errno.
+    Keep the standard test below 100 lines and add no Platform API or policy.
+    - [ ] Pass Host and commit it.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching old prepared operation after all three
+      cases pass. Keep `MountSetattr` and propagation hard-close checks.
   - [x] Replace the pre-policy `mount_global_mutation_epoch` read. The
     production policy owner creates this hash-map row during policy
     installation. The old probe reads it before policy installation. The full
