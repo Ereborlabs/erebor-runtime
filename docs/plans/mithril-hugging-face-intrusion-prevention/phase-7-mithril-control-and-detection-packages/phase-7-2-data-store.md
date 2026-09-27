@@ -1593,7 +1593,13 @@ mithril-e2e --lib discovery::data_store::tests::data_context_bounds -- --exact
 unchanged pending input after an oversized context, Node WAL reopen, two
 bounded wire batches, durable receipts, and the ordered retained-frame digest
 after data-store reopen. It uses a temporary database and synthetic input,
-not kernel events. Its final workspace gate is pending.
+not kernel events. Its full workspace gate compiled for `6e4662b1` passed with
+`CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh`.
+Formatting, compilation, strict Clippy, and workspace tests passed. Data passed
+49 tests with three ignored; Control passed 196 with two ignored; Mithril e2e
+passed 124 with 251 ignored; Node passed 256 with one ignored. Tests ran serially.
+The later record-boundary test was added after this gate compiled its tests;
+this result does not cover that addition.
 The release `data-store-quota` case is active on `a0f620da`. Its binary
 SHA-256 is `37ce7068608cb348686f59e31d3c55b75d7cd1ce0648156ab06d562c63a8db35`.
 The CLI build passed in 5 minutes 7 seconds. No quota result is claimed yet.
@@ -1609,4 +1615,7 @@ transport or full-capacity memory. No production API or limit changed.
 The first build found an ambiguous test slice conversion; the corrected test
 passed. A prior package-only build was stopped before tests because it selected
 a separate native build. The final workspace gate for this addition is pending.
+Its first full gate passed formatting and compilation, then rejected the test's
+`unwrap_err` under strict Clippy. The test now uses the existing fallible error
+assertion. The complete gate is running again with serial tests and two build jobs.
 The phase remains **Not done**.
