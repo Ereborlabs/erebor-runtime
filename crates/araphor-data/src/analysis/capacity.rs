@@ -296,6 +296,118 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    #[ignore = "release-only isolated process RSS qualification on Linux"]
+    fn analysis_store_thread_memory() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use std::{sync::mpsc, thread};
+
+        if cfg!(debug_assertions) {
+            return Err("run this test alone with --release --ignored --exact".into());
+        }
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let identity = EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "node-a".into(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        };
+        let memory =
+            |store: &AnalysisStore| -> std::result::Result<(), Box<dyn std::error::Error>> {
+                let status = fs::read_to_string("/proc/self/status")?;
+                let peak: u64 = status
+                    .lines()
+                    .find(|line| line.starts_with("VmHWM:"))
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .ok_or("the process memory peak is absent")?
+                    .parse()?;
+                if peak > 256 * 1024 {
+                    let reader = store.reader()?;
+                    let mut query = reader.get()?.prepare(
+                    "SELECT tag, memory_usage_bytes FROM duckdb_memory() WHERE memory_usage_bytes > 0 ORDER BY tag",
+                )?;
+                    let native = query
+                        .query_map([], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+                        })?
+                        .collect::<duckdb::Result<Vec<_>>>()?;
+                    let cursor = store
+                        .source_receipt(&identity)?
+                        .ok_or("receipt absent")?
+                        .contiguous_cursor;
+                    return Err(format!("process peak {peak} KiB exceeds 256 MiB at cursor {cursor}; native bytes: {native:?}").into());
+                }
+                Ok(())
+            };
+        thread::scope(
+            |scope| -> std::result::Result<(), Box<dyn std::error::Error>> {
+                let workers: Vec<_> = (0..4)
+                    .map(|_| {
+                        let (send, requests) = mpsc::sync_channel::<ValidatedEvidenceBatchV1>(1);
+                        let (reply, receive) = mpsc::sync_channel(1);
+                        let store = &store;
+                        let identity = &identity;
+                        scope.spawn(move || {
+                            for batch in requests {
+                                if reply
+                                    .send(store.accept_validated_batch(identity.clone(), batch))
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                        });
+                        (send, receive)
+                    })
+                    .collect();
+                for group in 0..1024_u64 {
+                    let mut frames = vec![0_u8; 128 * 1024];
+                    for index in 0..1024 {
+                        let cursor = group * 1024 + index as u64 + 1;
+                        frames[index * 128..index * 128 + 8].copy_from_slice(&cursor.to_be_bytes());
+                    }
+                    let batch = ValidatedEvidenceBatchV1 {
+                        cpu_id: 0,
+                        first_cursor: group * 1024 + 1,
+                        last_cursor: (group + 1) * 1024,
+                        intake_utc_ns: 1_800_000_000_000_000_000,
+                        framed_records: frames.into(),
+                        frame_ends: (1..=1024).map(|index| index * 128).collect(),
+                    };
+                    let (send, receive) = &workers[group as usize % workers.len()];
+                    send.send(batch)?;
+                    assert_eq!(receive.recv()??, EvidenceStoreOutcomeV1::Accepted);
+                    assert_eq!(
+                        store
+                            .source_receipt(&identity)?
+                            .ok_or("receipt absent")?
+                            .contiguous_cursor,
+                        (group + 1) * 1024
+                    );
+                    memory(&store)?;
+                }
+                Ok(())
+            },
+        )?;
+        let receipt = store.source_receipt(&identity)?.ok_or("receipt absent")?;
+        assert_eq!(receipt.contiguous_cursor, 1024 * 1024);
+        store.checkpoint()?;
+        memory(&store)?;
+        drop(store);
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(store.source_receipt(&identity)?, Some(receipt));
+        let last = store.read_page(&identity, 1024 * 1024)?;
+        let mut expected = vec![0_u8; 128];
+        expected[..8].copy_from_slice(&(1024 * 1024_u64).to_be_bytes());
+        assert_eq!(last.records.len(), 1);
+        assert_eq!(last.records[0].framed_record, expected);
+        memory(&store)?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]

@@ -208,6 +208,17 @@ batches, explicit gaps, checked overflow, cross-tenant references, required
 processor stall, review pins, retirement, expiry, late context, WAL recovery,
 disk full, unsupported schema and rejected old evidence state.
 
+Run `analysis_store_thread_memory` alone in a release test process on Linux.
+Use four calling threads with one batch in flight and the default store limits.
+Commit 1,024 batches of 1,024 synthetic post-validation frames. Require the
+exact receipt and last retained frame after checkpoint and reopen. Read process
+high-water RSS after each batch and after reopen. Fail above 256 MiB; include
+the native memory categories in the failure. Do not treat DuckDB's configured
+buffer limit as an RSS limit. Keep this host-dependent test ignored in normal
+CI. Record the host and allocator environment when running it explicitly.
+This component test does not prove wire validation, full-quota memory,
+concurrent readers, or the memory of embedded Node and Control owners.
+
 Use `analysis_store_input_crashes` for process exits immediately before and
 after evidence, coverage, context, and recovery-gap commits. Reopen through the
 production owner. Require the complete prior or new state, exact receipts and
@@ -1414,3 +1425,55 @@ discovery comparison. They prove bounded completion for this synthetic load,
 not physical policy activation or full-capacity resource limits. Old-writer
 removal and the remaining resource and physical checks stay open. The phase
 remains **Not done**.
+
+An isolated memory diagnostic used the existing release data library on the
+same pilot VM. It called `AnalysisStore::accept_validated_batch` with 1,024
+synthetic 128-byte post-validation frames per batch. Each frame contains its
+cursor and zero padding. It did not run Node, Control, required processors,
+or background retention. Each run used a new temporary store and one batch
+in flight. Stop conditions were the tenant quota or RSS above 256 MiB.
+Each run checked its receipt, checkpoint, last-row read, and reopen.
+
+| Calling threads | Allocator environment | Accepted rows at stop | Stop reason | Peak RSS KiB | Elapsed seconds |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Default | 4,193,280 | Tenant logical quota | 249,792 | 377.88 |
+| 4, round-robin | Default | 804,864 | RSS limit crossed | 292,132 | 36.04 |
+| 4, round-robin | `MALLOC_ARENA_MAX=1` | 4,193,280 | Tenant logical quota | 228,816 | 423.45 |
+
+The source, executables, CSV samples, and resource logs are in
+`/tmp/araphor-memory-probe.z1rbDjUR`. The linked release library SHA-256 is
+`f2a12d19995d41a8e1ef1ef3b1fa933d436d0967390e040d6f0e475e5221c36d`.
+The single-thread executable digest is
+`2e541c655af7425f90ea5c1a0c4194904de376712bbd5586268a2ebaadf25167`;
+the four-thread digest is
+`a5d2d741ab1ae93dfe77c28b000088b7608e4512309e22c6e659d8319e5da5a9`.
+All processes exited successfully after their diagnostic stop; the second
+run is a memory-limit failure, not a qualification pass. The arena setting
+applied only to the third process. No production allocator setting changed.
+These measurements support a thread/allocator contribution. They do not
+identify every allocation in the earlier combined-process peak or prove a
+production remedy. Wire validation, largest payloads, concurrent readers,
+required-processor work, and default production scheduling remain outside
+these diagnostic runs.
+
+The repository regression then reproduced the default failure at cursor
+804,864 with a 290,000-KiB process peak. Its diagnostic query reported
+262,144 `ART_INDEX` bytes and 4,718,592 `BASE_TABLE` bytes after that batch.
+These categories do not measure all process allocations or the earlier peak.
+The same executable passed with `MALLOC_ARENA_MAX=1` in 47.52 seconds.
+The external resource log reports 290,276 KiB peak RSS for the failed process
+and 201,332 KiB for the allocator-controlled process.
+Its SHA-256 is
+`2af2d115b56c88e673b9fc7eb20e1724a4e4b499b5ddc4317e9113fefc0dbc1c`.
+The output directory above contains `memory-regression-default.log`,
+`memory-regression-arena.log`, and their `-resources.log` files. Each run used
+`--ignored --exact analysis::capacity::tests::analysis_store_thread_memory
+--test-threads=1 --nocapture`. Host compilation overlapped these runs; do not
+use their elapsed times as a performance comparison. The regression is a
+known default-environment failure, not a memory qualification pass. The final
+workspace gate remains pending. The phase remains **Not done**.
+Build the release test with
+`CARGO_BUILD_JOBS=2 cargo test --locked --release -p araphor-data -p mithril-e2e --lib --no-run`
+to use the e2e dependency feature set. Then run only the data test executable.
+The library-only package selection triggered a separate native build and was
+stopped before this command. No test failure was discarded by that stop.
