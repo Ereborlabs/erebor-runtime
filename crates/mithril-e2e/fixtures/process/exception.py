@@ -42,34 +42,45 @@ elif mode == "read":
     if sys.stdin.readline() != "read\n":
         raise RuntimeError("expected read")
     write("expired-result", str(open_errno(secret, os.O_RDONLY)))
-elif mode in ("symlink", "procfd", "bind"):
-    secret = Path("/tmp/mithril-observe-secret")
+elif mode in ("symlink", "procfd", "bind", "bind-allowed"):
+    secret = Path(
+        "/tmp/mithril-descriptor-allowed"
+        if mode == "bind-allowed"
+        else "/tmp/mithril-observe-secret"
+    )
     secret.parent.mkdir(parents=True, exist_ok=True)
     secret.write_bytes(b"secret")
+    if mode == "bind-allowed":
+        Path("/tmp/mithril-descriptor-secret").write_bytes(b"secret")
     libc = ctypes.CDLL(None, use_errno=True)
     libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
-    if mode == "bind":
-        aliases = [work / f"bind-{index}" for index in (1, 2)]
+    if mode in ("bind", "bind-allowed"):
+        names = ("allowed",) if mode == "bind-allowed" else (1, 2)
+        aliases = [work / f"bind-{index}" for index in names]
         for alias in aliases:
             alias.mkdir()
         libc.unshare.argtypes = [ctypes.c_int]
         libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_void_p]
-        if libc.unshare(0x00020000) != 0:
-            raise OSError(ctypes.get_errno(), "unshare mount namespace")
-        if libc.mount(None, b"/", None, 16384 | 1 << 18, None) != 0:
-            raise OSError(ctypes.get_errno(), "make mounts private")
+        if mode == "bind":
+            if libc.unshare(0x00020000) != 0:
+                raise OSError(ctypes.get_errno(), "unshare mount namespace")
+            if libc.mount(None, b"/", None, 16384 | 1 << 18, None) != 0:
+                raise OSError(ctypes.get_errno(), "make mounts private")
         if libc.mount(os.fsencode(secret.parent), os.fsencode(secret.parent), None, 4096, None) != 0:
             raise OSError(ctypes.get_errno(), "self-bind source")
         for alias in aliases:
             if libc.mount(os.fsencode(secret.parent), os.fsencode(alias), None, 4096, None) != 0:
                 raise OSError(ctypes.get_errno(), f"bind {alias}")
-        actions = [
-            ("base", secret),
-            ("confirm", secret),
-            ("first", aliases[0] / secret.name),
-            ("second", aliases[1] / secret.name),
-        ]
-        write("bind-paths", json.dumps([str(path) for _, path in actions[1:]]))
+        if mode == "bind-allowed":
+            actions = [("base", secret), ("alias", aliases[0] / secret.name)]
+        else:
+            actions = [
+                ("base", secret),
+                ("confirm", secret),
+                ("first", aliases[0] / secret.name),
+                ("second", aliases[1] / secret.name),
+            ]
+            write("bind-paths", json.dumps([str(path) for _, path in actions[1:]]))
     elif mode == "symlink":
         alias = Path("/tmp/mithril-observe-link")
         alias.symlink_to(secret)
@@ -79,7 +90,7 @@ elif mode in ("symlink", "procfd", "bind"):
         alias = Path(f"/proc/self/fd/{held}")
         command = "fd"
     print("native-fixture-ready", flush=True)
-    if mode != "bind":
+    if mode not in ("bind", "bind-allowed"):
         actions = [("base", secret), ("confirm", secret)]
         if mode == "procfd":
             actions.extend((f"hf{number}", secret) for number in (6, 8, 9, 10))

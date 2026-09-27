@@ -22,6 +22,8 @@ mod executable_memory;
 #[cfg(test)]
 mod file_bind;
 #[cfg(test)]
+mod file_bind_allowed;
+#[cfg(test)]
 mod file_bind_observe;
 #[cfg(test)]
 mod file_effect;

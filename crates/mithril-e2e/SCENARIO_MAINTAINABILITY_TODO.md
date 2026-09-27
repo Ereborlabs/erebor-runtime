@@ -1945,6 +1945,20 @@ test does not close a row when its physical condition or an assertion changed.
     - [ ] Replace the remaining allowed-bind and propagation resolver checks
       before removing their fixture paths. Keep their selected mount,
       canonical component, and mount namespace assertions.
+      - [ ] Qualify the benign bind alias with `file_bind_allowed.rs`. Reuse
+        `exception.py` and `retained_descriptor_policy.json`. Require a real
+        bind mount, two allowed opens, two attributed exact Allow results,
+        distinct mount IDs, and equal selected mount, canonical component,
+        mount namespace, device, inode, and inode generation. Keep the test
+        below 100 lines and add no Platform API.
+        - [x] Pass Host and commit it. The `mount_late_host` case passed in
+          `mithril-runtime-qualification-762734`; 92 runnable library tests,
+          format, and strict Clippy passed. The test file has 90 lines.
+        - [ ] Pass direct `runc` and commit it.
+        - [ ] Pass Kubernetes and commit it.
+        - [ ] Remove only the matching old allowed-bind comparison after all
+          three platforms pass. Keep the source resolver for policy
+          publication and the separate propagation checks.
     - [x] Remove only the duplicate protected-alias resolver comparison from
       the old effect probe. The shared Protect and Observe tests resolve the
       original file and both aliases. They require distinct mount IDs and
