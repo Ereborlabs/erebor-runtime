@@ -3663,6 +3663,17 @@ setup, production actions, assertions, and focused test.
         cleanup checks remain. Its schema is still version 40. The repository
         Rust CI script passed. Keep the old mount action until those distinct
         checks have shared coverage.
+    - [ ] Replace the old successful bind-mount event receipt.
+      - [x] Use the shared `mount_alias.py` actor and signed policy. Record the
+        public production observation cursor before the actor mounts. Require
+        a successful bind mount and a new Mount/Mount effect from that actor.
+        The 93-line standard test passed on Host in 45.91 seconds, direct
+        `runc` in 65.77 seconds, and Kubernetes in 101.30 seconds. The related
+        12-case lifecycle passed on Host in 151.24 seconds, direct `runc` in
+        265.08 seconds, and Kubernetes in 356.06 seconds.
+      - [ ] Retire the old event wait only after its actor writes a separate
+        mount-complete signal. The old wait also holds its FIFO handshake
+        before later reads. Removing it now would change the old test order.
   - [x] Retire the duplicate in-container bind-mount result and shell gate.
     `late_bind_keeps_policy` requires the mount to succeed after production
     policy activation on Host, direct `runc`, and Kubernetes. Keep the legacy

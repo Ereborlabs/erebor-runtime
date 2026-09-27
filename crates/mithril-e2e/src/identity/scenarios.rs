@@ -39,6 +39,8 @@ mod mount_alias;
 #[cfg(test)]
 mod mount_cache;
 #[cfg(test)]
+mod mount_event;
+#[cfg(test)]
 mod mount_future;
 #[cfg(test)]
 mod mount_late;
