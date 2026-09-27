@@ -54,7 +54,7 @@ def move_tree(tree, target):
 
 
 args = sys.argv[2:]
-if args not in ([], ["late"], ["recursive"], ["move"], ["future"], ["race"]):
+if args not in ([], ["late"], ["recursive"], ["move"], ["future"], ["race"], ["runtime"]):
     sys.exit(2)
 mode = args[0] if args else "early"
 root = os.path.join(sys.argv[1], "mount")
@@ -73,13 +73,13 @@ with open(result_path, "w", encoding="utf-8"):
     pass
 
 mount_error = 0
-if mode != "future":
+if mode not in ("future", "runtime"):
     check(libc.unshare(CLONE_NEWNS))
     check(libc.mount(None, b"/", None, MS_REC | MS_PRIVATE, None))
 mount_namespace = os.stat("/proc/self/ns/mnt").st_ino
 if mode == "early":
     check(libc.mount(secret.encode(), denied_alias.encode(), None, MS_BIND, None))
-if mode not in ("recursive", "future"):
+if mode not in ("recursive", "future", "runtime"):
     check(libc.mount(allowed.encode(), allowed_alias.encode(), None, MS_BIND, None))
 race_results = [None] * 8
 race_barrier = threading.Barrier(9)
@@ -140,11 +140,11 @@ elif mode == "move" and command == "open\n":
         )
         output.truncate()
     command = sys.stdin.readline()
-if mode in ("late", "recursive") and command == "mount-read\n":
+if mode in ("late", "recursive", "runtime") and command == "mount-read\n":
     flags = MS_BIND | (MS_REC if mode == "recursive" else 0)
     result = libc.mount(secret.encode(), denied_alias.encode(), None, flags, None)
     mount_error = ctypes.get_errno() if result else 0
-    if mode == "recursive":
+    if mode in ("recursive", "runtime"):
         result = libc.mount(allowed.encode(), allowed_alias.encode(), None, flags, None)
         allowed_mount_error = ctypes.get_errno() if result else 0
 elif command not in ("read\n", "race\n"):

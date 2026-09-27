@@ -3566,6 +3566,22 @@ setup, production actions, assertions, and focused test.
       Kubernetes tests in 951.49 seconds.
 - [ ] Kubernetes subpath, bind alias, and wildcard paths: keep the same mount
   order and protected reads as the Kubernetes workload.
+  - [ ] Replace the old protected-start in-container bind alias. Reuse
+    `mount_alias.py` and `mount_alias_policy.json`. Start Node and install
+    policy before the actor. Require the bind mount to succeed, the aliased
+    secret read to fail with `EACCES`, the allowed read to succeed, and the
+    exact attributed path-tree denial. Pass Host, direct `runc`, and real
+    Kubernetes before removing the matching old action and result field.
+    - [x] Add the 68-line Rust test and the actor's `runtime` mode. The
+      runtime already gives the actor a mount namespace. A second
+      `MS_PRIVATE` call returned `EACCES` after Mithril reported
+      `EXACT_POLICY_ALLOW`, so the new mode uses the runtime namespace. It
+      still makes the protected bind and checks the denied read.
+    - [x] Pass Host. All nine `mount_late_host` cases passed in 112.60
+      seconds. Formatting and strict Mithril E2E Clippy passed.
+    - [ ] Pass direct `runc` and commit that platform.
+    - [ ] Pass real Kubernetes and remove only the matching old action,
+      result field, and shell gate.
   - [x] Retire the duplicate in-container bind-mount result and shell gate.
     `late_bind_keeps_policy` requires the mount to succeed after production
     policy activation on Host, direct `runc`, and Kubernetes. Keep the legacy
@@ -4055,7 +4071,12 @@ setup, production actions, assertions, and focused test.
   - [ ] Keep the old probe's fail-closed unknown-root assertion. The new
     protected-policy test has `initial_container_root`, not
     `restored_or_unknown_root`. Do not remove the old probe until a small
-    production-backed test proves the conservative-root case.
+    production-backed test proves the conservative-root case. A Host probe
+    started the sidecar and init before Node, with no policy. After Node
+    started, the sidecar had no published identity for 30 seconds. Node did
+    not publish the old probe's conservative binding in this order. The
+    experimental test was removed; the old probe remains. No platform or
+    production behavior changed.
   - [x] Run the affected identity lanes after the shared platform change.
     Host passed 59 of 59 tests in 655.68 seconds. Direct `runc` passed 54 of
     54 tests in 1200.06 seconds. Real Kubernetes passed 55 of 55 tests in
