@@ -4062,6 +4062,14 @@ setup, production actions, assertions, and focused test.
   - [x] Keep the test below 100 lines and remove the legacy probe only after
     the replacement passes. Verify group setup and cleanup on Host and direct
     `runc`, then run the Kubernetes case.
+  - Proof on 2026-09-26: the full `identity` lifecycle passed 57 Host tests in
+    640.42 seconds, 52 direct-`runc` tests in 1137.98 seconds, and 53
+    Kubernetes tests in 1422.25 seconds. This is not the full generated
+    platform matrix.
+
+- [ ] Make the thin launcher run each generated lifecycle in its own test
+  process. A broad platform suffix selects different lifecycles together and
+  fails the lifecycle ownership check. Keep the VM and K3s between processes.
 
 Each Kubernetes identity case must keep the `k3s`, CRI, OCI hook, node
 process, and public production-owner operations that its physical harness

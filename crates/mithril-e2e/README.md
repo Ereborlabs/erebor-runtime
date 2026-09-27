@@ -61,6 +61,14 @@ and [its ownership review](MULTI_POLICY_REVIEW.md). Host tests also need the
 production `mithril-oci-hook` binary. Set `MITHRIL_TEST_OCI_HOOK` when the binary
 is not at `target/debug/mithril-oci-hook` under `MITHRIL_TEST_ROOT`.
 
+For two containers under one policy, give each container match its own
+`applicationEntry` role. Pass both `GroupActor` values to
+`start_actor_group("pid-reuse-pod-v1.yaml", &actors, &labels)`. Kubernetes starts
+one Pod with two container PID-1 processes. Host and direct `runc` start two
+separate PID-1 roots. See [the group-role test](src/identity/scenarios/group_roles.rs).
+The [native network-probe test](src/identity/scenarios/network_probes.rs) uses
+the same group call with a checked Pod YAML and native container commands.
+
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path
 result flags for a shell gate. The 41-line
@@ -109,6 +117,11 @@ sudo -i
   effect::prestop_path::prestop_uses_literal_path::node_restart_kubernetes \
   --exact --ignored --nocapture --test-threads=1
 ```
+
+To run all tests in one lifecycle, filter by its full generated suffix, such
+as `identity_host`, `identity_runc`, or `identity_kubernetes`. Run each suffix
+in a separate test process. A broad `_host` filter mixes lifecycles and fails
+their resource ownership check.
 
 The same VM can run the matching Host and direct-`runc` cases. Use a new
 output, pin, lease, and cgroup path for each run. The manual environment sets
