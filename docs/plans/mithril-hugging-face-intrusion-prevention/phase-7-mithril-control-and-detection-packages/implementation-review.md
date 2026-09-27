@@ -376,7 +376,13 @@ operation completes its ACK and duplicate replay before a following idle
 operation starts. This order balances the increasing policy history. The
 production Control snapshot commit remains unchanged. The order assertion
 failed before this correction and passed after it; the focused case took
-2.53 seconds. New release measurements and a new full gate remain open.
+2.53 seconds. The release case passed on `7bdf5797` with 16 pairs in each
+order, 64 Active transitions, and 131,072 records. Its binary SHA-256 is
+`8d790a437a6f10c27b31311eda4b6f9b38f61b14a580f2703a33e5ad2c3c718d`.
+The pilot directory contains `balanced-rollout-smoke.json` and its resource
+log. Host workspace tests ran concurrently. Formatting, workspace checks,
+and strict Clippy passed; workspace tests and repeated measurements remain
+open. No slowdown removal or physical activation pass is claimed.
 `data_rollout_load` passed with two pairs and four transitions. It also checks
 invalid pair counts and refusal to replace an existing result. All 16 enabled
 data-store tests and four enabled outage tests passed with serial execution.
