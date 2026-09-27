@@ -18,9 +18,9 @@ use mithril_control::{
     EvidenceIntakeOwner, EvidenceRecord, EvidenceRetentionOwner, EvidenceStoreCapacityPolicyV1,
     EvidenceStoreLimitsV1, EvidenceTemporalCoverage, KubernetesAdmissionHttpConfigV1,
     KubernetesAdmissionOwner, KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner,
-    NodeDecommissionAuthorizationV1, NodeDecommissionStateV1, NodeRegistration,
-    PolicyActivationAcknowledgement, PolicyBundleV1, ResolveAdministrativeExec,
-    SignedNodeDecommissionV1, TrustGenerationV1, WorkloadProtectionPolicy,
+    NodeDecommissionAuthorizationV1, NodeDecommissionStateV1, NodeRegistration, PolicyBundleV1,
+    ResolveAdministrativeExec, SignedNodeDecommissionV1, TrustGenerationV1,
+    WorkloadProtectionPolicy,
 };
 use mithril_node::{
     AdministrativeControlRequest, CoverageGapReasonV1, EffectObservationStore, EvidenceIdV1,
@@ -645,26 +645,6 @@ fn control_evidence_queue_reclaims_only_durably_consumed_segments() -> Result<()
 }
 
 impl OutagePolicyFixture {
-    fn active_acknowledgement(
-        bundle: &PolicyBundleV1,
-        profile_generation_ref_id: u64,
-        observed_utc_ns: i64,
-    ) -> PolicyActivationAcknowledgement {
-        PolicyActivationAcknowledgement {
-            tenant_id: bundle.candidate.tenant_id.clone(),
-            candidate_content_id: bundle.candidate.candidate_content_id.clone(),
-            policy_source_revision_id: bundle.candidate.policy_source_revision_id.clone(),
-            target_snapshot_digest: bundle.candidate.target_snapshot_digest.clone(),
-            state: "ACTIVE".to_owned(),
-            node_bound_generation_digest: "1".repeat(64),
-            profile_generation_ref_id,
-            readback_digest: "2".repeat(64),
-            probe_result_digest: "3".repeat(64),
-            reason_code: String::new(),
-            observed_utc_ns,
-        }
-    }
-
     fn kubernetes_client(
         &self,
         resource: &WorkloadProtectionPolicy,
@@ -767,21 +747,6 @@ impl OutagePolicyFixture {
                 }
             }
         })
-    }
-
-    fn registration(node_boot_id: [u8; 16], active_policy: bool) -> NodeRegistration {
-        let mut registration = registration_for(node_boot_id, 1);
-        registration.effect_prevention_claims_enabled = true;
-        registration.kubernetes_node_name = "worker-a".to_owned();
-        registration.policy_authority_absent = !active_policy;
-        registration.startup_absence_proof_digest = mithril_control::startup_absence_proof_digest(
-            "node-a",
-            &node_boot_id,
-            1,
-            !active_policy,
-            true,
-        );
-        registration
     }
 }
 

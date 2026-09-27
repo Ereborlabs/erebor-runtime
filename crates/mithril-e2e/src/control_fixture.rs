@@ -93,6 +93,55 @@ pub(crate) struct OutagePolicyFixture {
 }
 
 impl OutagePolicyFixture {
+    pub(crate) fn registration(
+        node_boot_id: [u8; 16],
+        active_policy: bool,
+    ) -> mithril_control::NodeRegistration {
+        mithril_control::NodeRegistration {
+            platform_digest: "a".repeat(64),
+            program_digest: "b".repeat(64),
+            label_epoch: 1,
+            kernel_ready: true,
+            effect_prevention_claims_enabled: true,
+            kubernetes_node_name: "worker-a".to_owned(),
+            startup_absence_proof_digest: mithril_control::startup_absence_proof_digest(
+                "node-a",
+                &node_boot_id,
+                1,
+                !active_policy,
+                true,
+            ),
+            policy_authority_absent: !active_policy,
+            exception_authority_absent: true,
+            capabilities: vec![mithril_control::CapabilityRecord {
+                capability_id: "KERNEL_LSM_CHASSIS".to_owned(),
+                state: "SUPPORTED".to_owned(),
+                reason_code: "EXACT_ATTACH_READBACK".to_owned(),
+            }],
+            workload_targets: Vec::new(),
+        }
+    }
+
+    pub(crate) fn active_acknowledgement(
+        bundle: &mithril_control::PolicyBundleV1,
+        profile_generation_ref_id: u64,
+        observed_utc_ns: i64,
+    ) -> mithril_control::PolicyActivationAcknowledgement {
+        mithril_control::PolicyActivationAcknowledgement {
+            tenant_id: bundle.candidate.tenant_id.clone(),
+            candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+            policy_source_revision_id: bundle.candidate.policy_source_revision_id.clone(),
+            target_snapshot_digest: bundle.candidate.target_snapshot_digest.clone(),
+            state: "ACTIVE".to_owned(),
+            node_bound_generation_digest: "1".repeat(64),
+            profile_generation_ref_id,
+            readback_digest: "2".repeat(64),
+            probe_result_digest: "3".repeat(64),
+            reason_code: String::new(),
+            observed_utc_ns,
+        }
+    }
+
     pub(crate) fn new(store: ControlStore) -> Self {
         let digest = "0".repeat(64);
         Self {

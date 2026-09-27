@@ -354,6 +354,29 @@ worst-case payloads, full storage quotas, or maintenance reserve sizing.
 -> [AnalysisStore::checkpoint](../../../../crates/araphor-data/src/analysis/backup.rs) Native checkpoint completes before replay.<br>
 -> [DataStoreQualification::quota_with_limits](../../../../crates/mithril-e2e/src/discovery/data_store/quota.rs) Replay receives a durable ACK. Restart preserves exact replayed frames, the result, receipt, and witness.
 
+[DataStoreQualification::rollout_load](../../../../crates/mithril-e2e/src/discovery/data_store/rollout.rs) The CLI selects 32 idle/loaded rollout pairs on temporary stores.<br>
+-> [DataStoreQualification::load_group](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The existing bounded Node worker creates 4,096 records for each pair.<br>
+-> [PolicyDesiredStateOwner::reconcile](../../../../crates/mithril-control/src/policy/reconciliation.rs) Each idle and loaded operation commits a new policy generation through the production owner.<br>
+-> [DataStoreQualification::rollout_step](../../../../crates/mithril-e2e/src/discovery/data_store/rollout.rs) The Node client checks inventory and fetches the exact signed bundle over mTLS.<br>
+-> [OutagePolicyFixture::active_acknowledgement](../../../../crates/mithril-e2e/src/control_fixture.rs) The fixture supplies an activation report. No kernel policy is installed.<br>
+-> [ControlPlane](../../../../crates/mithril-control/src/service.rs) The policy service authenticates the report and commits the rollout transition through its existing owner.<br>
+-> [DataStoreQualification::rollout_pairs](../../../../crates/mithril-e2e/src/discovery/data_store/rollout.rs) Each rollout reaches one Active target. Loaded operations start after evidence submission and before reading its ACK. The case checks exact retained bytes and unchanged source state on replay.<br>
+-> [DataStoreQualification::rollout_pairs](../../../../crates/mithril-e2e/src/discovery/data_store/rollout.rs) Restart preserves evidence source state and every recorded rollout transition.
+
+The shared fixture registration and activation-report methods are moved from
+`control_tls.rs`; their values are unchanged. Independent context projection
+remains active. Replay compares source state, not the global data revision.
+Each sample records idle rollout, loaded rollout, and observed evidence ACK
+times. ACK time includes the policy operation before the ACK is read; it is
+not the evidence commit time. These are synthetic Control-rollout measurements,
+not physical activation or a completed performance comparison.
+`data_rollout_load` passed with two pairs and four transitions. It also checks
+invalid pair counts and refusal to replace an existing result. All 16 enabled
+data-store tests and four enabled outage tests passed with serial execution.
+The ignored subprocess, filesystem, and release-only cases are not claimed by
+these runs. Release runs and the final full workspace gate remain open for
+this change.
+
 `data_quota_recovery` uses the same runner with a two-MiB tenant quota. The CLI
 keeps production defaults. Neither result proves global saturation, worst-case
 payloads, concurrent rollout, or a physical filesystem reserve. The runner

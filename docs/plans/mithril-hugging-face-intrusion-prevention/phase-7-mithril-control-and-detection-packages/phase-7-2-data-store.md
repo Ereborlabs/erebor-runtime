@@ -381,6 +381,23 @@ database/WAL bytes. `data_tenant_load` uses two groups per Node in CI.
 This case does not prove concurrent policy rollout, worst-case payloads, or
 full-quota capacity.
 
+Add `data-store-rollout` to compare policy rollout with intake idle and with
+an evidence group in flight. Use the existing policy fixture, production
+desired-state and rollout owners, Node WAL, and mTLS services. Run 32 pairs;
+each loaded pair submits 4,096 records. Each rollout uses a new policy source
+generation. Require exact inventory and bundle bytes, an authenticated
+activation report, and one Active target with no Updating or Failed target.
+The fixture supplies the Node activation report; this case does not install
+kernel policy. Record each idle and loaded rollout time and the evidence ACK
+time. Keep the five-second evidence wait. Require exact retained input,
+duplicate replay without source-state changes, and durable rollout and evidence
+state after restart. Keep independent context projection active; do not compare
+its global revision as an evidence-only replay receipt. Run two pairs in
+`data_rollout_load` before release measurements. Reject invalid pair counts
+and an existing output directory. Compare repeated idle/loaded samples before
+claiming the five-percent performance gate. This case does not qualify physical
+policy activation, full quotas, or filesystem reserve adequacy.
+
 Use `data-store-quota` to fill the default tenant logical quota through Node
 WAL and mTLS intake. Register a required processor before intake and leave its
 progress at zero. Send one 1,024-record batch at a time, with a maximum of
@@ -416,6 +433,7 @@ cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-recov
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-startup --output-directory /tmp/araphor-data-startup
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-load --output-directory /tmp/araphor-data-load
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-tenants --output-directory /tmp/araphor-data-tenants
+cargo run --release --locked -p mithril-e2e --bin mithril_discovery_test -- --case data-store-rollout --output-directory /tmp/araphor-data-rollout
 cargo run --release --locked -p mithril-e2e --bin mithril_discovery_test -- --case data-store-quota --output-directory /tmp/araphor-data-quota
 bash .github/scripts/verify-rust-ci.sh
 ```
@@ -1289,3 +1307,15 @@ This evidence closes repeated measurement for these two small-input cases.
 It does not qualify repeated full-quota behavior, worst-case payloads,
 concurrent rollout, global capacity, or physical reserve adequacy.
 Old-writer removal also remains open. The phase remains **Not done**.
+
+The `data-store-rollout` case now uses the production policy desired-state,
+rollout, and evidence owners with the existing synthetic Node activation
+fixture. The focused `data_rollout_load` test passed in 2.72 seconds. It checks
+two pairs, four Active transitions, 8,192 exact records, duplicate replay,
+restart, invalid counts, and refusal to replace a result. All 16 enabled
+data-store tests passed in 46.19 seconds; four subprocess or filesystem cases
+remain ignored. The four enabled outage tests passed in 26.07 seconds with
+the moved fixture methods. Their release-only startup case remains ignored.
+Formatting passed. Release measurements and the final workspace gate remain
+open. This case does not qualify kernel
+policy installation. The phase remains **Not done**.
