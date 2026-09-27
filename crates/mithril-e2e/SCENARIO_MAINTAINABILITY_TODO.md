@@ -2752,9 +2752,15 @@ test does not close a row when its physical condition or an assertion changed.
       passed again in 33.11 seconds.
     - [x] Pass direct `runc` and commit its platform registration. The exact
       case passed in 54.60 seconds through stock `runc` and the OCI hook.
-    - [ ] Pass Kubernetes and commit its platform registration.
+    - [x] Pass Kubernetes and commit its platform registration. The exact
+      case passed in 81.36 seconds in retained K3s; the launcher exited 0.
+    - [ ] Preserve the old `fexecve` variant before retirement. The new
+      `add_actor` case proves runtime entry, but the legacy action calls
+      `fexecve` from a recovered external actor. Reuse the Python exec actor
+      with a file-descriptor mode and require the same two decisions on all
+      three platforms. The separate denied-`fexecve` case remains.
     - [ ] Remove only the matching legacy action, result field, and unused
-      fixture state after all three platforms pass.
+      fixture state after the `fexecve` case passes on all three platforms.
   - [x] Replace the old SQPOLL check for a restricted rule-zero actor in
     Protect and Observe modes. The old binding sets `arm_initial_root=false`.
     The existing Protect platform test covers the same recovered rule-zero
