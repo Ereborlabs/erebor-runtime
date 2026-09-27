@@ -12,6 +12,7 @@ enum Case {
     DataStoreStartup,
     DataStoreLoad,
     DataStoreTenants,
+    DataStoreQuota,
     DataStoreInspect,
 }
 
@@ -78,6 +79,11 @@ async fn main() {
         Case::DataStoreTenants => {
             mithril_e2e::DataStoreQualification::new(cli.output_directory)
                 .tenant_load()
+                .await
+        }
+        Case::DataStoreQuota => {
+            mithril_e2e::DataStoreQualification::new(cli.output_directory)
+                .quota()
                 .await
         }
         Case::DataStoreInspect => match (cli.data_directory, cli.tenant_id) {

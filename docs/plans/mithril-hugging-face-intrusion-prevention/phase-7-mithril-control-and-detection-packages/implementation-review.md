@@ -345,6 +345,27 @@ e2e passed 117 tests with 250 ignored. No Rust source changed after the gate.
 This case does not qualify multi-tenant load, policy rollout under load,
 worst-case payloads, full storage quotas, or maintenance reserve sizing.
 
+[DataStoreQualification::quota](../../../../crates/mithril-e2e/src/discovery/data_store/quota.rs) The CLI selects the default two-GiB tenant quota.<br>
+-> [AnalysisStore::register_processor](../../../../crates/araphor-data/src/analysis/progress.rs) Required progress protects the accepted raw input.<br>
+-> [ControlConnection::send_evidence_batch](../../../../crates/mithril-node/src/control.rs) Node sends one 1,024-record WAL batch through mTLS at a time.<br>
+-> [DataStoreQualification::quota_with_limits](../../../../crates/mithril-e2e/src/discovery/data_store/quota.rs) The case requires logical-quota rejection with unchanged receipts, revision, and pending Node input. It checks policy access, retained duplicate replay, and the complete input digest.<br>
+-> [AnalysisStore::commit_result](../../../../crates/araphor-data/src/analysis/progress.rs) A result advances required progress and retains one exact witness through maintenance admission.<br>
+-> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) Sixteen bounded passes can expire eligible input after the fixture clock advances by 25 hours.<br>
+-> [AnalysisStore::checkpoint](../../../../crates/araphor-data/src/analysis/backup.rs) Native checkpoint completes before replay.<br>
+-> [DataStoreQualification::quota_with_limits](../../../../crates/mithril-e2e/src/discovery/data_store/quota.rs) Replay receives a durable ACK. Restart preserves exact replayed frames, the result, receipt, and witness.
+
+`data_quota_recovery` uses the same runner with a two-MiB tenant quota. The CLI
+keeps production defaults. Neither result proves global saturation, worst-case
+payloads, concurrent rollout, or a physical filesystem reserve. The runner
+uses temporary stores and leaves deployment data unchanged.
+
+The [data_control_crash](../../../../crates/mithril-e2e/src/discovery/data_store.rs)
+child always uses serial test execution. Its readiness marker starts on a new
+line because the test harness can leave its test name on the current line.
+The parent still requires the exact marker and child exit code 73. The serial
+case failed in 10.06 seconds before this correction and passed in 1.47 seconds
+after it. No readiness or crash timeout was increased.
+
 [DataStoreQualification::tenant_load](../../../../crates/mithril-e2e/src/discovery/data_store.rs)
 selects two tenants and 32 groups per tenant. Both CLI load cases now use
 `load_tenants`. Each Node has a distinct certificate, tenant, and boot ID.

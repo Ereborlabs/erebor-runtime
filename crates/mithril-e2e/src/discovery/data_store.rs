@@ -24,6 +24,7 @@ use mithril_node::{
 use zerocopy::IntoBytes as _;
 
 mod inspection;
+mod quota;
 
 use crate::control_fixture::{
     reopen_control_store, ControlServerFixture, MtlsFixture, OutagePolicyFixture,
@@ -1423,7 +1424,8 @@ mod tests {
             .control
             .set_evidence_commit_hook(|| std::process::exit(73));
         let server = ControlServerFixture::start_tls(parts.tls, parts.control).await?;
-        println!("CONTROL_READY={}", server.address());
+        // The serial test harness can leave its test name on this line.
+        println!("\nCONTROL_READY={}", server.address());
         std::future::pending::<()>().await;
         Ok(())
     }
@@ -1488,6 +1490,7 @@ mod tests {
                 "--nocapture",
             ])
             .env("ARAPHOR_CONTROL_CRASH_ROOT", tls.path())
+            .env("RUST_TEST_THREADS", "1")
             .stdout(Stdio::piped())
             .kill_on_drop(true)
             .spawn()?;
