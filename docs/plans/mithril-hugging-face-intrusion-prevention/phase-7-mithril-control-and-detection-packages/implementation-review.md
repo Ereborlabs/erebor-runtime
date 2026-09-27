@@ -374,8 +374,14 @@ not physical activation or a completed performance comparison.
 invalid pair counts and refusal to replace an existing result. All 16 enabled
 data-store tests and four enabled outage tests passed with serial execution.
 The ignored subprocess, filesystem, and release-only cases are not claimed by
-these runs. Release runs and the final full workspace gate remain open for
-this change.
+these runs. The release case passed on `9ecffced` with 32 pairs, 64 Active
+transitions, and 131,072 exact evidence records. Its binary SHA-256 is
+`d4bd13e7937528c4deff66550e2641cc54f28142de7d781f32b59e4fd92272fc`.
+The pilot directory contains `rollout-smoke.json` and its resource log.
+The case took 15.73 seconds with 188,896 KiB whole-process peak RSS. Host
+workspace tests ran concurrently; this result is not a clean performance
+baseline or a physical activation proof. Formatting, workspace checks, and
+strict Clippy passed. The full workspace tests remain running for this source.
 
 `data_quota_recovery` uses the same runner with a two-MiB tenant quota. The CLI
 keeps production defaults. Neither result proves global saturation, worst-case

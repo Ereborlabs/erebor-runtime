@@ -1319,3 +1319,20 @@ the moved fixture methods. Their release-only startup case remains ignored.
 Formatting passed. Release measurements and the final workspace gate remain
 open. This case does not qualify kernel
 policy installation. The phase remains **Not done**.
+
+The release build passed on `9ecffced` with the same locked build command
+above. It took two minutes. The binary SHA-256 is
+`d4bd13e7937528c4deff66550e2641cc54f28142de7d781f32b59e4fd92272fc`;
+the copied pilot binary has the same digest. The pilot rollout case passed
+32 pairs, 64 Active transitions, and 131,072 exact evidence records. Replay
+and restart checks passed. Results are `rollout-smoke.json` and
+`rollout-smoke-resources.log` in the pilot output directory above.
+The case took 15.73 seconds with 188,896 KiB peak whole-process RSS.
+Idle/loaded rollout p50 values were 100.212/107.247 milliseconds; p95 values
+were 184.967/180.281 milliseconds. The largest observed evidence ACK was
+243.827 milliseconds, including the policy operation before ACK read.
+The host workspace gate ran concurrently. This single run does not establish
+the five-percent performance gate or a repeatable regression. Repeat the
+measurements after host verification finishes. Formatting, workspace checks,
+and strict Clippy passed; workspace tests remain running. No Rust source
+changed during the gate. The complete phase remains **Not done**.
