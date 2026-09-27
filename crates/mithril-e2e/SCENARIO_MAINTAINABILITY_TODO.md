@@ -2767,8 +2767,8 @@ test does not close a row when its physical condition or an assertion changed.
       run then passed Protect and denied the next Pod while Node was stopped.
       The OCI hook reported `DENY_NODE_UNAVAILABLE`. The existing direct-`runc`
       `runtime_gate_fails_closed` test reproduced that decision in 38.33
-      seconds. Give Observe its own lifecycle; keep the actor-first recovery
-      order and all SQPOLL assertions.
+      seconds. Observe now has its own lifecycle. Its actor-first recovery
+      order and SQPOLL assertions are unchanged.
     - [x] Remove only the matching old action, result field, and private
       syscall helper after both modes pass on all three platforms. This
       deletes 44 lines. The 92 runnable library tests pass after removal.
