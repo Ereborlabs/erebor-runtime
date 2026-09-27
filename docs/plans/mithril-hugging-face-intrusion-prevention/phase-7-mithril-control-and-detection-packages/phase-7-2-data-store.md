@@ -1704,12 +1704,20 @@ infer either value. The logs are
 `/tmp/araphor-memory-probe.z1rbDjUR/memory-global.log` and
 `memory-global-resources.log`. Global capacity remains unqualified.
 
-The unchanged gRPC quota executable is running again in the owned pilot VM.
+The unchanged gRPC quota executable ran again in the owned pilot VM.
 Its SHA-256 remains
 `37ce7068608cb348686f59e31d3c55b75d7cd1ce0648156ab06d562c63a8db35`.
-The output directory is
-`/tmp/araphor-storage-pilot.dOaqVlEM/headroom-quota-repeat`.
-No task build or other task load runs alongside this repeat. The unrelated VM
-and desktop applications remain active. Quotas, allocator environment, and
-the five-second ACK deadline are unchanged. No repeat result is claimed yet.
+No task build or other task load ran alongside this repeat. The unrelated VM
+and desktop applications remained active. Quotas, allocator environment, and
+the five-second ACK deadline were unchanged. The repeat failed with exit status
+one after 2,121.59 seconds. Peak whole-process RSS was 226,504 KiB. DuckDB could
+not pin a 256-KiB block during `check exact witness quota`; 63.9 MiB of its
+64-MiB budget was in use. This run did not reproduce the ACK timeout.
+The source flow reaches this operation after quota rejection, retained replay,
+and the complete retained-frame digest check. The run did not print the accepted
+count or timing samples. It created no result JSON because the failure occurred
+after the intake-only failure recorder. Do not infer the missing measurements.
+Logs are `/tmp/araphor-memory-probe.z1rbDjUR/headroom-quota-repeat.log` and
+`headroom-quota-repeat-resources.log`. Result commit, retention, resumed intake,
+and reopen were not qualified by this run.
 The phase remains **Not done**.
