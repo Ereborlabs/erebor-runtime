@@ -500,8 +500,12 @@ mod tests {
             "UPDATE source_receipts SET retained_floor = 2",
             "DELETE FROM source_receipts",
             "UPDATE source_bindings SET label_epoch = 9",
-            "UPDATE events SET framed_record = 'changed'::BLOB",
-            "UPDATE events SET cpu_id = 9",
+            "UPDATE batch_ranges SET content_sha256 = 'changed'::BLOB",
+            "UPDATE segments SET cpu_id = 9",
+            "UPDATE batch_ranges SET frame_ends = [0]",
+            "UPDATE batch_ranges SET byte_end = byte_end + 1",
+            "UPDATE segments SET committed_end = committed_end + 1",
+            "UPDATE store_meta SET next_segment_id = 1",
             "UPDATE evidence_refs SET durable_cursor = 2",
             "UPDATE evidence_refs SET tenant_id = 'foreign'::BLOB",
             "UPDATE context_refs SET content_sha256 = 'changed'::BLOB",
@@ -509,7 +513,7 @@ mod tests {
             "UPDATE context_versions SET body = 'changed'::BLOB",
             "UPDATE processor_progress SET consumed_cursor = 2",
             "UPDATE analysis_results SET body = 'changed'::BLOB",
-            "UPDATE events SET commit_revision = 99",
+            "UPDATE batch_ranges SET commit_revision = 99",
             "UPDATE relation_revisions SET last_changed_revision = 99",
             "UPDATE store_meta SET recovery_epoch = 0",
         ];
@@ -658,12 +662,12 @@ mod tests {
         store
             .writer()?
             .get()?
-            .execute("ALTER TABLE events RENAME TO missing_events", [])?;
+            .execute("ALTER TABLE batch_ranges RENAME TO missing_ranges", [])?;
         drop(store);
         assert!(AnalysisStore::open(&root).is_err());
         let writer = Connection::open(root.join("analysis.duckdb"))?;
-        assert!(writer.prepare("SELECT * FROM events").is_err());
-        assert!(writer.prepare("SELECT * FROM missing_events").is_ok());
+        assert!(writer.prepare("SELECT * FROM batch_ranges").is_err());
+        assert!(writer.prepare("SELECT * FROM missing_ranges").is_ok());
         Ok(())
     }
 }

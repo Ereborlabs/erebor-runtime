@@ -729,7 +729,7 @@ mod tests {
         assert!(store.retention_healthy());
         store.accept_validated_batch(source.clone(), batch(2, b"b"))?;
         let reader = store.writer()?.get()?.try_clone()?;
-        reader.execute_batch("BEGIN TRANSACTION; SELECT * FROM events")?;
+        reader.execute_batch("BEGIN TRANSACTION; SELECT * FROM batch_ranges")?;
         assert!(owner.sweep(None, u64::MAX).is_err());
         assert!(!store.retention_healthy());
         assert_eq!(
@@ -748,8 +748,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_store_retention_respects_progress_and_witnesses(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn analysis_store_retention_guards() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let source = identity(1);
@@ -827,31 +826,29 @@ mod tests {
             context_refs: vec![],
         })?;
         let first = owner.retain(&source, 200)?;
-        assert_eq!(first.removed_records, 1);
+        assert_eq!(first.removed_records, 0);
         assert_eq!(first.retained_floor, 0);
-        assert_eq!(first.retained_bytes, 2);
-        assert!(matches!(
-            store.read_page(&source, 2),
-            Err(crate::Error::RetainedRangeExpired { .. })
-        ));
+        assert!(first.retained_bytes > 3);
+        assert_eq!(store.read_page(&source, 2)?.records.len(), 2);
         let witness = store.read_page(&source, 1)?;
-        assert_eq!(witness.records.len(), 1);
+        assert_eq!(witness.records.len(), 3);
         assert_eq!(witness.records[0].cursor, 1);
-        assert_eq!(witness.next_cursor, Some(2));
+        assert_eq!(witness.next_cursor, None);
         assert_eq!(store.read_page(&source, 3)?.records[0].cursor, 3);
         assert_eq!(
             store.accept_validated_batch(source.clone(), batch(2, b"b"))?,
-            EvidenceStoreOutcomeV1::AlreadyAcceptedExpired
+            EvidenceStoreOutcomeV1::Accepted
         );
-        assert!(store
-            .accept_validated_batch(source.clone(), batch(2, b"bc"))
-            .is_err());
+        assert_eq!(
+            store.accept_validated_batch(source.clone(), batch(2, b"bc"))?,
+            EvidenceStoreOutcomeV1::Accepted
+        );
         assert_eq!(store.read_page(&other, 1)?.records.len(), 3);
         let second = owner.retain(&source, 300)?;
-        assert_eq!(second.removed_records, 1);
-        assert_eq!(second.retained_floor, 2);
+        assert_eq!(second.removed_records, 0);
+        assert_eq!(second.retained_floor, 0);
         assert!(store
-            .accept_validated_batch(source.clone(), batch(2, b"bcd"))
+            .accept_validated_batch(source.clone(), batch(2, b"bad"))
             .is_err());
         assert_eq!(
             store
@@ -873,8 +870,15 @@ mod tests {
             context_refs: vec![],
         })?;
         let third = owner.retain(&source, 300)?;
-        assert_eq!(third.removed_records, 1);
+        assert_eq!(third.removed_records, 3);
         assert_eq!(third.retained_floor, 3);
+        assert_eq!(
+            store.accept_validated_batch(source.clone(), batch(2, b"b"))?,
+            EvidenceStoreOutcomeV1::AlreadyAcceptedExpired
+        );
+        assert!(store
+            .accept_validated_batch(source.clone(), batch(2, b"bcd"))
+            .is_err());
         assert_eq!(
             store
                 .source_status(&source)?
@@ -888,7 +892,6 @@ mod tests {
     #[test]
     fn analysis_store_physical_reuse() -> std::result::Result<(), Box<dyn std::error::Error>> {
         use sha2::{Digest as _, Sha256};
-        use std::os::unix::fs::MetadataExt as _;
 
         const ROWS: u64 = 512;
         const CYCLES: u64 = 5;
@@ -963,57 +966,54 @@ mod tests {
                 })?;
             }
             store.checkpoint()?;
-            let loaded = std::fs::metadata(root.join("analysis.duckdb"))?;
-            let peak = loaded.len();
-            assert!(loaded.blocks() * 512 >= ROWS * FRAME_BYTES as u64);
+            let peak = store.storage_usage()?.allocated_bytes;
+            assert!(peak >= ROWS * FRAME_BYTES as u64);
             if cycle < 2 {
                 first_peak = first_peak.max(peak);
             } else {
                 assert!(
-                    peak <= first_peak + 8 * 1024 * 1024,
+                    peak <= first_peak + ROWS * FRAME_BYTES as u64 + 1024 * 1024,
                     "cycle {cycle} grew from {first_peak} to {peak} bytes"
                 );
             }
-            let mut removed = 0;
-            let expected = ROWS - u64::from(cycle == 0);
-            for _ in 0..ROWS / RETENTION_BATCH as u64 {
-                let sweep = owner.sweep(None, intake + 101)?;
-                assert_eq!(sweep.checked_sources, 1);
-                assert_eq!(
-                    sweep.removed_records as u64,
-                    (expected - removed as u64).min(RETENTION_BATCH as u64)
-                );
-                removed += sweep.removed_records;
-            }
-            assert_eq!(removed as u64, expected);
+            let expected = match cycle {
+                0 => 0,
+                1 => BATCH,
+                _ => ROWS,
+            };
+            let sweep = owner.sweep(None, intake + 101)?;
+            assert_eq!(sweep.checked_sources, 1);
+            assert_eq!(sweep.removed_records as u64, expected);
             let retained = store.source_status(&source)?.ok_or("source is absent")?;
-            assert_eq!(retained.retained_event_count, 1);
+            assert_eq!(
+                retained.retained_event_count,
+                if cycle == 0 { ROWS } else { 15 * BATCH }
+            );
             assert_eq!(retained.receipt.contiguous_cursor, (cycle + 1) * ROWS);
-            assert_eq!(retained.receipt.retained_floor, ROWS - 1);
+            assert_eq!(retained.receipt.retained_floor, 0);
+            assert_eq!(std::fs::read_dir(root.join("segments"))?.count(), 1);
             assert_eq!(
                 store.read_page(&source, ROWS)?.records[0].framed_record,
                 witness
             );
-            assert!(matches!(
-                store.read_page(&source, cycle * ROWS + 1),
-                Err(crate::Error::RetainedRangeExpired { .. })
-            ));
+            if cycle > 0 {
+                assert!(matches!(
+                    store.read_page(&source, (cycle + 1) * ROWS),
+                    Err(crate::Error::RetainedRangeExpired { .. })
+                ));
+            }
             assert!(!root.join("analysis.duckdb.wal").exists());
         }
-        let pinned: (u64, u64, u64) = store.reader()?.get()?.query_row(
-            "SELECT total_blocks, used_blocks, free_blocks FROM pragma_database_size()",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        assert_eq!(owner.sweep(None, 10_000)?.removed_records, 1);
-        let cleared: (u64, u64, u64) = store.reader()?.get()?.query_row(
-            "SELECT total_blocks, used_blocks, free_blocks FROM pragma_database_size()",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
+        let pinned = store.storage_usage()?.allocated_bytes;
+        assert_eq!(
+            owner.sweep(None, 10_000)?.removed_records as u64,
+            15 * BATCH
+        );
+        let cleared = store.storage_usage()?.allocated_bytes;
+        assert_eq!(std::fs::read_dir(root.join("segments"))?.count(), 0);
         assert!(
-            cleared.1 < pinned.1 && (cleared.0 < pinned.0 || cleared.2 > pinned.2),
-            "checkpoint did not release blocks: {pinned:?} -> {cleared:?}"
+            cleared + 14 * 1024 * 1024 < pinned,
+            "segment deletion did not release blocks: {pinned} -> {cleared}"
         );
         let before = store.meta()?;
         drop(store);
@@ -1030,8 +1030,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_store_retention_reclaims_byte_pressure(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn analysis_store_retention_pressure() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("analysis");
         let source = identity(1);
@@ -1052,26 +1051,33 @@ mod tests {
                 },
             )?;
             let result = owner.retain(&source, 101)?;
-            assert_eq!(result.removed_records, 2);
-            assert_eq!(result.retained_bytes, 1);
-            assert_eq!(result.retained_floor, 2);
-            assert_eq!(store.read_page(&source, 3)?.records.len(), 1);
+            assert_eq!(result.removed_records, 3);
+            assert_eq!(result.retained_bytes, 0);
+            assert_eq!(result.retained_floor, 3);
+            assert!(matches!(
+                store.read_page(&source, 3),
+                Err(crate::Error::RetainedRangeExpired { .. })
+            ));
         }
         let reopened = AnalysisStore::open(path)?;
         assert!(matches!(
             reopened.read_page(&source, 1),
             Err(crate::Error::RetainedRangeExpired { .. })
         ));
-        assert_eq!(reopened.read_page(&source, 3)?.records.len(), 1);
+        assert!(matches!(
+            reopened.read_page(&source, 3),
+            Err(crate::Error::RetainedRangeExpired { .. })
+        ));
         let gap = reopened
             .resume_optional(&optional)?
             .ok_or_else(|| std::io::Error::other("optional gap absent"))?;
-        assert_eq!((gap.first_cursor, gap.last_cursor), (1, 2));
+        assert_eq!((gap.first_cursor, gap.last_cursor), (1, 3));
         assert_eq!(reopened.resume_optional(&optional)?, None);
+        reopened.accept_validated_batch(source.clone(), batch(4, b"d"))?;
         reopened.commit_result(&AnalysisResultCommitV1 {
             scope: optional,
-            expected_cursor: 2,
-            consumed_cursor: 3,
+            expected_cursor: 3,
+            consumed_cursor: 4,
             coverage_revision: 0,
             context_revision: 0,
             result_id: "profile-after-gap".into(),
@@ -1088,7 +1094,7 @@ mod tests {
         assert!(reopened
             .register_processor(&scope, ProcessorClassV1::Required, 1)
             .is_err());
-        reopened.register_processor(&scope, ProcessorClassV1::Required, 3)?;
+        reopened.register_processor(&scope, ProcessorClassV1::Required, 4)?;
         assert!(reopened
             .register_processor(&scope, ProcessorClassV1::Required, 2)
             .is_err());
@@ -1102,9 +1108,9 @@ mod tests {
                 .source_receipt(&scope.identity)?
                 .ok_or_else(|| { std::io::Error::other("restored source receipt absent") })?
                 .retained_floor,
-            2
+            3
         );
-        assert_eq!(restored.read_page(&scope.identity, 3)?.records.len(), 1);
+        assert_eq!(restored.read_page(&scope.identity, 4)?.records.len(), 1);
         Ok(())
     }
 }

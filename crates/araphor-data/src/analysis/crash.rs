@@ -314,7 +314,7 @@ fn analysis_store_processor_crashes() -> std::result::Result<(), Box<dyn std::er
                     .is_err());
                 let result =
                     EvidenceRetentionOwner::new(&store, limits)?.retain(&scope.identity, 200)?;
-                assert_eq!(result.removed_records, 2);
+                assert_eq!(result.removed_records, 0);
                 assert_eq!(
                     store.read_page(&scope.identity, 1)?.records[0].framed_record,
                     b"a"
@@ -355,7 +355,7 @@ fn analysis_store_input_crashes() -> std::result::Result<(), Box<dyn std::error:
     };
     let apply = |store: &AnalysisStore, kind: &str| -> Result<()> {
         match kind {
-            "evidence" => {
+            "evidence" | "segment" => {
                 assert_eq!(
                     store.accept_validated_batch(
                         source.clone(),
@@ -402,8 +402,13 @@ fn analysis_store_input_crashes() -> std::result::Result<(), Box<dyn std::error:
         return Err("the requested commit crash did not occur".into());
     }
 
-    for kind in ["evidence", "coverage", "context", "recovery"] {
-        for boundary in ["before", "after"] {
+    for kind in ["evidence", "segment", "coverage", "context", "recovery"] {
+        let boundaries: &[&str] = if kind == "segment" {
+            &["reserved", "appended", "synced"]
+        } else {
+            &["before", "after"]
+        };
+        for &boundary in boundaries {
             let point = format!("{kind}.{boundary}");
             let directory = tempfile::tempdir()?;
             let root = directory.path().join("analysis");
@@ -422,6 +427,9 @@ fn analysis_store_input_crashes() -> std::result::Result<(), Box<dyn std::error:
             )?;
             let before = store.meta()?;
             assert_eq!(before.commit_revision, 2);
+            if kind == "segment" {
+                store.backup(&root.join("backups/sealed"))?;
+            }
             drop(store);
             let status = std::process::Command::new(std::env::current_exe()?)
                 .args(["--exact", "analysis::crash::analysis_store_input_crashes"])
@@ -441,7 +449,7 @@ fn analysis_store_input_crashes() -> std::result::Result<(), Box<dyn std::error:
                     expected.commit_revision,
                     "{point}"
                 );
-                let evidence = applied && kind == "evidence";
+                let evidence = applied && matches!(kind, "evidence" | "segment");
                 let coverage = applied && kind == "coverage";
                 let status = store.source_status(&source)?.ok_or("source absent")?;
                 let cursor = 3 + u64::from(evidence);
@@ -496,7 +504,7 @@ fn analysis_store_input_crashes() -> std::result::Result<(), Box<dyn std::error:
                     changed,
                     if !applied {
                         0
-                    } else if matches!(kind, "evidence" | "coverage") {
+                    } else if matches!(kind, "evidence" | "segment" | "coverage") {
                         2
                     } else {
                         1
@@ -552,7 +560,7 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
         expected_cursor: 0,
         consumed_cursor: 3,
         coverage_revision: 0,
-        context_revision: 3,
+        context_revision: 4,
         result_id: "finding".into(),
         body: b"result".to_vec(),
         created_utc_ns: 150,
@@ -586,6 +594,8 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
         "result.after",
         "retention.before",
         "retention.after",
+        "retention.unlinked",
+        "retention.cleaned",
     ] {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
@@ -596,15 +606,27 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
             ValidatedEvidenceBatchV1 {
                 cpu_id: 0,
                 first_cursor: 1,
-                last_cursor: 3,
+                last_cursor: 2,
                 intake_utc_ns: 100,
-                framed_records: b"abc".to_vec().into(),
-                frame_ends: vec![1, 2, 3],
+                framed_records: b"ab".to_vec().into(),
+                frame_ends: vec![1, 2],
             },
         )?;
-        assert_eq!(store.commit_context(&context)?, 3);
+        store.backup(&root.join("backups/sealed"))?;
+        store.accept_validated_batch(
+            source.clone(),
+            ValidatedEvidenceBatchV1 {
+                cpu_id: 0,
+                first_cursor: 3,
+                last_cursor: 3,
+                intake_utc_ns: 100,
+                framed_records: b"c".to_vec().into(),
+                frame_ends: vec![1],
+            },
+        )?;
+        assert_eq!(store.commit_context(&context)?, 4);
         if point.starts_with("retention.") {
-            assert_eq!(store.commit_result(&input)?.commit_revision, 4);
+            assert_eq!(store.commit_result(&input)?.commit_revision, 5);
         }
         let before = store.meta()?;
         drop(store);
@@ -615,7 +637,7 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
             .status()?;
         assert_eq!(status.code(), Some(73), "{point}");
         let store = AnalysisStore::open(&root)?;
-        let after = point.ends_with(".after");
+        let after = !point.ends_with(".before");
         let meta = store.meta()?;
         assert_eq!(meta.store_uuid, before.store_uuid, "{point}");
         assert_eq!(meta.recovery_epoch, before.recovery_epoch, "{point}");
@@ -654,7 +676,7 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
             (u64::from(committed), u64::from(committed)),
             "{point}"
         );
-        let expired = point == "retention.after";
+        let expired = point.starts_with("retention.") && after;
         let retained = store.source_status(&source)?.ok_or("source is absent")?;
         assert_eq!(retained.receipt.contiguous_cursor, 3, "{point}");
         assert_eq!(
@@ -681,7 +703,7 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
             "{point}"
         );
         let receipt = store.commit_result(&input)?;
-        assert_eq!(receipt.commit_revision, 4, "{point}");
+        assert_eq!(receipt.commit_revision, 5, "{point}");
         let revision = store.meta()?.commit_revision;
         assert_eq!(store.commit_result(&input)?, receipt, "{point}");
         assert_eq!(store.meta()?.commit_revision, revision, "{point}");
@@ -692,10 +714,10 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
             "{point}"
         );
         assert_eq!(result.retained_floor, 2, "{point}");
-        assert_eq!(store.meta()?.commit_revision, 5, "{point}");
+        assert_eq!(store.meta()?.commit_revision, 6, "{point}");
         drop(store);
         let store = AnalysisStore::open(root)?;
-        assert_eq!(store.meta()?.commit_revision, 5, "{point}");
+        assert_eq!(store.meta()?.commit_revision, 6, "{point}");
         assert_eq!(
             store.read_page(&source, 3)?.records[0].framed_record,
             b"c",

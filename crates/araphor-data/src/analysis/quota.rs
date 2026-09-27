@@ -260,7 +260,13 @@ mod tests {
                 key: context.key,
             }],
         };
-        let current_bytes = 1290 + serde_json::to_vec(&input.scope.identity)?.len() as u64;
+        let current_bytes = {
+            let mut writer = store.writer()?;
+            let transaction = writer.get_mut()?.transaction()?;
+            store
+                .logical_usage(&transaction, input.scope.identity.tenant_id)?
+                .1
+        };
         store.storage.tenant_max_bytes = current_bytes + 776;
         let before = store.meta()?;
         assert!(matches!(
@@ -281,7 +287,11 @@ mod tests {
             })
         ));
         assert_eq!(store.meta()?, before);
-        store.storage.witness_max_bytes = 520;
+        let witness_bytes = super::super::SegmentFile::encode_identity(&input.scope.identity)?.len()
+            as u64
+            + 5
+            + 260;
+        store.storage.witness_max_bytes = witness_bytes - 1;
         let before = store.meta()?;
         assert!(matches!(
             store.commit_result(&input),
@@ -292,7 +302,7 @@ mod tests {
         ));
         assert_eq!(store.meta()?, before);
         assert!(store.read_result([1; 16], "r")?.is_none());
-        store.storage.witness_max_bytes = 521;
+        store.storage.witness_max_bytes = witness_bytes;
         let receipt = store.commit_result(&input)?;
         {
             let reader = store.reader()?;
@@ -322,7 +332,8 @@ mod tests {
         assert_eq!(store.read_result([1; 16], "s")?, Some(vec![1]));
         {
             let reader = store.reader()?;
-            for (tenant, now, expected) in [(1_u8, 2_u64, 521_u64), (1, 100, 260), (2, 2, 0)] {
+            for (tenant, now, expected) in [(1_u8, 2_u64, witness_bytes), (1, 100, 260), (2, 2, 0)]
+            {
                 let bytes: u64 = reader.get()?.query_row(
                     AnalysisStore::WITNESS_USAGE,
                     params![[tenant; 16].as_slice(), now, [tenant; 16].as_slice()],

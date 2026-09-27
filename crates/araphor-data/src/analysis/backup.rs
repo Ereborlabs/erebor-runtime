@@ -124,9 +124,7 @@ impl AnalysisStore {
             Self::record_revision(&transaction, revision, &["recovery_gaps"])?;
             #[cfg(test)]
             self.crash_at("recovery.before");
-            transaction.commit().context(AnalysisDatabaseSnafu {
-                operation: "commit source recovery",
-            })?;
+            self.commit_metadata(transaction, "commit source recovery")?;
             #[cfg(test)]
             self.crash_at("recovery.after");
             self.revision.send_replace(revision);
@@ -680,9 +678,7 @@ impl AnalysisStore {
                 })?;
             #[cfg(test)]
             store.crash_at("restore.before");
-            transaction.commit().context(AnalysisDatabaseSnafu {
-                operation: "commit restore epoch",
-            })?;
+            store.commit_metadata(transaction, "commit restore epoch")?;
             #[cfg(test)]
             store.crash_at("restore.after");
         }

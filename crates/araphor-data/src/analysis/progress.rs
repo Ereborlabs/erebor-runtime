@@ -188,9 +188,7 @@ impl AnalysisStore {
         Self::record_revision(&transaction, revision, &["processor_progress"])?;
         #[cfg(test)]
         self.crash_at("register.before");
-        transaction.commit().context(AnalysisDatabaseSnafu {
-            operation: "commit processor registration",
-        })?;
+        self.commit_metadata(transaction, "commit processor registration")?;
         #[cfg(test)]
         self.crash_at("register.after");
         self.revision.send_replace(revision);
@@ -300,9 +298,7 @@ impl AnalysisStore {
         )?;
         #[cfg(test)]
         self.crash_at("resume.before");
-        transaction.commit().context(AnalysisDatabaseSnafu {
-            operation: "commit optional processor gap",
-        })?;
+        self.commit_metadata(transaction, "commit optional processor gap")?;
         #[cfg(test)]
         self.crash_at("resume.after");
         self.revision.send_replace(revision);
@@ -569,9 +565,7 @@ impl AnalysisStore {
         Self::record_revision(&transaction, revision, &relations)?;
         #[cfg(test)]
         self.crash_at("result.before");
-        transaction.commit().context(AnalysisDatabaseSnafu {
-            operation: "commit analysis result",
-        })?;
+        self.commit_metadata(transaction, "commit analysis result")?;
         #[cfg(test)]
         self.crash_at("result.after");
         self.revision.send_replace(revision);

@@ -108,6 +108,19 @@ impl AnalysisConnection<'_> {
 }
 
 impl AnalysisStore {
+    pub(super) fn commit_metadata(
+        &self,
+        transaction: duckdb::Transaction<'_>,
+        operation: &'static str,
+    ) -> Result<()> {
+        self.write_ready.store(false, Ordering::Release);
+        transaction
+            .commit()
+            .context(AnalysisDatabaseSnafu { operation })?;
+        self.write_ready.store(true, Ordering::Release);
+        Ok(())
+    }
+
     pub(super) fn open_native(path: &Path) -> Result<Connection> {
         let config = Config::default()
             .enable_autoload_extension(false)
@@ -255,6 +268,39 @@ mod tests {
     }
 
     #[test]
+    fn analysis_store_uncertain_commit() -> TestResult {
+        for applied in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let root = directory.path().join("analysis");
+            let store = AnalysisStore::open(&root)?;
+            let notice = store.subscribe_revision();
+            let mut writer = store.writer()?;
+            let transaction = writer.get_mut()?.transaction()?;
+            transaction.execute("UPDATE store_meta SET next_segment_id = 2", [])?;
+            transaction.execute_batch(if applied { "COMMIT" } else { "ROLLBACK" })?;
+            assert!(store
+                .commit_metadata(transaction, "test uncertain commit")
+                .is_err());
+            drop(writer);
+            assert!(store.writer().is_err());
+            assert!(store.maintenance_writer().is_err());
+            assert!(store.accept_validated_batch(identity(), batch(1)).is_err());
+            assert!(!notice.has_changed()?);
+            drop(store);
+            let store = AnalysisStore::open(&root)?;
+            let next: u64 = store.reader()?.get()?.query_row(
+                "SELECT next_segment_id FROM store_meta",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(next, if applied { 2 } else { 1 });
+            store.accept_validated_batch(identity(), batch(1))?;
+            assert_eq!(store.read_page(&identity(), 1)?.records.len(), 1);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn analysis_store_admission_bounds() -> TestResult {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
@@ -329,7 +375,7 @@ mod tests {
             let mut reader = store.reader()?;
             let snapshot = reader.get_mut()?.transaction()?;
             assert_eq!(
-                snapshot.query_row("SELECT COUNT(*) FROM events", [], |row| row
+                snapshot.query_row("SELECT COUNT(*) FROM batch_ranges", [], |row| row
                     .get::<_, u64>(0))?,
                 1
             );
@@ -341,9 +387,15 @@ mod tests {
                     raw_max_bytes: 100,
                 },
             )?;
-            assert_eq!(owner.retain(&identity(), 200)?.removed_records, 1);
+            let worker = scope.spawn(move || {
+                sender
+                    .send(owner.retain(&identity(), 300))
+                    .map_err(|_| "retention result lost")
+            });
+            let pending = receiver.recv_timeout(Duration::from_millis(50));
+            assert!(matches!(pending, Err(mpsc::RecvTimeoutError::Timeout)));
             assert_eq!(
-                snapshot.query_row("SELECT COUNT(*) FROM events", [], |row| row
+                snapshot.query_row("SELECT COUNT(*) FROM batch_ranges", [], |row| row
                     .get::<_, u64>(0))?,
                 1
             );
@@ -354,28 +406,31 @@ mod tests {
                 1
             );
             assert_eq!(
-                snapshot.query_row("SELECT durable_cursor FROM events", [], |row| row
+                snapshot.query_row("SELECT first_cursor FROM batch_ranges", [], |row| row
                     .get::<_, u64>(0))?,
                 1
             );
-            assert_eq!(store.read_page(&identity(), 2)?.records[0].cursor, 2);
-            let worker = scope.spawn(|| {
-                sender
-                    .send(store.checkpoint())
-                    .map_err(|_| "checkpoint result lost")
-            });
-            let pending = receiver.recv_timeout(Duration::from_millis(50));
+            let ranges = AnalysisStore::raw_ranges(&snapshot, &identity(), 1, 1, 1)?;
+            assert_eq!(ranges[0].read(&store.root)?.len(), 1);
             drop(snapshot);
             drop(reader);
-            assert!(matches!(pending, Err(mpsc::RecvTimeoutError::Timeout)));
-            receiver.recv_timeout(Duration::from_secs(5))??;
-            worker.join().map_err(|_| "checkpoint panicked")??;
+            assert_eq!(
+                receiver
+                    .recv_timeout(Duration::from_secs(5))??
+                    .removed_records,
+                2
+            );
+            worker.join().map_err(|_| "retention panicked")??;
             Ok(())
         })?;
+        store.checkpoint()?;
         assert_eq!(store.meta()?.commit_revision, 3);
         drop(store);
         let reopened = AnalysisStore::open(directory.path().join("analysis"))?;
-        assert_eq!(reopened.read_page(&identity(), 2)?.records[0].cursor, 2);
+        assert!(matches!(
+            reopened.read_page(&identity(), 2),
+            Err(crate::Error::RetainedRangeExpired { .. })
+        ));
         Ok(())
     }
 }

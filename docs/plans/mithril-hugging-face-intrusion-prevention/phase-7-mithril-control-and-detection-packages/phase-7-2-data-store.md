@@ -539,8 +539,8 @@ old per-row retention/witness assertions, and old native-memory settings.
 The required-input scope test passed after the exact-prefix accounting fix.
 The command returned 101; this result does not qualify the full phase.
 
-Complete-bundle backup and restore are described below. Apply the
-uncertain-commit guard to the other metadata owners as well.
+Complete-bundle backup and restore are described below. The shared metadata
+commit guard and current fault checks are described after that record.
 Trusted bounded extraction, pin-amplification reporting, the old Control writer
 removal, updated fault fixtures, mithril-e2e proof, and release resource and
 performance gates remain incomplete.
@@ -575,6 +575,50 @@ formatting, workspace check, and Clippy. The test step returned 101 with
 tests passed. The remaining failures are the raw-table corruption fixtures,
 old per-row retention and witness expectations, and old native-memory limits.
 These must be converted and verified before the phase can be Done.
+
+### Metadata commit and segment fault checks
+
+Source state: the guard and fixture conversion after `299f8b49`.
+`AnalysisStore::commit_metadata` blocks later writes if a metadata commit
+returns an error. Context, coverage, processor registration/resume/result,
+required retirement, recovery gaps, restore epochs, and segment reservations
+use this guard. Raw publication and deletion retain their longer guard: raw
+sync or file cleanup must also complete before writes can resume. Initial
+schema creation and startup cleanup cannot publish an owner on failure.
+
+`analysis_store_uncertain_commit` checks both durable outcomes before a failed
+commit response. Neither outcome permits another write or a revision notice
+before reopen. Recovery then accepts the durable state and permits intake.
+`analysis_store_input_crashes` also exits after reservation, append, and sync
+of a new segment. `analysis_store_commit_crashes` uses two sealed segments and
+checks deletion marking, unlink, and catalog cleanup while another segment
+contains an exact witness. `segment_recovery_rejects_corruption` checks missing,
+short, changed-header, and changed-record files. Repeated startup rejects these
+files without removing or repairing committed evidence.
+
+The retention fixtures now check whole-segment behavior. Required progress or
+one live witness prevents deletion of its segment. Optional progress does not
+prevent expiry. Resume records the complete missing interval before new work.
+A held read lease blocks deletion while intake can append. Five append/expiry
+cycles check bounded physical use and actual file-space release after the
+last witness expires. Quota tests use current metadata and whole-segment
+charges, not raw-row charges.
+
+**Done for the commit guard and component fault checks. Not done for the full
+phase.** After the final Rust edit, `bash .github/scripts/verify-rust-ci.sh`
+passed formatting, workspace check, and Clippy. Araphor-data passed 60 tests
+with 4 ignored. Control passed 197 unit tests with 3 ignored. The workspace
+test step returned 101 in mithril-e2e: 119 passed, 5 failed, and 251 ignored.
+The separate `discovery::data_store` run had 12 passed, 5 failed, and 4 ignored.
+
+The remaining failures are `data_quota_recovery`, `data_commit_failure`,
+`data_intake_failure`, `data_store_startup`, and `data_store_recovery`.
+The quota fixture still uses 2 MiB, below one segment, instead of the specified
+64 MiB. The commit fixture expects a native metadata error when the segment
+append fails first. Startup still changes the removed `events` table. The
+recovery case times out and needs diagnosis. The intake case also found a
+production error-mapping gap: a segment-reservation database failure returns
+gRPC Internal instead of Unavailable. Fix these cases and rerun the full gate.
 
 ### Previous implementation evidence
 
