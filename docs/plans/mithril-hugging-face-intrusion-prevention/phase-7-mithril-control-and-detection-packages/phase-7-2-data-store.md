@@ -385,7 +385,12 @@ Add `data-store-rollout` to compare policy rollout with intake idle and with
 an evidence group in flight. Use the existing policy fixture, production
 desired-state and rollout owners, Node WAL, and mTLS services. Run 32 pairs;
 each loaded pair submits 4,096 records. Each rollout uses a new policy source
-generation. Require exact inventory and bundle bytes, an authenticated
+generation. Alternate idle-first and loaded-first pairs. Require an even pair
+count from two through 32, so each run has equal order counts. Record the order
+with each sample. Finish the loaded operation, evidence ACK, and duplicate
+replay before a following idle operation. This order prevents growing policy
+history from always charging its later generation to the loaded case.
+Require exact inventory and bundle bytes, an authenticated
 activation report, and one Active target with no Updating or Failed target.
 The fixture supplies the Node activation report; this case does not install
 kernel policy. Record each idle and loaded rollout time and the evidence ACK
@@ -1361,3 +1366,14 @@ completion and durable state under this synthetic load; they do not prove a
 physical activation or the later discovery-performance gate. Full-capacity
 memory, worst-case payloads, global saturation, physical reserve adequacy,
 and old-writer removal also remain open. The phase remains **Not done**.
+
+The rollout samples show increasing cost as policy history grows. In each
+original pair, the loaded operation always has the later generation. The
+independent Control commit clones and replaces its full state. This fixed
+order is a comparison defect; it is not proof that all measured overhead
+comes from that defect. The runner now alternates pair order and records it.
+The order regression failed on the original runner and passed after the
+correction in 2.53 seconds. It also rejects odd pair counts. Production
+persistence, quotas, timeouts, and evidence checks are unchanged. Keep the
+original results. New release comparisons and the final workspace gate must
+run before this correction is qualified. The phase remains **Not done**.

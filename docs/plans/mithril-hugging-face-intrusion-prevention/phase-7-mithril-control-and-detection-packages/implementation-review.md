@@ -370,6 +370,13 @@ Each sample records idle rollout, loaded rollout, and observed evidence ACK
 times. ACK time includes the policy operation before the ACK is read; it is
 not the evidence commit time. These are synthetic Control-rollout measurements,
 not physical activation or a completed performance comparison.
+The runner alternates idle-first and loaded-first pairs. Each sample records
+`loaded_first`. It accepts only even pair counts from two through 32. A loaded
+operation completes its ACK and duplicate replay before a following idle
+operation starts. This order balances the increasing policy history. The
+production Control snapshot commit remains unchanged. The order assertion
+failed before this correction and passed after it; the focused case took
+2.53 seconds. New release measurements and a new full gate remain open.
 `data_rollout_load` passed with two pairs and four transitions. It also checks
 invalid pair counts and refusal to replace an existing result. All 16 enabled
 data-store tests and four enabled outage tests passed with serial execution.
