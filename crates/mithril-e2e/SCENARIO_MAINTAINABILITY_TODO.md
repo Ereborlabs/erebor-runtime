@@ -2146,7 +2146,9 @@ test does not close a row when its physical condition or an assertion changed.
     request a read-only mount. Require physical denial and fresh, attributed
     `UNSUPPORTED_OBJECT` Privilege/Capability `-EACCES` evidence. Add no
     Platform API or policy. Keep the standard test below 100 lines.
-    - [ ] Pass Host and commit it.
+    - [x] Pass Host and commit it. The 71-line exact test passed in 44.85
+      seconds. The existing prepared-move Host test passed in 30.71 seconds
+      after the shared actor change.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching old action after all three platforms pass.

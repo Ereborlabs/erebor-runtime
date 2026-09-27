@@ -55,6 +55,8 @@ mod mount_race;
 #[cfg(test)]
 mod mount_recursive;
 #[cfg(test)]
+mod mount_setattr;
+#[cfg(test)]
 mod moved_exec;
 #[cfg(test)]
 mod multi_policy;

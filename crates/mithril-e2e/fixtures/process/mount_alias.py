@@ -24,6 +24,25 @@ libc.move_mount.argtypes = [
     ctypes.c_uint,
 ]
 libc.move_mount.restype = ctypes.c_int
+
+
+class MountAttr(ctypes.Structure):
+    _fields_ = [
+        ("attr_set", ctypes.c_uint64),
+        ("attr_clr", ctypes.c_uint64),
+        ("propagation", ctypes.c_uint64),
+        ("userns_fd", ctypes.c_uint64),
+    ]
+
+
+libc.mount_setattr.argtypes = [
+    ctypes.c_int,
+    ctypes.c_char_p,
+    ctypes.c_uint,
+    ctypes.POINTER(MountAttr),
+    ctypes.c_size_t,
+]
+libc.mount_setattr.restype = ctypes.c_int
 AT_FDCWD = -100
 CLONE_NEWNS = 0x00020000
 MS_BIND = 4096
@@ -54,7 +73,9 @@ def move_tree(tree, target):
 
 
 args = sys.argv[2:]
-if args not in ([], ["late"], ["recursive"], ["move"], ["prepared"], ["future"], ["race"], ["runtime"]):
+if args not in (
+    [], ["late"], ["recursive"], ["move"], ["prepared"], ["setattr"], ["future"], ["race"], ["runtime"]
+):
     sys.exit(2)
 mode = args[0] if args else "early"
 root = os.path.join(sys.argv[1], "mount")
@@ -151,6 +172,15 @@ elif mode == "prepared" and command == "mount\n":
     mount_error = move_tree(prepared_tree, denied_alias)
     with open(result_path, "w", encoding="utf-8") as output:
         json.dump({"phase": "mounted", "mount": mount_error}, output)
+    sys.exit(0)
+elif mode == "setattr" and command == "setattr\n":
+    attr = MountAttr(1, 0, 0, 0)
+    result = libc.mount_setattr(
+        AT_FDCWD, allowed_alias.encode(), 0, ctypes.byref(attr), ctypes.sizeof(attr)
+    )
+    code = ctypes.get_errno() if result else 0
+    with open(result_path, "w", encoding="utf-8") as output:
+        json.dump({"phase": "setattr", "errno": code}, output)
     sys.exit(0)
 if mode in ("late", "recursive", "runtime") and command in ("mount-read\n", "mount\n"):
     flags = MS_BIND | (MS_REC if mode == "recursive" else 0)
