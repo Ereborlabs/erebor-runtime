@@ -50,3 +50,46 @@ Choose a raw owner only after the same workload meets the intake, query,
 retention, witness, and recovery contracts. A small throughput win cannot
 replace those checks. Keep the current phase plan in force until this choice
 is reviewed.
+
+## Direct store comparison
+
+The ignored `store::raw_bench::raw_event_store_comparison` test feeds the same
+framed records to each production store API. Each batch has 256 records. One
+source sends consecutive batches. The test prepares records before timing,
+measures each durable store call, closes and reopens the store, then reads and
+decodes every record in pages. It checks each record's cursor. The legacy read
+uses `begin_evidence_read` and `read_evidence_page`. The DuckDB read uses
+`read_page` and decodes the returned frames. One store runs per process.
+
+The test ran in the owned VM `mithril-runtime-qualification-2249801`: four
+virtual CPUs, Linux 6.8.0-142, ext4, no swap. It used release builds, default
+store limits, no allocator override, and no concurrent benchmark. DuckDB used
+the current 160 MiB engine target and 16 MiB checkpoint threshold. The final
+test executable SHA-256 was
+`34824977af630a4dcdc1ec4673b7e02800a959db6407a46a2bd03712ce6f913b`.
+Both stores accepted and returned all records after reopen.
+
+| Store | Events | Write events/s | Write p95 ms/batch | Read events/s | Reopen ms | Peak RSS KiB | Allocated bytes after reopen |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Segments | 16,384 | 92,318 | 3.209 | 573,085 | 11.135 | 17,944 | 2,310,144 |
+| DuckDB | 16,384 | 17,046 | 16.914 | 95,239 | 58.308 | 59,336 | 4,468,736 |
+| Segments | 262,144 | 99,163 | 2.963 | 577,597 | 130.070 | 81,528 | 37,466,112 |
+| DuckDB | 262,144 | 10,797 | 30.960 | 62,202 | 243.424 | 189,336 | 30,945,280 |
+
+The 262,144-event input contained 37,445,318 framed bytes in both runs.
+Before close, the segment files occupied 37,466,112 allocated bytes and
+DuckDB occupied 42,061,824. DuckDB fell to 30,945,280 after its close and
+checkpoint. These counts use each file's allocated ext4 blocks. The earlier
+release executable, before the allocated-block counter was added, repeated
+the large case in both run orders. It measured 85,456 to 95,392 write
+events/s for segments and 9,608 to 10,364 for DuckDB. The direction of the
+gap did not depend on run order.
+
+This workload favors the segment writer by about nine times for direct writes
+and reads at 262,144 events. DuckDB used about 17 percent fewer allocated
+bytes after close at that size. The experiment does not include mTLS, multiple
+sources, concurrent readers, context, coverage, retention, discovery, SQL,
+or power-loss recovery. It also does not test an unindexed DuckDB events table.
+The prior full-capacity DuckDB memory failures remain separate evidence.
+The store choice is still open until the query, retention, witness, and
+recovery work for the segment alternative is estimated and tested.

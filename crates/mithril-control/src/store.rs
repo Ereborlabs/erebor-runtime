@@ -42,6 +42,8 @@ mod context;
 pub use context::ControlContextOwner;
 mod evidence_read;
 pub use evidence_read::*;
+#[cfg(test)]
+mod raw_bench;
 const STATE_DIGEST_BYTES: usize = 32;
 const MAX_STATE_BYTES: usize = 64 * 1_024 * 1_024;
 
