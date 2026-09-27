@@ -118,13 +118,11 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "disable external access",
             })?
-            .max_memory("160MiB")
+            .max_memory("64MiB")
             .and_then(|config| config.threads(2))
             .and_then(|config| config.with("wal_autocheckpoint", "16MiB"))
             .and_then(|config| config.with("max_temp_directory_size", "128MiB"))
             .and_then(|config| config.with("allocator_bulk_deallocation_flush_threshold", "0B"))
-            // Indexed raw tables need compaction too. Resource limits still apply.
-            .and_then(|config| config.with("vacuum_rebuild_indexes", u64::MAX.to_string()))
             .context(AnalysisDatabaseSnafu {
                 operation: "bound native data resources",
             })?;
@@ -144,7 +142,7 @@ impl AnalysisStore {
         Ok(connection)
     }
 
-    fn writer_access(&self) -> Result<AnalysisConnection<'_>> {
+    pub(super) fn writer_access(&self) -> Result<AnalysisConnection<'_>> {
         let permit = self
             .write_slots
             .try_acquire()
@@ -153,6 +151,9 @@ impl AnalysisStore {
             .writer
             .lock()
             .map_err(|_| self.state_error("the analysis writer lock is poisoned"))?;
+        if !self.write_ready.load(Ordering::Acquire) {
+            return self.reject("the data writer requires catalog recovery before retry");
+        }
         Ok(AnalysisConnection {
             connection,
             root: &self.root,

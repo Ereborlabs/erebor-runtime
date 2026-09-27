@@ -9,11 +9,13 @@ const GLOBAL_REVISIONS: u64 = 4_096;
 
 impl AnalysisStore {
     const WITNESS_USAGE: &'static str = "SELECT (
-        COALESCE((SELECT SUM(256 + octet_length(e.framed_record)) FROM events e
+        COALESCE((SELECT SUM(s.committed_end) FROM segments s
             SEMI JOIN (
-                SELECT tenant_id, stream_key, durable_cursor FROM evidence_refs
-                WHERE tenant_id = ? AND expires_utc_ns > ?
-            ) r USING (tenant_id, stream_key, durable_cursor)), 0)
+                SELECT b.segment_id FROM batch_ranges b JOIN evidence_refs r
+                    ON r.tenant_id = b.tenant_id AND r.stream_key = b.stream_key
+                    AND r.durable_cursor BETWEEN b.first_cursor AND b.last_cursor
+                WHERE r.tenant_id = ? AND r.expires_utc_ns > ?
+            ) r USING (segment_id) WHERE s.state = 'Live'), 0)
         + COALESCE((SELECT SUM(256 + octet_length(c.body) + octet_length(encode(c.owner_id))
             + octet_length(c.entity_key) + octet_length(c.lifetime_key)) FROM context_versions c
             SEMI JOIN (
@@ -31,8 +33,10 @@ impl AnalysisStore {
         transaction
             .query_row(
                 "WITH charges AS (
-                    SELECT tenant_id, 'events' AS family, false AS limited,
-                        256 + octet_length(framed_record) AS bytes FROM events
+                    SELECT tenant_id, 'segments' AS family, false AS limited,
+                        256 + committed_end + octet_length(encode(identity_json)) AS bytes FROM segments
+                    UNION ALL SELECT tenant_id, 'batches', false,
+                        256 + 4 * len(frame_ends) FROM batch_ranges
                     UNION ALL SELECT tenant_id, 'coverage', true,
                         256 + octet_length(report) FROM coverage
                     UNION ALL SELECT tenant_id, 'receipts', false,

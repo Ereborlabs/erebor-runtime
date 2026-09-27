@@ -32,10 +32,35 @@ impl AnalysisStore {
         Self::validate_contexts(writer, root)?;
         let checks = [
             ("invalid source key", "SELECT 1 FROM source_receipts WHERE octet_length(stream_key) <> 32"),
-            ("invalid event source or digest", "SELECT 1 FROM events e LEFT JOIN source_receipts s USING (stream_key)
-                WHERE s.stream_key IS NULL OR e.tenant_id <> s.tenant_id OR e.cpu_id <> s.cpu_id
-                OR e.durable_cursor = 0 OR e.durable_cursor <= s.retained_floor OR e.intake_utc_ns = 0
-                OR sha256(e.framed_record) <> lower(hex(e.frame_sha256))"),
+            ("invalid segment identity or state", "SELECT 1 FROM segments e
+                LEFT JOIN source_receipts s USING (stream_key)
+                WHERE e.segment_id = 0 OR e.segment_id >= (SELECT next_segment_id FROM store_meta)
+                OR e.state NOT IN ('Reserved', 'Live', 'Deleting') OR e.stream_kind <> 'records'
+                OR e.committed_end < 70 OR e.committed_end > 16777216
+                OR (e.state <> 'Reserved' AND (s.stream_key IS NULL OR e.tenant_id <> s.tenant_id
+                    OR e.cpu_id <> s.cpu_id OR e.identity_json <> s.identity_json))
+                OR (e.state = 'Reserved' AND EXISTS (SELECT 1 FROM batch_ranges b WHERE b.segment_id = e.segment_id))"),
+            ("invalid batch range", "SELECT 1 FROM batch_ranges b LEFT JOIN segments s USING (segment_id)
+                WHERE s.segment_id IS NULL OR s.state = 'Reserved'
+                    OR b.stream_key <> s.stream_key OR b.tenant_id <> s.tenant_id
+                    OR b.first_cursor = 0 OR b.last_cursor < b.first_cursor
+                    OR b.last_cursor::HUGEINT - b.first_cursor + 1 > 4096
+                    OR b.byte_start < 70 OR b.byte_end <= b.byte_start OR b.byte_end > s.committed_end
+                    OR b.byte_end - b.byte_start > 4194304 OR b.intake_utc_ns = 0
+                    OR octet_length(b.content_sha256) <> 32
+                    OR len(b.frame_ends) <> b.last_cursor::HUGEINT - b.first_cursor + 1
+                    OR b.ordinal::HUGEINT + len(b.frame_ends) > 4096"),
+            ("overlapping batch cursors", "SELECT 1 FROM (
+                SELECT first_cursor, LAG(last_cursor) OVER (
+                    PARTITION BY tenant_id, stream_key ORDER BY first_cursor) AS prior
+                FROM batch_ranges) WHERE first_cursor <= prior"),
+            ("overlapping batch bytes", "SELECT 1 FROM (
+                SELECT byte_start, LAG(byte_end) OVER (
+                    PARTITION BY segment_id ORDER BY byte_start) AS prior
+                FROM batch_ranges) WHERE byte_start < prior"),
+            ("invalid retained batch floor", "SELECT 1 FROM batch_ranges b JOIN segments e USING (segment_id)
+                JOIN source_receipts s ON s.stream_key = b.stream_key AND s.tenant_id = b.tenant_id
+                WHERE e.state = 'Live' AND b.first_cursor <= s.retained_floor"),
             ("invalid coverage source or digest", "SELECT 1 FROM coverage c LEFT JOIN source_receipts s USING (stream_key)
                 WHERE s.stream_key IS NULL OR c.tenant_id <> s.tenant_id OR c.revision = 0
                 OR c.revision > s.coverage_revision OR sha256(c.report) <> lower(hex(c.report_sha256))"),
@@ -44,26 +69,33 @@ impl AnalysisStore {
             ("invalid expiry range", "SELECT 1 FROM expired_ranges x LEFT JOIN source_receipts s USING (stream_key)
                 WHERE s.stream_key IS NULL OR x.tenant_id <> s.tenant_id OR x.first_cursor = 0
                 OR x.last_cursor < x.first_cursor OR x.last_cursor > s.contiguous_cursor
-                OR EXISTS (SELECT 1 FROM events e WHERE e.stream_key = x.stream_key
-                    AND e.durable_cursor BETWEEN x.first_cursor AND x.last_cursor)
+                OR EXISTS (SELECT 1 FROM batch_ranges b JOIN segments e USING (segment_id)
+                    WHERE b.stream_key = x.stream_key AND b.tenant_id = x.tenant_id AND e.state = 'Live'
+                    AND b.first_cursor <= x.last_cursor AND b.last_cursor >= x.first_cursor)
                 OR EXISTS (SELECT 1 FROM expired_ranges y WHERE y.stream_key = x.stream_key
                     AND y.first_cursor > x.first_cursor AND y.first_cursor <= x.last_cursor)"),
             ("incomplete acknowledged range", "SELECT 1 FROM source_receipts s WHERE s.contiguous_cursor::HUGEINT <>
-                (SELECT COUNT(*) FROM events e WHERE e.stream_key = s.stream_key AND e.durable_cursor <= s.contiguous_cursor)
+                COALESCE((SELECT SUM(LEAST(b.last_cursor, s.contiguous_cursor)::HUGEINT - b.first_cursor + 1)
+                    FROM batch_ranges b JOIN segments e USING (segment_id)
+                    WHERE b.stream_key = s.stream_key AND b.tenant_id = s.tenant_id AND e.state = 'Live'
+                        AND b.first_cursor <= s.contiguous_cursor), 0)
                 + COALESCE((SELECT SUM(x.last_cursor::HUGEINT - x.first_cursor + 1)
                     FROM expired_ranges x WHERE x.stream_key = s.stream_key), 0)"),
             ("invalid retained floor", "SELECT 1 FROM source_receipts s WHERE s.retained_floor <>
-                COALESCE((SELECT MIN(e.durable_cursor) - 1 FROM events e WHERE e.stream_key = s.stream_key
-                    AND e.durable_cursor <= s.contiguous_cursor), s.contiguous_cursor)"),
+                COALESCE((SELECT MIN(b.first_cursor) - 1 FROM batch_ranges b JOIN segments e USING (segment_id)
+                    WHERE b.stream_key = s.stream_key AND b.tenant_id = s.tenant_id AND e.state = 'Live'
+                        AND b.first_cursor <= s.contiguous_cursor), s.contiguous_cursor)"),
             ("invalid result body", "SELECT 1 FROM analysis_results WHERE octet_length(tenant_id) <> 16
                 OR result_id = '' OR length(result_id) > 256 OR processor_id = ''
                 OR octet_length(body) = 0 OR octet_length(body) > 16777216 OR sha256(body) <> lower(hex(body_sha256))
                 OR octet_length(request_sha256) <> 32"),
             ("invalid witness reference", "SELECT 1 FROM evidence_refs r
                 LEFT JOIN analysis_results a ON a.result_id = r.ref_id AND a.tenant_id = r.tenant_id
-                LEFT JOIN events e ON e.stream_key = r.stream_key AND e.durable_cursor = r.durable_cursor
-                    AND e.tenant_id = r.tenant_id
-                WHERE a.result_id IS NULL OR e.stream_key IS NULL OR r.expires_utc_ns = 0"),
+                LEFT JOIN batch_ranges b ON b.stream_key = r.stream_key
+                    AND r.durable_cursor BETWEEN b.first_cursor AND b.last_cursor AND b.tenant_id = r.tenant_id
+                LEFT JOIN segments e ON e.segment_id = b.segment_id AND e.state = 'Live'
+                WHERE a.result_id IS NULL OR e.segment_id IS NULL OR r.expires_utc_ns = 0
+                    OR octet_length(r.frame_sha256) <> 32"),
             ("invalid context reference", "SELECT 1 FROM context_refs r
                 LEFT JOIN analysis_results a ON a.result_id = r.ref_id AND a.tenant_id = r.tenant_id
                 LEFT JOIN context_versions c ON c.tenant_id = r.tenant_id AND c.owner_id = r.owner_id
@@ -121,20 +153,20 @@ impl AnalysisStore {
                 return Self::reject_path(root, reason);
             }
         }
-        for relation in [
-            "events",
-            "coverage",
-            "context_versions",
-            "analysis_results",
-            "processor_gaps",
-            "recovery_gaps",
-            "expired_ranges",
+        for (relation, notice) in [
+            ("batch_ranges", "events"),
+            ("coverage", "coverage"),
+            ("context_versions", "context_versions"),
+            ("analysis_results", "analysis_results"),
+            ("processor_gaps", "processor_gaps"),
+            ("recovery_gaps", "recovery_gaps"),
+            ("expired_ranges", "expired_ranges"),
         ] {
             let invalid: bool = writer.query_row(&format!(
                 "SELECT EXISTS (SELECT 1 FROM {relation} WHERE commit_revision = 0 OR commit_revision > ?
                     OR commit_revision > COALESCE((SELECT last_changed_revision FROM relation_revisions
                         WHERE relation_name = ?), 0))"),
-                params![meta.commit_revision, relation], |row| row.get(0),
+                params![meta.commit_revision, notice], |row| row.get(0),
             ).context(AnalysisDatabaseSnafu { operation: "validate committed revisions" })?;
             if invalid {
                 return Self::reject_path(root, "the stored relation revision is invalid");
@@ -142,8 +174,9 @@ impl AnalysisStore {
         }
         let invalid: bool = writer.query_row(
             "SELECT EXISTS (SELECT 1 FROM relation_revisions WHERE last_changed_revision = 0 OR last_changed_revision > ?)
-                OR EXISTS (SELECT 1 FROM events e JOIN source_receipts s USING (stream_key)
-                    WHERE e.durable_cursor::HUGEINT > s.contiguous_cursor::HUGEINT + ?)",
+                OR EXISTS (SELECT 1 FROM batch_ranges e JOIN source_receipts s USING (stream_key)
+                    WHERE e.last_cursor::HUGEINT > s.contiguous_cursor::HUGEINT + ?)
+                OR EXISTS (SELECT 1 FROM store_meta WHERE next_segment_id = 0)",
             params![meta.commit_revision, crate::MAX_PENDING_EVIDENCE_RECORDS], |row| row.get(0),
         ).context(AnalysisDatabaseSnafu { operation: "validate revision and pending bounds" })?;
         if invalid {
@@ -288,11 +321,13 @@ impl AnalysisStore {
             "relation_name, last_changed_revision FROM relation_revisions",
             "stream_key, identity_json, tenant_id, cpu_id, contiguous_cursor, coverage_revision, retained_floor FROM source_receipts",
             "epoch_key, tenant_id, node_boot_id, label_epoch FROM source_bindings",
-            "stream_key, tenant_id, durable_cursor, cpu_id, framed_record, frame_sha256, commit_revision, ordinal, intake_utc_ns FROM events",
+            "next_segment_id FROM store_meta",
+            "segment_id, stream_key, tenant_id, identity_json, cpu_id, stream_kind, state, sealed, committed_end FROM segments",
+            "segment_id, stream_key, tenant_id, byte_start, byte_end, first_cursor, last_cursor, frame_ends, content_sha256, commit_revision, ordinal, intake_utc_ns FROM batch_ranges",
             "stream_key, tenant_id, revision, report, report_sha256, commit_revision, ordinal FROM coverage",
             "tenant_id, owner_id, entity_key, lifetime_key, owner_revision, valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, content_sha256, commit_revision FROM context_versions",
             "processor_id, method_version, tenant_id, stream_key, class, consumed_cursor, resume_floor, coverage_revision, context_revision, start_cursor, required_floor, retired, retirement_id, retirement_reason, retirement_cursor, retirement_revision FROM processor_progress",
-            "ref_id, tenant_id, stream_key, durable_cursor, expires_utc_ns FROM evidence_refs",
+            "ref_id, tenant_id, stream_key, durable_cursor, expires_utc_ns, frame_sha256 FROM evidence_refs",
             "ref_id, tenant_id, owner_id, entity_key, lifetime_key, owner_revision, content_sha256 FROM context_refs",
             "result_id, tenant_id, processor_id, body, body_sha256, request_sha256, commit_revision FROM analysis_results",
             "processor_id, method_version, tenant_id, stream_key, first_cursor, last_cursor, commit_revision FROM processor_gaps",

@@ -1,10 +1,9 @@
 use duckdb::{params, OptionalExt as _};
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use super::{
-    source_key, valid_source_identity, AnalysisReadPageV1, AnalysisRecordV1, AnalysisStore,
-    StorePositionV1, MAX_ANALYSIS_PAGE_BYTES, MAX_ANALYSIS_PAGE_RECORDS,
+    source_key, valid_source_identity, AnalysisReadPageV1, AnalysisStore, MAX_ANALYSIS_PAGE_BYTES,
+    MAX_ANALYSIS_PAGE_RECORDS,
 };
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result, RetainedRangeExpiredSnafu};
 
@@ -70,6 +69,7 @@ impl AnalysisStore {
         first_cursor: u64,
     ) -> Result<AnalysisReadPageV1> {
         let key = source_key(identity);
+        let coordinator = self.writer_access()?;
         let mut reader_guard = self.reader()?;
         let reader = reader_guard.get_mut()?;
         let writer = reader.transaction().context(AnalysisDatabaseSnafu {
@@ -106,87 +106,53 @@ impl AnalysisStore {
         let page_end = expiry.map_or(receipt.contiguous_cursor, |cursor| cursor - 1);
         let read_revision =
             Self::read_meta_from(&writer, &self.root.join("analysis.duckdb"))?.commit_revision;
-        let mut statement = writer
-            .prepare(
-                "SELECT durable_cursor, framed_record, frame_sha256, commit_revision, ordinal
-                 FROM events WHERE stream_key = ? AND tenant_id = ?
-                 AND durable_cursor >= ? AND durable_cursor <= ?
-                 ORDER BY durable_cursor LIMIT ?",
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare bounded evidence read",
-            })?;
-        let mut rows = statement
-            .query(params![
-                key.as_slice(),
-                identity.tenant_id.as_slice(),
-                first_cursor,
-                page_end.min(first_cursor.saturating_add(MAX_ANALYSIS_PAGE_RECORDS as u64)),
-                MAX_ANALYSIS_PAGE_RECORDS as u32 + 1,
-            ])
-            .context(AnalysisDatabaseSnafu {
-                operation: "read bounded evidence",
-            })?;
+        let ranges = Self::raw_ranges(
+            &writer,
+            identity,
+            first_cursor,
+            page_end.min(first_cursor.saturating_add(MAX_ANALYSIS_PAGE_RECORDS as u64)),
+            MAX_ANALYSIS_PAGE_RECORDS + 1,
+        )?;
+        // The reader guard prevents deletion until extraction ends.
+        drop(coordinator);
         let mut records = Vec::new();
         let mut encoded_bytes = 0;
         let mut bounded = false;
-        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-            operation: "read bounded evidence",
-        })? {
-            let cursor: u64 = row.get(0).context(AnalysisDatabaseSnafu {
-                operation: "read evidence cursor",
-            })?;
-            if cursor != first_cursor + records.len() as u64 {
-                return self.expired_or_missing(
-                    &writer,
-                    &key,
-                    identity,
-                    first_cursor + records.len() as u64,
-                );
-            }
-            if records.len() == MAX_ANALYSIS_PAGE_RECORDS {
-                bounded = true;
-                break;
-            }
-            let frame: Vec<u8> = row.get(1).context(AnalysisDatabaseSnafu {
-                operation: "read evidence frame",
-            })?;
-            let digest: Vec<u8> = row.get(2).context(AnalysisDatabaseSnafu {
-                operation: "read evidence digest",
-            })?;
-            if Sha256::digest(&frame).as_slice() != digest {
-                return self.reject("the retained evidence digest does not match its frame");
-            }
-            if encoded_bytes + frame.len() > MAX_ANALYSIS_PAGE_BYTES {
-                if records.is_empty() {
-                    return self.reject("one evidence frame exceeds the read page bound");
+        'ranges: for range in ranges {
+            for record in range.read(&self.root)? {
+                if record.cursor < first_cursor || record.cursor > page_end {
+                    continue;
                 }
-                bounded = true;
-                break;
+                let expected = first_cursor
+                    .checked_add(records.len() as u64)
+                    .ok_or_else(|| self.state_error("the evidence read cursor is exhausted"))?;
+                if record.cursor != expected {
+                    return self.expired_or_missing(&writer, &key, identity, expected);
+                }
+                if records.len() == MAX_ANALYSIS_PAGE_RECORDS {
+                    bounded = true;
+                    break 'ranges;
+                }
+                if encoded_bytes + record.framed_record.len() > MAX_ANALYSIS_PAGE_BYTES {
+                    if records.is_empty() {
+                        return self.reject("one evidence frame exceeds the read page bound");
+                    }
+                    bounded = true;
+                    break 'ranges;
+                }
+                encoded_bytes += record.framed_record.len();
+                records.push(record);
             }
-            encoded_bytes += frame.len();
-            records.push(AnalysisRecordV1 {
-                cursor,
-                framed_record: frame,
-                position: StorePositionV1 {
-                    commit_revision: row.get(3).context(AnalysisDatabaseSnafu {
-                        operation: "read evidence commit revision",
-                    })?,
-                    ordinal: row.get(4).context(AnalysisDatabaseSnafu {
-                        operation: "read evidence ordinal",
-                    })?,
-                },
-            });
         }
-        let next_cursor = first_cursor + records.len() as u64;
-        if next_cursor <= page_end && !bounded {
-            return self.expired_or_missing(&writer, &key, identity, next_cursor);
+        let next_cursor = first_cursor.checked_add(records.len() as u64);
+        if let Some(next) = next_cursor.filter(|next| *next <= page_end && !bounded) {
+            return self.expired_or_missing(&writer, &key, identity, next);
         }
         Ok(AnalysisReadPageV1 {
             first_cursor,
             records,
             encoded_bytes,
-            next_cursor: (next_cursor <= receipt.contiguous_cursor).then_some(next_cursor),
+            next_cursor: next_cursor.filter(|next| *next <= receipt.contiguous_cursor),
             read_revision,
         })
     }
