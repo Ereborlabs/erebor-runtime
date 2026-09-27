@@ -1,10 +1,10 @@
 use mithril_control::WorkloadProtectionPolicy as Policy;
 
-use std::{cell::RefCell, collections::BTreeSet, time::Duration};
+use std::time::Duration;
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
 
-use crate::error::InvalidInputSnafu;
+use crate::effect::EffectCheck;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
@@ -28,12 +28,9 @@ fn protected_mount_race_is_closed<P: Platform>() -> TestResult<()> {
     env.node_ready()?;
     env.running(init.id())?;
     let task = env.recovered(pid, "mount race actor")?;
-    let seen = env
-        .snapshot()?
-        .recent_effects
-        .into_iter()
-        .map(|event| (event.source_cpu_id, event.source_sequence))
-        .collect::<BTreeSet<_>>();
+    let role = task.snapshot.active_role_id;
+    let gen = task.snapshot.profile_generation_ref_id;
+    let effects = EffectCheck::new(&env, task)?;
     if let Err(error) = actor.send(b"race\n") {
         return Err(format!("{error}; stderr: {:?}", actor.stderr()?).into());
     }
@@ -55,46 +52,27 @@ fn protected_mount_race_is_closed<P: Platform>() -> TestResult<()> {
     assert_eq!(result["mount_other"], 0);
     assert_eq!(result["denied"], libc::EACCES);
     assert_eq!(result["allowed"], "allowed bind source\n");
-    let path = env.maps().0.to_owned();
-    let last = RefCell::new(String::from("<none>"));
-    wait_for(
-        &path,
-        "mount race effects",
-        Duration::from_secs(30),
-        || {
-            let events = env.snapshot().map_err(|source| {
-                InvalidInputSnafu {
-                    path: &path,
-                    reason: source.to_string(),
-                }
-                .build()
-            })?;
-            let fresh = events
-                .recent_effects
-                .into_iter()
-                .filter(|event| !seen.contains(&(event.source_cpu_id, event.source_sequence)))
-                .collect::<Vec<_>>();
-            let mount = fresh.iter().any(|event| {
-                event.reason == "UNSUPPORTED_OBJECT"
-                    && event.effect_family == u32::from(F::Mount as u16)
-                    && event.operation == u32::from(O::Mount as u16)
-                    && matches!(event.kernel_result, value if value == -libc::EACCES || value == -libc::EPERM)
-            });
-            let file = |reason: &str, result| {
-                fresh
-                    .iter()
-                    .any(|event| task.matches_effect(event, reason, F::File, O::OpenRead, result))
-            };
-            let deny = file("EXACT_POLICY_DENY", -libc::EACCES);
-            let allow = file("EXACT_POLICY_ALLOW", 0);
-            *last.borrow_mut() = format!(
-                "mount={mount} deny={deny} allow={allow}; fresh={}",
-                fresh.len()
-            );
-            Ok((mount && deny && allow).then_some(()))
-        },
-        || format!("last effects: {}", last.borrow()),
+    effects.wait(
+        &env,
+        "EXACT_POLICY_DENY",
+        F::File,
+        O::OpenRead,
+        -libc::EACCES,
+        "deny",
     )?;
+    effects.wait(&env, "EXACT_POLICY_ALLOW", F::File, O::OpenRead, 0, "allow")?;
+    effects.wait_match(
+        &env,
+        "worker mount denial effect",
+        |event| {
+            event.reason == "UNSUPPORTED_OBJECT"
+                && event.effect_family == u32::from(F::Mount as u16)
+                && event.operation == u32::from(O::Mount as u16)
+                && matches!(event.kernel_result, value if value == -libc::EACCES || value == -libc::EPERM)
+                && event.active_role_id == role
+                && event.profile_generation_ref_id == gen
+        },
+    ).map_err(|error| format!("{error}; actor stderr: {:?}", actor.stderr()))?;
 
     actor.stop()?;
     init.stop()?;

@@ -2292,6 +2292,12 @@ test does not close a row when its physical condition or an assertion changed.
       field, mailbox requests, and worker owner after all three platform cases
       pass. This removed 205 lines. The 92 non-privileged library tests and
       strict crate Clippy pass.
+    - [x] Bring the shared mount-race test below 100 lines. It is 80 lines.
+      The existing effect checker observes the exact denied and allowed reads.
+      The test keeps all eight mount results and the worker Mount denial.
+      The 92 library tests and the exact Host, direct-`runc`, and Kubernetes
+      cases passed on 2026-09-27. The Kubernetes test waits for the actor's
+      result file because a failed attach transport does not prove actor exit.
     - [x] Run the complete Host, direct-`runc`, and Kubernetes matrix because
       this is the third completed migration since the last full matrix. On
       2026-09-19, Host passed 47 tests in nine lifecycle processes, direct

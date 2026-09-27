@@ -178,11 +178,11 @@ fn wait_ignores_transport_exit() -> crate::Result<()> {
         .context(IoSnafu { path: "sleep" })?;
     let pid = actor.id();
     let waiter = std::thread::spawn(move || actor.wait());
-    let mut child = Command::new("true")
+    let mut child = Command::new("false")
         .spawn()
-        .context(IoSnafu { path: "true" })?;
-    assert!(child.wait().context(IoSnafu { path: "true" })?.success());
-    let mut fixture = ProcessFixture::new(child, Path::new("true"));
+        .context(IoSnafu { path: "false" })?;
+    assert!(!child.wait().context(IoSnafu { path: "false" })?.success());
+    let mut fixture = ProcessFixture::new(child, Path::new("false"));
     fixture.set_actor(pid)?;
     let mut polls = 0;
 

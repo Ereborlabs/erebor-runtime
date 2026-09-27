@@ -23,6 +23,12 @@ impl EffectCheck {
         Ok(Self { task, seen })
     }
 
+    fn fresh(&self, event: &MithrilEffectObservation) -> bool {
+        !self
+            .seen
+            .contains(&(event.source_cpu_id, event.source_sequence))
+    }
+
     pub(crate) fn wait<P: Platform>(
         &self,
         env: &P,
@@ -46,6 +52,28 @@ impl EffectCheck {
         count: usize,
         name: &str,
     ) -> TestResult<Vec<MithrilEffectObservation>> {
+        self.wait_where(env, count, name, |event| {
+            self.task
+                .matches_effect(event, reason, effect.0, effect.1, result)
+        })
+    }
+
+    pub(crate) fn wait_match<P: Platform>(
+        &self,
+        env: &P,
+        name: &str,
+        check: impl Fn(&MithrilEffectObservation) -> bool,
+    ) -> TestResult<MithrilEffectObservation> {
+        Ok(self.wait_where(env, 1, name, check)?.remove(0))
+    }
+
+    fn wait_where<P: Platform>(
+        &self,
+        env: &P,
+        count: usize,
+        name: &str,
+        check: impl Fn(&MithrilEffectObservation) -> bool,
+    ) -> TestResult<Vec<MithrilEffectObservation>> {
         assert!(count > 0);
         let path = env.maps().0.to_owned();
         let last = RefCell::new(Vec::new());
@@ -64,11 +92,7 @@ impl EffectCheck {
                 let fresh = snapshot
                     .recent_effects
                     .into_iter()
-                    .filter(|event| {
-                        !self
-                            .seen
-                            .contains(&(event.source_cpu_id, event.source_sequence))
-                    })
+                    .filter(|event| self.fresh(event))
                     .collect::<Vec<_>>();
                 *last.borrow_mut() = fresh
                     .iter()
@@ -89,10 +113,7 @@ impl EffectCheck {
                     .collect();
                 let matched = fresh
                     .into_iter()
-                    .filter(|event| {
-                        self.task
-                            .matches_effect(event, reason, effect.0, effect.1, result)
-                    })
+                    .filter(|event| check(event))
                     .collect::<Vec<_>>();
                 Ok((matched.len() >= count).then_some(matched))
             },
