@@ -48,6 +48,7 @@ CLONE_NEWNS = 0x00020000
 MS_BIND = 4096
 MS_REC = 16384
 MS_PRIVATE = 1 << 18
+MS_SHARED = 1 << 20
 OPEN_TREE_CLONE = 1
 MOVE_EMPTY_PATH = 4
 
@@ -74,7 +75,7 @@ def move_tree(tree, target):
 
 args = sys.argv[2:]
 if args not in (
-    [], ["late"], ["recursive"], ["move"], ["prepared"], ["setattr"], ["future"], ["race"], ["runtime"]
+    [], ["late"], ["recursive"], ["move"], ["prepared"], ["setattr"], ["propagate"], ["future"], ["race"], ["runtime"]
 ):
     sys.exit(2)
 mode = args[0] if args else "early"
@@ -181,6 +182,12 @@ elif mode == "setattr" and command == "setattr\n":
     code = ctypes.get_errno() if result else 0
     with open(result_path, "w", encoding="utf-8") as output:
         json.dump({"phase": "setattr", "errno": code}, output)
+    sys.exit(0)
+elif mode == "propagate" and command == "share\n":
+    result = libc.mount(None, allowed_alias.encode(), None, MS_SHARED | MS_REC, None)
+    code = ctypes.get_errno() if result else 0
+    with open(result_path, "w", encoding="utf-8") as output:
+        json.dump({"phase": "shared", "errno": code}, output)
     sys.exit(0)
 if mode in ("late", "recursive", "runtime") and command in ("mount-read\n", "mount\n"):
     flags = MS_BIND | (MS_REC if mode == "recursive" else 0)

@@ -2165,7 +2165,9 @@ test does not close a row when its physical condition or an assertion changed.
     `UNSUPPORTED_OBJECT` Mount/Mount evidence with kernel `-EACCES`. Use the
     existing actor and policy. Add no Platform API. Keep the test below 100
     lines.
-    - [ ] Pass Host and commit it.
+    - [x] Pass Host and commit it. The 74-line exact test passed in 37.84
+      seconds. The existing mount-setattr Host test passed in 29.92 seconds
+      after the shared actor change.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove the matching old action, its unused stored mount path,
