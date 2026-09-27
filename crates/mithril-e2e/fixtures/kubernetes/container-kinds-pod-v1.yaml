@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: container-kinds
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 1
+  initContainers:
+    - name: sidecar
+      image: MITHRIL_TEST_ACTOR_IMAGE
+      imagePullPolicy: Never
+      restartPolicy: Always
+      command: [MITHRIL_TEST_ACTOR_PYTHON]
+      args: [/fixtures/read_path.py, /work, sidecar]
+      stdin: true
+      stdinOnce: true
+      securityContext:
+        privileged: true
+        appArmorProfile: {type: Unconfined}
+        seccompProfile: {type: Unconfined}
+      volumeMounts:
+        - {name: fixtures, mountPath: /fixtures, readOnly: true}
+        - {name: work, mountPath: /work}
+    - name: init
+      image: MITHRIL_TEST_ACTOR_IMAGE
+      imagePullPolicy: Never
+      command: [MITHRIL_TEST_ACTOR_PYTHON]
+      args: [/fixtures/read_path.py, /work, init]
+      stdin: true
+      stdinOnce: true
+      securityContext:
+        privileged: true
+        appArmorProfile: {type: Unconfined}
+        seccompProfile: {type: Unconfined}
+      volumeMounts:
+        - {name: fixtures, mountPath: /fixtures, readOnly: true}
+        - {name: work, mountPath: /work}
+  containers:
+    - name: application
+      image: MITHRIL_TEST_ACTOR_IMAGE
+      imagePullPolicy: Never
+      command: [MITHRIL_TEST_ACTOR_PYTHON]
+      args: [/fixtures/read_path.py, /work, application]
+      stdin: true
+      stdinOnce: true
+      securityContext:
+        privileged: true
+        appArmorProfile: {type: Unconfined}
+        seccompProfile: {type: Unconfined}
+      volumeMounts:
+        - {name: fixtures, mountPath: /fixtures, readOnly: true}
+        - {name: work, mountPath: /work}
+  volumes:
+    - name: fixtures
+      hostPath: {path: MITHRIL_TEST_FIXTURE_PATH, type: Directory}
+    - name: work
+      hostPath: {path: MITHRIL_TEST_WORK_PATH, type: Directory}

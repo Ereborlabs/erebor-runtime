@@ -9,6 +9,8 @@ mod child_exec;
 #[cfg(test)]
 mod clone_exec;
 #[cfg(test)]
+mod container_kinds;
+#[cfg(test)]
 mod double_fork;
 #[cfg(test)]
 mod entry_isolation;
