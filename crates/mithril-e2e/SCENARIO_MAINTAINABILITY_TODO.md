@@ -3702,6 +3702,19 @@ test does not close a row when its physical condition or an assertion changed.
       build it before this focused probe. The runner's parent needed
       `SIGCONT` after its probe child exited. Do not treat that launcher
       behavior as a test assertion.
+  - [ ] Replace the recovered startup entry's missing-file control. Reuse the
+    shared entry-isolation policy and `ready.py` actor. Start the actor before
+    Node, recover it, then start a declared `cat` entry. Remove its protected
+    file while the entry waits at a FIFO. Require `ENOENT`, a nonzero entry
+    rule, and no fresh signed-policy denial for that entry. Keep the separate
+    readiness-before-startup and signed-denial checks until their own shared
+    tests pass.
+    - [x] Host passed in 39.52 seconds. The standard test has 71 lines.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching old rename, missing-file action, and
+      assertion after all three platforms pass. The old protected file must
+      remain for its signed-denial action.
 
 ### Direct runtime entry roles
 

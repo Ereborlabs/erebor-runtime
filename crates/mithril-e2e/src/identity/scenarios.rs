@@ -34,6 +34,7 @@ mod lifecycle_sleep;
 mod lifetime_result;
 #[cfg(test)]
 mod lifetime_test;
+mod missing_file;
 #[cfg(test)]
 mod mount_alias;
 #[cfg(test)]
