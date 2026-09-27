@@ -2998,50 +2998,6 @@ impl EffectTestRunner {
             }
         );
 
-        fs::rename(
-            role_directory.join("startup.denied"),
-            role_directory.join("startup.saved"),
-        )
-        .context(IoSnafu {
-            path: &role_directory,
-        })?;
-        let missing_marker = observations.cursor();
-        let missing_stdout = output_directory.join("recovered-missing-file.stdout");
-        let missing_stderr = output_directory.join("recovered-missing-file.stderr");
-        let mut missing = container.spawn_exec(
-            "/bin/cat",
-            &["/var/lib/mithril-convergence/startup.denied"],
-            &fixture_root.join("missing-file.pid"),
-            &missing_stdout,
-            &missing_stderr,
-        )?;
-        let missing_status = wait_for_child(&mut missing)?;
-        reader
-            .poll(Duration::from_millis(100))
-            .context(InterceptorSnafu)?;
-        ensure!(
-            !missing_status.success()
-                && fs::read_to_string(&missing_stderr)
-                    .context(IoSnafu {
-                        path: &missing_stderr
-                    })?
-                    .contains("No such file or directory")
-                && observations
-                    .recent_since(missing_marker)
-                    .iter()
-                    .all(|event| event.reason != "EXACT_POLICY_DENY"),
-            InvalidInputSnafu {
-                path: &missing_stderr,
-                reason: "a missing file must not qualify as a signed policy denial",
-            }
-        );
-        fs::rename(
-            role_directory.join("startup.saved"),
-            role_directory.join("startup.denied"),
-        )
-        .context(IoSnafu {
-            path: &role_directory,
-        })?;
         let policy_deny_marker = observations.cursor();
         let policy_deny_stdout = output_directory.join("recovered-policy-deny.stdout");
         let policy_deny_stderr = output_directory.join("recovered-policy-deny.stderr");
