@@ -171,6 +171,11 @@ Store recovery fails
    native option is experimental and rebuilds affected indexes. Qualify its
    cost and recovery before production use. Check repeated file reuse with
    live exact witnesses; do not require each partial deletion to shrink a file.
+   Qualify native allocator release under multiple calling threads. Set the
+   native bulk-deallocation release threshold to zero. Do not change the
+   process-wide allocator policy. Keep the 128-MiB engine memory target and
+   the 256-MiB process qualification limit unchanged. Require the isolated
+   memory regression and mTLS load checks before accepting this setting.
 8. Activate the data owner in a clean development deployment. Control opens
    a private AnalysisStore with the current schema and selects it as the only
    evidence writer before Node intake starts. Backward compatibility with
@@ -1477,3 +1482,22 @@ Build the release test with
 to use the e2e dependency feature set. Then run only the data test executable.
 The library-only package selection triggered a separate native build and was
 stopped before this command. No test failure was discarded by that stop.
+
+The native-setting change sets
+`allocator_bulk_deallocation_flush_threshold` to `0B` in `open_native`.
+The native-setting assertion passed. With no allocator environment override,
+the unchanged isolated memory regression passed in 52.24 seconds with
+216,100 KiB peak RSS. Its executable SHA-256 is
+`ea1ba86e369fbdf1b48bc7b7b09648ef2897b3f99966398d57439b8f21a2f6da`.
+The memory output directory contains `memory-regression-flush.log` and
+`memory-regression-flush-resources.log`. Host release compilation overlapped
+this run. This result closes only the one-million-row component reproduction.
+The release mTLS data-store suite then passed 16 tests with four ignored in
+15.10 seconds. This suite includes load, tenant, rollout, retention, native
+commit failure, crash recovery, and restart cases. Its executable SHA-256 is
+`48744fcd1a134639c6c1f0fa17799839fcd2be35de3b738a3f1853df6e97ad32`;
+the log is `data-flush-e2e.log` in the memory output directory. No allocator
+environment override was set. The release build passed in 7 minutes 1 second.
+Formatting, workspace checks, and strict Clippy passed. Workspace tests and
+the matched full-quota memory diagnostic are still running. No Rust source
+changed after the workspace gate started. The phase remains **Not done**.

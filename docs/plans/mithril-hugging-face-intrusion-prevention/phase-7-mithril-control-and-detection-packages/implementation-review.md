@@ -681,8 +681,16 @@ Linux process high-water RSS and reports native memory categories on failure.
 Run it alone; other tests would share its process peak. The release check
 failed with default allocator settings at cursor 804,864 and 290,000 KiB peak
 RSS. The same executable passed with `MALLOC_ARENA_MAX=1` in 47.52 seconds.
-The data-store plan records its executable digest and logs. The default
-failure remains open; the final workspace gate is pending.
+The data-store plan records its executable digest and logs.
+[AnalysisStore::open_native](../../../../crates/araphor-data/src/analysis/connection.rs)
+now sets the native bulk-deallocation release threshold to zero. The native
+buffer target stays at 128 MiB. The process-wide allocator policy is unchanged.
+The same isolated regression passes without an allocator environment override:
+216,100 KiB peak RSS and 52.24 seconds. The native-setting assertion also passes.
+The release mTLS data-store suite also passes 16 tests with four ignored in
+15.10 seconds. Its log and executable digest are in the data-store plan.
+Formatting, workspace checks, and strict Clippy pass. Workspace tests and
+full-capacity memory qualification remain pending.
 The preceding temporary diagnostic crossed 256 MiB at 804,864 rows with four
 calling threads. Its peak was 292,132 KiB. The same input reached the tenant
 quota with one calling thread at 249,792 KiB, and with four threads plus
