@@ -1885,3 +1885,16 @@ fails index rebuild at larger capacity; the 160-MiB target fails the process
 memory gate. These results do not prove that every configuration fails.
 Further memory-budget changes require a decision before implementation.
 The 256-MiB process gate remains unchanged. The phase remains **Not done**.
+
+The workspace gate on `873b5467` passed formatting, workspace checking, and
+strict Clippy. Test compilation then failed with `No space left on device`;
+the full test suite did not run. The command used `CARGO_BUILD_JOBS=2
+CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh`.
+Its log is `index-workspace.log` in the host evidence directory. Disabling
+incremental compilation did not prevent existing debug outputs from filling
+the filesystem. After all compiler processes stopped, package-scoped Cargo
+cleanup removed only debug artifacts for `araphor-data`, `mithril-control`,
+`mithril-node`, and `mithril-e2e`. Cargo reported 52.5 GiB removed; filesystem
+free space returned to 45 GiB. Release executable digests and tracked files
+were unchanged. Native dependency builds, evidence logs, and VM state remain.
+The complete workspace gate must run again. No capacity result changes.
