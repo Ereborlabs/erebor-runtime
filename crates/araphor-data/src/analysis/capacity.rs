@@ -334,6 +334,19 @@ mod tests {
         } else {
             "global logical bytes"
         };
+        let native = |store: &AnalysisStore| -> std::result::Result<
+            Vec<(String, u64)>,
+            Box<dyn std::error::Error>,
+        > {
+            let reader = store.reader()?;
+            let mut query = reader.get()?.prepare(
+                "SELECT tag, memory_usage_bytes FROM duckdb_memory() WHERE memory_usage_bytes > 0 ORDER BY tag",
+            )?;
+            let values = query
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)))?
+                .collect::<duckdb::Result<Vec<_>>>()?;
+            Ok(values)
+        };
         let memory =
             |store: &AnalysisStore| -> std::result::Result<(), Box<dyn std::error::Error>> {
                 let status = fs::read_to_string("/proc/self/status")?;
@@ -344,15 +357,7 @@ mod tests {
                     .ok_or("the process memory peak is absent")?
                     .parse()?;
                 if peak > 256 * 1024 {
-                    let reader = store.reader()?;
-                    let mut query = reader.get()?.prepare(
-                    "SELECT tag, memory_usage_bytes FROM duckdb_memory() WHERE memory_usage_bytes > 0 ORDER BY tag",
-                )?;
-                    let native = query
-                        .query_map([], |row| {
-                            Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
-                        })?
-                        .collect::<duckdb::Result<Vec<_>>>()?;
+                    let native = native(store)?;
                     let cursors = identities
                         .iter()
                         .map(|identity| {
@@ -392,7 +397,11 @@ mod tests {
                         })
                         .collect();
                 let mut cursors = vec![0_u64; identities.len()];
+                let mut sample = None;
                 for group in 0..8192 * u64::from(tenants) {
+                    if group % 64 == 0 {
+                        sample = Some((group, native(&store)?, store.storage_usage()?));
+                    }
                     let tenant = group as usize % identities.len();
                     let accepted = cursors[tenant];
                     let mut frames = vec![0_u8; 128 * 1024];
@@ -427,7 +436,11 @@ mod tests {
                             memory(&store)?;
                             return Ok(cursors);
                         }
-                        Err(error) => return Err(error.into()),
+                        Err(error) => {
+                            return Err(format!(
+                                "batch {group} failed; prior successful cursors {cursors:?}; last sample (batch, native bytes, storage) {sample:?}: {error:?}"
+                            ).into());
+                        }
                     }
                     cursors[tenant] += 1024;
                     assert_eq!(

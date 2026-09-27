@@ -753,6 +753,12 @@ input before any tenant quota does. Metadata and receipts must not change on
 rejection. Every tenant's final frame and receipt must survive checkpoint and
 reopen. The same 256-MiB process limit applies. This ignored release test has
 not passed yet. It does not prove concurrent-reader or mTLS behavior.
+The runner retains one native-memory and storage sample per 64 batches. An
+unexpected write error reports the latest sample, its batch number, the failed
+batch, and prior successful cursors. This report needs no read from a connection
+invalidated by the failure. Prior successful cursors are not a final receipt.
+The diagnostic addition has not yet been compiled or run. The unchanged gRPC
+repeat must finish before another task build or load starts.
 The release build for `c72a3b68` passed. After the host filesystem reserve was
 restored by removing generated incremental compiler cache, the unchanged release
 data suite passed 49 tests with four ignored. The shared tenant run passed in
