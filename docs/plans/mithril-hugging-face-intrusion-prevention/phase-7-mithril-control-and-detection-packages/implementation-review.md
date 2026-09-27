@@ -764,8 +764,13 @@ after a merge changes row IDs. A merge can combine partially filled groups
 without a preceding raw-event deletion. This path is a failure hypothesis,
 not a confirmed cause. Production logging and compaction settings are unchanged.
 The diagnostic addition compiles in release mode on `e3e223b9`. The ignored
-global-capacity run has started; no result is claimed yet. The unchanged gRPC
-repeat finished as recorded below.
+global-capacity run fails after 1,032.01 seconds at batch 7,335. The prior
+successful cursors total 7,511,040 records; they are not the failed batch's
+final durable state. The last sample reports 43.25 MiB of in-memory-table
+buffers. An events merge precedes the fatal checkpoint allocation failure.
+Peak process RSS is 195,076 KiB. The phase plan records the complete sample
+and logs. A lower WAL checkpoint threshold is the next hypothesis, not a
+proven remedy. The unchanged gRPC repeat finished as recorded below.
 The release build for `c72a3b68` passed. After the host filesystem reserve was
 restored by removing generated incremental compiler cache, the unchanged release
 data suite passed 49 tests with four ignored. The shared tenant run passed in
