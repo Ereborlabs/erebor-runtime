@@ -3579,7 +3579,9 @@ setup, production actions, assertions, and focused test.
       still makes the protected bind and checks the denied read.
     - [x] Pass Host. All nine `mount_late_host` cases passed in 112.60
       seconds. Formatting and strict Mithril E2E Clippy passed.
-    - [ ] Pass direct `runc` and commit that platform.
+    - [x] Pass direct `runc`. The exact case passed in 30.07 seconds. All
+      nine `mount_late_runc` cases passed in 112.70 seconds with the current
+      production OCI hook. The pin root, cgroup, and lease were removed.
     - [ ] Pass real Kubernetes and remove only the matching old action,
       result field, and shell gate.
   - [x] Retire the duplicate in-container bind-mount result and shell gate.
