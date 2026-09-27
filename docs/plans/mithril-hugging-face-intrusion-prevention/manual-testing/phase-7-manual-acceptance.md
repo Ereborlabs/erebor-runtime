@@ -49,7 +49,7 @@ Manual checks do not replace these owner-API cases.
    query through shared data facilities. Stop the isolated query worker;
    durable upload must continue. Separately make the test data store
    unavailable: require no ACK, bounded Node spool and local trace expiry.
-   Do not delete the authoritative database or its native WAL.
+   Do not delete raw segments, the metadata database, or its native WAL.
 9. Stall required graph processing and optional discovery separately. Optional
    progress must not block expiry or intake. Resume after expiry with a recorded
    gap. Required graph input and exact review witnesses prevent reclamation.

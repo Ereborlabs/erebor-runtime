@@ -11,8 +11,8 @@ Read [engine-design.md](engine-design.md) for shared contracts and
 
 ## Intended end state
 
-One default Control deployment accepts Node evidence, stores retained data in
-DuckDB, serves SQL and subscriptions, coordinates traces, derives behavior and
+One default Control deployment accepts Node evidence, stores raw data in
+segments and metadata/derived state in DuckDB, serves SQL and subscriptions, coordinates traces, derives behavior and
 findings, and supports agents and the console. No external platform is required.
 The data crate owns storage, retention, query, discovery, graph/finding,
 notification, and trace-output persistence and reads. An optional deployment
@@ -21,9 +21,9 @@ either deployment. Control retains Node authentication and ACK, trace intent
 and dispatch, policy, approval, publication, and response authority.
 
 ControlStore retains policy, trust, rollout and authority state. AnalysisStore
-retains events, context, trace output and analysis in DuckDB with its native WAL.
-Node retains its delivery WAL. A source ACK follows the data commit, not receipt
-in memory. Raw input can expire while bounded profiles, findings and exact
+owns one raw segment store and one DuckDB metadata/derived-state database.
+Node retains its delivery WAL. A source ACK follows segment sync and metadata
+commit, not receipt in memory. Discovery creates no second raw archive. Raw input can expire while bounded profiles, findings and exact
 witnesses remain available. Summary retention is not full raw-history retention.
 
 Development changes do not require backward compatibility. Use a fresh data
@@ -37,7 +37,7 @@ backup and restore remain required.
 ```text
 Node produces evidence under installed local policy
   -> existing authenticated Control intake validates it
-  -> AnalysisStore commits events, context, receipt progress and table revisions
+  -> AnalysisStore syncs raw segments, then commits metadata, receipts and revisions
   -> Control acknowledges the durable contiguous source position
   -> QueryOwner wakes interested readers
   -> DiscoveryOwner derives profiles, context, methods and draft changes
@@ -74,7 +74,7 @@ replaces a complete bounded query result. It has no public read-job lifecycle.
 | Owner | Owns | Must not do |
 | --- | --- | --- |
 | EvidenceIntakeOwner | Existing authenticated source validation and ACK contract | ACK before durable data commit |
-| AnalysisStore | One DuckDB writer, data/revision transactions, backup and recovery | Change policy/control-state persistence |
+| AnalysisStore | One segment/metadata writer, result/progress transactions, bundle backup and recovery | Change policy/control-state persistence |
 | EvidenceRetentionOwner | Age, quota, required security progress and exact witness checks | Let optional discovery lag pin raw input or stop intake |
 | QueryOwner | SQL admission, scope/disclosure, isolated execution and follow | Mutate policy or attach probes |
 | DiscoveryOwner | Exact profiles, context, recipes, assessments and proposals | Infer authority from repetition or model labels |
@@ -124,7 +124,7 @@ Each row is a bounded deliverable. The required test level appears below.
 | Order | Phase | Deliverable and entry gate |
 | --- | --- | --- |
 | 1 | [7.1 Contracts and offline proof](phase-7-1-contracts-and-offline-proof.md) | Establish the data crate, freeze schemas and corpus, and prove DuckDB durability/isolation. |
-| 2 | [7.2 Data store](phase-7-2-data-store.md) | Durable intake, context records, commit revisions, retention, backup and fresh-store activation; needs 7.1. |
+| 2 | [7.2 Data store](phase-7-2-data-store.md) | Reuse segment storage in the data crate; durable append/metadata commits, whole-segment retention, complete backup and clean activation; needs 7.1. |
 | 3 | [7.3 Query and follow](phase-7-3-query-and-follow.md) | Isolated SQL and commit-driven append/replace streams; needs 7.2. |
 | 4 | [Observability 1](../../araphor-observability/phase-1-contracts-and-backend.md), then [2](../../araphor-observability/phase-2-owned-capture.md) | Backend proof can run alongside 7.1–7.3. Capture integration requires 7.2 and backend proof. |
 | 5 | [Observability 3](../../araphor-observability/phase-3-cli-api-and-console.md) | Shared protobuf gRPC, SQL/trace CLI, gRPC-Web console views, and old client-route retirement; needs 7.3 and Observability 2. |
@@ -136,6 +136,12 @@ Each row is a bounded deliverable. The required test level appears below.
 | 11 | [7.9 Remote placement](phase-7-9-remote-placement.md) | Package the existing data crate as an optional process and add direct CLI/console access with identical contracts; needs 7.8. It is not needed for embedded operation. |
 | 12 | [7.10 Qualification](phase-7-10-qualification.md) | Integrated unit/e2e/physical, performance, recovery and recorded-client proof; needs 7.8 and every advertised optional phase. |
 | Optional | [Observability 4](../../araphor-observability/phase-4-declarative-captures.md) | Finite Trace CRD adapter after Observability 3. |
+
+7.2 is the active storage conversion. Complete its segment recovery, witness
+space, and bounded extraction gates before closing 7.3 or Observability 2.
+It retires the current DuckDB raw-row path and Control-owned raw writer, not
+segment storage itself. 7.4 removes discovery's copied raw export archive.
+No code cutover or storage qualification is claimed by this plan update.
 
 Recommended serial route: 7.1 → 7.2 → 7.3 → Observability 1 → 2 → 3 →
 7.4 → 7.5 → 7.6 → 7.7 → 7.8 → 7.9 if selected → 7.10.
@@ -154,7 +160,7 @@ production owners without Kubernetes; run a physical case only where listed.
 | Phase | Component tests | End-to-end and physical tests |
 | --- | --- | --- |
 | 7.1 | Check schema bounds, exact derivation, offline DuckDB recovery, SQL admission and worker isolation. | Run `offline-exact` and `storage-contract` through public recorded and AnalysisStore methods. Do not call live Node intake; no physical case is required. |
-| 7.2 | Check transactions, receipts, retention, backup and clean-start refusal. | Run `data-store-recovery` through Node mTLS with durable ACK and storage measurements, `data-store-startup` on a fresh development state and the paired physical storage/partition case. |
+| 7.2 | Check segment-sync/catalog commits, pin/delete races, bounded extraction, bundle backup and clean-start refusal. | Run `data-store-recovery` through Node mTLS with durable ACK and storage measurements, `data-store-startup` on a fresh development state and the paired physical storage/partition case. |
 | 7.3 | Check SQL admission, scope, extraction limits, worker resources, follow frames and cursor limits. | Run `query-follow` against AnalysisStore and QueryOwner with bounded-extraction measurements; physical qualification follows in 7.10. |
 | 7.4 | Check exact atoms, context selection, comparison and deterministic replay. | Run `context-roundtrip` and `profile-restart` from Node WAL through mTLS and DiscoveryOwner; physical qualification follows in 7.10. |
 | 7.5 | Check graph, finding, provenance and routing decisions under gaps and retries. | Run `graph-notification` through intake, graph and router owners, then run the paired physical incident case. |
@@ -168,7 +174,7 @@ production owners without Kubernetes; run a physical case only where listed.
 
 Status: **Not done** for this target design. Reuse source and tests that meet
 these contracts. A prior test on another persistence contract is not proof of
-DuckDB recovery, subscriptions or remote placement.
+segment/catalog recovery, subscriptions or remote placement.
 
 Each implementation updates its phase with Done, Not done or Blocked; exact
 revision, commands, nonzero test counts, result paths and remaining limits.

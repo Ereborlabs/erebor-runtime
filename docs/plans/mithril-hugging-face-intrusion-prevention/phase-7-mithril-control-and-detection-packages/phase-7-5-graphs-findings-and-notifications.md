@@ -38,7 +38,9 @@ Control restarts or a notification sink fails
 Require Phase 7.4. GraphAndFindingOwner owns graph and finding revisions;
 NotificationRouter owns delivery state; the authority owner owns signed
 provider-neutral records. AnalysisStore owns durable data.
-Use shared reads, transactional results, and retention from Phase 7.2.
+Use shared segment reads, transactional results, and retention from Phase 7.2.
+Register exact witnesses through AnalysisStore; whole-segment charges and
+pin/delete serialization apply. Do not add a graph-owned raw archive.
 Enabled security packages are required processors. They use accepted evidence
 and owner-qualified context without waiting for optional discovery profiles.
 Their failure raises unhealthy coverage; their protected retention bounds,

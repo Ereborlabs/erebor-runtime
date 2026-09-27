@@ -38,7 +38,9 @@ Derivation fails or is disabled
 1. Move the portable model, recorded derivation and context selection from
    Control `src/discovery/` into `crates/araphor-data/src/discovery/`.
    Replace live/runtime ControlStore reads and checkpoints with bounded
-   AnalysisStore reads and one data transaction for result plus progress.
+   AnalysisStore segment reads and one metadata transaction for result,
+   references, and progress. Read raw evidence directly; no export artifact
+   or staging table may contain another full copy before derivation.
    Control exports qualified policy facts; exact native preview stays in
    Control. Delete the superseded Control discovery loop after parity tests.
    Do not make `araphor-data` depend on Control.
@@ -79,7 +81,9 @@ Derivation fails or is disabled
    Preserve conflicts, omissions, sensitivity and source trust. Imported
    documents are bounded operator data, not executable instructions.
 8. Retain exact context/witness dependencies with sealed outputs under the
-   shared quota. Full replay requires the complete retained input manifest;
+   shared quota. Charge the full distinct witness segments under 7.2 rules.
+   No private witness archive or discovery-specific compactor is permitted.
+   Full replay requires the complete retained input manifest;
    a sample supports only the statements it actually proves. Expired raw input
    yields ReplayUnavailable for full reconstruction, not invented context.
 9. Register `behaviors` and `context` views with QueryOwner after 7.3.
@@ -101,7 +105,8 @@ Crash before/after count-progress and sealed-output commits. Require no double
 count and exact context. Disable discovery past the raw retention period and prove intake/query/trace
 still work. Resume at the retained floor with an explicit gap and incomplete
 profile, not synthetic counts or an empty healthy interval.
-Expire unpinned raw input; retained profile/context remains readable while
+Check that profiles and progress survive restart without a raw export archive.
+Expire unpinned segments; retained profile/context remains readable while
 full replay correctly reports unavailable input.
 
 ```sh

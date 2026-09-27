@@ -23,14 +23,14 @@ master plan invented for them.
 
 - [Araphor observability](araphor-observability/README.md) — CLI-first SQL and
   bpftrace capture, shared console APIs, and optional finite Trace CRD. Reuses
-  shared DuckDB data/query facilities and existing execution owners.
+  shared segment-backed data and DuckDB query facilities and existing execution owners.
   Capture does not require discovery enablement. The plan requires unit,
   mithril-e2e and paired physical proof before production enablement.
 - [Mithril 7: Control, discovery, and detection](mithril-hugging-face-intrusion-prevention/phase-7-mithril-control-and-detection-packages/README.md) — source-grounded
   evidence and context for agents, simple SQL query/follow, classification,
   and governed policy tools. Response tools retain the master plan's owner and
   physical-proof gates. Local or hosted clients need explicit export permission.
-  Ten subphases cover contracts, DuckDB storage, query/follow, profiles,
+  Ten subphases cover contracts, segment/derived-state storage, query/follow, profiles,
   findings, methods/preview, agent classification, publication, optional remote
   placement and qualification.
 - [Araphor console](araphor-console/README.md) — one interface for agent and

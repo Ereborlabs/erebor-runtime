@@ -31,8 +31,8 @@ User deletes the resource
   -> forced finalizer removal cannot extend the Node execution lease
 ```
 
-Status: **Not done**. This optional phase uses the same DuckDB trace records
-and query/output API; it introduces no separate output store.
+Status: **Not done**. This optional phase uses the same AnalysisStore trace
+state, segment output, and query/output API. It adds no separate output store.
 
 ## Scope, owners, and changes
 

@@ -239,7 +239,7 @@ claim that these projects have no enforcement or no policy learning.
 | [Tetragon aggregator at the local revision](https://github.com/cilium/tetragon/blob/dbb59576f9ce504c044f8d9a0cd7a0f91c71ae2c/pkg/aggregator/aggregator.go) | In this inspected file, `handleEvent` has only a default branch that forwards events. The cache/window structure alone does not prove effective aggregation. | Inspect the executable path, not only an API option named aggregation. This finding is limited to the pinned revision and file. |
 | [Cilium monitor aggregation](https://docs.cilium.io/en/latest/operations/performance/tuning/) | The inspected development documentation describes connection/flag and periodic emission controls. | Source records need sampling and reduction metadata. Emitted observations are not packet counts or proven physical-effect counts. |
 | [SQLite WAL](https://www.sqlite.org/wal.html) | Concurrent readers share one writer; WAL requires a same-host filesystem. Long reads can delay checkpoints. The WAL-reset fix is in 3.51.3 and documented backports. | Comparison reference, not the selected production store. Keep bounded transactions and qualified local filesystems. |
-| [DuckDB workload guidance](https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads) | Designed for analytical workloads, not many small concurrent requests. | Selected embedded engine for batched retained events, context and analysis. Qualify the actual mixed workload and durable ACK contract. |
+| [DuckDB workload guidance](https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads) | Designed for analytical workloads, not many small concurrent requests. | Use for metadata/derived state and isolated SQL, not raw event payloads. Qualify metadata commit cost in the actual durable ACK path. |
 | [ClickHouse incremental views](https://clickhouse.com/docs/concepts/features/materialized-views/incremental-materialized-view) | An insert transforms an input block. Changes to joined reference tables do not update previous results automatically. | Consider later for measured fleet-scale analytics. It does not remove input deduplication, revision, or replay requirements. |
 
 No inspected project establishes Araphor's capacity. The embedded choice must
@@ -394,10 +394,12 @@ joins, and paged review during ingestion.
 does not make every SQLite indexing assumption portable. Its
 [non-determinism guidance](https://duckdb.org/docs/current/operations_manual/non-deterministic_behavior)
 also requires explicit ordering and care with parallel floating-point results.
-Benchmark query plans and memory as well as OLAP throughput. DuckDB owns
-retained events, context and analysis. Policy/control-state persistence stays
-with its existing owner. Durable output survives raw-input expiry; backup and
-restore are required. No second raw store or generic driver is selected.
+Benchmark query plans and memory as well as OLAP throughput. The selected
+design keeps raw events in segments and metadata/derived state in DuckDB.
+SQL workers receive bounded authorized input from the shared data owner.
+Policy/control-state persistence stays with its existing owner. Durable
+results survive raw-input expiry; backup and restore include metadata and
+segments together. No second raw store or generic driver is selected.
 
 The local Mangroves file
 `/home/navid/go/src/github.com/mangrovesdb/mangroves/src/sql/src/execution/subscribe.rs`

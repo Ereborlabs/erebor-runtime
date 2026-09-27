@@ -208,7 +208,7 @@ computable local deny into allow.
 | `CoverageHealthOwner` | 6 local source; 7-10 merged source views |
 | `LocalEvidenceOwner` | 6 canonical observation/WAL/upload |
 | `EvidenceIntakeOwner` | 6 durable append and acknowledgement; 6.2 production Control transaction and source cursor |
-| `ControlStore` / `AnalysisStore` | ControlStore keeps policy/trust/rollout authority; 7.2 introduces authoritative DuckDB event/context/analysis storage, recovery and retained-data reads |
+| `ControlStore` / `AnalysisStore` | ControlStore keeps policy/trust/rollout authority; 7.2 owns raw segments and transactional metadata/derived state in araphor-data, with recovery and retained-data reads |
 | `EvidenceRetentionOwner` | 6.2 retained intake; 7 consumer-progress and evidence-reference rules before reclamation |
 | `DiscoveryOwner` / `QueryOwner` | 7.3 query/follow; 7.4 profiles/context; 7.6 methods/preview; 7.7 assessments; 7.8 review/publication through existing policy authority |
 | `GraphAndFindingOwner` | 7 local; 8 Kubernetes; 10 provider/artifact branches |
@@ -281,10 +281,11 @@ classification, 7.8 console/publication, optional 7.9 remote placement, then
 
 The default Control deployment embeds data, query, discovery, graph and notification
 owners as one data component.
-DuckDB owns retained events, context, trace output and analysis. Its native WAL
-provides crash recovery. ControlStore keeps policy/control-state persistence;
-Node keeps its delivery WAL. Optional remote placement runs the same data
-component with one authoritative database, not a duplicate raw store. CLI and
+AnalysisStore owns one raw segment store for events and trace output. DuckDB
+holds transactional metadata, context, and derived state, and runs isolated
+queries over bounded authorized input. ControlStore keeps policy/control-state
+persistence; Node keeps its delivery WAL. Optional remote placement moves the
+same complete data directory, not a duplicate raw store. CLI and
 console can connect directly to either deployment with the same API. Remote
 trace and policy commands retain Control authorization and execution ownership.
 Optional discovery does not pin raw history or block intake. Araphor owns no
@@ -304,7 +305,8 @@ physical results.
 Phase 6 owns Node WAL, upload replay and authenticated source/coverage contracts.
 Phase 6.2 establishes production durable ACK and policy delivery. Phase 7.2
 changes the retained-data destination while preserving that ACK meaning:
-source receipt and events commit before acknowledgement. Do not add a public
+raw segments sync before the receipt/catalog transaction and acknowledgement.
+It retires the DuckDB raw-row path, not the reusable segment storage code. Do not add a public
 generic producer API or migrate policy/control state as part of that change.
 
 ## Complete Design-To-Phase Coverage Ledger
@@ -332,7 +334,7 @@ the named phase file contains a matching deliverable and proof.
 | Ch. 19 network/DNS/TLS limits | 3, 5, 7, 10 | socket lifetime, rewrite, DNS exfiltration, same-TLS honest-result tests |
 | Ch. 20 devices and derived authority | 0, 3, 4 | device/ioctl/derived-fd fixtures |
 | Ch. 21 privilege, self-protection, Landlock, deferred Seccomp | 0, 3, 4, 11, 12 | escape matrix; self-protection oracle; optional-layer records |
-| Discovery backend and shared query | 7 | 7.2 DuckDB; 7.3 query/follow; 7.4 profiles/context; 7.5 findings; 7.6 methods/preview; 7.7 assessment; 7.8 publication; 7.9 optional placement; 7.10 proof |
+| Discovery backend and shared query | 7 | 7.2 segments and derived state; 7.3 query/follow; 7.4 profiles/context; 7.5 findings; 7.6 methods/preview; 7.7 assessment; 7.8 publication; 7.9 optional placement; 7.10 proof |
 | Ch. 22 evidence, coverage, proof quality, findings | 0, 6, 6.1, 6.2, 7 | typed evidence service; source epoch/gap tests; durable intake acknowledgement; deterministic replay |
 | Ch. 23 cross-node/provider causality | 7, 8, 10 | one Control graph owner; registered edge contracts; fan-out/contradiction/shared-principal tests |
 | Ch. 24 response transaction and blast radius | 9, 10 | authorization, simulation, exact re-resolution, physical readback |

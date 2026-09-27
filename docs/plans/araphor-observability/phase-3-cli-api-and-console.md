@@ -90,7 +90,10 @@ Status: **Not done**.
    Follow declares append or replace semantics from Mithril 7.3.
    An aggregate uses complete bounded replacements on relevant commits.
    Neither normal nor followed aggregates count a truncated input.
-   Reuse DuckDB and the qualified isolated worker.
+   Reuse QueryOwner segment extraction and the qualified isolated DuckDB worker.
+   The CLI and console cannot open segments or the metadata database. Both
+   SQL follow and trace output use committed store positions and the same
+   expiry contract; neither needs a separate subscription store.
 6. Extend `ui/mithril-console/src/Console.tsx` and its planned API client.
    Add a trace panel inside Activity/investigation or workload Behavior, not
    another workspace. Show source, requested and resolved targets, Run/Stop,

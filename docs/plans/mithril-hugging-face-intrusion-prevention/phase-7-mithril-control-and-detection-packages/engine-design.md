@@ -13,9 +13,11 @@ Control supplies versioned workload and policy facts. Missing context remains
 unresolved. Do not recover historical identity from a current PID, path, or Pod
 name. Do not infer application verbs from opaque network effects.
 
-AnalysisStore owns retained events, context, diagnostic output, and analysis
-records in DuckDB. Its native WAL provides crash recovery. A durable commit
-precedes each source acknowledgement. ControlStore keeps policy, trust, rollout,
+AnalysisStore owns one segment store for raw events and diagnostic output.
+DuckDB stores the segment catalog, receipts, context, and derived state. It
+also runs isolated SQL queries over bounded authorized input. Raw payloads
+are not copied into DuckDB or discovery archives. A segment sync followed by
+a metadata commit precedes each source acknowledgement. ControlStore keeps policy, trust, rollout,
 and approval authority in its existing format. Node keeps its existing delivery
 WAL. Neither store replaces the other's authority.
 
@@ -23,7 +25,7 @@ The default deployment embeds the `araphor-data` crate in Control: AnalysisStore
 EvidenceRetentionOwner, QueryOwner, DiscoveryOwner, GraphAndFindingOwner and
 NotificationRouter. Discovery can be disabled without disabling intake, query,
 or tracing. Optional remote placement moves this complete component and its
-one database. CLI and console can use either deployment's authenticated API.
+complete data directory. CLI and console can use either deployment's authenticated API.
 Policy authority, publication and trace dispatch remain in Control.
 No generic public producer or Ingest API is part of this plan.
 
@@ -509,207 +511,223 @@ It supplies the context and tested proposal needed for a separate authorized
 change. Stable exact grouping, revision comparison, and lifecycle coverage are
 the first noise controls; optional classification is not a release dependency.
 
-## Embedded database and query contract
+## Embedded storage and query contract
 
-Use the pinned DuckDB Rust binding. Use no ORM, storage-driver framework,
-DataFusion layer, external database service, or second raw-event store.
-Qualify the version in 7.1. The [concurrency contract](https://duckdb.org/docs/current/connect/concurrency)
-permits the embedded design; it is not a multi-process writer protocol.
+Use one AnalysisStore in `araphor-data`. Reuse the existing segment codec,
+checksums, bounded append, and reader from Control. Retain the pinned DuckDB
+binding for metadata and derived-state transactions and isolated SQL workers.
+Do not add SQLite, DataFusion, a broker, an ORM, or a storage-driver framework.
 
 ### Storage owner and schema
-
-The default layout is:
 
 ```text
 data/control/             existing policy, trust, rollout, and authority state
 data/analysis/
-  analysis.duckdb         authoritative retained data
-  analysis.duckdb.wal     managed only by DuckDB
-  tmp/                   bounded query and maintenance spill
+  segments/               the only retained raw event and trace payloads
+  analysis.duckdb         catalog, receipts, context, results, and progress
+  analysis.duckdb.wal     native recovery for that metadata and derived state
+  backups/                complete, manifest-bound store copies
+  tmp/                    bounded query and maintenance spill
 ```
 
-AnalysisStore owns one writer queue and at most two trusted extraction readers.
-Only that owner opens the persistent database. All blocking engine work runs
-outside Tokio executor threads and outside the ControlStore lock. Expensive
-derivation runs outside write transactions. Query workers receive bounded
-authorized data; they cannot open the persistent file.
+AnalysisStore owns the directory lease, one bounded writer queue, and at most
+two trusted extraction readers. Neither ControlStore nor DiscoveryOwner opens
+a second raw writer. Blocking storage work runs outside Tokio executor threads
+and outside ControlStore locks. Compute results outside the writer guard.
 
-Every table key includes tenant where the record is tenant-owned. Validate
-cross-table tenant/reference consistency before commit. Use explicit primary
-keys, checked integer values, schema versions, and canonical digests. The first
-schema contains these logical relations; do not create unused indexes.
+Use existing per-source segment rotation and size bounds. Keep tenant/source
+binding and stream kind exact. Trace output uses separate diagnostic streams
+and quotas under the same owner. Seal an idle active segment at the next
+retention sweep when necessary; do not keep expired input forever because no
+new batch arrives. Enforce open-file and source-count limits.
+
+Every tenant-owned metadata key includes tenant identity. Validate reference
+ownership, checked integers, schema versions, and canonical digests. Use these
+relations; create later result families only in their owning phase.
 
 | Relation | Key and content |
 | --- | --- |
-| `store_meta`, `relation_revisions` | Store UUID, schema version, recovery epoch, monotonically increasing commit revision; last changed revision for each exposed relation. |
-| `events` | Stable source identity, epoch, stream/CPU and source cursor; immutable canonical payload and digest; commit/ordinal position; retained intake time; target lifetime; kind and result. Derived revisions have distinct kinds and are not sensor actions. |
-| `source_receipts`, `coverage` | Authenticated source/session binding, contiguous acknowledged position, bounded pending ranges, retained floor, gaps and coverage revisions. Kernel sequence stays separate. |
-| `context_versions` | Exact owner, entity/lifetime, revision, validity, sensitivity, bounded body and digest. Policy projections retain the authoritative owner's revision. |
-| `processor_progress`, `evidence_refs` | Processor/version/scope, consumed position, coverage/context positions, required input retention; exact witness/context dependencies, reason and expiry. |
-| `profiles`, `behavior_atoms`, `behavior_buckets` | Sealed manifests, full exact atom keys, checked counts, outcomes, lifecycle matrix and method version. Mutable working rows are separate from sealed revisions. |
-| `relationships`, `findings`, `notifications` | Qualified graph/finding revisions and notification attempts/deadlines. Only their named owners can write these records. |
-| `assessments`, `requirements`, `proposals`, `reviews`, `publications` | Bounded immutable content, parent references, expected revision, request digest and owner state. A query row cannot authorize a mutation. |
-| `traces`, `trace_output`, `trace_measurements` | Accepted source/grant/target digests, execution state, deduplicated output and reviewed typed measurements. Host-sensitive output keeps its wider read restriction. |
+| `store_meta`, `relation_revisions` | Store UUID, schema, recovery epoch, commit revision, and last change for each exposed relation. |
+| `segments`, `batch_ranges` | Exact source/kind, file ID, committed byte end, cursor range, byte range, count, digest, commit/ordinal range, intake-time bounds, and Reserved/Live/Deleting state. One entry per segment or batch, not a second row per event. |
+| `events` | A logical query relation decoded from committed segment ranges. Derived revision notices have distinct kinds and are not sensor actions. No persisted raw-event table. |
+| `source_receipts`, `coverage` | Source/session binding, contiguous ACK position, bounded pending ranges, explicit expiry/loss intervals, and coverage revisions. Kernel sequence stays separate. |
+| `context_versions` | Exact owner/lifetime/revision, validity, sensitivity, bounded body, and digest. |
+| `processor_progress`, `evidence_refs`, `context_refs` | Processor/version/scope, consumed position, exact dependencies, reason, expiry, and required input floor. |
+| `profiles`, `behavior_atoms`, `behavior_buckets` | Derived counts, keys, manifests, lifecycle coverage, and method version. Working rows are separate from sealed results. |
+| `relationships`, `findings`, `notifications` | Owner-qualified revisions, references, route attempts, and deadlines. |
+| `assessments`, `requirements`, `proposals`, `reviews`, `publications` | Bounded immutable bodies, parent references, expected revisions, request digests, and owner state. |
+| `traces`, `trace_measurements` | Intent, source/grant/target digests, execution state, output receipts, and reviewed derived measurements. `trace_output` is a segment-backed logical relation. |
 
-`StorePositionV1` is `(commit_revision: u64, ordinal: u32)`. Revision zero
-means an empty store. A transaction that changes retained data advances the
-revision once. Its new rows have distinct zero-based ordinals. An exact retry
-that changes nothing does not advance the revision. This position orders data
-commits; it is not a Node source cursor or a kernel sequence.
+Reuse the existing batch ranges and frame offsets for exact reads. Keep
+metadata proportional to batches/segments and bounded sources, not all decoded
+events in memory. Do not add a per-event ART index, full-text index, custom
+B-tree, compactor, or persistent raw query cache.
 
-`store_meta` keeps one UUID across ordinary restarts. A restored copy uses a
-new recovery epoch. Each `relation_revisions` entry contains the last commit
-revision that changed that relation, including retention changes. A processor
-progress key is processor ID, method version, tenant and source scope. Its
-value contains the last consumed store position, the coverage and context
-revisions used, and the required input floor. Commit output and progress in
-one transaction. A missing retained range is a separate coverage fact, not
-successful processor progress. Each authenticated source/CPU receipt has its
-own contiguous cursor and retained floor. Neither value is a query position.
+`StorePositionV1` remains `(commit_revision: u64, ordinal: u32)`.
+The metadata transaction assigns one revision and distinct ordinals to newly
+visible records. An exact retry changes neither revision nor notification.
+Source cursor, kernel sequence, and store position remain separate. Revisions
+order commits, not cross-node causality. Ordinary restart keeps the store UUID
+and epoch; restore changes the recovery epoch.
 
-Store canonical manifests and bounded bodies in DuckDB, not parallel
-authoritative artifact files. Export bundles are optional portable copies.
-A retained summary cannot reproduce arbitrary queries over expired raw input.
-A restored database, not a rebuild from incomplete raw history, recovers
-retained findings, profiles and reviews.
+Store result bodies and canonical manifests in DuckDB. References identify
+segment records by exact source/cursor/digest; they do not copy their payloads.
+A retained summary cannot answer arbitrary queries over expired raw input.
+Recovery of results needs their database, not a rebuild from incomplete history.
 
-Policy/control facts cross the store boundary by owner-qualified revision and
-digest. A reconciler reads committed ControlStore facts and inserts them
-idempotently into context_versions. Report pending or missing context. Do not
-claim an atomic transaction across the two stores or infer activation from a
-projection. Recheck the authoritative policy owner before a policy mutation.
-Control projections preserve the owner's revision number, including zero.
-They copy bounded policy source/document pairs, trust generations, and current
-rollout transitions. Both validity bounds are null when the owner cannot prove
-an interval. A timestamp in a copied body does not prove continued activation.
-An exact context read returns no row until that version is retained. A rollout
-transition replaced before projection can remain missing. Treat that state as
-Unknown; do not substitute the latest transition or invent historical coverage.
+Control projects bounded policy, trust, and rollout facts through exact owner
+revisions and digests. Preserve revision zero. Read at most 16 entries per
+one-second tick, release the Control lock, then commit each projection.
+Limit each body to 32 KiB. Missing exact versions stay Unknown. Use null
+validity bounds when the source cannot prove an interval. Do not infer
+activation from a projection or claim a transaction across Control and data.
 
 ### Commit and acknowledgement
 
 ```text
-Authenticated Node submits an evidence batch
-  -> EvidenceIntakeOwner validates source identity, schema, sizes and continuity
-  -> AnalysisStore reserves capacity and checks retained duplicate digests
-  -> one transaction inserts new events, context, coverage and receipt progress
-  -> the same transaction assigns commit positions and relation revisions
-  -> durable commit completes
-  -> writer publishes the latest revision to an in-process watch channel
-  -> EvidenceIntakeOwner returns only the durable contiguous source position
+Authenticated Node submits a batch
+  -> EvidenceIntakeOwner validates source, wire format, sizes, and grants
+  -> AnalysisStore reserves segment, metadata, and recovery capacity
+  -> writer checks source ranges and retained duplicate bytes
+  -> on rotation, writer commits an internal Reserved file ID before file creation
+  -> writer appends complete framed records at the known committed file end
+  -> writer syncs affected segment files and any new directory entries
+  -> one DuckDB transaction commits batch ranges, receipts, context/coverage,
+     commit positions, and affected relation revisions
+  -> writer publishes the committed revision
+  -> Control returns the durable contiguous source cursor
 
-Processor reads a bounded committed interval
-  -> processor freezes input, context, method and coverage revisions
-  -> processor computes outside a write transaction
-  -> one transaction checks expected progress and commits outputs, references,
-     revision records and new progress
-  -> commit notification wakes dependent readers
+A processor submits calculated results
+  -> writer checks expected progress, input availability, and exact references
+  -> one metadata transaction commits results, progress, and reference pins
+  -> writer publishes the new revision
 ```
 
-Start intake batches at 4,096 records, 4 MiB encoded input, or 50 ms, whichever
-comes first. These are tuning defaults, not measured capacity. Keep decoded
-input and queue limits from verification.md. Return retryable backpressure
-before ACK if the writer cannot accept a batch. Node keeps unacknowledged input
-under its bounded delivery contract; exhaustion produces explicit source loss.
+The metadata commit makes synced segment bytes visible. Raw append and result
+calculation do not need one shared transaction. If a crash occurs before that
+commit, appended bytes have no receipt and cannot be read or acknowledged.
+Recovery discards only uncommitted tails and catalog-reserved new files.
+Reservation is per rotation, not per event. It advances no public relation
+revision or source receipt. Successful intake changes Reserved to Live in its
+metadata commit. Never reuse file IDs or delete unknown files as a repair.
+Missing or corrupt committed bytes
+stop data readiness; do not create an empty replacement.
 
-A retained duplicate with equal identity and bytes has no second effect.
-Conflicting bytes reject the batch. Below the retained digest floor, return
-AlreadyAcceptedExpired for an already acknowledged position; do not insert it
-or claim to compare unavailable bytes. A new unproven gap cannot advance ACK.
-Preserve the existing authenticated coverage/gap acknowledgement rules.
+If the metadata commit outcome is uncertain, stop writes and recover the
+catalog before truncating or retrying. If it committed, a lost ACK retries as
+a duplicate. If it did not, recovery removes the uncommitted append. Keep the
+writer unavailable if recovery fails. Node retains unacknowledged input.
 
-Rollback changes neither receipt nor processor progress. A crash after commit
-but before ACK causes a safe duplicate retry. A processor retries from its
-committed progress; counts cannot double. Commit order is delivery order, not
-cross-node causal order. Restart reads durable revisions before publishing
-readiness. Every mutation, including expiry and deletion, updates dependencies.
+Start group limits at 4,096 records, 4 MiB encoded input, or 50 ms, whichever
+comes first. Existing wire limits still apply. The retained duplicate path
+reads the bounded committed batch range and compares exact bytes/digests.
+Conflicting bytes reject. Below the retained digest floor, return
+AlreadyAcceptedExpired, not a claim that unavailable bytes match.
+Preserve pending-gap bounds and authenticated coverage rules. Reject capacity
+before ACK; no new delivery journal or dual-write raw path is required.
+
+Keep derived work outside transactions. Commit results, progress, and exact
+references together with expected-progress comparison. A failed transaction
+advances none of them; replay must not double counts. A bounded read lease
+protects input during extraction. At result commit, recheck that each required
+record is still available; expiry returns an explicit conflict/gap.
 
 ### Retention, capacity, backup and restore
 
-Use independent age and byte budgets: initial raw retention 24 hours, profile
-windows 30 days, finding/review records 90 days, and pending-review witnesses
-7 days. These are configurable pilot defaults. Charge exact witness/context
-pins to their own bounded quota; do not pin an entire raw stream for one finding.
+Use the existing pilot ages: raw input 24 hours, profiles 30 days,
+finding/review records 90 days, and pending-review witnesses 7 days.
+An age is an expiry target, not permission to erase required evidence.
 
-EvidenceRetentionOwner checks age, capacity, required processing and exact
-witness references in one transaction. It advances retained floors with the
-deletion. Keep context while retained output references it.
+Keep two processor classes:
 
-There are two fixed processor classes, not a user-defined processor framework:
+- Optional discovery/enrichment/advisory progress does not pin raw history.
+  Resume retained input or commit an explicit missing range before continuing.
+- Required security packages protect their unprocessed accepted input.
+  Failure raises health immediately. Stop affected intake at its protected
+  age/byte bound; only authorized retirement can release that obligation.
+  Disabling discovery does not disable required security packages.
 
-- Optional: discovery profiles, context enrichment and advisory methods.
-  Their progress does not pin raw input or stop intake. Disablement preserves
-  committed results and progress. On restart, process the retained backlog.
-  If the retained floor passed progress, commit an explicit missing range and
-  a new incomplete interval before resuming. Never mark skipped input processed.
-- Required: enabled deterministic security packages in GraphAndFindingOwner.
-  Record each package's source scope and starting floor before intake depends
-  on it. Failure raises an unhealthy state immediately. Unprocessed accepted
-  input remains protected within the configured raw age/byte budget.
-  NotificationRouter retains pending finding/route records and their exact
-  witnesses; it does not pin unrelated raw input.
+References stay event-exact, but the first implementation retains whole
+segments. A live reference protects its containing segment, not its whole
+source stream. Charge the full distinct protected segment bytes to the witness
+budget, once per tenant, plus retained context. Report referenced payload bytes
+and extra retained segment bytes separately. Reject new optional pins before
+their quota; required work reports unhealthy/backpressure rather than losing
+its witness. Do not silently weaken the evidence requirement.
 
-Lag alone raises health warnings; it does not stop intake at an arbitrary
-one-hour threshold. Stop affected intake when required unprocessed input
-reaches its protected age bound or exhausts its byte reservation. Retain that
-existing input until processing or authorized retirement. Raw age is a
-reclamation target, not permission to delete protected input. A shared physical
-capacity failure can stop all data intake. Keep installed enforcement and
-policy/control-state commits independent. Disabling discovery does not disable
-security packages. Retiring a required package requires an authorized explicit
-change with its cutoff and missing coverage; do not auto-retire it on failure.
-No bounded store guarantees both unlimited intake and unlimited recovery.
+```text
+Retention selects a sealed segment
+  -> writer verifies age/byte eligibility for every contained batch
+  -> writer checks required progress, pending input, exact pins, and read leases
+  -> metadata transaction marks it Deleting and commits exact expired ranges
+     and relation revisions
+  -> new reads and result pins cannot acquire that segment
+  -> owner unlinks that exact file and syncs its directory
+  -> metadata cleanup removes the pending-delete entry
 
-Review/finding witness pins have their own age and byte budgets. Admission
-reserves exact dependencies, not the whole source stream. Optional computation
-uses bounded work leases while it commits result references; cancel or restart
-expired work instead of keeping an indefinite pin. External readers have no
-retention pins or processor ACKs. Required package dependencies must not include
-an optional profile processor.
+The process restarts during deletion
+  -> recovery completes only catalog-recorded deletions
+  -> an already absent Deleting file is an idempotent success
+  -> a missing Live file is corruption, not normal expiry
+```
 
-Example: with 24-hour raw retention, discovery can resume an eight-hour backlog.
-After two days disabled, it records the expired range and resumes at the retained
-floor. In both cases intake continues unless a separate required obligation or
-physical capacity limit blocks it. Full replay of expired raw input stays
-unavailable even when a retained profile is readable.
+Serialize pin registration and retirement through the same writer. Keep read
+leases bounded by the extraction deadline; release them before network I/O.
+A query cursor or external consumption ACK never pins history. Holes caused by
+expiry remain explicit even when an older witness segment survives. Never hide
+such a retained witness behind a single contiguous floor.
 
-Account for database, native WAL, temporary files, backup/maintenance space,
-queued writes and terminal trace reserve. Reserve separate filesystem capacity
-for policy/control-state commits before admitting data work. At the high-water
-mark, remove
-eligible data, checkpoint, and check actual free bytes. SQL DELETE alone is
-not a disk-space guarantee. [DuckDB checkpoint behavior](https://duckdb.org/docs/current/sql/statements/checkpoint)
-requires measured reclamation. If capacity is still insufficient, stop new
-diagnostic work first and backpressure uncommitted intake. Keep local Node
-enforcement and Control policy authority independent. A corrupt authoritative
-data store blocks data ACK and dependent reads; it is not a disposable index.
+Initially reclaim whole segments only. No row-level raw deletion, background
+compaction, or selective witness archive. If measured pin amplification or
+query scans cannot meet the unchanged budgets, stop and propose the smallest
+change for approval. Do not build a custom storage engine to force this choice.
 
-Use a maintenance window for a consistent backup: pause new data writes,
-drain bounded accepted work, checkpoint, close connections, copy the database,
-sync the copy and its manifest, reopen, then resume. Never copy only a live DB
-file while omitting its WAL. Managed copies use `.duckdb` files directly in the
-private `AnalysisStore/backups` directory. Complete and incomplete copies count
-in the existing data-file budget. Reserve copy bytes, one quarter of that size,
-4,096 manifest bytes, and two file entries before copying. Reserve one more
-entry when the backup directory is absent. Preserve the
-ordinary free-space reserve. Never overwrite or automatically delete a backup.
-Operators can copy both completed files outside this directory. Restore accepts
-such external copies; their storage remains the operator's responsibility.
-Restore into an empty owned directory; validate
-schema, digests, references, receipts and processor progress before activation.
-A restore uses a new recovery epoch so pre-restore query cursors fail explicitly.
-Keep the previous valid copy until the restored store passes checks.
-Restore holds the destination lease throughout copy, validation, and epoch
-commit. A synced `restore.pending` marker prevents normal startup from opening
-an incomplete restore. Clear the marker only after the new epoch is durable,
-then sync the directory before exposing the owner. If the marker remains after
-interruption, keep that directory unavailable and restore the backup into a new empty
-directory. Do not remove the marker to enable an incomplete copy.
+Charge raw frames once, batch/segment metadata, derived rows, pending appends,
+native WAL, temporary work, and complete/incomplete backups. Retain the 8-GiB
+store, 2-GiB tenant, 512-MiB witness, and 25-percent maintenance allowances from
+verification.md. Protect separate Control policy capacity and trace terminal
+reserve. Raw bytes inside pinned segments are not freed capacity.
+Check actual file/free-space use after unlink and metadata checkpoint; a
+logical expiry does not prove physical recovery. If capacity stays exhausted,
+reject diagnostics first and backpressure uncommitted intake.
 
-After restore, a source may already have discarded input acknowledged after
-the backup. The Node's retained floor and the restored receipt expose that gap.
-Do not invent those records or rewind Node ACK state. Record backup revision,
-known missing ranges, and Partial recovery. Qualify this case before release.
+Backup pauses admission, drains work and read leases, seals/syncs segments,
+checkpoints/closes the metadata DB, and copies the complete directory state.
+The manifest lists schema, store/epoch/revision, exact segment files and
+committed sizes/digests, and the metadata database digest. No active native
+WAL is omitted. Resume only after validated reopen; keep the lease throughout.
+Managed backups use unique subdirectories under backups/, never overwrite or
+auto-delete old copies, and count all files against capacity. Reserve total
+copy size plus 25 percent, manifest bytes, and the actual file-entry count.
+An external completed bundle is a valid restore source.
+
+Restore to an empty owned directory under its lease. Sync restore.pending
+before copy. Validate metadata, every listed segment, receipts, progress,
+and references. Commit a new recovery epoch, then remove the marker and sync
+before readiness. On failure, leave the destination unavailable and preserve
+the source bundle. A retry uses another empty directory; do not remove the
+marker to bypass checks. Never restore only the database or only the segments.
+
+After an older restore, Node can have discarded already acknowledged input.
+Use the existing authenticated NodeEvidence.ReportFloor contract to commit
+exact recovery gaps. It is not an evidence ACK and cannot advance receipts
+or processor progress. Report Partial recovery; do not invent missing records.
+
+### Read snapshot and selection
+
+Capture the metadata snapshot, store revision, committed byte ends, and bounded
+segment read leases under the writer coordinator. Release the coordinator
+before scanning. Readers see only those committed ends; later appends cannot
+enter the snapshot. Keep context/result reads at the same metadata snapshot.
+Cancel and release leases at the deadline, before waiting on the caller.
+
+Use source/cursor ranges and conservative per-batch intake-time bounds to skip
+files. Null, unknown, nonmonotonic, or unproved bounds cannot exclude input.
+Use exact target/context checks during decode unless a qualified batch summary
+proves exclusion. A sparse result can still require a large scan. Bound both
+scanned bytes and extracted bytes; return an explicit limit, not a partial
+aggregate. Query workers receive decoded authorized batches, never segment
+paths or the persistent database.
 
 ### One query contract
 
@@ -808,10 +826,10 @@ No general incremental SQL engine or persistent result cache is required.
 ```text
 Client requests follow
   -> QueryOwner validates grants, SQL and dependencies, then registers watch
-  -> trusted reader captures one database snapshot and its revision
+  -> trusted reader captures one metadata snapshot, committed segment ends, and revision
   -> worker evaluates the initial retained range or complete bounded snapshot
   -> QueryOwner emits metadata, result frames and a committed checkpoint
-  -> all DB readers and workers close before waiting or network backpressure
+  -> all segment leases, DB readers, and workers close before client backpressure
   -> relevant commit or supported time-window expiry marks the query dirty
   -> one evaluation runs; concurrent changes set one coalesced dirty flag
   -> QueryOwner rechecks dependencies after evaluation and before waiting
@@ -900,11 +918,11 @@ QueryOwner uses a maintained parser plus a closed relation/function binder.
 Resolve aliases, nested expressions, CTEs and star expansion against authorized
 schemas. Reject unsupported syntax; do not use regex or a SELECT-prefix test.
 
-Trusted prepared extraction statements apply tenant, lifetime, row scope and
+Trusted bounded extraction applies tenant, lifetime, row scope and
 field disclosure before evaluation. Hidden fields cannot be used in predicates,
 joins, aggregates or errors. Add only the proven SQL-derived time bounds above.
 Export complete bounded authorized relation batches and needed columns from one
-snapshot. Over-limit extraction fails and requests a narrower SQL predicate or
+metadata/segment snapshot. Over-limit extraction fails and requests a narrower SQL predicate or
 target scope; do not execute arbitrary client expressions in the persistent DB.
 
 A disposable unprivileged worker evaluates those batches in an in-memory
@@ -948,7 +966,7 @@ to fill a historical gap.
 Run `araphor-data` in the optional data process instead of linking it into
 Control's process. AnalysisStore, EvidenceRetentionOwner, QueryOwner,
 DiscoveryOwner, GraphAndFindingOwner, NotificationRouter and trace-output reads
-use the same crate and local database transactions in either placement.
+use the same crate, segment files, and local metadata transactions in either placement.
 Graph/finding/progress commits and notification recovery do not cross RPC.
 Control retains policy/trust/approval authority, source publication, TraceOwner,
 Node authentication and dispatch. External agents retain model execution.
@@ -982,7 +1000,7 @@ Node evidence and output still enter authenticated Control intake. Forward
 bounded batches; acknowledge only the remote durable receipt. Use private
 protobuf gRPC domain operations for accepted evidence, owner-qualified context, trace
 intent/output/result, and shared query/discovery requests. These operations
-validate schema, scope and owner before one local transaction. Do not export
+validate schema, scope and owner before the local append/metadata commit protocol. Do not export
 table CRUD, SQL writes or begin/commit RPCs. TraceOwner waits for durable intent
 before dispatch. A lost reply is reconciled by request key and content digest;
 retry cannot duplicate a capture or source write.
@@ -998,8 +1016,8 @@ External read-only consumers use query/follow at either endpoint. They require
 no broker, retention ACK or deployment change. Expired cursors report a gap.
 
 Placement change uses planned downtime: stop new work, finish or expire traces,
-drain, checkpoint and close the sole writer, transfer and validate the complete
-store, fence the former deployment, then start the new writer. Preserve store
+drain, seal segments, checkpoint metadata and close the sole writer, then transfer
+and validate the complete segment/database bundle, fence the former deployment, then start the new writer. Preserve store
 identity and committed positions for a lossless move. Backup rollback changes
 the recovery epoch. Do not support live dual writers or automatic split-brain
 failover. Policy authority and installed Node enforcement remain in place.

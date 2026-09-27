@@ -46,9 +46,10 @@ Operator changes placement
    reuse the client authentication and gRPC adapters without a crate cycle.
    It calls `araphor-data` owners and does not start Control authority owners.
    Do not fork algorithms, schemas or retention code.
-2. Add Embedded/Remote placement configuration. Remote mode must not open a
-   local analysis DB. Keep policy/trust/approval, publication and TraceOwner
-   dispatch in Control. Give NotificationRouter only its scoped sink credentials.
+2. Add Embedded/Remote placement configuration. In remote mode, Control must
+   not open a local data directory or raw mirror. Keep policy/trust/approval,
+   publication and TraceOwner dispatch in Control. Give NotificationRouter
+   only its scoped sink credentials.
 3. Reuse `ClientGrpcOwner` at the remote TLS gRPC endpoint, with gRPC-Web for
    browser clients. Reuse and qualify the
    --endpoint/profile selection from Observability 3; do not add another CLI
@@ -72,14 +73,17 @@ Operator changes placement
    non-idempotent work blindly or acknowledge an in-memory forwarding queue.
    Flow control stays bounded end to end; a partition creates no local archive.
 6. Package the optional process and its single-writer PVC using the existing
-   image/chart patterns. Embedded remains the default. No shared DuckDB file
+   image/chart patterns. Move segments and metadata as one bundle.
+   Embedded remains the default. No shared segment directory or DuckDB file
    across pods, database network filesystem, automatic failover or broker.
    Reject deployments that configure both local and remote writers.
    Configure TLS, API audience, allowed origins and Control delegation peer for
    the remote listener. Reuse shared browser-session/CSRF checks. Do not expose
    internal intake or delegation RPCs on the public listener.
 7. Implement the stopped-writer transfer command in the data owner. Validate
-   manifest, store UUID, schema, references and receipt/progress positions.
+   manifest, every segment digest/committed end, metadata database, store UUID,
+   schema, references and receipt/progress positions. A database-only copy or
+   missing Live segment rejects startup; no reads fall back to Control files.
    Keep a recoverable source backup. An orchestration gate must stop the old
    deployment; a local file lock does not fence a writer on another host.
 
@@ -105,8 +109,11 @@ No remote RPC may grant wider access or conceal an unavailable action owner.
 
 Test stopped-writer transfer, refusal while old writer remains active, schema
 mismatch, interrupted copy and older-backup restore with source loss. Require
-explicit cursor epoch behavior. The paired physical case uses the existing
-two-node harness and Helm assets after the lightweight result passes.
+explicit cursor epoch behavior. Reject database-only and segment-only transfers.
+Crash the remote writer between segment sync and metadata commit; after recovery,
+require either safe replay or the original durable receipt, never a false ACK.
+The paired physical case uses the existing two-node harness and Helm assets
+after the lightweight result passes.
 
 ```sh
 cargo test -p mithril-control
