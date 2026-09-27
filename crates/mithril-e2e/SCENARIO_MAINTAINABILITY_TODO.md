@@ -4047,6 +4047,24 @@ setup, production actions, assertions, and focused test.
     The two-call Host/direct-`runc` test from `99c4e467` and `37e988f3`
     passed focused tests but did not model one Pod. It was removed. The old
     Kubernetes probe remains the coverage owner.
+  - [ ] Keep one Pod identity for members of one group call. A later group
+    call must use a new Pod UID and new container IDs, even with the same
+    policy labels and member names. The 60-line `group_boundary` test starts
+    two groups under one signed policy and checks separate production
+    bindings, cgroups, execution sets, and allowed reads. Its Host case passed
+    in 47.26 seconds with a distinct CRI sandbox ID for each Pod. The unchanged
+    two-policy Host case passed in 37.22 seconds. The complete Host identity
+    lane passed 58 tests in 691.00 seconds with the original exact runtime
+    entry role checks. Direct `runc` and Kubernetes remain to be checked. The
+    old Kubernetes probe remains in place.
+  - [x] Keep the Host lane reliable after the extra workload. The TCP
+    send-variants case now uses the existing bounded evidence wait and still
+    requires exactly three allowed sends. The focused TCP case passed in
+    43.31 seconds. The complete Host lane then passed 58 tests.
+  - [x] Wait for the large-argument actor's admitted entry before checking
+    its original exact role and nonzero rule. A full Host run saw role 5 while
+    the first task snapshot still had rule 0. The bounded wait passed in the
+    complete 58-test Host lane. It retains the exact role and rule checks.
   - [ ] Keep the original probe until its replacement passes. It starts a
     restartable sidecar and a held init container before the application. It
     checks separate cgroups, task cookies, process states, execution sets, and

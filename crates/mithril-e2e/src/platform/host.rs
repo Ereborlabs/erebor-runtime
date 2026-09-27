@@ -247,6 +247,7 @@ impl Platform for Host {
         extra: &[&str],
         labels: &Labels,
     ) -> TestResult<ProcessFixture> {
+        self.shared.begin_pod(labels);
         self.start_named(name, extra, labels, "worker")
     }
 
@@ -256,6 +257,7 @@ impl Platform for Host {
         actors: &[GroupActor<'_>],
         labels: &Labels,
     ) -> TestResult<Vec<(ProcessFixture, PathBuf)>> {
+        self.shared.begin_pod(labels);
         let mut group = Vec::with_capacity(actors.len());
         for actor in actors {
             let script = actor

@@ -64,12 +64,15 @@ struct ActorFiles {
     work: ProbeDirectory,
     cgroup: ProbeCgroup,
     pod_uid: String,
+    container_id: String,
     execution_set_id: String,
 }
 
-type ActorKey = (Labels, String);
+type ActorKey = (String, Labels, String);
 
 pub(super) struct SharedState {
+    pod_uid: String,
+    pod_started: BTreeSet<String>,
     labels: Labels,
     actor: String,
     actors: BTreeMap<ActorKey, ActorFiles>,
@@ -181,6 +184,8 @@ impl SharedState {
     fn reset(&mut self) -> TestResult<()> {
         self.work = Some(ProbeDirectory::create(&self.work_path)?);
         self.cgroup = Some(ProbeCgroup::create(&self.cgroup_path)?);
+        self.pod_uid = POD_UID.to_owned();
+        self.pod_started.clear();
         self.labels.clear();
         self.actor = "worker".to_owned();
         Ok(())
@@ -191,25 +196,34 @@ impl SharedState {
     }
 
     fn key(&self) -> ActorKey {
-        (self.labels.clone(), self.actor.clone())
+        (
+            self.pod_uid.clone(),
+            self.labels.clone(),
+            self.actor.clone(),
+        )
+    }
+
+    pub(super) fn begin_pod(&mut self, labels: &Labels) {
+        self.pod_uid = self
+            .actors
+            .keys()
+            .find(|(uid, known, _)| known == labels && !self.pod_started.contains(uid))
+            .map(|(uid, _, _)| uid.clone())
+            .unwrap_or_else(|| {
+                if self.actors.is_empty() && self.pod_started.is_empty() {
+                    POD_UID.to_owned()
+                } else {
+                    uuid::Uuid::new_v4().to_string()
+                }
+            });
+        self.pod_started.insert(self.pod_uid.clone());
     }
 
     pub(super) fn prepare_member(&mut self, labels: &Labels, name: &str) -> TestResult<()> {
-        let key = (labels.clone(), name.to_owned());
+        let key = (self.pod_uid.clone(), labels.clone(), name.to_owned());
         if !self.actors.contains_key(&key) {
             let first = self.actors.is_empty();
-            let pod_uid = self
-                .actors
-                .iter()
-                .find(|((known, _), _)| known == labels)
-                .map(|(_, files)| files.pod_uid.clone())
-                .unwrap_or_else(|| {
-                    if first {
-                        POD_UID.to_owned()
-                    } else {
-                        uuid::Uuid::new_v4().to_string()
-                    }
-                });
+            let pod_uid = self.pod_uid.clone();
             let work = if first {
                 self.work
                     .take()
@@ -236,6 +250,7 @@ impl SharedState {
                 ActorFiles {
                     work,
                     cgroup,
+                    container_id: format!("{:064x}", uuid::Uuid::new_v4().as_u128()),
                     execution_set_id: if name == "worker" {
                         pod_uid.clone()
                     } else {
@@ -279,14 +294,10 @@ impl SharedState {
     }
 
     pub(super) fn actor_id(&self) -> TestResult<String> {
-        if let Some(binding) = self.bindings.get(&self.key()) {
-            return Ok(binding.container_id.clone());
-        }
-        let generation = self
-            .policy_generation
-            .checked_add(1)
-            .ok_or("the test policy generation overflowed")?;
-        Ok(format!("{generation:064x}"))
+        self.actors
+            .get(&self.key())
+            .map(|actor| actor.container_id.clone())
+            .ok_or_else(|| "the actor resources are missing".into())
     }
 
     pub(super) fn has_policy(&self) -> bool {
@@ -612,6 +623,8 @@ impl Shared {
         let work = ProbeDirectory::create(&work_path)?;
         let cgroup = ProbeCgroup::create(&cgroup_path)?;
         lifecycle.put(SharedState {
+            pod_uid: POD_UID.to_owned(),
+            pod_started: BTreeSet::new(),
             labels: Labels::new(),
             actor: "worker".to_owned(),
             actors: BTreeMap::new(),
@@ -878,6 +891,18 @@ impl Shared {
         resource.metadata.resource_version = Some(self.policy_generation.to_string());
         self.policies.insert(labels.clone(), (resource, path));
         let previous = self.key();
+        self.pod_uid = self
+            .actors
+            .keys()
+            .find(|(_, known, _)| known == &labels)
+            .map(|(uid, _, _)| uid.clone())
+            .unwrap_or_else(|| {
+                if self.actors.is_empty() {
+                    POD_UID.to_owned()
+                } else {
+                    uuid::Uuid::new_v4().to_string()
+                }
+            });
         self.prepare_actor(&labels)?;
         let result = if self.node_task.is_some() {
             self.sync_policy()
@@ -902,7 +927,7 @@ impl Shared {
             Ok(())
         };
         if self.actors.contains_key(&previous) {
-            (self.labels, self.actor) = previous;
+            (self.pod_uid, self.labels, self.actor) = previous;
         }
         result?;
         Ok(labels)
@@ -1105,11 +1130,7 @@ impl Shared {
         );
 
         let generation = u64::try_from(self.policy_generation)?;
-        let container_id = if self.actor == "worker" {
-            format!("{generation:064x}")
-        } else {
-            format!("{:064x}", uuid::Uuid::new_v4().as_u128())
-        };
+        let container_id = files.container_id.clone();
         let revision = source.policy_source_revision_id;
         let digest = target.workload_binding_generation_digest.clone();
         self.wait_policy(&revision, &digest)?;
@@ -1145,7 +1166,7 @@ impl Shared {
                 service_account_uid: target.service_account_uid,
                 pod_labels: target.pod_labels,
                 pod_uid: pod_uid.clone(),
-                sandbox_id: "d".repeat(64),
+                sandbox_id: format!("{:064x}", uuid::Uuid::parse_str(&pod_uid)?.as_u128()),
                 container_name: actor,
                 image_digest: target.image_digest,
                 container_kind: ContainerKindV1::Application,

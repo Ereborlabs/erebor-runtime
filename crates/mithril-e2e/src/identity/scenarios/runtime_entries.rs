@@ -1,10 +1,12 @@
 use std::{
+    cell::RefCell,
     fs, thread,
     time::{Duration, Instant},
 };
 
 use erebor_interceptor_abi::ProcessExecutionStateV1;
 
+use crate::error::InvalidInputSnafu;
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
@@ -20,7 +22,26 @@ fn large_argv_fills_effect_window<P: Platform>() -> TestResult<()> {
     let mut args = vec!["/fixtures/runtime_copy.txt"; 1_200];
     args.push("-");
     let mut actor = env.add_actor("cat", &args)?;
-    let task = env.task(actor.id(), "large-argv actor")?;
+    let pid = actor.id();
+    let path = env.maps().0.to_owned();
+    let last = RefCell::new(String::from("<absent>"));
+    let task = actor.wait_path(
+        &path,
+        "registered cat role",
+        Duration::from_secs(5),
+        || {
+            let task = env.task(pid, "large-argv actor").map_err(|error| {
+                InvalidInputSnafu {
+                    path: &path,
+                    reason: error.to_string(),
+                }
+                .build()
+            })?;
+            *last.borrow_mut() = format!("{:?}", task.snapshot);
+            Ok((task.snapshot.admitted_entry_rule_id != 0).then_some(task))
+        },
+        || format!("last actor identity: {}", last.borrow()),
+    )?;
     assert_eq!(task.snapshot.active_role_id, 5);
     assert_ne!(task.snapshot.admitted_entry_rule_id, 0);
 
