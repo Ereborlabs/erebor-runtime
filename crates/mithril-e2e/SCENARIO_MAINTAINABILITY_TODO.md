@@ -2738,6 +2738,21 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace the protected action-level executable Allow that cannot admit
+    an undeclared runtime entry. Reuse `ready.py`. Give the distinct signed
+    policy an external-role Allow for `/usr/bin/sleep` but no `sleep` entry
+    declaration. Start Control and Node,
+    install the signed policy, start the actor, and try `add_actor("sleep")`.
+    Require physical `EACCES`, fresh attributed Exec/Execute
+    `EXACT_POLICY_ALLOW` path evidence, and a matching
+    `UNSUPPORTED_OBJECT` denial. Keep the test below 100 lines and add no
+    Platform or production API.
+    - [x] Pass Host and commit the test. The exact privileged case passed in
+      44.37 seconds in the retained VM with both attributed Exec decisions.
+    - [ ] Pass direct `runc` and commit its platform registration.
+    - [ ] Pass Kubernetes and commit its platform registration.
+    - [ ] Remove only the matching legacy action, result field, and unused
+      fixture state after all three platforms pass.
   - [x] Replace the old SQPOLL check for a restricted rule-zero actor in
     Protect and Observe modes. The old binding sets `arm_initial_root=false`.
     The existing Protect platform test covers the same recovered rule-zero
