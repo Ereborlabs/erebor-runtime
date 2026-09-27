@@ -775,8 +775,13 @@ error: a 256-KiB allocation exceeded the 64-MiB engine budget. Peak process RSS
 was 195,120 KiB. The failure occurred before successful global-quota rejection;
 it is not a process-RSS-limit failure. The test did not report pre-error native
 categories or final accepted cursors. The phase plan records the retained logs.
-The unchanged gRPC quota repeat is running without competing task builds or
-loads. Neither global capacity nor full-path quota behavior is qualified.
+The unchanged gRPC quota repeat failed without competing task builds or loads.
+After 2,121.59 seconds, `check_witnesses` returned a native allocation error
+under the 64-MiB engine limit. Whole-process peak RSS was 226,504 KiB. This
+repeat did not reproduce the ACK timeout. The source flow places the error
+after quota rejection, duplicate replay, and complete retained-frame comparison.
+It did not emit a result JSON or accepted count. Neither global capacity nor
+full-path quota behavior is qualified. The phase plan records the retained logs.
 The final workspace gate passed for the Rust source in `c72a3b68`: formatting,
 compilation, strict Clippy, and serial workspace tests. Data passed 49 tests
 with four ignored; Control passed 197 with two ignored; Mithril e2e passed 124
