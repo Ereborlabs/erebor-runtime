@@ -2763,7 +2763,8 @@ test does not close a row when its physical condition or an assertion changed.
         policy activation, then tried file-descriptor exec after recovery.
         The exact case passed in 40.68 seconds with physical `EACCES` and
         attributed Allow-then-deny Exec evidence.
-      - [ ] Pass direct `runc` and commit its registration.
+      - [x] Pass direct `runc` and commit its registration. The exact case
+        passed in 43.09 seconds through stock `runc` and the OCI hook.
       - [ ] Pass Kubernetes and commit its registration.
     - [ ] Remove only the matching legacy action, result field, and unused
       fixture state after the `fexecve` case passes on all three platforms.
