@@ -1772,5 +1772,25 @@ and `witness-cli-build.log` under `/tmp/araphor-memory-probe.z1rbDjUR`.
 | Qualification CLI | `11f46ab4eea1188f172bd9b339680e0e504f8b85a1762547b658e309a8ffc3f7` |
 
 The staged VM copies have the same digests. The instrumented global-capacity
-test has started with the data executable above. No result is claimed yet.
+test failed with exit status 101 after 1,032.01 seconds. External elapsed time
+was 1,032.02 seconds; peak process RSS was 195,076 KiB. Batch 7,335 failed during
+evidence commit. Each of the five prior successful cursors was 1,502,208, for
+7,511,040 successful records. These cursors do not establish the failed batch's
+final durable state. The latest sample, before batch 7,296, reported 4,980,736
+ART index bytes, 8,126,464 base-table bytes, 45,350,912 in-memory-table bytes,
+and 786,432 transaction bytes. It reported 446,742,528 file bytes and
+14,542,032,896 available filesystem bytes.
+The final native checkpoint log schedules an events merge from four row groups
+to three, with 313,344 rows from row position 7,198,720. The checkpoint then
+fails to allocate 128 KiB with 63.8 MiB of the 64-MiB engine budget in use.
+No later table checkpoint is logged. This evidence supports checkpoint memory
+pressure but does not identify the exact failed native allocation site.
+The native index reset clears old buffers before rebuild. Do not claim that
+the old and rebuilt index remain allocated together.
+The logs are `witness-global.log` and `witness-global-resources.log` in
+`/tmp/araphor-memory-probe.z1rbDjUR`. Global capacity remains unqualified.
+The next hypothesis is that the 64-MiB native WAL checkpoint threshold leaves
+too little working space for checkpointing under the 64-MiB engine limit.
+Test a lower checkpoint threshold without changing logical quotas, primary
+keys, compaction, or the 256-MiB process bound. No production remedy is proven.
 These small-suite passes do not close either full-capacity failure.
