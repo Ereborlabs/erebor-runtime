@@ -3680,7 +3680,7 @@ test does not close a row when its physical condition or an assertion changed.
   `SIGSTOP` and cannot report completion without an external continue.
 - [ ] Recovered-container application, external, and declared-probe entries:
   keep each stock runtime action and exact role, rule, and denial assertion.
-  - [ ] Replace the recovered-container unmatched `mkdir` exec. Keep the
+  - [x] Replace the recovered-container unmatched `mkdir` exec. Keep the
     existing node-first unlisted-exec test. In a second small standard test,
     start the actor before Node, install the signed policy, recover the live
     actor, and call `add_actor("mkdir", ...)`. Require physical `EACCES` and
@@ -3695,8 +3695,13 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit its registration. The recovered case
       passed in 97.69 seconds; the unchanged node-first case passed in
       79.18 seconds. Both launcher commands exited 0.
-    - [ ] Remove the matching old action, result field, and `run.sh` gate.
-      Keep the separate two-node convergence check.
+    - [x] Remove the matching old action, result field, and `run.sh` gate.
+      Keep the separate two-node convergence check. The reduced direct-`runc`
+      probe passed. Its remaining launcher JSON predicate returned `true`.
+      The first probe run lacked the public `mithril-inspect` test binary;
+      build it before this focused probe. The runner's parent needed
+      `SIGCONT` after its probe child exited. Do not treat that launcher
+      behavior as a test assertion.
 
 ### Direct runtime entry roles
 

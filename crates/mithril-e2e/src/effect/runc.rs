@@ -200,7 +200,6 @@ pub struct RecoveredContainerEntryProbeV1 {
     pub declared_probe_role_id: u32,
     pub declared_probe_rule_id: u32,
     pub declared_probe_policy_denied: bool,
-    pub unmatched_exec_denied: bool,
     pub pin_root_removed: bool,
     pub lease_removed: bool,
     pub cgroup_removed: bool,
@@ -3125,45 +3124,6 @@ impl EffectTestRunner {
             }
         );
 
-        let denied_marker = observations.cursor();
-        let denied_pid_path = fixture_root.join("unmatched.pid");
-        let denied_stdout = output_directory.join("recovered-unmatched.stdout");
-        let denied_stderr = output_directory.join("recovered-unmatched.stderr");
-        let mut denied = container.spawn_exec(
-            "/bin/mkdir",
-            &["/tmp/unmatched"],
-            &denied_pid_path,
-            &denied_stdout,
-            &denied_stderr,
-        )?;
-        let denied_status = wait_for_child(&mut denied)?;
-        reader
-            .poll(Duration::from_millis(100))
-            .context(InterceptorSnafu)?;
-        wait_for_reason(&reader, &observations, denied_marker, "UNSUPPORTED_OBJECT")?;
-        let unmatched_exec_denied = !denied_status.success()
-            && observations
-                .recent_since(denied_marker)
-                .iter()
-                .any(|event| {
-                    event.reason == "UNSUPPORTED_OBJECT"
-                        && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
-                        && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
-                        && event.active_role_id == binding.external_role_id
-                        && event.admitted_entry_rule_id == 0
-                        && event.kernel_result == -13
-                });
-        ensure!(
-            unmatched_exec_denied,
-            InvalidInputSnafu {
-                path: &denied_stderr,
-                reason: format!(
-                    "an unmatched later entry passed after recovery: status={denied_status}, effects={:?}",
-                    recent_effect_summary(&observations, denied_marker)
-                ),
-            }
-        );
-
         self.release_recovery_task(
             pin_root,
             &cgroup_path,
@@ -3243,7 +3203,6 @@ impl EffectTestRunner {
             declared_probe_role_id: probe_snapshot.active_role_id,
             declared_probe_rule_id: probe_snapshot.admitted_entry_rule_id,
             declared_probe_policy_denied,
-            unmatched_exec_denied,
             pin_root_removed: !pin_root.exists(),
             lease_removed: !lease_path.exists(),
             cgroup_removed,

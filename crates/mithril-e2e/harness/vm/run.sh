@@ -518,7 +518,6 @@ if [[ $recovered_entry_only == true ]]; then
     .declared_probe_policy_denied and
     .declared_probe_role_id != .recovered_application_role_id and
     .declared_probe_rule_id != .recovered_application_rule_id and
-    .unmatched_exec_denied and
     .pin_root_removed and
     .lease_removed and
     .cgroup_removed and
