@@ -3601,7 +3601,9 @@ setup, production actions, assertions, and focused test.
       - [x] Pass Host. The 88-line `bind_refreshes_cache` test passed in the
         privileged VM. All ten related Host lifecycle tests passed in
         111.49 seconds. No old assertion was removed.
-      - [ ] Pass direct `runc` and commit it separately.
+      - [x] Pass direct `runc` in a separate commit. The exact case passed in
+        29.57 seconds with the production OCI hook. All ten related direct
+        `runc` lifecycle tests passed in 117.34 seconds.
       - [ ] Pass real Kubernetes and commit it separately.
       - [ ] Remove only the old cache assertion after the shared test proves
         the same condition on all three platforms. Keep the old mount action
