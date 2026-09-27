@@ -30,22 +30,51 @@ declarative captures are not delivered by these changes.
 
 ### Segment storage conversion
 
-Source state: the shared segment extraction after `777b5721`. This extraction
-does not change configured AnalysisStore intake, raw retention, or backup.
-Those paths still use raw DuckDB rows. The target conversion remains incomplete.
+Source state: the segment conversion after `293762be`. Configured AnalysisStore
+intake and reads now use segments. The target conversion remains incomplete.
+Backup and restore still copy only the database. Do not use those paths for
+the new store. Storage pass records outside this section predate this conversion
+and do not qualify the current storage implementation.
 
 [ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Control starts.<br>
--> Partial [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) AnalysisStore obtains the complete data-directory lease.<br>
--> Not implemented: owner recovers metadata and validates committed segment ranges.<br>
--> Not implemented: owner completes recorded deletions and removes only uncommitted tails.<br>
--> Partial [AnalysisStore](../../../../crates/araphor-data/src/analysis/mod.rs) owner publishes durable relation revisions and data readiness. Current readiness covers DuckDB raw rows.
+-> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) AnalysisStore obtains the complete data-directory lease.<br>
+-> [AnalysisStore::recover_segments](../../../../crates/araphor-data/src/analysis/segments.rs) owner recovers metadata and validates committed segment ranges.<br>
+-> [AnalysisStore::recover_segments](../../../../crates/araphor-data/src/analysis/segments.rs) owner completes recorded deletions and removes only uncommitted tails.<br>
+-> [AnalysisStore::open_leased](../../../../crates/araphor-data/src/analysis/mod.rs) owner publishes durable relation revisions and data readiness.
 
 [EvidenceIntakeOwner](../../../../crates/mithril-control/src/evidence.rs) Node sends an authenticated batch.<br>
 -> [receive_group](../../../../crates/mithril-control/src/evidence.rs) EvidenceIntakeOwner validates source and reserves bounded capacity.<br>
--> Not implemented: configured AnalysisStore checks retries and appends framed raw records to segments.<br>
--> Not implemented: owner syncs segment bytes and new file directory entries.<br>
--> Not implemented: one metadata transaction commits ranges, receipts, and revisions.<br>
--> Partial [receive_group](../../../../crates/mithril-control/src/evidence.rs) Control acknowledges the durable contiguous source position. The current ACK follows a raw-DuckDB commit.
+-> [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/mod.rs) AnalysisStore checks retries and appends framed raw records through its reserved segment.<br>
+-> [AnalysisStore::sync_append](../../../../crates/araphor-data/src/analysis/segments.rs) owner syncs segment bytes and new file directory entries.<br>
+-> [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/mod.rs) one metadata transaction commits ranges, receipts, and revisions.<br>
+-> [receive_group](../../../../crates/mithril-control/src/evidence.rs) Control acknowledges the durable contiguous source position.
+
+[EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) Retention selects an eligible sealed segment.<br>
+-> Partial [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) owner checks age, required progress, pins, and bounded read leases.<br>
+-> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) metadata commit marks Deleting and records exact expiry intervals.<br>
+-> [AnalysisStore::remove_segment](../../../../crates/araphor-data/src/analysis/segments.rs) owner unlinks that file, syncs the directory, and completes catalog cleanup.<br>
+-> [AnalysisStore::recover_segments](../../../../crates/araphor-data/src/analysis/segments.rs) restart resumes incomplete deletion without deleting Live segments.
+
+The catalog has one row per segment and one row per batch range. Frame offsets
+use a native UINTEGER array. The batch digest binds the offset count, offsets,
+and raw bytes. The writer retains no full-store event index. Reserved file IDs
+come from a durable, increasing counter. An uncertain raw publication or
+deletion commit keeps the writer unavailable. A definite pre-commit failure can
+remove only its reserved file or uncommitted tail. The other metadata owners
+still need the same uncertain-commit guard. An eligible idle active segment is
+sealed when the deletion transaction marks it Deleting. Reader count and page
+bytes are bounded; extraction-deadline cancellation is not implemented.
+
+`analysis_store_batch_receipt` checks exact retries, gaps, receipt positions,
+reopen, and batch-proportional metadata. `segment_recovery_checks_ownership`
+checks reserved files, non-reused IDs, uncommitted tails, and unknown files.
+`segment_retention_keeps_witnesses` checks whole-segment pins and expiry holes.
+`segment_growth_keeps_budget` checks the witness budget during later appends.
+Full backup, bounded-extraction, resource, and mithril-e2e qualification remain
+incomplete. The latest required workspace command passed formatting, check,
+and Clippy. Its test step stopped with 39 passed, 17 failed, and 4 ignored in
+araphor-data. The named segment tests passed. Read the phase result for the
+remaining backup and fixture failures; this is not a completed storage phase.
 
 The reusable segment path has these implemented calls:
 
@@ -115,7 +144,7 @@ Control intake or the SQLite discovery projection.
 -> [DiscoveryOwner::derive_recorded](../../../../crates/mithril-control/src/discovery/recorded.rs) Existing owner derives the expected accepted count and snapshot digest.<br>
 -> [run_discovery_offline](../../../../crates/mithril-e2e/src/discovery.rs) Existing case checks exact counts, replay, and native preview against the frozen oracle.<br>
 -> [run_discovery_storage_contract](../../../../crates/mithril-e2e/src/discovery/storage_contract.rs) New case frames validated fixture records for the public data owner.<br>
--> [AnalysisStore::accept_validated_batch](../../../../crates/araphor-data/src/analysis/mod.rs) One transaction commits new records and the contiguous source receipt. An identical retry is a no-op; different content fails.<br>
+-> [AnalysisStore::accept_validated_batch](../../../../crates/araphor-data/src/analysis/mod.rs) Segment sync precedes the transaction that commits batch ranges and the contiguous source receipt. An identical retry is a no-op; different content fails.<br>
 -> [AnalysisStore::accept_validated_coverage](../../../../crates/araphor-data/src/analysis/mod.rs) A second transaction commits the report bytes and coverage revision.<br>
 -> [AnalysisStore::record_revision](../../../../crates/araphor-data/src/analysis/mod.rs) Each commit records affected relation revisions and the store revision in its transaction.<br>
 -> [AnalysisStore::source_status](../../../../crates/araphor-data/src/analysis/mod.rs) A locked read returns the exact source receipt, retained count, and digest-checked report.<br>
@@ -195,14 +224,14 @@ the owner explicitly. The startup case uses ControlConfig and the default owner.
 -> [AnalysisStore::commit_context](../../../../crates/araphor-data/src/analysis/context.rs) The data owner commits an exact, tenant-scoped context version. A retry with different content conflicts.<br>
 -> [AnalysisStore::register_processor](../../../../crates/araphor-data/src/analysis/progress.rs) A processor binds its class, source, method version, and retained start cursor.<br>
 -> [AnalysisStore::commit_result](../../../../crates/araphor-data/src/analysis/progress.rs) One transaction checks expected progress and exact context/witness digests. It commits the result, references, and progress.<br>
--> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) One transaction deletes eligible raw rows, records expired ranges, and advances the retained floor. Required progress and live exact witnesses protect rows.<br>
+-> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) One transaction marks an eligible segment Deleting, records expired ranges, and advances the retained floor. Required progress and live exact witnesses protect segments. File removal follows the commit.<br>
 -> [AnalysisStore::resume_optional](../../../../crates/araphor-data/src/analysis/progress.rs) An optional processor records an expired gap before it resumes. Its consumed cursor does not advance for the skipped input.<br>
 -> [AnalysisStore::processor_health](../../../../crates/araphor-data/src/analysis/health.rs) One snapshot returns accepted and effective progress, lag, missing input, and its revision. An optional resume keeps the missing-coverage flag.<br>
 -> [AnalysisStore::backup](../../../../crates/araphor-data/src/analysis/backup.rs) Maintenance drains readers, checkpoints, and closes all native connections while the directory lease remains held.<br>
 -> [StorageLimitsV1::check_backup](../../../../crates/araphor-data/src/analysis/capacity.rs) The closed source size and manifest allowance must fit the data-file budget and ordinary free-space reserve.<br>
--> [AnalysisStore::copy_backup](../../../../crates/araphor-data/src/analysis/backup.rs) A closed database has no native WAL. A new synced copy and digest manifest preserve the committed revision.<br>
+-> Partial [AnalysisStore::copy_backup](../../../../crates/araphor-data/src/analysis/backup.rs) The copy includes the database, but not the required segments. Complete-bundle backup is not implemented.<br>
 -> [AnalysisStore::reopen_backup](../../../../crates/araphor-data/src/analysis/backup.rs) The owner validates identity, schema, receipts, and references before it publishes reopened native connections.<br>
--> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) A validated copy opens in an empty private directory with a new recovery epoch.
+-> Partial [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) The current copy path cannot restore a complete segment store. Complete-bundle restore is not implemented.
 
 [AnalysisLease::acquire](../../../../crates/araphor-data/src/analysis/connection.rs) Restore obtains the same exclusive directory lease used by normal startup.<br>
 -> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) Restore requires no entry except the lease file, then creates and syncs `restore.pending` before copying.<br>

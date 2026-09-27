@@ -409,9 +409,14 @@ impl AnalysisStore {
         let expected = input.consumed_cursor - input.expected_cursor;
         let available: u64 = transaction
             .query_row(
-                "SELECT COUNT(*) FROM events WHERE stream_key = ? AND tenant_id = ?
-                 AND durable_cursor > ? AND durable_cursor <= ?",
+                "SELECT COALESCE(SUM(LEAST(b.last_cursor, ?)::HUGEINT
+                    - GREATEST(b.first_cursor::HUGEINT, ?::HUGEINT + 1) + 1), 0)::UBIGINT
+                 FROM batch_ranges b JOIN segments s USING (segment_id)
+                 WHERE b.stream_key = ? AND b.tenant_id = ? AND s.state = 'Live'
+                    AND b.last_cursor > ? AND b.first_cursor <= ?",
                 params![
+                    input.consumed_cursor,
+                    input.expected_cursor,
                     key.as_slice(),
                     input.scope.identity.tenant_id.as_slice(),
                     input.expected_cursor,
@@ -444,29 +449,35 @@ impl AnalysisStore {
         if input.context_revision != context_revision {
             return self.reject("the result context revision differs from its references");
         }
+        let mut witness_digests = Vec::<[u8; 32]>::with_capacity(input.witnesses.len());
+        let mut cached = Vec::<super::AnalysisRecordV1>::new();
+        let mut source = None;
         for witness in &input.witnesses {
-            let witness_key = source_key(&witness.identity);
-            let stored: Option<(Vec<u8>, Vec<u8>)> = transaction
-                .query_row(
-                    "SELECT framed_record, frame_sha256 FROM events
-                     WHERE stream_key = ? AND tenant_id = ? AND durable_cursor = ?",
-                    params![
-                        witness_key.as_slice(),
-                        witness.identity.tenant_id.as_slice(),
-                        witness.cursor,
-                    ],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "check exact witness",
-                })?;
-            let Some((frame, digest)) = stored else {
-                return self.reject("the result witness is not retained");
-            };
-            if Sha256::digest(&frame).as_slice() != digest {
-                return self.reject("the result witness digest is invalid");
+            if source != Some(&witness.identity)
+                || cached
+                    .first()
+                    .is_none_or(|record| witness.cursor < record.cursor)
+                || cached
+                    .last()
+                    .is_none_or(|record| witness.cursor > record.cursor)
+            {
+                let ranges = Self::raw_ranges(
+                    &transaction,
+                    &witness.identity,
+                    witness.cursor,
+                    witness.cursor,
+                    2,
+                )?;
+                if ranges.len() != 1 {
+                    return self.reject("the result witness is not retained exactly once");
+                }
+                cached = ranges[0].read(&self.root)?;
+                source = Some(&witness.identity);
             }
+            let index = cached
+                .binary_search_by_key(&witness.cursor, |record| record.cursor)
+                .map_err(|_| self.state_error("the result witness is not retained"))?;
+            witness_digests.push(Sha256::digest(&cached[index].framed_record).into());
         }
         let revision = Self::read_meta_from(&transaction, &path)?
             .commit_revision
@@ -488,16 +499,17 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "insert analysis result",
             })?;
-        for witness in &input.witnesses {
+        for (witness, digest) in input.witnesses.iter().zip(&witness_digests) {
             transaction
                 .execute(
-                    "INSERT INTO evidence_refs VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO evidence_refs VALUES (?, ?, ?, ?, ?, ?)",
                     params![
                         input.result_id,
                         witness.identity.tenant_id.as_slice(),
                         source_key(&witness.identity).as_slice(),
                         witness.cursor,
                         witness.expires_utc_ns,
+                        digest.as_slice(),
                     ],
                 )
                 .context(AnalysisDatabaseSnafu {

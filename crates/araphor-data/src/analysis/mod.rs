@@ -32,6 +32,7 @@ mod retention;
 mod retirement;
 mod schema;
 mod segment_file;
+mod segments;
 
 pub use backup::{AnalysisBackupManifestV1, AnalysisRecoveryStatusV1};
 pub use capacity::{StorageLimitsV1, StorageUsageV1};
@@ -49,7 +50,7 @@ pub use segment_file::{SegmentFile, MAX_EVIDENCE_SEGMENT_BYTES};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-const ANALYSIS_SCHEMA_VERSION: i64 = 5;
+const ANALYSIS_SCHEMA_VERSION: i64 = 6;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -64,6 +65,7 @@ pub struct AnalysisStore {
     maintenance: RwLock<()>,
     revision: watch::Sender<u64>,
     retention_healthy: AtomicBool,
+    write_ready: AtomicBool,
     retention: RetentionLimitsV1,
     storage: StorageLimitsV1,
     // Release the lease after the database connection closes.
@@ -230,8 +232,10 @@ impl AnalysisStore {
             }
             Self::validate_tables(&writer)?;
             Self::validate_state(&writer, &root)?;
+            Self::recover_segments(&mut writer, &root)?;
         }
         if !existing {
+            Self::segment_directory(&root)?;
             let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
                 operation: "begin schema",
             })?;
@@ -242,7 +246,8 @@ impl AnalysisStore {
                     store_uuid VARCHAR NOT NULL,
                     schema_version INTEGER NOT NULL,
                     recovery_epoch UBIGINT NOT NULL,
-                    commit_revision UBIGINT NOT NULL
+                    commit_revision UBIGINT NOT NULL,
+                    next_segment_id UBIGINT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS relation_revisions (
                     relation_name VARCHAR PRIMARY KEY,
@@ -263,17 +268,31 @@ impl AnalysisStore {
                     node_boot_id BLOB NOT NULL,
                     label_epoch UBIGINT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS events (
+                CREATE TABLE segments (
+                    segment_id UBIGINT PRIMARY KEY,
                     stream_key BLOB NOT NULL,
                     tenant_id BLOB NOT NULL,
-                    durable_cursor UBIGINT NOT NULL,
+                    identity_json VARCHAR NOT NULL,
                     cpu_id UINTEGER NOT NULL,
-                    framed_record BLOB NOT NULL,
-                    frame_sha256 BLOB NOT NULL,
+                    stream_kind VARCHAR NOT NULL,
+                    state VARCHAR NOT NULL CHECK (state IN ('Reserved', 'Live', 'Deleting')),
+                    sealed BOOLEAN NOT NULL,
+                    committed_end UBIGINT NOT NULL
+                );
+                CREATE TABLE batch_ranges (
+                    segment_id UBIGINT NOT NULL,
+                    stream_key BLOB NOT NULL,
+                    tenant_id BLOB NOT NULL,
+                    byte_start UBIGINT NOT NULL,
+                    byte_end UBIGINT NOT NULL,
+                    first_cursor UBIGINT NOT NULL,
+                    last_cursor UBIGINT NOT NULL,
+                    frame_ends UINTEGER[] NOT NULL,
+                    content_sha256 BLOB NOT NULL,
                     commit_revision UBIGINT NOT NULL,
                     ordinal UINTEGER NOT NULL,
                     intake_utc_ns UBIGINT NOT NULL,
-                    PRIMARY KEY (stream_key, durable_cursor)
+                    PRIMARY KEY (tenant_id, stream_key, first_cursor)
                 );
                 CREATE TABLE IF NOT EXISTS coverage (
                     stream_key BLOB NOT NULL,
@@ -324,6 +343,7 @@ impl AnalysisStore {
                     stream_key BLOB NOT NULL,
                     durable_cursor UBIGINT NOT NULL,
                     expires_utc_ns UBIGINT NOT NULL,
+                    frame_sha256 BLOB NOT NULL,
                     PRIMARY KEY (ref_id, stream_key, durable_cursor)
                 );
                 CREATE TABLE IF NOT EXISTS context_refs (
@@ -379,7 +399,7 @@ impl AnalysisStore {
             transaction
                 .execute(
                     "INSERT INTO store_meta
-                 SELECT true, ?, ?, 1, 0 WHERE NOT EXISTS (SELECT 1 FROM store_meta)",
+                 SELECT true, ?, ?, 1, 0, 1 WHERE NOT EXISTS (SELECT 1 FROM store_meta)",
                     params![initial_uuid, ANALYSIS_SCHEMA_VERSION],
                 )
                 .context(AnalysisDatabaseSnafu {
@@ -410,6 +430,7 @@ impl AnalysisStore {
             maintenance: RwLock::new(()),
             revision,
             retention_healthy: AtomicBool::new(true),
+            write_ready: AtomicBool::new(true),
             retention,
             storage,
         })
@@ -466,7 +487,9 @@ impl AnalysisStore {
         };
         let retained_event_count = writer
             .query_row(
-                "SELECT COUNT(*) FROM events WHERE stream_key = ? AND tenant_id = ?",
+                "SELECT COALESCE(SUM(b.last_cursor::HUGEINT - b.first_cursor + 1), 0)::UBIGINT
+                 FROM batch_ranges b JOIN segments s USING (segment_id)
+                 WHERE b.stream_key = ? AND b.tenant_id = ? AND s.state = 'Live'",
                 params![key.as_slice(), identity.tenant_id.as_slice()],
                 |row| row.get(0),
             )
@@ -534,7 +557,7 @@ impl AnalysisStore {
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin evidence",
         })?;
-        let bound = Self::bind_source(&transaction, &self.root, &identity)?;
+        Self::bind_source(&transaction, &self.root, &identity)?;
         let previous = Self::read_receipt_from(&transaction, &self.root, &identity, &key)?;
         if previous
             .as_ref()
@@ -589,155 +612,127 @@ impl AnalysisStore {
             .commit_revision
             .checked_add(1)
             .ok_or_else(|| self.state_error("the analysis commit revision is exhausted"))?;
-        let retained = {
-            let mut statement = transaction
-                .prepare(
-                    "SELECT durable_cursor, frame_sha256 FROM events
-                     WHERE stream_key = ? AND durable_cursor BETWEEN ? AND ?",
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "prepare duplicate evidence",
-                })?;
-            statement
-                .query_map(
-                    params![key.as_slice(), batch.first_cursor, batch.last_cursor],
-                    |row| Ok((row.get::<_, u64>(0)?, row.get::<_, Vec<u8>>(1)?)),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read duplicate evidence",
-                })?
-                .collect::<duckdb::Result<std::collections::BTreeMap<_, _>>>()
-                .context(AnalysisDatabaseSnafu {
-                    operation: "decode duplicate evidence",
-                })?
-        };
-        let mut appender = transaction
-            .appender("events")
-            .context(AnalysisDatabaseSnafu {
-                operation: "open evidence appender",
-            })?;
-        let mut new_records = 0_u32;
-        let mut frame_start = 0;
-        for (index, frame_end) in batch.frame_ends.iter().copied().enumerate() {
-            let frame = &batch.framed_records[frame_start..frame_end];
-            frame_start = frame_end;
-            let cursor = batch
-                .first_cursor
-                .checked_add(index as u64)
-                .ok_or_else(|| self.state_error("the evidence cursor is exhausted"))?;
-            let frame_digest: [u8; 32] = Sha256::digest(frame).into();
-            if let Some(existing) = retained.get(&cursor) {
-                if existing != frame_digest.as_slice() {
-                    return self.reject("an evidence retry has conflicting record content");
-                }
-                continue;
-            }
-            if cursor <= contiguous {
-                return self.reject("an acknowledged evidence record is not retained");
-            }
-            if new_records == 0 {
-                self.require_capacity(false)?;
-            }
-            appender
-                .append_row(params![
-                    key.as_slice(),
-                    identity.tenant_id.as_slice(),
-                    cursor,
-                    batch.cpu_id,
-                    frame,
-                    frame_digest.as_slice(),
-                    revision,
-                    new_records,
-                    batch.intake_utc_ns,
-                ])
-                .context(AnalysisDatabaseSnafu {
-                    operation: "insert evidence",
-                })?;
-            new_records += 1;
-        }
-        appender.flush().context(AnalysisDatabaseSnafu {
-            operation: "flush evidence appender",
-        })?;
-        drop(appender);
-        if new_records == 0 {
+        let pending = self.prepare_batch(&transaction, &identity, &batch, contiguous)?;
+        if pending.records == 0 {
             return Ok(if contiguous >= batch.last_cursor {
                 EvidenceStoreOutcomeV1::Accepted
             } else {
                 EvidenceStoreOutcomeV1::Pending
             });
         }
-        self.check_required(&transaction, &identity, batch.intake_utc_ns)?;
-        let mut next_contiguous = contiguous;
-        {
-            let mut statement = transaction
-                .prepare(
-                    "SELECT durable_cursor FROM events WHERE stream_key = ?
-                     AND durable_cursor > ? ORDER BY durable_cursor",
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "prepare contiguous evidence scan",
-                })?;
-            let mut rows = statement
-                .query(params![key.as_slice(), contiguous])
-                .context(AnalysisDatabaseSnafu {
-                    operation: "scan contiguous evidence",
-                })?;
-            while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-                operation: "scan contiguous evidence",
-            })? {
-                let cursor: u64 = row.get(0).context(AnalysisDatabaseSnafu {
-                    operation: "read evidence cursor",
-                })?;
-                if next_contiguous.checked_add(1) != Some(cursor) {
-                    break;
-                }
-                next_contiguous = cursor;
-            }
-        }
-        if previous.is_some() {
-            transaction
-                .execute(
-                    "UPDATE source_receipts SET contiguous_cursor = ? WHERE stream_key = ?",
-                    params![next_contiguous, key.as_slice()],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "advance source receipt",
-                })?;
-        } else {
-            transaction
-                .execute(
-                    "INSERT INTO source_receipts VALUES (?, ?, ?, ?, ?, 0, 0)",
-                    params![
+        drop(transaction);
+        self.require_capacity(false)?;
+        let append = self.reserve_segment(writer, &identity, batch.cpu_id, pending.bytes.len())?;
+        let mut commit_attempted = false;
+        let result = (|| {
+            let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
+                operation: "begin segment publication",
+            })?;
+            let bound = Self::bind_source(&transaction, &self.root, &identity)?;
+            pending.insert(
+                &transaction,
+                &identity,
+                &append,
+                revision,
+                batch.intake_utc_ns,
+            )?;
+            self.check_required(&transaction, &identity, batch.intake_utc_ns)?;
+            let mut next_contiguous = contiguous;
+            {
+                let mut statement = transaction
+                    .prepare(
+                        "SELECT first_cursor, last_cursor FROM batch_ranges
+                     WHERE stream_key = ? AND tenant_id = ? AND last_cursor > ?
+                     ORDER BY first_cursor",
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "prepare contiguous evidence scan",
+                    })?;
+                let mut rows = statement
+                    .query(params![
                         key.as_slice(),
-                        identity_json,
                         identity.tenant_id.as_slice(),
-                        batch.cpu_id,
-                        next_contiguous,
-                    ],
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "insert source receipt",
-                })?;
+                        contiguous
+                    ])
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "scan contiguous evidence",
+                    })?;
+                while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
+                    operation: "scan contiguous evidence",
+                })? {
+                    let first: u64 = row.get(0).context(AnalysisDatabaseSnafu {
+                        operation: "read evidence cursor",
+                    })?;
+                    let last: u64 = row.get(1).context(AnalysisDatabaseSnafu {
+                        operation: "read evidence cursor end",
+                    })?;
+                    if first > next_contiguous.saturating_add(1) {
+                        break;
+                    }
+                    next_contiguous = next_contiguous.max(last);
+                }
+            }
+            if previous.is_some() {
+                transaction
+                    .execute(
+                        "UPDATE source_receipts SET contiguous_cursor = ? WHERE stream_key = ?",
+                        params![next_contiguous, key.as_slice()],
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "advance source receipt",
+                    })?;
+            } else {
+                transaction
+                    .execute(
+                        "INSERT INTO source_receipts VALUES (?, ?, ?, ?, ?, 0, 0)",
+                        params![
+                            key.as_slice(),
+                            identity_json,
+                            identity.tenant_id.as_slice(),
+                            batch.cpu_id,
+                            next_contiguous,
+                        ],
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "insert source receipt",
+                    })?;
+            }
+            let mut relations = vec!["events", "source_receipts"];
+            if bound {
+                relations.push("source_bindings");
+            }
+            self.check_logical(&transaction, identity.tenant_id, false)?;
+            self.check_witnesses(&transaction, identity.tenant_id, batch.intake_utc_ns)?;
+            Self::record_revision(&transaction, revision, &relations)?;
+            self.write_ready.store(false, Ordering::Release);
+            self.sync_append(&append, &identity, &pending.bytes)?;
+            #[cfg(test)]
+            self.crash_at("evidence.before");
+            commit_attempted = true;
+            transaction.commit().context(AnalysisDatabaseSnafu {
+                operation: "commit evidence",
+            })?;
+            #[cfg(test)]
+            self.crash_at("evidence.after");
+            self.write_ready.store(true, Ordering::Release);
+            self.revision.send_replace(revision);
+            Ok(if next_contiguous >= batch.last_cursor {
+                EvidenceStoreOutcomeV1::Accepted
+            } else {
+                EvidenceStoreOutcomeV1::Pending
+            })
+        })();
+        if result.is_err() && !commit_attempted {
+            self.write_ready.store(false, Ordering::Release);
+            if append.reserved {
+                Self::remove_segment(writer, &self.root, append.segment_id, "Reserved")?;
+            } else {
+                SegmentFile::open(&segments::SegmentRange::path(&self.root, append.segment_id))?
+                    .discard_tail(append.byte_start)?;
+            }
+            self.write_ready.store(true, Ordering::Release);
         }
-        let mut relations = vec!["events", "source_receipts"];
-        if bound {
-            relations.push("source_bindings");
-        }
-        self.check_logical(&transaction, identity.tenant_id, false)?;
-        Self::record_revision(&transaction, revision, &relations)?;
-        #[cfg(test)]
-        self.crash_at("evidence.before");
-        transaction.commit().context(AnalysisDatabaseSnafu {
-            operation: "commit evidence",
-        })?;
-        #[cfg(test)]
-        self.crash_at("evidence.after");
-        self.revision.send_replace(revision);
-        Ok(if next_contiguous >= batch.last_cursor {
-            EvidenceStoreOutcomeV1::Accepted
-        } else {
-            EvidenceStoreOutcomeV1::Pending
-        })
+        result
     }
 
     pub fn accept_validated_coverage(&self, input: ValidatedCoverageV1) -> Result<u64> {
@@ -1095,7 +1090,7 @@ mod tests {
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
         let initial = store.meta()?;
-        assert_eq!(initial.schema_version, 5);
+        assert_eq!(initial.schema_version, 6);
         assert_eq!(initial.commit_revision, 0);
         assert!(AnalysisStore::open(&root).is_err());
         {
@@ -1131,7 +1126,7 @@ mod tests {
     #[test]
     fn analysis_store_schema_permissions() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        for version in [0, 2, 3, 4, 6] {
+        for version in [0, 2, 3, 4, 5, 7] {
             let root = directory.path().join(format!("schema-{version}"));
             let store = AnalysisStore::open(&root)?;
             {
@@ -1194,15 +1189,15 @@ mod tests {
                 |row| row.get(0),
             )?;
             assert_eq!(changed, 2);
-            let key = source_key(&identity);
-            let position: (u64, u32) = writer.query_row(
-                "SELECT commit_revision, ordinal FROM events
-                 WHERE stream_key = ? AND durable_cursor = 2",
-                params![key.as_slice()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?;
-            assert_eq!(position, (1, 0));
+            assert!(writer.prepare("SELECT * FROM events").is_err());
         }
+        assert_eq!(
+            store.read_page(&identity, 2)?.records[0].position,
+            StorePositionV1 {
+                commit_revision: 1,
+                ordinal: 0
+            }
+        );
         assert_eq!(
             store.accept_validated_batch(identity.clone(), pending)?,
             EvidenceStoreOutcomeV1::Accepted
@@ -1229,13 +1224,13 @@ mod tests {
                 .contiguous_cursor,
             2
         );
-        {
-            let writer_guard = store.writer()?;
-            let writer = writer_guard.get()?;
-            let count: u64 =
-                writer.query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
-            assert_eq!(count, 3);
-        }
+        assert_eq!(
+            store
+                .source_status(&identity)?
+                .ok_or("source absent")?
+                .retained_event_count,
+            3
+        );
         drop(store);
         let reopened = AnalysisStore::open(&root)?;
         assert_eq!(
@@ -1261,6 +1256,20 @@ mod tests {
         assert!(reopened
             .accept_validated_batch(relabeled, batch(1, &[b"first"]))
             .is_err());
+        reopened.accept_validated_batch(identity.clone(), batch(5, &[first, second, third]))?;
+        assert_eq!(
+            reopened
+                .source_status(&identity)?
+                .ok_or("source absent")?
+                .retained_event_count,
+            7
+        );
+        let reader = reopened.reader()?;
+        let count: u64 =
+            reader
+                .get()?
+                .query_row("SELECT COUNT(*) FROM batch_ranges", [], |row| row.get(0))?;
+        assert_eq!(count, 5);
         Ok(())
     }
 

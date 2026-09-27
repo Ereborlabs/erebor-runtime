@@ -13,8 +13,9 @@ No raw-event table or copied discovery archive is part of the target.
 Control keeps policy/trust/rollout persistence and authority. Node keeps its
 delivery WAL. The same complete data owner can later run remotely. Storage
 and trace intake do not require discovery. Entry: 7.1.
-Status: **Not done**. The current configured implementation writes raw events
-to DuckDB; it must be replaced and qualified against this segment contract.
+Status: **Not done**. Segment intake, reads, recovery, and retention are under
+implementation. Complete-bundle backup, bounded extraction, caller conversion,
+and full qualification remain incomplete.
 Previous implementation results below are evidence for their named revisions,
 not completion of this design.
 
@@ -491,15 +492,16 @@ required here. Stop before enabling a data path whose recovery case fails.
 ## Implementation result
 
 **Not done for the segment-backed design.**
-Configured intake still uses DuckDB raw rows. Implement the ordered changes
-above, then rerun their component and mithril-e2e gates. The records below
+The current data owner uses segments and batch metadata. Complete the ordered
+changes above, then rerun their component and mithril-e2e gates. The records below
 describe previous raw-DuckDB revisions only. Their native-memory settings,
 raw-table maintenance, and pass counts are not instructions or qualification
 for the selected segment design.
 
-### Segment primitive extraction
+### Segment storage implementation
 
-**Not done for the full phase.** The data crate now owns SegmentFile, the
+**Not done for the full phase.** Source state: the conversion after `293762be`.
+The data crate owns SegmentFile, the
 existing CRC32C source-header codec, the 16-MiB segment bound, and checked
 positional reads/appends. The existing Control segment writer and frozen reader
 call that primitive. New files use mode 0600 and exclusive creation. Open
@@ -511,16 +513,38 @@ each truncated header length, checksum changes, read/append bounds, stale
 positions, path replacement, and read-only access. The existing Control segment
 tests remain the framing, rotation, and restart callers.
 
-Configured intake still writes raw DuckDB rows. Segment catalog, ordered
-sync/metadata commit, whole-segment retention, complete-bundle backup, bounded
-extraction, and the configured cutover remain to implement. The extracted
-primitive does not claim durability by itself; the caller still owns sync
-and commit. Do not enable the target path from this extraction alone.
+Fresh stores use schema 6. AnalysisStore writes raw frames only to segments.
+DuckDB stores one batch range with its frame offsets, digest, and commit
+positions. No persisted `events` table remains. A durable counter assigns each
+Reserved file ID once. Segment sync precedes receipt commit. An uncertain raw
+publication or deletion commit stops later writes until recovery.
 
-Verification is in progress. The first workspace segment-test build failed
-with ENOSPC while writing Rust archives. The worktree target directory was
-then removed outside this task. The required verification procedure is
-rebuilding its dependencies. No test pass is recorded for this extraction yet.
+Reads capture the catalog under the writer coordinator. The existing reader
+guard prevents deletion until extraction ends. Recovery validates Live ranges,
+removes Reserved files, trims uncommitted tails, and rejects unknown files.
+Result commits retain exact frame digests. Whole-segment retention commits
+Deleting state and exact expiry intervals before unlink and catalog cleanup.
+Witness quotas count each pinned segment once. Intake checks that budget when
+an append enlarges a pinned segment. Required-input bytes exclude the consumed
+prefix of a batch.
+
+The tests `analysis_store_batch_receipt`, `segment_recovery_checks_ownership`,
+`segment_retention_keeps_witnesses`, and `segment_growth_keeps_budget` cover
+the new owner paths. The required command
+`bash .github/scripts/verify-rust-ci.sh` passed formatting, workspace check,
+and Clippy after the latest Rust edits. The test step stopped in araphor-data:
+39 passed, 17 failed, and 4 ignored. The named segment tests passed. Remaining
+failures include DB-only backup/restore, references to the removed raw table,
+old per-row retention/witness assertions, and old native-memory settings.
+The required-input scope test passed after the exact-prefix accounting fix.
+The command returned 101; this result does not qualify the full phase.
+
+Complete-bundle backup and restore are not converted. The current backup
+implementation copies only the database and must not be used for a segment
+store. Apply the uncertain-commit guard to the other metadata owners as well.
+Trusted bounded extraction, pin-amplification reporting, the old Control writer
+removal, updated fault fixtures, mithril-e2e proof, and release resource and
+performance gates remain incomplete.
 
 ### Previous implementation evidence
 

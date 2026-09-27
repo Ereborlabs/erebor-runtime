@@ -187,6 +187,28 @@ impl SegmentFile {
         Ok(bytes)
     }
 
+    pub(super) fn length(&self) -> Result<u64> {
+        Ok(self
+            .file
+            .metadata()
+            .context(IoSnafu { path: &self.path })?
+            .len())
+    }
+
+    pub(super) fn sync(&self) -> Result<()> {
+        self.file.sync_all().context(IoSnafu { path: &self.path })
+    }
+
+    pub(super) fn discard_tail(&self, committed_end: u64) -> Result<()> {
+        if committed_end == 0 || committed_end > self.length()? {
+            return Self::invalid(&self.path, "the committed segment end is unavailable");
+        }
+        self.file
+            .set_len(committed_end)
+            .context(IoSnafu { path: &self.path })?;
+        self.sync()
+    }
+
     fn invalid<T>(path: &Path, reason: &str) -> Result<T> {
         AnalysisStateSnafu { path, reason }.fail()
     }
