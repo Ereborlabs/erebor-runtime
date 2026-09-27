@@ -3692,7 +3692,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit its registration. The recovered case
       passed in 89.92 seconds through stock `runc` and the OCI hook. The
       unchanged node-first case passed in 62.58 seconds.
-    - [ ] Pass Kubernetes and commit its registration.
+    - [x] Pass Kubernetes and commit its registration. The recovered case
+      passed in 97.69 seconds; the unchanged node-first case passed in
+      79.18 seconds. Both launcher commands exited 0.
     - [ ] Remove the matching old action, result field, and `run.sh` gate.
       Keep the separate two-node convergence check.
 
