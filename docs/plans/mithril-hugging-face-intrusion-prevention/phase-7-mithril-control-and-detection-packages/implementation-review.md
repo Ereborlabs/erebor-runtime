@@ -355,7 +355,9 @@ three-MiB wire limit. Production Node and Control owners send and acknowledge
 both batches through mTLS. After AnalysisStore reopen, bounded pages reproduce
 the complete ordered frame digest. The focused test passed in 3.38 seconds.
 This case does not qualify full-quota memory or the separate 128-KiB record
-limit. The final workspace gate for this test addition is pending.
+limit. The full workspace gate compiled for `6e4662b1` passed, including
+124 enabled Mithril e2e tests. Tests ran serially. This gate does not cover
+the later record-boundary test.
 
 [intake_record_bounds](../../../../crates/mithril-control/src/evidence.rs)
 calls the data-backed `EvidenceIntakeOwner::receive` with valid protobuf records
@@ -366,7 +368,8 @@ without a receipt or revision change. Valid input then uses the rejected cursor.
 Store reopen must preserve all accepted frames and the receipt. This component
 case does not test mTLS transport or full-capacity memory. The focused Control
 test passed in 0.83 seconds. The final workspace gate for this addition is
-pending. No production API or limit changes.
+pending. Its first run rejected `unwrap_err` under strict Clippy. The test now
+uses the existing fallible assertion pattern. No production API or limit changes.
 
 [DataStoreQualification::quota](../../../../crates/mithril-e2e/src/discovery/data_store/quota.rs) The CLI selects the default two-GiB tenant quota.<br>
 -> [AnalysisStore::register_processor](../../../../crates/araphor-data/src/analysis/progress.rs) Required progress protects the accepted raw input.<br>

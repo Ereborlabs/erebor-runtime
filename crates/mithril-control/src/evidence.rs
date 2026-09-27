@@ -1252,7 +1252,10 @@ mod tests {
             input.framed_records = framed.clone().into();
             let prior = data.meta()?;
             if size > maximum {
-                let error = intake.receive(&authenticated(), input).unwrap_err();
+                let error = intake
+                    .receive(&authenticated(), input)
+                    .err()
+                    .ok_or("oversized record was accepted")?;
                 assert_eq!(error.code(), tonic::Code::InvalidArgument);
                 assert_eq!(
                     error.message(),
