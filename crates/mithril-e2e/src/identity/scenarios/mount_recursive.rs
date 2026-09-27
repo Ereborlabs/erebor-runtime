@@ -1,11 +1,12 @@
 use mithril_control::WorkloadProtectionPolicy as Policy;
 
-use std::{cell::RefCell, collections::BTreeSet, os::unix::fs::MetadataExt as _, time::Duration};
+use std::{os::unix::fs::MetadataExt as _, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
 use snafu::ResultExt as _;
 
-use crate::error::{InterceptorSnafu, InvalidInputSnafu};
+use crate::effect::EffectCheck;
+use crate::error::InterceptorSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
@@ -45,12 +46,7 @@ fn recursive_bind_keeps_policy<P: Platform>() -> TestResult<()> {
         },
         || format!("mount namespace {ns} has no security-view lock"),
     )?;
-    let seen = env
-        .snapshot()?
-        .recent_effects
-        .into_iter()
-        .map(|event| (event.source_cpu_id, event.source_sequence))
-        .collect::<BTreeSet<_>>();
+    let effects = EffectCheck::new(&env, task)?;
 
     actor.send(b"mount-read\n")?;
     actor.close();
@@ -59,41 +55,21 @@ fn recursive_bind_keeps_policy<P: Platform>() -> TestResult<()> {
     assert!(status.success(), "{status}; stderr: {stderr:?}");
     let result: serde_json::Value =
         serde_json::from_slice(&std::fs::read(env.work().join("mount-result.json"))?)?;
-    let last = RefCell::new(String::from("<none>"));
-    wait_for(
-        &path,
-        "recursive bind effects",
-        Duration::from_secs(30),
-        || {
-            let events = env.snapshot().map_err(|source| {
-                InvalidInputSnafu {
-                    path: &path,
-                    reason: source.to_string(),
-                }
-                .build()
-            })?;
-            let fresh = events
-                .recent_effects
-                .into_iter()
-                .filter(|event| !seen.contains(&(event.source_cpu_id, event.source_sequence)))
-                .collect::<Vec<_>>();
-            *last.borrow_mut() = format!("{:?}", fresh.iter().rev().take(8));
-            let matches = |reason: &str, result| {
-                fresh.iter().any(|event| {
-                    task.matches_effect(
-                        event,
-                        reason,
-                        KernelEffectFamilyV1::File,
-                        KernelEffectOperationV1::OpenRead,
-                        result,
-                    )
-                })
-            };
-            Ok((matches("PATH_TREE_POLICY_DENY", -libc::EACCES)
-                && matches("EXACT_POLICY_ALLOW", 0))
-            .then_some(()))
-        },
-        || format!("last effects: {}", last.borrow()),
+    effects.wait(
+        &env,
+        "PATH_TREE_POLICY_DENY",
+        KernelEffectFamilyV1::File,
+        KernelEffectOperationV1::OpenRead,
+        -libc::EACCES,
+        "recursive bind denial",
+    )?;
+    effects.wait(
+        &env,
+        "EXACT_POLICY_ALLOW",
+        KernelEffectFamilyV1::File,
+        KernelEffectOperationV1::OpenRead,
+        0,
+        "recursive bind control",
     )?;
     assert_eq!(result["mount"], 0);
     assert_eq!(result["allowed_mount"], 0);
