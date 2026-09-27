@@ -1832,3 +1832,19 @@ Logs are `checkpoint-global.log` and `checkpoint-global-resources.log` in
 in-memory-table usage but does not correct the checkpoint failure. Do not
 accept this setting as a capacity remedy. Identify the failed native allocation
 before selecting another change. Global capacity remains unqualified.
+
+The unchanged executable then ran under GDB with a breakpoint at
+`duckdb::OutOfMemoryException`. It failed at batch 7,687 again after 1,248.33
+seconds. The prior successful cursors are unchanged from the preceding run.
+The captured stack identifies `DataTable::RebuildIndexes`, `BoundIndex::Append`,
+`ART::InsertKeys`, `Node256::GrowNode48`, `FixedSizeAllocator::New`, and
+`StandardBufferManager::EvictBlocksOrThrow`. The failed allocation occurs while
+the checkpoint rebuilds the primary-key index. The pinned native source clears
+old index storage before rebuilding. New fixed-size buffers remain pinned until
+serialization. This result does not show two complete indexes held together.
+The debugger script, stack log, and resource log are `checkpoint-stack.gdb`,
+`checkpoint-stack.log`, and `checkpoint-stack-resources.log` in the same host
+evidence directory. The breakpoint captured the stack and then continued to
+the test's normal failure exit. Debugger timing and resource measurements are
+diagnostic only. The next candidate gives the index rebuild more native memory
+while keeping the 256-MiB process gate, storage quotas, and compaction unchanged.

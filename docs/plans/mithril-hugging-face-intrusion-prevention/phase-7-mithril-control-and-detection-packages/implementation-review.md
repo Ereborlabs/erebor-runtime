@@ -781,6 +781,11 @@ usage falls to 16.5 MiB, but a checkpoint still cannot allocate a 256-KiB block
 within the 64-MiB engine limit. Peak process RSS is 193,904 KiB. The phase plan
 records the exact sample and logs. This setting is not a capacity remedy.
 The final workspace gate and full-capacity gRPC rerun remain pending.
+The unchanged executable also fails at batch 7,687 under GDB. The captured
+stack identifies `DataTable::RebuildIndexes` and ART node growth as the native
+allocation path. New index buffers remain pinned until serialization; the old
+index is cleared before rebuild. The phase plan records the script and stack.
+This diagnostic does not qualify performance or change the process-memory gate.
 The release build for `c72a3b68` passed. After the host filesystem reserve was
 restored by removing generated incremental compiler cache, the unchanged release
 data suite passed 49 tests with four ignored. The shared tenant run passed in
