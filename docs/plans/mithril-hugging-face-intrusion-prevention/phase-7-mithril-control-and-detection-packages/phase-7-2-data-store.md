@@ -1645,8 +1645,15 @@ The phase remains **Not done**.
 The shared memory runner and global case are committed as `c72a3b68`.
 The release build passed in 6 minutes 57 seconds. Its data test executable
 SHA-256 is `c92d3ec115d30f07a8342960c4eea5868a554a72125e095b0d7017a1841f67b5`.
-The pilot VM copy has the same digest. The original tenant case is running
-through that shared runner; the global case has not run yet.
+The pilot VM copy has the same digest. The original tenant case passed through
+the shared runner in 462.97 seconds. Peak process RSS was 204,692 KiB, including
+cleanup; exit status was zero. The default allocator environment was used.
+The test reached tenant quota rejection and checked unchanged metadata and
+receipt, checkpoint, the final frame, and reopen. Logs are
+`/tmp/araphor-memory-probe.z1rbDjUR/memory-shared-tenant.log` and
+`memory-shared-tenant-resources.log`. Host workspace tests overlapped this run;
+do not use its time as a clean performance comparison. The global case is now
+running with the same executable. No global-capacity pass is claimed.
 The host release suite first failed 35 tests with filesystem-reserve errors.
 The overlapping workspace runs also failed: one reported a reserve error,
 an old SQLite page timeout, and a missing subprocess executable; the later
