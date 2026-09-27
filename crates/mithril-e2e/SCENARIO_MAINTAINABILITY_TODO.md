@@ -619,7 +619,7 @@ runner that still needs replacement:
 | --- | ---: | --- |
 | `effect/runc.rs` | 6,860 | Size and runner retirement |
 | `identity.rs` | 5,174 | Size and runner retirement |
-| `effect.rs` | 3,202 | Size and runner retirement |
+| `effect.rs` | 3,156 | Size and runner retirement |
 | `effect/child.rs` | 2,991 | Size and runner retirement |
 | `control_tls.rs` | 2,416 | Size and runner retirement |
 | `effect/network.rs` | 1,505 | Runner retirement; size limit met |
@@ -1824,6 +1824,12 @@ test does not close a row when its physical condition or an assertion changed.
       seconds on the retained K3s VM.
 - [ ] `EffectTestRunner::physical_probe` setup and teardown: own its three
   cgroups, child processes, pin root, lease, and diagnostic output.
+  - [ ] Repair the old Observe probe's baseline setup. The current VM run
+    denied all 6,000 secret opens before the effect policy was enabled. The
+    probe stopped before its exact-file alias checks. Setting the worker
+    binding's `arm_initial_root` flag did not change the result; that test
+    change was reverted. Keep the baseline allow assertion and find why the
+    actor is denied before changing the setup.
 - [ ] `EffectTestRunner::physical_probe` observe scenario: keep the public
   node policy, binding, reader, action, and evidence operations explicit.
   - [ ] Replace the exact secret `OpenRead` in Observe mode with one small
@@ -1936,9 +1942,16 @@ test does not close a row when its physical condition or an assertion changed.
       Protect and Observe cases in 40.01 and 37.53 seconds. The old probe
       denies all 6,000 baseline opens before these actions, both before and
       after this deletion. The old runner remains unqualified.
-    - [ ] Replace the old resolver topology check before removing its alias
-      fixture paths. It also checks the selected mount, canonical component,
-      and mount namespace, which the new effect events do not expose.
+    - [ ] Replace the remaining allowed-bind and propagation resolver checks
+      before removing their fixture paths. Keep their selected mount,
+      canonical component, and mount namespace assertions.
+    - [x] Remove only the duplicate protected-alias resolver comparison from
+      the old effect probe. The shared Protect and Observe tests resolve the
+      original file and both aliases. They require distinct mount IDs and
+      equal selected mount, canonical component, mount namespace, device,
+      inode, and inode generation. Both tests passed on Host, direct `runc`,
+      and real Kubernetes after the deletion. Keep the original resolver
+      value for policy publication and later dirty-view checks.
     - [x] Match each new alias effect to the live public resolver result for
       that actor path. The removed old action made this match. Distinct mount
       IDs alone do not prove that each alias used its expected mount. Keep

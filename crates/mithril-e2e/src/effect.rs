@@ -1254,54 +1254,6 @@ impl EffectTestRunner {
             None,
         )
         .context(NodeSnafu)?;
-        let bind_alias_object = ExactFileObjectResolver::resolve(
-            fixture.pid(),
-            &paths.bind_alias,
-            PROFILE_GENERATION_REF_ID,
-            PathSelectorV1::kernel_handle_for_id("manual-secret"),
-            "MANUAL_SECRET".to_owned(),
-            secret_inode_generation,
-            None,
-        )
-        .context(NodeSnafu)?;
-        let second_bind_alias_object = ExactFileObjectResolver::resolve(
-            fixture.pid(),
-            &paths.second_bind_alias,
-            PROFILE_GENERATION_REF_ID,
-            PathSelectorV1::kernel_handle_for_id("manual-secret"),
-            "MANUAL_SECRET".to_owned(),
-            secret_inode_generation,
-            None,
-        )
-        .context(NodeSnafu)?;
-        ensure!(
-            exact_object.mount_id_unique != bind_alias_object.mount_id_unique
-                && exact_object.mount_id_unique != second_bind_alias_object.mount_id_unique
-                && bind_alias_object.mount_id_unique != second_bind_alias_object.mount_id_unique
-                && exact_object.selected_mount_id_unique
-                    == bind_alias_object.selected_mount_id_unique
-                && exact_object.selected_mount_id_unique
-                    == second_bind_alias_object.selected_mount_id_unique
-                && exact_object.canonical_component_hex
-                    == bind_alias_object.canonical_component_hex
-                && exact_object.canonical_component_hex
-                    == second_bind_alias_object.canonical_component_hex
-                && exact_object.mount_namespace_inode
-                    == bind_alias_object.mount_namespace_inode
-                && exact_object.mount_namespace_inode
-                    == second_bind_alias_object.mount_namespace_inode
-                && exact_object.filesystem_device == bind_alias_object.filesystem_device
-                && exact_object.filesystem_device
-                    == second_bind_alias_object.filesystem_device
-                && exact_object.inode == bind_alias_object.inode
-                && exact_object.inode == second_bind_alias_object.inode
-                && exact_object.inode_generation == bind_alias_object.inode_generation
-                && exact_object.inode_generation == second_bind_alias_object.inode_generation,
-            InvalidInputSnafu {
-                path: &paths.second_bind_alias,
-                reason: "the bind fixtures are not distinct live mounts of the same canonical exact object",
-            }
-        );
         let benign_inode_generation = inode_generation(fixture.pid(), &paths.benign)?;
         let benign_object = ExactFileObjectResolver::resolve(
             fixture.pid(),
