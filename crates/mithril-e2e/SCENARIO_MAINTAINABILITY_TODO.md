@@ -3710,7 +3710,7 @@ test does not close a row when its physical condition or an assertion changed.
     readiness-before-startup and signed-denial checks until their own shared
     tests pass.
     - [x] Host passed in 39.52 seconds. The standard test has 71 lines.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Direct `runc` passed in 41.89 seconds through the production hook.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching old rename, missing-file action, and
       assertion after all three platforms pass. The old protected file must
