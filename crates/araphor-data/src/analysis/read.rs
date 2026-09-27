@@ -76,12 +76,14 @@ impl AnalysisReadControl {
         .build()
     }
 
-    fn run<T>(
+    pub(super) fn run<T>(
         &self,
-        interrupt: Arc<duckdb::InterruptHandle>,
-        read: impl FnOnce() -> Result<T>,
+        reader: &mut super::connection::AnalysisConnection<'_>,
+        read: impl FnOnce(&duckdb::Connection) -> Result<T>,
     ) -> Result<T> {
         self.check()?;
+        let connection = reader.get_mut()?;
+        let interrupt = connection.interrupt_handle();
         let mut slot = self.interrupt.lock().map_err(|_| Self::lock_error())?;
         if slot.is_some() {
             return crate::AnalysisBusySnafu {
@@ -91,8 +93,9 @@ impl AnalysisReadControl {
         }
         *slot = Some(interrupt.clone());
         drop(slot);
-        let _guard = ReadInterrupt(self);
+        let guard = ReadInterrupt(self);
         self.check()?;
+        let mut snapshot = None;
         let result = std::thread::scope(|scope| {
             let (stop, stopped) = std::sync::mpsc::channel::<()>();
             let remaining = self.deadline.saturating_duration_since(Instant::now());
@@ -115,10 +118,26 @@ impl AnalysisReadControl {
                     }
                     .build()
                 })?;
-            let result = read();
+            let transaction = connection.transaction().context(AnalysisDatabaseSnafu {
+                operation: "begin read snapshot",
+            })?;
+            let result = read(snapshot.insert(transaction));
             drop(stop);
             result
         });
+        // Stop both interrupt sources before rollback. Never reuse a failed snapshot.
+        drop(guard);
+        let opened = snapshot.is_some();
+        let cleanup = snapshot
+            .map(duckdb::Transaction::rollback)
+            .transpose()
+            .context(AnalysisDatabaseSnafu {
+                operation: "close read snapshot",
+            });
+        if cleanup.is_err() || (!opened && result.is_err()) {
+            drop(reader.connection.take());
+        }
+        cleanup?;
         self.check()?;
         result
     }
@@ -149,9 +168,8 @@ impl AnalysisStore {
         }
         let after = after.map(source_key);
         let control = AnalysisReadControl::default();
-        let reader_guard = self.reader_until(&control)?;
-        let reader = reader_guard.get()?;
-        control.run(reader.interrupt_handle(), || {
+        let mut reader_guard = self.reader_until(&control)?;
+        control.run(&mut reader_guard, |reader| {
             let mut statement = reader
                 .prepare(
                     "SELECT stream_key, identity_json FROM source_receipts
@@ -212,13 +230,9 @@ impl AnalysisStore {
         control.check()?;
         let coordinator = self.read_coordinator(control)?;
         let mut reader_guard = self.reader_until(control)?;
-        let reader = reader_guard.get_mut()?;
-        control.run(reader.interrupt_handle(), || {
+        control.run(&mut reader_guard, |writer| {
             let key = source_key(identity);
-            let writer = reader.transaction().context(AnalysisDatabaseSnafu {
-                operation: "begin evidence snapshot",
-            })?;
-            let receipt = Self::read_receipt_from(&writer, &self.root, identity, &key)?
+            let receipt = Self::read_receipt_from(writer, &self.root, identity, &key)?
                 .ok_or_else(|| self.state_error("the evidence source is absent"))?;
             if first_cursor == 0 || first_cursor > receipt.contiguous_cursor.saturating_add(1) {
                 return self.reject("the evidence read cursor is outside the accepted range");
@@ -230,7 +244,7 @@ impl AnalysisStore {
                 }
                 .fail();
             }
-            self.check_expired(&writer, &key, identity, first_cursor)?;
+            self.check_expired(writer, &key, identity, first_cursor)?;
             let expiry: Option<u64> = writer
                 .query_row(
                     "SELECT MIN(first_cursor) FROM expired_ranges
@@ -248,9 +262,9 @@ impl AnalysisStore {
                 })?;
             let page_end = expiry.map_or(receipt.contiguous_cursor, |cursor| cursor - 1);
             let read_revision =
-                Self::read_meta_from(&writer, &self.root.join("analysis.duckdb"))?.commit_revision;
+                Self::read_meta_from(writer, &self.root.join("analysis.duckdb"))?.commit_revision;
             let ranges = Self::raw_ranges(
-                &writer,
+                writer,
                 identity,
                 first_cursor,
                 page_end.min(first_cursor.saturating_add(MAX_ANALYSIS_PAGE_RECORDS as u64)),
@@ -272,7 +286,7 @@ impl AnalysisStore {
                         .checked_add(records.len() as u64)
                         .ok_or_else(|| self.state_error("the evidence read cursor is exhausted"))?;
                     if record.cursor != expected {
-                        return self.expired_or_missing(&writer, &key, identity, expected);
+                        return self.expired_or_missing(writer, &key, identity, expected);
                     }
                     if records.len() == MAX_ANALYSIS_PAGE_RECORDS {
                         bounded = true;
@@ -291,7 +305,7 @@ impl AnalysisStore {
             }
             let next_cursor = first_cursor.checked_add(records.len() as u64);
             if let Some(next) = next_cursor.filter(|next| *next <= page_end && !bounded) {
-                return self.expired_or_missing(&writer, &key, identity, next);
+                return self.expired_or_missing(writer, &key, identity, next);
             }
             Ok(AnalysisReadPageV1 {
                 first_cursor,
@@ -353,7 +367,7 @@ impl AnalysisStore {
 mod tests {
     use super::*;
 
-    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+    type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
     #[test]
     fn analysis_read_lock_deadline() -> TestResult {
@@ -451,41 +465,112 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let before = store.meta()?;
-        let control = AnalysisReadControl {
-            deadline: Instant::now() + Duration::from_millis(50),
-            ..Default::default()
-        };
-        let mut reader = store.reader_until(&control)?;
-        let connection = reader.get_mut()?;
-        let started = Instant::now();
-        let result = control.run(connection.interrupt_handle(), || {
-            let snapshot = connection.transaction().context(AnalysisDatabaseSnafu {
-                operation: "begin deadline test",
-            })?;
-            snapshot
-                .query_row("SELECT sum(range) FROM range(100000000000)", [], |row| {
-                    row.get::<_, i64>(0)
-                })
-                .context(AnalysisDatabaseSnafu {
-                    operation: "test native deadline",
-                })
-        });
-        assert!(
-            matches!(result, Err(crate::Error::AnalysisReadDeadline { .. })),
-            "{result:?}"
-        );
-        assert!(started.elapsed() < Duration::from_secs(2));
-        assert!(control
-            .interrupt
-            .lock()
-            .map_err(|_| "interrupt poisoned")?
-            .is_none());
-        assert_eq!(
-            connection.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))?,
-            1
-        );
+        let mut reader = store.reader()?;
+        for _ in 0..16 {
+            let control = AnalysisReadControl {
+                deadline: Instant::now() + Duration::from_millis(50),
+                ..Default::default()
+            };
+            let started = Instant::now();
+            let result = control.run(&mut reader, |snapshot| {
+                snapshot
+                    .query_row("SELECT sum(range) FROM range(100000000000)", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "test native deadline",
+                    })
+            });
+            assert!(
+                matches!(result, Err(crate::Error::AnalysisReadDeadline { .. })),
+                "{result:?}"
+            );
+            assert!(started.elapsed() < Duration::from_secs(2));
+            assert!(control
+                .interrupt
+                .lock()
+                .map_err(|_| "interrupt poisoned")?
+                .is_none());
+            let snapshot = reader.get_mut()?.transaction()?;
+            assert_eq!(
+                snapshot.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))?,
+                1
+            );
+            snapshot.rollback()?;
+        }
         drop(reader);
         assert!(store.maintenance.try_write().is_ok());
+        assert_eq!(store.meta()?, before);
+        store.checkpoint()?;
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_read_cancel_cleanup() -> TestResult {
+        use std::sync::mpsc;
+
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let before = store.meta()?;
+        let mut reader = store.reader()?;
+        for _ in 0..16 {
+            let control = AnalysisReadControl::default();
+            let (start, started) = mpsc::channel();
+            let (stop, stopped) = mpsc::channel::<()>();
+            let result = std::thread::scope(|scope| -> TestResult {
+                let control = &control;
+                let cancel = scope.spawn(move || -> TestResult {
+                    started.recv_timeout(Duration::from_secs(2))?;
+                    while matches!(stopped.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+                        control.cancel()?;
+                        std::thread::yield_now();
+                    }
+                    Ok(())
+                });
+                let result = control.run(&mut reader, |snapshot| {
+                    let _sent = start.send(());
+                    while !control.cancelled.load(Ordering::Acquire) {
+                        std::thread::yield_now();
+                    }
+                    snapshot
+                        .query_row("SELECT sum(range) FROM range(100000000000)", [], |row| {
+                            row.get::<_, i64>(0)
+                        })
+                        .context(AnalysisDatabaseSnafu {
+                            operation: "test repeated cancellation",
+                        })
+                });
+                drop(stop);
+                cancel.join().map_err(|_| "cancel worker panicked")??;
+                assert!(
+                    matches!(result, Err(crate::Error::AnalysisReadCancelled { .. })),
+                    "{result:?}"
+                );
+                Ok(())
+            });
+            result?;
+            let snapshot = reader.get_mut()?.transaction()?;
+            assert_eq!(
+                snapshot.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))?,
+                1
+            );
+            snapshot.rollback()?;
+        }
+        let control = AnalysisReadControl::default();
+        assert!(control
+            .run(&mut reader, |snapshot| {
+                snapshot
+                    .execute_batch("ROLLBACK")
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "test failed snapshot cleanup",
+                    })
+            })
+            .is_err());
+        assert!(reader.connection.is_none());
+        drop(reader);
+        assert_eq!(store.read_slots.available_permits(), 16);
+        assert!(store.maintenance.try_write().is_ok());
+        store.recover()?;
         assert_eq!(store.meta()?, before);
         store.checkpoint()?;
         Ok(())

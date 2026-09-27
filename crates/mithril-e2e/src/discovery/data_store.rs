@@ -705,6 +705,7 @@ impl DataStoreQualification {
         data.register_processor(&required, ProcessorClassV1::Required, 1)?;
         data.register_processor(&optional, ProcessorClassV1::Optional, 1)?;
         let mut connection = self.connect(&tls, &server).await?;
+        connection.report_readiness(true, true).await?;
         let control_revision = control.health()?.commit_index;
         let mut changes = data.subscribe_revision();
         let started = Instant::now();
@@ -729,6 +730,66 @@ impl DataStoreQualification {
         self.check(
             page.records.len() == 2 && frames == wire.framed_records,
             "intake changed Node frames",
+        )?;
+        let selected_data = data.clone();
+        let selected_source = identity.clone();
+        let (entered, reading) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let extract_started = Instant::now();
+        let extraction = tokio::task::spawn_blocking(move || {
+            use araphor_data::{AnalysisInputV1, AnalysisReadControl, AnalysisSelectionV1};
+            use prost::Message as _;
+            use std::ops::Bound;
+
+            let mut selection =
+                AnalysisSelectionV1::new(selected_source.tenant_id, vec![selected_source]);
+            selection.received_from = Bound::Included(START);
+            selection.received_until = Bound::Included(START);
+            let mut entered = Some(entered);
+            selected_data.extract(&selection, &AnalysisReadControl::default(), |input| {
+                let AnalysisInputV1::Event { record, .. } = input else {
+                    return Ok(None);
+                };
+                if let Some(entered) = entered.take() {
+                    let _sent = entered.send(());
+                    released
+                        .recv_timeout(Duration::from_millis(500))
+                        .map_err(|error| araphor_data::Error::AnalysisState {
+                            path: PathBuf::from("<qualified-projection>"),
+                            reason: format!("policy probe did not release extraction: {error}"),
+                            location: snafu::Location::default(),
+                        })?;
+                }
+                let length = record.framed_record.len();
+                let wire =
+                    mithril_control::EvidenceRecord::decode(&record.framed_record[4..length - 4])
+                        .map_err(|error| araphor_data::Error::AnalysisState {
+                        path: PathBuf::from("<qualified-projection>"),
+                        reason: error.to_string(),
+                        location: snafu::Location::default(),
+                    })?;
+                Ok((record.cursor == 2).then(|| wire.operation.to_be_bytes().to_vec()))
+            })
+        });
+        tokio::time::timeout(Duration::from_millis(500), reading).await??;
+        connection.policy_inventory(None, Vec::new()).await?;
+        self.check(
+            !extraction.is_finished(),
+            "extraction ended before the policy probe",
+        )?;
+        release.send(())?;
+        let extracted = extraction.await??;
+        let extraction_us = extract_started.elapsed().as_micros();
+        self.check(
+            extracted.meta.commit_revision >= page.read_revision
+                && extracted.sources[0].receipt.contiguous_cursor == 2
+                && extracted.sources[0].receipt.cpu_id == 3
+                && extracted.scanned_bytes == wire.framed_records.len()
+                && extracted.projected_bytes == 4
+                && extracted.pages.len() == 1
+                && extracted.pages[0].rows.len() == 1
+                && extracted.pages[0].rows[0].as_ref() == 1_u32.to_be_bytes(),
+            "selected extraction changed scope, projection, or snapshot",
         )?;
         let snapshot = observations
             .coverage_snapshot()
@@ -1038,6 +1099,8 @@ impl DataStoreQualification {
         let checks = [
             "production-mtls-intake",
             "exact-node-frames",
+            "scoped-field-extraction",
+            "policy-rpc-during-extraction",
             "coverage-commit",
             "lost-ack-keeps-node-wal",
             "restart-keeps-source-state",
@@ -1076,6 +1139,10 @@ impl DataStoreQualification {
                 "source_identity": identity, "contiguous_cursor": 4, "retained_floor": 2,
                 "retained_event_count": 2, "backup_revision": backup.commit_revision,
                 "batch_commit_us": commit_us, "durable_ack_us": ack_us,
+                "extraction_us": extraction_us,
+                "extraction_scan_bytes": extracted.scanned_bytes,
+                "extraction_input_bytes": extracted.input_bytes,
+                "extraction_projected_bytes": extracted.projected_bytes,
                 "checkpoint_us": checkpoint_us, "database_bytes": database_bytes,
                 "wal_bytes_after_checkpoint": wal_bytes,
                 "remaining_qualification": ["physical-capacity-backpressure", "crash-injection", "physical-disk-reuse"],
