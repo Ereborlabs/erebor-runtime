@@ -2125,7 +2125,9 @@ test does not close a row when its physical condition or an assertion changed.
       seconds. The actor cloned the tree before Node started. The protected
       `move_mount` was denied, and production reported the actor's exact
       Privilege/Capability `-EACCES` effect.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The same exact test passed in
+      40.94 seconds through stock `runc` and the production OCI hook. The
+      existing positive mount-move runc test passed in 66.33 seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching old prepared operation after all three
       cases pass. Keep `MountSetattr` and propagation hard-close checks.
