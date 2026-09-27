@@ -675,7 +675,10 @@ adequacy, repeated performance, and old-writer removal remain unqualified.
 
 [analysis_store_thread_memory](../../../../crates/araphor-data/src/analysis/capacity.rs)
 adds an ignored, release-only component memory check. Four scoped calling
-threads use the public batch API with one request in flight. The test checks
+threads use the public batch API with one request in flight. The test reaches
+the default tenant logical quota within 8,192 batches. Other capacity errors
+fail the test. A rejected batch must leave its source receipt unchanged.
+The test checks
 receipts after each batch, checkpoint, the last frame, and reopen. It reads
 Linux process high-water RSS and reports native memory categories on failure.
 Run it alone; other tests would share its process peak. The release check
@@ -685,12 +688,16 @@ The data-store plan records its executable digest and logs.
 [AnalysisStore::open_native](../../../../crates/araphor-data/src/analysis/connection.rs)
 now sets the native bulk-deallocation release threshold to zero. The native
 buffer target stays at 128 MiB. The process-wide allocator policy is unchanged.
-The same isolated regression passes without an allocator environment override:
+The earlier one-million-row regression passed without an allocator environment override:
 216,100 KiB peak RSS and 52.24 seconds. The native-setting assertion also passes.
 The release mTLS data-store suite also passes 16 tests with four ignored in
 15.10 seconds. Its log and executable digest are in the data-store plan.
-Formatting, workspace checks, and strict Clippy pass. Workspace tests and
-full-capacity memory qualification remain pending.
+Formatting, workspace checks, and strict Clippy passed for `3a03e307`.
+Its workspace tests remain active. The longer temporary diagnostic failed
+the memory limit at 4,024,320 rows with 273,232 KiB peak RSS. Its checkpoint
+and reopen checks passed. The native-setting change does not satisfy
+full-capacity memory qualification. The extended repository regression is
+not covered by that workspace run; its release run is pending.
 The preceding temporary diagnostic crossed 256 MiB at 804,864 rows with four
 calling threads. Its peak was 292,132 KiB. The same input reached the tenant
 quota with one calling thread at 249,792 KiB, and with four threads plus
