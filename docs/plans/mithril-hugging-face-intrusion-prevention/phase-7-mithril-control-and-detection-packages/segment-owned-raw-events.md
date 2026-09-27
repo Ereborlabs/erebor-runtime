@@ -1,61 +1,41 @@
-# Segment-Owned Raw Events: Design Alternative
+# Segment-Owned Raw Events: Decision Note
 
-This note records an architecture alternative. It does not change the current
-implementation plan or select a raw-event store. The storage comparison is in
-[raw-event-store-decision.md](raw-event-store-decision.md).
+**Accept for evaluation:** Keep one raw segment store, let discovery derive
+directly from it, and add the retention and query contracts the product needs.
+**Reject:** Keep the old consumption-based purge rule and change only discovery.
+The segment design could have avoided much of the raw-storage rewrite, but its
+full-system performance and complexity are not proven.
 
-## Separate the decisions
+These are separate decisions:
 
-Removing discovery's duplicate raw archive, retaining evidence for later
-investigation, and choosing DuckDB as the raw-event store are three different
-decisions. The first two do not require the third. The existing Control segment
-store should have been assessed as the baseline before a raw-storage rewrite.
+1. Remove discovery's second raw-event archive. Discovery can read committed
+   segment pages and store derived results instead of copying every event.
+2. Retain and query evidence after discovery consumes it. A derived count
+   cannot recover a purged command, its arguments, or its policy decision.
+3. Choose the durable raw-event owner. The first two decisions do not require
+   DuckDB to own raw events. SQL can run over authorized, bounded segment input.
 
-## Segment-owned design
+The segment design keeps the current authenticated intake, durable ACK, and
+segment reader. Discovery commits each result, processing cursor, and exact
+evidence reference in one results transaction. On restart, it resumes from
+that committed cursor. Retention must bound history by age and size, then
+check required-processor progress and live references before it reclaims raw
+input. Consumption alone is not a deletion boundary.
 
-```text
-Authenticated Node intake -> Control commits one raw copy in segments -> ACK
-                           -> discovery reads committed segment pages
-                           -> one results transaction commits derived state,
-                              processing progress, and exact evidence references
-                           -> retention checks progress and references
-                           -> scoped SQL reads bounded segment input
-```
+The choice remains open until we prove four costs:
 
-Discovery must not copy every raw event into another archive. It can replay
-committed pages from its last committed cursor after a crash. The results store
-must commit each derived change with the cursor and evidence references that
-justify it. Otherwise, a saved cursor could skip a missing result. The segment
-reader and the results store remain separate durable owners; this design needs
-an explicit protocol between result commits and segment reclamation.
+- **Crash safety:** Coordinate result commits with segment reclamation across
+  the two durable owners. A crash must neither skip a result nor delete an
+  event still needed by a processor or witness.
+- **Witness retention:** One cited event may pin a whole segment. Measure that
+  cost before choosing whole-segment retention, compaction, or extraction.
+- **Queries:** Measure how many segment bytes must be read and decoded for
+  bounded searches by tenant, source, workload, and time. DuckDB can be the
+  query worker without being the raw-event store.
+- **Whole-system cost:** Compare intake, query and follow latency, retention,
+  restart, memory, and disk under the same workload. A raw write/read benchmark
+  alone does not select the architecture.
 
-## Contracts this design still needs
-
-- Consumption is not permission to delete raw input. Retention must bound
-  history by age and size, protect unprocessed required input, and retain exact
-  events cited by findings or review. A derived count cannot reconstruct a
-  purged command, its arguments, or its policy decision. Optional discovery
-  lag must not pin all raw input.
-- The retention owner must not remove a segment based on stale progress or
-  references. It needs a stable eligibility decision across the raw and result
-  owners, plus recovery after a crash during reclamation.
-- One retained event may keep an entire segment. Segment compaction or witness
-  extraction could reduce that cost, but each adds code and recovery work.
-  Select and measure a policy before claiming fine-grained retention.
-- SQL can run in an isolated DuckDB worker over authorized, bounded records
-  extracted from the segments. A bounded DuckDB table-function adapter is
-  another option, but Araphor would own that adapter. DuckDB need not own the
-  raw records. Historical selection by workload or time may scan and decode
-  too much input; measure that cost before adding metadata or an index. The
-  existing [query plan](phase-7-3-query-and-follow.md) already separates input
-  selection from SQL execution.
-
-## Decision boundary
-
-Reading segments directly is enough to remove discovery's raw-event
-duplication. It is not enough to leave the old consumption-based purge rule
-unchanged. DuckDB can make row retention and result transactions easier, but
-SQL support alone does not require it to own raw events. Neither a DuckDB index
-failure nor a direct store benchmark settles the full query, retention,
-witness, and crash-recovery contracts. Keep both designs open until those
-contracts have implementation and end-to-end proof.
+The current plan still selects DuckDB. This note does not change that plan.
+See the separate [storage comparison](raw-event-store-decision.md) for measured
+raw-store results and their limits.
