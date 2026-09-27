@@ -752,6 +752,11 @@ input before any tenant quota does. Metadata and receipts must not change on
 rejection. Every tenant's final frame and receipt must survive checkpoint and
 reopen. The same 256-MiB process limit applies. This ignored release test has
 not passed yet. It does not prove concurrent-reader or mTLS behavior.
+The release build for `c72a3b68` passed. After the host filesystem reserve was
+restored by removing generated incremental compiler cache, the unchanged release
+data suite passed 49 tests with four ignored. The shared tenant run and final
+workspace gate are active. The phase plan records the earlier failed gates;
+none is a full pass. Keep builds separate from subprocess test execution.
 
 The preceding temporary diagnostic crossed 256 MiB at 804,864 rows with four
 calling threads. Its peak was 292,132 KiB. The same input reached the tenant
