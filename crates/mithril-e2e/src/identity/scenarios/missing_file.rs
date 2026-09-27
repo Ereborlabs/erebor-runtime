@@ -5,7 +5,7 @@ use rustix::fs::{mkfifoat, Mode, CWD};
 
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = recovery_entry]
 fn missing_file_is_not_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("missing-startup-file")?;

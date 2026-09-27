@@ -3711,7 +3711,7 @@ test does not close a row when its physical condition or an assertion changed.
     tests pass.
     - [x] Host passed in 39.52 seconds. The standard test has 71 lines.
     - [x] Direct `runc` passed in 41.89 seconds through the production hook.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Kubernetes passed in 79.15 seconds. The launcher exited 0.
     - [ ] Remove only the matching old rename, missing-file action, and
       assertion after all three platforms pass. The old protected file must
       remain for its signed-denial action.
