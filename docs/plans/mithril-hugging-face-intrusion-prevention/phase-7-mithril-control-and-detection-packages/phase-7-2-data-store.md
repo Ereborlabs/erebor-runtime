@@ -177,8 +177,8 @@ Store recovery fails
    live exact witnesses; do not require each partial deletion to shrink a file.
    Qualify native allocator release under multiple calling threads. Set the
    native bulk-deallocation release threshold to zero. Do not change the
-   process-wide allocator policy. Set the engine memory target to 64 MiB to
-   leave space for allocations outside the native buffer manager. Keep the
+   process-wide allocator policy. Set the engine memory target to 160 MiB.
+   Account for allocations outside the native buffer manager. Keep the
    native WAL checkpoint threshold at 16 MiB. This threshold starts checkpoint
    work earlier; it does not reserve memory or bound process RSS. Keep the
    256-MiB process qualification limit unchanged. Require the isolated
@@ -1848,3 +1848,24 @@ evidence directory. The breakpoint captured the stack and then continued to
 the test's normal failure exit. Debugger timing and resource measurements are
 diagnostic only. The next candidate gives the index rebuild more native memory
 while keeping the 256-MiB process gate, storage quotas, and compaction unchanged.
+
+The index-headroom candidate sets the native memory target to 160 MiB at open
+and reopen. The existing settings assertion requires this value. The 16-MiB
+checkpoint threshold and all other native settings remain unchanged. This
+candidate gives index rebuild more working memory without adding a storage
+owner or changing the process allocator. It is not qualified. The process can
+still exceed 256 MiB because the native target does not bound all allocations.
+Run the unchanged full-capacity memory tests before accepting this candidate.
+
+The candidate release build passed in 5 minutes 51 seconds with the preceding
+paired-package command. Formatting passed. In the owned pilot VM, the data
+suite passed 49 tests with four ignored in 22.63 seconds. The data-store gRPC
+suite passed 17 tests with four ignored in 12.49 seconds. Both suites ran
+serially with no allocator override or competing task build. The data executable
+SHA-256 is `5e282e48251056797c5946f0638e9472edd223e2fdd7024edd390dbf2787cd4c`.
+The e2e executable SHA-256 is
+`5ca2dce8ebcf2a5a96b777783c13499ce04cbe6b0d130a3f6291c6dbb27c4526`.
+The VM copies have the same digests. Logs are `index-headroom-build.log`,
+`index-data-release.log`, and `index-e2e-release.log` in the host evidence
+directory. Full-capacity memory, the full-capacity gRPC path, and the final
+workspace gate remain pending. These small suites do not qualify the candidate.
