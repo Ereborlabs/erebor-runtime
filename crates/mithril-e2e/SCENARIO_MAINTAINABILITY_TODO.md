@@ -3605,6 +3605,13 @@ setup, production actions, assertions, and focused test.
       Kubernetes tests in 951.49 seconds.
 - [ ] Kubernetes subpath, bind alias, and wildcard paths: keep the same mount
   order and protected reads as the Kubernetes workload.
+  - [x] Reuse `EffectCheck` in `mount_protected.rs` for the protected bind
+    denial. Keep the actor's successful mount, protected `EACCES`, allowed
+    read, and task-attributed production evidence explicit. Pass Host,
+    direct `runc`, and Kubernetes before committing.
+    The 45-line test passed on Host in 50.63 seconds, direct `runc` in 61.34
+    seconds, and real Kubernetes in 118.63 seconds. The replaced wait was
+    local test plumbing; no old runner assertion was removed.
   - [ ] Replace the old protected-start in-container bind alias. Reuse
     `mount_alias.py` and `mount_alias_policy.json`. Start Node and install
     policy before the actor. Require the bind mount to succeed, the aliased

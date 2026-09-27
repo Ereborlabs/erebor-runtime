@@ -1,9 +1,8 @@
-use std::{cell::RefCell, time::Duration};
+use std::time::Duration;
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
 
-use crate::error::InvalidInputSnafu;
-use crate::physical::wait_for;
+use crate::effect::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
@@ -20,6 +19,7 @@ fn protected_bind_denies_alias<P: Platform>() -> TestResult<()> {
         task.snapshot.root_class.as_deref(),
         Some("initial_container_root")
     );
+    let effects = EffectCheck::new(&env, task)?;
 
     actor.send(b"mount-read\n")?;
     actor.close();
@@ -31,36 +31,13 @@ fn protected_bind_denies_alias<P: Platform>() -> TestResult<()> {
     assert_eq!(result["denied"], libc::EACCES);
     assert_eq!(result["allowed"], "allowed bind source\n");
 
-    let path = env.maps().0.to_owned();
-    let last = RefCell::new(String::from("<none>"));
-    wait_for(
-        &path,
+    effects.wait(
+        &env,
+        "PATH_TREE_POLICY_DENY",
+        F::File,
+        O::OpenRead,
+        -libc::EACCES,
         "protected bind denial evidence",
-        Duration::from_secs(30),
-        || {
-            let snapshot = env.snapshot().map_err(|source| {
-                InvalidInputSnafu {
-                    path: &path,
-                    reason: source.to_string(),
-                }
-                .build()
-            })?;
-            *last.borrow_mut() = format!("{:?}", snapshot.recent_effects.iter().rev().take(8));
-            Ok(snapshot
-                .recent_effects
-                .iter()
-                .any(|event| {
-                    task.matches_effect(
-                        event,
-                        "PATH_TREE_POLICY_DENY",
-                        F::File,
-                        O::OpenRead,
-                        -libc::EACCES,
-                    )
-                })
-                .then_some(()))
-        },
-        || format!("last effects: {}", last.borrow()),
     )?;
 
     actor.stop()?;
