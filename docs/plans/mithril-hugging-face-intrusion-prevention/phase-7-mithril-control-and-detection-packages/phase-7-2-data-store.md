@@ -1750,3 +1750,27 @@ a competing task build or load. The full log is
 All 442 local file links in this plan and its implementation review resolve.
 The release capacity reruns remain pending. The separate global checkpoint
 failure is not corrected by this query change. The phase remains **Not done**.
+
+The release test build passed on `e3e223b9` in 5 minutes 54 seconds with
+`CARGO_BUILD_JOBS=2 cargo test --locked --release -p araphor-data -p mithril-e2e
+--lib --no-run`. The CLI build passed in 4 minutes 29 seconds with
+`CARGO_BUILD_JOBS=2 cargo build --locked --release -p mithril-e2e --bin
+mithril_discovery_test`. This source has the Rust changes from `38da332c`.
+In the owned pilot VM, the release data suite passed 49 tests with four ignored
+in 23.30 seconds. The release `discovery::data_store::` suite passed 17 tests
+with four ignored in 13.08 seconds. Both suites used `--test-threads=1`, no
+allocator override, and no competing task build or load. The VM has four CPUs,
+7,941 MiB usable memory, no swap, Linux 6.8.0-142-generic, and an ext4 filesystem.
+The host evidence directory contains `witness-data-release.log`,
+`witness-e2e-release.log`, `witness-environment.log`, `witness-release-build.log`,
+and `witness-cli-build.log` under `/tmp/araphor-memory-probe.z1rbDjUR`.
+
+| Release executable | SHA-256 |
+| --- | --- |
+| Data tests | `0cf329398a7517105201f5ebf9d15f4f0e91c177d9f7c64b81994054d68c6b8c` |
+| Mithril e2e tests | `a5bcefd041b09ded6dee47903df621d243841fab7810a1a2f94323c0678ba204` |
+| Qualification CLI | `11f46ab4eea1188f172bd9b339680e0e504f8b85a1762547b658e309a8ffc3f7` |
+
+The staged VM copies have the same digests. The instrumented global-capacity
+test has started with the data executable above. No result is claimed yet.
+These small-suite passes do not close either full-capacity failure.

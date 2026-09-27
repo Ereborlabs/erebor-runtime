@@ -763,8 +763,9 @@ a growing in-memory log. The pinned native code rebuilds the whole index
 after a merge changes row IDs. A merge can combine partially filled groups
 without a preceding raw-event deletion. This path is a failure hypothesis,
 not a confirmed cause. Production logging and compaction settings are unchanged.
-The diagnostic addition compiles with the quota regression. Its ignored release
-run remains pending. The unchanged gRPC repeat finished as recorded below.
+The diagnostic addition compiles in release mode on `e3e223b9`. The ignored
+global-capacity run has started; no result is claimed yet. The unchanged gRPC
+repeat finished as recorded below.
 The release build for `c72a3b68` passed. After the host filesystem reserve was
 restored by removing generated incremental compiler cache, the unchanged release
 data suite passed 49 tests with four ignored. The shared tenant run passed in
@@ -977,6 +978,10 @@ with four ignored; Control passed 197 with two ignored; Mithril e2e passed
 124 with 251 ignored; Node passed 256 with one ignored. The phase plan records
 the command, timings, and log. The default-capacity gRPC rerun and the separate
 global checkpoint failure remain open.
+The release data suite also passed 49 tests with four ignored. The release
+data-store gRPC suite passed 17 tests with four ignored. These isolated VM
+runs use the same Rust source. The phase plan records executable digests,
+commands, environment, and logs. They do not qualify full-capacity operation.
 The owner computes usage from native columns inside the write transaction;
 there is no separate accounting ledger to recover. A quota failure rolls back
 rows, references, progress, and receipts together. Size-reducing raw retention
