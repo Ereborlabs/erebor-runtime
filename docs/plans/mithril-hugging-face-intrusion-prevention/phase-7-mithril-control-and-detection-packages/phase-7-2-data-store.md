@@ -1898,3 +1898,17 @@ cleanup removed only debug artifacts for `araphor-data`, `mithril-control`,
 free space returned to 45 GiB. Release executable digests and tracked files
 were unchanged. Native dependency builds, evidence logs, and VM state remain.
 The complete workspace gate must run again. No capacity result changes.
+
+The complete workspace gate then passed on `7e37bc5d`, which contains the Rust
+source from `50b55a21`. The command used `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0
+RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh`. Formatting,
+workspace checking, strict Clippy, and all enabled workspace tests passed.
+Data passed 49 tests with four ignored in 117.29 seconds. Control passed 197
+with two ignored in 493.39 seconds. Mithril e2e passed 124 with 251 ignored in
+128.13 seconds. Node passed 256 with one ignored in 13.75 seconds. The log is
+`index-workspace-retry.log` in the host evidence directory. Tests ran serially
+without a competing task build or qualification load. The ignored full-capacity
+test remains a recorded failure. This gate does not qualify the 160-MiB native
+target against the 256-MiB process limit. The memory-budget decision remains
+pending. Full-capacity gRPC, remaining load and physical qualification, and
+old-writer retirement remain open. The phase remains **Not done**.
