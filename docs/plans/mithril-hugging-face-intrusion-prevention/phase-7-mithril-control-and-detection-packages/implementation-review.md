@@ -786,6 +786,13 @@ stack identifies `DataTable::RebuildIndexes` and ART node growth as the native
 allocation path. New index buffers remain pinned until serialization; the old
 index is cleared before rebuild. The phase plan records the script and stack.
 This diagnostic does not qualify performance or change the process-memory gate.
+The next candidate sets `open_native` to 160 MiB and updates the existing
+settings assertion. Other native settings and the 256-MiB process gate remain
+unchanged. Capacity and process memory are not yet qualified for this candidate.
+Formatting and the release build pass. The isolated release data suite passes
+49 tests with four ignored; the data-store gRPC suite passes 17 with four
+ignored. The phase plan records exact executable digests and logs. Full-capacity
+checks and the final workspace gate remain pending.
 The release build for `c72a3b68` passed. After the host filesystem reserve was
 restored by removing generated incremental compiler cache, the unchanged release
 data suite passed 49 tests with four ignored. The shared tenant run passed in
@@ -904,7 +911,7 @@ requires the policy reserve, that allowance, and 25 percent of the disk budget.
 Maintenance requires the policy reserve and write allowance. Retention,
 checkpoint, and result commits use this path so processing can release input.
 The check samples space; it cannot constrain unrelated filesystem writers.
-Native limits are a 64-MiB memory target, two threads, a 16-MiB WAL checkpoint
+Native limits are a 160-MiB memory target, two threads, a 16-MiB WAL checkpoint
 threshold, and a 128-MiB temporary-directory limit. No RSS limit is claimed.
 
 `open_native` pins DuckDB core 1.5.5 through Rust binding 1.10505.0. It enables
