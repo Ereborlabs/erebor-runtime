@@ -740,6 +740,19 @@ test addition.
 This result qualifies the isolated tenant-quota workload, not concurrent
 readers, global saturation, largest payloads, or embedded Node and Control
 memory. The data-store plan records the exact digests and logs.
+The later full-path quota run on `a0f620da` failed its five-second ACK deadline
+after a last observed ACK of 3,971,072. Peak whole-process RSS was 222,276 KiB.
+The timeout cause is not confirmed. This failure prevents full-path acceptance
+of the memory setting; it does not change the earlier component result.
+
+[analysis_store_global_memory](../../../../crates/araphor-data/src/analysis/capacity.rs)
+reuses `check_thread_memory` with five tenants. Four calling threads send one
+batch at a time. The test requires the default global logical quota to reject
+input before any tenant quota does. Metadata and receipts must not change on
+rejection. Every tenant's final frame and receipt must survive checkpoint and
+reopen. The same 256-MiB process limit applies. This ignored release test has
+not passed yet. It does not prove concurrent-reader or mTLS behavior.
+
 The preceding temporary diagnostic crossed 256 MiB at 804,864 rows with four
 calling threads. Its peak was 292,132 KiB. The same input reached the tenant
 quota with one calling thread at 249,792 KiB, and with four threads plus
