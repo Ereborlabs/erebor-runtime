@@ -380,8 +380,17 @@ transitions, and 131,072 exact evidence records. Its binary SHA-256 is
 The pilot directory contains `rollout-smoke.json` and its resource log.
 The case took 15.73 seconds with 188,896 KiB whole-process peak RSS. Host
 workspace tests ran concurrently; this result is not a clean performance
-baseline or a physical activation proof. Formatting, workspace checks, and
-strict Clippy passed. The full workspace tests remain running for this source.
+baseline or a physical activation proof. The full gate passed on `9ecffced`
+with two build jobs and serial tests. Formatting, workspace checks, strict
+Clippy, and workspace tests passed. Data passed 49 tests with two ignored;
+Control passed 196 with two ignored; Mithril e2e passed 123 with 251 ignored;
+Node passed 256 with one ignored. No Rust source changed during the gate.
+Three subsequent pilot runs passed after host build and test jobs finished.
+Their `rollout-{1,2,3}.json` and resource logs remain in the pilot directory.
+Loaded mean rollout time exceeds idle mean time by 6.2–6.4 percent. The
+data-store phase records all measurements and the pending investigation.
+This is an idle-versus-intake comparison, not a discovery-off/on comparison.
+No five-percent performance or physical activation pass is claimed.
 
 `data_quota_recovery` uses the same runner with a two-MiB tenant quota. The CLI
 keeps production defaults. Neither result proves global saturation, worst-case
