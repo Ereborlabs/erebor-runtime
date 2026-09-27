@@ -370,6 +370,24 @@ database/WAL bytes. `data_tenant_load` uses two groups per Node in CI.
 This case does not prove concurrent policy rollout, worst-case payloads, or
 full-quota capacity.
 
+Use `data-store-quota` to fill the default tenant logical quota through Node
+WAL and mTLS intake. Register a required processor before intake and leave its
+progress at zero. Send one 1,024-record batch at a time, with a maximum of
+8,192 batches. Require the tenant logical limit to reject a complete batch
+without an ACK, receipt change, or revision change. Node retains that input.
+Read all accepted frames and compare their ordered digest. Require a policy
+RPC and an unchanged retained duplicate retry while the quota is full.
+Commit a processor result with one exact witness through the maintenance
+allowance. Run bounded retention and checkpoint, then replay the rejected
+batch. Advance the fixture clock by 25 hours after the result commit. Keep the
+witness valid for 96 hours. Require explicit expiry, one durable acceptance,
+unchanged duplicate replay, a readable witness, and unchanged state
+after restart. Record intake, read, result, retention, checkpoint, and restart
+times with sampled file bytes. `data_quota_recovery` runs the same case with
+a two-MiB tenant quota in CI. Only the CLI uses the default two-GiB quota.
+This case does not qualify global saturation, worst-case payloads, concurrent
+rollout, or a filesystem reserve at its physical boundary.
+
 ```sh
 cargo test -p mithril-control
 cargo test -p araphor-data
@@ -377,6 +395,7 @@ cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-recov
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-startup --output-directory /tmp/araphor-data-startup
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-load --output-directory /tmp/araphor-data-load
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-tenants --output-directory /tmp/araphor-data-tenants
+cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-quota --output-directory /tmp/araphor-data-quota
 bash .github/scripts/verify-rust-ci.sh
 ```
 
@@ -1081,5 +1100,14 @@ policy on the isolated Node; reconnection completes the two-Node rollout.
 API recovery and watch relist also converge. Control and both Nodes are Running
 after cleanup. This result does not replace the failed mount-cache check.
 It does not prove full-quota throughput, reserve adequacy, or pilot capacity.
-The final full Rust gate is running after this physical test. The complete
-phase remains **Not done**.
+The subsequent serial Rust gate failed in `data_control_crash`. The child test
+harness put its test name before the readiness marker on the same line. The
+parent could not read the marker. A focused serial run reproduced the timeout
+in 10.06 seconds. The marker now starts on a new line, and the child always uses
+serial execution. The same test passed in 1.47 seconds without a larger timeout.
+All 14 enabled data-store tests passed on the final quota-case source; four
+subprocess or filesystem cases remain ignored. This run includes exact replay
+bytes after restart, explicit expiry, witness retention, and the serial crash
+regression. The default-quota CLI and final workspace gate must still run.
+Full-quota measurements, reserve sizing, remaining load
+qualification, and old-writer removal remain open. The phase is **Not done**.
