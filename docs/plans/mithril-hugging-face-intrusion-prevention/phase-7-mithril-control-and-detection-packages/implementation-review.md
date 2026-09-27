@@ -775,8 +775,12 @@ proven remedy. The unchanged gRPC repeat finished as recorded below.
 The 64-MiB engine target and 256-MiB process bound are unchanged. The native
 settings assertion and all 49 enabled release data tests pass. All 17 enabled
 release data-store gRPC tests pass. The phase plan records exact digests and
-logs. The unchanged global-capacity regression and final workspace gate remain
-pending; do not treat this setting as a qualified capacity remedy.
+logs. The global-capacity regression fails on `fdc9f982` after 1,286.24 seconds.
+Prior successful cursors total 7,871,488 records. The sampled in-memory-table
+usage falls to 16.5 MiB, but a checkpoint still cannot allocate a 256-KiB block
+within the 64-MiB engine limit. Peak process RSS is 193,904 KiB. The phase plan
+records the exact sample and logs. This setting is not a capacity remedy.
+The final workspace gate and full-capacity gRPC rerun remain pending.
 The release build for `c72a3b68` passed. After the host filesystem reserve was
 restored by removing generated incremental compiler cache, the unchanged release
 data suite passed 49 tests with four ignored. The shared tenant run passed in
@@ -895,7 +899,7 @@ requires the policy reserve, that allowance, and 25 percent of the disk budget.
 Maintenance requires the policy reserve and write allowance. Retention,
 checkpoint, and result commits use this path so processing can release input.
 The check samples space; it cannot constrain unrelated filesystem writers.
-Native limits are a 64-MiB memory target, two threads, a 64-MiB WAL checkpoint
+Native limits are a 64-MiB memory target, two threads, a 16-MiB WAL checkpoint
 threshold, and a 128-MiB temporary-directory limit. No RSS limit is claimed.
 
 `open_native` pins DuckDB core 1.5.5 through Rust binding 1.10505.0. It enables
