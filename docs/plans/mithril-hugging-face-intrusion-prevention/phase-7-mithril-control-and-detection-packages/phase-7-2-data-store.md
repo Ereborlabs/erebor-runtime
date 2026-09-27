@@ -1653,8 +1653,8 @@ The test reached tenant quota rejection and checked unchanged metadata and
 receipt, checkpoint, the final frame, and reopen. Logs are
 `/tmp/araphor-memory-probe.z1rbDjUR/memory-shared-tenant.log` and
 `memory-shared-tenant-resources.log`. Host workspace tests overlapped this run;
-do not use its time as a clean performance comparison. The global case is now
-running with the same executable. No global-capacity pass is claimed.
+do not use its time as a clean performance comparison. The global case used
+the same executable and failed as recorded below.
 The host release suite first failed 35 tests with filesystem-reserve errors.
 The overlapping workspace runs also failed: one reported a reserve error,
 an old SQLite page timeout, and a missing subprocess executable; the later
@@ -1682,3 +1682,24 @@ test digests match the host scripts. Logs are
 `/tmp/araphor-memory-probe.z1rbDjUR/current-vm-harness.log` and
 `current-inspection-vm.log`. These temporary-file and mocked-service checks do
 not replace the current-source Kubernetes storage/partition run.
+
+The global memory case failed after 1,128.08 seconds with exit status 101.
+During evidence commit, the native checkpoint could not allocate a 256-KiB
+block: 63.9 MiB of the 64-MiB engine budget was in use. DuckDB returned a fatal
+checkpoint error. Peak process RSS was 195,120 KiB; elapsed process time was
+1,128.09 seconds. This is an engine-allocation failure, not a process-RSS-limit
+failure or successful logical-quota rejection. The test did not report the
+last accepted cursors or native memory categories before this error. Do not
+infer either value. The logs are
+`/tmp/araphor-memory-probe.z1rbDjUR/memory-global.log` and
+`memory-global-resources.log`. Global capacity remains unqualified.
+
+The unchanged gRPC quota executable is running again in the owned pilot VM.
+Its SHA-256 remains
+`37ce7068608cb348686f59e31d3c55b75d7cd1ce0648156ab06d562c63a8db35`.
+The output directory is
+`/tmp/araphor-storage-pilot.dOaqVlEM/headroom-quota-repeat`.
+No task build or other task load runs alongside this repeat. The unrelated VM
+and desktop applications remain active. Quotas, allocator environment, and
+the five-second ACK deadline are unchanged. No repeat result is claimed yet.
+The phase remains **Not done**.
