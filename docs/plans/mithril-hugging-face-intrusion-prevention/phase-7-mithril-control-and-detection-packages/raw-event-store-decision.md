@@ -1,9 +1,9 @@
-# Raw Event Store Decision
+# Raw Event Store Comparison
 
-The current data plan makes DuckDB the durable owner of raw events. This choice
-needs a direct comparison with the existing Control segment store. The goal is
-one durable copy of each raw event, direct discovery reads, durable results and
-progress, scoped SQL, and bounded retention.
+The current data plan proposes DuckDB as the durable owner of raw events. This
+proposal needs a direct comparison with the existing Control segment store.
+The goal is one durable copy of each raw event, direct discovery reads,
+durable results and progress, scoped SQL, and bounded retention.
 
 ## Existing behavior
 
@@ -89,7 +89,22 @@ This workload favors the segment writer by about nine times for direct writes
 and reads at 262,144 events. DuckDB used about 17 percent fewer allocated
 bytes after close at that size. The experiment does not include mTLS, multiple
 sources, concurrent readers, context, coverage, retention, discovery, SQL,
-or power-loss recovery. It also does not test an unindexed DuckDB events table.
-The prior full-capacity DuckDB memory failures remain separate evidence.
+or power-loss recovery. The prior full-capacity DuckDB memory failures remain
+separate evidence.
 The store choice is still open until the query, retention, witness, and
 recovery work for the segment alternative is estimated and tested.
+
+## Unindexed raw table check
+
+A second release executable removed only the `events` primary key and its
+index. Its SHA-256 was
+`5036e94a2500986eef59e0208ceae09119dde5f7cf268eb39ac0903a2699d68f`.
+Both store modes ran from that executable on the same VM with 262,144 events.
+Two runs in reverse order measured 78,644–97,091 write events/s and
+550,045–592,725 read events/s for segments, versus 10,216–11,192 write
+events/s and 63,490–70,725 read events/s for unindexed DuckDB. An indexed
+DuckDB release rerun on that VM measured 11,499 write events/s and 65,274 read
+events/s. Removing the raw index did not close the direct-store gap. It also
+removed the database uniqueness constraint. The schema change was restored
+after the benchmark. This run still excludes SQL, discovery, retention, and
+crash recovery.
