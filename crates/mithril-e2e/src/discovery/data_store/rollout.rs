@@ -11,7 +11,7 @@ impl DataStoreQualification {
     async fn rollout_pairs(&self, pairs: u64) -> Result<()> {
         self.check(!self.output.exists(), "the output directory already exists")?;
         self.check(
-            (1..=32).contains(&pairs),
+            (2..=32).contains(&pairs) && pairs.is_multiple_of(2),
             "the rollout pair count is invalid",
         )?;
         let tls = MtlsFixture::new(false)?;
@@ -61,7 +61,7 @@ impl DataStoreQualification {
         let mut samples = Vec::new();
         let mut states = Vec::new();
         for pair in 0..pairs {
-            let batches = self.load_group(&observations, pair).await?;
+            let mut batches = self.load_group(&observations, pair).await?;
             for batch in &batches {
                 let wire: mithril_control::EvidenceBatch = batch.clone().into();
                 identity.get_or_insert(EvidenceIntakeIdentityV1 {
@@ -75,41 +75,56 @@ impl DataStoreQualification {
                 digest.update(&wire.framed_records);
             }
             let generation = i64::try_from(pair * 2 + 3)?;
-            let idle = Instant::now();
-            let state = self
-                .rollout_step(&fixture, &mut connection, &targets, generation)
-                .await?;
-            let idle_us = idle.elapsed().as_micros();
-            states.push(state);
-            let sent = Instant::now();
-            connection.send_evidence_group(batches.clone()).await?;
-            let loaded = Instant::now();
-            let state = self
-                .rollout_step(&fixture, &mut connection, &targets, generation + 1)
-                .await?;
-            let loaded_us = loaded.elapsed().as_micros();
-            states.push(state);
             let accepted = (pair + 1) * 4096;
-            let ack = self.load_ack(&mut connection, accepted).await?;
-            let ack_us = sent.elapsed().as_micros();
-            observations.acknowledge_evidence(ack)?;
-            self.check(
-                observations.next_evidence_batch().is_none(),
-                "rollout load kept acknowledged input",
-            )?;
-            let identity = identity.as_ref().ok_or("rollout source absent")?;
-            let before = data.source_status(identity)?;
-            connection.send_evidence_group(batches).await?;
-            self.check(
-                self.load_ack(&mut connection, accepted)
-                    .await?
-                    .contiguous_cursor
-                    == accepted
-                    && data.source_status(identity)? == before,
-                "rollout load replay changed source state",
-            )?;
+            let loaded_first = !pair.is_multiple_of(2);
+            let mut idle_us = 0;
+            let mut loaded_us = 0;
+            let mut ack_us = 0;
+            for (offset, loaded) in [loaded_first, !loaded_first].into_iter().enumerate() {
+                let sent = Instant::now();
+                if loaded {
+                    connection.send_evidence_group(batches.clone()).await?;
+                }
+                let started = Instant::now();
+                states.push(
+                    self.rollout_step(
+                        &fixture,
+                        &mut connection,
+                        &targets,
+                        generation + i64::try_from(offset)?,
+                    )
+                    .await?,
+                );
+                let elapsed = started.elapsed().as_micros();
+                if loaded {
+                    loaded_us = elapsed;
+                    let ack = self.load_ack(&mut connection, accepted).await?;
+                    ack_us = sent.elapsed().as_micros();
+                    observations.acknowledge_evidence(ack)?;
+                    self.check(
+                        observations.next_evidence_batch().is_none(),
+                        "rollout load kept acknowledged input",
+                    )?;
+                    let identity = identity.as_ref().ok_or("rollout source absent")?;
+                    let before = data.source_status(identity)?;
+                    connection
+                        .send_evidence_group(std::mem::take(&mut batches))
+                        .await?;
+                    self.check(
+                        self.load_ack(&mut connection, accepted)
+                            .await?
+                            .contiguous_cursor
+                            == accepted
+                            && data.source_status(identity)? == before,
+                        "rollout load replay changed source state",
+                    )?;
+                } else {
+                    idle_us = elapsed;
+                }
+            }
             samples.push(serde_json::json!({
-                "pair": pair, "idle_rollout_us": idle_us, "loaded_rollout_us": loaded_us,
+                "pair": pair, "loaded_first": loaded_first,
+                "idle_rollout_us": idle_us, "loaded_rollout_us": loaded_us,
                 "durable_ack_us": ack_us, "accepted_cursor": accepted,
             }));
         }
@@ -262,7 +277,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let output = directory.path().join("rollout");
         let case = DataStoreQualification::new(output.clone());
-        for pairs in [0, 33] {
+        for pairs in [0, 1, 3, 33, 34] {
             assert!(case.rollout_pairs(pairs).await.is_err());
             assert!(!output.exists());
         }
@@ -276,6 +291,8 @@ mod tests {
             result["samples"].as_array().ok_or("samples absent")?.len(),
             2
         );
+        assert_eq!(result["samples"][0]["loaded_first"], false);
+        assert_eq!(result["samples"][1]["loaded_first"], true);
         assert_eq!(result["kernel_evidence"], false);
         assert!(case.rollout_pairs(2).await.is_err());
         assert_eq!(fs::read(output.join("result.json"))?, bytes);
