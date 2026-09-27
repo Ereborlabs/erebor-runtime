@@ -1220,6 +1220,84 @@ mod tests {
     }
 
     #[test]
+    fn intake_record_bounds() -> Result<(), Box<dyn std::error::Error>> {
+        use prost::Message as _;
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let control = crate::ControlStore::open(directory.path().join("control"))?;
+        let data = Arc::new(araphor_data::AnalysisStore::open(&root)?);
+        let intake = EvidenceIntakeOwner::new(
+            control.clone(),
+            data.clone(),
+            Arc::new(super::SystemIntakeClock),
+        )?;
+        let maximum = super::MAX_EVIDENCE_RECORD_BYTES;
+        let mut retained = Vec::new();
+        for (index, size) in [maximum - 1, maximum, maximum + 1].into_iter().enumerate() {
+            let cursor = index as u64 + 1;
+            let record = observation(cursor).to_wire_record()?;
+            let mut payload = record.encode_to_vec();
+            // An unknown field increases wire size without changing the observation.
+            let mut padding = vec![0_u8; size - payload.len()];
+            let overhead = prost::encoding::bytes::encoded_len(100, &padding) - padding.len();
+            padding.truncate(padding.len() - overhead);
+            prost::encoding::bytes::encode(100, &padding, &mut payload);
+            assert_eq!(payload.len(), size);
+            assert_eq!(EvidenceRecord::decode(payload.as_slice())?, record);
+            let mut framed = u32::try_from(size)?.to_be_bytes().to_vec();
+            framed.extend_from_slice(&payload);
+            framed.extend_from_slice(&crc32c::crc32c(&framed).to_be_bytes());
+            let mut input = batch(cursor, 1)?;
+            input.framed_records = framed.clone().into();
+            let prior = data.meta()?;
+            if size > maximum {
+                let error = intake.receive(&authenticated(), input).unwrap_err();
+                assert_eq!(error.code(), tonic::Code::InvalidArgument);
+                assert_eq!(
+                    error.message(),
+                    "evidence record frame is outside its size bound"
+                );
+                assert_eq!(data.meta()?, prior);
+                assert_eq!(intake.contiguous_cursor(&identity())?, cursor - 1);
+            } else {
+                assert_eq!(
+                    intake
+                        .receive(&authenticated(), input.clone())?
+                        .contiguous_cursor,
+                    cursor
+                );
+                let committed = data.meta()?;
+                assert_eq!(committed.commit_revision, prior.commit_revision + 1);
+                assert_eq!(
+                    intake.receive(&authenticated(), input)?.contiguous_cursor,
+                    cursor
+                );
+                assert_eq!(data.meta()?, committed);
+                retained.push(framed);
+            }
+        }
+        let next = batch(3, 1)?;
+        retained.push(next.framed_records.to_vec());
+        assert_eq!(intake.receive(&authenticated(), next)?.contiguous_cursor, 3);
+        assert_eq!(control.evidence_cursor(&identity())?, 0);
+        let committed = data.meta()?;
+        drop(intake);
+        drop(data);
+        let data = Arc::new(araphor_data::AnalysisStore::open(&root)?);
+        let intake =
+            EvidenceIntakeOwner::new(control, data.clone(), Arc::new(super::SystemIntakeClock))?;
+        assert_eq!(data.meta()?, committed);
+        assert_eq!(intake.contiguous_cursor(&identity())?, 3);
+        let page = data.read_page(&identity(), 1)?;
+        assert_eq!(page.records.len(), retained.len());
+        for (record, expected) in page.records.iter().zip(retained) {
+            assert_eq!(record.framed_record.as_slice(), expected.as_slice());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn intake_bounds_group_records() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let control = crate::ControlStore::open(directory.path().join("control"))?;
