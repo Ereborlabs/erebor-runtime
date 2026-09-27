@@ -237,6 +237,11 @@ and the rejected source receipt. Check every tenant's receipt and final frame
 after checkpoint and reopen. Keep the 256-MiB process limit and default storage
 limits. This test uses synthetic post-validation frames, not Node wire input.
 It does not qualify concurrent readers, required processors, or mTLS latency.
+Keep only the latest native-memory and storage sample from each 64-batch
+interval. On an unexpected write error, report that sample's batch number,
+the failed batch number, and the prior successful cursors with the exact error.
+Do not query an invalidated connection to obtain this failure context. These
+prior cursors do not establish the failed batch's final durable state.
 
 Use `data_context_bounds` for maximum-size decision context. Derive a valid
 catalog from the signed-policy fixture. Add JSON whitespace to reach exactly
