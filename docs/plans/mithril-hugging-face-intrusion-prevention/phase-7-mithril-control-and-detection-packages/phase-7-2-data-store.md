@@ -1167,8 +1167,11 @@ ignored; Mithril e2e passed 121 with 251 ignored; Node passed 256 with one ignor
 The same full gate also passed for `224c98dc`, including its failure-report
 change. Mithril e2e passed 122 tests with 251 ignored. The data, Control, and
 Node counts are unchanged. Only documentation changed during that run.
-The release CLI build is still running; this test result does not qualify
-release capacity.
+The release CLI build passed with
+`CARGO_BUILD_JOBS=2 cargo build --locked --release -p mithril-e2e --bin mithril_discovery_test`.
+The compiler is Rust 1.97.1 for x86_64-unknown-linux-gnu. The binary SHA-256 is
+`67809fc7fc881b39cfcf63e2f310fea120f55c9e28541038ed27f9679d591042`.
+The copied guest binary has the same digest.
 
 The isolated pilot VM is ready with four vCPUs and 8 GiB configured memory.
 The guest reports 7,941 MiB usable memory, no swap, Linux 6.8.0-142-generic,
@@ -1179,3 +1182,12 @@ are stopped; their disks remain. An unrelated VM and the build/test jobs remain
 active on the host. Guest output uses `/tmp/araphor-storage-pilot.dOaqVlEM`.
 This environment check is not a capacity result. Release quota, reserve, and
 remaining load qualification and old-writer removal remain **Not done**.
+
+Release startup passed 18 checks and recovery passed 29 checks on this VM.
+Results and resource logs are in `/tmp/araphor-pilot-qualification.TmOyPeOh/`.
+`environment.json` records the source, compiler, binary, and guest configuration.
+Startup took 0.47 seconds with 68,548 KiB peak RSS. Recovery took 1.66 seconds
+with 95,864 KiB peak RSS. Recovery retained cursor 4, floor 2, two exact events,
+backup revision 12, an 8,400,896-byte database, and zero checkpointed WAL bytes.
+The host build and workspace tests finished before these measurements.
+These small synthetic cases do not prove full capacity or physical effects.

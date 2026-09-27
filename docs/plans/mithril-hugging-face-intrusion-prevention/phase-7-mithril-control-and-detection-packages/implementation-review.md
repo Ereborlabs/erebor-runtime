@@ -385,7 +385,11 @@ with one ignored. Formatting, workspace checks, and strict Clippy also passed.
 The same full gate also passed for the failure-report change in `224c98dc`.
 Mithril e2e passed 122 tests with 251 ignored. Other suite counts are unchanged.
 No Rust source changed during that run.
-The four-vCPU, 8-GiB pilot VM is ready, but has no release capacity result yet.
+The release CLI passed startup (18 checks) and recovery (29 checks) on the
+four-vCPU, 8-GiB pilot VM. Results, resource logs, and the source/build manifest
+are in `/tmp/araphor-pilot-qualification.TmOyPeOh/`. The binary SHA-256 is
+`67809fc7fc881b39cfcf63e2f310fea120f55c9e28541038ed27f9679d591042`.
+These small synthetic cases do not qualify full capacity or physical effects.
 
 The [data_control_crash](../../../../crates/mithril-e2e/src/discovery/data_store.rs)
 child always uses serial test execution. Its readiness marker starts on a new
