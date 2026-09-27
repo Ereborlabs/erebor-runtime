@@ -78,6 +78,11 @@ Store recovery fails
    Check age only for accepted input on the current source; check protected
    bytes across the tenant, including pending input. Do not build intermediate
    query state keyed by every event cursor to find the required bound.
+   For raw expiry, read the minimum active required cursor for the exact tenant
+   and source in the retention transaction. Bound candidates by that cursor
+   and the accepted cursor. With no required processor, use the accepted cursor.
+   Exclude rows with a matching live witness. Do not build intermediate query
+   state keyed by each candidate cursor to check progress or witnesses.
    Control applies at most 32 explicit `data_retirements` from its trusted
    startup configuration before it admits Node data. Each request names the
    exact processor, method version, tenant/source identity, change ID, reason,
@@ -1191,3 +1196,21 @@ with 95,864 KiB peak RSS. Recovery retained cursor 4, floor 2, two exact events,
 backup revision 12, an 8,400,896-byte database, and zero checkpointed WAL bytes.
 The host build and workspace tests finished before these measurements.
 These small synthetic cases do not prove full capacity or physical effects.
+
+The release quota run on `224c98dc` failed at the unchanged five-second ACK
+deadline. Its last observed ACK is 3,898,368, not a final store receipt.
+It ran for 1,271.50 seconds with 403,768 KiB peak whole-process RSS.
+The largest successful ACK sample was 2,337,074 microseconds. The last sample
+records 364,392,448 database bytes, 48,797,420 WAL bytes, and 17,370,853,376
+available filesystem bytes. Results are `quota.json` and `quota-resources.log`
+in the pilot output directory above. This run does not qualify full capacity.
+
+The retention query-plan regression failed on the original query with two
+event-cursor delimiter joins. The query now uses a source-level required cutoff
+and a direct live-witness join. The same regression passes. All eight
+retention-owner tests pass, including unequal required progress, overlapping
+witnesses, optional progress, and tenant isolation. No limit, timeout, schema,
+or counter table changed. All 15 enabled data-store e2e tests passed with serial
+execution; four subprocess or filesystem cases remain ignored. The full quota
+retry and final workspace gate remain required before this correction is
+qualified. The phase remains **Not done**.

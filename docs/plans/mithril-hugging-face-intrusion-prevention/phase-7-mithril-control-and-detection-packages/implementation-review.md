@@ -579,6 +579,19 @@ permission to skip input or advance an ACK.
 -> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) The transaction keeps that row. An expired row can be deleted on a later call after its protection ends.<br>
 -> [AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/read.rs) A read distinguishes committed expiry from an unexplained missing row.
 
+The retention transaction reads one minimum active required cursor for the
+exact tenant and source. Candidates cannot exceed that cursor or the accepted
+cursor. With no active required processor, only the accepted bound applies.
+A direct join excludes each row that has a live exact witness. The query does
+not build an intermediate group for every candidate cursor.
+`analysis_store_required_plan` checks the actual intake and retention SQL.
+Its retention assertion failed before this change and passes after it.
+All eight retention-owner tests pass. The progress/witness test also checks
+unequal required cursors, overlapping witnesses, optional progress, and a
+foreign tenant. All 15 enabled data-store e2e tests also passed with serial
+execution; four subprocess or filesystem cases remain ignored.
+The full workspace gate and release quota retry remain open.
+
 [EvidenceIntakeOwner::new](../../../../crates/mithril-control/src/evidence.rs) The explicit data-backed constructor rejects accepted, pending, or coverage state in the old Control evidence store. The owner validates Node batches and commits evidence and coverage only to AnalysisStore. Its component tests check exact frames, replay, old Control-store isolation, and restart.<br>
 -> [ControlPlane::from_intake](../../../../crates/mithril-control/src/service.rs) The service accepts the selected intake owner and keeps the same Control policy and trust store.<br>
 -> [DataStoreQualification::recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The mTLS case submits Node WAL records, leaves an ACK unread, restarts the owners, and retries the same bytes. The case passed 23 checks with the selected data owner.<br>

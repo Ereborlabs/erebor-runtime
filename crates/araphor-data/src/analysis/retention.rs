@@ -44,6 +44,17 @@ pub struct EvidenceRetentionOwner<'a> {
 }
 
 impl<'a> EvidenceRetentionOwner<'a> {
+    const ELIGIBLE_RAW: &'static str =
+        "SELECT e.durable_cursor, octet_length(e.framed_record), e.intake_utc_ns
+         FROM events e LEFT JOIN evidence_refs r
+         ON r.stream_key = e.stream_key AND r.tenant_id = e.tenant_id
+         AND r.durable_cursor = e.durable_cursor AND r.expires_utc_ns > ?
+         WHERE e.stream_key = ? AND e.tenant_id = ?
+         AND e.durable_cursor <= ?
+         AND r.durable_cursor IS NULL
+         AND (e.intake_utc_ns <= ? OR ?)
+         ORDER BY e.durable_cursor LIMIT ?";
+
     pub fn new(store: &'a AnalysisStore, limits: RetentionLimitsV1) -> Result<Self> {
         if limits.raw_max_age_ns == 0 || limits.raw_max_bytes == 0 {
             return store.reject("the raw retention limits must be positive");
@@ -135,6 +146,21 @@ impl<'a> EvidenceRetentionOwner<'a> {
         let receipt =
             AnalysisStore::read_receipt_from(&transaction, &self.store.root, identity, &key)?
                 .ok_or_else(|| self.store.state_error("the retention source is absent"))?;
+        let consumed: u64 = transaction
+            .query_row(
+                "SELECT COALESCE(MIN(consumed_cursor), ?) FROM processor_progress
+                 WHERE stream_key = ? AND tenant_id = ?
+                 AND class = 'required' AND retired = false",
+                params![
+                    receipt.contiguous_cursor,
+                    key.as_slice(),
+                    identity.tenant_id.as_slice(),
+                ],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "read required retention cutoff",
+            })?;
         let mut retained_bytes: u64 = transaction
             .query_row(
                 "SELECT CAST(COALESCE(SUM(octet_length(framed_record)), 0) AS UBIGINT)
@@ -161,35 +187,19 @@ impl<'a> EvidenceRetentionOwner<'a> {
             .logical_pressure(&transaction, identity.tenant_id)?;
         let mut selected = Vec::new();
         {
-            let mut statement = transaction
-                .prepare(
-                    "SELECT e.durable_cursor, octet_length(e.framed_record), e.intake_utc_ns
-                     FROM events e WHERE e.stream_key = ? AND e.tenant_id = ?
-                     AND e.durable_cursor <= ?
-                     AND NOT EXISTS (
-                         SELECT 1 FROM processor_progress p
-                         WHERE p.stream_key = e.stream_key AND p.tenant_id = e.tenant_id
-                         AND p.class = 'required' AND p.retired = false
-                         AND p.consumed_cursor < e.durable_cursor
-                     )
-                     AND NOT EXISTS (
-                         SELECT 1 FROM evidence_refs r
-                         WHERE r.stream_key = e.stream_key AND r.tenant_id = e.tenant_id
-                         AND r.durable_cursor = e.durable_cursor AND r.expires_utc_ns > ?
-                     )
-                     AND (e.intake_utc_ns <= ? OR ?)
-                     ORDER BY e.durable_cursor LIMIT ?",
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "prepare eligible raw evidence",
-                })?;
+            let mut statement =
+                transaction
+                    .prepare(Self::ELIGIBLE_RAW)
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "prepare eligible raw evidence",
+                    })?;
             let rows = statement
                 .query_map(
                     params![
+                        now_utc_ns,
                         key.as_slice(),
                         identity.tenant_id.as_slice(),
-                        receipt.contiguous_cursor,
-                        now_utc_ns,
+                        consumed.min(receipt.contiguous_cursor),
                         cutoff,
                         tenant_bytes > self.limits.raw_max_bytes || logical_pressure,
                         RETENTION_BATCH as u32,
@@ -449,6 +459,22 @@ mod tests {
         };
         store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
         store.accept_validated_batch(source.clone(), batch(1, b"abc"))?;
+        store.commit_result(&AnalysisResultCommitV1 {
+            scope,
+            expected_cursor: 0,
+            consumed_cursor: 1,
+            coverage_revision: 0,
+            context_revision: 0,
+            result_id: "witness".into(),
+            body: b"checked".to_vec(),
+            created_utc_ns: 101,
+            witnesses: vec![AnalysisWitnessV1 {
+                identity: source.clone(),
+                cursor: 1,
+                expires_utc_ns: 200,
+            }],
+            context_refs: vec![],
+        })?;
         let reader = store.reader()?;
         let plan: String = reader.get()?.query_row(
             &format!("EXPLAIN {}", AnalysisStore::REQUIRED_BUDGET),
@@ -458,6 +484,23 @@ mod tests {
         assert!(
             !plan.contains("DELIM_JOIN"),
             "required budget correlates each event:\n{plan}"
+        );
+        let plan: String = reader.get()?.query_row(
+            &format!("EXPLAIN {}", EvidenceRetentionOwner::ELIGIBLE_RAW),
+            params![
+                101_u64,
+                source_key(&source).as_slice(),
+                source.tenant_id.as_slice(),
+                1_u64,
+                0_u64,
+                true,
+                RETENTION_BATCH as u32,
+            ],
+            |row| row.get(1),
+        )?;
+        assert!(
+            !plan.contains("DELIM_JOIN"),
+            "retention correlates each event:\n{plan}"
         );
         Ok(())
     }
@@ -781,6 +824,27 @@ mod tests {
             identity: source.clone(),
         };
         store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
+        let review = ProcessorScopeV1 {
+            processor_id: "review".into(),
+            ..scope.clone()
+        };
+        store.register_processor(&review, ProcessorClassV1::Required, 1)?;
+        store.register_processor(
+            &ProcessorScopeV1 {
+                processor_id: "optional".into(),
+                ..scope.clone()
+            },
+            ProcessorClassV1::Optional,
+            1,
+        )?;
+        store.register_processor(
+            &ProcessorScopeV1 {
+                identity: other.clone(),
+                ..scope.clone()
+            },
+            ProcessorClassV1::Required,
+            1,
+        )?;
         let owner = EvidenceRetentionOwner::new(
             &store,
             RetentionLimitsV1 {
@@ -802,6 +866,22 @@ mod tests {
                 identity: source.clone(),
                 cursor: 1,
                 expires_utc_ns: 300,
+            }],
+            context_refs: vec![],
+        })?;
+        store.commit_result(&AnalysisResultCommitV1 {
+            scope: review,
+            expected_cursor: 0,
+            consumed_cursor: 3,
+            coverage_revision: 0,
+            context_revision: 0,
+            result_id: "review".into(),
+            body: b"checked".to_vec(),
+            created_utc_ns: 150,
+            witnesses: vec![AnalysisWitnessV1 {
+                identity: source.clone(),
+                cursor: 1,
+                expires_utc_ns: 200,
             }],
             context_refs: vec![],
         })?;
