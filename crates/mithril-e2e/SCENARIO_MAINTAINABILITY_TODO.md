@@ -4047,7 +4047,7 @@ setup, production actions, assertions, and focused test.
     The two-call Host/direct-`runc` test from `99c4e467` and `37e988f3`
     passed focused tests but did not model one Pod. It was removed. The old
     Kubernetes probe remains the coverage owner.
-  - [ ] Keep one Pod identity for members of one group call. A later group
+  - [x] Keep one Pod identity for members of one group call. A later group
     call must use a new Pod UID and new container IDs, even with the same
     policy labels and member names. The 60-line `group_boundary` test starts
     two groups under one signed policy and checks separate production
@@ -4061,8 +4061,9 @@ setup, production actions, assertions, and focused test.
     and all 22 direct-`runc` identity scenarios passed in 435.84 seconds. The
     full 52-test direct-`runc` lane passed in 1157.38 seconds when only the
     new case was skipped. An unchanged repeat of all 53 direct-`runc` tests
-    passed in 1200.52 seconds. Kubernetes is not checked. The old Kubernetes
-    probe remains in place.
+    passed in 1200.52 seconds. The focused Kubernetes case passed in 83.53
+    seconds, and the complete Kubernetes identity lane passed 54 tests in
+    1451.29 seconds. The old Kubernetes probe remains in place.
   - [ ] Diagnose the intermittent direct-`runc` exec failure. One full run
     reported that `runc exec cat` exited before writing its PID file. The
     same test passed alone, in the 22-test identity subset, and in the full
