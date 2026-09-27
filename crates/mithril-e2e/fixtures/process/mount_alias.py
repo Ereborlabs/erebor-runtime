@@ -140,13 +140,25 @@ elif mode == "move" and command == "open\n":
         )
         output.truncate()
     command = sys.stdin.readline()
-if mode in ("late", "recursive", "runtime") and command == "mount-read\n":
+if mode in ("late", "recursive", "runtime") and command in ("mount-read\n", "mount\n"):
     flags = MS_BIND | (MS_REC if mode == "recursive" else 0)
     result = libc.mount(secret.encode(), denied_alias.encode(), None, flags, None)
     mount_error = ctypes.get_errno() if result else 0
     if mode in ("recursive", "runtime"):
         result = libc.mount(allowed.encode(), allowed_alias.encode(), None, flags, None)
         allowed_mount_error = ctypes.get_errno() if result else 0
+    if mode == "runtime" and command == "mount\n":
+        with open(result_path, "w", encoding="utf-8") as output:
+            json.dump(
+                {
+                    "phase": "mounted",
+                    "mount": mount_error,
+                    "allowed_mount": allowed_mount_error,
+                },
+                output,
+            )
+        if sys.stdin.readline() != "read\n":
+            sys.exit(2)
 elif command not in ("read\n", "race\n"):
     sys.exit(2)
 

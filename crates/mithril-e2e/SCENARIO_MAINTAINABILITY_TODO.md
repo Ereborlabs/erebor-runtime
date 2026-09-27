@@ -3592,6 +3592,20 @@ setup, production actions, assertions, and focused test.
       fixture-root gates passed, and the duplicate field is absent. The VM
       launcher passed `bash -n`. The repository Rust CI script passed after
       the final Rust edit.
+    - [ ] Replace the bind-mount cache check. The shared actor must stop after
+      its successful bind mount. Read the production mutation, clean, and
+      pending counters before the actor reads. Require a new mutation and a
+      dirty view. Then require the protected read to fail and the control read
+      to succeed. Keep the old mount-event receipt check until a shared test
+      proves that receipt on all platforms.
+      - [x] Pass Host. The 88-line `bind_refreshes_cache` test passed in the
+        privileged VM. All ten related Host lifecycle tests passed in
+        111.49 seconds. No old assertion was removed.
+      - [ ] Pass direct `runc` and commit it separately.
+      - [ ] Pass real Kubernetes and commit it separately.
+      - [ ] Remove only the old cache assertion after the shared test proves
+        the same condition on all three platforms. Keep the old mount action
+        while mount-event receipt and five-denial capture depend on it.
   - [x] Retire the duplicate in-container bind-mount result and shell gate.
     `late_bind_keeps_policy` requires the mount to succeed after production
     policy activation on Host, direct `runc`, and Kubernetes. Keep the legacy
