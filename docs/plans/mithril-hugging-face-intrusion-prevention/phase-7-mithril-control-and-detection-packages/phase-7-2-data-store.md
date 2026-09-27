@@ -228,6 +228,16 @@ CI. Record the host and allocator environment when running it explicitly.
 This component test does not prove wire validation, global-quota memory,
 concurrent readers, or the memory of embedded Node and Control owners.
 
+Use `analysis_store_global_memory` for the default global logical quota.
+Reuse the same component runner with five tenants and four calling threads.
+Send one batch at a time and cycle through tenants. Each tenant remains below
+its own quota when the global ordinary-write allowance is full. Only a global
+logical-capacity error is a successful stop condition. Check unchanged metadata
+and the rejected source receipt. Check every tenant's receipt and final frame
+after checkpoint and reopen. Keep the 256-MiB process limit and default storage
+limits. This test uses synthetic post-validation frames, not Node wire input.
+It does not qualify concurrent readers, required processors, or mTLS latency.
+
 Use `data_context_bounds` for maximum-size decision context. Derive a valid
 catalog from the signed-policy fixture. Add JSON whitespace to reach exactly
 16 KiB without changing the catalog content. Append 256 observations through
@@ -1600,9 +1610,21 @@ Formatting, compilation, strict Clippy, and workspace tests passed. Data passed
 passed 124 with 251 ignored; Node passed 256 with one ignored. Tests ran serially.
 The later record-boundary test was added after this gate compiled its tests;
 this result does not cover that addition.
-The release `data-store-quota` case is active on `a0f620da`. Its binary
+The release `data-store-quota` case failed on `a0f620da`. Its binary
 SHA-256 is `37ce7068608cb348686f59e31d3c55b75d7cd1ce0648156ab06d562c63a8db35`.
-The CLI build passed in 5 minutes 7 seconds. No quota result is claimed yet.
+The CLI build passed in 5 minutes 7 seconds. The run ended with
+`deadline has elapsed` after a last observed ACK of 3,971,072 records. This
+cursor is not a final store receipt. The 3,878 successful ACK samples have a
+maximum of 3.307 seconds. The last sample has a 368,324,608-byte database and
+65,780,833-byte native WAL. Elapsed process time was 1,884.06 seconds; peak
+whole-process RSS was 222,276 KiB. Exit status was one. The result and resource
+log are `/tmp/araphor-memory-probe.z1rbDjUR/headroom-quota.json` and
+`headroom-quota-resources.log`. Most earlier ACKs above two seconds coincide
+with an empty WAL after a checkpoint. This observation does not establish the
+timeout cause. Host builds and workspace tests overlapped the run. The next
+check repeats the unchanged executable after those jobs finish. Keep the
+five-second ACK deadline and all storage quotas. Full-path qualification fails;
+the isolated component memory pass does not replace it.
 
 The `intake_record_bounds` component case passed in 0.83 seconds with
 `CARGO_BUILD_JOBS=2 cargo test --locked -p mithril-control -p mithril-e2e --lib

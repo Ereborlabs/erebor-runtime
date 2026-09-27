@@ -301,6 +301,16 @@ mod tests {
     #[test]
     #[ignore = "release-only isolated process RSS qualification on Linux"]
     fn analysis_store_thread_memory() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        check_thread_memory(1)
+    }
+
+    #[test]
+    #[ignore = "release-only default global quota RSS qualification on Linux"]
+    fn analysis_store_global_memory() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        check_thread_memory(5)
+    }
+
+    fn check_thread_memory(tenants: u8) -> std::result::Result<(), Box<dyn std::error::Error>> {
         use std::{sync::mpsc, thread};
 
         if cfg!(debug_assertions) {
@@ -309,13 +319,20 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
-        let identity = EvidenceIntakeIdentityV1 {
-            tenant_id: [1; 16],
-            node_id: "node-a".into(),
-            node_boot_id: [2; 16],
-            label_epoch: 1,
-            source_id: [3; 16],
-            source_epoch: 1,
+        let identities: Vec<_> = (1..=tenants)
+            .map(|tenant| EvidenceIntakeIdentityV1 {
+                tenant_id: [tenant; 16],
+                node_id: format!("node-{tenant}"),
+                node_boot_id: [2; 16],
+                label_epoch: 1,
+                source_id: [3; 16],
+                source_epoch: 1,
+            })
+            .collect();
+        let expected_limit = if tenants == 1 {
+            "tenant logical bytes"
+        } else {
+            "global logical bytes"
         };
         let memory =
             |store: &AnalysisStore| -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -336,86 +353,118 @@ mod tests {
                             Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
                         })?
                         .collect::<duckdb::Result<Vec<_>>>()?;
-                    let cursor = store
-                        .source_receipt(&identity)?
-                        .ok_or("receipt absent")?
-                        .contiguous_cursor;
-                    return Err(format!("process peak {peak} KiB exceeds 256 MiB at cursor {cursor}; native bytes: {native:?}").into());
+                    let cursors = identities
+                        .iter()
+                        .map(|identity| {
+                            store.source_receipt(identity).map(|receipt| {
+                                receipt.map_or(0, |receipt| receipt.contiguous_cursor)
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    return Err(format!("process peak {peak} KiB exceeds 256 MiB at cursors {cursors:?}; native bytes: {native:?}").into());
                 }
                 Ok(())
             };
-        let limit_cursor = thread::scope(
-            |scope| -> std::result::Result<u64, Box<dyn std::error::Error>> {
-                let workers: Vec<_> = (0..4)
-                    .map(|_| {
-                        let (send, requests) = mpsc::sync_channel::<ValidatedEvidenceBatchV1>(1);
-                        let (reply, receive) = mpsc::sync_channel(1);
-                        let store = &store;
-                        let identity = &identity;
-                        scope.spawn(move || {
-                            for batch in requests {
-                                if reply
-                                    .send(store.accept_validated_batch(identity.clone(), batch))
-                                    .is_err()
-                                {
-                                    break;
+        let cursors = thread::scope(
+            |scope| -> std::result::Result<Vec<u64>, Box<dyn std::error::Error>> {
+                let workers: Vec<_> =
+                    (0..4)
+                        .map(|_| {
+                            let (send, requests) =
+                                mpsc::sync_channel::<(usize, ValidatedEvidenceBatchV1)>(1);
+                            let (reply, receive) = mpsc::sync_channel(1);
+                            let store = &store;
+                            let identities = &identities;
+                            scope.spawn(move || {
+                                for (tenant, batch) in requests {
+                                    if reply
+                                        .send(store.accept_validated_batch(
+                                            identities[tenant].clone(),
+                                            batch,
+                                        ))
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
                                 }
-                            }
-                        });
-                        (send, receive)
-                    })
-                    .collect();
-                for group in 0..8192_u64 {
+                            });
+                            (send, receive)
+                        })
+                        .collect();
+                let mut cursors = vec![0_u64; identities.len()];
+                for group in 0..8192 * u64::from(tenants) {
+                    let tenant = group as usize % identities.len();
+                    let accepted = cursors[tenant];
                     let mut frames = vec![0_u8; 128 * 1024];
                     for index in 0..1024 {
-                        let cursor = group * 1024 + index as u64 + 1;
+                        let cursor = accepted + index as u64 + 1;
                         frames[index * 128..index * 128 + 8].copy_from_slice(&cursor.to_be_bytes());
                     }
                     let batch = ValidatedEvidenceBatchV1 {
                         cpu_id: 0,
-                        first_cursor: group * 1024 + 1,
-                        last_cursor: (group + 1) * 1024,
+                        first_cursor: accepted + 1,
+                        last_cursor: accepted + 1024,
                         intake_utc_ns: 1_800_000_000_000_000_000,
                         framed_records: frames.into(),
                         frame_ends: (1..=1024).map(|index| index * 128).collect(),
                     };
                     let (send, receive) = &workers[group as usize % workers.len()];
-                    send.send(batch)?;
+                    let prior = store.meta()?;
+                    send.send((tenant, batch))?;
                     match receive.recv()? {
                         Ok(outcome) => assert_eq!(outcome, EvidenceStoreOutcomeV1::Accepted),
-                        Err(crate::Error::StorageCapacity {
-                            resource: "tenant logical bytes",
-                            ..
-                        }) => {
+                        Err(crate::Error::StorageCapacity { resource, .. })
+                            if resource == expected_limit =>
+                        {
+                            assert_eq!(store.meta()?, prior);
+                            assert_eq!(
+                                store
+                                    .source_receipt(&identities[tenant])?
+                                    .ok_or("receipt absent")?
+                                    .contiguous_cursor,
+                                accepted
+                            );
                             memory(&store)?;
-                            return Ok(group * 1024);
+                            return Ok(cursors);
                         }
                         Err(error) => return Err(error.into()),
                     }
+                    cursors[tenant] += 1024;
                     assert_eq!(
                         store
-                            .source_receipt(&identity)?
+                            .source_receipt(&identities[tenant])?
                             .ok_or("receipt absent")?
                             .contiguous_cursor,
-                        (group + 1) * 1024
+                        cursors[tenant]
                     );
                     memory(&store)?;
                 }
-                Err("the default tenant quota was not reached".into())
+                Err(format!("the default {expected_limit} limit was not reached").into())
             },
         )?;
-        let receipt = store.source_receipt(&identity)?.ok_or("receipt absent")?;
-        assert_eq!(receipt.contiguous_cursor, limit_cursor);
+        let receipts = identities
+            .iter()
+            .map(|identity| store.source_receipt(identity))
+            .collect::<Result<Vec<_>>>()?;
+        for (receipt, cursor) in receipts.iter().zip(&cursors) {
+            assert!(*cursor > 0);
+            assert_eq!(
+                receipt.as_ref().ok_or("receipt absent")?.contiguous_cursor,
+                *cursor
+            );
+        }
         store.checkpoint()?;
         memory(&store)?;
         drop(store);
         let store = AnalysisStore::open(&root)?;
-        assert_eq!(store.source_receipt(&identity)?, Some(receipt));
-        let last = store.read_page(&identity, limit_cursor)?;
-        let mut expected = vec![0_u8; 128];
-        expected[..8].copy_from_slice(&limit_cursor.to_be_bytes());
-        assert_eq!(last.records.len(), 1);
-        assert_eq!(last.records[0].framed_record, expected);
+        for ((identity, receipt), cursor) in identities.iter().zip(receipts).zip(cursors) {
+            assert_eq!(store.source_receipt(identity)?, receipt);
+            let last = store.read_page(identity, cursor)?;
+            let mut expected = vec![0_u8; 128];
+            expected[..8].copy_from_slice(&cursor.to_be_bytes());
+            assert_eq!(last.records.len(), 1);
+            assert_eq!(last.records[0].framed_record, expected);
+        }
         memory(&store)?;
         Ok(())
     }
