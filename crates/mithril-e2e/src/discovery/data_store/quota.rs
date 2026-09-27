@@ -8,6 +8,28 @@ impl DataStoreQualification {
         self.quota_with_limits(StorageLimitsV1::default()).await
     }
 
+    fn quota_failure(
+        &self,
+        accepted: u64,
+        elapsed: Duration,
+        samples: &[serde_json::Value],
+        error: &dyn StdError,
+    ) -> Result<()> {
+        fs::create_dir(&self.output)?;
+        super::super::write_json(
+            &self.output.join("result.json"),
+            &serde_json::json!({
+                "schema_version": 1, "case": "data-store-quota", "result": "FAIL",
+                "proof_kind": "synthetic-mtls", "kernel_evidence": false,
+                "debug_assertions": cfg!(debug_assertions),
+                "last_observed_ack": accepted, "elapsed_us": elapsed.as_micros(),
+                "ack_deadline_seconds": 5, "error": error.to_string(), "samples": samples,
+                "qualification": "incomplete; the last observed ACK is not a final store receipt",
+            }),
+        )?;
+        Ok(())
+    }
+
     async fn quota_with_limits(&self, limits: StorageLimitsV1) -> Result<()> {
         self.check(!self.output.exists(), "the output directory already exists")?;
         let tls = MtlsFixture::new(false)?;
@@ -86,6 +108,7 @@ impl DataStoreQualification {
                     connection.send_evidence_batch(batch.clone()).await?;
                     match Self::ack(&mut connection).await {
                         Ok(ack) => {
+                            let ack_us = sent.elapsed().as_micros();
                             self.check(
                                 ack.contiguous_cursor == accepted + 1024,
                                 "quota load ACK differs",
@@ -97,18 +120,26 @@ impl DataStoreQualification {
                             digest.update(&wire.framed_records);
                             previous = Some(batch.clone());
                             samples.push(serde_json::json!({
-                                "accepted_cursor": accepted, "ack_us": sent.elapsed().as_micros(),
+                                "accepted_cursor": accepted, "ack_us": ack_us,
+                                "database_bytes": Self::file_size(&root.join("analysis.duckdb"))?,
+                                "wal_bytes": Self::file_size(&root.join("analysis.duckdb.wal"))?,
                                 "usage": data.storage_usage()?,
                             }));
                         }
                         Err(error) => {
-                            self.check(
-                                matches!(error.downcast_ref::<mithril_node::Error>(),
+                            if !matches!(error.downcast_ref::<mithril_node::Error>(),
                                 Some(mithril_node::Error::ControlRpc { source, .. })
                                 if source.code() == tonic::Code::ResourceExhausted
-                                    && source.message().contains("tenant logical bytes")),
-                                &format!("expected the tenant logical limit, got {error}"),
-                            )?;
+                                    && source.message().contains("tenant logical bytes"))
+                            {
+                                self.quota_failure(
+                                    accepted,
+                                    started.elapsed(),
+                                    &samples,
+                                    error.as_ref(),
+                                )?;
+                                return Err(error);
+                            }
                             self.check(
                                 data.meta()? == before
                                     && data.source_receipt(&identity)? == receipt
@@ -256,6 +287,7 @@ impl DataStoreQualification {
             &serde_json::json!({
                 "schema_version": 1, "case": "data-store-quota", "result": "PASS",
                 "proof_kind": "synthetic-mtls", "kernel_evidence": false,
+                "debug_assertions": cfg!(debug_assertions),
                 "tenant_max_bytes": limits.tenant_max_bytes,
                 "accepted_before_limit": accepted, "accepted_after_recovery": accepted + 1024,
                 "input_bytes": input_bytes, "input_sha256": hex::encode(expected),
@@ -273,6 +305,26 @@ impl DataStoreQualification {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_quota_failure() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let output = directory.path().join("failed");
+        let case = DataStoreQualification::new(output.clone());
+        let error = std::io::Error::other("test ACK failure");
+        let samples = [serde_json::json!({ "accepted_cursor": 1024, "ack_us": 12 })];
+        case.quota_failure(1024, Duration::from_secs(6), &samples, &error)?;
+        let bytes = fs::read(output.join("result.json"))?;
+        let result: serde_json::Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(result["result"], "FAIL");
+        assert_eq!(result["last_observed_ack"], 1024);
+        assert_eq!(result["elapsed_us"], 6_000_000);
+        assert_eq!(result["samples"], serde_json::json!(samples));
+        assert_eq!(result["error"], "test ACK failure");
+        assert!(case.quota_failure(0, Duration::ZERO, &[], &error).is_err());
+        assert_eq!(fs::read(output.join("result.json"))?, bytes);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn data_quota_recovery() -> Result<()> {

@@ -359,6 +359,13 @@ keeps production defaults. Neither result proves global saturation, worst-case
 payloads, concurrent rollout, or a physical filesystem reserve. The runner
 uses temporary stores and leaves deployment data unchanged.
 
+[DataStoreQualification::quota_failure](../../../../crates/mithril-e2e/src/discovery/data_store/quota.rs)
+retains the bounded samples when an unexpected ACK error stops quota intake.
+The `FAIL` result distinguishes the last observed ACK from the unknown final
+store receipt. Samples record ACK arrival before Node applies that ACK, plus
+database, WAL, and total file bytes. `data_quota_failure` checks the error record
+and refusal to replace a prior result. This report is not a recovery pass.
+
 [AnalysisStore::check_required](../../../../crates/araphor-data/src/analysis/retention.rs)
 groups active required processors by tenant and source before joining events.
 The minimum consumed cursor protects the union of their unprocessed input.

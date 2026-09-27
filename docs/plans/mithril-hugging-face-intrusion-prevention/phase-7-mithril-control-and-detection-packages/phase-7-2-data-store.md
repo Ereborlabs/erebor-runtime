@@ -391,8 +391,18 @@ unchanged duplicate replay, a readable witness, and unchanged state
 after restart. Record intake, read, result, retention, checkpoint, and restart
 times with sampled file bytes. `data_quota_recovery` runs the same case with
 a two-MiB tenant quota in CI. Only the CLI uses the default two-GiB quota.
+Run full-capacity measurements with `--release --locked`, as used by the
+production image build. Keep the debug-build failures in the result record.
+Record the build command and binary digest; each result also records whether
+Rust debug assertions are enabled. Unit tests keep the default debug profile.
 This case does not qualify global saturation, worst-case payloads, concurrent
 rollout, or a filesystem reserve at its physical boundary.
+On an unexpected ACK error, write a `FAIL` result with the last observed ACK,
+elapsed time, exact error, and the bounded samples collected before failure.
+Each sample includes ACK arrival time and database, WAL, and aggregate file
+bytes. Do not include Node ACK-application time in ACK arrival time. A timeout
+does not prove that a data commit failed; do not label the last observed ACK as
+the final store receipt. Reject an existing output directory.
 
 ```sh
 cargo test -p mithril-control
@@ -401,7 +411,7 @@ cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-recov
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-startup --output-directory /tmp/araphor-data-startup
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-load --output-directory /tmp/araphor-data-load
 cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-tenants --output-directory /tmp/araphor-data-tenants
-cargo run -p mithril-e2e --bin mithril_discovery_test -- --case data-store-quota --output-directory /tmp/araphor-data-quota
+cargo run --release --locked -p mithril-e2e --bin mithril_discovery_test -- --case data-store-quota --output-directory /tmp/araphor-data-quota
 bash .github/scripts/verify-rust-ci.sh
 ```
 
@@ -1137,3 +1147,14 @@ processor progress, retirement, optional scopes, and tenant isolation.
 The earlier workspace gate was stopped after this source change. It is not
 final verification. The default-quota case and full workspace gate must run
 again. This SQL change adds no cache, counter table, or schema change.
+
+The default-quota retry on `020d09a2` also exceeded the five-second ACK wait.
+It ran for 441.48 seconds with 245,056 KiB peak RSS. Its resource log is
+`/tmp/araphor-quota-qualification.vDuyJTzR/grouped-resources.log`; the CLI
+SHA-256 is `cc345b612a36585f36ac89e465edd19793aef6ed27e430e7dce0d427a798e685`.
+The query rewrite removed the event-keyed delimiter join, but does not yet
+qualify full capacity. The next run must retain failure samples before another
+production change is selected. Limits and the ACK deadline remain unchanged.
+The failure-report and two-MiB recovery tests now pass. The failure-report test
+also proves that an existing result is not replaced. Release capacity
+qualification and the final workspace gate remain open.
