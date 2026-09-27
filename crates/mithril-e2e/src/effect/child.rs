@@ -158,7 +158,6 @@ pub(super) enum PreparedOperation {
     IoUringBenignRead,
     IoUringSqpoll,
     DetachedMountOpen,
-    MountSetattr,
     MountPropagation,
     Ioctl,
     IoctlDerivedPeer,
@@ -1907,9 +1906,6 @@ impl PreparedOperations {
                     self.mount_tree.as_raw_fd(),
                     Path::new("secret"),
                 ))
-            }
-            PreparedOperation::MountSetattr => {
-                io_outcome(fixture_syscalls::set_mount_read_only(&self.mount_source))
             }
             PreparedOperation::MountPropagation => {
                 io_outcome(fixture_syscalls::make_mount_shared(&self.mount_source))

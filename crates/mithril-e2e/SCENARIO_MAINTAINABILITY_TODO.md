@@ -2140,7 +2140,7 @@ test does not close a row when its physical condition or an assertion changed.
       it installs policy. A syscall trace confirms this order. Retire the
       remaining legacy checks through platform scenarios; do not treat that
       baseline failure as a prepared-move result.
-  - [ ] Replace the prepared `MountSetattr` hard-close check. Let the shared
+  - [x] Replace the prepared `MountSetattr` hard-close check. Let the shared
     mount actor prepare its mount before Node starts. After Node recovers the
     actor under the signed policy without `SysAdmin`, call `mount_setattr` to
     request a read-only mount. Require physical denial and fresh, attributed
@@ -2154,9 +2154,9 @@ test does not close a row when its physical condition or an assertion changed.
       prepared-move direct-`runc` test passed in 37.97 seconds.
     - [x] Pass Kubernetes and commit it. The exact test passed in 78.49
       seconds with the deployed Control and Node in retained K3s.
-    - [ ] Remove only the matching old action after all three platforms pass.
+    - [x] Remove only the matching old action after all three platforms pass.
       Keep the shared syscall helper, mount propagation, and detached-tree
-      checks.
+      checks. The 92 non-privileged Mithril library tests pass after removal.
   - [x] Replace the pre-policy `mount_global_mutation_epoch` read. The
     production policy owner creates this hash-map row during policy
     installation. The old probe reads it before policy installation. The full

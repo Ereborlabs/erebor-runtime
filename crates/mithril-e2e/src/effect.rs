@@ -2284,31 +2284,15 @@ impl EffectTestRunner {
             "UNRESOLVED_OBJECT",
         )?;
 
-        for (operation, expected_effect, label) in [
-            (
-                HardClosedOperation::MountSetattr,
-                (
-                    KernelEffectFamilyV1::Privilege,
-                    KernelEffectOperationV1::Capability,
-                ),
-                "mount_setattr capability precondition",
-            ),
-            (
-                HardClosedOperation::MountPropagation,
-                (KernelEffectFamilyV1::Mount, KernelEffectOperationV1::Mount),
-                "mount propagation mutation",
-            ),
-        ] {
-            require_hard_close(
-                &mut fixture,
-                &reader,
-                &observations,
-                operation,
-                "UNSUPPORTED_OBJECT",
-                expected_effect,
-                label,
-            )?;
-        }
+        require_hard_close(
+            &mut fixture,
+            &reader,
+            &observations,
+            HardClosedOperation::MountPropagation,
+            "UNSUPPORTED_OBJECT",
+            (KernelEffectFamilyV1::Mount, KernelEffectOperationV1::Mount),
+            "mount propagation mutation",
+        )?;
 
         let mount_snapshots_before_mutation = ready_canonical_mount_snapshots(&host)?;
         let mount_epoch_before_mutation = global_mount_mutation_epoch(&host)?;
