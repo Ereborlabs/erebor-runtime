@@ -793,6 +793,11 @@ Formatting and the release build pass. The isolated release data suite passes
 49 tests with four ignored; the data-store gRPC suite passes 17 with four
 ignored. The phase plan records exact executable digests and logs. Full-capacity
 checks and the final workspace gate remain pending.
+The global-capacity test then fails on `50b55a21` after 130.60 seconds. Process
+peak RSS is 266,376 KiB at 2,349,056 accepted records, above the unchanged
+256-MiB gate. This is not a native allocation error or successful quota stop.
+The phase plan records the exact cursors, native sample, and logs. The candidate
+is not qualified. No further memory-budget change is approved.
 The release build for `c72a3b68` passed. After the host filesystem reserve was
 restored by removing generated incremental compiler cache, the unchanged release
 data suite passed 49 tests with four ignored. The shared tenant run passed in
