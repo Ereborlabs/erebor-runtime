@@ -127,7 +127,6 @@ enum ChildRequest {
         secret_path: PathBuf,
         benign_path: PathBuf,
         mount_source: PathBuf,
-        move_mount_target: PathBuf,
     },
     PrepareUnixStreamTarget,
     ReceivePassedSecret,
@@ -159,7 +158,6 @@ pub(super) enum PreparedOperation {
     IoUringBenignRead,
     IoUringSqpoll,
     DetachedMountOpen,
-    MoveMount,
     MountSetattr,
     MountPropagation,
     Ioctl,
@@ -202,7 +200,6 @@ pub(super) struct EffectPaths {
     pub(super) script_target: PathBuf,
     pub(super) deleted_exec_target: PathBuf,
     pub(super) mount_target: PathBuf,
-    pub(super) move_mount_target: PathBuf,
     pub(super) propagation_source: PathBuf,
     pub(super) propagation_target: PathBuf,
     pub(super) propagation_marker: PathBuf,
@@ -603,7 +600,6 @@ impl EffectProcessFixture {
             secret_path: paths.secret.clone(),
             benign_path: paths.benign.clone(),
             mount_source: paths.source.clone(),
-            move_mount_target: paths.move_mount_target.clone(),
         })? {
             ChildResponse::Prepared => Ok(()),
             _ => Err(invalid_state(
@@ -1077,7 +1073,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 secret_path,
                 benign_path,
                 mount_source,
-                move_mount_target,
             } => match PreparedOperations::new(
                 &exec_path,
                 &allowed_exec_path,
@@ -1086,7 +1081,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 &secret_path,
                 &benign_path,
                 &mount_source,
-                &move_mount_target,
             ) {
                 Ok(prepared) => {
                     prepared_hard_closed = Some(prepared);
@@ -1235,7 +1229,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     let script_target = root.join("script-target");
     let deleted_exec_target = root.join("deleted-exec-target");
     let mount_target = root.join("mount-target");
-    let move_mount_target = root.join("move-mount-target");
     let propagation_source = root.join("propagation-source");
     let propagation_target = source.join("propagation-target");
     let propagation_marker = propagation_target.join("propagated-marker");
@@ -1276,9 +1269,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     })?;
     fs::create_dir(&mount_target).context(IoSnafu {
         path: &mount_target,
-    })?;
-    fs::create_dir(&move_mount_target).context(IoSnafu {
-        path: &move_mount_target,
     })?;
     fs::create_dir(&propagation_source).context(IoSnafu {
         path: &propagation_source,
@@ -1323,7 +1313,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
         script_target,
         deleted_exec_target,
         mount_target,
-        move_mount_target,
         propagation_source,
         propagation_target,
         propagation_marker,
@@ -1603,7 +1592,6 @@ struct PreparedOperations {
     passed_secret_file: fs::File,
     passed_benign_file: fs::File,
     mount_source: PathBuf,
-    move_mount_target: PathBuf,
     mount_tree: fs::File,
     ioctl_file: fs::File,
     unsupported_ioctl_file: fs::File,
@@ -1617,7 +1605,6 @@ struct PreparedOperations {
 
 #[allow(unsafe_code)]
 impl PreparedOperations {
-    #[allow(clippy::too_many_arguments)]
     fn new(
         exec_path: &Path,
         allowed_exec_path: &Path,
@@ -1626,7 +1613,6 @@ impl PreparedOperations {
         secret_path: &Path,
         benign_path: &Path,
         mount_source: &Path,
-        move_mount_target: &Path,
     ) -> Result<Self> {
         let ioctl_file = fs::OpenOptions::new()
             .read(true)
@@ -1778,7 +1764,6 @@ impl PreparedOperations {
             passed_secret_file,
             passed_benign_file,
             mount_source: mount_source.to_path_buf(),
-            move_mount_target: move_mount_target.to_path_buf(),
             mount_tree,
             ioctl_file,
             unsupported_ioctl_file,
@@ -1923,10 +1908,6 @@ impl PreparedOperations {
                     Path::new("secret"),
                 ))
             }
-            PreparedOperation::MoveMount => io_outcome(fixture_syscalls::move_mount(
-                self.mount_tree.as_raw_fd(),
-                &self.move_mount_target,
-            )),
             PreparedOperation::MountSetattr => {
                 io_outcome(fixture_syscalls::set_mount_read_only(&self.mount_source))
             }

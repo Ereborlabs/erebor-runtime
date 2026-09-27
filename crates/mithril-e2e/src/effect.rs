@@ -2286,14 +2286,6 @@ impl EffectTestRunner {
 
         for (operation, expected_effect, label) in [
             (
-                HardClosedOperation::MoveMount,
-                (
-                    KernelEffectFamilyV1::Privilege,
-                    KernelEffectOperationV1::Capability,
-                ),
-                "detached move_mount capability precondition",
-            ),
-            (
                 HardClosedOperation::MountSetattr,
                 (
                     KernelEffectFamilyV1::Privilege,

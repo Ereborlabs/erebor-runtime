@@ -15,7 +15,6 @@ const FSCONFIG_SET_STRING: libc::c_uint = 1;
 const FSCONFIG_CMD_RECONFIGURE: libc::c_uint = 7;
 const FSPICK_CLOEXEC: libc::c_uint = 0x0000_0001;
 const MOUNT_ATTR_RDONLY: u64 = 0x0000_0001;
-const MOVE_MOUNT_F_EMPTY_PATH: libc::c_uint = 0x0000_0004;
 const OPEN_TREE_CLONE: libc::c_uint = 0x0000_0001;
 const IORING_SETUP_R_DISABLED: u32 = 1 << 6;
 const IORING_SETUP_SQPOLL: u32 = 1 << 1;
@@ -717,21 +716,6 @@ pub(super) fn open_mount_tree(path: &Path) -> io::Result<File> {
         // SAFETY: fd is a newly owned open_tree descriptor.
         Ok(unsafe { File::from_raw_fd(fd as RawFd) })
     }
-}
-
-pub(super) fn move_mount(tree: RawFd, target: &Path) -> io::Result<()> {
-    let target = path_c_string(target)?;
-    // SAFETY: both strings and the detached mount descriptor remain valid.
-    syscall_result(unsafe {
-        libc::syscall(
-            libc::SYS_move_mount,
-            tree,
-            c"".as_ptr(),
-            libc::AT_FDCWD,
-            target.as_ptr(),
-            MOVE_MOUNT_F_EMPTY_PATH,
-        )
-    })
 }
 
 pub(super) fn open_detached_mount_file(tree: RawFd, path: &Path) -> io::Result<()> {

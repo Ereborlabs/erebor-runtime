@@ -2131,8 +2131,15 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Kubernetes and commit it. The exact test passed in 101.80
       seconds. The existing allowed mount-move Kubernetes test passed in
       298.58 seconds on the retained cluster.
-    - [ ] Remove only the matching old prepared operation after all three
-      cases pass. Keep `MountSetattr` and propagation hard-close checks.
+    - [x] Remove only the matching old prepared operation after all three
+      cases pass. Keep `MountSetattr` and propagation hard-close checks. The
+      removed branch and its unused target and syscall helper total 43
+      deleted lines. The 92 non-privileged Mithril library tests pass. The
+      legacy physical probe stops before these mount checks: its baseline
+      open returns `EACCES` after it publishes the cgroup binding and before
+      it installs policy. A syscall trace confirms this order. Retire the
+      remaining legacy checks through platform scenarios; do not treat that
+      baseline failure as a prepared-move result.
   - [x] Replace the pre-policy `mount_global_mutation_epoch` read. The
     production policy owner creates this hash-map row during policy
     installation. The old probe reads it before policy installation. The full
