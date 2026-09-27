@@ -2168,7 +2168,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit it. The 74-line exact test passed in 37.84
       seconds. The existing mount-setattr Host test passed in 29.92 seconds
       after the shared actor change.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact test passed in 97.55
+      seconds through stock `runc` and the production OCI hook. The existing
+      mount-setattr direct-`runc` test passed in 61.80 seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove the matching old action, its unused stored mount path,
       and its syscall helper after all three cases pass. Keep the detached
