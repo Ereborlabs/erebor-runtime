@@ -81,6 +81,8 @@ mod runtime_exec;
 #[cfg(test)]
 mod runtime_outage;
 #[cfg(test)]
+mod staged_containers;
+#[cfg(test)]
 mod subreaper;
 #[cfg(test)]
 mod terminal_exec;

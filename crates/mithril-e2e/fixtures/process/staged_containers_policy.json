@@ -1,0 +1,52 @@
+{
+  "apiVersion": "mithril.erebor.dev/v1alpha1",
+  "kind": "WorkloadProtectionPolicy",
+  "metadata": {"name": "staged-containers", "namespace": "default", "uid": "10000000-0000-4000-8000-000000000041", "generation": 1, "resourceVersion": "1"},
+  "spec": {
+    "podSelector": {"matchLabels": {"app.kubernetes.io/name": "staged-containers"}, "matchExpressions": []},
+    "mode": "Protect",
+    "containers": [
+      {
+        "names": ["sidecar"], "kinds": ["Sidecar"],
+        "images": ["fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+        "applicationEntry": {"executionRule": "sidecar-python", "role": "sidecar"},
+        "additionalEntries": [], "administrativeEntry": {"role": "administrator"}, "externalRole": "external"
+      },
+      {
+        "names": ["init"], "kinds": ["Init"],
+        "images": ["fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+        "applicationEntry": {"executionRule": "init-python", "role": "init"},
+        "additionalEntries": [], "administrativeEntry": {"role": "administrator"}, "externalRole": "external"
+      },
+      {
+        "names": ["application"], "kinds": ["Application"],
+        "images": ["fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+        "applicationEntry": {"executionRule": "app-python", "role": "application"},
+        "additionalEntries": [], "administrativeEntry": {"role": "administrator"}, "externalRole": "external"
+      }
+    ],
+    "roles": [
+      {
+        "name": "sidecar", "files": [],
+        "execution": [
+          {"name": "sidecar-python", "path": "/usr/bin/python3", "recursive": false, "operations": ["Execute"], "action": "Allow"},
+          {"name": "deny-false", "path": "/usr/bin/false", "recursive": false, "operations": ["Execute"], "action": "Deny"}
+        ],
+        "network": {"destinations": []}, "processControl": [], "unixStreams": []
+      },
+      {
+        "name": "init", "files": [],
+        "execution": [{"name": "init-python", "path": "/usr/bin/python3", "recursive": false, "operations": ["Execute"], "action": "Allow"}],
+        "network": {"destinations": []}, "processControl": [], "unixStreams": []
+      },
+      {
+        "name": "application", "files": [],
+        "execution": [{"name": "app-python", "path": "/usr/bin/python3", "recursive": false, "operations": ["Execute"], "action": "Allow"}],
+        "network": {"destinations": []}, "processControl": [], "unixStreams": []
+      },
+      {"name": "administrator", "files": [], "execution": [], "network": {"destinations": []}, "processControl": [], "unixStreams": []},
+      {"name": "external", "files": [], "execution": [], "network": {"destinations": []}, "processControl": [], "unixStreams": []}
+    ],
+    "exceptionGrants": []
+  }
+}
