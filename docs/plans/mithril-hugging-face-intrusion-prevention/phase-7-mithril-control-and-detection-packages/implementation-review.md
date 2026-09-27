@@ -367,8 +367,9 @@ exact retained bytes, unchanged duplicate replay, and oversized rejection
 without a receipt or revision change. Valid input then uses the rejected cursor.
 Store reopen must preserve all accepted frames and the receipt. This component
 case does not test mTLS transport or full-capacity memory. The focused Control
-test passed in 0.83 seconds. The final workspace gate for this addition is
-pending. Its first run rejected `unwrap_err` under strict Clippy. The test now
+test passed in 0.83 seconds. The final workspace gate covering `c72a3b68`
+passed, including this test. Its first run rejected `unwrap_err` under strict
+Clippy. The test now
 uses the existing fallible assertion pattern. No production API or limit changes.
 
 [DataStoreQualification::quota](../../../../crates/mithril-e2e/src/discovery/data_store/quota.rs) The CLI selects the default two-GiB tenant quota.<br>
@@ -756,9 +757,14 @@ The release build for `c72a3b68` passed. After the host filesystem reserve was
 restored by removing generated incremental compiler cache, the unchanged release
 data suite passed 49 tests with four ignored. The shared tenant run passed in
 462.97 seconds with 204,692 KiB peak RSS. It preserves the original quota,
-receipt, checkpoint, final-frame, and reopen checks. The global run and final
-workspace gate are active. The phase plan records the earlier failed gates;
-none is a full pass. Keep builds separate from subprocess test execution.
+receipt, checkpoint, final-frame, and reopen checks. The global run is active.
+The final workspace gate passed for the Rust source in `c72a3b68`: formatting,
+compilation, strict Clippy, and serial workspace tests. Data passed 49 tests
+with four ignored; Control passed 197 with two ignored; Mithril e2e passed 124
+with 251 ignored; Node passed 256 with one ignored. The phase plan retains the
+earlier failed runs. Keep builds separate from subprocess test execution.
+The mocked VM harness checks and isolated non-root inspection prerequisite
+also pass. They do not prove current-source Kubernetes storage recovery.
 
 The preceding temporary diagnostic crossed 256 MiB at 804,864 rows with four
 calling threads. Its peak was 292,132 KiB. The same input reached the tenant
