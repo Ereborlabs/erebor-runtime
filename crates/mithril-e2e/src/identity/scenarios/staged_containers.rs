@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::platform::{platform_test, GroupActor, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = staged_containers]
 fn sidecar_recovers<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("staged-containers")?;

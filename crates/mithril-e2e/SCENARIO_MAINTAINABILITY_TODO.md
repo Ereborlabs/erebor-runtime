@@ -4039,6 +4039,20 @@ setup, production actions, assertions, and focused test.
     pre-readiness case, namespace-init passed in 112.56 seconds. The complete
     Kubernetes rerun is pending the test-runtime review.
 - [ ] `physical_kubernetes_containers_probe`
+  - [x] Add one policy with separate Sidecar, Init, and Application entry
+    roles. The small Host and direct-`runc` test starts the sidecar before
+    Node, checks public recovery and a denied exec, then adds the init and
+    application actors. It checks distinct cookies, process states, execution
+    sets, roles, cgroups, and a stable sidecar. The final focused Host and
+    direct-`runc` cases passed. The new test does not yet
+    use the original init-before-Node order or a real Kubernetes Pod, so it
+    does not replace the old probe.
+    The 58-test Host `identity` run passed the 57 existing tests and found
+    that this actor-before-Node test had reused an already-running Node.
+    The corrected separate lifecycle passed on Host and direct `runc`.
+    The complete 52-test direct-`runc` `identity` lane passed. The Rust CI
+    gate passed. A complete Host and Kubernetes matrix on the final lifecycle
+    layout remains pending.
   - [ ] Keep the original probe until its replacement passes. It starts a
     restartable sidecar and a held init container before the application. It
     checks separate cgroups, task cookies, process states, execution sets, and
@@ -4055,6 +4069,10 @@ setup, production actions, assertions, and focused test.
     Application-only policy and an input-driven actor had the same result.
     The existing worker/helper group passed. This does not prove a Node defect.
     No replacement or production change was kept from these failed runs.
+    A reversed worker/helper group timed out before its first actor activated.
+    Removing the fixture's name-based first-member IDs did not fix it.
+    Installing a policy without a target left Node prevention claims disabled,
+    as the readiness check requires. These diagnostic changes were reverted.
   - [ ] Pass Host and direct `runc` with the original assertions. Then pass
     Kubernetes with its real init, sidecar, and application containers before
     removing the old probe.
