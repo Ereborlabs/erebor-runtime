@@ -1954,7 +1954,9 @@ test does not close a row when its physical condition or an assertion changed.
         - [x] Pass Host and commit it. The `mount_late_host` case passed in
           `mithril-runtime-qualification-762734`; 92 runnable library tests,
           format, and strict Clippy passed. The test file has 90 lines.
-        - [ ] Pass direct `runc` and commit it.
+        - [x] Pass direct `runc` and commit it. The `mount_late_runc` case
+          passed in `mithril-runtime-qualification-762734` with the same
+          actor, policy, and assertions as Host.
         - [ ] Pass Kubernetes and commit it.
         - [ ] Remove only the matching old allowed-bind comparison after all
           three platforms pass. Keep the source resolver for policy
