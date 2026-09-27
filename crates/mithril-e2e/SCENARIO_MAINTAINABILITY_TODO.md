@@ -4039,20 +4039,14 @@ setup, production actions, assertions, and focused test.
     pre-readiness case, namespace-init passed in 112.56 seconds. The complete
     Kubernetes rerun is pending the test-runtime review.
 - [ ] `physical_kubernetes_containers_probe`
-  - [x] Add one policy with separate Sidecar, Init, and Application entry
-    roles. The small Host and direct-`runc` test starts the sidecar before
-    Node, checks public recovery and a denied exec, then adds the init and
-    application actors. It checks distinct cookies, process states, execution
-    sets, roles, cgroups, and a stable sidecar. The final focused Host and
-    direct-`runc` cases passed. The new test does not yet
-    use the original init-before-Node order or a real Kubernetes Pod, so it
-    does not replace the old probe.
-    The 58-test Host `identity` run passed the 57 existing tests and found
-    that this actor-before-Node test had reused an already-running Node.
-    The corrected separate lifecycle passed on Host and direct `runc`.
-    The complete 52-test direct-`runc` `identity` lane passed. The Rust CI
-    gate passed. A complete Host and Kubernetes matrix on the final lifecycle
-    layout remains pending.
+  - [ ] Call `start_actor_group` once with all three actor commands. One call
+    must create one workload: one Pod on Kubernetes. The Pod must declare the
+    sidecar, init, and application at creation. Kubernetes starts the declared
+    containers in its native order. A second group call must not add a
+    container or create another Pod for this scenario.
+    The two-call Host/direct-`runc` test from `99c4e467` and `37e988f3`
+    passed focused tests but did not model one Pod. It was removed. The old
+    Kubernetes probe remains the coverage owner.
   - [ ] Keep the original probe until its replacement passes. It starts a
     restartable sidecar and a held init container before the application. It
     checks separate cgroups, task cookies, process states, execution sets, and
@@ -4060,8 +4054,8 @@ setup, production actions, assertions, and focused test.
     the application starts.
   - [ ] Give the shared actor group one Pod policy with a separate entry role
     for each container. Use the real `Sidecar`, `Init`, and `Application` kinds.
-    Return the running init and sidecar before the Pod is Ready. Attach to the
-    later application in the same Pod through the same group operation.
+    Return the running init and sidecar before the Pod is Ready. Observe the
+    later application through the group returned by the one start call.
   - [ ] Resolve the paired lightweight setup before a Kubernetes run. In a
     focused Host run, the first target activated. With the second target, Node
     reported two runtime bindings but left a later policy activation pending.

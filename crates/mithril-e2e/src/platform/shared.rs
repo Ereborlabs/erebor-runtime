@@ -139,7 +139,6 @@ impl SharedState {
         document: &PolicyDocumentV1,
         selector: &str,
         kind: EntryKindV1,
-        container: ControlContainerKind,
     ) -> TestResult<u32> {
         let roles = document
             .entry_role_assignments
@@ -147,7 +146,9 @@ impl SharedState {
             .filter(|entry| {
                 entry.workload_selector_ids.iter().any(|id| id == selector)
                     && entry.entry_kinds.contains(&kind)
-                    && entry.container_kinds.contains(&container)
+                    && entry
+                        .container_kinds
+                        .contains(&ControlContainerKind::Application)
             })
             .map(|entry| entry.resulting_role_id.as_str())
             .collect::<BTreeSet<_>>();
@@ -1024,18 +1025,10 @@ impl Shared {
             .find(|selector| selector.container_names.contains(&self.actor))
             .ok_or("the policy has no selector for the actor container")?;
         let selector_id = selector.workload_selector_id.clone();
-        let kind = match selector.container_kinds.as_slice() {
-            [kind] => *kind,
-            _ => return Err("the actor selector must have one container kind".into()),
-        };
         let initial_role =
-            SharedState::role_handle(&document, &selector_id, EntryKindV1::ContainerStart, kind)?;
-        let external_role = SharedState::role_handle(
-            &document,
-            &selector_id,
-            EntryKindV1::ExternalRuntimeUnknown,
-            kind,
-        )?;
+            SharedState::role_handle(&document, &selector_id, EntryKindV1::ContainerStart)?;
+        let external_role =
+            SharedState::role_handle(&document, &selector_id, EntryKindV1::ExternalRuntimeUnknown)?;
         let image_digest = selector
             .image_digests
             .first()
@@ -1053,7 +1046,7 @@ impl Shared {
             pod_uid: pod_uid.clone(),
             container_id: format!("scheduled:{}", pod_uid),
             container_name: self.actor.clone(),
-            container_kind: kind,
+            container_kind: ControlContainerKind::Application,
             image_digest,
             pod_labels: self.labels.clone(),
             kubernetes: Some(KubernetesWorkloadIdentityV1 {
@@ -1155,12 +1148,7 @@ impl Shared {
                 sandbox_id: "d".repeat(64),
                 container_name: actor,
                 image_digest: target.image_digest,
-                container_kind: match kind {
-                    ControlContainerKind::Init => ContainerKindV1::Init,
-                    ControlContainerKind::Sidecar => ContainerKindV1::Sidecar,
-                    ControlContainerKind::Application => ContainerKindV1::Application,
-                    ControlContainerKind::Ephemeral => ContainerKindV1::Ephemeral,
-                },
+                container_kind: ContainerKindV1::Application,
                 container_generation: generation,
                 root_cgroup_path: Some(cgroup),
                 lifecycle_generation: generation,
