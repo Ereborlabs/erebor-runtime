@@ -596,7 +596,19 @@ ignored; Mithril e2e passed 122 with 251 ignored; Node passed 256 with one ignor
 Formatting, workspace checks, and strict Clippy also passed. The rebuilt release
 CLI passed startup (18 checks) and recovery (29 checks) on the pilot VM.
 Their `bounded-*` results are in `/tmp/araphor-pilot-qualification.TmOyPeOh/`.
-The release quota retry remains open; these passes do not qualify full capacity.
+The release quota retry passed on the same source. Its `bounded-quota.json`
+and `bounded-quota-resources.log` are in that directory. The tenant quota
+rejected a complete batch after 4,328,448 accepted records without changing
+receipts, revision, or pending Node input. The full retained-input digest
+matched. A result with one exact witness committed through maintenance
+admission. Retention permitted replay to cursor 4,329,472. Restart preserved
+the result, receipt, witness, and replayed frames. The old writer remained empty.
+The run took 2,057.58 seconds; its maximum successful ACK was 3.142 seconds.
+Peak whole-process RSS was 539,568 KiB, including Node, Control, and DuckDB.
+This value does not prove the analysis-only memory limit. Host workspace tests
+overlapped this run, so its timings are not a clean performance baseline.
+Global saturation, worst-case payloads, concurrent rollout, physical reserve
+adequacy, repeated performance, and old-writer removal remain unqualified.
 
 [EvidenceIntakeOwner::new](../../../../crates/mithril-control/src/evidence.rs) The explicit data-backed constructor rejects accepted, pending, or coverage state in the old Control evidence store. The owner validates Node batches and commits evidence and coverage only to AnalysisStore. Its component tests check exact frames, replay, old Control-store isolation, and restart.<br>
 -> [ControlPlane::from_intake](../../../../crates/mithril-control/src/service.rs) The service accepts the selected intake owner and keeps the same Control policy and trust store.<br>

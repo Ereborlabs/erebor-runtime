@@ -1222,6 +1222,36 @@ The release rebuild also passed. Its binary SHA-256 is
 `c6444b761161696108fdfb9d9fb1bd19cb0ac1e18b2974fc4d16400a376aeec0`.
 Release startup passed 18 checks and recovery passed 29 checks again.
 The pilot directory above contains their `bounded-*` results, resource logs,
-and environment record. The quota retry overlaps the host workspace tests;
-its timings are not a clean performance baseline. The retry is still running.
-Full capacity remains unqualified. The phase remains **Not done**.
+and environment record. The quota retry overlapped the host workspace tests;
+its timings are not a clean performance baseline.
+
+The release quota retry passed on `7d7b1acc`. Results are
+`bounded-quota.json` and `bounded-quota-resources.log` in the pilot directory.
+The default two-GiB tenant quota accepted 4,328,448 records before rejecting
+the next complete batch. The rejection kept receipts, revision, and pending
+Node input unchanged. A policy RPC and retained duplicate replay still worked.
+Bounded reads reproduced all 502,201,394 input bytes and their ordered digest.
+The result commit retained one exact witness. Retention recorded explicit
+expiry, and replay advanced the accepted cursor to 4,329,472. Restart preserved
+the result, receipt, witness, and exact replayed frames. The old Control evidence
+writer remained empty. No quota or deadline changed.
+
+| Measurement | Seconds |
+| --- | ---: |
+| Intake through quota rejection | 1,953.442 |
+| Complete retained-input read | 79.420 |
+| Result commit | 6.081 |
+| Sixteen bounded retention calls | 10.246 |
+| Checkpoint | 1.931 |
+| Reopen | 2.639 |
+
+The whole case took 2,057.58 seconds. Its 4,227 successful ACK samples have
+p50/p95/p99 values of 0.314/1.013/1.111 seconds and a maximum of 3.142 seconds.
+Peak whole-process RSS was 539,568 KiB. This process contains Node, Control,
+and DuckDB; the measurement does not prove the analysis-only memory limit.
+Maximum sampled database, WAL, and aggregate file sizes were 367,538,176,
+65,811,242, and 433,328,128 bytes. These samples are not continuous peaks.
+This pass proves the synthetic tenant-quota recovery case, not global
+saturation, worst-case payloads, concurrent rollout, reserve adequacy, or
+repeatable performance. Those checks and old-writer removal remain open.
+The phase remains **Not done**.
