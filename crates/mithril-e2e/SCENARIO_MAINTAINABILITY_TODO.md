@@ -4055,8 +4055,19 @@ setup, production actions, assertions, and focused test.
     in 47.26 seconds with a distinct CRI sandbox ID for each Pod. The unchanged
     two-policy Host case passed in 37.22 seconds. The complete Host identity
     lane passed 58 tests in 691.00 seconds with the original exact runtime
-    entry role checks. Direct `runc` and Kubernetes remain to be checked. The
-    old Kubernetes probe remains in place.
+    entry role checks. The focused direct-`runc` case passed in 48.81 seconds.
+    The full direct-`runc` lane passed 52 of 53 tests. A later `runc exec cat`
+    failed before it wrote a PID file. That test passed alone in 51.08 seconds,
+    and all 22 direct-`runc` identity scenarios passed in 435.84 seconds. The
+    full 52-test direct-`runc` lane passed in 1157.38 seconds when only the
+    new case was skipped. An unchanged repeat of all 53 direct-`runc` tests
+    passed in 1200.52 seconds. Kubernetes is not checked. The old Kubernetes
+    probe remains in place.
+  - [ ] Diagnose the intermittent direct-`runc` exec failure. One full run
+    reported that `runc exec cat` exited before writing its PID file. The
+    same test passed alone, in the 22-test identity subset, and in the full
+    53-test repeat. No Node or BPF defect has been established. Do not weaken
+    the runtime-entry assertions or claim that this failure is fixed.
   - [x] Keep the Host lane reliable after the extra workload. The TCP
     send-variants case now uses the existing bounded evidence wait and still
     requires exactly three allowed sends. The focused TCP case passed in

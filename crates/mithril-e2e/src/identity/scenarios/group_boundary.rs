@@ -1,6 +1,6 @@
 use crate::platform::{platform_test, GroupActor, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn each_group_is_one_workload<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("group-boundary")?;
