@@ -1501,8 +1501,12 @@ commit failure, crash recovery, and restart cases. Its executable SHA-256 is
 `48744fcd1a134639c6c1f0fa17799839fcd2be35de3b738a3f1853df6e97ad32`;
 the log is `data-flush-e2e.log` in the memory output directory. No allocator
 environment override was set. The release build passed in 7 minutes 1 second.
-Formatting, workspace checks, and strict Clippy passed for `3a03e307`.
-Workspace tests are still running for that source state.
+The full workspace gate passed for `3a03e307`. It used
+`CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh`.
+Formatting, compilation, strict Clippy, and workspace tests passed.
+Data tests passed 49 with three ignored; Control passed 196 with two ignored;
+Mithril e2e passed 123 with 251 ignored; Node passed 256 with one ignored.
+Test execution was serial. This result does not cover the later test extension.
 The matched full-quota diagnostic then crossed the 256-MiB limit at
 4,024,320 accepted rows, before reaching the tenant quota. Peak RSS was
 273,232 KiB; elapsed time was 588.50 seconds. Receipt, checkpoint, last-row
@@ -1513,7 +1517,20 @@ The memory output directory contains `memory-flush.csv` and
 `memory-flush-resources.log`. No allocator environment override was set.
 Host workspace tests overlapped this diagnostic. The native-setting change
 does not satisfy full-capacity memory qualification.
-The repository memory regression now continues to the default tenant quota
-instead of stopping after one million rows. Its release run is pending.
-This test edit is not covered by the running workspace gate. The phase
-remains **Not done**.
+The repository memory regression in `083212f6` now continues to the default
+tenant quota instead of stopping after one million rows. Its release build
+passed in 7 minutes 9 seconds. The exact isolated test failed after 375.68
+seconds at cursor 3,915,776. Its failure sample reports 264,796 KiB high-water
+RSS. Native categories after that batch report 4,194,304 ART index bytes,
+72,089,600 base-table bytes, 47,710,208 in-memory-table bytes, and 786,432
+transaction bytes. These categories do not measure all process allocations.
+The external resource log reports a final process peak of 282,312 KiB and
+exit status 101. No allocator environment override was set.
+The test executable SHA-256 is
+`d22e3caf6e9d397fd2233741590163a38556030207ad986302c8cfd715159ede`.
+The memory output directory contains `memory-quota-regression.log` and
+`memory-quota-regression-resources.log`. A new full workspace gate is running
+for `083212f6`; formatting, compilation, and strict Clippy have passed.
+A temporary diagnostic tests a 64-MiB native buffer target with the same
+tenant quota and four calling threads. Production settings remain unchanged.
+The memory requirement and the complete phase remain **Not done**.
