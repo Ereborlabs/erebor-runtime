@@ -381,7 +381,6 @@ impl Platform for Runc {
 
     fn start_actor_group<F>(
         &mut self,
-        manifest: &str,
         actors: &[GroupActor<'_>],
         labels: &Labels,
         before_app: F,
@@ -389,22 +388,16 @@ impl Platform for Runc {
     where
         F: FnOnce(&mut Self, &mut Vec<(ProcessFixture, PathBuf)>) -> TestResult<()>,
     {
-        let path = self
-            .shared
-            .source()
-            .join("crates/mithril-e2e/fixtures/kubernetes")
-            .join(manifest);
-        let pod: k8s_openapi::api::core::v1::Pod = serde_saphyr::from_slice(&fs::read(&path)?)?;
         self.shared.begin_pod(labels);
         let mut group = Vec::with_capacity(actors.len());
         let mut before_app = Some(before_app);
         for actor in actors {
-            let kind = actor.kind(&pod)?;
+            let kind = actor.kind;
             if kind == mithril_control::ContainerKindV1::Application {
                 if let Some(check) = before_app.take() {
                     check(self, &mut group)?;
                     for (member, (process, _)) in actors.iter().zip(&mut group) {
-                        if member.kind(&pod)? == mithril_control::ContainerKindV1::Init {
+                        if member.kind == mithril_control::ContainerKindV1::Init {
                             self.shared.finish_init(labels, member.name, process)?;
                         }
                     }

@@ -19,7 +19,6 @@ use crate::process::ProcessFixture;
 impl Kubernetes {
     pub(super) fn start_group<F>(
         &mut self,
-        manifest: &str,
         actors: &[GroupActor<'_>],
         labels: &Labels,
         before_app: F,
@@ -48,7 +47,23 @@ impl Kubernetes {
         self.actor_cgroup = None;
 
         let fixtures = self.root.join(PROCESS_FIXTURES);
-        let mut pod: Pod = serde_saphyr::from_slice(&fs::read(self.fixture(manifest))?)?;
+        let named = self.fixture(&format!("{}-pod-v1.yaml", self.scenario));
+        let path = if named.is_file() {
+            named
+        } else {
+            if actors.iter().any(|actor| {
+                actor.script.is_none()
+                    || actor.kind != mithril_control::ContainerKindV1::Application
+            }) {
+                return Err(format!(
+                    "{}: the scenario needs a Pod fixture for native or non-application actors",
+                    named.display()
+                )
+                .into());
+            }
+            self.fixture("pid-reuse-pod-v1.yaml")
+        };
+        let mut pod: Pod = serde_saphyr::from_slice(&fs::read(&path)?)?;
         pod.metadata.namespace = Some(self.namespace.clone());
         pod.metadata.name = Some(self.actor_name.clone());
         pod.metadata.labels = Some(labels.clone());
@@ -80,11 +95,40 @@ impl Kubernetes {
             "kubernetes.io/hostname".to_owned(),
             self.node_name.clone(),
         )]));
+        if actors.iter().any(|actor| actor.script.is_some()) {
+            let volumes = spec
+                .volumes
+                .as_mut()
+                .ok_or("the actor Pod has no volumes")?;
+            for (name, path) in [
+                ("fixtures", fixtures.as_path()),
+                ("work", self.work_path.as_path()),
+            ] {
+                let source = volumes
+                    .iter_mut()
+                    .find(|volume| volume.name == name)
+                    .and_then(|volume| volume.host_path.as_mut())
+                    .ok_or_else(|| format!("the actor Pod has no {name} hostPath"))?;
+                source.path = path.display().to_string();
+            }
+        }
         let mut names = BTreeSet::new();
         for actor in actors {
             if !names.insert(actor.name) {
                 return Err(format!("duplicate actor name {}", actor.name).into());
             }
+            let kind = actor.pod_kind(&pod)?;
+            if kind != actor.kind {
+                return Err(format!(
+                    "{}: actor {} is {:?} in the Pod, expected {:?}",
+                    path.display(),
+                    actor.name,
+                    kind,
+                    actor.kind
+                )
+                .into());
+            }
+            let spec = pod.spec.as_mut().ok_or("the actor Pod has no spec")?;
             let container = spec
                 .init_containers
                 .as_mut()
@@ -114,23 +158,6 @@ impl Kubernetes {
                 });
             }
         }
-        if actors.iter().any(|actor| actor.script.is_some()) {
-            let volumes = spec
-                .volumes
-                .as_mut()
-                .ok_or("the actor Pod has no volumes")?;
-            for (name, path) in [
-                ("fixtures", fixtures.as_path()),
-                ("work", self.work_path.as_path()),
-            ] {
-                let source = volumes
-                    .iter_mut()
-                    .find(|volume| volume.name == name)
-                    .and_then(|volume| volume.host_path.as_mut())
-                    .ok_or_else(|| format!("the actor Pod has no {name} hostPath"))?;
-                source.path = path.display().to_string();
-            }
-        }
         let pods = Api::<Pod>::namespaced(self.client.clone(), &self.namespace);
         self.runtime
             .block_on(pods.create(&PostParams::default(), &pod))?;
@@ -138,7 +165,7 @@ impl Kubernetes {
         let mut group = Vec::with_capacity(actors.len());
         let mut before_app = Some(before_app);
         for actor in actors {
-            if actor.kind(&pod)? == mithril_control::ContainerKindV1::Application {
+            if actor.kind == mithril_control::ContainerKindV1::Application {
                 if let Some(check) = before_app.take() {
                     check(self, &mut group)?;
                 }
@@ -146,7 +173,7 @@ impl Kubernetes {
             let path = actor
                 .script
                 .map(|script| fixtures.join(script))
-                .unwrap_or_else(|| self.fixture(manifest));
+                .unwrap_or_else(|| path.clone());
             let last = RefCell::new(String::from("<absent>"));
             let id = wait_for(
                 &path,
@@ -316,7 +343,7 @@ impl Kubernetes {
             for actor in actors {
                 let state = KubernetesState::member_status(&pod, actor.name)
                     .ok_or_else(|| format!("the actor Pod has no {} status", actor.name))?;
-                let ready = if actor.kind(&pod)? == mithril_control::ContainerKindV1::Init {
+                let ready = if actor.kind == mithril_control::ContainerKindV1::Init {
                     state
                         .state
                         .as_ref()

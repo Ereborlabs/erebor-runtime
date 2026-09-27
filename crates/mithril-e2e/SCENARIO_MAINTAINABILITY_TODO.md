@@ -4166,6 +4166,20 @@ setup, production actions, assertions, and focused test.
     The two-call Host/direct-`runc` test from `99c4e467` and `37e988f3`
     passed focused tests but did not model one Pod. It was removed. The old
     Kubernetes probe remains the coverage owner.
+  - [x] Remove the Pod YAML argument from `start_actor_group`. The shared test
+    supplies actor commands and each member's container kind. Host and direct
+    `runc` use that kind without parsing Kubernetes YAML. Kubernetes owns its
+    Pod fixture: use the scenario Pod fixture when present and the existing
+    standard actor Pod otherwise. Keep native probe and init/sidecar settings
+    in their Kubernetes physical fixtures. One group call creates one Pod;
+    the separate two-call boundary test creates two Pods by design.
+    The roles, container-kind, and two-Pod boundary cases passed on Host,
+    direct `runc`, and Kubernetes. The native HTTP/TCP/gRPC probe case passed
+    on Kubernetes. The same scenario bodies and result assertions remain.
+    The complete affected identity lifecycle passed 59 Host tests in 640.68
+    seconds, 54 direct-`runc` tests in 1491.05 seconds, and 55 real Kubernetes
+    tests in 1462.52 seconds. The retained VM and K3s cluster stayed running.
+    The repository Rust CI verifier passed.
   - [x] Keep one Pod identity for members of one group call. A later group
     call must use a new Pod UID and new container IDs, even with the same
     policy labels and member names. The 60-line `group_boundary` test starts

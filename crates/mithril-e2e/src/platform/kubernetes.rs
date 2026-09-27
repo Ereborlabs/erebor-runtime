@@ -59,6 +59,7 @@ pub(crate) struct Kubernetes {
 
 pub(crate) struct KubernetesState {
     namespace: String,
+    scenario: String,
     work_path: PathBuf,
     work: Option<ProbeDirectory>,
     directories: Vec<ProbeDirectory>,
@@ -1016,6 +1017,7 @@ impl KubernetesState {
             return Err("the previous Kubernetes scenario is not clean".into());
         }
         self.namespace = format!("mithril-work-{name}-{}", self.token);
+        self.scenario = name.to_owned();
         self.work_path = self.work_path.with_file_name("actor");
         self.work = Some(ProbeDirectory::create(&self.work_path)?);
         self.actor_name = ACTOR.to_owned();
@@ -1335,6 +1337,7 @@ impl Platform for Kubernetes {
         let reader = KernelStateReader::new(&pin_path);
         let mut fixture = KubernetesState {
             namespace,
+            scenario: name.to_owned(),
             work: Some(ProbeDirectory::create(&work_path)?),
             work_path,
             directories: Vec::new(),
@@ -1533,15 +1536,14 @@ impl Platform for Kubernetes {
             name: CONTAINER,
             script: Some(name),
             args: extra,
+            kind: mithril_control::ContainerKindV1::Application,
         };
-        let mut group =
-            self.start_actor_group("pid-reuse-pod-v1.yaml", &[actor], labels, |_, _| Ok(()))?;
+        let mut group = self.start_actor_group(&[actor], labels, |_, _| Ok(()))?;
         Ok(group.remove(0).0)
     }
 
     fn start_actor_group<F>(
         &mut self,
-        manifest: &str,
         actors: &[GroupActor<'_>],
         labels: &super::Labels,
         before_app: F,
@@ -1549,7 +1551,7 @@ impl Platform for Kubernetes {
     where
         F: FnOnce(&mut Self, &mut Vec<(ProcessFixture, PathBuf)>) -> TestResult<()>,
     {
-        self.start_group(manifest, actors, labels, before_app)
+        self.start_group(actors, labels, before_app)
     }
     fn add_actor(&mut self, command: &str, args: &[&str]) -> TestResult<ProcessFixture> {
         self.start_entry(command, args)

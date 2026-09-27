@@ -2,6 +2,8 @@ use std::fs;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use mithril_control::ContainerKindV1;
+
 use crate::platform::{platform_test, GroupActor, Labels, Platform, TestResult};
 
 #[platform_test(kubernetes)]
@@ -16,13 +18,9 @@ fn native_probes_keep_pid1<P: Platform>() -> TestResult<()> {
         name,
         script: None,
         args: &[],
+        kind: ContainerKindV1::Application,
     });
-    let mut group = env.start_actor_group(
-        "network-probes-pod-v1.yaml",
-        &actors,
-        &Labels::default(),
-        |_, _| Ok(()),
-    )?;
+    let mut group = env.start_actor_group(&actors, &Labels::default(), |_, _| Ok(()))?;
     assert!(env.workload_ready()?, "native probes did not become Ready");
 
     let until = Instant::now() + Duration::from_secs(4);

@@ -43,10 +43,11 @@ pub(crate) struct GroupActor<'a> {
     pub(crate) name: &'a str,
     pub(crate) script: Option<&'a str>,
     pub(crate) args: &'a [&'a str],
+    pub(crate) kind: mithril_control::ContainerKindV1,
 }
 
 impl GroupActor<'_> {
-    fn kind(&self, pod: &Pod) -> TestResult<mithril_control::ContainerKindV1> {
+    fn pod_kind(&self, pod: &Pod) -> TestResult<mithril_control::ContainerKindV1> {
         use mithril_control::ContainerKindV1;
 
         let spec = pod.spec.as_ref().ok_or("the group Pod has no spec")?;
@@ -201,7 +202,6 @@ pub(crate) trait Platform: Sized {
     }
     fn start_actor_group<F>(
         &mut self,
-        _manifest: &str,
         _actors: &[GroupActor<'_>],
         _labels: &Labels,
         _before_app: F,

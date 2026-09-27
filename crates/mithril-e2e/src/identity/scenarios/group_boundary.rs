@@ -1,3 +1,5 @@
+use mithril_control::ContainerKindV1;
+
 use crate::platform::{platform_test, GroupActor, Platform, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
@@ -13,13 +15,14 @@ fn each_group_is_one_workload<P: Platform>() -> TestResult<()> {
         name: "worker",
         script: Some("read_path.py"),
         args: &["worker"],
+        kind: ContainerKindV1::Application,
     }];
     let mut first = env
-        .start_actor_group("pid-reuse-pod-v1.yaml", &actors, &labels, |_, _| Ok(()))
+        .start_actor_group(&actors, &labels, |_, _| Ok(()))
         .map_err(|error| format!("first group: {error}"))?;
     let before = env.task(first[0].0.id(), "first group identity")?;
     let mut second = env
-        .start_actor_group("pid-reuse-pod-v1.yaml", &actors, &labels, |_, _| Ok(()))
+        .start_actor_group(&actors, &labels, |_, _| Ok(()))
         .map_err(|error| format!("second group: {error}"))?;
     let after = env.task(second[0].0.id(), "second group identity")?;
 

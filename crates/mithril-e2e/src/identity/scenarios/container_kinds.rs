@@ -1,3 +1,5 @@
+use mithril_control::ContainerKindV1;
+
 use crate::platform::{platform_test, GroupActor, Platform, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
@@ -14,33 +16,31 @@ fn group_kinds_are_isolated<P: Platform>() -> TestResult<()> {
             name: "sidecar",
             script: Some("read_path.py"),
             args: &["sidecar"],
+            kind: ContainerKindV1::Sidecar,
         },
         GroupActor {
             name: "init",
             script: Some("ready.py"),
             args: &[],
+            kind: ContainerKindV1::Init,
         },
         GroupActor {
             name: "application",
             script: Some("read_path.py"),
             args: &["application"],
+            kind: ContainerKindV1::Application,
         },
     ];
     let mut early = None;
-    let mut group = env.start_actor_group(
-        "container-kinds-pod-v1.yaml",
-        &actors,
-        &labels,
-        |env, group| {
-            assert_eq!(group.len(), 2, "init and sidecar must precede application");
-            let side = env.task(group[0].0.id(), "sidecar before application")?;
-            let init = env.task(group[1].0.id(), "init before application")?;
-            assert_ne!(side.snapshot.task_cookie, init.snapshot.task_cookie);
-            early = Some((side.snapshot, init.snapshot));
-            group[1].0.send(b"stop\n")?;
-            Ok(())
-        },
-    )?;
+    let mut group = env.start_actor_group(&actors, &labels, |env, group| {
+        assert_eq!(group.len(), 2, "init and sidecar must precede application");
+        let side = env.task(group[0].0.id(), "sidecar before application")?;
+        let init = env.task(group[1].0.id(), "init before application")?;
+        assert_ne!(side.snapshot.task_cookie, init.snapshot.task_cookie);
+        early = Some((side.snapshot, init.snapshot));
+        group[1].0.send(b"stop\n")?;
+        Ok(())
+    })?;
     let (side_before, init_root) = early.ok_or("the pre-application checkpoint did not run")?;
     let side_after = env.task(group[0].0.id(), "sidecar after application")?;
     let application = env.task(group[2].0.id(), "application identity")?;

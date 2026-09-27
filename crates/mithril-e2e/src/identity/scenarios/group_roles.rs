@@ -1,3 +1,5 @@
+use mithril_control::ContainerKindV1;
+
 use crate::platform::{platform_test, GroupActor, Platform, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
@@ -14,15 +16,16 @@ fn container_roles_are_distinct<P: Platform>() -> TestResult<()> {
             name: "worker",
             script: Some("read_path.py"),
             args: &["worker"],
+            kind: ContainerKindV1::Application,
         },
         GroupActor {
             name: "helper",
             script: Some("read_path.py"),
             args: &["helper"],
+            kind: ContainerKindV1::Application,
         },
     ];
-    let mut group =
-        env.start_actor_group("pid-reuse-pod-v1.yaml", &actors, &labels, |_, _| Ok(()))?;
+    let mut group = env.start_actor_group(&actors, &labels, |_, _| Ok(()))?;
     let first = env.task(group[0].0.id(), "worker identity")?;
     let second = env.task(group[1].0.id(), "helper identity")?;
     assert_ne!(first.snapshot.task_cookie, second.snapshot.task_cookie);

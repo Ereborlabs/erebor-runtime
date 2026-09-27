@@ -62,12 +62,17 @@ production `mithril-oci-hook` binary. Set `MITHRIL_TEST_OCI_HOOK` when the binar
 is not at `target/debug/mithril-oci-hook` under `MITHRIL_TEST_ROOT`.
 
 For two containers under one policy, give each container match its own
-`applicationEntry` role. Pass both `GroupActor` values to
-`start_actor_group("pid-reuse-pod-v1.yaml", &actors, &labels)`. Kubernetes starts
-one Pod with two container PID-1 processes. Host and direct `runc` start two
-separate PID-1 roots. See [the group-role test](src/identity/scenarios/group_roles.rs).
-The [native network-probe test](src/identity/scenarios/network_probes.rs) uses
-the same group call with a checked Pod YAML and native container commands.
+`applicationEntry` role. Set each `GroupActor.kind` to the required production
+container kind. Pass both actors to
+`start_actor_group(&actors, &labels, |_, _| Ok(()))`. One call starts one Pod
+with two container PID-1 processes on Kubernetes. Host and direct `runc` start
+two separate PID-1 roots in one workload. See [the group-role test](src/identity/scenarios/group_roles.rs).
+The test does not pass a Pod YAML name. For a special Kubernetes Pod, place
+`<setup-name>-pod-v1.yaml` in `fixtures/kubernetes/`. Kubernetes uses that
+fixture; otherwise it uses the standard actor Pod. Host and direct `runc` use
+the actor kinds, not Kubernetes YAML. The
+[native network-probe test](src/identity/scenarios/network_probes.rs) keeps its
+HTTP, TCP, and gRPC probe definitions in its Kubernetes Pod fixture.
 
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path
