@@ -1385,5 +1385,32 @@ with 186,964 KiB peak whole-process RSS. Idle/loaded mean times were
 99.198/107.309 milliseconds; the maximum observed ACK was 218.475 milliseconds.
 Host workspace tests ran concurrently. These times do not prove that the
 slowdown is removed. Formatting, workspace checks, and strict Clippy passed.
-Workspace tests and repeated post-verification comparisons remain open.
-No Rust source changed during the gate. The phase remains **Not done**.
+The full workspace gate passed on `7bdf5797` with
+`CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh`.
+Data passed 49 tests with two ignored; Control passed 196 with two ignored;
+Mithril e2e passed 123 with 251 ignored; Node passed 256 with one ignored.
+Control took 519.07 seconds; Mithril e2e took 130.43 seconds. No Rust source
+changed during the gate.
+
+Three release runs then passed with the same binary and new temporary stores.
+Each run has 16 pairs in each order, 64 Active transitions, and 131,072 records.
+This branch's build and test jobs had finished. The unrelated VM and desktop
+applications remained active; these runs do not use a dedicated host.
+The pilot directory contains `balanced-rollout-{1,2,3}.json` and their
+`-resources.log` files. Keep all three runs and the original fixed-order runs.
+Percentiles use the nearest-rank method over all 32 samples in each run.
+
+| Run | Idle / loaded mean milliseconds | Mean increase | Idle / loaded p50 milliseconds | Idle / loaded p95 milliseconds | Maximum observed ACK milliseconds | Whole-case seconds | Peak RSS KiB |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 79.422 / 85.748 | 7.96% | 77.860 / 82.527 | 124.417 / 134.713 | 214.647 | 13.15 | 185,944 |
+| 2 | 84.073 / 87.423 | 3.98% | 78.155 / 85.835 | 128.722 / 136.349 | 138.867 | 13.54 | 185,528 |
+| 3 | 79.427 / 84.029 | 5.79% | 78.815 / 82.944 | 130.289 / 138.304 | 147.844 | 12.98 | 189,212 |
+
+The corrected order does not remove the measured intake cost. Do not claim
+that the earlier difference was only a test defect. The five-percent rule in
+verification.md compares discovery enabled and disabled under equal input.
+These runs compare idle and active intake; they do not pass or fail that
+discovery comparison. They prove bounded completion for this synthetic load,
+not physical policy activation or full-capacity resource limits. Old-writer
+removal and the remaining resource and physical checks stay open. The phase
+remains **Not done**.

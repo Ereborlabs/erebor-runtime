@@ -380,9 +380,21 @@ failed before this correction and passed after it; the focused case took
 order, 64 Active transitions, and 131,072 records. Its binary SHA-256 is
 `8d790a437a6f10c27b31311eda4b6f9b38f61b14a580f2703a33e5ad2c3c718d`.
 The pilot directory contains `balanced-rollout-smoke.json` and its resource
-log. Host workspace tests ran concurrently. Formatting, workspace checks,
-and strict Clippy passed; workspace tests and repeated measurements remain
-open. No slowdown removal or physical activation pass is claimed.
+log. Host workspace tests ran concurrently. The full gate then passed on
+`7bdf5797` with two build jobs and serial tests: formatting, workspace checks,
+strict Clippy, and all workspace tests. Data passed 49 tests with two ignored;
+Control passed 196 with two ignored; Mithril e2e passed 123 with 251 ignored;
+Node passed 256 with one ignored. No Rust source changed during the gate.
+Three later release runs passed after this branch's build and test jobs ended.
+Each run has 16 pairs in each order, 64 Active transitions, and 131,072 records.
+The pilot directory contains `balanced-rollout-{1,2,3}.json` and their resource
+logs. Loaded mean time increases by 7.96, 3.98, and 5.79 percent. The maximum
+observed ACK is 214.647 milliseconds. The data-store plan records every run's
+means, percentiles, elapsed time, and whole-process RSS. The unrelated VM and
+desktop applications remain active. These results do not show removal of the
+intake cost. The five-percent discovery rule needs enabled/disabled runs at
+equal input; this idle/intake comparison does not prove that rule. No physical
+activation or full-capacity memory pass is claimed.
 `data_rollout_load` passed with two pairs and four transitions. It also checks
 invalid pair counts and refusal to replace an existing result. All 16 enabled
 data-store tests and four enabled outage tests passed with serial execution.
