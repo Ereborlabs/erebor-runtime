@@ -7,7 +7,7 @@ use duckdb::{Config, Connection};
 use snafu::ResultExt as _;
 use tokio::sync::SemaphorePermit;
 
-use super::AnalysisStore;
+use super::{AnalysisReadControl, AnalysisStore};
 use crate::{AnalysisBusySnafu, AnalysisDatabaseSnafu, AnalysisStateSnafu, IoSnafu, Result};
 
 pub(super) struct AnalysisLease {
@@ -216,14 +216,28 @@ impl AnalysisStore {
     }
 
     pub(super) fn writer_access(&self) -> Result<AnalysisConnection<'_>> {
+        self.writer_wait(None)
+    }
+
+    pub(super) fn read_coordinator(
+        &self,
+        control: &AnalysisReadControl,
+    ) -> Result<AnalysisConnection<'_>> {
+        self.writer_wait(Some(control))
+    }
+
+    fn writer_wait(&self, control: Option<&AnalysisReadControl>) -> Result<AnalysisConnection<'_>> {
         let permit = self
             .write_slots
             .try_acquire()
             .map_err(|_| AnalysisBusySnafu { resource: "writer" }.build())?;
-        let connection = self
-            .writer
-            .lock()
-            .map_err(|_| self.state_error("the analysis writer lock is poisoned"))?;
+        let connection = match control {
+            Some(control) => control.lock(|| self.writer.try_lock())?,
+            None => self
+                .writer
+                .lock()
+                .map_err(|_| self.state_error("the analysis writer lock is poisoned"))?,
+        };
         if !self.write_ready.load(Ordering::Acquire) {
             return self.reject("the data writer requires catalog recovery before retry");
         }
@@ -236,14 +250,28 @@ impl AnalysisStore {
     }
 
     pub(super) fn reader(&self) -> Result<AnalysisConnection<'_>> {
+        self.reader_wait(None)
+    }
+
+    pub(super) fn reader_until(
+        &self,
+        control: &AnalysisReadControl,
+    ) -> Result<AnalysisConnection<'_>> {
+        self.reader_wait(Some(control))
+    }
+
+    fn reader_wait(&self, control: Option<&AnalysisReadControl>) -> Result<AnalysisConnection<'_>> {
         let permit = self
             .read_slots
             .try_acquire()
             .map_err(|_| AnalysisBusySnafu { resource: "reader" }.build())?;
-        let snapshot = self
-            .maintenance
-            .read()
-            .map_err(|_| self.state_error("the analysis maintenance lock is poisoned"))?;
+        let snapshot = match control {
+            Some(control) => control.lock(|| self.maintenance.try_read())?,
+            None => self
+                .maintenance
+                .read()
+                .map_err(|_| self.state_error("the analysis maintenance lock is poisoned"))?,
+        };
         let first = self.read_next.fetch_add(1, Ordering::Relaxed) % self.readers.len();
         for index in 0..self.readers.len() {
             match self.readers[(first + index) % self.readers.len()].try_lock() {
@@ -262,9 +290,12 @@ impl AnalysisStore {
             }
         }
         // ponytail: a queued read keeps its selected reader. Use a shared queue if measurements show imbalance.
-        let connection = self.readers[first]
-            .lock()
-            .map_err(|_| self.state_error("the analysis reader lock is poisoned"))?;
+        let connection = match control {
+            Some(control) => control.lock(|| self.readers[first].try_lock())?,
+            None => self.readers[first]
+                .lock()
+                .map_err(|_| self.state_error("the analysis reader lock is poisoned"))?,
+        };
         Ok(AnalysisConnection {
             connection,
             root: &self.root,

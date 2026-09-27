@@ -42,6 +42,7 @@ pub use progress::{
     AnalysisContextRefV1, AnalysisGapV1, AnalysisResultCommitV1, AnalysisResultReceiptV1,
     AnalysisWitnessV1, ProcessorClassV1, ProcessorScopeV1,
 };
+pub use read::AnalysisReadControl;
 pub use retention::{
     EvidenceRetentionOwner, RetentionLimitsV1, RetentionResultV1, RetentionSweepV1,
 };
