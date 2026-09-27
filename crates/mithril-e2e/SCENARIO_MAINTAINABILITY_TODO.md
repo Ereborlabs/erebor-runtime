@@ -3592,7 +3592,7 @@ setup, production actions, assertions, and focused test.
       fixture-root gates passed, and the duplicate field is absent. The VM
       launcher passed `bash -n`. The repository Rust CI script passed after
       the final Rust edit.
-    - [ ] Replace the bind-mount cache check. The shared actor must stop after
+    - [x] Replace the bind-mount cache check. The shared actor must stop after
       its successful bind mount. Read the production mutation, clean, and
       pending counters before the actor reads. Require a new mutation and a
       dirty view. Then require the protected read to fail and the control read
@@ -3604,10 +3604,19 @@ setup, production actions, assertions, and focused test.
       - [x] Pass direct `runc` in a separate commit. The exact case passed in
         29.57 seconds with the production OCI hook. All ten related direct
         `runc` lifecycle tests passed in 117.34 seconds.
-      - [ ] Pass real Kubernetes and commit it separately.
-      - [ ] Remove only the old cache assertion after the shared test proves
-        the same condition on all three platforms. Keep the old mount action
-        while mount-event receipt and five-denial capture depend on it.
+      - [x] Pass real Kubernetes. The exact case passed in 68.55 seconds.
+        All ten related Kubernetes lifecycle tests passed in 297.38 seconds.
+        The first attempt stopped before the actor: the retained VM was 97%
+        full and K3s could not schedule Control. The recovery removed seven
+        superseded test binaries, restarted only K3s, and restored the pinned
+        actor image. The unchanged test then passed. Keep the VM disk below
+        pressure limits.
+      - [x] Remove only the old duplicate dirty-view assertion. The rebuilt
+        complete direct-`runc` probe passed. Its mount-event receipt, control
+        read, five-denial capture, stale-cache repair, reader burst, and
+        cleanup checks remain. Its schema is still version 40. The repository
+        Rust CI script passed. Keep the old mount action until those distinct
+        checks have shared coverage.
   - [x] Retire the duplicate in-container bind-mount result and shell gate.
     `late_bind_keeps_policy` requires the mount to succeed after production
     policy activation on Host, direct `runc`, and Kubernetes. Keep the legacy

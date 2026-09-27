@@ -4401,9 +4401,7 @@ impl EffectTestRunner {
             reader
                 .poll(Duration::from_millis(10))
                 .context(InterceptorSnafu)?;
-            if observations.mount_change_sequence() > mount_change_sequence
-                && global_mount_view_is_dirty(&host)?
-            {
+            if observations.mount_change_sequence() > mount_change_sequence {
                 break;
             }
         }
@@ -4412,13 +4410,6 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: &rootfs,
                 reason: "the successful container bind mount did not publish a mount event",
-            }
-        );
-        ensure!(
-            global_mount_view_is_dirty(&host)?,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the attached container bind mount did not invalidate its security view",
             }
         );
         fs::write(

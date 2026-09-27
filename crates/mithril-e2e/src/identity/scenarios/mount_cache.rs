@@ -4,7 +4,7 @@ use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = mount_late]
 fn bind_refreshes_cache<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("mount-cache")?;
