@@ -319,6 +319,13 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
+        store.writer()?.get()?.execute_batch(
+            "SET logging_storage = 'stdout';
+             SET logging_level = 'debug';
+             SET logging_mode = 'ENABLE_SELECTED';
+             SET enabled_log_types = 'Checkpoint';
+             SET enable_logging = true;",
+        )?;
         let identities: Vec<_> = (1..=tenants)
             .map(|tenant| EvidenceIntakeIdentityV1 {
                 tenant_id: [tenant; 16],

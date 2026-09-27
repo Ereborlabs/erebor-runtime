@@ -757,6 +757,12 @@ The runner retains one native-memory and storage sample per 64 batches. An
 unexpected write error reports the latest sample, its batch number, the failed
 batch, and prior successful cursors. This report needs no read from a connection
 invalidated by the failure. Prior successful cursors are not a final receipt.
+The ignored test also enables only the native `Checkpoint` log on stdout.
+This log reports row-group checkpoint and merge operations without retaining
+a growing in-memory log. The pinned native code rebuilds the whole index
+after a merge changes row IDs. A merge can combine partially filled groups
+without a preceding raw-event deletion. This path is a failure hypothesis,
+not a confirmed cause. Production logging and compaction settings are unchanged.
 The diagnostic addition has not yet been compiled or run. The unchanged gRPC
 repeat must finish before another task build or load starts.
 The release build for `c72a3b68` passed. After the host filesystem reserve was
