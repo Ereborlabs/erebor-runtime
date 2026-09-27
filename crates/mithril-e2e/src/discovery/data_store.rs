@@ -1224,6 +1224,155 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn data_context_bounds() -> Result<()> {
+        use mithril_control::{
+            MAX_EVIDENCE_BATCH_PAYLOAD_BYTES, MAX_EVIDENCE_DECISION_CONTEXT_BYTES,
+        };
+        use mithril_node::{EvidenceWal, TemporalCoverageV1};
+        use prost::Message as _;
+        use sha2::{Digest as _, Sha256};
+
+        let tls = MtlsFixture::new(false)?;
+        let case = DataStoreQualification::new(tls.path().join("proof"));
+        let control = ControlStore::open(tls.path().join("control-store"))?;
+        let boot = EvidenceIdV1::from([7; 16]);
+        let (catalog, mut raw, _) =
+            super::super::roundtrip::signed_catalog(&control, tls.path(), boot)?;
+        raw.source_sequence = 1;
+        raw.source_cpu_id = 3;
+        raw.observed_boottime_ns = 101;
+        raw.task_cookie = 7;
+        raw.process_instance_id = EvidenceIdV1::new(8, 9);
+        raw.entry_instance_id = EvidenceIdV1::new(10, 11);
+        raw.reason = 9;
+        raw.physical_result = 1;
+        let canonicalizer = ObservationCanonicalizer::new(
+            EvidenceIdV1::new(1, 2),
+            EvidenceIdV1::new(3, 4),
+            1,
+            boot,
+        )?;
+        let wal_root = tls.path().join("large-wal");
+        let limits = EvidenceWalLimits {
+            maximum_batch_records: 4096,
+            ..Default::default()
+        };
+        let mut wal = EvidenceWal::open(&wal_root, limits)?;
+        let mut last = None;
+        for cursor in 1..=256 {
+            raw.source_sequence = cursor;
+            raw.observed_boottime_ns = cursor + 100;
+            let mut observation = canonicalizer.normalize_kernel(
+                raw,
+                EvidenceIdV1::new(5, 6),
+                TemporalCoverageV1::Complete,
+                i64::try_from(START)?,
+            )?;
+            catalog.attach(&mut observation);
+            let context = observation
+                .decision_context
+                .as_mut()
+                .ok_or("decision context absent")?;
+            let expected = context.catalog()?.ok_or("verified catalog absent")?;
+            let padding = MAX_EVIDENCE_DECISION_CONTEXT_BYTES
+                .checked_sub(context.encoded_len())
+                .ok_or("catalog exceeds context limit")?;
+            // JSON whitespace changes encoded size, not catalog content.
+            context
+                .catalog_json
+                .resize(context.catalog_json.len() + padding, b' ');
+            assert_eq!(context.encoded_len(), MAX_EVIDENCE_DECISION_CONTEXT_BYTES);
+            assert_eq!(context.catalog()?, Some(expected));
+            assert_eq!(wal.append(&observation)?, cursor);
+            last = Some(observation);
+        }
+        let mut oversized = last.ok_or("last observation absent")?;
+        oversized.source_sequence = 257;
+        let context = oversized
+            .decision_context
+            .as_mut()
+            .ok_or("decision context absent")?;
+        context.original_kernel_sequence = 257;
+        context.catalog_json.push(b' ');
+        assert_eq!(
+            context.encoded_len(),
+            MAX_EVIDENCE_DECISION_CONTEXT_BYTES + 1
+        );
+        assert!(wal.append(&oversized).is_err());
+        assert_eq!(wal.pending_records(), 256);
+        drop(wal);
+        let mut wal = EvidenceWal::open(&wal_root, limits)?;
+        assert_eq!(wal.pending_records(), 256);
+        let first = wal.next_batch().ok_or("first batch absent")?;
+        assert!(first.record_count() < 256);
+        let wire: mithril_control::EvidenceBatch = first.into();
+        assert!(wire.encoded_len() <= MAX_EVIDENCE_BATCH_PAYLOAD_BYTES);
+        assert!(wire.encoded_len() > MAX_EVIDENCE_BATCH_PAYLOAD_BYTES - 32 * 1024);
+        let identity = EvidenceIntakeIdentityV1 {
+            tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+            node_id: "node-a".into(),
+            node_boot_id: boot.to_be_bytes(),
+            label_epoch: 1,
+            source_id: wire.source_id.as_slice().try_into()?,
+            source_epoch: wire.source_epoch,
+        };
+        let root = tls.path().join("analysis");
+        let data = Arc::new(AnalysisStore::open(&root)?);
+        let intake = EvidenceIntakeOwner::new(
+            control,
+            data.clone(),
+            Arc::new(TestClock(AtomicU64::new(START))),
+        )?;
+        let server = tls.start(tls.control_from_intake(intake, 1)?).await?;
+        let mut connection = case.connect(&tls, &server).await?;
+        connection.report_readiness(true, true).await?;
+        let mut expected = Sha256::new();
+        let mut batches = 0;
+        while let Some(batch) = wal.next_batch() {
+            let end = batch.last_cursor;
+            let wire: mithril_control::EvidenceBatch = batch.clone().into();
+            assert!(wire.encoded_len() <= MAX_EVIDENCE_BATCH_PAYLOAD_BYTES);
+            expected.update(&wire.framed_records);
+            connection.send_evidence_batch(batch).await?;
+            let ack = DataStoreQualification::ack(&mut connection).await?;
+            assert_eq!(ack.contiguous_cursor, end);
+            assert_eq!(
+                data.source_receipt(&identity)?
+                    .ok_or("receipt absent")?
+                    .contiguous_cursor,
+                end
+            );
+            wal.acknowledge(ack)?;
+            batches += 1;
+        }
+        assert_eq!(batches, 2);
+        assert_eq!(wal.pending_records(), 0);
+        let receipt = data.source_receipt(&identity)?;
+        drop(connection);
+        server.shutdown().await?;
+        drop(data);
+        let data = DataStoreQualification::reopen_data(&root).await?;
+        assert_eq!(data.source_receipt(&identity)?, receipt);
+        let mut actual = Sha256::new();
+        let mut cursor = 1;
+        let mut count = 0;
+        loop {
+            let page = data.read_page(&identity, cursor)?;
+            for record in page.records {
+                actual.update(&record.framed_record);
+                count += 1;
+            }
+            match page.next_cursor {
+                Some(next) => cursor = next,
+                None => break,
+            }
+        }
+        assert_eq!(count, 256);
+        assert_eq!(actual.finalize(), expected.finalize());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn data_tenant_load() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let output = directory.path().join("tenants");

@@ -345,6 +345,18 @@ e2e passed 117 tests with 250 ignored. No Rust source changed after the gate.
 This case does not qualify multi-tenant load, policy rollout under load,
 worst-case payloads, full storage quotas, or maintenance reserve sizing.
 
+[data_context_bounds](../../../../crates/mithril-e2e/src/discovery/data_store.rs)
+checks 256 observations with exactly 16 KiB of decision context. The fixture
+adds JSON whitespace to a verified catalog without changing its content.
+[EvidenceWal::append](../../../../crates/mithril-node/src/observation/wal.rs)
+rejects a context one byte above that limit without advancing pending input.
+After WAL reopen, `next_batch` splits the records into two batches below the
+three-MiB wire limit. Production Node and Control owners send and acknowledge
+both batches through mTLS. After AnalysisStore reopen, bounded pages reproduce
+the complete ordered frame digest. The focused test passed in 3.38 seconds.
+This case does not qualify full-quota memory or the separate 128-KiB record
+limit. The final workspace gate for this test addition is pending.
+
 [DataStoreQualification::quota](../../../../crates/mithril-e2e/src/discovery/data_store/quota.rs) The CLI selects the default two-GiB tenant quota.<br>
 -> [AnalysisStore::register_processor](../../../../crates/araphor-data/src/analysis/progress.rs) Required progress protects the accepted raw input.<br>
 -> [ControlConnection::send_evidence_batch](../../../../crates/mithril-node/src/control.rs) Node sends one 1,024-record WAL batch through mTLS at a time.<br>
@@ -706,8 +718,11 @@ The owner now sets a 64-MiB buffer target to leave space for other allocations.
 The unchanged full-quota regression passes in 517.52 seconds with 194,040 KiB
 peak RSS, including checkpoint and reopen. The native-setting test passes.
 All 49 non-ignored release data tests pass. The release mTLS data-store suite
-passes 16 tests with four ignored. The current full workspace gate is running;
-formatting, compilation, strict Clippy, and 49 data tests have passed.
+passes 16 tests with four ignored. The full workspace gate passed for
+`a0f620da` with serial test execution. Data passed 49 tests with three ignored;
+Control passed 196 with two ignored; Mithril e2e passed 123 with 251 ignored;
+Node passed 256 with one ignored. This gate excludes the later context-boundary
+test addition.
 This result qualifies the isolated tenant-quota workload, not concurrent
 readers, global saturation, largest payloads, or embedded Node and Control
 memory. The data-store plan records the exact digests and logs.
