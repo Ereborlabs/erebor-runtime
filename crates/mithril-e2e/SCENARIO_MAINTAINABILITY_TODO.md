@@ -2065,7 +2065,7 @@ test does not close a row when its physical condition or an assertion changed.
     rebuilds it. Require `EACCES` and `PATH_TREE_POLICY_DENY` for the protected
     attachment. Require the allowed read and its `EXACT_POLICY_ALLOW` evidence
     as the control. Do not add a Platform API. This specific test can contain
-    at most 150 lines. The implementation has 143 lines. The limit preserves
+    at most 150 lines. The implementation has 131 lines. The limit preserves
     the two-stage actor protocol, dirty-state proof, Node recovery, bounded
     readiness diagnostics, and explicit effect assertions.
     - [x] Pass Host and commit it. The exact test passed in 50.04 seconds. The
@@ -2091,7 +2091,7 @@ test does not close a row when its physical condition or an assertion changed.
       epoch to stay unchanged before `move_mount` attaches either tree.
     - [x] Keep the existing attachment, dirty-view, rebuild, protected denial,
       allowed control, and exact evidence assertions in the same platform
-      test. The test file has 143 lines, which is below its approved 150-line
+      test. The test file has 131 lines, which is below its approved 150-line
       limit.
     - [x] Pass Host and commit it. The exact test passed in 51.74 seconds. The
       preexisting-bind, late-bind, and recursive-bind Host regressions passed
@@ -2104,6 +2104,11 @@ test does not close a row when its physical condition or an assertion changed.
       after all three platform cases pass. Keep the prepared `MoveMount`
       fail-closed case. The 92 non-privileged library tests, package clippy,
       formatting, and whitespace checks pass.
+    - [x] Reuse the existing effect checker in the late-bind, recursive-bind,
+      and move-mount tests. Keep each denial and allow expectation in its test.
+      The tests have 80, 81, and 131 lines. All ten Host mount-late cases and
+      all ten direct-`runc` mount-late cases passed. The three changed
+      Kubernetes cases passed.
   - [x] Replace the initial single-component and recursive wildcard reads with
     one actor-driven platform test. Start Control and the actor before policy
     and Node so production recovery owns the running actor. Use

@@ -1,12 +1,13 @@
 use mithril_control::WorkloadProtectionPolicy as Policy;
 
+use crate::effect::EffectCheck;
 use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
 use std::cell::RefCell;
 use std::os::unix::fs::MetadataExt as _;
-use std::{collections::BTreeSet, fs, time::Duration};
+use std::{fs, time::Duration};
 #[platform_test(host, runc, kubernetes)]
 #[lifecycle = mount_late]
 fn moved_mount_keeps_policy<P: Platform>() -> TestResult<()> {
@@ -101,40 +102,27 @@ fn moved_mount_keeps_policy<P: Platform>() -> TestResult<()> {
     env.running(pid)?;
     let task = env.recovered(pid, "moved mount recovery")?;
     view(&env)?;
-    let seen = env
-        .snapshot()?
-        .recent_effects
-        .into_iter()
-        .map(|event| (event.source_cpu_id, event.source_sequence))
-        .collect::<BTreeSet<_>>();
+    let effects = EffectCheck::new(&env, task)?;
     actor.send(b"read\n")?;
     actor.close();
     let status = actor.wait_exit("move mount reads", Duration::from_secs(5))?;
     assert!(status.success(), "{status}; stderr: {:?}", actor.stderr()?);
     let result: serde_json::Value = serde_json::from_slice(&fs::read(&result_path)?)?;
-    wait_for(
-        &path,
-        "move mount effects",
-        Duration::from_secs(30),
-        || {
-            let fresh = env
-                .snapshot()
-                .map_err(|error| bad(error.to_string()))?
-                .recent_effects
-                .into_iter()
-                .filter(|event| !seen.contains(&(event.source_cpu_id, event.source_sequence)))
-                .collect::<Vec<_>>();
-            *last.borrow_mut() = format!("{:?}", fresh.iter().rev().take(8));
-            let matches = |reason: &str, result| {
-                fresh
-                    .iter()
-                    .any(|event| task.matches_effect(event, reason, F::File, O::OpenRead, result))
-            };
-            Ok((matches("PATH_TREE_POLICY_DENY", -libc::EACCES)
-                && matches("EXACT_POLICY_ALLOW", 0))
-            .then_some(()))
-        },
-        || format!("last effects: {}", last.borrow()),
+    effects.wait(
+        &env,
+        "PATH_TREE_POLICY_DENY",
+        F::File,
+        O::OpenRead,
+        -libc::EACCES,
+        "moved secret",
+    )?;
+    effects.wait(
+        &env,
+        "EXACT_POLICY_ALLOW",
+        F::File,
+        O::OpenRead,
+        0,
+        "moved control",
     )?;
     assert_eq!(result["denied"], libc::EACCES);
     assert_eq!(result["allowed"], "allowed bind source\n");
