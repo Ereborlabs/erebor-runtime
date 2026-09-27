@@ -1639,7 +1639,8 @@ passed. A prior package-only build was stopped before tests because it selected
 a separate native build. The final workspace gate for this addition is pending.
 Its first full gate passed formatting and compilation, then rejected the test's
 `unwrap_err` under strict Clippy. The test now uses the existing fallible error
-assertion. The complete gate is running again with serial tests and two build jobs.
+assertion. That gate later failed as recorded below. The current full-gate result
+also appears below.
 The phase remains **Not done**.
 
 The shared memory runner and global case are committed as `c72a3b68`.
@@ -1662,6 +1663,22 @@ Removing only this worktree's 14-GiB generated incremental compiler cache
 restored 17 GiB of free space. Source, executables, native build outputs,
 VM disks, and proof artifacts remain unchanged. The unchanged release data
 suite then passed 49 tests with four ignored in 32.77 seconds. The final
-workspace gate is running again with serial tests and no competing build.
+workspace gate passed for the Rust source in `c72a3b68`; later commits changed
+only documents. The command was `CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=1 bash
+.github/scripts/verify-rust-ci.sh`. Formatting, compilation, strict Clippy,
+and all workspace tests passed. Data passed 49 tests with four ignored;
+Control passed 197 with two ignored; Mithril e2e passed 124 with 251 ignored;
+Node passed 256 with one ignored. Tests ran serially with no competing build.
 Do not build into the same target directory while subprocess tests run.
 The phase remains **Not done**.
+
+The unchanged VM harness regression passed on `4930f330` with
+`bash crates/mithril-e2e/harness/vm/test.sh`. The host inspection prerequisite
+could not run because sudo required a password. The same
+`inspect-data-test.sh` passed under sudo in the owned pilot VM. It checked
+numeric user 65532, private-parent refusal, unchanged ownership and permissions,
+and private-mount cleanup after success and failure. The copied launcher and
+test digests match the host scripts. Logs are
+`/tmp/araphor-memory-probe.z1rbDjUR/current-vm-harness.log` and
+`current-inspection-vm.log`. These temporary-file and mocked-service checks do
+not replace the current-source Kubernetes storage/partition run.
