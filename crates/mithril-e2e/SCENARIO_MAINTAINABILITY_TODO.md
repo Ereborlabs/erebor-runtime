@@ -4039,6 +4039,25 @@ setup, production actions, assertions, and focused test.
     pre-readiness case, namespace-init passed in 112.56 seconds. The complete
     Kubernetes rerun is pending the test-runtime review.
 - [ ] `physical_kubernetes_containers_probe`
+  - [ ] Keep the original probe until its replacement passes. It starts a
+    restartable sidecar and a held init container before the application. It
+    checks separate cgroups, task cookies, process states, execution sets, and
+    conservative roots. It checks that the sidecar root stays unchanged when
+    the application starts.
+  - [ ] Give the shared actor group one Pod policy with a separate entry role
+    for each container. Use the real `Sidecar`, `Init`, and `Application` kinds.
+    Return the running init and sidecar before the Pod is Ready. Attach to the
+    later application in the same Pod through the same group operation.
+  - [ ] Resolve the paired lightweight setup before a Kubernetes run. In a
+    focused Host run, the first target activated. With the second target, Node
+    reported two runtime bindings but left a later policy activation pending.
+    The fixture then timed out before it could check either root. An
+    Application-only policy and an input-driven actor had the same result.
+    The existing worker/helper group passed. This does not prove a Node defect.
+    No replacement or production change was kept from these failed runs.
+  - [ ] Pass Host and direct `runc` with the original assertions. Then pass
+    Kubernetes with its real init, sidecar, and application containers before
+    removing the old probe.
 - [ ] `physical_kubernetes_ephemeral_probe`
 - [ ] `physical_kubernetes_probe_impersonation`
 - [ ] `physical_kubernetes_prestop_probe`
