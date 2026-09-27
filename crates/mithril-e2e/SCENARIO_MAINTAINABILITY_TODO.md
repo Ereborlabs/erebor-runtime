@@ -2738,6 +2738,17 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace the old SQPOLL check for an admitted actor in Protect and
+    Observe modes. The existing platform test covers a recovered rule-zero
+    actor. Reuse `sqpoll.py` and signed policies. Require a physical
+    `io_uring_setup` denial and attributed `UNSUPPORTED_OBJECT`
+    Privilege/IoUringSqpoll evidence. Add no Platform or production API.
+    - [ ] Pass Protect on Host, direct `runc`, and Kubernetes. Commit each
+      verified platform separately.
+    - [ ] Pass Observe on Host, direct `runc`, and Kubernetes. Commit each
+      verified platform separately.
+    - [ ] Remove only the matching old action, result field, and private
+      syscall helper after both modes pass on all three platforms.
   - [x] Replace the exact Unix-stream allow relationship. Reuse the approved
     socket-pass actor and signed worker-to-worker policy. Require a completed
     descriptor transfer and payload, distinct admitted worker tasks, and
