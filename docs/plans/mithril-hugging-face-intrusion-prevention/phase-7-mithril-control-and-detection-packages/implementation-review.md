@@ -798,6 +798,13 @@ peak RSS is 266,376 KiB at 2,349,056 accepted records, above the unchanged
 256-MiB gate. This is not a native allocation error or successful quota stop.
 The phase plan records the exact cursors, native sample, and logs. The candidate
 is not qualified. No further memory-budget change is approved.
+The complete workspace gate subsequently passes on `7e37bc5d`, with Rust
+source from `50b55a21`. Formatting, workspace checking, strict Clippy, and
+all enabled tests pass. Data passes 49 tests with four ignored; Control passes
+197 with two ignored; Mithril e2e passes 124 with 251 ignored; Node passes 256
+with one ignored. The phase plan records the exact command and retained log.
+The ignored capacity failure remains open. A green workspace gate does not
+approve the candidate or change the 256-MiB process requirement.
 The release build for `c72a3b68` passed. After the host filesystem reserve was
 restored by removing generated incremental compiler cache, the unchanged release
 data suite passed 49 tests with four ignored. The shared tenant run passed in
