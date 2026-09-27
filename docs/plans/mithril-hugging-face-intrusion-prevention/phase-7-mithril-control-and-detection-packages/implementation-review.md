@@ -692,12 +692,16 @@ The earlier one-million-row regression passed without an allocator environment o
 216,100 KiB peak RSS and 52.24 seconds. The native-setting assertion also passes.
 The release mTLS data-store suite also passes 16 tests with four ignored in
 15.10 seconds. Its log and executable digest are in the data-store plan.
-Formatting, workspace checks, and strict Clippy passed for `3a03e307`.
-Its workspace tests remain active. The longer temporary diagnostic failed
+The full workspace gate passed for `3a03e307` with serial test execution.
+The longer temporary diagnostic failed
 the memory limit at 4,024,320 rows with 273,232 KiB peak RSS. Its checkpoint
 and reopen checks passed. The native-setting change does not satisfy
-full-capacity memory qualification. The extended repository regression is
-not covered by that workspace run; its release run is pending.
+full-capacity memory qualification. The extended repository regression in
+`083212f6` failed at cursor 3,915,776 with 264,796 KiB high-water RSS in its
+failure sample. The external log reports 282,312 KiB for the whole process.
+The data-store plan records native categories, the executable digest, and logs.
+A new full workspace gate is running for that test extension. Formatting,
+compilation, and strict Clippy have passed. The memory requirement remains open.
 The preceding temporary diagnostic crossed 256 MiB at 804,864 rows with four
 calling threads. Its peak was 292,132 KiB. The same input reached the tenant
 quota with one calling thread at 249,792 KiB, and with four threads plus
