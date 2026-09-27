@@ -1,19 +1,21 @@
 # Raw Event Store Comparison
 
-The current data plan proposes DuckDB as the durable owner of raw events. This
-proposal needs a direct comparison with the existing Control segment store.
-The goal is one durable copy of each raw event, direct discovery reads,
+The DuckDB raw owner is partway through implementation. Configured Control
+already selects it, but the full storage qualification is not complete. This
+note compares direct raw-store behavior with the old Control segment writer.
+The required end state is one durable raw copy, direct discovery reads,
 durable results and progress, scoped SQL, and bounded retention.
 
 ## Existing behavior
 
-The Control store writes raw event bytes to segment files. It keeps batch ranges,
-source cursors, and frame offsets to find those bytes. The current discovery
-path reads the segments and copies raw records into discovery export artifacts.
-The DuckDB intake path writes each event once to the `events` table. Intake
-selects either writer; it does not write each event to both. The old discovery
-consumer still reads Control segments. The planned consumer conversion is not
-complete.
+Configured startup rejects a Control store with accepted raw evidence. It
+opens `AnalysisStore`, then authenticated intake commits events and source
+receipts to DuckDB. If that owner cannot open, intake is unavailable; it does
+not fall back to segments. The old Control segment writer and reader remain
+callable in code and are the other side of this benchmark. They keep batch
+ranges, source cursors, and frame offsets. Old discovery code reads those
+segments and copies raw records into export artifacts. It has not been
+converted to consume configured DuckDB intake. There is no dual write.
 
 The `events` primary key creates a DuckDB ART index on `(stream_key,
 durable_cursor)`. The Rust writer also checks retained retries for identical
@@ -24,11 +26,13 @@ the 256 MiB process memory gate. Neither result compares the two store designs.
 
 ## Alternative to test
 
-Keep the existing segment writer as the only raw event owner. Make discovery
-read committed segment pages and store only derived results, processing
-progress, and references to selected raw events. Execute authorized SQL over
-bounded records read from the segments. Keep the SQL worker separate from
-the raw writer.
+A segment replacement that preserves the approved owner boundary would adapt
+the segment writer and reader into the portable data owner, then make
+discovery read committed pages without another raw archive.
+Derived results, processing progress, and selected evidence references remain
+durable. Authorized SQL could use bounded segment input in an isolated worker.
+Keeping the old Control writer unchanged would not meet the current data-owner
+boundary or retention contract.
 
 This choice still needs an explicit retention contract. Consumption alone
 cannot delete an event that a required processor or a retained witness needs.
