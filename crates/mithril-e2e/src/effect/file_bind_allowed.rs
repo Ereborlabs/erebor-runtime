@@ -6,7 +6,7 @@ use mithril_node::ExactFileObjectResolver;
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = mount_late]
 fn allowed_bind_keeps_exact_allow<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("file-bind-allowed")?;

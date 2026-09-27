@@ -1957,7 +1957,8 @@ test does not close a row when its physical condition or an assertion changed.
         - [x] Pass direct `runc` and commit it. The `mount_late_runc` case
           passed in `mithril-runtime-qualification-762734` with the same
           actor, policy, and assertions as Host.
-        - [ ] Pass Kubernetes and commit it.
+        - [x] Pass Kubernetes and commit it. The `mount_late_kubernetes` case
+          passed in the retained K3s VM with the same scenario body.
         - [ ] Remove only the matching old allowed-bind comparison after all
           three platforms pass. Keep the source resolver for policy
           publication and the separate propagation checks.
