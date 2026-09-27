@@ -120,7 +120,7 @@ impl AnalysisStore {
             })?
             .max_memory("64MiB")
             .and_then(|config| config.threads(2))
-            .and_then(|config| config.with("wal_autocheckpoint", "64MiB"))
+            .and_then(|config| config.with("wal_autocheckpoint", "16MiB"))
             .and_then(|config| config.with("max_temp_directory_size", "128MiB"))
             .and_then(|config| config.with("allocator_bulk_deallocation_flush_threshold", "0B"))
             // Indexed raw tables need compaction too. Resource limits still apply.

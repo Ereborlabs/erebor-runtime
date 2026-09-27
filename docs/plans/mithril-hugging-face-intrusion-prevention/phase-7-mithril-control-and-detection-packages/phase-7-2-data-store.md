@@ -179,6 +179,8 @@ Store recovery fails
    native bulk-deallocation release threshold to zero. Do not change the
    process-wide allocator policy. Set the engine memory target to 64 MiB to
    leave space for allocations outside the native buffer manager. Keep the
+   native WAL checkpoint threshold at 16 MiB. This threshold starts checkpoint
+   work earlier; it does not reserve memory or bound process RSS. Keep the
    256-MiB process qualification limit unchanged. Require the isolated
    memory regression and mTLS load checks before accepting this setting.
 8. Activate the data owner in a clean development deployment. Control opens
@@ -1794,3 +1796,23 @@ too little working space for checkpointing under the 64-MiB engine limit.
 Test a lower checkpoint threshold without changing logical quotas, primary
 keys, compaction, or the 256-MiB process bound. No production remedy is proven.
 These small-suite passes do not close either full-capacity failure.
+
+The checkpoint-headroom candidate changes only the native WAL checkpoint
+threshold from 64 MiB to 16 MiB and its existing settings assertion. Native
+memory, worker count, temporary-file allowance, compaction, logical quotas,
+and the process RSS bound are unchanged. `open_native` applies the same
+setting at startup and after backup. The release test build passed in
+5 minutes 50 seconds with the preceding paired-package command. In the owned
+pilot VM, all 49 enabled release data tests passed in 21.41 seconds, with four
+ignored. All 17 enabled release data-store gRPC tests passed in 12.59 seconds,
+with four ignored. Both suites ran serially without allocator overrides or
+competing task builds. The data executable SHA-256 is
+`c61dc4561558a0e0f7c70e2861acd263fd529ec18bb3fe827ad5126b095d6414`.
+The e2e executable SHA-256 is
+`fa94e61ec402d86582171a1d5aabcd8e2b355bc01b5029cd358928c65fbb66d8`.
+The staged VM copies have the same digests. Logs are
+`checkpoint-headroom-build.log`, `checkpoint-data-release.log`, and
+`checkpoint-e2e-release.log` in `/tmp/araphor-memory-probe.z1rbDjUR`.
+The unchanged global-capacity regression is the next check. These small-suite
+passes do not prove that the lower threshold corrects the allocation failure.
+The final workspace gate and full-capacity gRPC rerun remain pending.
