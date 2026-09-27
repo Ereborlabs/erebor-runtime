@@ -2822,6 +2822,12 @@ test does not close a row when its physical condition or an assertion changed.
     unchanged Host retry passed in 76.84 seconds after one Node readiness
     timeout. Direct `runc` passed in 79.52 seconds. Kubernetes passed in
     92.99 seconds and its launcher exited 0.
+  - [x] Retire the hard-coded inherited-descriptor read result. The existing
+    `retained_descriptor_is_enforced` test opens the file before policy
+    replacement, then checks physical read denial, exact object attribution,
+    and allowed controls. The unchanged case passed on Host in 61.32
+    seconds, direct `runc` in 62.54 seconds, and Kubernetes in 102.24
+    seconds. The Kubernetes launcher exited 0.
   - [ ] Replace the old SysV `IPC_STAT` check. A draft actor used the same
     syscall, but it succeeded under `actor_policy.json` on Host. The draft
     was removed. Do not retire the old check until a signed policy and the
