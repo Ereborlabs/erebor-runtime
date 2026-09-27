@@ -2149,7 +2149,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit it. The 71-line exact test passed in 44.85
       seconds. The existing prepared-move Host test passed in 30.71 seconds
       after the shared actor change.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact test passed in 79.49
+      seconds through stock `runc` and the production OCI hook. The existing
+      prepared-move direct-`runc` test passed in 37.97 seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching old action after all three platforms pass.
       Keep the shared syscall helper, mount propagation, and detached-tree
