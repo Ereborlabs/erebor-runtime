@@ -3406,8 +3406,8 @@ impl EffectTestRunner {
                 "true 2>/dev/null </var/lib/mithril-convergence/protected.exception-target || true; ",
                 "exec 3<>/var/lib/mithril-convergence/mount-reconciliation.fifo; ",
                 "if /bin/mount --bind /home/secret /home/attack 2>/var/lib/mithril-convergence/container-bind-mount.stderr; then mithril_mount_result=MOUNT_READY; else mithril_mount_result=MOUNT_FAILED; fi; ",
-                "read -r mount_reconciled <&3; exec 3>&-; ",
                 "echo \"$mithril_mount_result\" >/var/lib/mithril-convergence/container-bind-mount.result; ",
+                "read -r mount_reconciled <&3; exec 3>&-; ",
                 "if /bin/cat /home/kubelet-attack/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/var/lib/mithril-convergence/kubernetes-subpath.result; else echo PATH_TREE_DENIED >/var/lib/mithril-convergence/kubernetes-subpath.result; fi; ",
                 "if /bin/cat /home/kubelet-attack-newer/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/var/lib/mithril-convergence/kubernetes-subpath-newer.result; else echo PATH_TREE_DENIED >/var/lib/mithril-convergence/kubernetes-subpath-newer.result; fi; ",
                 "if /bin/cat /home/attack/models/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/var/lib/mithril-convergence/container-bind.result; else echo PATH_TREE_DENIED >/var/lib/mithril-convergence/container-bind.result; fi; ",
@@ -4392,26 +4392,15 @@ impl EffectTestRunner {
                 ),
             }
         );
-        let mount_change_sequence = observations.mount_change_sequence();
+        let container_bind_mount_result = role_directory.join("container-bind-mount.result");
         fs::write(role_directory.join("effects-ready"), b"ready\n").context(IoSnafu {
             path: &role_directory,
         })?;
-        let mount_event_deadline = Instant::now() + WAIT_LIMIT;
-        while Instant::now() < mount_event_deadline {
-            reader
-                .poll(Duration::from_millis(10))
-                .context(InterceptorSnafu)?;
-            if observations.mount_change_sequence() > mount_change_sequence {
-                break;
-            }
-        }
-        ensure!(
-            observations.mount_change_sequence() > mount_change_sequence,
-            InvalidInputSnafu {
-                path: &rootfs,
-                reason: "the successful container bind mount did not publish a mount event",
-            }
-        );
+        wait_for_path(
+            &container_bind_mount_result,
+            true,
+            "the in-container bind mount before reconciliation",
+        )?;
         fs::write(
             role_directory.join("mount-reconciliation.fifo"),
             b"reconciled\n",
@@ -4595,7 +4584,6 @@ impl EffectTestRunner {
         let kubernetes_subpath_result = role_directory.join("kubernetes-subpath.result");
         let newer_kubernetes_subpath_result =
             role_directory.join("kubernetes-subpath-newer.result");
-        let container_bind_mount_result = role_directory.join("container-bind-mount.result");
         let container_bind_result = role_directory.join("container-bind.result");
         for (result, description) in [
             (

@@ -3658,12 +3658,12 @@ setup, production actions, assertions, and focused test.
         actor image. The unchanged test then passed. Keep the VM disk below
         pressure limits.
       - [x] Remove only the old duplicate dirty-view assertion. The rebuilt
-        complete direct-`runc` probe passed. Its mount-event receipt, control
-        read, five-denial capture, stale-cache repair, reader burst, and
-        cleanup checks remain. Its schema is still version 40. The repository
-        Rust CI script passed. Keep the old mount action until those distinct
-        checks have shared coverage.
-    - [ ] Replace the old successful bind-mount event receipt.
+        complete direct-`runc` probe passed. At that point, its mount-event
+        receipt, control read, five-denial capture, stale-cache repair, reader
+        burst, and cleanup checks remained. Its schema is still version 40.
+        The repository Rust CI script passed. Keep the old mount action until
+        those distinct checks have shared coverage.
+    - [x] Replace the old successful bind-mount event receipt.
       - [x] Use the shared `mount_alias.py` actor and signed policy. Record the
         public production observation cursor before the actor mounts. Require
         a successful bind mount and a new Mount/Mount effect from that actor.
@@ -3671,9 +3671,12 @@ setup, production actions, assertions, and focused test.
         `runc` in 65.77 seconds, and Kubernetes in 101.30 seconds. The related
         12-case lifecycle passed on Host in 151.24 seconds, direct `runc` in
         265.08 seconds, and Kubernetes in 356.06 seconds.
-      - [ ] Retire the old event wait only after its actor writes a separate
-        mount-complete signal. The old wait also holds its FIFO handshake
-        before later reads. Removing it now would change the old test order.
+      - [x] Retire the old event wait. Its actor now writes the existing
+        mount-result file before it waits on the FIFO. The old runner waits
+        for that result before it releases the FIFO. The full direct-`runc`
+        probe passed with the unchanged later mount, path-tree, reader-queue,
+        and cleanup assertions. Its schema remains version 40. The new shared
+        test owns the production Mount/Mount event assertion.
   - [x] Retire the duplicate in-container bind-mount result and shell gate.
     `late_bind_keeps_policy` requires the mount to succeed after production
     policy activation on Host, direct `runc`, and Kubernetes. Keep the legacy
