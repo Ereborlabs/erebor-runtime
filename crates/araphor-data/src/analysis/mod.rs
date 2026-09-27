@@ -839,9 +839,7 @@ impl AnalysisStore {
         Self::record_revision(&transaction, revision, &relations)?;
         #[cfg(test)]
         self.crash_at("coverage.before");
-        transaction.commit().context(AnalysisDatabaseSnafu {
-            operation: "commit coverage",
-        })?;
+        self.commit_metadata(transaction, "commit coverage")?;
         #[cfg(test)]
         self.crash_at("coverage.after");
         self.revision.send_replace(revision);
@@ -1380,7 +1378,7 @@ mod tests {
         {
             let writer = reopened.writer()?;
             writer.get()?.execute(
-                "DELETE FROM events WHERE stream_key = ? AND durable_cursor = 257",
+                "DELETE FROM batch_ranges WHERE stream_key = ?",
                 params![source_key(&identity).as_slice()],
             )?;
         }

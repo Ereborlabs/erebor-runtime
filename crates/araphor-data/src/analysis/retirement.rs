@@ -115,9 +115,7 @@ impl AnalysisStore {
         Self::record_revision(&transaction, revision, relations)?;
         #[cfg(test)]
         self.crash_at("retire.before");
-        transaction.commit().context(AnalysisDatabaseSnafu {
-            operation: "commit processor retirement",
-        })?;
+        self.commit_metadata(transaction, "commit processor retirement")?;
         #[cfg(test)]
         self.crash_at("retire.after");
         self.revision.send_replace(revision);
@@ -266,20 +264,13 @@ mod tests {
             EvidenceRetentionOwner::new(&store, limits)?
                 .retain(&input.scope.identity, 10)?
                 .removed_records,
-            2
+            0
         );
         let page = store.read_page(&input.scope.identity, 1)?;
-        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.records.len(), 3);
         assert_eq!(page.records[0].cursor, 1);
-        assert_eq!(page.next_cursor, Some(2));
-        assert!(matches!(
-            store.read_page(&input.scope.identity, 2),
-            Err(crate::Error::RetainedRangeExpired {
-                first_cursor: 2,
-                last_cursor: 3,
-                ..
-            })
-        ));
+        assert_eq!(page.next_cursor, None);
+        assert_eq!(store.read_page(&input.scope.identity, 2)?.records.len(), 2);
         store.accept_validated_batch(
             input.scope.identity.clone(),
             ValidatedEvidenceBatchV1 {

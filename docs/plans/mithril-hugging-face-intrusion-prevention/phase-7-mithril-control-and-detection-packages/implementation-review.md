@@ -30,7 +30,7 @@ declarative captures are not delivered by these changes.
 
 ### Segment storage conversion
 
-Source state: the bundle conversion after `1cbdab02`. Configured AnalysisStore
+Source state: the guard and fixture conversion after `299f8b49`. Configured AnalysisStore
 intake and reads now use segments. The target conversion remains incomplete.
 Backup and restore copy the complete metadata and segment bundle.
 Storage pass records outside this section predate this conversion
@@ -60,8 +60,8 @@ use a native UINTEGER array. The batch digest binds the offset count, offsets,
 and raw bytes. The writer retains no full-store event index. Reserved file IDs
 come from a durable, increasing counter. An uncertain raw publication or
 deletion commit keeps the writer unavailable. A definite pre-commit failure can
-remove only its reserved file or uncommitted tail. The other metadata owners
-still need the same uncertain-commit guard. An eligible idle active segment is
+remove only its reserved file or uncommitted tail. Other metadata owners use
+`AnalysisStore::commit_metadata` and block writes on a commit error. An eligible idle active segment is
 sealed when the deletion transaction marks it Deleting. Reader count and page
 bytes are bounded; extraction-deadline cancellation is not implemented.
 
@@ -72,10 +72,11 @@ checks reserved files, non-reused IDs, uncommitted tails, and unknown files.
 `segment_growth_keeps_budget` checks the witness budget during later appends.
 Bounded-extraction, resource, and mithril-e2e qualification remain
 incomplete. The latest required workspace command passed formatting, check,
-and Clippy. Its test step stopped with 45 passed, 13 failed, and 4 ignored in
-araphor-data. The named segment tests and all six bundle/restore tests passed.
-Read the phase result for the remaining fixture failures; this is not a
-completed storage phase.
+and Clippy. Araphor-data passed 60 tests with 4 ignored; Control passed 197
+unit tests with 3 ignored. The test step stopped in mithril-e2e with 119 passed,
+5 failed, and 251 ignored. The named segment tests and all six bundle/restore
+tests passed. Read the phase result for the remaining integration failures;
+this is not a completed storage phase.
 
 [AnalysisStore::backup](../../../../crates/araphor-data/src/analysis/backup.rs) A caller supplies one new managed bundle directory.<br>
 -> [AnalysisStore::backup_segments](../../../../crates/araphor-data/src/analysis/backup.rs) The owner holds the writer, drains readers, and captures the complete Live catalog.<br>
@@ -96,6 +97,26 @@ reject incomplete bundles. `analysis_store_restore_crashes` checks that failed
 destinations remain unavailable and complete restores retain their new epoch.
 No raw index, backup registry, automatic cleanup, or compatibility reader is
 added.
+
+[AnalysisStore::commit_metadata](../../../../crates/araphor-data/src/analysis/connection.rs) A metadata owner has validated and prepared its transaction under the writer guard.<br>
+-> [AnalysisStore::commit_metadata](../../../../crates/araphor-data/src/analysis/connection.rs) The owner clears write readiness before native commit and restores it only on success.<br>
+-> [AnalysisStore::writer_access](../../../../crates/araphor-data/src/analysis/connection.rs) A later mutation rejects an uncertain outcome until the owner reopens and validates durable state.
+
+`analysis_store_uncertain_commit` tests both durable outcomes before a failed
+commit response. Raw publication and deletion retain a longer guard around
+their file work. `analysis_store_input_crashes` covers new-file reservation,
+append, and sync. `analysis_store_commit_crashes` covers deletion marking,
+unlink, and catalog cleanup with a separate pinned witness segment.
+`segment_recovery_rejects_corruption` proves repeated rejection without removal
+of missing or corrupt committed data. `analysis_store_snapshot_maintenance`
+checks that the read lease blocks deletion, not ordinary append.
+
+The integration failures include one production boundary gap:
+[EvidenceIntakeOwner::data_status](../../../../crates/mithril-control/src/evidence.rs)
+maps a segment-reservation database error to Internal, not Unavailable.
+The native-failure fixture must inject raw-file and metadata-commit failures
+separately. The startup and quota fixtures still contain raw-row assumptions.
+The recovery case times out; its cause is not yet verified.
 
 The reusable segment path has these implemented calls:
 

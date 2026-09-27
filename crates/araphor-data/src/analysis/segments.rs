@@ -364,13 +364,7 @@ impl AnalysisStore {
                 operation: "insert reserved segment",
             })?;
         // No file is created until its non-reusable identity is durable.
-        self.write_ready
-            .store(false, std::sync::atomic::Ordering::Release);
-        transaction.commit().context(AnalysisDatabaseSnafu {
-            operation: "commit segment reservation",
-        })?;
-        self.write_ready
-            .store(true, std::sync::atomic::Ordering::Release);
+        self.commit_metadata(transaction, "commit segment reservation")?;
         #[cfg(test)]
         self.crash_at("segment.reserved");
         Ok(SegmentAppend {
@@ -780,6 +774,57 @@ mod tests {
         assert!(AnalysisStore::open(&root).is_err());
         assert_eq!(fs::read(&unknown)?, b"unknown");
         assert_eq!(fs::metadata(&live)?.len(), length);
+        Ok(())
+    }
+
+    #[test]
+    fn segment_recovery_rejects_corruption() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
+        for fault in ["missing", "short", "header", "changed"] {
+            let directory = tempfile::tempdir()?;
+            let root = directory.path().join("analysis");
+            let store = AnalysisStore::open(&root)?;
+            store.accept_validated_batch(
+                source(),
+                ValidatedEvidenceBatchV1 {
+                    cpu_id: 0,
+                    first_cursor: 1,
+                    last_cursor: 1,
+                    intake_utc_ns: 100,
+                    framed_records: b"frame".to_vec().into(),
+                    frame_ends: vec![5],
+                },
+            )?;
+            store.checkpoint()?;
+            drop(store);
+            let file = SegmentRange::path(&root, 1);
+            let mut bytes = fs::read(&file)?;
+            match fault {
+                "missing" => fs::rename(&file, directory.path().join("saved"))?,
+                "short" => {
+                    bytes.pop();
+                    fs::write(&file, &bytes)?;
+                }
+                "header" => {
+                    bytes[0] ^= 1;
+                    fs::write(&file, &bytes)?;
+                }
+                "changed" => {
+                    *bytes.last_mut().ok_or("segment is empty")? ^= 1;
+                    fs::write(&file, &bytes)?;
+                }
+                _ => return Err("unknown fault".into()),
+            }
+            for _ in 0..2 {
+                assert!(AnalysisStore::open(&root).is_err(), "{fault}");
+                if fault == "missing" {
+                    assert!(!file.exists());
+                    assert_eq!(fs::read(directory.path().join("saved"))?, bytes);
+                } else {
+                    assert_eq!(fs::read(&file)?, bytes, "{fault}");
+                }
+            }
+        }
         Ok(())
     }
 

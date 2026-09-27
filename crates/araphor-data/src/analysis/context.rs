@@ -155,9 +155,7 @@ impl AnalysisStore {
         Self::record_revision(&transaction, revision, &["context_versions"])?;
         #[cfg(test)]
         self.crash_at("context.before");
-        transaction.commit().context(AnalysisDatabaseSnafu {
-            operation: "commit context version",
-        })?;
+        self.commit_metadata(transaction, "commit context version")?;
         #[cfg(test)]
         self.crash_at("context.after");
         self.revision.send_replace(revision);
