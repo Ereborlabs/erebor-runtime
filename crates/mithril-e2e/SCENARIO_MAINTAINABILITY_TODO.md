@@ -4267,6 +4267,23 @@ setup, production actions, assertions, and focused test.
 - [ ] `physical_kubernetes_ephemeral_probe`
 - [ ] `physical_kubernetes_probe_impersonation`
 - [ ] `physical_kubernetes_prestop_probe`
+  - [ ] Keep the real Pod `preStop.exec` hook. Deleting the Pod starts a new
+    task in the application cgroup. The hook writes its namespace PID and
+    waits on a FIFO. An ordinary `add_actor` call does not replace this event.
+  - [ ] Before deletion, require one application identity and one profile
+    task reference. While the hook waits, require the application snapshot
+    to remain unchanged. Require a distinct PreStop task, an external runtime
+    root, the restricted external role, and two profile task references.
+  - [ ] Release the FIFO. Require Pod deletion, zero profile task references,
+    and removal of the namespace, pin root, lease, and fixture directory.
+  - [ ] Preserve the old `restored_or_unknown_root` and `fail_closed_unknown`
+    application checks until a production-backed replacement proves the same
+    condition. The old probe publishes an identity-only binding after Pod
+    start; the current shared Node-restart test does not reproduce that setup.
+  - [ ] Keep the replacement in a small standard Rust test. Use the existing
+    Kubernetes fixture for the hook. Add no generic Platform operation only
+    to delete this Pod. Qualify the matching lightweight condition before the
+    Kubernetes case, then remove only the matching old probe and result fields.
 - [ ] `physical_kubernetes_poststart_probe`
 - [ ] `physical_kubernetes_stock_hook_failure_probe`
 - [ ] `physical_kubernetes_resilience_probe`: keep the Pod and its cgroup
