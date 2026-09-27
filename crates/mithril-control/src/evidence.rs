@@ -272,9 +272,11 @@ impl EvidenceIntakeOwner {
             | araphor_data::Error::AnalysisBusy { .. } => {
                 Status::resource_exhausted(error.to_string())
             }
-            araphor_data::Error::RetentionUnavailable { .. } => {
-                Status::unavailable(error.to_string())
-            }
+            araphor_data::Error::RetentionUnavailable { .. }
+            | araphor_data::Error::AnalysisDatabase { .. }
+            | araphor_data::Error::AnalysisState { .. }
+            | araphor_data::Error::Json { .. }
+            | araphor_data::Error::Io { .. } => Status::unavailable(error.to_string()),
             _ => Status::internal(error.to_string()),
         }
     }

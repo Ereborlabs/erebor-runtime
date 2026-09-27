@@ -493,8 +493,8 @@ required here. Stop before enabling a data path whose recovery case fails.
 
 **Not done for the segment-backed design.**
 The current data owner uses segments and batch metadata. Complete the ordered
-changes above, then rerun their component and mithril-e2e gates. The records below
-describe previous raw-DuckDB revisions only. Their native-memory settings,
+changes above, then rerun their component and mithril-e2e gates. The records under
+`Previous implementation evidence` describe previous raw-DuckDB revisions only. Their native-memory settings,
 raw-table maintenance, and pass counts are not instructions or qualification
 for the selected segment design.
 
@@ -619,6 +619,52 @@ append fails first. Startup still changes the removed `events` table. The
 recovery case times out and needs diagnosis. The intake case also found a
 production error-mapping gap: a segment-reservation database failure returns
 gRPC Internal instead of Unavailable. Fix these cases and rerun the full gate.
+
+### In-process recovery and intake fault checks
+
+Source state: the recovery changes after `c984b5d2`. `AnalysisStore::recover`
+keeps the data-directory lease and shared owner. It drains readers, closes
+native connections, and uses the startup catalog and segment checks. It rejects
+a changed store identity, unsupported schema, older revision, or corrupt
+committed bytes. It restores connections only after all checks pass. A recovered
+new commit sends a revision notice; unchanged recovery does not.
+
+Raw file I/O failures stop writes and defer cleanup to recovery. This rule
+preserves the original failure when the filesystem also cannot accept a cleanup
+commit. Control maps storage failures to Unavailable. Capacity failures remain
+ResourceExhausted. Neither result sends an evidence ACK.
+
+The test-only commit callback runs once, before raw append or after raw sync.
+The native tests now fail raw append, metadata commit, and result commit
+separately. The mTLS case removes the limit, calls the production recovery
+method, and retries without restarting Control. This method has no public RPC
+or automatic retry loop.
+
+The startup fixture changes the batch catalog instead of the removed raw table.
+The recovery fixture seals disposable input before adding its witness to a new
+segment. The quota fixture uses 64 MiB and yields between bounded reads and
+retention passes so the single-threaded test runtime can service mTLS traffic.
+
+**Done for in-process recovery and the intake fault checks. Not done for the
+full phase.** After the final Rust edit,
+`bash .github/scripts/verify-rust-ci.sh` passed formatting, workspace check,
+strict Clippy, and all workspace tests. Araphor-data passed 61 tests with
+4 ignored. Control passed 197 unit tests with 3 ignored. Mithril-e2e passed
+124 tests with 251 ignored. Node passed 256 unit tests with 1 ignored.
+The full result is `/tmp/araphor-segment-recovery-final-ci.log`.
+All five previously failing data-store integration cases passed.
+The focused recovery/locking run passed five tests. The isolated mTLS raw and
+metadata failure cases passed. `data_quota_recovery` passed with a 64-MiB tenant
+limit in 228.79 seconds in a debug build. This result proves correctness, not
+the release performance gate. The paired capacity harness passed
+`data_capacity_retry`, `data_capacity_recovery`, and `data_full_disk` on a
+private 1-GiB tmpfs. The full-filesystem case allocated 1,065,316,352 padding
+bytes and observed zero available bytes. It retained two exact records after
+recovery and rejected backup/restore when their reserve was unavailable.
+The result is `/tmp/araphor-segment-disk-full-20260927.log`.
+These results do not qualify hardware power loss, Kubernetes outage, release
+memory, or full-capacity performance. Bounded extraction, witness cost reports,
+old Control writer removal, and those qualification gates remain incomplete.
 
 ### Previous implementation evidence
 
