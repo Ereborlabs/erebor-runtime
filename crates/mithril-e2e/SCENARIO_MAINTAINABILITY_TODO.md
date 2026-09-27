@@ -2753,11 +2753,22 @@ test does not close a row when its physical condition or an assertion changed.
       the retained VM with the real syscall and attributed denial. Reuse the
       existing `memory_observe.json` policy; `file_observe.json` needs an
       unrelated exact file and stayed activation-pending in the first draft.
-      Protect and Observe passed together in one lifecycle in 64.89 seconds.
+      Before lifecycle separation, both passed together on Host in 64.89
+      seconds.
     - [x] Pass the same Observe test on direct `runc` and commit it. The exact
       case passed in 48.70 seconds through stock `runc` and the production
-      OCI hook. Both SQPOLL cases passed in one lifecycle in 86.63 seconds.
-    - [ ] Pass the same Observe test on Kubernetes and commit it.
+      OCI hook. Before lifecycle separation, both passed together on direct
+      `runc` in 86.63 seconds.
+    - [x] Pass the same Observe test on Kubernetes and commit it. The final
+      exact case passed in 125.44 seconds and the VM command exited with 0.
+      The final separate-lifecycle case also passed on Host in 31.05 seconds
+      and direct `runc` in 38.79 seconds.
+      The exact Kubernetes case passed in 81.12 seconds. A two-test lifecycle
+      run then passed Protect and denied the next Pod while Node was stopped.
+      The OCI hook reported `DENY_NODE_UNAVAILABLE`. The existing direct-`runc`
+      `runtime_gate_fails_closed` test reproduced that decision in 38.33
+      seconds. Give Observe its own lifecycle; keep the actor-first recovery
+      order and all SQPOLL assertions.
     - [ ] Remove only the matching old action, result field, and private
       syscall helper after both modes pass on all three platforms.
   - [x] Replace the exact Unix-stream allow relationship. Reuse the approved

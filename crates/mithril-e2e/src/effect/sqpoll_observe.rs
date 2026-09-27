@@ -6,8 +6,8 @@ use mithril_control::WorkloadProtectionPolicy as Policy;
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
-#[lifecycle = sqpoll_recovery]
+#[platform_test(host, runc, kubernetes)]
+#[lifecycle = sqpoll_observe]
 fn observe_sqpoll_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("sqpoll-observe")?;
     env.start_control()?;
