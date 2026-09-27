@@ -72,6 +72,12 @@ Store recovery fails
    Return Conflict on a competing commit. Commit optional missing ranges before
    resuming from a newer retained floor. External readers cannot pin input.
    Required-package retirement is explicit and authorized.
+   For required-input admission, group active required processors by tenant
+   and source. Use their minimum consumed cursor as the protected-input bound.
+   Count each protected event once. Exclude optional and retired processors.
+   Check age only for accepted input on the current source; check protected
+   bytes across the tenant, including pending input. Do not build intermediate
+   query state keyed by every event cursor to find the required bound.
    Control applies at most 32 explicit `data_retirements` from its trusted
    startup configuration before it admits Node data. Each request names the
    exact processor, method version, tenant/source identity, change ID, reason,
@@ -1111,3 +1117,23 @@ bytes after restart, explicit expiry, witness retention, and the serial crash
 regression. The default-quota CLI and final workspace gate must still run.
 Full-quota measurements, reserve sizing, remaining load
 qualification, and old-writer removal remain open. The phase is **Not done**.
+
+The default-quota CLI failed on `d075047e`: an evidence ACK exceeded its
+five-second test deadline before the tenant quota was reached. The run took
+623.17 seconds and used 427,524 KiB peak RSS. Resource measurements are in
+`/tmp/araphor-quota-qualification.vDuyJTzR/resources.log`. The CLI SHA-256 is
+`bd95bdff97de9ea124e63d2e96071a1167da6713e894e18c24f471eaa8c3256c`.
+The last sampled durable Node ACK was cursor 446,464; this sample is not the
+final accepted count. Other VMs and build/test work ran on the host. This is
+a failed capacity case, not a clean throughput baseline. Required-input SQL
+cost needs a focused check before another full-quota run. No limit was reduced
+and no timeout was increased.
+
+The required-input query now groups processor cutoffs by tenant and source.
+The query-plan regression failed on the original SQL with `LEFT_DELIM_JOIN`
+and an intermediate group for each event cursor. It passes with the grouped
+cutoff. All four required-input component checks pass, including unequal
+processor progress, retirement, optional scopes, and tenant isolation.
+The earlier workspace gate was stopped after this source change. It is not
+final verification. The default-quota case and full workspace gate must run
+again. This SQL change adds no cache, counter table, or schema change.
