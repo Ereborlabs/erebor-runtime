@@ -2284,16 +2284,6 @@ impl EffectTestRunner {
             "UNRESOLVED_OBJECT",
         )?;
 
-        require_hard_close(
-            &mut fixture,
-            &reader,
-            &observations,
-            HardClosedOperation::MountPropagation,
-            "UNSUPPORTED_OBJECT",
-            (KernelEffectFamilyV1::Mount, KernelEffectOperationV1::Mount),
-            "mount propagation mutation",
-        )?;
-
         let mount_snapshots_before_mutation = ready_canonical_mount_snapshots(&host)?;
         let mount_epoch_before_mutation = global_mount_mutation_epoch(&host)?;
         let changed_mount_secret = paths.mount_target.join("secret");

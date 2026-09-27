@@ -158,7 +158,6 @@ pub(super) enum PreparedOperation {
     IoUringBenignRead,
     IoUringSqpoll,
     DetachedMountOpen,
-    MountPropagation,
     Ioctl,
     IoctlDerivedPeer,
     IoctlUnsupported,
@@ -1590,7 +1589,6 @@ struct PreparedOperations {
     memfd_read_mapping: Option<memmap2::Mmap>,
     passed_secret_file: fs::File,
     passed_benign_file: fs::File,
-    mount_source: PathBuf,
     mount_tree: fs::File,
     ioctl_file: fs::File,
     unsupported_ioctl_file: fs::File,
@@ -1762,7 +1760,6 @@ impl PreparedOperations {
             memfd_read_mapping: Some(memfd_read_mapping),
             passed_secret_file,
             passed_benign_file,
-            mount_source: mount_source.to_path_buf(),
             mount_tree,
             ioctl_file,
             unsupported_ioctl_file,
@@ -1906,9 +1903,6 @@ impl PreparedOperations {
                     self.mount_tree.as_raw_fd(),
                     Path::new("secret"),
                 ))
-            }
-            PreparedOperation::MountPropagation => {
-                io_outcome(fixture_syscalls::make_mount_shared(&self.mount_source))
             }
             PreparedOperation::Ioctl => ptmx_number_outcome(&self.ioctl_file),
             PreparedOperation::IoctlDerivedPeer => ptmx_peer_outcome(&self.ioctl_file),

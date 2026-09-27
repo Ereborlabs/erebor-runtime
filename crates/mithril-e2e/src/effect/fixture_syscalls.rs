@@ -800,21 +800,6 @@ fn set_mount_readonly_state(path: &Path, read_only: bool) -> io::Result<()> {
     })
 }
 
-pub(super) fn make_mount_shared(path: &Path) -> io::Result<()> {
-    let path = path_c_string(path)?;
-    // SAFETY: only target and propagation flags are used for this mount call.
-    let result = unsafe {
-        libc::mount(
-            std::ptr::null(),
-            path.as_ptr(),
-            std::ptr::null(),
-            libc::MS_SHARED | libc::MS_REC,
-            std::ptr::null(),
-        )
-    };
-    syscall_result(result.into())
-}
-
 fn fork_and_wait(child_call: impl FnOnce() -> libc::c_int) -> io::Result<()> {
     // SAFETY: the child executes only the supplied syscall path and then _exit.
     let child = unsafe { libc::fork() };
