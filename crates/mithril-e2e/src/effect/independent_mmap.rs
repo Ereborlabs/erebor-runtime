@@ -26,6 +26,14 @@ fn independent_mapping_is_denied<P: Platform>() -> TestResult<()> {
         "primary mapping control",
         Duration::from_secs(5),
     )?;
+    root_check.wait(
+        &env,
+        "EXACT_POLICY_DENY",
+        F::File,
+        O::MmapRead,
+        -libc::EACCES,
+        "primary root mapping denial",
+    )?;
     let first = root_check.wait(
         &env,
         "EXACT_POLICY_ALLOW",
@@ -34,7 +42,6 @@ fn independent_mapping_is_denied<P: Platform>() -> TestResult<()> {
         0,
         "primary root read",
     )?;
-
     let mut actor = env.add_actor(
         "python",
         &["/fixtures/retained_descriptor.py", "/work", "independent"],

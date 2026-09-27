@@ -2815,6 +2815,13 @@ test does not close a row when its physical condition or an assertion changed.
     50.86 seconds, and Kubernetes passed in 150.77 seconds. The Kubernetes
     launcher exited 0. Remove the old action, result field, and fixture arm;
     keep the other executable-mapping checks.
+  - [x] Replace the old file `MmapRead` result with an exact effect check in
+    the same 100-line shared mapping test. The actor already reports physical
+    `EACCES`; the test now also requires attributed `EXACT_POLICY_DENY`
+    File/MmapRead evidence. Remove the hard-coded old result field. An
+    unchanged Host retry passed in 76.84 seconds after one Node readiness
+    timeout. Direct `runc` passed in 79.52 seconds. Kubernetes passed in
+    92.99 seconds and its launcher exited 0.
   - [ ] Replace the old SysV `IPC_STAT` check. A draft actor used the same
     syscall, but it succeeded under `actor_policy.json` on Host. The draft
     was removed. Do not retire the old check until a signed policy and the
