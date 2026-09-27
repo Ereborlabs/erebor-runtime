@@ -26,11 +26,8 @@ fn bind_alias_keeps_exact_observe<P: Platform>() -> TestResult<()> {
     env.sync_policy()?;
     env.node_ready()?;
     env.running(pid)?;
-    let root = env.recovered(pid, "bind alias actor")?;
-    assert_eq!(
-        root.snapshot.root_class.as_deref(),
-        Some("recovered_application_root")
-    );
+    let root_class = env.recovered(pid, "bind alias actor")?.snapshot.root_class;
+    assert_eq!(root_class.as_deref(), Some("recovered_application_root"));
     env.install_policy("file_observe.json")?;
     env.node_ready()?;
 
@@ -43,12 +40,8 @@ fn bind_alias_keeps_exact_observe<P: Platform>() -> TestResult<()> {
 
     for name in ["confirm", "first", "second"] {
         actor.send(format!("{name}\n").as_bytes())?;
-        actor.wait_name(
-            pid,
-            &format!("link-{name}-0"),
-            "bind alias read",
-            Duration::from_secs(5),
-        )?;
+        let mark = format!("link-{name}-0");
+        actor.wait_name(pid, &mark, "bind alias read", Duration::from_secs(5))?;
     }
     let events = effects.wait_many(
         &env,
@@ -82,13 +75,11 @@ fn bind_alias_keeps_exact_observe<P: Platform>() -> TestResult<()> {
     assert_ne!(base.mount_id_unique, 0);
     assert_ne!(base.exact_object_key_id, 0);
     assert_ne!(base.composite_atom_id, 0);
+    let selected = origin.selected_mount_id_unique;
     for (alias, view) in events[1..].iter().zip(&views[1..]) {
         assert_ne!(alias.mount_id_unique, base.mount_id_unique);
         assert_eq!(view.mount_namespace_inode, origin.mount_namespace_inode);
-        assert_eq!(
-            view.selected_mount_id_unique,
-            origin.selected_mount_id_unique
-        );
+        assert_eq!(view.selected_mount_id_unique, selected);
         assert_eq!(view.canonical_component_hex, origin.canonical_component_hex);
         assert_eq!(alias.filesystem_device, base.filesystem_device);
         assert_eq!(alias.inode, base.inode);
