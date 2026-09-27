@@ -1166,8 +1166,6 @@ impl EffectTestRunner {
             fixture_root.join("path-tree-preexisting-bind-alias");
         let allowed_bind_source = fixture_root.join("allowed-bind-source");
         let allowed_bind_source_file = allowed_bind_source.join("allowed");
-        let allowed_bind_target = fixture_root.join("allowed-bind-alias");
-        let allowed_bind_alias = allowed_bind_target.join("allowed");
         fs::create_dir_all(&path_tree_root).context(IoSnafu {
             path: &path_tree_root,
         })?;
@@ -1177,9 +1175,9 @@ impl EffectTestRunner {
         fs::write(&allowed_bind_source_file, b"allowed bind source\n").context(IoSnafu {
             path: &allowed_bind_source_file,
         })?;
-        for target in [&path_tree_preexisting_bind_target, &allowed_bind_target] {
-            fs::create_dir(target).context(IoSnafu { path: target })?;
-        }
+        fs::create_dir(&path_tree_preexisting_bind_target).context(IoSnafu {
+            path: &path_tree_preexisting_bind_target,
+        })?;
         ensure!(
             !protect
                 || path_tree_preexisting
@@ -1198,7 +1196,6 @@ impl EffectTestRunner {
         let propagation_peer_pid = fixture.prepare_propagation_peer(&paths)?;
         let external_mount_namespace = ExternalMountNamespace::acquire(fixture.pid())?;
         external_mount_namespace.bind_mount(&path_tree_root, &path_tree_preexisting_bind_target)?;
-        external_mount_namespace.bind_mount(&allowed_bind_source, &allowed_bind_target)?;
         fixture.prepare_operations(&paths)?;
         let unix_stream_peer_pid = fixture.prepare_unix_stream_target()?;
         if protect {
@@ -1279,33 +1276,6 @@ impl EffectTestRunner {
             None,
         )
         .context(NodeSnafu)?;
-        let allowed_bind_alias_object = ExactFileObjectResolver::resolve(
-            fixture.pid(),
-            &allowed_bind_alias,
-            PROFILE_GENERATION_REF_ID,
-            PathSelectorV1::kernel_handle_for_id("manual-benign-bind"),
-            "MANUAL_BENIGN".to_owned(),
-            allowed_bind_inode_generation,
-            None,
-        )
-        .context(NodeSnafu)?;
-        ensure!(
-            allowed_bind_object.mount_id_unique != allowed_bind_alias_object.mount_id_unique
-                && allowed_bind_object.selected_mount_id_unique
-                    == allowed_bind_alias_object.selected_mount_id_unique
-                && allowed_bind_object.canonical_component_hex
-                    == allowed_bind_alias_object.canonical_component_hex
-                && allowed_bind_object.filesystem_device
-                    == allowed_bind_alias_object.filesystem_device
-                && allowed_bind_object.inode == allowed_bind_alias_object.inode
-                && allowed_bind_object.inode_generation
-                    == allowed_bind_alias_object.inode_generation,
-            InvalidInputSnafu {
-                path: &allowed_bind_alias,
-                reason:
-                    "the allowed bind fixture is not a distinct mount of the same canonical file",
-            }
-        );
         let propagation_benign_object = ExactFileObjectResolver::resolve(
             propagation_peer_pid,
             &paths.benign,
@@ -2450,7 +2420,6 @@ impl EffectTestRunner {
         )?;
 
         external_mount_namespace.unmount(&path_tree_preexisting_bind_target)?;
-        external_mount_namespace.unmount(&allowed_bind_target)?;
         reconcile_policy_lifecycle(&policy, &mut host)?;
 
         ensure!(

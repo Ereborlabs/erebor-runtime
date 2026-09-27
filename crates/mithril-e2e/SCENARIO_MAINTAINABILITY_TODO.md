@@ -619,7 +619,7 @@ runner that still needs replacement:
 | --- | ---: | --- |
 | `effect/runc.rs` | 6,860 | Size and runner retirement |
 | `identity.rs` | 5,174 | Size and runner retirement |
-| `effect.rs` | 3,156 | Size and runner retirement |
+| `effect.rs` | 3,127 | Size and runner retirement |
 | `effect/child.rs` | 2,991 | Size and runner retirement |
 | `control_tls.rs` | 2,416 | Size and runner retirement |
 | `effect/network.rs` | 1,505 | Runner retirement; size limit met |
@@ -1945,7 +1945,7 @@ test does not close a row when its physical condition or an assertion changed.
     - [ ] Replace the remaining allowed-bind and propagation resolver checks
       before removing their fixture paths. Keep their selected mount,
       canonical component, and mount namespace assertions.
-      - [ ] Qualify the benign bind alias with `file_bind_allowed.rs`. Reuse
+      - [x] Qualify the benign bind alias with `file_bind_allowed.rs`. Reuse
         `exception.py` and `retained_descriptor_policy.json`. Require a real
         bind mount, two allowed opens, two attributed exact Allow results,
         distinct mount IDs, and equal selected mount, canonical component,
@@ -1959,9 +1959,10 @@ test does not close a row when its physical condition or an assertion changed.
           actor, policy, and assertions as Host.
         - [x] Pass Kubernetes and commit it. The `mount_late_kubernetes` case
           passed in the retained K3s VM with the same scenario body.
-        - [ ] Remove only the matching old allowed-bind comparison after all
-          three platforms pass. Keep the source resolver for policy
-          publication and the separate propagation checks.
+        - [x] Remove only the matching old allowed-bind comparison and its
+          unused alias mount after all three platforms pass. Keep the source
+          resolver for policy publication and the propagation checks. The
+          old runner still fails its pre-policy baseline before this block.
     - [x] Remove only the duplicate protected-alias resolver comparison from
       the old effect probe. The shared Protect and Observe tests resolve the
       original file and both aliases. They require distinct mount IDs and
