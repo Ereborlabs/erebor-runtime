@@ -610,6 +610,18 @@ overlapped this run, so its timings are not a clean performance baseline.
 Global saturation, worst-case payloads, concurrent rollout, physical reserve
 adequacy, repeated performance, and old-writer removal remain unqualified.
 
+On the same release source, three single-tenant and three two-tenant load runs
+passed on the pilot VM. Each run submits 262,144 records to a new temporary
+store. Host build and test jobs finished before these runs; the unrelated VM
+and desktop applications remain active. No cache is cleared. The existing load
+flow checks exact bytes, replay, receipts, restart, and tenant isolation.
+Whole-case times range from 12.33 to 12.81 seconds for one tenant and 12.52 to
+12.83 seconds for two tenants. No policy read exceeded 8.199 milliseconds.
+The data-store phase records all six runs and measurement limits. Their
+`bounded-load-{1,2,3}` and `bounded-tenants-{1,2,3}` JSON results and resource
+logs are in the pilot directory. These repetitions do not prove a policy
+rollout under load or repeated full-quota performance.
+
 [EvidenceIntakeOwner::new](../../../../crates/mithril-control/src/evidence.rs) The explicit data-backed constructor rejects accepted, pending, or coverage state in the old Control evidence store. The owner validates Node batches and commits evidence and coverage only to AnalysisStore. Its component tests check exact frames, replay, old Control-store isolation, and restart.<br>
 -> [ControlPlane::from_intake](../../../../crates/mithril-control/src/service.rs) The service accepts the selected intake owner and keeps the same Control policy and trust store.<br>
 -> [DataStoreQualification::recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The mTLS case submits Node WAL records, leaves an ACK unread, restarts the owners, and retries the same bytes. The case passed 23 checks with the selected data owner.<br>

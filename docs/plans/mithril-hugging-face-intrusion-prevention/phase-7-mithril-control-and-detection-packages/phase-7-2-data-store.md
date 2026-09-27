@@ -1255,3 +1255,37 @@ This pass proves the synthetic tenant-quota recovery case, not global
 saturation, worst-case payloads, concurrent rollout, reserve adequacy, or
 repeatable performance. Those checks and old-writer removal remain open.
 The phase remains **Not done**.
+
+Three release runs of each existing load case passed on `7d7b1acc` on the
+same pilot VM. The copied binary digest is unchanged. Each run starts a new
+temporary store and submits 262,144 records. Single-tenant input is 30,113,740
+bytes; two-tenant input is 30,080,920 bytes. All six runs preserve exact frame
+digests, duplicate replay, receipts, and restart state. The two-tenant case
+also rejects foreign-tenant reads. Host build and workspace tests finished
+before these runs. One unrelated VM and desktop applications remain active;
+the host is not dedicated. Runs alternate single-tenant and two-tenant cases.
+No filesystem cache is cleared, so these results are not cold-cache trials.
+
+| Case / run | Intake seconds | ACK p95 milliseconds | Policy-read p95 milliseconds | Whole-case seconds | Peak RSS KiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| One tenant / 1 | 6.818 | 42.900 | 3.930 | 12.80 | 203,296 |
+| One tenant / 2 | 7.261 | 45.771 | 3.842 | 12.81 | 200,212 |
+| One tenant / 3 | 6.694 | 39.829 | 3.450 | 12.33 | 198,692 |
+| Two tenants / 1 | 6.409 | 70.503 | 4.804 | 12.52 | 213,784 |
+| Two tenants / 2 | 6.691 | 76.541 | 2.603 | 12.79 | 212,008 |
+| Two tenants / 3 | 6.815 | 79.003 | 5.137 | 12.83 | 222,780 |
+
+ACK time includes the policy inventory RPC and group-send calls. Intake time
+also includes Node generation and duplicate replay. These measurements are
+not engine-only throughput. Whole-case elapsed spread is 3.9 percent for one
+tenant and 2.5 percent for two tenants, measured from each minimum. Intake
+spread is 8.5 and 6.3 percent. These same-source runs do not establish a
+regression against another implementation. No policy read exceeded 8.199
+milliseconds. Checkpoint time ranges from 0.205 to 0.239 seconds; reopen ranges
+from 0.191 to 0.208 seconds. Each final native WAL is empty.
+The pilot output directory contains `bounded-load-{1,2,3}.json`,
+`bounded-tenants-{1,2,3}.json`, and their `-resources.log` files.
+This evidence closes repeated measurement for these two small-input cases.
+It does not qualify repeated full-quota behavior, worst-case payloads,
+concurrent rollout, global capacity, or physical reserve adequacy.
+Old-writer removal also remains open. The phase remains **Not done**.
