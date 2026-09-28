@@ -438,6 +438,27 @@ without stopping policy service. Node replay, partition recovery, API recovery,
 and watch relist pass. This result does not replace the separate failed
 mount-cache test or qualify full-quota performance and reserve adequacy.
 
+[wait_rollout](../../../../crates/mithril-e2e/harness/vm/outage-rollout.sh) API recovery reads the fixture Pod during the bounded rollout wait.<br>
+-> [pod_needs_api_restart_recreation](../../../../crates/mithril-e2e/harness/kubernetes-oracles.sh) Only a non-deleting Failed/NodeAffinity Pod with the Mithril readiness selector permits recreation.<br>
+-> [wait_rollout](../../../../crates/mithril-e2e/harness/vm/outage-rollout.sh) The harness waits for Node readiness and recreates `outage-a` at most once through normal admission.<br>
+-> [wait_rollout](../../../../crates/mithril-e2e/harness/vm/outage-rollout.sh) Application startup, Node acknowledgement, and two active rollout targets are required. An unrelated failure, second eviction, or expired wait fails the case.
+
+The [VM shell regression](../../../../crates/mithril-e2e/harness/vm/test.sh)
+executes this wait with Running, delayed Failed/NodeAffinity, and replacement
+Running states. It also rejects repeated eviction and unrelated failure.
+Ordinary rollout waits do not read or recreate the fixture Pod. The delayed
+case failed against the previous wait and passes with this change. The physical
+rerun passed on the current Rust source with the corrected wait. Read
+`/tmp/araphor-storage-recovery.b0SjI8YM/outage-fixed/result.json`: retained
+records increased from 3,221 to 4,034 to 4,219 across the exact baseline checks.
+Storage failure withheld ACKs without stopping policy service. Node replay,
+partition recovery, API recovery, and watch relist passed. Both Nodes and all
+Mithril Pods were healthy after cleanup. The final repository gate after the
+harness edit passed formatting, workspace check, strict Clippy, and all enabled
+workspace tests. Read `final-ci.log` in the same artifact directory.
+Implementation and correctness/recovery verification are complete. Performance
+gates remain unverified and require the user's run-or-defer decision.
+
 The next route covers the data-owner implementation. The recovery case selects
 the owner explicitly. The startup case uses ControlConfig and the default owner.
 
