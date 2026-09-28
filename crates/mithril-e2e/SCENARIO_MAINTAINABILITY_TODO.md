@@ -3808,7 +3808,9 @@ setup, production actions, assertions, and focused test.
   result field until the paired platforms pass.
   - [x] Host passed in 63.25 seconds. The standard test has fewer than 100
     lines and checks the active runtime binding and fresh effect.
-  - [ ] Pass direct `runc` and Kubernetes with the same test body.
+  - [x] Direct `runc` passed in 83.40 seconds with the same test body and
+    production OCI hook.
+  - [ ] Pass Kubernetes with the same test body.
   - [ ] Remove only the matching old wait, result, and shell gate.
 - [ ] Initial application activation: keep the entry action and `ACTIVE`,
   role, rule, default-effect, and large-argv assertions explicit.
