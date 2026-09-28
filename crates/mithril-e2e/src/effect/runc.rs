@@ -196,7 +196,6 @@ pub struct RecoveredContainerEntryProbeV1 {
     pub recovered_application_task_count: u64,
     pub recovered_external_task_count: u64,
     pub ptrace_bootstrap_marker_observed: bool,
-    pub runtime_internal_exec_observed_with_rule_zero: bool,
     pub declared_probe_role_id: u32,
     pub declared_probe_rule_id: u32,
     pub pin_root_removed: bool,
@@ -2929,12 +2928,6 @@ impl EffectTestRunner {
                 && event.target_task_cookie == recovered_initial.task_cookie
                 && event.admitted_entry_rule_id == 0
         });
-        let runtime_internal_exec_observed_with_rule_zero = probe_effects.iter().any(|event| {
-            event.reason == "RUNTIME_ENTRY_INFRASTRUCTURE"
-                && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
-                && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
-                && event.admitted_entry_rule_id == 0
-        });
         ensure!(
             probe_status.success()
                 && fs::read(&probe_stdout).context(IoSnafu {
@@ -2942,8 +2935,7 @@ impl EffectTestRunner {
                 })? == b"READY\nrelease\n"
                 && probe_snapshot.active_role_id == policy.role_ids["startup"]
                 && probe_snapshot.admitted_entry_rule_id != 0
-                && ptrace_bootstrap_marker_observed
-                && runtime_internal_exec_observed_with_rule_zero,
+                && ptrace_bootstrap_marker_observed,
             InvalidInputSnafu {
                 path: &probe_stderr,
                 reason: format!(
@@ -3112,7 +3104,6 @@ impl EffectTestRunner {
             recovered_application_task_count: recovery.validation_application_task_count,
             recovered_external_task_count: recovery.validation_external_task_count,
             ptrace_bootstrap_marker_observed,
-            runtime_internal_exec_observed_with_rule_zero,
             declared_probe_role_id: probe_snapshot.active_role_id,
             declared_probe_rule_id: probe_snapshot.admitted_entry_rule_id,
             pin_root_removed: !pin_root.exists(),

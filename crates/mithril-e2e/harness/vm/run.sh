@@ -512,7 +512,6 @@ if [[ $recovered_entry_only == true ]]; then
     .schema_version == 1 and
     .recovering_before_iterator and
     .ptrace_bootstrap_marker_observed and
-    .runtime_internal_exec_observed_with_rule_zero and
     .declared_probe_role_id > 0 and
     .declared_probe_rule_id > 0 and
     .declared_probe_role_id != .recovered_application_role_id and
