@@ -1,43 +1,37 @@
 # Raw Event Store Comparison
 
 The selected target is now the [segment-backed design](segment-owned-raw-events.md).
-The measurements below describe the earlier raw-DuckDB and segment paths.
-The DuckDB raw owner is partway through implementation. Configured Control
-already selects it, but the full storage qualification is not complete. This
-note compares direct raw-store behavior with the old Control segment writer.
-The required end state is one durable raw copy, direct discovery reads,
-durable results and progress, scoped SQL, and bounded retention.
+The measurements below describe the earlier raw-DuckDB and Control segment
+paths. They do not measure the selected segment-plus-metadata implementation.
+Read [7.2](phase-7-2-data-store.md) for the current implementation and proof.
 
-## Existing behavior
+## Historical benchmark source
 
-Configured startup rejects a Control store with accepted raw evidence. It
-opens `AnalysisStore`, then authenticated intake commits events and source
-receipts to DuckDB. If that owner cannot open, intake is unavailable; it does
-not fall back to segments. The old Control segment writer and reader remain
-callable in code and are the other side of this benchmark. They keep batch
-ranges, source cursors, and frame offsets. Old discovery code reads those
-segments and copies raw records into export artifacts. It has not been
-converted to consume configured DuckDB intake. There is no dual write.
+At the benchmark revision, configured startup rejected a Control store with
+accepted raw evidence. AnalysisStore stored raw events and source receipts in
+DuckDB. Failed data startup made intake unavailable without a segment fallback.
+The old Control segment writer and reader were still callable. They stored
+batch ranges, source cursors, and frame offsets. The old discovery loop copied
+their raw records into export artifacts. The two writers were separate paths,
+not a dual-write intake. Neither raw-owner arrangement describes current Control.
 
-The `events` primary key creates a DuckDB ART index on `(stream_key,
-durable_cursor)`. The Rust writer also checks retained retries for identical
-bytes or conflicting content. The ART index gives a second uniqueness check,
-but it is not needed to calculate discovery results. A large checkpoint failed
+The tested `events` primary key created a DuckDB ART index on `(stream_key,
+durable_cursor)`. The Rust writer also checked retained retries for identical
+bytes or conflicting content. The ART index supplied a second uniqueness check,
+not a discovery algorithm. A large checkpoint failed
 while DuckDB rebuilt this index. A larger native memory target then exceeded
 the 256 MiB process memory gate. Neither result compares the two store designs.
 
 ## Selected replacement and remaining proof
 
-A segment replacement that preserves the approved owner boundary would adapt
-the segment writer and reader into the portable data owner, then make
-discovery read committed pages without another raw archive.
-Derived results, processing progress, and selected evidence references remain
-durable. Authorized SQL could use bounded segment input in an isolated worker.
-Keeping the old Control writer unchanged would not meet the current data-owner
-boundary or retention contract.
+The selected design puts the segment writer and reader in the portable data
+owner. Discovery must read committed pages without another raw archive.
+Results, progress, and exact references must remain durable. SQL must use
+bounded authorized input in an isolated worker. Keeping the old Control writer
+unchanged would not meet the data-owner boundary or retention contract.
 
-This choice still needs an explicit retention contract. Consumption alone
-cannot delete an event that a required processor or a retained witness needs.
+The shared design defines the retention contract. Consumption alone cannot
+permit deletion of an event that a required processor or retained witness needs.
 Result and progress commits must survive restart together. Segment reclamation
 must preserve referenced events. Queries need bounded reads by source, time,
 and scope. Measure the cost of scans and any segment metadata before adding
@@ -58,18 +52,19 @@ and recovery contracts before release. The approved choice is recorded in
 
 ## Direct store comparison
 
-The ignored `store::raw_bench::raw_event_store_comparison` test feeds the same
-framed records to each production store API. Each batch has 256 records. One
-source sends consecutive batches. The test prepares records before timing,
-measures each durable store call, closes and reopens the store, then reads and
-decodes every record in pages. It checks each record's cursor. The legacy read
-uses `begin_evidence_read` and `read_evidence_page`. The DuckDB read uses
-`read_page` and decodes the returned frames. One store runs per process.
+The recorded `store::raw_bench::raw_event_store_comparison` test fed identical
+frames to each then-current store API. Each batch had 256 records. One source
+sent consecutive batches. The test prepared records before timing, measured
+durable calls, reopened the store, and checked every record's cursor through
+paged reads. The Control path used `begin_evidence_read` and
+`read_evidence_page`; the raw-DuckDB path used `read_page`. Each store ran in
+a separate process. The current fixture tests only the selected data owner;
+the old writer is not retained for comparison.
 
 The test ran in the owned VM `mithril-runtime-qualification-2249801`: four
 virtual CPUs, Linux 6.8.0-142, ext4, no swap. It used release builds, default
 store limits, no allocator override, and no concurrent benchmark. DuckDB used
-the current 160 MiB engine target and 16 MiB checkpoint threshold. The final
+a 160 MiB engine target and 16 MiB checkpoint threshold. The final
 test executable SHA-256 was
 `34824977af630a4dcdc1ec4673b7e02800a959db6407a46a2bd03712ce6f913b`.
 Both stores accepted and returned all records after reopen.
