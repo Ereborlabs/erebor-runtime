@@ -119,8 +119,10 @@ Log: `/tmp/araphor-memory-ceiling.OzjkL9bu/ci.log`. The ignored performance test
 did not run. This result does not complete storage qualification.
 
 These are proposed pilot limits, not measured capacity or final service-level
-commitments. Phase 7.1 pins offline feasibility defaults. Phase 7.2 measures
-intake and storage limits before cutover. Phase 7.3 measures extraction and
+commitments. Phase 7.1 pins offline feasibility defaults. Phase 7.2 requires
+storage correctness, recovery, and bounded extraction before completion.
+Its capacity and throughput measurements are separate qualification; prove
+a capacity before advertising it. Phase 7.3 measures extraction and
 query-worker limits before query release. Enforce both count and byte limits;
 use the first one reached.
 
@@ -185,6 +187,14 @@ compaction or secondary witness archive is part of qualification.
 
 ## Performance experiment
 
+For Phase 7.2, use its ordered qualification table. Small correctness cases,
+recovery, protected retention, and bounded extraction remain mandatory.
+Full-capacity, throughput, and old-writer comparisons do not all block
+implementation completion. Existing provisional memory ceilings are test
+conditions, not production memory budgets. Do not infer a leak from a ceiling
+failure alone. The current user-directed run executes one item, reports it,
+and stops for a decision before the next item.
+
 Qualify the combined segment writer and DuckDB metadata transactions with the
 sealed corpus and actual production batch schedule. Reuse the recorded release
 baseline; do not infer complete-system throughput from the old segment test
@@ -213,9 +223,10 @@ does not hold a gRPC call open for all work. Query reads the result. This is a p
 Record cold and warm runs separately; do not exclude failures or model startup.
 
 Run primary evidence and rollout workloads concurrently. Compare their latency
-and completion with discovery disabled. Investigate a reproducible regression
-above 5%; the release must not accept unbounded stalls at any percentage.
-Repeat runs and report variability. Test disk-full and noisy-neighbor cases
+and completion with discovery disabled. Preserve policy progress and existing
+operation deadlines. Report latency differences and variability; five percent
+is not a justified completion threshold. A future performance gate needs an
+approved workload, deployment budget, and measurement method. Test disk-full and noisy-neighbor cases
 independently from nominal throughput.
 
 Compare raw-event review and deterministic recipes on the same operator tasks.
