@@ -6,7 +6,7 @@ use rustix::fs::{mkfifoat, Mode, CWD};
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = node_restart]
 fn prestop_keeps_file_role<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("prestop-dd")?;

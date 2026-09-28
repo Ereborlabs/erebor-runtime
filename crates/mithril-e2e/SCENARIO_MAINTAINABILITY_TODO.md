@@ -4317,7 +4317,8 @@ setup, production actions, assertions, and focused test.
       - [x] Host passed in 71.53 seconds on 2026-09-28. After the new
         role moved behind the existing role IDs, all five Host restart
         tests and all 62 Host identity tests passed without test changes.
-      - [ ] Pass direct `runc` and commit it.
+      - [x] Direct `runc` passed in 75.92 seconds with the production OCI
+        hook on 2026-09-28.
       - [ ] Pass Kubernetes and commit it.
     - [ ] Replace the separate runtime-inventory omission case before its
       legacy result is removed. The new restart test uses the normal CRI
