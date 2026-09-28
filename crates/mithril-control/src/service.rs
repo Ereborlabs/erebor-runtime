@@ -260,11 +260,7 @@ impl ControlPlane {
         trust: TrustGenerationV1,
         store: crate::ControlStore,
     ) -> crate::Result<Self> {
-        Self::from_intake(
-            allowed,
-            trust,
-            crate::EvidenceIntakeOwner::from_store(store),
-        )
+        Self::from_intake(allowed, trust, crate::EvidenceIntakeOwner::try_from(store)?)
     }
 
     pub fn from_intake(
@@ -317,7 +313,7 @@ impl ControlPlane {
     pub fn analysis_store(&self) -> Option<Arc<araphor_data::AnalysisStore>> {
         self.evidence
             .as_ref()
-            .and_then(crate::EvidenceIntakeOwner::analysis_store)
+            .map(crate::EvidenceIntakeOwner::analysis_store)
     }
 
     #[cfg(feature = "test-fixtures")]
@@ -557,10 +553,6 @@ impl ControlPlane {
             allowed_nodes: count(self.allowed_nodes.len()),
             connected_nodes,
             ready_nodes,
-            evidence_cursors: store.evidence_cursors,
-            pending_evidence_batches: store.pending_evidence_batches,
-            pending_evidence_records: store.pending_evidence_records,
-            coverage_cursors: store.coverage_cursors,
         })
     }
 

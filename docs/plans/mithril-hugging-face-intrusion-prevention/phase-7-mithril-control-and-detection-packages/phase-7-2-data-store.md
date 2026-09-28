@@ -15,8 +15,9 @@ delivery WAL. The same complete data owner can later run remotely. Storage
 and trace intake do not require discovery. Entry: 7.1.
 Status: **Not done**. Segment intake, reads, recovery, and retention are under
 implementation. Complete-bundle backup and trusted bounded extraction are
-implemented. Extraction release qualification, caller conversion, and full
-qualification remain incomplete.
+implemented. The old Control raw writer and its callers are removed. The
+complete workspace gate and paired disk-full case pass for this removal.
+Release measurements and Kubernetes qualification remain incomplete.
 Previous implementation results below are evidence for their named revisions,
 not completion of this design.
 
@@ -165,9 +166,10 @@ Storage fails or cannot meet capacity
 
 ## Storage choice qualification
 
-The existing `raw_event_store_comparison` fixture accepts release builds and
-1 through 4,096 batches. Modes `segments` and `analysis` select the original
-Control writer and the combined segment/metadata owner. It reports durable-call
+The `raw_event_store_comparison` fixture accepts release builds and
+1 through 4,096 batches. Mode `analysis` selects the combined segment/metadata
+owner. Compare its results with the recorded original-writer baseline. The
+original writer is not retained for this benchmark. The fixture reports durable-call
 p95/p99 and separate raw-sync and post-sync intervals. The post-sync interval
 includes metadata commit, notification, and return; it is not native SQL time
 alone. Test hooks add measurement overhead. `raw_commit_clock` passed, and the
@@ -895,8 +897,70 @@ does not cover the later intake constructor conversion.
 done for the full phase.** Release memory, sparse-history and many-segment
 measurements, caller conversion, and physical qualification remain required.
 
-### Previous implementation evidence
+### Intake owner conversion
 
+The conversion after `3e5bfcea` is **Done for raw-owner removal and caller
+verification. Not done for the full phase.**
+`EvidenceIntakeOwner` requires AnalysisStore. Opening data can fail; no
+constructor selects a Control raw writer. Evidence, coverage, receipts, and
+source bindings use the data owner. Control still checks the exact durable
+Node session. Converted mTLS fixtures share the data owner.
+
+Control no longer owns a segment writer, raw reader, raw index, receipt map,
+or consumption-based deletion path. Its policy/trust snapshot format remains
+MessagePack with a checksum. Schema 7 excludes raw state. Startup rejects old
+schemas and old raw directories without import. The old `evidence_store`
+configuration and four raw-counter fields in convergence health are removed.
+Node WAL behavior is unchanged.
+
+The old live discovery scheduler and raw-copy adapter are removed. Offline
+profile algorithms, context contracts, and trace owners remain. Direct-read
+live discovery remains a 7.4 requirement. `evidence-restart` and
+`context-roundtrip` now check exact retained frames and context through Node
+WAL, mTLS, and AnalysisStore reopen. They do not qualify profiles. The obsolete
+`profile-restart` command is removed until that implementation exists.
+
+Before raw-owner removal, all 16 intake tests passed after removal of the
+task-owned incremental compiler cache. The earlier nine failures were storage
+reserve rejections on a filesystem with 1.2 GiB free. No storage limit changed.
+After raw-owner removal, `CARGO_BUILD_JOBS=2 cargo check --workspace
+--all-targets --all-features` passed without warnings in 26.53 seconds. Its log
+is `/tmp/araphor-raw-retirement-check.log`. The complete test build passed in
+6 minutes 18 seconds at `/tmp/araphor-retirement-test-build.log`.
+The current focused runs passed 16 intake tests, one unsupported-state test,
+19 mTLS tests, two frame/context round-trip tests, and two startup/recovery
+tests. The mTLS suite kept one ignored load case. The local VM harness
+regression and shell syntax check passed. These checks use the removed-writer
+source, not the earlier raw owner. Read `/tmp/araphor-retirement-mtls.log`
+and `/tmp/araphor-retirement-harness.log`.
+
+The first final gate passed formatting and workspace checking, then stopped
+at Clippy's transaction-enum size check. The expected discovery head now uses
+the existing boxed-field pattern; serialization and transaction checks are
+unchanged. The retry passed Clippy but ran out of disk space during e2e test
+compilation. Only this worktree's idle incremental compiler caches were removed.
+No source, test evidence, native library, or successful binary was removed.
+The next gate completed compilation but failed 47 data tests at the unchanged
+filesystem reserve; 27 tests passed. The remaining idle compiler cache was
+removed. The final command, `RUST_TEST_THREADS=4 CARGO_BUILD_JOBS=1 bash
+.github/scripts/verify-rust-ci.sh`, passed formatting, workspace check, strict
+Clippy, and all enabled workspace tests. Counts include 74 data tests with
+five ignored, 174 Control tests with two ignored, 123 Mithril e2e tests with
+249 ignored, and 256 Node tests with one ignored. Read
+`/tmp/araphor-retirement-final-ci-verified.log`. No Rust source changed after
+this run. Release measurements and Kubernetes qualification remain open.
+
+The current-source disk harness passed `data_capacity_retry`,
+`data_capacity_recovery`, and `data_full_disk`, one test each. It ran through
+`unshare --user --map-root-user --mount` with the newly built e2e executable.
+The private one-GiB tmpfs case allocated 1,065,316,352 padding bytes and reached
+zero available bytes. It checked no false ACK, working policy service, rejected
+copy reserves, replay, and two exact retained records after recovery. The
+harness removed its mount. Read `/tmp/araphor-retirement-disk-full.log` for the
+binary digest, source status, and results. This pass does not prove a native
+fsync failure, hardware power loss, or Kubernetes partition recovery.
+
+### Previous implementation evidence
 
 **Not done.** AnalysisStore has a writer, bounded reads, exact context
 versions, processor results and references, guarded raw expiry, backup and

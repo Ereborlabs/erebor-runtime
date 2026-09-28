@@ -149,7 +149,7 @@ impl DataStoreQualification {
             "rollout load changed retained input",
         )?;
         self.check(
-            control.health()?.evidence_cursors == 0,
+            !control.root().join("evidence/segments-v2").exists(),
             "rollout load used the old evidence writer",
         )?;
         let status = data.source_status(&identity)?;

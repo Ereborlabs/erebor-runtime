@@ -954,11 +954,6 @@ jq -n \
     ],
     trust: $trust[0],
     evidence_directory: "/var/lib/mithril-control/evidence",
-    evidence_store: {
-      maximum_retained_bytes: 1073741824,
-      maximum_retained_records: 1000000,
-      capacity_policy: "RETAIN"
-    },
     control_store_directory: "/var/lib/mithril-control/store",
     kubernetes_policy: {
       tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",

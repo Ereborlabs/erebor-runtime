@@ -302,7 +302,7 @@ impl DataStoreQualification {
         }
         let read_us = read_start.elapsed().as_micros();
         self.check(
-            control.health()?.evidence_cursors == 0,
+            !control.root().join("evidence/segments-v2").exists(),
             "load used the old evidence writer",
         )?;
         let checkpoint = Instant::now();
@@ -458,7 +458,7 @@ impl DataStoreQualification {
         drop(Self::reopen_data(&tls.path().join("evidence/analysis")).await?);
         let control = reopen_control_store(&control_root).await?;
         self.check(
-            control.health()?.evidence_cursors == 0
+            !control.root().join("evidence/segments-v2").exists()
                 && control.policy_document(&policy_id)?.as_ref() == Some(&policy),
             "default intake changed policy or used the old evidence writer",
         )?;
@@ -562,7 +562,7 @@ impl DataStoreQualification {
             server.shutdown().await?;
             let control = reopen_control_store(&control_root).await?;
             self.check(
-                control.health()?.evidence_cursors == 0
+                !control.root().join("evidence/segments-v2").exists()
                     && control.policy_document(&policy_id)?.as_ref() == Some(&policy),
                 "data failure changed policy or selected the old writer",
             )?;
@@ -581,19 +581,10 @@ impl DataStoreQualification {
         )?;
 
         let old = MtlsFixture::new(false)?;
-        let control = ControlStore::open(old.path().join("control-store"))?;
-        let intake = EvidenceIntakeOwner::from_store(control.clone());
-        intake.receive(
-            &mithril_control::AuthenticatedEvidenceNodeV1 {
-                tenant_id: identity.tenant_id,
-                node_id: identity.node_id.clone(),
-                node_boot_id: identity.node_boot_id,
-                label_epoch: identity.label_epoch,
-            },
-            wire,
-        )?;
-        drop(intake);
-        drop(control);
+        let old_root = old.path().join("control-store/evidence/segments-v2");
+        fs::create_dir_all(&old_root)?;
+        let old_file = old_root.join("unsupported-segment");
+        fs::write(&old_file, b"old raw evidence")?;
         self.check(
             old.configuration()?.into_parts().is_err(),
             "old receipts were accepted",
@@ -601,6 +592,10 @@ impl DataStoreQualification {
         self.check(
             !old.path().join("evidence/analysis").exists(),
             "old receipts created a new data store",
+        )?;
+        self.check(
+            fs::read(&old_file)? == b"old raw evidence",
+            "old evidence changed",
         )?;
 
         let checks = [
@@ -1024,7 +1019,7 @@ impl DataStoreQualification {
             "result read crossed its tenant or changed content",
         )?;
         self.check(
-            control.health()?.evidence_cursors == 0
+            !control.root().join("evidence/segments-v2").exists()
                 && control.policy_document(&policy_id)?.as_ref() == Some(&policy),
             "data work changed policy or used the old writer",
         )?;
@@ -1167,7 +1162,7 @@ impl DataStoreQualification {
         Ok(())
     }
 
-    async fn reopen_data(root: &Path) -> Result<AnalysisStore> {
+    pub(super) async fn reopen_data(root: &Path) -> Result<AnalysisStore> {
         Ok(crate::physical::wait_for_async(
             root,
             "the stopped server to release its data lease",
@@ -1792,7 +1787,7 @@ mod tests {
         assert_eq!(committed.records[0].framed_record, wire.framed_records);
         let store = ControlStore::open(&control_root)?;
         assert_eq!(store.policy_document(&policy_id)?, Some(policy.clone()));
-        assert_eq!(store.health()?.evidence_cursors, 0);
+        assert!(!store.root().join("evidence/segments-v2").exists());
         let intake = EvidenceIntakeOwner::new(
             store.clone(),
             data.clone(),

@@ -301,7 +301,7 @@ pub(super) mod tests {
             reopened.progress(key.tenant_id, &key.id)?,
             Some(progress.clone())
         );
-        assert_eq!(store.evidence_cursor(&page.stream)?, 0);
+        assert!(!store.root().join("evidence/segments-v2").exists());
         drop(reopened);
         fs::remove_file(directory.path().join("discovery-index.sqlite"))?;
         let rebuilt = DiscoveryIndex::open(store)?;

@@ -14,13 +14,11 @@ use kube::Client;
 use mithril_control::{
     AdministrativeExecArmResult, AdministrativeExecResolution, AllowedNodeIdentity,
     ArmAdministrativeExec, AuthenticatedEvidenceNodeV1, CapabilityRecord, ControlPlane,
-    ControlStore, EvidenceBatch, EvidenceConsumptionWatermarkV1, EvidenceIntakeIdentityV1,
-    EvidenceIntakeOwner, EvidenceRecord, EvidenceRetentionOwner, EvidenceStoreCapacityPolicyV1,
-    EvidenceStoreLimitsV1, EvidenceTemporalCoverage, KubernetesAdmissionHttpConfigV1,
-    KubernetesAdmissionOwner, KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner,
-    NodeDecommissionAuthorizationV1, NodeDecommissionStateV1, NodeRegistration, PolicyBundleV1,
-    ResolveAdministrativeExec, SignedNodeDecommissionV1, TrustGenerationV1,
-    WorkloadProtectionPolicy,
+    ControlStore, EvidenceBatch, EvidenceIntakeIdentityV1, EvidenceIntakeOwner, EvidenceRecord,
+    EvidenceTemporalCoverage, KubernetesAdmissionHttpConfigV1, KubernetesAdmissionOwner,
+    KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner, NodeDecommissionAuthorizationV1,
+    NodeDecommissionStateV1, NodeRegistration, PolicyBundleV1, ResolveAdministrativeExec,
+    SignedNodeDecommissionV1, TrustGenerationV1, WorkloadProtectionPolicy,
 };
 use mithril_node::{
     AdministrativeControlRequest, CoverageGapReasonV1, EffectObservationStore, EvidenceIdV1,
@@ -52,7 +50,7 @@ use crate::control_fixture::{
     control_store_lease_ready, free_address, CertificateFiles, Certificates, ControlServerFixture,
     MtlsFixture, OutagePolicyFixture, OUTAGE_CLUSTER_UID, OUTAGE_NAMESPACE_UID, OUTAGE_TENANT_ID,
 };
-use crate::physical::{wait_for, wait_for_async};
+use crate::physical::wait_for_async;
 
 mod rejection;
 
@@ -509,53 +507,10 @@ async fn kubernetes_outage_pending_policy_transfer_preempts_evidence_ack_backlog
 }
 
 #[test]
-#[ignore = "the startup budget requires the shipped release optimization level"]
-fn kubernetes_outage_retained_control_store_starts_from_latest_state(
-) -> Result<(), Box<dyn StdError>> {
-    const FIXTURE_BATCHES: u64 = 3_204;
-    const RECORDS_PER_BATCH: usize = 74;
-    const LEGACY_BYTES_PER_RECORD: u64 = 16_776;
-    const STARTUP_BUDGET: Duration = Duration::from_secs(5);
-
+fn consumed_events_follow_retention() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let store_path = directory.path().join("control-store");
     let store = ControlStore::open(&store_path)?;
-    let stored_bytes =
-        store.write_retained_evidence_for_test(FIXTURE_BATCHES, RECORDS_PER_BATCH)?;
-    let commit_index = store.commit_index();
-    drop(store);
-
-    let started = Instant::now();
-    let reopened = ControlStore::open(&store_path)?;
-    let elapsed = started.elapsed();
-    let record_count = FIXTURE_BATCHES * RECORDS_PER_BATCH as u64;
-    eprintln!(
-        "opened {record_count} retained records in {elapsed:?}; compact store uses {stored_bytes} bytes"
-    );
-    assert_eq!(reopened.commit_index(), commit_index);
-    assert_eq!(reopened.health()?.evidence_cursors, 1);
-    assert!(elapsed <= STARTUP_BUDGET);
-    assert!(stored_bytes * 100 <= LEGACY_BYTES_PER_RECORD * record_count);
-    assert!(store_path.join("state.bin").is_file());
-    assert!(!store_path.join("commits").exists());
-    let segment_count = fs::read_dir(store_path.join("evidence/segments-v2"))?.count() as u64;
-    assert!(segment_count > 0 && segment_count < FIXTURE_BATCHES);
-    Ok(())
-}
-
-#[test]
-fn control_evidence_queue_reclaims_only_durably_consumed_segments() -> Result<(), Box<dyn StdError>>
-{
-    let directory = tempfile::tempdir()?;
-    let store_path = directory.path().join("control-store");
-    let segments = store_path.join("evidence/segments-v2");
-    let limits = EvidenceStoreLimitsV1 {
-        maximum_retained_bytes: mithril_control::MAX_EVIDENCE_SEGMENT_BYTES as u64,
-        maximum_retained_records: 2,
-        capacity_policy: EvidenceStoreCapacityPolicyV1::Block,
-    };
-    let store = ControlStore::open_with_evidence_limits(&store_path, limits)?;
-    store.write_retained_evidence_for_test(2, 1)?;
     let identity = EvidenceIntakeIdentityV1 {
         tenant_id: [2; 16],
         node_id: "node-a".to_owned(),
@@ -595,52 +550,83 @@ fn control_evidence_queue_reclaims_only_durably_consumed_segments() -> Result<()
     framed_records.extend_from_slice(&payload);
     let checksum = crc32c::crc32c(&framed_records);
     framed_records.extend_from_slice(&checksum.to_be_bytes());
-    let third = EvidenceBatch {
+    let mut batch = EvidenceBatch {
         node_boot_id: identity.node_boot_id.to_vec(),
         source_id: identity.source_id.to_vec(),
         source_epoch: identity.source_epoch,
         cpu_id: 0,
-        first_cursor: 3,
+        first_cursor: 1,
         framed_records: framed_records.into(),
         commit_group_tail: false,
     };
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    assert!(intake.receive(&authenticated, third.clone()).is_err());
-    assert_eq!(fs::read_dir(&segments)?.count(), 1);
-
-    let retention = EvidenceRetentionOwner::from_store(store.clone());
-    retention.acknowledge(EvidenceConsumptionWatermarkV1 {
+    let intake = EvidenceIntakeOwner::try_from(store.clone())?;
+    for cursor in 1..=3 {
+        batch.first_cursor = cursor;
+        assert_eq!(
+            intake
+                .receive(&authenticated, batch.clone())?
+                .contiguous_cursor,
+            cursor
+        );
+    }
+    let data = intake.analysis_store();
+    let now = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos(),
+    )?;
+    let scope = araphor_data::ProcessorScopeV1 {
+        processor_id: "retention-test".into(),
+        method_version: 1,
         identity: identity.clone(),
-        evidence_cursor: 1,
+    };
+    data.register_processor(&scope, araphor_data::ProcessorClassV1::Required, 1)?;
+    data.commit_result(&araphor_data::AnalysisResultCommitV1 {
+        scope,
+        expected_cursor: 0,
+        consumed_cursor: 3,
         coverage_revision: 0,
+        context_revision: 0,
+        result_id: "processed".into(),
+        body: vec![1],
+        created_utc_ns: now,
+        witnesses: Vec::new(),
+        context_refs: Vec::new(),
     })?;
-    assert_eq!(fs::read_dir(&segments)?.count(), 1);
-    assert_eq!(retention.watermark(&identity)?.evidence_cursor, 1);
-    assert!(intake.receive(&authenticated, third.clone()).is_err());
-    retention.acknowledge(EvidenceConsumptionWatermarkV1 {
-        identity: identity.clone(),
-        evidence_cursor: 2,
-        coverage_revision: 0,
-    })?;
-    assert_eq!(fs::read_dir(&segments)?.count(), 0);
-    intake.receive(&authenticated, third)?;
-    assert_eq!(store.accepted_evidence_records(&identity)?.len(), 1);
-    assert_eq!(fs::read_dir(&segments)?.count(), 1);
-
-    drop(retention);
+    assert_eq!(
+        araphor_data::EvidenceRetentionOwner::new(&data, Default::default())?
+            .retain(&identity, now)?
+            .removed_records,
+        0
+    );
+    assert_eq!(data.read_page(&identity, 1)?.records.len(), 3);
+    assert_eq!(
+        araphor_data::EvidenceRetentionOwner::new(&data, Default::default())?
+            .retain(&identity, u64::MAX)?
+            .removed_records,
+        3
+    );
+    assert_eq!(intake.contiguous_cursor(&identity)?, 3);
+    assert!(!store.root().join("evidence/segments-v2").exists());
+    drop(data);
     drop(intake);
     drop(store);
-    let reopened = wait_for(
-        &store_path,
-        "the compact evidence owners to release the store lease",
-        Duration::from_secs(5),
-        || control_store_lease_ready(ControlStore::open_with_evidence_limits(&store_path, limits)),
-        || "a compact evidence owner still owns `owner.lock`".to_owned(),
-    )?;
-    let retention = EvidenceRetentionOwner::from_store(reopened.clone());
-    assert_eq!(retention.watermark(&identity)?.evidence_cursor, 2);
-    assert_eq!(reopened.evidence_cursor(&identity)?, 3);
-    assert_eq!(reopened.accepted_evidence_records(&identity)?.len(), 1);
+    let reopened = EvidenceIntakeOwner::open(&store_path)?;
+    assert_eq!(reopened.contiguous_cursor(&identity)?, 3);
+    assert!(matches!(
+        reopened.analysis_store().read_page(&identity, 1),
+        Err(araphor_data::Error::RetainedRangeExpired {
+            first_cursor: 1,
+            last_cursor: 3,
+            ..
+        })
+    ));
+    assert_eq!(
+        reopened
+            .analysis_store()
+            .read_result(identity.tenant_id, "processed")?,
+        Some(vec![1])
+    );
     Ok(())
 }
 
@@ -970,8 +956,8 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
     let fixture = MtlsFixture::new(false)?;
     let intake_path = fixture.path().join("control-evidence");
     let store = ControlStore::open(&intake_path)?;
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let control = fixture.control_with_store(store, 1)?;
+    let intake = EvidenceIntakeOwner::try_from(store)?;
+    let control = fixture.control_from_intake(intake.clone(), 1)?;
     let server = fixture.start(control.clone()).await?;
     let observations = fixture.wal(EvidenceWalLimits {
         maximum_retained_records: 10,
@@ -1050,8 +1036,12 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
         let identity = fixture.identity(source_id);
         assert_eq!(intake.contiguous_cursor(&identity)?, batch.last_cursor);
         assert_eq!(
-            intake.store().accepted_evidence_records(&identity)?.len(),
-            batch.record_count()
+            intake
+                .analysis_store()
+                .source_status(&identity)?
+                .ok_or("source absent")?
+                .retained_event_count,
+            u64::try_from(batch.record_count())?
         );
     }
 
@@ -1096,8 +1086,8 @@ async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
     let identity = fixture.identity(source_id);
 
     let initial_store = ControlStore::open(&store_path)?;
-    let initial_intake = EvidenceIntakeOwner::from_store(initial_store.clone());
-    let initial_control = fixture.control_with_store(initial_store.clone(), 1)?;
+    let initial_intake = EvidenceIntakeOwner::try_from(initial_store.clone())?;
+    let initial_control = fixture.control_from_intake(initial_intake.clone(), 1)?;
     let initial_server = fixture.start(initial_control).await?;
     let mut trust = TrustCache::load(fixture.path())?;
     let mut connection = fixture
@@ -1109,7 +1099,14 @@ async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
         return Err("Control acknowledged evidence across a cursor gap".into());
     }
     assert_eq!(initial_intake.contiguous_cursor(&identity)?, 0);
-    assert_eq!(initial_store.health()?.pending_evidence_records, 1);
+    assert_eq!(
+        initial_intake
+            .analysis_store()
+            .source_status(&identity)?
+            .ok_or("source absent")?
+            .retained_event_count,
+        1
+    );
     assert_eq!(observations.pending_evidence_records(), 3);
     drop(connection);
     initial_server.shutdown().await?;
@@ -1124,10 +1121,17 @@ async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
         || "the stopped server still owns the evidence store `owner.lock`".to_owned(),
     )
     .await?;
-    let reopened_intake = EvidenceIntakeOwner::from_store(reopened_store.clone());
+    let reopened_intake = EvidenceIntakeOwner::try_from(reopened_store.clone())?;
     assert_eq!(reopened_intake.contiguous_cursor(&identity)?, 0);
-    assert_eq!(reopened_store.health()?.pending_evidence_records, 1);
-    let reopened_control = fixture.control_with_store(reopened_store.clone(), 1)?;
+    assert_eq!(
+        reopened_intake
+            .analysis_store()
+            .source_status(&identity)?
+            .ok_or("source absent")?
+            .retained_event_count,
+        1
+    );
+    let reopened_control = fixture.control_from_intake(reopened_intake.clone(), 1)?;
     let reopened_server = fixture.start(reopened_control).await?;
     let mut connection = fixture
         .connector(&reopened_server, "node-a", [7; 16])
@@ -1141,7 +1145,14 @@ async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
     };
     assert_eq!(acknowledgement.contiguous_cursor, 3);
     assert_eq!(reopened_intake.contiguous_cursor(&identity)?, 3);
-    assert_eq!(reopened_store.health()?.pending_evidence_records, 0);
+    assert_eq!(
+        reopened_intake
+            .analysis_store()
+            .source_status(&identity)?
+            .ok_or("source absent")?
+            .retained_event_count,
+        3
+    );
 
     connection.send_evidence_group(batches.clone()).await?;
     let NodeControlMessage::EvidenceAck(duplicate_acknowledgement) =
@@ -1152,9 +1163,14 @@ async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
     assert_eq!(duplicate_acknowledgement, acknowledgement);
     assert!(observations.acknowledge_evidence(acknowledgement)?);
     assert_eq!(observations.pending_evidence_records(), 0);
-    let store = reopened_intake.store();
-    let accepted = store.accepted_evidence_records(&identity)?;
-    assert_eq!(accepted.len(), 3);
+    assert_eq!(
+        reopened_intake
+            .analysis_store()
+            .source_status(&identity)?
+            .ok_or("source absent")?
+            .retained_event_count,
+        3
+    );
     drop(connection);
     reopened_server.shutdown().await?;
     Ok(())
@@ -1165,10 +1181,23 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
 ) -> Result<(), Box<dyn StdError>> {
     let fixture = MtlsFixture::new(false)?;
     let store_path = fixture.path().join("control-evidence");
-    let limits = |maximum_retained_records| EvidenceStoreLimitsV1 {
-        maximum_retained_bytes: mithril_control::MAX_EVIDENCE_SEGMENT_BYTES as u64,
-        maximum_retained_records,
-        capacity_policy: EvidenceStoreCapacityPolicyV1::Block,
+    let control = |store: ControlStore, capacity| -> Result<ControlPlane, Box<dyn StdError>> {
+        let data = araphor_data::AnalysisStore::open_with_limits(
+            store.root().join("analysis"),
+            Default::default(),
+            araphor_data::StorageLimitsV1 {
+                tenant_max_bytes: capacity,
+                ..Default::default()
+            },
+        )?;
+        Ok(fixture.control_from_intake(
+            EvidenceIntakeOwner::new(
+                store,
+                Arc::new(data),
+                Arc::new(mithril_control::SystemIntakeClock),
+            )?,
+            1,
+        )?)
     };
     let observations = fixture.wal(EvidenceWalLimits {
         maximum_retained_records: 10,
@@ -1192,22 +1221,22 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
         );
     }
 
-    let initial_store = ControlStore::open_with_evidence_limits(&store_path, limits(10))
+    let initial_store = ControlStore::open(&store_path)
         .map_err(|source| format!("initial Control store open failed: {source}"))?;
     drop(initial_store);
     let retained_store_path = fixture.path().join("retained-control-evidence");
     fs::rename(&store_path, &retained_store_path)?;
     fs::write(&store_path, [])?;
-    assert!(ControlStore::open_with_evidence_limits(&store_path, limits(10)).is_err());
+    assert!(ControlStore::open(&store_path).is_err());
     assert_eq!(observations.pending_evidence_records(), 2);
     fs::remove_file(&store_path)?;
     fs::rename(retained_store_path, &store_path)?;
 
     let mut trust = TrustCache::load(fixture.path())?;
     {
-        let blocked_store = ControlStore::open_with_evidence_limits(&store_path, limits(1))
+        let blocked_store = ControlStore::open(&store_path)
             .map_err(|source| format!("blocked Control store open failed: {source}"))?;
-        let blocked_control = fixture.control_with_store(blocked_store.clone(), 1)?;
+        let blocked_control = control(blocked_store.clone(), 1)?;
         let blocked_server = fixture.start(blocked_control).await?;
         let mut connection = fixture
             .connector(&blocked_server, "node-a", [7; 16])
@@ -1220,7 +1249,7 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
             return Err("Control acknowledged evidence that exceeded durable capacity".into());
         }
         assert_eq!(observations.pending_evidence_records(), 2);
-        assert_eq!(blocked_store.health()?.evidence_cursors, 0);
+        assert!(!blocked_store.root().join("evidence/segments-v2").exists());
         drop(connection);
         blocked_server.shutdown().await?;
     }
@@ -1229,16 +1258,17 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
         &store_path,
         "the stopped Control server to release its store lease",
         Duration::from_secs(5),
-        || {
-            control_store_lease_ready(ControlStore::open_with_evidence_limits(
-                &store_path,
-                limits(10),
-            ))
-        },
+        || control_store_lease_ready(ControlStore::open(&store_path)),
         || "the stopped server still owns `owner.lock`".to_owned(),
     )
     .await?;
-    let restored_control = fixture.control_with_store(restored_store.clone(), 1)?;
+    let restored_control = control(
+        restored_store.clone(),
+        araphor_data::StorageLimitsV1::default().tenant_max_bytes,
+    )?;
+    let restored_data = restored_control
+        .analysis_store()
+        .ok_or("data owner absent")?;
     let restored_server = fixture.start(restored_control).await?;
     let mut connection = fixture
         .connector(&restored_server, "node-a", [7; 16])
@@ -1252,7 +1282,16 @@ async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
     };
     assert!(observations.acknowledge_evidence(acknowledgement)?);
     assert_eq!(observations.pending_evidence_records(), 0);
-    assert_eq!(restored_store.health()?.evidence_cursors, 1);
+    assert!(!restored_store.root().join("evidence/segments-v2").exists());
+    let sources = restored_data.source_page(EvidenceIdV1::new(1, 2).to_be_bytes(), None)?;
+    assert_eq!(sources.len(), 1);
+    assert_eq!(
+        restored_data
+            .source_receipt(&sources[0])?
+            .ok_or("receipt absent")?
+            .contiguous_cursor,
+        2
+    );
     drop(connection);
     restored_server.shutdown().await?;
     Ok(())
@@ -1403,8 +1442,8 @@ async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retaine
         second_bundle.candidate.candidate_content_id,
         first_candidate_id
     );
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let control = ControlPlane::with_control_store(allowed(), trust_generation, store)?
+    let intake = EvidenceIntakeOwner::try_from(store.clone())?;
+    let control = ControlPlane::from_intake(allowed(), trust_generation, intake.clone())?
         .with_policy_desired_state(fixture.owner.clone());
     assert!(control.replace_kubernetes_workload_inventory(workload_inventory.clone())?);
     let second_server = ControlServerFixture::start(&files, control.clone()).await?;
@@ -1521,9 +1560,13 @@ async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retaine
     assert_eq!(control.registered_nonce_count(), 1);
     assert_eq!(
         intake
-            .store()
-            .accepted_evidence_records(&original_identity)?,
-        retained.decode_records()?
+            .analysis_store()
+            .read_page(&original_identity, 1)?
+            .records
+            .iter()
+            .flat_map(|record| record.framed_record.iter().copied())
+            .collect::<Vec<_>>(),
+        EvidenceBatch::from(retained).framed_records.to_vec()
     );
 
     drop(connection);
@@ -1750,14 +1793,15 @@ async fn kubernetes_outage_retained_evidence_allows_protected_pod_admission(
         .next_evidence_batch()
         .ok_or("missing retained admission evidence")?;
     let retained: mithril_control::EvidenceBatch = retained.into();
-    let node = AuthenticatedEvidenceNodeV1 {
-        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
-        node_id: "node-a".to_owned(),
-        node_boot_id: [7; 16],
-        label_epoch: 1,
-    };
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    intake.receive(&node, retained)?;
+    EvidenceIntakeOwner::try_from(store.clone())?.receive(
+        &AuthenticatedEvidenceNodeV1 {
+            tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+            node_id: "node-a".to_owned(),
+            node_boot_id: [7; 16],
+            label_epoch: 1,
+        },
+        retained,
+    )?;
 
     let fixture = OutagePolicyFixture::new(store.clone());
     let resource = fixture.resource(1)?;
@@ -1934,8 +1978,8 @@ async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_th
     let fixture = MtlsFixture::new(false)?;
     let intake_path = fixture.path().join("control-evidence");
     let store = ControlStore::open(&intake_path)?;
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let control = fixture.control_with_store(store, 1)?;
+    let intake = EvidenceIntakeOwner::try_from(store)?;
+    let control = fixture.control_from_intake(intake.clone(), 1)?;
     let server = fixture.start(control.clone()).await?;
     let wal_limits = EvidenceWalLimits {
         maximum_retained_records: 3,
@@ -2010,7 +2054,11 @@ async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_th
         fixture.identity(delivered_source.ok_or("the evidence stream had no source identity")?);
     assert_eq!(intake.contiguous_cursor(&identity)?, 303);
     assert_eq!(
-        intake.store().accepted_evidence_records(&identity)?.len(),
+        intake
+            .analysis_store()
+            .source_status(&identity)?
+            .ok_or("source absent")?
+            .retained_event_count,
         303
     );
     drop(connection);
@@ -2031,14 +2079,9 @@ async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box
     let directory = tempfile::tempdir_in(target)?;
     let certificates = Certificates::issue(false)?;
     let files = certificates.write(directory.path())?;
-    let store = ControlStore::open_with_evidence_limits(
-        directory.path().join("control-evidence"),
-        EvidenceStoreLimitsV1 {
-            capacity_policy: EvidenceStoreCapacityPolicyV1::Retain,
-            ..EvidenceStoreLimitsV1::default()
-        },
-    )?;
-    let control = ControlPlane::with_control_store(
+    let store = ControlStore::open(directory.path().join("control-evidence"))?;
+    let intake = EvidenceIntakeOwner::try_from(store.clone())?;
+    let control = ControlPlane::from_intake(
         vec![AllowedNodeIdentity {
             node_id: "node-a".to_owned(),
             certificate_sha256: certificates.node_digest(),
@@ -2050,7 +2093,7 @@ async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box
             policy_issuer_sequence_epoch: 0,
             policy_signers: Vec::new(),
         },
-        store.clone(),
+        intake.clone(),
     )?;
     let server = ControlServerFixture::start(&files, control).await?;
 
@@ -2119,7 +2162,6 @@ async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box
     );
     let mut trust = TrustCache::load(&directory.path().join("trust"))?;
     let mut connection = connector.connect(registration(), false, &mut trust).await?;
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
     let direct_authenticated = AuthenticatedEvidenceNodeV1 {
         tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
         node_id: "node-a".to_owned(),
@@ -2201,7 +2243,7 @@ async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box
         "durably acknowledged {accepted_bytes} evidence bytes in {elapsed:?}: {mib_per_second:.1} MiB/s (target {TARGET_MIB_PER_SECOND:.1}); acknowledgements={acknowledgement_count} prepare={preparation_elapsed:?} enqueue={enqueue_elapsed:?} control_ack={acknowledgement_elapsed:?}"
     );
     assert_eq!(acknowledgement_count, expected_acknowledgements);
-    assert_eq!(store.health()?.pending_evidence_records, 0);
+    assert!(!store.root().join("evidence/segments-v2").exists());
     drop(connection);
     server.shutdown().await?;
     assert!(mib_per_second > PREVIOUS_MIB_PER_SECOND);
@@ -2221,8 +2263,8 @@ async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box
     let fixture = MtlsFixture::new(false)?;
     let intake_path = fixture.path().join("control-evidence");
     let store = ControlStore::open(&intake_path)?;
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let control = fixture.control_with_store(store, 1)?;
+    let intake = EvidenceIntakeOwner::try_from(store)?;
+    let control = fixture.control_from_intake(intake.clone(), 1)?;
     let server = fixture.start(control).await?;
     let observations = EffectObservationStore::durable(
         4,

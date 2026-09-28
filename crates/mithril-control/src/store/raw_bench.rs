@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use prost::Message as _;
 
-use super::{ControlStore, EvidenceBatchInputV1, EvidenceIntakeIdentityV1, EvidenceRecord};
+use crate::{EvidenceBatchInputV1, EvidenceIntakeIdentityV1, EvidenceRecord};
 
 #[cfg(feature = "test-fixtures")]
 struct CommitClock {
@@ -135,10 +135,7 @@ fn raw_event_store_comparison() -> Result<(), Box<dyn std::error::Error>> {
 
     let mode = std::env::var("ARAPHOR_STORE_BENCH_MODE")?;
     let batch_count: u64 = std::env::var("ARAPHOR_STORE_BENCH_BATCHES")?.parse()?;
-    if !matches!(mode.as_str(), "segments" | "analysis")
-        || !(1..=4096).contains(&batch_count)
-        || cfg!(debug_assertions)
-    {
+    if mode != "analysis" || !(1..=4096).contains(&batch_count) || cfg!(debug_assertions) {
         return Err("invalid raw event benchmark configuration".into());
     }
     let total = batch_count * RECORDS_PER_BATCH;
@@ -185,48 +182,7 @@ fn raw_event_store_comparison() -> Result<(), Box<dyn std::error::Error>> {
     let mut latency = Vec::new();
     #[cfg(feature = "test-fixtures")]
     let mut commit_times = Vec::new();
-    let (open, write, reopen, read, empty, written, closed) = if mode == "segments" {
-        let store = ControlStore::open(&root)?;
-        let open = open_start.elapsed();
-        let empty = sizes_in(&root)?;
-        let write_start = Instant::now();
-        for batch in &batches {
-            let start = Instant::now();
-            assert_eq!(
-                store.accept_evidence_batch(identity.clone(), batch.clone())?,
-                crate::EvidenceStoreOutcomeV1::Accepted
-            );
-            latency.push(start.elapsed());
-        }
-        let write = write_start.elapsed();
-        assert_eq!(store.evidence_cursor(&identity)?, total);
-        let written = sizes_in(&root)?;
-        drop(store);
-        let reopen_start = Instant::now();
-        let store = ControlStore::open(&root)?;
-        let reopen = reopen_start.elapsed();
-        let closed = sizes_in(&root)?;
-        let read_start = Instant::now();
-        let handle = store.begin_evidence_read(&identity, 1)?;
-        let mut next = 1;
-        while next <= total {
-            let page = store.read_evidence_page(&handle, next)?;
-            assert!(!page.records.is_empty());
-            for (offset, record) in page.records.iter().enumerate() {
-                assert_eq!(record.observed_boottime_ns, next + offset as u64);
-            }
-            next += page.records.len() as u64;
-        }
-        (
-            open,
-            write,
-            reopen,
-            read_start.elapsed(),
-            empty,
-            written,
-            closed,
-        )
-    } else {
+    let (open, write, reopen, read, empty, written, closed) = {
         let store = std::sync::Arc::new(araphor_data::AnalysisStore::open(&root)?);
         let open = open_start.elapsed();
         let empty = sizes_in(&root)?;

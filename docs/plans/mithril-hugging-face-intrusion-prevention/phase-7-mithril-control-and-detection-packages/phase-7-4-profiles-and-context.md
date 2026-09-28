@@ -37,12 +37,12 @@ Derivation fails or is disabled
 
 1. Move the portable model, recorded derivation and context selection from
    Control `src/discovery/` into `crates/araphor-data/src/discovery/`.
-   Replace live/runtime ControlStore reads and checkpoints with bounded
-   AnalysisStore segment reads and one metadata transaction for result,
+   Implement the live worker with bounded AnalysisStore segment reads
+   and one metadata transaction for result,
    references, and progress. Read raw evidence directly; no export artifact
    or staging table may contain another full copy before derivation.
    Control exports qualified policy facts; exact native preview stays in
-   Control. Delete the superseded Control discovery loop after parity tests.
+   Control. Prove parity with the recorded derivation tests before live use.
    Do not make `araphor-data` depend on Control.
    Keep storage startup outside `DiscoveryOwner::run`. No second database,
    copied raw-event archive or public derivation-job API is required.
@@ -98,8 +98,9 @@ keys, generation-handle reuse, denied/failed/unknown results, missing bindings,
 integer overflow, source gaps, poisoned baseline, future review leakage and
 quota N/N+1. Equal manifests must yield equal canonical digests.
 
-Extend existing `context-roundtrip` and `profile-restart` cases in
-`crates/mithril-e2e/src/discovery/roundtrip.rs` and `storage.rs`.
+Extend the existing `context-roundtrip` and `evidence-restart` storage cases
+in `crates/mithril-e2e/src/discovery/roundtrip.rs`. Add `profile-restart`
+for the live DiscoveryOwner. Use `storage.rs` for artifact parity checks.
 Use Node observation/WAL, actual mTLS intake, AnalysisStore and DiscoveryOwner.
 Crash before/after count-progress and sealed-output commits. Require no double
 count and exact context. Disable discovery past the raw retention period and prove intake/query/trace

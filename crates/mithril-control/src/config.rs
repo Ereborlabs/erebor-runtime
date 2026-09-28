@@ -12,9 +12,9 @@ use snafu::{ensure, ResultExt as _};
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, JsonSnafu};
 use crate::{
     AdministrativeHttpConfigV1, AllowedNodeIdentity, ControlPlane, ControlServerTls, ControlStore,
-    EvidenceIntakeOwner, EvidenceStoreLimitsV1, KubernetesAdmissionHttpConfigV1,
-    KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner, PolicyDesiredStateConfigV1,
-    PolicyDesiredStateOwner, Result, SystemIntakeClock, TrustGenerationV1,
+    EvidenceIntakeOwner, KubernetesAdmissionHttpConfigV1, KubernetesNodeControlConfigV1,
+    KubernetesNodeReadinessOwner, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, Result,
+    SystemIntakeClock, TrustGenerationV1,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -26,8 +26,6 @@ pub struct ControlConfig {
     pub trust: TrustGenerationV1,
     pub administrative_exec: Option<AdministrativeHttpConfigV1>,
     pub evidence_directory: PathBuf,
-    #[serde(default)]
-    pub evidence_store: EvidenceStoreLimitsV1,
     #[serde(default)]
     pub data_retention: araphor_data::RetentionLimitsV1,
     #[serde(default)]
@@ -68,8 +66,7 @@ impl ControlConfig {
             .control_store_directory
             .as_ref()
             .unwrap_or(&self.evidence_directory);
-        let store = ControlStore::open_with_evidence_limits(store_directory, self.evidence_store)?;
-        store.require_empty_evidence()?;
+        let store = ControlStore::open(store_directory)?;
         let (mut control, data_error) = match self.open_analysis() {
             Ok(data) => (
                 ControlPlane::from_intake(
@@ -133,7 +130,6 @@ impl ControlConfig {
                 reason: "evidence_directory must be absolute",
             }
         );
-        self.evidence_store.validate()?;
         let mut retired_scopes = BTreeSet::new();
         ensure!(
             self.data_retirements.len() <= 32,

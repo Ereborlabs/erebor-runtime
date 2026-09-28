@@ -6,7 +6,7 @@ use clap::{CommandFactory as _, Parser, ValueEnum};
 enum Case {
     OfflineExact,
     StorageContract,
-    ProfileRestart,
+    EvidenceRestart,
     ContextRoundtrip,
     DataStoreRecovery,
     DataStoreStartup,
@@ -99,9 +99,9 @@ async fn main() {
             .inspect(&root, *tenant.as_bytes(), cli.baseline.as_deref()),
             _ => Err("inspection requires a data directory and tenant".into()),
         },
-        Case::ProfileRestart => {
+        Case::EvidenceRestart => {
             mithril_e2e::DiscoveryQualificationRunner::new(cli.output_directory)
-                .profile_restart()
+                .evidence_restart()
                 .await
         }
         Case::ContextRoundtrip => {

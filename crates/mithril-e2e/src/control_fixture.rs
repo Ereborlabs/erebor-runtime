@@ -372,7 +372,7 @@ impl MtlsFixture {
         generation: u64,
     ) -> mithril_control::Result<ControlPlane> {
         self.control_from_intake(
-            mithril_control::EvidenceIntakeOwner::from_store(store),
+            mithril_control::EvidenceIntakeOwner::try_from(store)?,
             generation,
         )
     }

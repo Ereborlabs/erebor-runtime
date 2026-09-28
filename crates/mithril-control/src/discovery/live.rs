@@ -9,8 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::*;
 use crate::{
     error::DiscoverySnafu, ControlStore, DiscoveryArtifactRefV1, DiscoveryArtifactV1,
-    DiscoveryContextJoinV1, DiscoveryContextUnavailableV1, DiscoveryHeadKeyV1, DiscoveryHeadV1,
-    EvidenceIntakeIdentityV1, Result,
+    DiscoveryHeadKeyV1, DiscoveryHeadV1, EvidenceIntakeIdentityV1, Result,
 };
 
 pub(super) struct DiscoveryLive {
@@ -70,22 +69,6 @@ impl DiscoveryLive {
             self.index.replay_interval(export)
         }
     }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(
-    tag = "state",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    deny_unknown_fields
-)]
-pub enum DiscoveryAdvanceV1 {
-    Idle {
-        next_cursor: u64,
-    },
-    Applied {
-        export: DiscoveryHeadV1,
-        progress: DiscoveryIndexProgressV1,
-    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -206,16 +189,6 @@ impl DiscoveryOwner {
         self.live.index.resource_usage()
     }
 
-    pub(super) fn interval_key(
-        stream: &EvidenceIntakeIdentityV1,
-        first_cursor: u64,
-    ) -> Result<DiscoveryHeadKeyV1> {
-        Ok(DiscoveryHeadKeyV1 {
-            tenant_id: stream.tenant_id,
-            id: DiscoveryDigestV1::of(&("evidence-export-v1", stream, first_cursor))?,
-        })
-    }
-
     pub fn open(store: ControlStore) -> Result<Self> {
         let index = match DiscoveryIndex::open(store.clone()) {
             Ok(index) => index,
@@ -243,110 +216,6 @@ impl DiscoveryOwner {
                 operation: Mutex::new(()),
             },
         })
-    }
-
-    pub fn advance(
-        &self,
-        stream: &EvidenceIntakeIdentityV1,
-        interval_first_cursor: u64,
-    ) -> Result<DiscoveryAdvanceV1> {
-        let live = &self.live;
-        let _operation = live.admit()?;
-        DiscoveryInputManifestV1::require(interval_first_cursor > 0, "INTERVAL_START")?;
-        let key = Self::interval_key(stream, interval_first_cursor)?;
-        let previous = live.store.discovery_head(&key)?;
-        let (first_cursor, remaining_records, remaining_bytes) = if let Some(head) = &previous {
-            let progress = live.resume(head)?;
-            DiscoveryInputManifestV1::require(
-                progress.accepted_records < MAX_DISCOVERY_RECORDS as u64
-                    && progress.input_bytes < MAX_DISCOVERY_INPUT_BYTES as u64,
-                "INTERVAL_SEAL_REQUIRED",
-            )?;
-            (
-                progress.next_cursor,
-                MAX_DISCOVERY_RECORDS - progress.accepted_records as usize,
-                MAX_DISCOVERY_INPUT_BYTES as u64 - progress.input_bytes,
-            )
-        } else {
-            (
-                interval_first_cursor,
-                MAX_DISCOVERY_RECORDS,
-                MAX_DISCOVERY_INPUT_BYTES as u64,
-            )
-        };
-        let read = live.store.begin_evidence_read(stream, first_cursor)?;
-        let metadata = read.metadata();
-        if first_cursor > metadata.last_cursor {
-            return Ok(DiscoveryAdvanceV1::Idle {
-                next_cursor: first_cursor,
-            });
-        }
-        let mut exported = DiscoveryExportPageV1 {
-            schema_version: 1,
-            stream: stream.clone(),
-            cpu_binding: metadata.cpu_binding,
-            first_cursor,
-            expired_through: None,
-            coverage_record: metadata
-                .coverage
-                .as_ref()
-                .map(|coverage| coverage.encode_to_vec()),
-            previous,
-            records: Vec::new(),
-        };
-        match live.store.read_evidence_page(&read, first_cursor) {
-            Ok(page) => {
-                for (ordinal, wire) in page.records.into_iter().take(remaining_records).enumerate()
-                {
-                    let cursor = first_cursor + ordinal as u64;
-                    let context = if let Some(cpu) = exported
-                        .cpu_binding
-                        .filter(|cpu| cursor >= cpu.first_cursor)
-                    {
-                        live.store.discovery_context(&DiscoveryRecordV1::from_wire(
-                            stream, cpu.cpu_id, cursor, &wire,
-                        )?)?
-                    } else {
-                        DiscoveryContextJoinV1::Unresolved(
-                            DiscoveryContextUnavailableV1::MissingSourceCpu,
-                        )
-                    };
-                    exported.records.push(DiscoveryExportRecordV1 {
-                        wire_record: wire.encode_to_vec(),
-                        context,
-                    });
-                }
-            }
-            Err(crate::Error::RetainedRangeExpired { last_cursor, .. }) => {
-                exported.expired_through = Some(last_cursor);
-            }
-            Err(error) => return Err(error),
-        }
-        let artifact = loop {
-            if exported.input_bytes()? <= remaining_bytes {
-                match exported.artifact() {
-                    Ok(artifact) => break artifact,
-                    Err(crate::Error::Discovery {
-                        code: "EXPORT_LIMIT",
-                        ..
-                    }) => {}
-                    Err(error) => return Err(error),
-                }
-            }
-            DiscoveryInputManifestV1::require(
-                exported.records.len() > 1,
-                "INTERVAL_SEAL_REQUIRED",
-            )?;
-            exported.records.truncate(exported.records.len() / 2);
-        };
-        let artifact = live.store.put_discovery_artifact(&artifact)?;
-        let export = live
-            .store
-            .commit_discovery_head(key, exported.previous.as_ref(), artifact)?;
-        #[cfg(test)]
-        super::test_crash_boundary("export-head");
-        let progress = live.index.apply_export(&export)?;
-        Ok(DiscoveryAdvanceV1::Applied { export, progress })
     }
 
     pub fn seal_interval(&self, export: &DiscoveryHeadV1) -> Result<DiscoveryHeadV1> {
@@ -634,81 +503,6 @@ impl DiscoveryOwner {
         Ok(snapshot)
     }
 
-    pub(super) fn refresh_coverage(&self, profile: &DiscoveryProfileV1) -> Result<DiscoveryHeadV1> {
-        let live = &self.live;
-        let _operation = live.admit()?;
-        let current = live
-            .store
-            .discovery_head(&profile.export.key)?
-            .ok_or_else(|| {
-                DiscoverySnafu {
-                    code: "EXPORT_NOT_COMMITTED",
-                    reason: "the profile export is absent",
-                }
-                .build()
-            })?;
-        let previous = live.index.export(&current)?;
-        let next_cursor = previous.next_cursor()?;
-        DiscoveryInputManifestV1::require(
-            profile.last_cursor.checked_add(1) == Some(next_cursor),
-            "COVERAGE_INPUT_CHANGED",
-        )?;
-        if current != profile.export {
-            return Ok(current);
-        }
-        let read = live
-            .store
-            .begin_evidence_read(&profile.stream, next_cursor)?;
-        let Some(coverage) = read.metadata().coverage.as_ref() else {
-            return Ok(current);
-        };
-        let coverage_record = coverage.encode_to_vec();
-        if previous.coverage_record.as_ref() == Some(&coverage_record) {
-            return Ok(current);
-        }
-        if let Some(bytes) = &previous.coverage_record {
-            let known = crate::CoverageReport::decode(bytes.as_slice()).map_err(|error| {
-                DiscoverySnafu {
-                    code: "EXPORT_COVERAGE",
-                    reason: error.to_string(),
-                }
-                .build()
-            })?;
-            DiscoveryInputManifestV1::require(
-                coverage.revision > known.revision,
-                "COVERAGE_REVISION_CONFLICT",
-            )?;
-        }
-        let progress = live.resume(&current)?;
-        DiscoveryInputManifestV1::require(
-            profile.accepted_records == progress.accepted_records,
-            "COVERAGE_INPUT_CHANGED",
-        )?;
-        let page = DiscoveryExportPageV1 {
-            schema_version: 1,
-            stream: profile.stream.clone(),
-            cpu_binding: read.metadata().cpu_binding,
-            first_cursor: progress.next_cursor,
-            expired_through: None,
-            coverage_record: Some(coverage_record),
-            previous: Some(current.clone()),
-            records: Vec::new(),
-        };
-        DiscoveryInputManifestV1::require(
-            progress
-                .input_bytes
-                .checked_add(page.input_bytes()?)
-                .is_some_and(|bytes| bytes <= MAX_DISCOVERY_INPUT_BYTES as u64),
-            "INTERVAL_SEAL_REQUIRED",
-        )?;
-        let artifact = live.store.put_discovery_artifact(&page.artifact()?)?;
-        let export =
-            live.store
-                .commit_discovery_head(current.key.clone(), Some(&current), artifact)?;
-        live.index.apply_export(&export)?;
-        Ok(export)
-    }
-
     pub(super) fn profile(&self, head: &DiscoveryHeadV1) -> Result<DiscoveryProfileV1> {
         let live = &self.live;
         DiscoveryInputManifestV1::require(
@@ -938,176 +732,6 @@ mod tests {
             .write_profile_artifact(artifact, &mut used)
             .is_err());
         assert_eq!(used, 128 * 1024 * 1024 - bytes + 1);
-        Ok(())
-    }
-
-    #[test]
-    fn discovery_derivation_exports_retained_input_and_exact_gaps_then_rebuilds(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let store = ControlStore::open(directory.path())?;
-        let input = DiscoveryInputManifestV1::from_json(include_bytes!(
-            "../../../mithril-e2e/fixtures/discovery/manifest.json"
-        ))?;
-        let record = &input.records[0];
-        let stream = &record.id.stream;
-        let wire = record.observation.to_wire_record()?.encode_to_vec();
-        let mut frames = Vec::new();
-        for _ in 0..10 {
-            let start = frames.len();
-            frames.extend_from_slice(&u32::try_from(wire.len())?.to_be_bytes());
-            frames.extend_from_slice(&wire);
-            let checksum = crc32c::crc32c(&frames[start..]);
-            frames.extend_from_slice(&checksum.to_be_bytes());
-        }
-        for first_cursor in [1, 11] {
-            crate::EvidenceIntakeOwner::from_store(store.clone()).receive(
-                &crate::AuthenticatedEvidenceNodeV1 {
-                    tenant_id: stream.tenant_id,
-                    node_id: stream.node_id.clone(),
-                    node_boot_id: stream.node_boot_id,
-                    label_epoch: stream.label_epoch,
-                },
-                crate::EvidenceBatch {
-                    node_boot_id: stream.node_boot_id.to_vec(),
-                    source_id: stream.source_id.to_vec(),
-                    source_epoch: stream.source_epoch,
-                    cpu_id: record.id.cpu_id,
-                    first_cursor,
-                    framed_records: frames.clone().into(),
-                    commit_group_tail: true,
-                },
-            )?;
-        }
-        let retention = crate::EvidenceRetentionOwner::from_store(store.clone());
-        retention.acknowledge(crate::EvidenceConsumptionWatermarkV1 {
-            identity: stream.clone(),
-            evidence_cursor: 10,
-            coverage_revision: 0,
-        })?;
-        let before = retention.watermark(stream)?;
-        let owner = DiscoveryOwner::open(store.clone())?;
-        assert!(DiscoveryOwner::open(store.clone()).is_err());
-        {
-            let _busy = owner.live.admit()?;
-            assert!(matches!(
-                owner.live.admit(),
-                Err(crate::Error::Discovery {
-                    code: "DISCOVERY_BUSY",
-                    ..
-                })
-            ));
-            assert!(matches!(
-                owner.advance(stream, 1),
-                Err(crate::Error::Discovery {
-                    code: "DISCOVERY_BUSY",
-                    ..
-                })
-            ));
-            assert!(matches!(
-                owner.project_revisions(),
-                Err(crate::Error::Discovery {
-                    code: "DISCOVERY_BUSY",
-                    ..
-                })
-            ));
-        }
-        let DiscoveryAdvanceV1::Applied {
-            export: gap,
-            progress,
-        } = owner.advance(stream, 1)?
-        else {
-            return Err("the expired range was not exported".into());
-        };
-        assert_eq!(
-            (
-                progress.next_cursor,
-                progress.accepted_records,
-                progress.atom_count
-            ),
-            (11, 0, 0)
-        );
-        let gap_page = owner.live.index.export(&gap)?;
-        assert_eq!(
-            (gap_page.first_cursor, gap_page.expired_through),
-            (1, Some(10))
-        );
-        assert!(gap_page.records.is_empty());
-        let DiscoveryAdvanceV1::Applied { export, progress } = owner.advance(stream, 1)? else {
-            return Err("the retained records were not exported".into());
-        };
-        assert_eq!(
-            (
-                progress.next_cursor,
-                progress.accepted_records,
-                progress.atom_count
-            ),
-            (21, 10, 0)
-        );
-        let page = owner.live.index.export(&export)?;
-        assert_eq!(page.previous, Some(gap));
-        assert_eq!(page.records.len(), 10);
-        assert!(page.records.iter().all(|record| matches!(
-            record.context,
-            DiscoveryContextJoinV1::Unresolved(
-                DiscoveryContextUnavailableV1::MissingDecisionCatalog
-            )
-        )));
-        assert_eq!(retention.watermark(stream)?, before);
-        assert_eq!(
-            owner.advance(stream, 1)?,
-            DiscoveryAdvanceV1::Idle { next_cursor: 21 }
-        );
-        let snapshot = owner.seal_interval(&export)?;
-        assert_eq!(owner.seal_interval(&export)?, snapshot);
-        let sealed = owner.read_snapshot(&snapshot, None)?;
-        assert_eq!(sealed.profile.state, DiscoveryProfileStateV1::Partial);
-        assert_eq!(
-            (
-                sealed.profile.accepted_records,
-                sealed.profile.unresolved_records,
-                sealed.profile.missing_records
-            ),
-            (10, 10, 10)
-        );
-        assert_eq!(
-            sealed.profile.partial_reasons,
-            vec![
-                "SOURCE_COVERAGE_UNPROVEN",
-                "SOURCE_RANGE_EXPIRED",
-                "UNRESOLVED_INPUT"
-            ]
-        );
-        assert!(sealed.atoms.is_empty());
-        assert!(sealed.next.is_none());
-        let mut foreign = snapshot.clone();
-        foreign.key.tenant_id = [9; 16];
-        assert!(owner.read_snapshot(&foreign, None).is_err());
-        retention.acknowledge(crate::EvidenceConsumptionWatermarkV1 {
-            identity: stream.clone(),
-            evidence_cursor: 20,
-            coverage_revision: 0,
-        })?;
-        drop(owner);
-        drop(retention);
-        drop(store);
-        std::fs::remove_file(directory.path().join("discovery-index.sqlite"))?;
-        let reopened = DiscoveryOwner::open(ControlStore::open(directory.path())?)?;
-        assert!(reopened.read_snapshot(&snapshot, None).is_err());
-        assert_eq!(reopened.seal_interval(&export)?, snapshot);
-        assert_eq!(reopened.read_snapshot(&snapshot, None)?, sealed);
-        assert_eq!(
-            reopened.advance(stream, 1)?,
-            DiscoveryAdvanceV1::Idle { next_cursor: 21 }
-        );
-        assert_eq!(
-            reopened
-                .live
-                .index
-                .progress(stream.tenant_id, &export.key.id)?,
-            Some(progress)
-        );
-        assert_eq!(reopened.live.index.export(&export)?, page);
         Ok(())
     }
 }

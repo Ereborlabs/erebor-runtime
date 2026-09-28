@@ -6,15 +6,12 @@ use std::{
     sync::Arc,
 };
 
-use mithril_control::{
-    ControlStore, DiscoveryAdvanceV1, DiscoveryOwner, DiscoveryProfileStateV1,
-    EvidenceConsumptionWatermarkV1, EvidenceIdV1, EvidenceIntakeIdentityV1, EvidenceRetentionOwner,
-    NodeRegistration,
-};
+use mithril_control::{ControlStore, EvidenceIdV1, EvidenceIntakeIdentityV1, NodeRegistration};
 use mithril_node::{
     EffectObservationStore, EvidenceWalLimits, NodeControlMessage, ObservationCanonicalizer,
     TrustCache,
 };
+use prost::Message as _;
 use snafu::ensure;
 use zerocopy::IntoBytes as _;
 
@@ -34,7 +31,7 @@ impl DiscoveryQualificationRunner {
         Self { output }
     }
 
-    pub async fn profile_restart(&self) -> Result<(), Box<dyn StdError>> {
+    pub async fn evidence_restart(&self) -> Result<(), Box<dyn StdError>> {
         self.roundtrip(false).await
     }
 
@@ -54,6 +51,7 @@ impl DiscoveryQualificationRunner {
         let root = tls.path().join("control-store");
         let store = ControlStore::open(&root)?;
         let control = tls.control_with_store(store.clone(), 1)?;
+        let data = control.analysis_store().ok_or("the data owner is absent")?;
         let server = tls.start(control).await?;
         let boot = EvidenceIdV1::from([7; 16]);
         let source = EvidenceIdV1::new(3, 4);
@@ -167,8 +165,14 @@ impl DiscoveryQualificationRunner {
             source_epoch: wire.source_epoch,
         };
         let retained = {
-            let read = store.begin_evidence_read(&stream, 1)?;
-            store.read_evidence_page(&read, 1)?.records
+            let page = data.read_page(&stream, 1)?;
+            page.records
+                .iter()
+                .map(|record| {
+                    let frame = &record.framed_record;
+                    mithril_control::EvidenceRecord::decode(&frame[4..frame.len() - 4])
+                })
+                .collect::<Result<Vec<_>, _>>()?
         };
         ensure!(
             retained == original && retained.len() == 1,
@@ -197,28 +201,14 @@ impl DiscoveryQualificationRunner {
                 reason: "raw context differs after the transport roundtrip",
             }
         );
-        let before = EvidenceRetentionOwner::from_store(store.clone()).watermark(&stream)?;
-        let owner = DiscoveryOwner::open(store.clone())?;
-        let DiscoveryAdvanceV1::Applied { export, progress } = owner.advance(&stream, 1)? else {
-            return Err("discovery did not export the accepted record".into());
-        };
-        let snapshot = owner.seal_interval(&export)?;
-        let page = owner.read_snapshot(&snapshot, None)?;
-        ensure!(
-            page.profile.state == DiscoveryProfileStateV1::Partial
-                && page.profile.accepted_records == 1
-                && page.profile.unresolved_records == u64::from(!signed_context)
-                && page.profile.included_records == u64::from(signed_context)
-                && progress.next_cursor == 2
-                && EvidenceRetentionOwner::from_store(store.clone()).watermark(&stream)? == before,
-            InvalidInputSnafu {
-                path: &self.output,
-                reason: format!("discovery counts or retention changed: {:?}", page.profile)
-            }
-        );
-        let copied = store.read_discovery_artifact(&export.artifact)?;
-        let packet = if let Some(workload) = expected_workload {
-            let observation = mithril_control::ObservationEnvelopeV1::from_wire_record(
+        let joined = mithril_control::DiscoveryRecordV1 {
+            id: mithril_control::DiscoveryRecordIdV1 {
+                stream: stream.clone(),
+                cpu_id: wire.cpu_id,
+                durable_cursor: 1,
+            },
+            original_kernel_sequence: Some(context.original_kernel_sequence),
+            observation: mithril_control::ObservationEnvelopeV1::from_wire_record(
                 stream.tenant_id.into(),
                 stream.node_boot_id.into(),
                 stream.source_id.into(),
@@ -226,188 +216,65 @@ impl DiscoveryQualificationRunner {
                 1,
                 wire.cpu_id,
                 &retained[0],
-            )?;
-            let record = mithril_control::DiscoveryRecordV1 {
-                id: mithril_control::DiscoveryRecordIdV1 {
-                    stream: stream.clone(),
-                    cpu_id: wire.cpu_id,
-                    durable_cursor: 1,
-                },
-                original_kernel_sequence: Some(101),
-                observation,
-            };
-            let mithril_control::DiscoveryContextJoinV1::Available(pin) =
-                store.discovery_context(&record)?
-            else {
+            )?,
+        };
+        let pin = store.discovery_context(&joined)?;
+        if let Some(workload) = expected_workload {
+            let mithril_control::DiscoveryContextJoinV1::Available(context) = &pin else {
                 return Err("the signed context was not resolved".into());
             };
             ensure!(
-                pin.workload == workload && page.atoms.len() == 1,
+                context.workload == workload,
                 InvalidInputSnafu {
                     path: &self.output,
-                    reason: "the signed workload pin or atom differs"
+                    reason: "the signed workload pin differs",
                 }
             );
-            let access = mithril_control::DiscoveryContextAccessV1 {
-                tenant_id: stream.tenant_id.into(),
-                subject: DiscoveryOwner::context_subject(&pin)?,
-                lifetime: process,
-                disclosure: mithril_control::DisclosurePolicyV1 {
-                    principal: "qualification-agent".into(),
-                    revision: 1,
-                    purpose: "inspect retained denial".into(),
-                    destination: mithril_control::DiscoveryDisclosureDestinationV1::LocalOnly,
-                    allowed_fields: vec!["context".into(), "evidence".into()],
-                },
-                sensitivities: vec!["INTERNAL".into()],
-                can_import: true,
-                can_review: true,
-            };
-            let method = mithril_control::DiscoveryMethodV1 {
-                id: "file-read".into(),
-                version: "1".into(),
-                parameters_digest: mithril_control::DiscoveryDigestV1::of(&"exact-read")?,
-                client_supplied: false,
-            };
-            let handle = owner.import_context(&access, mithril_control::DiscoveryContextDocumentV1 {
-                schema_version: 1, tenant_id: access.tenant_id, id: "worker-runbook".into(), revision: 1,
-                kind: mithril_control::DiscoveryContextKindV1::Runbook, subject: access.subject.clone(),
-                lifetime: process, method: method.clone(), origin: "qualification owner".into(),
-                valid_from_utc_ns: 1, valid_until_utc_ns: None, sensitivity: "INTERNAL".into(),
-                trust: mithril_control::DiscoveryContextTrustV1::Reviewed, approver: Some(access.disclosure.principal.clone()),
-                text: "Check the exact path and physical result. Do not treat a profile count as containment proof.".into(),
-            })?;
-            let view = owner.context_view(
-                &access,
-                &export,
-                &method,
-                handle.imported_utc_ns,
-                "What supports this file-read observation?".into(),
-            )?;
-            ensure!(
-                view.packet.records.len() == 1
-                    && view.documents == vec![handle]
-                    && owner
-                        .read_context_evidence(&access, &view, &view.packet.records[0])?
-                        .wire_record
-                        == {
-                            use prost::Message as _;
-                            retained[0].encode_to_vec()
-                        },
-                InvalidInputSnafu {
-                    path: &self.output,
-                    reason: "the scoped context packet differs"
-                }
-            );
-            Some((access, method, view))
-        } else {
-            None
-        };
-        if signed_context {
-            let changed = OutagePolicyFixture::new(store.clone());
-            let resource = changed.resource(2)?;
-            let inventory = changed.inventory(&resource)?;
-            changed.owner.reconcile(
-                &resource,
-                OUTAGE_NAMESPACE_UID,
-                &inventory,
-                1_800_000_000_000_000_001,
-            )?;
         }
-        while !owner.project_revisions()? {}
-        let revisions = owner.read_revisions(stream.tenant_id.into(), None)?;
-        EvidenceRetentionOwner::from_store(store.clone()).acknowledge(
-            EvidenceConsumptionWatermarkV1 {
-                identity: stream.clone(),
-                evidence_cursor: 1,
-                coverage_revision: 0,
-            },
-        )?;
-        drop(owner);
+        let receipt = data
+            .source_receipt(&stream)?
+            .ok_or("the data receipt is absent")?;
+        ensure!(
+            observations.pending_evidence_records() == 0,
+            InvalidInputSnafu {
+                path: &self.output,
+                reason: "Node retained acknowledged input",
+            }
+        );
+        drop(data);
         drop(connection);
         server.shutdown().await?;
         drop(store);
         let store = reopen_control_store(&root).await?;
-        fs::remove_file(root.join("discovery-index.sqlite"))?;
-        let recovered = DiscoveryOwner::open(store.clone())?;
+        let recovered =
+            super::data_store::DataStoreQualification::reopen_data(&root.join("analysis")).await?;
+        let page = recovered.read_page(&stream, 1)?;
         ensure!(
-            recovered.read_snapshot(&snapshot, None).is_err(),
+            page.records.len() == 1
+                && page.records[0].framed_record == wire.framed_records.as_ref()
+                && recovered.source_receipt(&stream)? == Some(receipt)
+                && store.discovery_context(&joined)? == pin
+                && !root.join("evidence/segments-v2").exists()
+                && !root.join("discovery").exists(),
             InvalidInputSnafu {
                 path: &self.output,
-                reason: "a missing projection was exposed as ready",
-            }
-        );
-        let recovered_head = recovered.seal_interval(&export)?;
-        let recovered_page = recovered.read_snapshot(&recovered_head, None)?;
-        while !recovered.project_revisions()? {}
-        ensure!(
-            recovered
-                .read_revisions(stream.tenant_id.into(), None)?
-                .events
-                == revisions.events,
-            InvalidInputSnafu {
-                path: &self.output,
-                reason: "revision positions changed after replay"
-            }
-        );
-        if let Some((access, method, view)) = &packet {
-            ensure!(
-                recovered.context_view(
-                    access,
-                    &export,
-                    method,
-                    view.packet.cutoff_utc_ns,
-                    view.packet.question.clone()
-                )? == *view,
-                InvalidInputSnafu {
-                    path: &self.output,
-                    reason: "the context packet changed after replay"
-                }
-            );
-            let mut foreign = access.clone();
-            foreign.tenant_id = EvidenceIdV1::new(99, 99);
-            ensure!(
-                recovered
-                    .read_context_evidence(&foreign, view, &view.packet.records[0])
-                    .is_err(),
-                InvalidInputSnafu {
-                    path: &self.output,
-                    reason: "a foreign tenant read context evidence"
-                }
-            );
-        }
-        ensure!(
-            recovered_head == snapshot
-                && recovered_page == page
-                && store.read_discovery_artifact(&export.artifact)? == copied
-                && store
-                    .begin_evidence_read(&stream, 1)?
-                    .metadata()
-                    .retained_floor
-                    == 2,
-            InvalidInputSnafu {
-                path: &self.output,
-                reason: "profile recovery changed retained proof"
+                reason: "retained evidence or context changed after restart",
             }
         );
         fs::create_dir(&self.output)?;
-        super::write_json(&self.output.join("export.json"), &copied)?;
-        super::write_json(&self.output.join("snapshot.json"), &recovered_page)?;
         super::write_json(
             &self.output.join("result.json"),
             &serde_json::json!({
-                "schema_version": 1, "case": if signed_context { "context-roundtrip" } else { "profile-restart" }, "result": "PASS",
-                "qualification": "LIGHTWEIGHT", "input": "synthetic kernel record",
-                "production_authority": false, "physical_action_attempted": false,
+                "schema_version": 1,
+                "case": if signed_context { "context-roundtrip" } else { "evidence-restart" },
+                "result": "PASS", "qualification": "LIGHTWEIGHT",
+                "input": "synthetic kernel record", "production_authority": false,
+                "physical_action_attempted": false, "profiles_qualified": false,
                 "signed_context_resolved": signed_context, "durable_cursor": 1,
                 "original_kernel_sequence": context.original_kernel_sequence,
                 "context_digest": crate::DigestV1::of(serde_json::to_vec(context)?),
-                "packet": packet.as_ref().map(|(_, _, view)| view), "revision_events": revisions.events,
-                "checkpoint": progress, "export": export, "snapshot": snapshot,
-                "recovered_snapshot": recovered_head, "recovered_digest": recovered_page.profile.content_digest,
-                "asserted_contracts": ["node-wal", "mtls-intake", "raw-context", "bounded-export",
-                    if signed_context { "signed-context-pin" } else { "explicit-unresolved-context" },
-                    "wal-reopen", "sealing", "source-reclamation", "projection-repair", "stable-snapshot"]
+                "asserted_contracts": ["node-wal", "mtls-intake", "exact-retained-frame",
+                    "raw-context", "data-restart", "no-control-raw-writer", "no-discovery-copy"]
             }),
         )?;
         Ok(())
@@ -609,14 +476,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn discovery_derivation_profile_restart_uses_wal_and_mtls(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn evidence_restart_retains_context() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let output = directory.path().join("proof");
         let runner = super::DiscoveryQualificationRunner::new(output.clone());
-        runner.profile_restart().await?;
+        runner.evidence_restart().await?;
         let before = std::fs::read(output.join("result.json"))?;
-        assert!(runner.profile_restart().await.is_err());
+        assert!(runner.evidence_restart().await.is_err());
         assert_eq!(std::fs::read(output.join("result.json"))?, before);
         Ok(())
     }
