@@ -4307,6 +4307,18 @@ setup, production actions, assertions, and focused test.
       seconds on 2026-09-21.
     - [x] Pass Kubernetes and commit it. The exact test passed in 106.45
       seconds on 2026-09-21.
+    - [ ] Replace the stock `dd` file-role check with
+      `prestop_dd::prestop_keeps_file_role`. After Node restart, require the
+      PreStop entry to read the application's denied FIFO, copy its bytes,
+      and fail on its own denied file. Require its declared role, admission
+      rule, and fresh attributed File/OpenRead `EACCES` evidence. Keep the
+      old result until the missing-inventory condition below has separate
+      proof.
+      - [x] Host passed in 71.53 seconds on 2026-09-28. After the new
+        role moved behind the existing role IDs, all five Host restart
+        tests and all 62 Host identity tests passed without test changes.
+      - [ ] Pass direct `runc` and commit it.
+      - [ ] Pass Kubernetes and commit it.
     - [ ] Replace the separate runtime-inventory omission case before its
       legacy result is removed. The new restart test uses the normal CRI
       inventory. It does not prove that a populated cgroup retains its binding

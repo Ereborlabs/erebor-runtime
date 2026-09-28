@@ -65,6 +65,8 @@ mod network_unsupported;
 #[cfg(test)]
 mod node_restart;
 #[cfg(test)]
+mod prestop_dd;
+#[cfg(test)]
 mod prestop_path;
 #[cfg(test)]
 mod privilege;

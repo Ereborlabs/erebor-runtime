@@ -41,6 +41,12 @@
             "role": "python"
           },
           {
+            "name": "prestop-dd",
+            "kind": "PreStop",
+            "executionRule": "prestop-dd-entry",
+            "role": "worker-prestop"
+          },
+          {
             "name": "reader",
             "kind": "StartupProbe",
             "executionRule": "reader-entry",
@@ -199,6 +205,30 @@
           {
             "name": "word-count-entry",
             "path": "/usr/bin/wc",
+            "recursive": false,
+            "operations": ["Execute"],
+            "action": "Allow"
+          }
+        ],
+        "network": {"destinations": []},
+        "processControl": [],
+        "unixStreams": []
+      },
+      {
+        "name": "worker-prestop",
+        "files": [
+          {
+            "name": "deny-prestop-file",
+            "path": "/work/prestop.denied",
+            "recursive": false,
+            "operations": ["OpenRead"],
+            "action": "Deny"
+          }
+        ],
+        "execution": [
+          {
+            "name": "prestop-dd-entry",
+            "path": "/usr/bin/dd",
             "recursive": false,
             "operations": ["Execute"],
             "action": "Allow"
