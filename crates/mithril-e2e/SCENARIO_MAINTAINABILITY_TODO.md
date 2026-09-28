@@ -4636,7 +4636,8 @@ setup, production actions, assertions, and focused test.
     - [x] Pass Host and commit. The exact test passed in 51.62 seconds with
       equal full snapshots and task coordinates before shutdown, during the
       Node gap, and after restart.
-    - [ ] Pass direct `runc` and commit.
+    - [x] Pass direct `runc` and commit. The unchanged exact test passed in
+      57.89 seconds through stock `runc` and the production OCI hook.
     - [ ] Pass Kubernetes and commit.
 - [x] `physical_kubernetes_network_probe`
   - [x] Add one `Platform::start_actor_group` operation. Kubernetes starts the
