@@ -1120,6 +1120,19 @@ checked receipts but did not compare all retained frames. It does not replace
 the committed tenant/global cases or prove an unlimited-runtime memory bound.
 Full storage qualification remains **Not done**.
 
+Capacity recovery with stored totals: **Done** on `adbcb3a8`. The existing
+`disk-full.sh` harness passed `data_capacity_retry`, `data_capacity_recovery`,
+and `data_full_disk`, one test each. The private one-GiB tmpfs case allocated
+1,064,267,776 padding bytes and reached zero available bytes. It rejected
+copy reserves and recovered both exact records. The harness removed its mount.
+Read `/tmp/araphor-memory-ceiling.OzjkL9bu/disk-full.log` for the binary digest,
+command results, receipts, and measured bytes. Release compilation overlapped
+this correctness run; its times are not a performance baseline.
+The existing `inspect-data-test.sh` also passed in the task-owned VM. It checked
+non-root access, unchanged parent permissions, and mount removal after success
+and failure. Read `inspect-data.log` in the same host directory. These checks
+do not qualify native commit failure, hardware power loss, or Kubernetes outage.
+
 The same release CLI passed `data-store-startup` with 18 assertions and
 `data-store-recovery` with 32 assertions. Their output directories are
 `startup` and `recovery` under the guest artifact directory above. The host
