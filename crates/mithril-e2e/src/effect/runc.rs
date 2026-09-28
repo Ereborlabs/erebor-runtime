@@ -210,7 +210,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub initial_host_pid: u32,
     pub prepared_state_before_exec: String,
     pub prepared_state_after_exec: String,
-    pub prepared_runtime_effect_observed: bool,
     pub seccomp_start_gate_unlinked: bool,
     pub create_runtime_path_authority_deferred: bool,
     pub runtime_topology_uninitialized_at_create_container: bool,
@@ -4153,12 +4152,6 @@ impl EffectTestRunner {
             initial_pid,
             output_directory,
         )?;
-        wait_for_reason(
-            &reader,
-            &observations,
-            marker,
-            "PREPARED_RUNTIME_INFRASTRUCTURE",
-        )?;
         let overlap_marker = observations.cursor();
         let poststart_overlap_pid = fixture_root.join("poststart-overlap.pid");
         let poststart_overlap_stdout = output_directory.join("poststart-overlap.stdout");
@@ -5702,7 +5695,6 @@ impl EffectTestRunner {
             initial_host_pid: initial_pid,
             prepared_state_before_exec: lifecycle_state_before_exec,
             prepared_state_after_exec: lifecycle_state_after_exec,
-            prepared_runtime_effect_observed: true,
             seccomp_start_gate_unlinked,
             create_runtime_path_authority_deferred,
             runtime_topology_uninitialized_at_create_container,

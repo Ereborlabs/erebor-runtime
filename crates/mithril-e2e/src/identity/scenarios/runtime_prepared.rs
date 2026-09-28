@@ -44,10 +44,21 @@ fn prepared_start_emits_effect<P: Platform>() -> TestResult<()> {
                 }
                 .build()
             })?;
-            *last.borrow_mut() = format!("{:?}", effects.recent_effects.iter().rev().take(8));
+            *last.borrow_mut() = format!(
+                "{} recent effects; last reasons: {:?}",
+                effects.recent_effects.len(),
+                effects
+                    .recent_effects
+                    .iter()
+                    .rev()
+                    .take(8)
+                    .map(|event| event.reason.as_str())
+                    .collect::<Vec<_>>()
+            );
             Ok(effects.recent_effects.into_iter().find(|event| {
                 !seen.contains(&(event.source_cpu_id, event.source_sequence))
                     && event.reason == "PREPARED_RUNTIME_INFRASTRUCTURE"
+                    && event.profile_generation_ref_id == task.snapshot.profile_generation_ref_id
             }))
         },
         || format!("last effects: {}", last.borrow()),

@@ -3800,18 +3800,32 @@ setup, production actions, assertions, and focused test.
 - [ ] Held OCI route publication: keep policy installation, background binding
   reconciliation, `createContainer`, route publication, and activation calls
   in their real order through public production APIs.
-- [ ] Replace the prepared-runtime effect result. Start Control and Node,
+- [x] Replace the prepared-runtime effect result. Start Control and Node,
   install the signed runtime-entries policy, then start the shared application
   actor. Require a fresh production `PREPARED_RUNTIME_INFRASTRUCTURE` effect
   from the prepared-to-active runtime transition. Use the same Rust test on
-  each platform where that physical transition occurs. Keep the old wait and
-  result field until the paired platforms pass.
+  each platform where that physical transition occurs. The Host and direct
+  `runc` pair now owns this assertion.
   - [x] Host passed in 63.25 seconds. The standard test has fewer than 100
-    lines and checks the active runtime binding and fresh effect.
+    lines and checks the active runtime binding and fresh effect. The stronger
+    policy-generation check passed in 41.24 seconds.
   - [x] Direct `runc` passed in 83.40 seconds with the same test body and
-    production OCI hook.
-  - [ ] Pass Kubernetes with the same test body.
-  - [ ] Remove only the matching old wait, result, and shell gate.
+    production OCI hook. The stronger check passed in 45.52 seconds.
+  - [ ] Revisit Kubernetes. The user excluded this platform from this test
+    until its physical setup can exercise the same pre-active effect. Two
+    focused Kubernetes runs found no prepared effect. A live
+    `mithril-inspect effects` sample began before policy activation and saw no
+    prepared effect through teardown. A temporary Host test proved that 1,100
+    reads can evict an earlier effect from the Node's 1,024-record window, but
+    eviction does not explain the live Kubernetes sample. The old direct-runc
+    case holds the actor through OCI hook stages. The current Kubernetes Pod
+    fixture does not cause the same pre-active action. Do not weaken the effect
+    assertion or count Kubernetes as qualified for this behavior.
+  - [x] Remove only the matching old wait, result, and shell gate after the
+    focused Host and direct-`runc` cases pass.
+  - [x] `bash -n` passed for the changed launcher. The final Rust CI procedure
+    passed. Its first run had one unrelated CLI test failure; that exact test
+    and the complete rerun passed without a source change.
 - [ ] Initial application activation: keep the entry action and `ACTIVE`,
   role, rule, default-effect, and large-argv assertions explicit.
   - [x] Replace the 1,200-argument `cat` action with one standard platform
