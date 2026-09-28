@@ -4614,6 +4614,15 @@ setup, production actions, assertions, and focused test.
     Kubernetes case, then remove only the matching old probe and result fields.
 - [ ] `physical_kubernetes_poststart_probe`
 - [ ] `physical_kubernetes_stock_hook_failure_probe`
+  - [ ] Keep the timeout, OCI-state mismatch, missing Pod UID, no-payload,
+    CRI-removal, and cleanup checks until their exact platform tests pass.
+  - A direct-`runc` Node-outage test passed in 35.81 seconds. A trial
+    Kubernetes registration did not reach the OCI hook: `stop_node()` removed
+    the Node selector, and the new Pod stayed Pending with no containerd ID.
+    The 180-second identity wait failed with `Unschedulable`. The trial
+    registration was removed. Do not count this as hook-timeout coverage.
+    Reproduce the scheduling condition in lightweight before a change or
+    another Kubernetes qualification run.
 - [ ] `physical_kubernetes_resilience_probe`: keep the Pod and its cgroup
   running before Node starts. Require public production recovery, exact
   identity retention across the Kubernetes service and Node outages, and
