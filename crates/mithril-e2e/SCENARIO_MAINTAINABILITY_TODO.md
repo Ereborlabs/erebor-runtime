@@ -3738,8 +3738,8 @@ test does not close a row when its physical condition or an assertion changed.
     distinct roles, nonzero entry rules, and one policy generation. Keep the
     old startup output and runtime-internal bootstrap checks until they have
     separate shared coverage.
-    - [x] Host passed in 43.97 seconds. The test has 77 lines.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Host passed in 43.97 seconds. The formatted test has 85 lines.
+    - [x] Direct `runc` passed in 47.82 seconds with the production OCI hook.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching old competing-readiness action and
       identity comparison after all three pass. Keep the startup action.
