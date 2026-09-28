@@ -19,9 +19,10 @@ implemented. The old Control raw writer and its callers are removed. Stored
 tenant totals replace repeated quota scans. The complete workspace gate,
 paired disk-full case, and release startup and recovery cases pass.
 Kubernetes storage and outage recovery also pass on the current Rust source.
-Extended performance qualification is stopped; the incomplete runs do not
-establish a pass. Ask the user about these gates only after implementation
-and correctness/recovery verification are complete. No gate is waived.
+Capacity and performance qualification are separate from implementation
+completion. The user approved the classification below and a serial review:
+run one table item, report its current result, then stop for the user's decision.
+Do not start the next item automatically. Incomplete runs establish no pass.
 Previous implementation results below are evidence for their named revisions,
 not completion of this design.
 
@@ -177,6 +178,35 @@ Storage fails or cannot meet capacity
    policy RPCs. Never claim an atomic transaction across Control and data.
 
 ## Storage choice qualification
+
+Correctness, recovery, protected retention, and bounded historical extraction
+are implementation gates. Default-capacity and throughput measurements are
+separate qualification. Prove a capacity before advertising it; a smaller case
+does not prove the default capacity. Do not require every overlapping full-store
+measurement to close an implementation change.
+
+Run the existing cases in this order. After each item, record the command,
+source, nonzero case count, result, measured limits, and limitations here.
+Report the result to the user and stop. The user decides whether to keep,
+change, or defer the check and whether to proceed. Do not add a test, change
+an assertion, or repeat a passing case without that decision.
+
+| Order | Existing case | Purpose and completion rule |
+| --- | --- | --- |
+| 1 | `data_quota_recovery` | Required correctness: fill the 64-MiB tenant fixture, reject without ACK, retain Node input, preserve a witness, reclaim eligible segments, retry, and reopen. This does not qualify the default capacity. |
+| 2 | `data-store-quota` | Default tenant capacity qualification through Node WAL and mTLS. Required before advertising that capacity, not for each implementation deliverable. |
+| 3 | `analysis_store_global_memory` | Store-wide capacity and memory measurement with five tenants. Supplementary qualification, not a mandatory repeat of each implementation change. |
+| 4 | `data-store-load` | Single-tenant throughput and latency measurement. Keep the small correctness case mandatory; no minimum event rate is specified. |
+| 5 | `data-store-tenants` | Shared-store contention measurement. Keep small isolation and replay checks mandatory; report large-run results separately. |
+| 6 | `data-store-rollout` | Check policy progress during intake and measure delay. Keep correctness and existing deadlines mandatory. No five-percent completion threshold applies. |
+| 7 | `analysis_extract_history` | Required bounded extraction and whole-segment witness proof. Keep scan/input limits and measure scanned/selected and pinned/useful bytes. |
+| 8 | `raw_event_store_comparison` | Diagnostic comparison with recorded old-writer results. The old writer has different work; matching its rate is not a completion gate. |
+
+The one-tenant component memory case already passed on the current Rust source.
+Retain that result; it does not add a ninth required run. The 512-MiB test
+ceiling remains provisional, not a production memory budget. Exceeding it
+fails that test but does not by itself prove a leak. No test code or production
+limit changes as part of this classification.
 
 New performance tests require explicit user approval. The existing memory
 tests use a provisional 512-MiB ceiling. Historical results below retain the
@@ -477,8 +507,8 @@ duplicate replay without source-state changes, and durable rollout and evidence
 state after restart. Keep independent context projection active; do not compare
 its global revision as an evidence-only replay receipt. Run two pairs in
 `data_rollout_load` before release measurements. Reject invalid pair counts
-and an existing output directory. Compare repeated idle/loaded samples before
-claiming the five-percent performance gate. This case does not qualify physical
+and an existing output directory. Report repeated idle/loaded samples and
+variability; a five-percent difference is not a completion gate. This case does not qualify physical
 policy activation, full quotas, or filesystem reserve adequacy.
 
 Use `data-store-quota` to fill the default tenant logical quota through Node
@@ -532,6 +562,9 @@ Record nonzero case counts, actual disk usage, source receipts, backup revision
 and retained ranges. Require whole-segment pin and bounded-extraction proof,
 not only direct-store throughput. No public SQL, discovery algorithm or remote transport is
 required here. Stop before enabling a data path whose recovery case fails.
+These gates cover the implemented storage contracts, not every performance
+measurement in the shared case families. Keep full-capacity and throughput
+qualification separate. Do not claim unmeasured capacity or latency.
 
 ## Implementation result
 
@@ -1255,9 +1288,9 @@ directory. The physical run overlapped part of this correctness check; these
 elapsed times are not performance measurements. Ignored benchmarks did not run.
 Implementation and correctness/recovery verification are **Done**. Global
 capacity, full-capacity mTLS, repeated load/rollout measurements, and remaining
-current-source performance qualification are **Not done**. Ask the user whether
-to run or defer those gates. Do not restart them or declare full completion
-without that decision.
+current-source performance qualification are **Not done**. The user subsequently
+approved the classification and one-item-at-a-time review in `Storage choice
+qualification` above. Report each result and stop before the next item.
 
 ### Previous implementation evidence
 
