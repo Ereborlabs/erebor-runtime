@@ -2013,10 +2013,11 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass direct `runc` and commit it. The same test body passed in
       42.97 seconds through stock `runc` and the production OCI hook. The
       unchanged bind-alias case passed in 42.47 seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [ ] Revisit Kubernetes for this test. Do not add it now. Keep the old
+      physical check until this platform case is approved and passes.
     - [ ] Remove only the matching old first-read decision and effect after
-      all three pass. Keep dirty-view, replaced-path, restoration, and cache
-      snapshot checks until their own replacements pass.
+      the deferred Kubernetes case passes. Keep dirty-view, replaced-path,
+      restoration, and cache snapshot checks until their own replacements pass.
   - [ ] Remove the old exact control open only after these alias and mount
     checks and their Protect-mode counterparts pass as platform tests.
 - [ ] `EffectTestRunner::physical_probe` protect scenario: keep every hard
