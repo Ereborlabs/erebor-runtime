@@ -3723,9 +3723,14 @@ test does not close a row when its physical condition or an assertion changed.
       98-line test passed on Host in 30.40 seconds, direct `runc` in 38.66
       seconds, and Kubernetes in 70.73 seconds. The Kubernetes launcher
       exited 0.
-    - [ ] Remove only the duplicate signed-denial action, result field, and
-      `run.sh` predicate. Keep the earlier startup role and runtime-internal
-      bootstrap assertions.
+    - [x] Remove the duplicate result field and `run.sh` predicate. Keep the
+      old signed-denial action because its event feeds the public
+      `mithril-inspect` capture in this probe. The reduced probe passed with
+      that capture and its earlier startup and bootstrap assertions.
+    - [ ] Qualify the same public `mithril-inspect` denial capture on Host and
+      direct `runc` before removing the old action and capture. The current
+      shared test checks the production observation API, but does not call the
+      CLI. The deployed two-node Kubernetes lane checks the CLI separately.
 
 ### Direct runtime entry roles
 

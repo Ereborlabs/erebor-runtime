@@ -515,7 +515,6 @@ if [[ $recovered_entry_only == true ]]; then
     .runtime_internal_exec_observed_with_rule_zero and
     .declared_probe_role_id > 0 and
     .declared_probe_rule_id > 0 and
-    .declared_probe_policy_denied and
     .declared_probe_role_id != .recovered_application_role_id and
     .declared_probe_rule_id != .recovered_application_rule_id and
     .pin_root_removed and
