@@ -1,4 +1,4 @@
-use mithril_control::{ControlStore, PolicyBundleV1};
+use mithril_control::{ControlStore, EvidenceIntakeOwner, PolicyBundleV1};
 use mithril_node::{EvidenceWalLimits, NodeControlMessage as Message, TrustCache};
 
 use super::OutagePolicyFixture as Policy;
@@ -9,6 +9,7 @@ use crate::{control_fixture::MtlsFixture, platform::TestResult};
 async fn restart_converges_with_replay() -> TestResult<()> {
     let tls = MtlsFixture::new(false)?;
     let store = ControlStore::open(tls.path().join("control-evidence"))?;
+    let intake = EvidenceIntakeOwner::try_from(store.clone())?;
     let mut trust = TrustCache::load(&tls.path().join("trust"))?;
     let (mut prior, mut cached) = (String::new(), Vec::new());
 
@@ -22,7 +23,7 @@ async fn restart_converges_with_replay() -> TestResult<()> {
         let id = &bundle.candidate.candidate_content_id;
         let digest = &bundle.bundle_digest;
         let control = tls
-            .control_with_store(store.clone(), 1)?
+            .control_from_intake(intake.clone(), 1)?
             .with_policy_desired_state(policy.owner.clone());
         assert!(control.replace_kubernetes_workload_inventory(facts.clone())?);
         let server = tls.start(control.clone()).await?;
@@ -80,8 +81,17 @@ async fn restart_converges_with_replay() -> TestResult<()> {
             assert!(wal.acknowledge_evidence(evidence)?);
             assert!(wal.next_evidence_batch().is_none());
             let identity = tls.identity(batch_source_id(&batch)?);
-            let accepted = store.accepted_evidence_records(&identity)?;
-            assert_eq!(accepted, batch.decode_records()?);
+            let accepted = intake.analysis_store().read_page(&identity, 1)?;
+            assert_eq!(
+                accepted
+                    .records
+                    .iter()
+                    .flat_map(|record| record.framed_record.iter().copied())
+                    .collect::<Vec<_>>(),
+                mithril_control::EvidenceBatch::from(batch)
+                    .framed_records
+                    .to_vec()
+            );
         } else {
             assert_eq!(step, 1, "Control restart lost the retained WAL batch");
         }

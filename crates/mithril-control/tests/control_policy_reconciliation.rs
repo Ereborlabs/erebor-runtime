@@ -1846,7 +1846,6 @@ fn health_snapshot_exposes_bounded_operational_counts_without_payloads() -> Test
     assert_eq!(health.unsettled_rollout_targets, 1);
     assert_eq!(health.exception_candidates, 0);
     assert_eq!(health.unsettled_exception_candidates, 0);
-    assert_eq!(health.pending_evidence_records, 0);
     Ok(())
 }
 

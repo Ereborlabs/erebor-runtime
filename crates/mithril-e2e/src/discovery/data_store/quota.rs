@@ -258,7 +258,7 @@ impl DataStoreQualification {
             "quota recovery changed its exact witness",
         )?;
         self.check(
-            control.health()?.evidence_cursors == 0,
+            !control.root().join("evidence/segments-v2").exists(),
             "quota load used the old evidence writer",
         )?;
         drop(connection);

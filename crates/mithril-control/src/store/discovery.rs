@@ -701,7 +701,7 @@ impl ControlStore {
             &mut inner,
             ControlTransactionV1::DiscoveryHeadCommitted {
                 head: head.clone(),
-                expected: expected.cloned(),
+                expected: expected.cloned().map(Box::new),
             },
         )?;
         Ok(head)
@@ -930,33 +930,33 @@ mod tests {
     }
 
     #[test]
-    fn discovery_migration_preserves_schema_five_cpu_metadata(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let store = ControlStore::open(directory.path())?;
-        let input = crate::DiscoveryInputManifestV1::from_json(include_bytes!(
-            "../../../mithril-e2e/fixtures/discovery/manifest.json"
-        ))?;
-        let identity = input.records[0].id.stream.clone();
-        let record = input.records[0].observation.to_wire_record()?;
-        store.accept_evidence_batch(
-            identity.clone(),
-            crate::EvidenceBatchInputV1::encode(1, vec![record])?,
-        )?;
-        let binding = store.evidence_cpu_binding(&identity)?;
-        let state = store.evidence_lock()?.state.clone();
-        drop(store);
-        let encoded = rmp_serde::to_vec_named(&DurableControlStateV1 {
-            schema_version: 5,
-            state,
-        })?;
-        let mut bytes = Sha256::digest(&encoded).to_vec();
-        bytes.extend(encoded);
-        fs::write(directory.path().join("state.bin"), &bytes)?;
-        let store = ControlStore::open(directory.path())?;
-        assert_eq!(store.evidence_cpu_binding(&identity)?, binding);
-        assert_eq!(fs::read(directory.path().join("state-v5.bin"))?, bytes);
-        assert!(store.discovery_heads(identity.tenant_id)?.is_empty());
+    fn rejects_unsupported_state() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for schema in [4, 5, 6, STORE_SCHEMA_VERSION, STORE_SCHEMA_VERSION + 1] {
+            let directory = tempfile::tempdir()?;
+            let encoded = rmp_serde::to_vec_named(&DurableControlStateV1 {
+                schema_version: schema,
+                state: ControlStoreState::default(),
+            })?;
+            let mut bytes = Sha256::digest(&encoded).to_vec();
+            bytes.extend(encoded);
+            if schema == STORE_SCHEMA_VERSION {
+                bytes[0] ^= 1;
+            }
+            let path = directory.path().join("state.bin");
+            let pending = directory.path().join("state.tmp");
+            fs::write(&path, &bytes)?;
+            fs::write(&pending, b"unsupported pending state")?;
+            for _ in 0..2 {
+                assert!(ControlStore::open(directory.path()).is_err());
+                assert_eq!(fs::read(&path)?, bytes);
+                assert_eq!(fs::read(&pending)?, b"unsupported pending state");
+                assert!(!directory.path().join("evidence").exists());
+                assert!(!directory
+                    .path()
+                    .join(format!("state-v{schema}.bin"))
+                    .exists());
+            }
+        }
         Ok(())
     }
 }

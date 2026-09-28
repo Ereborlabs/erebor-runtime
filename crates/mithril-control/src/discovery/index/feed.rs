@@ -1,5 +1,5 @@
 use super::*;
-use crate::discovery::{context::ContextRevision, runtime::StreamCheckpoint};
+use crate::discovery::context::ContextRevision;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -67,7 +67,6 @@ pub(super) enum RevisionPayload {
     Export(DiscoveryExportPageV1),
     Profile(DiscoveryProfileV1),
     Context(ContextRevision),
-    Checkpoint(StreamCheckpoint),
     Trace(crate::TraceRevisionV1, Box<crate::TraceAcceptedV1>),
 }
 
@@ -97,19 +96,6 @@ impl RevisionPayload {
         if rmp_serde::from_slice::<ContextRevision>(&artifact.payload).is_ok() {
             return Ok(Self::Context(ContextRevision::read(&live.store, head)?));
         }
-        if let Ok(checkpoint) = rmp_serde::from_slice::<StreamCheckpoint>(&artifact.payload) {
-            DiscoveryInputManifestV1::require(
-                checkpoint.schema_version == 1
-                    && checkpoint.next_interval_cursor > 0
-                    && checkpoint.stream.tenant_id == head.key.tenant_id
-                    && StreamCheckpoint::key(&checkpoint.stream)? == head.key
-                    && checkpoint.snapshot.key.tenant_id == head.key.tenant_id
-                    && checkpoint.snapshot.commit_index < head.commit_index
-                    && artifact.dependencies == vec![checkpoint.snapshot.artifact.clone()],
-                "CHECKPOINT_INTEGRITY",
-            )?;
-            return Ok(Self::Checkpoint(checkpoint));
-        }
         DiscoverySnafu {
             code: "REVISION_OWNER_UNSUPPORTED",
             reason: "a committed discovery head has an unknown payload",
@@ -122,7 +108,7 @@ impl RevisionPayload {
             Self::Export(page) => page.previous.as_ref(),
             Self::Context(revision) => revision.previous.as_ref(),
             Self::Trace(revision, _) => revision.previous.as_ref(),
-            Self::Profile(_) | Self::Checkpoint(_) => None,
+            Self::Profile(_) => None,
         }
     }
 
@@ -219,7 +205,6 @@ impl RevisionPayload {
                     accepted_digest: revision.accepted.sha256,
                 },
             )),
-            Self::Checkpoint(_) => {}
         }
         changes
             .into_iter()
@@ -278,9 +263,6 @@ impl DiscoveryOwner {
                     }
                     RevisionPayload::Profile(_) => {
                         live.index.publish_snapshot(&head)?;
-                    }
-                    RevisionPayload::Checkpoint(checkpoint) => {
-                        self.profile(&checkpoint.snapshot)?;
                     }
                     RevisionPayload::Trace(revision, accepted) => {
                         live.index.project_trace(&head, revision, accepted)?;

@@ -15,8 +15,8 @@ async fn retained_wal_survives_restart() -> TestResult<()> {
     let fixture = MtlsFixture::new(false)?;
     let path = fixture.path().join("control-evidence");
     let store = ControlStore::open(&path)?;
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let control = fixture.control_with_store(store, 1)?;
+    let intake = EvidenceIntakeOwner::try_from(store)?;
+    let control = fixture.control_from_intake(intake.clone(), 1)?;
     let server = fixture.start(control.clone()).await?;
     let limits = EvidenceWalLimits {
         maximum_retained_records: 3,
@@ -84,9 +84,33 @@ async fn retained_wal_survives_restart() -> TestResult<()> {
     assert_eq!(control.registered_nonce_count(), 1);
     let identity = fixture.identity(source);
     assert_eq!(intake.contiguous_cursor(&identity)?, 303);
-    let accepted = intake.store().accepted_evidence_records(&identity)?;
-    assert_eq!(accepted.len(), 303);
-    assert_eq!(accepted, records);
+    let data = intake.analysis_store();
+    assert_eq!(
+        data.source_status(&identity)?
+            .ok_or("source absent")?
+            .retained_event_count,
+        303
+    );
+    let mut accepted = Vec::new();
+    let mut cursor = 1;
+    loop {
+        let page = data.read_page(&identity, cursor)?;
+        accepted.extend(
+            page.records
+                .iter()
+                .flat_map(|record| record.framed_record.iter().copied()),
+        );
+        match page.next_cursor {
+            Some(next) => cursor = next,
+            None => break,
+        }
+    }
+    assert_eq!(
+        accepted,
+        mithril_control::EvidenceBatch::from(batch.clone())
+            .framed_records
+            .to_vec()
+    );
     drop(connection);
     server.shutdown().await?;
     Ok(())

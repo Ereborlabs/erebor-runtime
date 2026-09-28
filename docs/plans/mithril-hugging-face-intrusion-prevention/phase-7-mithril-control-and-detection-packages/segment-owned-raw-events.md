@@ -49,8 +49,10 @@ satisfies the required bounded-window case.
 
 **Not done.** Configured AnalysisStore intake writes raw segments and commits
 batch metadata in DuckDB. Complete-bundle backup and guarded recovery are
-implemented. Bounded extraction, old Control writer removal, and full
-qualification remain incomplete. See the current 7.2 implementation result.
+implemented. Bounded extraction is implemented. The old Control raw writer and
+its callers are removed. The complete workspace gate and paired disk-full case
+pass for this source. Release measurements and Kubernetes qualification remain
+incomplete. See the current 7.2 result.
 Use fresh development state; no compatibility import or migration is required.
 Tests use temporary stores. This decision does not authorize removal of
 existing deployment data.

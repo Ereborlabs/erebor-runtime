@@ -17,8 +17,8 @@ async fn evidence_replays_once() -> TestResult<()> {
     let fixture = MtlsFixture::new(false)?;
     let path = fixture.path().join("control-evidence");
     let store = ControlStore::open(&path)?;
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let control = fixture.control_with_store(store, 1)?;
+    let intake = EvidenceIntakeOwner::try_from(store)?;
+    let control = fixture.control_from_intake(intake.clone(), 1)?;
     let server = fixture.start(control.clone()).await?;
     let wal = fixture.wal(EvidenceWalLimits {
         maximum_retained_records: 10,
@@ -79,9 +79,17 @@ async fn evidence_replays_once() -> TestResult<()> {
         wal.acknowledge_evidence(ack)?;
         let identity = fixture.identity(source);
         assert_eq!(intake.contiguous_cursor(&identity)?, batch.last_cursor);
-        let records = intake.store().accepted_evidence_records(&identity)?;
+        let records = intake.analysis_store().read_page(&identity, 1)?.records;
         assert_eq!(records.len(), batch.record_count());
-        assert_eq!(records, batch.decode_records()?);
+        assert_eq!(
+            records
+                .iter()
+                .flat_map(|record| record.framed_record.iter().copied())
+                .collect::<Vec<_>>(),
+            mithril_control::EvidenceBatch::from(batch)
+                .framed_records
+                .to_vec()
+        );
         count += records.len();
         sources.push(source);
     }

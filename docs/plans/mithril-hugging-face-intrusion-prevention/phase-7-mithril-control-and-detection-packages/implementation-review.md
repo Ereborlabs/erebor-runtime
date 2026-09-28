@@ -18,7 +18,7 @@ and source authentication in Control. The default deployment embeds the data
 crate in Control. Agents and the console will use the same owners. Neither a
 query nor a diagnostic measurement grants policy authority.
 
-Current scope: Discovery contracts, durable derivation, and offline AnalysisStore
+Current scope: Discovery contracts, offline derivation, and offline AnalysisStore
 proof are implemented. Default Control startup selects AnalysisStore for data
 and keeps ControlStore for policy authority.
 Diagnostic contracts, execution, transport, and projection are implemented.
@@ -30,8 +30,10 @@ declarative captures are not delivered by these changes.
 
 ### Segment storage conversion
 
-Source state: the accounting and readiness changes after `34f5e2c4`. Configured AnalysisStore
-intake and reads now use segments. The target conversion remains incomplete.
+Source state: the working raw-owner removal after `3e5bfcea`. All intake
+constructors require AnalysisStore. Control has no raw writer or reader.
+The complete workspace gate and paired disk-full case pass for this source.
+Release and Kubernetes qualification remain incomplete.
 Backup and restore copy the complete metadata and segment bundle.
 Storage pass records outside this section predate this conversion
 and do not qualify the current storage implementation.
@@ -267,17 +269,17 @@ cancellation errors. These errors do not permit an intake ACK.
 
 The reusable segment path has these implemented calls:
 
-[EvidenceSegmentOwner::append_without_sync](../../../../crates/mithril-control/src/evidence_segment.rs) The existing Control segment writer appends a bounded batch.<br>
+[AnalysisStore::reserve_segment](../../../../crates/araphor-data/src/analysis/segments.rs) The data owner reserves the segment for a bounded batch.<br>
 -> [SegmentFile::encode_identity](../../../../crates/araphor-data/src/analysis/segment_file.rs) The data crate encodes the existing source header and CRC32C checksum.<br>
 -> [SegmentFile::create](../../../../crates/araphor-data/src/analysis/segment_file.rs) A new segment is a private file created without replacing an existing path.<br>
 -> [SegmentFile::open](../../../../crates/araphor-data/src/analysis/segment_file.rs) An append opens a private regular file without following its final symlink.<br>
 -> [SegmentFile::append](../../../../crates/araphor-data/src/analysis/segment_file.rs) The file owner checks the exact prior end and 16-MiB limit before writing.<br>
--> [EvidenceSegmentOwner::sync](../../../../crates/mithril-control/src/evidence_segment.rs) The existing segment owner retains its sync responsibility before returning the batch.
+-> [AnalysisStore::sync_append](../../../../crates/araphor-data/src/analysis/segments.rs) The data owner syncs the segment before metadata commit.
 
-[EvidenceSegmentOwner::open_read](../../../../crates/mithril-control/src/evidence_segment.rs) A frozen read opens the selected segment.<br>
+[SegmentRange::read](../../../../crates/araphor-data/src/analysis/segments.rs) A bounded read opens the selected committed range.<br>
 -> [SegmentFile::reader](../../../../crates/araphor-data/src/analysis/segment_file.rs) The data crate checks the private file and retains a read-only descriptor.<br>
 -> [SegmentFile::read](../../../../crates/araphor-data/src/analysis/segment_file.rs) Positional I/O reads an exact bounded range.<br>
--> [EvidenceSegmentReadV1::read_frame](../../../../crates/mithril-control/src/evidence_segment.rs) Control checks frame length and CRC32C before returning bytes.
+-> [SegmentRange::read](../../../../crates/araphor-data/src/analysis/segments.rs) The data owner checks the batch digest, frame lengths, and CRC32C before returning bytes.
 
 SegmentFile owns one file descriptor and its diagnostic path. Drop closes the
 descriptor; it does not delete, truncate, sync, or acknowledge the file.
@@ -290,8 +292,9 @@ The moved header keeps its byte format: tenant, boot and source IDs, big-endian
 epochs and node-name length, UTF-8 node name, and big-endian CRC32C. Existing
 source qualification remains at intake. The tests `segment_identity_checks_integrity`,
 `segment_append_checks_position`, `segment_append_checks_bound`, and
-`segment_rejects_foreign_files` are beside the data owner. Existing Control
-segment tests still exercise framing, rotation, corruption, and restart.
+`segment_rejects_foreign_files` are beside the data owner. The AnalysisStore
+tests check framing, rotation, corruption, and restart. The Control segment
+owner and its tests are removed.
 No BPF map, loader, policy, or wire-protocol boundary changes in this extraction.
 
 ### Recorded input and storage selection
@@ -1115,18 +1118,18 @@ The data-store phase records all six runs and measurement limits. Their
 logs are in the pilot directory. These repetitions do not prove a policy
 rollout under load or repeated full-quota performance.
 
-[EvidenceIntakeOwner::new](../../../../crates/mithril-control/src/evidence.rs) The explicit data-backed constructor rejects accepted, pending, or coverage state in the old Control evidence store. The owner validates Node batches and commits evidence and coverage only to AnalysisStore. Its component tests check exact frames, replay, old Control-store isolation, and restart.<br>
+[EvidenceIntakeOwner::new](../../../../crates/mithril-control/src/evidence.rs) The constructor requires an AnalysisStore handle. ControlStore startup rejects unsupported schemas and raw directories before this call. The intake owner validates Node batches and commits evidence and coverage only to AnalysisStore. Its component tests check exact frames, replay, old-state refusal, and restart.<br>
 -> [ControlPlane::from_intake](../../../../crates/mithril-control/src/service.rs) The service accepts the selected intake owner and keeps the same Control policy and trust store.<br>
 -> [DataStoreQualification::recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The mTLS case submits Node WAL records, leaves an ACK unread, restarts the owners, and retries the same bytes. The case passed 23 checks with the selected data owner.<br>
 
 [ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Control starts with its existing policy store and refuses old evidence receipts before it creates the data store.<br>
 -> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) One private writer opens at `evidence_directory/analysis`. Restart checks the schema version and required tables and columns. Restart does not create missing tables.<br>
--> [AnalysisStore::validate_state](../../../../crates/araphor-data/src/analysis/schema.rs) Before intake, recovery checks source bindings, receipts, coverage, frame and result digests, context versions, progress, references, expiry ranges, and relation revisions. An acknowledged position must have a retained row or a recorded expiry.<br>
+-> [AnalysisStore::validate_state](../../../../crates/araphor-data/src/analysis/schema.rs) Before intake, recovery checks source bindings, receipts, coverage, frame and result digests, context versions, progress, references, expiry ranges, and relation revisions. An acknowledged position must have a retained frame or a recorded expiry.<br>
 -> [EvidenceIntakeOwner::new](../../../../crates/mithril-control/src/evidence.rs) Intake shares that data handle. The default process does not start the superseded discovery projection.<br>
 -> [DataStoreQualification::startup](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The test uses configuration loading and mTLS to check exact frames, durable ACK, replay, and unchanged policy state.<br>
 -> [serve](../../../../crates/mithril-control/src/server.rs) Control runs retention with the existing service. Shutdown drops the timer; a bounded blocking pass can finish and release its data handle.<br>
 -> [EvidenceIntakeOwner::run_retention](../../../../crates/mithril-control/src/evidence.rs) A one-second timer calls the data owner through the existing clock seam. A failed pass retries without stopping policy service.<br>
--> [EvidenceRetentionOwner::sweep](../../../../crates/araphor-data/src/analysis/retention.rs) One pass visits at most 16 sources and removes at most 256 eligible rows per source. The pass checkpoints after deletion. Failure blocks intake until a later pass and checkpoint succeed.<br>
+-> [EvidenceRetentionOwner::sweep](../../../../crates/araphor-data/src/analysis/retention.rs) One pass visits at most 16 sources and removes at most one eligible segment per source. The pass checkpoints after deletion. Failure blocks intake until a later pass and checkpoint succeed.<br>
 -> [AnalysisStore::check_required](../../../../crates/araphor-data/src/analysis/retention.rs) A new batch cannot exceed the required-input age or tenant byte reservation.
 
 [NodeEvidence::open](../../../../crates/mithril-control/src/service.rs) An authenticated Node sends evidence on an open stream.<br>
@@ -1356,35 +1359,20 @@ bytes across two sources, exact retry, and gap repair. All use temporary stores.
 
 ### Durable evidence, profiles, and context
 
-This route describes the superseded library path. Default startup does not run
-this path. Its replacement uses the shared data owner. The
-[data-store plan](phase-7-2-data-store.md) defines the target storage contract.
+The live scheduler and its Control-reader raw-copy adapter are removed. Default
+startup has no discovery worker. Direct-read derivation from AnalysisStore is
+Not implemented; [7.4](phase-7-4-profiles-and-context.md) owns that work.
 
-[DiscoveryOwner::run](../../../../crates/mithril-control/src/discovery/runtime.rs) A direct library caller starts the old discovery owner.<br>
--> [DiscoveryOwner::open](../../../../crates/mithril-control/src/discovery/live.rs) DiscoveryOwner validates scope, supported sources, and quotas.<br>
--> [runtime checkpoint recovery](../../../../crates/mithril-control/src/discovery/runtime.rs) ControlStore opens the bounded derivation checkpoint.<br>
--> [ControlStore::read_evidence_page](../../../../crates/mithril-control/src/store/evidence_read.rs) bounded reader supplies committed evidence and pinned context.<br>
--> [DiscoveryOwner::advance](../../../../crates/mithril-control/src/discovery/live.rs) ControlStore commits a durable exported-page reference.<br>
--> [DiscoveryIndex::apply_committed](../../../../crates/mithril-control/src/discovery/index.rs) one selected-DB transaction deduplicates input, updates counts, and advances progress.<br>
--> [DiscoveryOwner::seal_interval](../../../../crates/mithril-control/src/discovery/live.rs) derivation seals checked canonical atoms and their input manifest.<br>
--> [ControlStore::commit_discovery_head](../../../../crates/mithril-control/src/store/discovery.rs) ControlStore commits the snapshot head.<br>
--> [DiscoveryOwner::read_snapshot](../../../../crates/mithril-control/src/discovery/live.rs) query index exposes only the committed snapshot and matching digest.<br>
--> [DiscoveryOwner::context_view](../../../../crates/mithril-control/src/discovery/context.rs) context builder joins versioned owner documents and rule/runbook references.<br>
--> [ContextPacket](../../../../crates/mithril-control/src/discovery/investigation.rs) packet preserves conflicts, missing facts, provenance, and disclosure classes.
+[DiscoveryOwner::derive_recorded](../../../../crates/mithril-control/src/discovery/recorded.rs) An offline caller supplies validated recorded input.<br>
+-> [BehaviorAtomV1](../../../../crates/mithril-control/src/discovery/model.rs) Exact derivation preserves incomplete counts and source identity.
 
-[DiscoveryOwner::advance](../../../../crates/mithril-control/src/discovery/live.rs) Source gap, binding conflict, or limit occurs.<br>
--> [export and aggregation](../../../../crates/mithril-control/src/discovery/index.rs) derivation records affected intervals and exact incomplete counts.<br>
--> [DiscoveryOwner::seal_interval](../../../../crates/mithril-control/src/discovery/live.rs) derivation seals Partial or stops with a typed failure.<br>
--> [immutable artifact owner](../../../../crates/mithril-control/src/store/discovery.rs) previous complete snapshots remain unchanged.<br>
--> [BehaviorAtomV1](../../../../crates/mithril-control/src/discovery/model.rs) no overflow becomes a directory or wildcard rule.
+[DiscoveryOwner::seal_interval](../../../../crates/mithril-control/src/discovery/live.rs) An artifact caller supplies committed profile input.<br>
+-> [DiscoveryOwner::read_snapshot](../../../../crates/mithril-control/src/discovery/live.rs) The artifact API exposes a committed snapshot and matching digest.
 
-[DiscoveryOwner::run](../../../../crates/mithril-control/src/discovery/runtime.rs) Control restarts or configured derivation is disabled.<br>
--> [ControlStore::recover_discovery_artifacts](../../../../crates/mithril-control/src/store/discovery.rs) recovery validates referenced artifacts before resuming.<br>
--> [runtime checkpoint recovery](../../../../crates/mithril-control/src/discovery/runtime.rs) enabled derivation resumes separate export and aggregation cursors.<br>
--> [DiscoveryIndex::rebuild_index](../../../../crates/mithril-control/src/discovery/index/recovery.rs) missing query state is rebuilt from retained authoritative artifacts.<br>
--> [ControlStore::recover_discovery_artifacts](../../../../crates/mithril-control/src/store/discovery.rs) orphan cleanup removes only unreferenced artifacts within the store.<br>
--> Not implemented: discovery expires only its own exported bundle references. No automatic export-reference expiry entry point exists. Orphan cleanup is not expiry of a referenced bundle.<br>
--> [bounded evidence reader](../../../../crates/mithril-control/src/store/evidence_read.rs) shared evidence consumption state remains unchanged.
+Recorded derivation and the artifact API are separate existing paths. Neither
+path starts intake consumption. Their tests do not qualify the future shared
+result/progress transaction. Context contracts and trace projection remain
+available to their existing callers.
 
 ### Diagnostic backend qualification
 
@@ -1444,7 +1432,7 @@ facts; it does not resolve a name or broaden a cohort on retry.
 | [EffectObservationStore](../../../../crates/mithril-node/src/observation.rs) | Node opens the existing observation owner and write-ahead log (WAL). Diagnostic capture does not own this log. | Kernel observations plus the catalogue produce optional decision context before WAL append. The existing observation owner remains the writer. | `discovery_context_old_and_new_wal_frames_reopen_without_reencoding` in [wal.rs](../../../../crates/mithril-node/src/observation/wal.rs). |
 | [ControlStore](../../../../crates/mithril-control/src/store.rs) | Control opens one leased durable store. The last local lease owner explicitly unlocks it. Closing the owner does not delete durable records. | Existing transactions own CPU bindings, immutable artifact references, and bounded heads. Discovery and TraceOwner use these methods; neither writes the state image directly. | `discovery_store_lease_releases_after_last_owner_with_duplicate_descriptor` and `discovery_store_lease_inherited_guard_cannot_unlock_active_parent`. |
 | [AnalysisStore](../../../../crates/araphor-data/src/analysis/mod.rs) | Offline proof opens one private DuckDB store and writer. Reopen retains its UUID, recovery epoch, and source receipts. The data owner also stores context versions, processor results, exact references, expiry ranges, and backup metadata. | Public methods accept Control-validated identity, framed evidence, and coverage. The data owner cannot authenticate a Node or change policy. | [storage_contract.rs](../../../../crates/mithril-e2e/src/discovery/storage_contract.rs), [context.rs tests](../../../../crates/araphor-data/src/analysis/context.rs), [retention.rs tests](../../../../crates/araphor-data/src/analysis/retention.rs), and `analysis_store_crash_replay`. |
-| [DiscoveryOwner](../../../../crates/mithril-control/src/discovery/mod.rs) | Configured runtime or an in-process caller opens the live owner. One admission guard bounds mutating work. Shutdown finishes the current bounded operation, then releases handles. | Bounded evidence pages and imported context produce export heads, profiles, and context packets. Stateless recorded-input methods need no live owner instance. | `discovery_derivation_runtime_disable_and_failure_leave_intake_active` in [runtime.rs](../../../../crates/mithril-control/src/discovery/runtime.rs). |
+| [DiscoveryOwner](../../../../crates/mithril-control/src/discovery/mod.rs) | Recorded methods are stateless. Artifact callers open one index owner and release its handles on drop. No intake scheduler remains. | Supplied recorded input produces exact atoms. Existing artifacts and imported context produce snapshots and context packets. | [recorded tests](../../../../crates/mithril-control/src/discovery/tests.rs) and [index tests](../../../../crates/mithril-control/src/discovery/index.rs). These tests do not prove direct-read live discovery. |
 | [DiscoveryIndex](../../../../crates/mithril-control/src/discovery/index.rs) | Discovery opens the leased SQLite projection. Closing connections retains the database. Recovery can replace only this derived state. | One writer applies retained artifacts. Two query-only readers serve bounded reads. Authoritative artifacts, not SQL rows, determine recovery. | `discovery_index_replacement_keeps_prior_index_on_invalid_authority` in [recovery.rs](../../../../crates/mithril-control/src/discovery/index/recovery.rs). |
 | [TraceOwner](../../../../crates/mithril-control/src/observability/owner.rs) | Control creates the owner over ControlStore. Accepted inputs and per-execution heads survive owner destruction. | Separate execution/read grants and optional host approval govern acceptance, append, cancellation, and disclosure. Only owner methods change trace heads. | `observability_recovery_commits_once_and_rejects_changed_output` and `observability_target_partial_cohort_never_widens_on_retry`. |
 | [NodeTraceOwner](../../../../crates/mithril-node/src/observability.rs) | Node opens a private leased spool. Drop cancels and joins workers before kernel-host shutdown. Acknowledgement retires retained output; restart never respawns a retained identity. | Signed dispatch and an exact binding lease produce synced frames and a terminal result. Capture workers write output; the owner commits acknowledgement and retirement. | `observability_recovery_preserves_all_pages_and_never_respawns` and `observability_recovery_disk_full_retains_unacknowledged_terminal`. |
@@ -1510,13 +1498,12 @@ method does not discover intent, generate a policy, or activate a candidate.
 
 ### Durable storage and recovery
 
-Read [evidence reads](../../../../crates/mithril-control/src/store/evidence_read.rs)
-before [segment decoding](../../../../crates/mithril-control/src/evidence_segment.rs).
-The store lock freezes bounds and opens at most four segment handles. Decoding
-runs outside the lock. A page has at most 256 records and 1 MiB. Reclamation
-before open returns `RetainedRangeExpired` with exact bounds. Reclamation after
-open does not invalidate the open handle. Discovery never acknowledges the
-shared evidence-consumption watermark.
+Read [shared evidence reads](../../../../crates/araphor-data/src/analysis/read.rs)
+before [segment decoding](../../../../crates/araphor-data/src/analysis/segments.rs).
+AnalysisStore freezes committed bounds under its writer coordinator. A bounded
+read lease protects the files until extraction ends. A page has at most 256
+records and 1 MiB. Recorded expiry is explicit. Control has no raw reader or
+evidence-consumption watermark.
 
 [Artifact publication](../../../../crates/mithril-control/src/store/discovery.rs)
 writes a private temporary file, syncs it, publishes the content-addressed
@@ -1526,9 +1513,10 @@ the expected predecessor. MessagePack artifacts have a SHA-256 digest and a
 SQLite reserves 1 GiB of each participating tenant's logical budget. This
 reserve is conservative accounting, not a measurement of that tenant's rows.
 
-Current store metadata uses schema 6. Current SQLite uses schema 5, including
-the trace tables. [Store migration](../../../../crates/mithril-control/src/store.rs)
-checks the prior state and recovery copy. A future schema is rejected.
+Control state uses schema 7 and contains no raw evidence metadata. Existing
+artifact projection uses SQLite schema 5, including trace tables.
+[Control startup](../../../../crates/mithril-control/src/store.rs) rejects old
+schemas and raw directories. It does not import or migrate them.
 `StoreLease` records the acquiring process ID. An inherited guard cannot unlock
 the parent's lease; the last owner in that process releases it explicitly.
 
@@ -1544,12 +1532,9 @@ have a one-second deadline. Snapshot pages have at most 200 rows and 1 MiB.
 The production methods run fixed bounded queries. The experiment's arbitrary
 SQL worker is not a public production SQL endpoint.
 
-[Runtime scheduling](../../../../crates/mithril-control/src/discovery/runtime.rs)
-scans at most 32 sources per pass. It admits four active and 32 pending
-intervals per process, and two active and eight pending intervals per tenant.
-Export, aggregation, and snapshot positions remain separate. A retry after an
-export commit reuses that artifact instead of counting records again. A late
-coverage change can update the profile without adding action counts.
+No live discovery scheduler remains. The future worker must read AnalysisStore
+and commit results, exact references, and progress through its transaction API.
+Offline artifact replay does not prove that integration.
 
 [Rebuild](../../../../crates/mithril-control/src/discovery/index/recovery.rs)
 holds the index lease, replays retained authority into a candidate database,
@@ -1824,7 +1809,7 @@ These checks cannot reconstruct an ID that was never observed.
 | Existing BPF effect record to [Node observation](../../../../crates/mithril-node/src/observation.rs) | Existing `EffectObservationV1` is a native-layout, all-bit-valid integer structure. `FromBytes::read_from_bytes` rejects a wrong size. Semantic normalization remains a separate check. | Bad records affect decode/coverage health; byte-length acceptance is not semantic proof. No kernel record layout changes in this branch. |
 | Existing exact-file measurement to [KernelHost](../../../../crates/erebor-interceptor/src/host.rs) | `TryFromBytes::try_read_from_bytes` validates enum-bearing ABI values as well as size. This differs from all-bit-valid `FromBytes`. | The host returns its checked measurement error. This pre-existing decoder is a dependency, not a new diagnostic ABI. |
 | Node observation to [Control protobuf](../../../../crates/mithril-control/proto/erebor/mithril/control/v1/control.proto) | Optional decision context is field 21. Fields 1–20 remain unchanged. Identity byte fields have exact 16-byte big-endian encoding. Original kernel sequence is separate from WAL cursor. | [Evidence model validation](../../../../crates/mithril-control/src/evidence/model.rs) checks schema, sizes, catalogue digest, IDs, object handle, effect, and operation. Invalid values return `EvidenceModelError`. Missing context remains explicit. |
-| Evidence file to [bounded decoder](../../../../crates/mithril-control/src/evidence_segment.rs) | Existing protobuf frame; big-endian 32-bit length and CRC32C. Reader checks the frozen index, length, checksum, and protobuf decoding. | Changed frames return `ControlStore` errors. An open descriptor survives pathname unlink; it does not waive checksum validation. |
+| Evidence file to [bounded decoder](../../../../crates/araphor-data/src/analysis/segments.rs) | Existing protobuf frame; big-endian 32-bit length and CRC32C. The data reader checks the committed batch digest, offsets, frame length, and checksum. | Changed frames return data-store errors. A read lease protects selected files until extraction completes. |
 | Control owner to [artifact store](../../../../crates/mithril-control/src/store/discovery.rs) | Versioned MessagePack, SHA-256, bounded payload and dependencies. No cross-platform raw Rust struct serialization. | Typed `Discovery` codes distinguish schema, digest, quota, and reference failures. |
 | Index positions to [SQLite](../../../../crates/mithril-control/src/discovery/index.rs) | Unsigned 64-bit positions use fixed eight-byte big-endian blobs where ordered full-range values are required. Constraints and checked arithmetic protect counts and uniqueness. | Overflow or mismatched replay fails the transaction; no partial count/progress commit. |
 | Control dispatch to [Node](../../../../crates/mithril-control/src/observability/dispatch.rs) | Versioned typed request inside bounded diagnostic transport; Ed25519 signature over domain-separated complete inputs. | Session, trust, digest, scope, lifetime, or signature failure rejects execution through typed trace errors. |
@@ -1842,10 +1827,10 @@ prevented effect. Enforcement evidence supplies the separate decision proof.
 | Read these tests | Contract to verify |
 | --- | --- |
 | [discovery/tests.rs](../../../../crates/mithril-control/src/discovery/tests.rs), [corpus.rs](../../../../crates/mithril-control/src/discovery/tests/corpus.rs) | Exact counts, conflicting duplicates, changed actors/images/objects, incomplete coverage, native preview, scoped resume, invalid reports, and citation limits. |
-| [evidence_read.rs tests](../../../../crates/mithril-control/src/store/evidence_read.rs) | Frozen pages, retention races, bounds, store identity, and CPU metadata. |
+| [shared read tests](../../../../crates/araphor-data/src/analysis/read.rs), [segment tests](../../../../crates/araphor-data/src/analysis/segments.rs) | Bounded pages, committed ranges, corruption, retention leases, and source identity. |
 | [store.rs tests](../../../../crates/mithril-control/src/store.rs), [artifact tests](../../../../crates/mithril-control/src/store/discovery.rs) | Migration, leases, synced references, orphan cleanup, quotas, and pinned workload/policy context. |
 | [index.rs tests](../../../../crates/mithril-control/src/discovery/index.rs), [recovery.rs tests](../../../../crates/mithril-control/src/discovery/index/recovery.rs) | Atomic deduplication/counts/progress; invalid authority; index replacement across process exits. |
-| [runtime.rs tests](../../../../crates/mithril-control/src/discovery/runtime.rs), [live.rs tests](../../../../crates/mithril-control/src/discovery/live.rs) | Separate checkpoints, nine process-crash boundaries, exact gaps, resource admission, disable/failure isolation, and rebuild. |
+| [artifact tests](../../../../crates/mithril-control/src/discovery/live.rs), [recovery tests](../../../../crates/mithril-control/src/discovery/index/recovery.rs) | Supplied artifact bounds, coverage proof, and projection recovery. The live intake scheduler and its tests are removed. |
 | [context.rs tests](../../../../crates/mithril-control/src/discovery/context.rs), [feed.rs tests](../../../../crates/mithril-control/src/discovery/index/feed.rs) | Cutoffs, disclosure, conflicts, context replay, and stable revision positions. |
 | [roundtrip.rs](../../../../crates/mithril-e2e/src/discovery/roundtrip.rs) | `discovery_context_roundtrip_uses_verified_catalog_wal_and_mtls` and `discovery_derivation_profile_restart_uses_wal_and_mtls` use production owners with synthetic external inputs. |
 | [storage.rs](../../../../crates/mithril-e2e/src/discovery/storage.rs) | Native SQLite bounds and isolated query-worker qualification. This is not a shipped arbitrary-SQL API. |
@@ -1906,7 +1891,7 @@ future owner exists. UI code and the console-only plan family are excluded.
 
 | Changed files | Review purpose and current boundary |
 | --- | --- |
-| [workspace Cargo.toml](../../../../Cargo.toml), [Cargo.lock](../../../../Cargo.lock), [Control manifest](../../../../crates/mithril-control/Cargo.toml), [data manifest](../../../../crates/araphor-data/Cargo.toml) | Pin the existing SQLite backend and the offline DuckDB data crate. DuckDB is not yet the live intake backend. |
+| [workspace Cargo.toml](../../../../Cargo.toml), [Cargo.lock](../../../../Cargo.lock), [Control manifest](../../../../crates/mithril-control/Cargo.toml), [data manifest](../../../../crates/araphor-data/Cargo.toml) | Pin SQLite for the existing artifact index and DuckDB for AnalysisStore metadata and derived state. Live intake writes raw segments through AnalysisStore. |
 | [Interceptor manifest](../../../../crates/erebor-interceptor/Cargo.toml), [Interceptor exports](../../../../crates/erebor-interceptor/src/lib.rs) | Add diagnostic process/mount/thread system calls and export the supervised backend. No new daemon or generic backend interface. |
 | [Control build.rs](../../../../crates/mithril-control/build.rs), [Control exports](../../../../crates/mithril-control/src/lib.rs), [observability module](../../../../crates/mithril-control/src/observability/mod.rs), [Control errors](../../../../crates/mithril-control/src/error.rs) | Generate strict JSON support for decision-context protobuf types; expose owner contracts and typed errors. |
 | [Control config](../../../../crates/mithril-control/src/config.rs), [signing-key reader](../../../../crates/mithril-control/src/policy/reconciliation.rs), [server](../../../../crates/mithril-control/src/server.rs) | Discovery is opt-in. Diagnostics require Discovery storage and a trusted configured signing key. Reuse the existing key reader. Register the bounded NodeDiagnostics service on existing authenticated transport. |
@@ -1931,6 +1916,26 @@ WAL limit plus metadata. Qualification input is an operator-supplied record,
 not a cryptographically verified attestation of the measured run.
 
 ## Source state and guide verification
+
+The working changes after `3e5bfcea` make
+[EvidenceIntakeOwner](../../../../crates/mithril-control/src/evidence.rs) require
+AnalysisStore. Control startup rejects unsupported raw directories and schemas.
+`intake_requires_data_store` checks lease and corrupt-database failure without
+fallback. The old writer, reader, receipt maps, consumption owner, and live
+discovery scheduler are removed. The caller conversion compiles without
+warnings. Focused intake, mTLS, round-trip, startup, and recovery tests passed.
+The first final gate stopped at an enum-size warning after raw variants were
+removed. The corrected enum boxes its optional expected discovery head.
+The retry passed Clippy but exhausted host disk space during test compilation.
+The next gate completed compilation but storage tests rejected the filesystem
+reserve. After removal of the remaining idle compiler cache, the complete
+gate passed with `RUST_TEST_THREADS=4 CARGO_BUILD_JOBS=1 bash
+.github/scripts/verify-rust-ci.sh`. Counts include 74 data tests, 174 Control
+tests, 123 Mithril e2e tests, and 256 Node tests. Read
+`/tmp/araphor-retirement-final-ci-verified.log`. The current-source paired disk
+harness also passed all three capacity cases at
+`/tmp/araphor-retirement-disk-full.log`. These results cover the removed raw
+owner and converted callers. Release and Kubernetes qualification remain open.
 
 [CommitClock](../../../../crates/mithril-control/src/store/raw_bench.rs) uses
 existing one-shot commit hooks to measure append/sync and post-sync return

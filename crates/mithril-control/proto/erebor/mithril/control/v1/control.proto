@@ -406,10 +406,7 @@ message ControlConvergenceHealth {
   uint64 allowed_nodes = 19;
   uint64 connected_nodes = 20;
   uint64 ready_nodes = 21;
-  uint64 evidence_cursors = 22;
-  uint64 pending_evidence_batches = 23;
-  uint64 pending_evidence_records = 24;
-  uint64 coverage_cursors = 25;
+  reserved 22 to 25;
   uint64 exception_candidates = 26;
   uint64 unsettled_exception_candidates = 27;
 }

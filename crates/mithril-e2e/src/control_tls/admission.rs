@@ -38,15 +38,15 @@ async fn admission_keeps_retained_evidence() -> TestResult<()> {
         node_boot_id: [7; 16],
         label_epoch: 1,
     };
-    let ack =
-        EvidenceIntakeOwner::from_store(store.clone()).receive(&node, batch.clone().into())?;
+    let intake = EvidenceIntakeOwner::try_from(store.clone())?;
+    let ack = intake.receive(&node, batch.clone().into())?;
     assert_eq!(ack.contiguous_cursor, 1);
 
     let fixture = OutagePolicyFixture::new(store.clone());
     let resource = fixture.resource(1)?;
     let kube = fixture.kubernetes_client(&resource)?;
     let review = fixture.protected_pod_admission_review();
-    let control = ControlPlane::with_control_store(
+    let control = ControlPlane::from_intake(
         Vec::new(),
         TrustGenerationV1 {
             generation: 1,
@@ -54,7 +54,7 @@ async fn admission_keeps_retained_evidence() -> TestResult<()> {
             policy_issuer_sequence_epoch: 0,
             policy_signers: Vec::new(),
         },
-        store.clone(),
+        intake.clone(),
     )?
     .with_policy_desired_state(fixture.owner.clone());
     assert!(control.replace_kubernetes_workload_inventory(Vec::new())?);
@@ -89,7 +89,16 @@ async fn admission_keeps_retained_evidence() -> TestResult<()> {
             .is_some_and(|patch| !patch.is_empty()),
         "protected Pod admission did not return a constraint patch: {review}"
     );
-    assert_eq!(store.health()?.evidence_cursors, 1);
+    let identity = tls.identity(super::batch_source_id(&batch)?);
+    assert_eq!(intake.contiguous_cursor(&identity)?, 1);
+    assert_eq!(
+        intake
+            .analysis_store()
+            .read_page(&identity, 1)?
+            .records
+            .len(),
+        1
+    );
     assert_eq!(wal.pending_evidence_records(), 1);
     assert_eq!(wal.next_evidence_batch().as_ref(), Some(&batch));
 

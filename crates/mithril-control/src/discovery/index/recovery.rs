@@ -204,9 +204,7 @@ impl DiscoveryOwner {
                         "INDEX_REBUILD_COUNTS",
                     )?;
                 }
-                feed::RevisionPayload::Context(_)
-                | feed::RevisionPayload::Checkpoint(_)
-                | feed::RevisionPayload::Trace(_, _) => {}
+                feed::RevisionPayload::Context(_) | feed::RevisionPayload::Trace(_, _) => {}
             }
         }
         DiscoveryInputManifestV1::require(
@@ -314,7 +312,7 @@ mod tests {
                 .events
                 .iter()
                 .all(|event| event.position.commit_index == head.commit_index));
-            assert_eq!(store.evidence_cursor(&page.stream)?, 0);
+            assert!(!store.root().join("evidence/segments-v2").exists());
             assert!(!directory.path().join("discovery-index.install").exists());
             assert!(!directory
                 .path()

@@ -19,11 +19,6 @@
     "policy_signers": []
   },
   "evidence_directory": "/var/lib/mithril-control/evidence",
-  "evidence_store": {
-    "maximum_retained_bytes": 67108864,
-    "maximum_retained_records": 100000,
-    "capacity_policy": "RETAIN"
-  },
   "control_store_directory": "/var/lib/mithril-control/store",
   "administrative_exec": {
     "listen": "0.0.0.0:9444",

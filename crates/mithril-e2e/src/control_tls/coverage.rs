@@ -15,8 +15,8 @@ async fn coverage_upload_keeps_truth() -> TestResult<()> {
     let fixture = MtlsFixture::new(false)?;
     let path = fixture.path().join("control-evidence");
     let store = ControlStore::open(&path)?;
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let control = fixture.control_with_store(store, 1)?;
+    let intake = EvidenceIntakeOwner::try_from(store)?;
+    let control = fixture.control_from_intake(intake.clone(), 1)?;
     let server = fixture.start(control).await?;
     let wal = fixture.wal(EvidenceWalLimits::default())?;
     let mut event = EffectObservationV1 {

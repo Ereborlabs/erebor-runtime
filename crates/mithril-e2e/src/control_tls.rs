@@ -2,7 +2,7 @@ use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::fs;
 use std::net::SocketAddr;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{header, HeaderValue, Request, Response, StatusCode};
@@ -10,17 +10,19 @@ use ed25519_dalek::SigningKey;
 use kube::client::Body as KubeBody;
 use kube::Client;
 use mithril_control::{
-    AllowedNodeIdentity, CapabilityRecord, ControlPlane, ControlStore, NodeRegistration,
-    PolicyBundleV1, TrustGenerationV1, WorkloadProtectionPolicy,
+    AllowedNodeIdentity, AuthenticatedEvidenceNodeV1, CapabilityRecord, ControlPlane, ControlStore, NodeRegistration,
+    EvidenceBatch, EvidenceIntakeIdentityV1, EvidenceIntakeOwner, EvidenceRecord, EvidenceTemporalCoverage,
+    TrustGenerationV1, WorkloadProtectionPolicy,
 };
 use mithril_node::{NodeControlConnector, PolicyControlPacingOwner, TrustCache};
+use prost::Message as _;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{oneshot, watch};
 use tower::service_fn;
 
 use crate::control_fixture::{
     control_store_lease_ready, Certificates, MtlsFixture, OutagePolicyFixture,
-    OUTAGE_CLUSTER_UID, OUTAGE_NAMESPACE_UID, OUTAGE_TENANT_ID,
+    OUTAGE_NAMESPACE_UID, OUTAGE_TENANT_ID,
 };
 
 mod administrative;
@@ -38,7 +40,6 @@ mod rejection;
 mod replay;
 mod restart;
 mod retained;
-mod retention;
 mod storage;
 mod transfer;
 mod transfer_tests;
@@ -499,37 +500,126 @@ async fn kubernetes_outage_pending_policy_transfer_preempts_evidence_ack_backlog
 }
 
 #[test]
-#[ignore = "the startup budget requires the shipped release optimization level"]
-fn kubernetes_outage_retained_control_store_starts_from_latest_state(
-) -> Result<(), Box<dyn StdError>> {
-    const FIXTURE_BATCHES: u64 = 3_204;
-    const RECORDS_PER_BATCH: usize = 74;
-    const LEGACY_BYTES_PER_RECORD: u64 = 16_776;
-    const STARTUP_BUDGET: Duration = Duration::from_secs(5);
-
+fn consumed_events_follow_retention() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let store_path = directory.path().join("control-store");
     let store = ControlStore::open(&store_path)?;
-    let stored_bytes =
-        store.write_retained_evidence_for_test(FIXTURE_BATCHES, RECORDS_PER_BATCH)?;
-    let commit_index = store.commit_index();
-    drop(store);
-
-    let started = Instant::now();
-    let reopened = ControlStore::open(&store_path)?;
-    let elapsed = started.elapsed();
-    let record_count = FIXTURE_BATCHES * RECORDS_PER_BATCH as u64;
-    eprintln!(
-        "opened {record_count} retained records in {elapsed:?}; compact store uses {stored_bytes} bytes"
+    let identity = EvidenceIntakeIdentityV1 {
+        tenant_id: [2; 16],
+        node_id: "node-a".to_owned(),
+        node_boot_id: [1; 16],
+        label_epoch: 1,
+        source_id: [3; 16],
+        source_epoch: 1,
+    };
+    let authenticated = AuthenticatedEvidenceNodeV1 {
+        tenant_id: identity.tenant_id,
+        node_id: identity.node_id.clone(),
+        node_boot_id: identity.node_boot_id,
+        label_epoch: identity.label_epoch,
+    };
+    let record = EvidenceRecord {
+        observed_boottime_ns: 3,
+        ingested_utc_ns: 3,
+        coverage_interval_id: vec![4; 16].into(),
+        task_cookie: 3,
+        process_lineage_id: vec![5; 16].into(),
+        authority_domain_id: vec![6; 16].into(),
+        execution_set_id: vec![7; 16].into(),
+        exact_object_id: vec![8; 16].into(),
+        policy_rule_id: 1,
+        reason: 1,
+        decision: 1,
+        effect_family: 1,
+        operation: 1,
+        configured_errno: -13,
+        kernel_result: -13,
+        temporal_coverage: EvidenceTemporalCoverage::Complete as i32,
+        ..EvidenceRecord::default()
+    };
+    let payload = record.encode_to_vec();
+    let mut framed_records = Vec::with_capacity(payload.len() + 8);
+    framed_records.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    framed_records.extend_from_slice(&payload);
+    let checksum = crc32c::crc32c(&framed_records);
+    framed_records.extend_from_slice(&checksum.to_be_bytes());
+    let mut batch = EvidenceBatch {
+        node_boot_id: identity.node_boot_id.to_vec(),
+        source_id: identity.source_id.to_vec(),
+        source_epoch: identity.source_epoch,
+        cpu_id: 0,
+        first_cursor: 1,
+        framed_records: framed_records.into(),
+        commit_group_tail: false,
+    };
+    let intake = EvidenceIntakeOwner::try_from(store.clone())?;
+    for cursor in 1..=3 {
+        batch.first_cursor = cursor;
+        assert_eq!(
+            intake
+                .receive(&authenticated, batch.clone())?
+                .contiguous_cursor,
+            cursor
+        );
+    }
+    let data = intake.analysis_store();
+    let now = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos(),
+    )?;
+    let scope = araphor_data::ProcessorScopeV1 {
+        processor_id: "retention-test".into(),
+        method_version: 1,
+        identity: identity.clone(),
+    };
+    data.register_processor(&scope, araphor_data::ProcessorClassV1::Required, 1)?;
+    data.commit_result(&araphor_data::AnalysisResultCommitV1 {
+        scope,
+        expected_cursor: 0,
+        consumed_cursor: 3,
+        coverage_revision: 0,
+        context_revision: 0,
+        result_id: "processed".into(),
+        body: vec![1],
+        created_utc_ns: now,
+        witnesses: Vec::new(),
+        context_refs: Vec::new(),
+    })?;
+    assert_eq!(
+        araphor_data::EvidenceRetentionOwner::new(&data, Default::default())?
+            .retain(&identity, now)?
+            .removed_records,
+        0
     );
-    assert_eq!(reopened.commit_index(), commit_index);
-    assert_eq!(reopened.health()?.evidence_cursors, 1);
-    assert!(elapsed <= STARTUP_BUDGET);
-    assert!(stored_bytes * 100 <= LEGACY_BYTES_PER_RECORD * record_count);
-    assert!(store_path.join("state.bin").is_file());
-    assert!(!store_path.join("commits").exists());
-    let segment_count = fs::read_dir(store_path.join("evidence/segments-v2"))?.count() as u64;
-    assert!(segment_count > 0 && segment_count < FIXTURE_BATCHES);
+    assert_eq!(data.read_page(&identity, 1)?.records.len(), 3);
+    assert_eq!(
+        araphor_data::EvidenceRetentionOwner::new(&data, Default::default())?
+            .retain(&identity, u64::MAX)?
+            .removed_records,
+        3
+    );
+    assert_eq!(intake.contiguous_cursor(&identity)?, 3);
+    assert!(!store.root().join("evidence/segments-v2").exists());
+    drop(data);
+    drop(intake);
+    drop(store);
+    let reopened = EvidenceIntakeOwner::open(&store_path)?;
+    assert_eq!(reopened.contiguous_cursor(&identity)?, 3);
+    assert!(matches!(
+        reopened.analysis_store().read_page(&identity, 1),
+        Err(araphor_data::Error::RetainedRangeExpired {
+            first_cursor: 1,
+            last_cursor: 3,
+            ..
+        })
+    ));
+    assert_eq!(
+        reopened
+            .analysis_store()
+            .read_result(identity.tenant_id, "processed")?,
+        Some(vec![1])
+    );
     Ok(())
 }
 

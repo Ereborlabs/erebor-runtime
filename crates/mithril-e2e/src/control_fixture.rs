@@ -9,14 +9,14 @@ use ed25519_dalek::SigningKey;
 use mithril_control::{
     lower_kubernetes_policy, serve, workload_target_fact_digest, AllowedNodeIdentity,
     ContainerKindV1, ControlPlane, ControlServerTls, ControlStore, KubernetesWorkloadIdentityV1,
-    PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicySignerConfigV1,
+    NodeRegistration, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicySignerConfigV1,
     PolicySourceRevisionV1, PolicySourceStateV1, ProfileSealRequestV1, RegistryDigestsV1,
     EvidenceIntakeIdentityV1, TrustGenerationV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
 };
 #[cfg(test)]
 use mithril_control::{
     KubernetesAdmissionHttpConfigV1, KubernetesAdmissionOwner, KubernetesNodeReadinessOwner,
-    NodeDecommissionAuthorizationV1, NodeRegistration, PolicyDesiredStateOwner,
+    NodeDecommissionAuthorizationV1,
     SignedNodeDecommissionV1,
 };
 use mithril_node::{
@@ -446,7 +446,7 @@ impl MtlsFixture {
         generation: u64,
     ) -> mithril_control::Result<ControlPlane> {
         self.control_from_intake(
-            mithril_control::EvidenceIntakeOwner::from_store(store),
+            mithril_control::EvidenceIntakeOwner::try_from(store)?,
             generation,
         )
     }

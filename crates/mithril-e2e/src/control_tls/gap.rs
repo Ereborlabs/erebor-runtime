@@ -42,8 +42,8 @@ async fn evidence_gap_survives_restart() -> TestResult<()> {
     let mut trust = TrustCache::load(fixture.path())?;
     {
         let store = ControlStore::open(&path)?;
-        let intake = EvidenceIntakeOwner::from_store(store.clone());
-        let control = fixture.control_with_store(store.clone(), 1)?;
+        let intake = EvidenceIntakeOwner::try_from(store)?;
+        let control = fixture.control_from_intake(intake.clone(), 1)?;
         let server = fixture.start(control).await?;
         let connector = fixture.connector(&server, "node-a", [7; 16]);
         let mut connection = connector.connect(registration(), false, &mut trust).await?;
@@ -53,7 +53,14 @@ async fn evidence_gap_survives_restart() -> TestResult<()> {
             .map_err(|error| format!("gap rejection at {path:?}: {error}"))?;
         assert!(message.is_err(), "Control acknowledged a cursor gap");
         assert_eq!(intake.contiguous_cursor(&identity)?, 0);
-        assert_eq!(store.health()?.pending_evidence_records, 1);
+        assert_eq!(
+            intake
+                .analysis_store()
+                .source_status(&identity)?
+                .ok_or("source absent")?
+                .retained_event_count,
+            1
+        );
         assert_eq!(wal.pending_evidence_records(), 3);
         drop(connection);
         server.shutdown().await?;
@@ -66,10 +73,17 @@ async fn evidence_gap_survives_restart() -> TestResult<()> {
         || "the stopped server still owns the evidence store `owner.lock`".to_owned(),
     )
     .await?;
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
+    let intake = EvidenceIntakeOwner::try_from(store)?;
     assert_eq!(intake.contiguous_cursor(&identity)?, 0);
-    assert_eq!(store.health()?.pending_evidence_records, 1);
-    let control = fixture.control_with_store(store.clone(), 1)?;
+    assert_eq!(
+        intake
+            .analysis_store()
+            .source_status(&identity)?
+            .ok_or("source absent")?
+            .retained_event_count,
+        1
+    );
+    let control = fixture.control_from_intake(intake.clone(), 1)?;
     let server = fixture.start(control).await?;
     let connector = fixture.connector(&server, "node-a", [7; 16]);
     let mut connection = connector.connect(registration(), false, &mut trust).await?;
@@ -84,7 +98,14 @@ async fn evidence_gap_survives_restart() -> TestResult<()> {
         };
         assert_eq!(received.contiguous_cursor, 3);
         assert_eq!(intake.contiguous_cursor(&identity)?, 3);
-        assert_eq!(store.health()?.pending_evidence_records, 0);
+        assert_eq!(
+            intake
+                .analysis_store()
+                .source_status(&identity)?
+                .ok_or("source absent")?
+                .retained_event_count,
+            3
+        );
         if let Some(previous) = ack {
             assert_eq!(received, previous);
         }
@@ -92,7 +113,14 @@ async fn evidence_gap_survives_restart() -> TestResult<()> {
     }
     assert!(wal.acknowledge_evidence(ack.ok_or("missing acknowledgement")?)?);
     assert_eq!(wal.pending_evidence_records(), 0);
-    assert_eq!(store.accepted_evidence_records(&identity)?.len(), 3);
+    assert_eq!(
+        intake
+            .analysis_store()
+            .read_page(&identity, 1)?
+            .records
+            .len(),
+        3
+    );
     drop(connection);
     server.shutdown().await?;
     Ok(())

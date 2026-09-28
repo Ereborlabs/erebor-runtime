@@ -19,14 +19,11 @@ async fn backlog_beats_previous_budget() -> TestResult<()> {
     fs::create_dir_all(&target)?;
     let tls = MtlsFixture::in_directory(tempfile::tempdir_in(target)?, false)?;
     let path = tls.path().display();
-    let store = control::ControlStore::open_with_evidence_limits(
-        tls.path().join("control-evidence"),
-        control::EvidenceStoreLimitsV1 {
-            capacity_policy: control::EvidenceStoreCapacityPolicyV1::Retain,
-            ..Default::default()
-        },
-    )?;
-    let server = tls.start(tls.control_with_store(store.clone(), 1)?).await?;
+    let store = control::ControlStore::open(tls.path().join("control-evidence"))?;
+    let intake = control::EvidenceIntakeOwner::try_from(store.clone())?;
+    let server = tls
+        .start(tls.control_from_intake(intake.clone(), 1)?)
+        .await?;
     let template = tls.effect_batch(RECORDS as usize)?;
     assert_eq!(template.record_count() as u64, RECORDS);
     let bytes = control::EvidenceBatch::from(template.clone()).encoded_len() as u64;
@@ -85,10 +82,18 @@ async fn backlog_beats_previous_budget() -> TestResult<()> {
     eprintln!("acknowledged {total} bytes: {elapsed:?}, {rate:.1} MiB/s (target 300.0); receipts={receipts} prepare={prep:?} enqueue={enqueue:?} control_ack={ack:?}");
     assert_eq!(receipts, count.div_ceil(limit));
     assert_eq!(
-        store.evidence_cursor(&tls.identity(batch_source_id(&template)?))?,
+        intake.contiguous_cursor(&tls.identity(batch_source_id(&template)?))?,
         count * RECORDS
     );
-    assert_eq!(store.health()?.pending_evidence_records, 0);
+    assert_eq!(
+        intake
+            .analysis_store()
+            .source_status(&tls.identity(batch_source_id(&template)?))?
+            .ok_or("source absent")?
+            .retained_event_count,
+        count * RECORDS
+    );
+    assert!(!store.root().join("evidence/segments-v2").exists());
     drop(connection);
     server.shutdown().await?;
     assert!(rate > 107.1, "{rate:.1} MiB/s <= 107.1 MiB/s");
