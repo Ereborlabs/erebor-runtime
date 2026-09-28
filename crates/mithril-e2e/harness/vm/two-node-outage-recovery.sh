@@ -7,6 +7,7 @@ trap 'echo "outage recovery failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 fixture_directory=$(cd -- "$directory/../../fixtures/convergence" && pwd)
 source "$directory/../kubernetes-oracles.sh"
+source "$directory/outage-rollout.sh"
 environment=
 provider=
 output_directory=
@@ -556,30 +557,6 @@ wait_policy_accepted() {
   return 1
 }
 
-wait_rollout() {
-  local active=$1
-  local updating=$2
-  local deadline=$((SECONDS + 360))
-  local policy_json
-  while ((SECONDS < deadline)); do
-    policy_json=$(remote_kubectl -n "$scenario_namespace" get \
-      workloadprotectionpolicy "$policy_name" -o json 2>/dev/null || true)
-    if [[ -n $policy_json ]] && jq -e \
-      --argjson active "$active" --argjson updating "$updating" '
-        .status.observedGeneration == .metadata.generation and
-        .status.rollout.desired == 2 and
-        .status.rollout.active == $active and
-        .status.rollout.updating == $updating and
-        .status.rollout.failed == 0
-      ' <<<"$policy_json" >/dev/null; then
-      return 0
-    fi
-    sleep 1
-  done
-  echo "policy rollout did not reach active=$active updating=$updating" >&2
-  return 1
-}
-
 wait_node_ready() {
   local node_name=$1
   local expected=$2
@@ -975,28 +952,12 @@ remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
   --timeout=300s >/dev/null
 wait_node_ready "$node_a_name" true
 wait_node_ready "$node_b_name" true
-pod_a_after_api_restart=$(remote_kubectl -n "$scenario_namespace" get \
-  pod outage-a -o json)
-if pod_needs_api_restart_recreation "$pod_a_after_api_restart"; then
-  remote_kubectl -n "$scenario_namespace" delete pod outage-a \
-    --wait=true --timeout=120s >/dev/null
-  "$provider" run "$vm_a" sudo rm -f \
-    "$marker_root/outage-a.started" "$marker_root/outage-a.result"
-  remote_kubectl create -f /var/tmp/mithril-outage-pod-a.yaml >/dev/null
-  remote_kubectl -n "$scenario_namespace" wait --for=condition=Ready \
-    pod/outage-a --timeout=300s >/dev/null
-  wait_application_started "$vm_a" outage-a
-elif ! jq -e '.status.phase == "Running"' \
-    <<<"$pod_a_after_api_restart" >/dev/null; then
-  echo "protected Pod outage-a entered an unrelated state after API recovery" >&2
-  exit 1
-fi
 wait_control_session mithril-node-a
 wait_control_session mithril-node-b
 wait_node_control_acknowledgement "$node_a_name"
 wait_node_control_acknowledgement "$node_b_name"
 refresh_policy_status api-recovered
-wait_rollout 2 0
+wait_rollout 2 0 true
 candidate_a_recovered=$(active_candidate "$node_a_name")
 candidate_b_recovered=$(active_candidate "$node_b_name")
 request_denial "$vm_b" outage-b recovered-b

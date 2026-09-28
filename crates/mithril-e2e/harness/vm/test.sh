@@ -570,6 +570,73 @@ if pod_needs_api_restart_recreation "$api_restart_running_pod"; then
   exit 1
 fi
 
+(
+  source "$directory/outage-rollout.sh"
+  scenario_namespace=api-recovery
+  policy_name=fixture
+  node_a_name=node-a
+  vm_a=vm-a
+  provider=true
+  marker_root=$test_root/api-markers
+  api_step=$test_root/api-step
+  api_created=$test_root/api-created
+  api_mode=late
+  printf '0\n' >"$api_step"
+  wait_node_ready() { [[ $1 == node-a && $2 == true ]]; }
+  wait_application_started() { [[ $1 == vm-a && $2 == outage-a ]]; }
+  wait_node_control_acknowledgement() { [[ $1 == node-a ]]; }
+  refresh_policy_status() { [[ $1 == api-recovered ]]; }
+  sleep() { SECONDS=$((SECONDS + 120)); }
+  remote_kubectl() {
+    case "$*" in
+      '-n api-recovery get pod outage-a -o json')
+        local step
+        read -r step <"$api_step"
+        printf '%s\n' "$((step + 1))" >"$api_step"
+        if [[ $step == 0 ]]; then
+          printf '%s\n' "$api_restart_running_pod"
+        elif [[ $api_mode == unrelated ]]; then
+          printf '{"status":{"phase":"Failed","reason":"OtherFailure"}}\n'
+        elif [[ $api_mode == late && -f $api_created ]]; then
+          printf '%s\n' "$api_restart_running_pod"
+        else
+          printf '%s\n' "$api_restart_evicted_pod"
+        fi
+        ;;
+      '-n api-recovery get workloadprotectionpolicy fixture -o json')
+        local active=1
+        [[ ! -f $api_created ]] || active=2
+        printf '{"metadata":{"generation":1},"status":{"observedGeneration":1,"rollout":{"desired":2,"active":%s,"updating":0,"failed":0}}}\n' "$active"
+        ;;
+      '-n api-recovery delete pod outage-a --wait=true --timeout=120s') ;;
+      'create -f /var/tmp/mithril-outage-pod-a.yaml')
+        printf 'created\n' >>"$api_created"
+        ;;
+      '-n api-recovery wait --for=condition=Ready pod/outage-a --timeout=300s') ;;
+      *) echo "unexpected API recovery command: $*" >&2; return 1 ;;
+    esac
+  }
+  wait_rollout 2 0 true
+  [[ $(wc -l <"$api_created") == 1 ]]
+  [[ $(<"$api_step") -ge 3 ]]
+  prior_step=$(<"$api_step")
+  wait_rollout 2 0
+  [[ $(<"$api_step") == "$prior_step" ]]
+  for api_mode in repeated unrelated; do
+    printf '0\n' >"$api_step"
+    rm -f -- "$api_created"
+    if wait_rollout 2 0 true; then
+      echo "$api_mode Pod failure satisfied API recovery" >&2
+      exit 1
+    fi
+    if [[ $api_mode == repeated ]]; then
+      [[ $(wc -l <"$api_created") == 1 ]]
+    else
+      [[ ! -e $api_created ]]
+    fi
+  done
+)
+
 split_selected_status='{"active_candidate_content_id":"candidate-node-b","active_profile_ids":["profile-a"],"active_target_count":1,"active_targets_truncated":false,"active_targets":[{"candidate_content_id":"candidate-node-b","operation":"REPLACE","predecessor_candidate_content_id":"candidate-protected","kubernetes_node_name":"node-b"}],"scheduled_binding_count":0,"runtime_binding_count":1,"activation_pending":false,"control_acknowledged":true}'
 split_gate_status='{"active_candidate_content_id":"candidate-node-a","active_profile_ids":["profile-a"],"active_target_count":1,"active_targets_truncated":false,"active_targets":[{"candidate_content_id":"candidate-node-a","operation":"ACTIVATE","predecessor_candidate_content_id":null,"kubernetes_node_name":"node-a"}],"scheduled_binding_count":1,"runtime_binding_count":0,"activation_pending":false,"control_acknowledged":true}'
 runtime_gate_delivery_matches node-b node-a \

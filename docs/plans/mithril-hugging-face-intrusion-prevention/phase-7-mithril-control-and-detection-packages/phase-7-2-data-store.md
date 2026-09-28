@@ -18,8 +18,10 @@ retention, complete-bundle backup, and trusted bounded extraction are
 implemented. The old Control raw writer and its callers are removed. Stored
 tenant totals replace repeated quota scans. The complete workspace gate,
 paired disk-full case, and release startup and recovery cases pass.
-Kubernetes recovery qualification remains incomplete. Extended performance
-qualification is stopped; the incomplete runs do not establish a pass.
+Kubernetes storage and outage recovery also pass on the current Rust source.
+Extended performance qualification is stopped; the incomplete runs do not
+establish a pass. Ask the user about these gates only after implementation
+and correctness/recovery verification are complete. No gate is waived.
 Previous implementation results below are evidence for their named revisions,
 not completion of this design.
 
@@ -390,6 +392,14 @@ successful removal retry with the same flag.
 Do not compare DuckDB file prefixes or import old evidence. Local shell checks
 do not replace this physical run.
 
+After an API restart, check the fixture Pod during the bounded rollout wait.
+The Pod can report Running before a delayed Failed/NodeAffinity update. Use
+the existing exact predicate and recreate only `outage-a`, at most once,
+after its Node is ready. Require normal admission, application startup, Node
+acknowledgement, and two active rollout targets. Reject unrelated Pod failure
+and repeated eviction. The VM shell regression executes the same rollout wait
+with this delayed transition before the physical case runs again.
+
 Use `data_capacity_recovery` and `data_full_disk` for paired capacity proof.
 Both call the same production-owner scenario. The first uses a sparse file to
 reach the data-file quota. The second requires an empty, task-owned 1-GiB tmpfs.
@@ -525,9 +535,14 @@ required here. Stop before enabling a data path whose recovery case fails.
 
 ## Implementation result
 
-**Not done for the segment-backed design.**
-The current data owner uses segments and batch metadata. Complete the ordered
-changes above, then rerun their component and mithril-e2e gates. The records under
+**Done for implementation. Not done for full qualification.**
+All nine ordered implementation changes are present. AnalysisStore owns raw
+segments, transactional metadata and totals, bounded reads and extraction,
+result/progress commits, retention, and complete-bundle recovery. Control uses
+that owner for intake and keeps its policy authority and context projection.
+The old raw writer and raw-event table are removed. Current correctness and
+physical results are recorded below. Performance gates remain unverified.
+The records under
 `Previous implementation evidence` describe previous raw-DuckDB revisions only. Their native-memory settings,
 raw-table maintenance, and pass counts are not instructions or qualification
 for the selected segment design.
@@ -1185,6 +1200,64 @@ and backup revision 12. The checkpointed database used 9,449,472 bytes with
 no native WAL. These cases use production Node WAL and mTLS intake with
 synthetic inputs. They do not qualify the failed full-quota memory case or
 Kubernetes outage recovery.
+
+### Current physical recovery result
+
+**Done for Kubernetes storage and outage recovery** on 2026-09-28. The release
+images use Rust source `adbcb3a8`; subsequent changes affect the harness and
+documents only. The first run exposed a delayed fixture Pod NodeAffinity
+failure after API restart. The previous wait checked that state only once.
+The VM shell regression failed against that wait. The corrected wait observes
+the transition throughout recovery and permits one exact fixture recreation.
+The regression then passed, including rejection of repeated and unrelated
+failures. No storage behavior, quota, or rollout acceptance condition changed.
+
+The corrected `two-node-outage-recovery.sh --data-check` run returned zero and
+recorded `PASS`. Its startup and recovery checks passed before cluster faults.
+Control restart preserved exact retained evidence. A read-only data mount
+stopped evidence ACKs while policy service continued. Both Nodes retained
+unacknowledged input. After mount recovery, replay preserved every baseline
+frame and appended new records. Retained counts were 3,221 before the outage,
+4,034 after replay, and 4,219 after the storage fault. The last inspection
+recorded revision 321 and four ranges, all starting at cursor 1:
+Node A CPU 0 through 1,443; Node A CPU 1 through 625; Node B CPU 0 through 939;
+Node B CPU 1 through 1,212. Database bytes were 7,090,176; native WAL bytes
+were 110,352; total and allocated file bytes were both 8,003,584.
+
+Node restart, WAL acknowledgement, network partition, mixed rollout, API
+recovery, watch compaction, and relist also passed. Harness cleanup returned
+zero. A subsequent read-only check found both Nodes Ready and Control plus
+both Node Pods Running. These results do not qualify hardware power loss,
+full-quota performance, or the separate mount-cache lifecycle case.
+
+Artifacts are under `/tmp/araphor-storage-recovery.b0SjI8YM`: the failed run is
+`outage-standard`; the passing run is `outage-fixed`. Read `result.json` and
+the three `data-*.json` inspections in `outage-fixed`. The shell regression
+logs are `late-affinity-red.log` and `late-affinity-green.log`.
+The retained environment record is
+`environment-standard/retained-environment.json`. The two task-owned VMs are
+`mithril-runtime-qualification-2903751` and `mithril-runtime-qualification-2903752`.
+The unrelated qualification VM was not changed.
+
+The release checker SHA-256 is
+`4ac2b96f06f565b1da2301c96fa30cdcb409e5bf7f149d8b7ecc8fc3314242c4`.
+The Node image ID is
+`sha256:6fb0bcda54cfd6f4daba52125655da0fc563e628c8af77d6066eaf19fdc56ce4`.
+The Control image ID is
+`sha256:81abd83680ba4e554cbd462d9d1cce3f30572c284902a67b3a8f3561581bd38a`.
+The final workspace gate after the harness edit returned zero. Command:
+`RUST_TEST_THREADS=4 CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 bash
+.github/scripts/verify-rust-ci.sh`. Formatting, workspace check, strict Clippy,
+and all enabled workspace tests passed. Data passed 77 tests with five ignored;
+Control passed 174 with two ignored; Mithril e2e passed 123 with 249 ignored;
+Node passed 256 with one ignored. Read `final-ci.log` in the artifact
+directory. The physical run overlapped part of this correctness check; these
+elapsed times are not performance measurements. Ignored benchmarks did not run.
+Implementation and correctness/recovery verification are **Done**. Global
+capacity, full-capacity mTLS, repeated load/rollout measurements, and remaining
+current-source performance qualification are **Not done**. Ask the user whether
+to run or defer those gates. Do not restart them or declare full completion
+without that decision.
 
 ### Previous implementation evidence
 
