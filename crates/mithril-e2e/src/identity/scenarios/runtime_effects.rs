@@ -172,7 +172,7 @@ fn recovered_bootstrap_exec<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(runc)]
+#[platform_test(runc, kubernetes)]
 #[lifecycle = recovery_entry]
 fn recovered_ptrace_is_scoped<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("recovered-ptrace")?;

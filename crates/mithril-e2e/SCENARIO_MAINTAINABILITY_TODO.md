@@ -3763,7 +3763,8 @@ test does not close a row when its physical condition or an assertion changed.
     Keep the old marker, result, and shell gate until both cases pass.
     - [x] Direct `runc` passed in 44.29 seconds through the production OCI
       hook. The standard test has 73 lines.
-    - [ ] Pass Kubernetes with the same test body.
+    - [x] Kubernetes passed in 73.34 seconds with the same test body. The
+      launcher exited 0 and removed the test resources.
     - [ ] Remove only the matching old marker, result, and shell gate.
 
 ### Direct runtime entry roles
