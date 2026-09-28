@@ -13,11 +13,13 @@ No raw-event table or copied discovery archive is part of the target.
 Control keeps policy/trust/rollout persistence and authority. Node keeps its
 delivery WAL. The same complete data owner can later run remotely. Storage
 and trace intake do not require discovery. Entry: 7.1.
-Status: **Not done**. Segment intake, reads, recovery, and retention are under
-implementation. Complete-bundle backup and trusted bounded extraction are
-implemented. The old Control raw writer and its callers are removed. The
-complete workspace gate and paired disk-full case pass for this removal.
-Release measurements and Kubernetes qualification remain incomplete.
+Status: **Not done** for full qualification. Segment intake, reads, recovery,
+retention, complete-bundle backup, and trusted bounded extraction are
+implemented. The old Control raw writer and its callers are removed. Stored
+tenant totals replace repeated quota scans. The complete workspace gate,
+paired disk-full case, and release startup and recovery cases pass.
+Kubernetes recovery qualification remains incomplete. Extended performance
+qualification is stopped; the incomplete runs do not establish a pass.
 Previous implementation results below are evidence for their named revisions,
 not completion of this design.
 
@@ -1162,6 +1164,16 @@ workload overlapped this run. Read `tenant-memory.log` and
 `tenant-memory-resources.log` in `/tmp/araphor-memory-ceiling.OzjkL9bu`.
 This pass does not erase the earlier peaks or prove a fixed memory bound.
 Global capacity, full-capacity mTLS, and physical outage qualification remain.
+
+Extended performance qualification stopped on 2026-09-28. The global memory
+run received SIGTERM after 50 minutes 59.65 seconds. It did not reach its quota
+and reopen assertions. No pass or workload failure is established. The queued
+full-capacity and repeated load cases did not start. Read `global-memory.log`
+and `global-memory-resources.log` in the host directory above. The temporary
+benchmark VM and its synthetic disk were removed after these logs were copied.
+Do not restart this benchmark sequence as a substitute for implementation
+closure. The next required check is the existing physical storage/outage case.
+The performance requirements above remain unverified, not waived.
 
 The earlier release CLI from `7ef9d59d` passed `data-store-startup` with 18 assertions and
 `data-store-recovery` with 32 assertions. Their output directories are
