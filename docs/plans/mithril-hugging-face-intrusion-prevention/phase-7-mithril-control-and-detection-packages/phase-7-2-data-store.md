@@ -208,6 +208,36 @@ ceiling remains provisional, not a production memory budget. Exceeding it
 fails that test but does not by itself prove a leak. No test code or production
 limit changes as part of this classification.
 
+### Ordered review: item 1
+
+**Done: PASS**, 2026-09-28. The current-source release case
+`discovery::data_store::quota::tests::data_quota_recovery` passed one test,
+with zero failures and 371 filtered tests, in 32.56 seconds. It used the
+64-MiB tenant fixture through Node WAL and mTLS. Its assertions checked quota
+rejection without receipt or pending-input changes, a working policy RPC,
+exact retained-frame digest, protected witness survival, explicit expiry,
+successful replay of 1,024 rejected records, duplicate replay, and reopen.
+It also checked that the old Control raw writer was not used.
+
+Command, from the implementing worktree:
+
+```sh
+/usr/bin/time -v -o /tmp/araphor-ordered.8WG38DaH/quota-resources.log target/release/deps/mithril_e2e-36858fcf1fbc2e49 discovery::data_store::quota::tests::data_quota_recovery --exact --nocapture --test-threads=1
+```
+
+The run returned zero. External elapsed time was 32.57 seconds; peak process
+RSS was 109,024 KiB. Read `quota.log` and `quota-resources.log` in that host
+directory. The executable SHA-256 is
+`4b1d814f9117dc97116278940a07b9f590f6801520b505f10f3d5dacc7e8117c`.
+Its Rust source is `adbcb3a8`; the current source at `00bab8a0` differs only in
+harness scripts and documents. No rebuild, test-code change, or limit change
+was needed. This host correctness run is not an isolated throughput result,
+default-capacity qualification, or physical reserve proof. The fixture checks
+its event count internally but does not retain its temporary result JSON.
+Item 2 has not started. Stop for the user's decision.
+
+### Measurement contracts
+
 New performance tests require explicit user approval. The existing memory
 tests use a provisional 512-MiB ceiling. Historical results below retain the
 limits used for those runs. A changed ceiling is not a new passing result.
