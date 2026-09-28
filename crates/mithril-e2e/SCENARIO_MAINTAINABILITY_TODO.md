@@ -676,7 +676,15 @@ Runner retirement is a separate, open check. In particular:
 - [ ] Identify the intermittent live-Node admission stall. The complete
   Kubernetes identity lifecycle passed on the next run, including the earlier
   failed TCP case. Do not claim that the intermittent stall is fixed without
-  evidence of its cause and a check for that cause.
+  evidence of its cause and a check for that cause. On 2026-09-28, a 56-case
+  Kubernetes identity run passed 55 cases. `tcp_nodelay_uses_network_role`
+  failed before its actor started. Node returned `POLICY_CONVERGENCE_PENDING`
+  until the OCI hook deadline, then activated the target. The new lightweight
+  `pending_policy_stage_is_closed` check sent an unmatched Pod through the
+  live Node admission client. It proved fail-closed timeout and a later
+  matched admission in 30.64 seconds. The exact Kubernetes TCP case passed
+  on a 65.77-second rerun. Keep this item open: the cause of delayed target
+  activation under the full lifecycle is not known.
 
 The diff from `95775f48` adds or relocates these private test functions with
 more than five name components:

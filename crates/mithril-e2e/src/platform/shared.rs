@@ -1813,6 +1813,45 @@ mod tests {
 
     #[test]
     #[ignore = "requires its physical test environment"]
+    fn pending_policy_stage_is_closed() -> TestResult<()> {
+        test_lifecycle::<Host, _>("pending-policy-stage", || {
+            let mut env = Shared::setup("pending-policy-stage")?;
+            env.start_control()?;
+            env.start_node()?;
+            env.install_policy("actor_policy.json")?;
+            env.node_ready()?;
+
+            let request = env.stage_request()?;
+            let mut unmatched = request.clone();
+            unmatched.annotations.insert(
+                mithril_node::POD_UID_ANNOTATION.to_owned(),
+                uuid::Uuid::new_v4().to_string(),
+            );
+            let client =
+                RuntimeAdmissionClient::new(env.admit_path.clone(), Duration::from_secs(2))?;
+            let denied = env.runtime.block_on(client.stage_runtime_facts(unmatched));
+            let error = match denied {
+                Ok(response) => {
+                    return Err(format!("an unmatched Pod was admitted: {response:?}").into())
+                }
+                Err(error) => error,
+            };
+            let message = error.to_string().to_lowercase();
+            assert!(
+                message.contains("timeout") || message.contains("deadline"),
+                "{error}"
+            );
+            assert!(
+                env.runtime
+                    .block_on(client.stage_runtime_facts(request))?
+                    .allowed
+            );
+            env.stop()
+        })
+    }
+
+    #[test]
+    #[ignore = "requires its physical test environment"]
     fn startup_sigterm_is_recoverable() -> TestResult<()> {
         test_lifecycle::<Host, _>("node-startup-signal", || {
             let mut env = Shared::setup("startup-signal")?;
