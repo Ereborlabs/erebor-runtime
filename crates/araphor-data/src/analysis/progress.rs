@@ -193,6 +193,8 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "register processor",
             })?;
+        super::quota::UsageChange::from(256 + scope.processor_id.len() as i64)
+            .apply(&transaction, &scope.identity.tenant_id)?;
         self.check_logical(&transaction, scope.identity.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &["processor_progress"])?;
         #[cfg(test)]
@@ -284,6 +286,8 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "record optional missing range",
             })?;
+        super::quota::UsageChange::from(256 + scope.processor_id.len() as i64)
+            .apply(&transaction, &scope.identity.tenant_id)?;
         transaction
             .execute(
                 "UPDATE processor_progress SET resume_floor = ?
@@ -504,6 +508,12 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "insert analysis result",
             })?;
+        let mut usage = super::quota::UsageChange {
+            bytes: (256 + input.result_id.len() + input.scope.processor_id.len() + input.body.len())
+                as i64,
+            results: 1,
+            ..Default::default()
+        };
         for (witness, digest) in input.witnesses.iter().zip(&witness_digests) {
             transaction
                 .execute(
@@ -520,6 +530,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert exact witness",
                 })?;
+            usage.bytes += 256 + input.result_id.len() as i64;
         }
         for reference in &input.context_refs {
             transaction
@@ -538,6 +549,11 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert exact result context",
                 })?;
+            usage.bytes += (256
+                + input.result_id.len()
+                + reference.key.owner_id.len()
+                + reference.key.entity_key.len()
+                + reference.key.lifetime_key.len()) as i64;
         }
         transaction
             .execute(
@@ -565,6 +581,7 @@ impl AnalysisStore {
         if !input.context_refs.is_empty() {
             relations.push("context_refs");
         }
+        usage.apply(&transaction, &input.scope.identity.tenant_id)?;
         self.check_logical(&transaction, input.scope.identity.tenant_id, true)?;
         self.check_witnesses(
             &transaction,

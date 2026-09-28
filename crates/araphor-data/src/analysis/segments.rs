@@ -131,7 +131,7 @@ struct PendingRange {
 impl PendingBatch {
     pub(super) fn insert(
         &self,
-        writer: &Connection,
+        writer: &duckdb::Transaction<'_>,
         identity: &EvidenceIntakeIdentityV1,
         append: &SegmentAppend,
         revision: u64,
@@ -180,6 +180,13 @@ impl PendingBatch {
             .context(AnalysisDatabaseSnafu {
                 operation: "publish committed segment end",
             })?;
+        let bytes = self.bytes.len() as i64
+            + self
+                .ranges
+                .iter()
+                .map(|range| 256 + 4 * range.frame_ends.len() as i64)
+                .sum::<i64>();
+        super::quota::UsageChange::from(bytes).apply(writer, &identity.tenant_id)?;
         Ok(())
     }
 }
@@ -369,6 +376,8 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "insert reserved segment",
             })?;
+        super::quota::UsageChange::from((256 + header.len() + identity_json.len()) as i64)
+            .apply(&transaction, &identity.tenant_id)?;
         // No file is created until its non-reusable identity is durable.
         self.commit_metadata(transaction, "commit segment reservation")?;
         #[cfg(test)]
@@ -688,6 +697,18 @@ impl AnalysisStore {
         let transaction = writer.transaction().context(AnalysisDatabaseSnafu {
             operation: "begin segment cleanup",
         })?;
+        let (tenant, bytes): (Vec<u8>, i64) = transaction
+            .query_row(
+                "SELECT tenant_id, (256 + committed_end + octet_length(encode(identity_json))
+                + COALESCE((SELECT SUM(256 + 4 * (last_cursor::HUGEINT - first_cursor + 1))
+                    FROM batch_ranges WHERE segment_id = ?), 0))::BIGINT
+                FROM segments WHERE segment_id = ? AND state = ?",
+                params![segment_id, segment_id, state],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "read removed segment charge",
+            })?;
         transaction
             .execute(
                 "DELETE FROM batch_ranges WHERE segment_id = ?",
@@ -704,6 +725,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "remove expired segment metadata",
             })?;
+        super::quota::UsageChange::from(-bytes).apply(&transaction, &tenant)?;
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit segment cleanup",
         })?;

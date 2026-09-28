@@ -151,6 +151,16 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "insert context version",
             })?;
+        super::quota::UsageChange {
+            bytes: (256
+                + key.owner_id.len()
+                + key.entity_key.len()
+                + key.lifetime_key.len()
+                + input.body.len()) as i64,
+            contexts: 1,
+            ..Default::default()
+        }
+        .apply(&transaction, &key.tenant_id)?;
         self.check_logical(&transaction, key.tenant_id, false)?;
         Self::record_revision(&transaction, revision, &["context_versions"])?;
         #[cfg(test)]

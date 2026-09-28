@@ -120,6 +120,7 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "record unrecoverable source range",
                 })?;
+            super::quota::UsageChange::from(256).apply(&transaction, &identity.tenant_id)?;
             self.check_logical(&transaction, identity.tenant_id, true)?;
             Self::record_revision(&transaction, revision, &["recovery_gaps"])?;
             #[cfg(test)]

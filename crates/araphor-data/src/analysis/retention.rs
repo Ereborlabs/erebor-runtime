@@ -239,7 +239,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
             "UPDATE segments SET state = 'Deleting', sealed = true WHERE segment_id = ? AND state = 'Live'",
             params![segment_id],
         ).context(AnalysisDatabaseSnafu { operation: "mark eligible segment deletion" })?;
-        transaction.execute(
+        let expired = transaction.execute(
             "INSERT INTO expired_ranges
              WITH ordered AS (
                  SELECT first_cursor, last_cursor, LAG(last_cursor) OVER (ORDER BY first_cursor) AS prior
@@ -252,10 +252,22 @@ impl<'a> EvidenceRetentionOwner<'a> {
              SELECT ?, ?, MIN(first_cursor), MAX(last_cursor), ? FROM grouped GROUP BY run",
             params![segment_id, key.as_slice(), identity.tenant_id.as_slice(), revision],
         ).context(AnalysisDatabaseSnafu { operation: "record expired segment intervals" })?;
+        let released: i64 = transaction
+            .query_row(
+                "SELECT COALESCE(SUM(256 + octet_length(encode(ref_id))), 0)::BIGINT
+                FROM evidence_refs WHERE stream_key = ? AND tenant_id = ? AND expires_utc_ns <= ?",
+                params![key.as_slice(), identity.tenant_id.as_slice(), now_utc_ns],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "read expired witness charge",
+            })?;
         transaction.execute(
             "DELETE FROM evidence_refs WHERE stream_key = ? AND tenant_id = ? AND expires_utc_ns <= ?",
             params![key.as_slice(), identity.tenant_id.as_slice(), now_utc_ns],
         ).context(AnalysisDatabaseSnafu { operation: "remove expired witness references" })?;
+        super::quota::UsageChange::from(256 * expired as i64 - released)
+            .apply(&transaction, &identity.tenant_id)?;
         let next_retained: Option<u64> = transaction.query_row(
             "SELECT MIN(b.first_cursor) FROM batch_ranges b JOIN segments s USING (segment_id)
              WHERE b.stream_key = ? AND b.tenant_id = ? AND s.state = 'Live' AND b.first_cursor <= ?",

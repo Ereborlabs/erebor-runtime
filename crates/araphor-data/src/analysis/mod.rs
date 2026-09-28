@@ -57,7 +57,7 @@ pub use segment_file::{SegmentFile, MAX_EVIDENCE_SEGMENT_BYTES};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-const ANALYSIS_SCHEMA_VERSION: i64 = 6;
+const ANALYSIS_SCHEMA_VERSION: i64 = 7;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -271,6 +271,13 @@ impl AnalysisStore {
                     recovery_epoch UBIGINT NOT NULL,
                     commit_revision UBIGINT NOT NULL,
                     next_segment_id UBIGINT NOT NULL
+                );
+                CREATE TABLE tenant_usage (
+                    tenant_id BLOB PRIMARY KEY,
+                    logical_bytes UBIGINT NOT NULL,
+                    coverage_count UBIGINT NOT NULL,
+                    context_count UBIGINT NOT NULL,
+                    result_count UBIGINT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS relation_revisions (
                     relation_name VARCHAR PRIMARY KEY,
@@ -754,6 +761,8 @@ impl AnalysisStore {
                     .context(AnalysisDatabaseSnafu {
                         operation: "insert source receipt",
                     })?;
+                quota::UsageChange::from(256 + identity_json.len() as i64)
+                    .apply(&transaction, &identity.tenant_id)?;
             }
             let mut relations = vec!["events", "source_receipts"];
             if bound {
@@ -868,6 +877,12 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "insert coverage",
             })?;
+        quota::UsageChange {
+            bytes: 256 + bytes.len() as i64,
+            coverage: 1,
+            ..Default::default()
+        }
+        .apply(&transaction, &identity.tenant_id)?;
         if previous.is_some() {
             transaction
                 .execute(
@@ -895,6 +910,8 @@ impl AnalysisStore {
                 .context(AnalysisDatabaseSnafu {
                     operation: "insert coverage receipt",
                 })?;
+            quota::UsageChange::from(256 + identity_json.len() as i64)
+                .apply(&transaction, &identity.tenant_id)?;
         }
         let mut relations = vec!["coverage", "source_receipts"];
         if bound {
@@ -1153,7 +1170,7 @@ mod tests {
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
         let initial = store.meta()?;
-        assert_eq!(initial.schema_version, 6);
+        assert_eq!(initial.schema_version, 7);
         assert_eq!(initial.commit_revision, 0);
         assert!(AnalysisStore::open(&root).is_err());
         {
@@ -1189,7 +1206,7 @@ mod tests {
     #[test]
     fn analysis_store_schema_permissions() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        for version in [0, 2, 3, 4, 5, 7] {
+        for version in [0, 2, 3, 4, 5, 6, 8] {
             let root = directory.path().join(format!("schema-{version}"));
             let store = AnalysisStore::open(&root)?;
             {
