@@ -1133,7 +1133,25 @@ non-root access, unchanged parent permissions, and mount removal after success
 and failure. Read `inspect-data.log` in the same host directory. These checks
 do not qualify native commit failure, hardware power loss, or Kubernetes outage.
 
-The same release CLI passed `data-store-startup` with 18 assertions and
+Current release startup and recovery: **Done** on Rust source `adbcb3a8`.
+The matching release test build passed in 9 minutes 29 seconds. The release
+CLI build passed in 5 minutes 14 seconds. Both reused the native library.
+Read `/tmp/araphor-memory-ceiling.OzjkL9bu/release-matched.log` for build results
+and executable paths. The current data test executable SHA-256 is
+`a96ba116d555469ca5e5113d82d13c7d8f6909d59d08c0c698a854b5429bc0f8`.
+The current CLI SHA-256 is
+`4ac2b96f06f565b1da2301c96fa30cdcb409e5bf7f149d8b7ecc8fc3314242c4`.
+Guest digests match. The fresh guest output directory is
+`/tmp/araphor-data-final.8k3KJeTv` on VM `mithril-runtime-qualification-2249801`.
+`data-store-startup` passed 18 assertions; `data-store-recovery` passed 32.
+Both used the production Node WAL and mTLS intake. Recovery retained cursor 4,
+floor 2, two exact frames, and backup revision 12. The database used 9,973,760
+bytes after checkpoint, with no native WAL. Host results are
+`startup-result.json` and `recovery-result.json` in the host directory above.
+Resource logs record exit zero, 0.75/2.43 seconds, and peak RSS of
+72,768/92,052 KiB. These cases do not qualify full quotas or Kubernetes outage.
+
+The earlier release CLI from `7ef9d59d` passed `data-store-startup` with 18 assertions and
 `data-store-recovery` with 32 assertions. Their output directories are
 `startup` and `recovery` under the guest artifact directory above. The host
 copies are `startup-result.json` and `recovery-result.json`. Startup took
