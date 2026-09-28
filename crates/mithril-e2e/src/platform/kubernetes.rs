@@ -1506,17 +1506,19 @@ impl Platform for Kubernetes {
         }
         self.policy_name = Some(name.clone());
         self.policies.insert(labels.clone(), name);
-        let active = if self.hook_up {
-            self.actors.get(&labels).copied().unwrap_or(0)
-        } else {
-            0
-        };
+        let active =
+            u32::from(self.hook_up && self.actors.get(&labels).is_some_and(|count| *count > 0));
         self.wait_policy(active)?;
         Ok(labels)
     }
 
     fn sync_policy(&mut self) -> TestResult<()> {
-        self.wait_policy(self.actors.get(&self.labels).copied().unwrap_or(0))
+        let active = u32::from(
+            self.actors
+                .get(&self.labels)
+                .is_some_and(|count| *count > 0),
+        );
+        self.wait_policy(active)
     }
 
     fn node_ready(&mut self) -> TestResult<()> {

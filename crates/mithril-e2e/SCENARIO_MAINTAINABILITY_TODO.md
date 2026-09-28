@@ -2569,6 +2569,24 @@ test does not close a row when its physical condition or an assertion changed.
     A fork of the main actor or `add_actor` inside its container does not
     preserve that condition. Keep the legacy transfer assertions until the
     common physical setup can create that peer on all three platforms.
+    A Host draft started both protected group members, opened the two files,
+    and then replaced the signed policy. The replacement stayed pending with
+    two targets on the old revision. The draft was removed. The shared fixture
+    now publishes every existing member before it waits for the replacement.
+    `container_roles_are_distinct` proves that both running members swap file
+    decisions under one signed replacement. After the final fixture edit, it
+    passed on Host in 43.89 seconds, direct `runc` in 59.28 seconds, and
+    Kubernetes in 85.99 seconds. The repository Rust CI gate passed. The
+    Kubernetes fixture now waits for one rollout bundle that contains both
+    members; it does not mistake two containers for two rollout bundles.
+    Next, rerun the descriptor transfer with the qualified replacement setup.
+    - [ ] Requalify the full identity lifecycles. Host passed 61 of 61 before
+      the final private fixture edit. Direct `runc` passed 54 of 56; stock
+      entry-isolation exec and the first TID cookie-gap check failed. Both
+      passed unchanged when run alone. Kubernetes passed 54 of 56; the
+      non-leader cookie-gap check and subreaper case failed. Both passed
+      unchanged when run alone. The two full lanes are not green. Find the
+      shared-lifecycle cause before delivery. Do not relax the assertions.
     - [ ] Pass Host and commit it.
     - [ ] Pass direct `runc` and commit it.
     - [ ] Pass Kubernetes and commit it.

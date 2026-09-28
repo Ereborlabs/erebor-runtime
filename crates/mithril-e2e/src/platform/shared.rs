@@ -926,7 +926,39 @@ impl Shared {
             });
         self.prepare_member(&labels, &actor, kind)?;
         let result = if self.node_task.is_some() {
-            self.sync_policy()
+            let members = self
+                .targets
+                .keys()
+                .filter(|key| key.1 == labels)
+                .cloned()
+                .collect::<Vec<_>>();
+            if members.is_empty() {
+                self.sync_policy()
+            } else {
+                for (index, key) in members
+                    .iter()
+                    .chain(members.iter().take(members.len() - 1))
+                    .enumerate()
+                {
+                    let kind = *self
+                        .policies
+                        .get(&labels)
+                        .ok_or("the policy is not installed")?
+                        .0
+                        .spec
+                        .containers
+                        .iter()
+                        .find(|item| item.names.contains(&key.2))
+                        .ok_or("the policy has no actor container")?
+                        .kinds
+                        .first()
+                        .ok_or("the actor container has no kind")?;
+                    self.pod_uid = key.0.clone();
+                    self.prepare_member(&labels, &key.2, ControlContainerKind::from(kind))?;
+                    self.sync_target(index < members.len() - 1)?;
+                }
+                Ok(())
+            }
         } else {
             let (resource, path) = self
                 .policies
@@ -1008,6 +1040,10 @@ impl Shared {
     }
 
     pub(super) fn sync_policy(&mut self) -> TestResult<()> {
+        self.sync_target(false)
+    }
+
+    fn sync_target(&mut self, defer: bool) -> TestResult<()> {
         let ready = self.ready.as_ref().ok_or("Node is not running")?;
         let task = self.node_task.as_ref().ok_or("Node is not running")?;
         let last = RefCell::new(String::from("<absent>"));
@@ -1163,6 +1199,19 @@ impl Shared {
         let container_id = files.container_id.clone();
         let revision = source.policy_source_revision_id;
         let digest = target.workload_binding_generation_digest.clone();
+        let pending = self.targets.iter().any(|(key, fact)| {
+            key != &self.key()
+                && key.1 == self.labels
+                && fact
+                    .kubernetes
+                    .as_ref()
+                    .is_some_and(|kube| kube.policy_source_revision_id != revision)
+        });
+        if defer && pending {
+            let key = self.key();
+            self.targets.insert(key, target);
+            return Ok(());
+        }
         self.wait_policy(&revision, &digest)?;
         let (_, ack) = policy
             .store()

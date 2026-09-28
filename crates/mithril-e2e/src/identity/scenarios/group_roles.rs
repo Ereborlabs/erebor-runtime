@@ -66,6 +66,30 @@ fn container_roles_are_distinct<P: Platform>() -> TestResult<()> {
     assert_eq!(denied_errno, libc::EACCES, "helper read: {denied}");
     assert_eq!(denied_size, 0);
 
+    assert_eq!(env.install_policy("group_roles_flip_policy.json")?, labels);
+    env.node_ready()?;
+    for (actor, _) in &mut group {
+        actor.send(b"/fixtures/policy_replace.py\n")?;
+    }
+    let first_path = group[0].1.join("1.json");
+    let second_path = group[1].1.join("1.json");
+    let denied = group[0]
+        .0
+        .wait_text(&first_path, "worker replacement read")?;
+    let allowed = group[1]
+        .0
+        .wait_text(&second_path, "helper replacement read")?;
+    let (denied_errno, denied_size): (i32, usize) = serde_json::from_str(&denied)?;
+    let (allowed_errno, allowed_size): (i32, usize) = serde_json::from_str(&allowed)?;
+    assert_eq!(
+        denied_errno,
+        libc::EACCES,
+        "worker replacement read: {denied}"
+    );
+    assert_eq!(denied_size, 0);
+    assert_eq!(allowed_errno, 0, "helper replacement read: {allowed}");
+    assert!(allowed_size > 0);
+
     for (actor, _) in &mut group {
         actor.stop()?;
     }

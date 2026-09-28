@@ -1,0 +1,42 @@
+{
+  "apiVersion": "mithril.erebor.dev/v1alpha1",
+  "kind": "WorkloadProtectionPolicy",
+  "metadata": {"name": "group-roles", "namespace": "default", "uid": "10000000-0000-4000-8000-000000000040", "generation": 2, "resourceVersion": "2"},
+  "spec": {
+    "podSelector": {"matchLabels": {"app.kubernetes.io/name": "group-roles"}, "matchExpressions": []},
+    "mode": "Protect",
+    "containers": [
+      {
+        "names": ["worker"], "kinds": ["Application"],
+        "images": ["fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+        "applicationEntry": {"executionRule": "allow-python", "role": "allowed"},
+        "additionalEntries": [], "administrativeEntry": {"role": "administrator"},
+        "externalRole": "external"
+      },
+      {
+        "names": ["helper"], "kinds": ["Application"],
+        "images": ["fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+        "applicationEntry": {"executionRule": "deny-python", "role": "denied"},
+        "additionalEntries": [], "administrativeEntry": {"role": "administrator"},
+        "externalRole": "external"
+      }
+    ],
+    "roles": [
+      {
+        "name": "allowed",
+        "files": [{"name": "deny-actor-read", "path": "/fixtures/policy_replace.py", "recursive": false, "operations": ["OpenRead"], "action": "Deny"}],
+        "execution": [{"name": "allow-python", "path": "/usr/bin/python3", "recursive": false, "operations": ["Execute"], "action": "Allow"}],
+        "network": {"destinations": []}, "processControl": [], "unixStreams": []
+      },
+      {
+        "name": "denied",
+        "files": [{"name": "allow-actor-read", "path": "/fixtures/policy_replace.py", "recursive": false, "operations": ["OpenRead"], "action": "Allow"}],
+        "execution": [{"name": "deny-python", "path": "/usr/bin/python3", "recursive": false, "operations": ["Execute"], "action": "Allow"}],
+        "network": {"destinations": []}, "processControl": [], "unixStreams": []
+      },
+      {"name": "administrator", "files": [], "execution": [], "network": {"destinations": []}, "processControl": [], "unixStreams": []},
+      {"name": "external", "files": [], "execution": [], "network": {"destinations": []}, "processControl": [], "unixStreams": []}
+    ],
+    "exceptionGrants": []
+  }
+}
