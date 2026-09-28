@@ -3751,7 +3751,7 @@ test does not close a row when its physical condition or an assertion changed.
     Keep the separate ptrace, startup output, and public inspector checks.
     - [x] Host passed in 35.04 seconds.
     - [x] Direct `runc` passed in 44.09 seconds with the production OCI hook.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Kubernetes passed in 78.49 seconds. The launcher exited 0.
     - [ ] Remove only the matching old event scan, serialized result, and
       `run.sh` predicate after all three pass.
 

@@ -96,7 +96,7 @@ fn incomplete_probe_fails_closed<P: Platform>() -> TestResult<()> {
     env.stop()
 }
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = recovery_entry]
 fn recovered_bootstrap_exec<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("recovered-bootstrap-exec")?;
