@@ -3755,7 +3755,7 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Remove only the matching old event scan, serialized result, and
       `run.sh` predicate after all three pass. The reduced old probe passed
       its remaining ptrace, role, and cleanup checks.
-  - [ ] Replace the recovered runtime ptrace marker. This is a runtime exec
+  - [x] Replace the recovered runtime ptrace marker. This is a runtime exec
     check, so run one shared test on direct `runc` and Kubernetes. Start the
     actor before Node, recover it, then hold a declared `cat` entry. Require
     a fresh `RUNTIME_ENTRY_INFRASTRUCTURE` Privilege event whose target task
@@ -3765,7 +3765,9 @@ test does not close a row when its physical condition or an assertion changed.
       hook. The standard test has 73 lines.
     - [x] Kubernetes passed in 73.34 seconds with the same test body. The
       launcher exited 0 and removed the test resources.
-    - [ ] Remove only the matching old marker, result, and shell gate.
+    - [x] Remove only the matching old marker, result, and shell gate. The
+      reduced old probe passed its startup, role, inspector, and cleanup
+      checks. Its remaining launcher predicate returned `true`.
 
 ### Direct runtime entry roles
 

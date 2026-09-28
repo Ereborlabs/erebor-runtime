@@ -195,7 +195,6 @@ pub struct RecoveredContainerEntryProbeV1 {
     pub recovered_application_rule_id: u32,
     pub recovered_application_task_count: u64,
     pub recovered_external_task_count: u64,
-    pub ptrace_bootstrap_marker_observed: bool,
     pub declared_probe_role_id: u32,
     pub declared_probe_rule_id: u32,
     pub pin_root_removed: bool,
@@ -2921,21 +2920,13 @@ impl EffectTestRunner {
         reader
             .poll(Duration::from_millis(100))
             .context(InterceptorSnafu)?;
-        let probe_effects = observations.recent_since(probe_marker);
-        let ptrace_bootstrap_marker_observed = probe_effects.iter().any(|event| {
-            event.reason == "RUNTIME_ENTRY_INFRASTRUCTURE"
-                && event.effect_family == u32::from(KernelEffectFamilyV1::Privilege as u16)
-                && event.target_task_cookie == recovered_initial.task_cookie
-                && event.admitted_entry_rule_id == 0
-        });
         ensure!(
             probe_status.success()
                 && fs::read(&probe_stdout).context(IoSnafu {
                     path: &probe_stdout,
                 })? == b"READY\nrelease\n"
                 && probe_snapshot.active_role_id == policy.role_ids["startup"]
-                && probe_snapshot.admitted_entry_rule_id != 0
-                && ptrace_bootstrap_marker_observed,
+                && probe_snapshot.admitted_entry_rule_id != 0,
             InvalidInputSnafu {
                 path: &probe_stderr,
                 reason: format!(
@@ -3103,7 +3094,6 @@ impl EffectTestRunner {
             recovered_application_rule_id: recovered_initial.admitted_entry_rule_id,
             recovered_application_task_count: recovery.validation_application_task_count,
             recovered_external_task_count: recovery.validation_external_task_count,
-            ptrace_bootstrap_marker_observed,
             declared_probe_role_id: probe_snapshot.active_role_id,
             declared_probe_rule_id: probe_snapshot.admitted_entry_rule_id,
             pin_root_removed: !pin_root.exists(),
