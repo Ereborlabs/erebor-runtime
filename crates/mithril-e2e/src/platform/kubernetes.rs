@@ -66,7 +66,6 @@ pub(crate) struct KubernetesState {
     move_group: Option<ProbeCgroup>,
     groups: Vec<ProbeCgroup>,
     work_up: bool,
-    post_sleep: Option<i64>,
     actor_name: String,
     actor_id: Option<String>,
     actor_pid: Option<u32>,
@@ -1073,7 +1072,6 @@ impl KubernetesState {
         {
             Self::retain(&mut failed, directory.cleanup().map_err(Into::into));
         }
-        self.post_sleep = None;
         self.actor_id = None;
         self.actor_pid = None;
         self.actor_cgroup = None;
@@ -1344,7 +1342,6 @@ impl Platform for Kubernetes {
             move_group: None,
             groups: Vec::new(),
             work_up: false,
-            post_sleep: None,
             actor_name: ACTOR.to_owned(),
             actor_id: None,
             actor_pid: None,
@@ -1559,17 +1556,6 @@ impl Platform for Kubernetes {
 
     fn approve(&mut self, command: &str, args: &[&str]) -> TestResult<()> {
         self.approve_entry(command, args)
-    }
-
-    fn post_start_sleep(&mut self, delay: Duration) -> TestResult<()> {
-        let seconds = i64::try_from(delay.as_secs())?;
-        if seconds == 0 || delay.subsec_nanos() != 0 || seconds.checked_add(10).is_none() {
-            return Err("the native post-start sleep must use positive whole seconds".into());
-        }
-        if self.actor_id.is_some() || self.post_sleep.replace(seconds).is_some() {
-            return Err("the native post-start sleep is already configured or running".into());
-        }
-        Ok(())
     }
 
     fn actor_tasks(&self) -> TestResult<Vec<u32>> {

@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(kubernetes)]
@@ -10,7 +8,6 @@ fn native_sleep_adds_no_task<P: Platform>() -> TestResult<()> {
     let labels = env.install_policy("python_policy.json")?;
     env.start_node()?;
     env.node_ready()?;
-    env.post_start_sleep(Duration::from_secs(30))?;
     let mut actor = env.start_actor("ready.py", &[], &labels)?;
 
     let tasks = env.actor_tasks()?;

@@ -4440,6 +4440,14 @@ setup, production actions, assertions, and focused test.
     result field optional until the legacy bundle schema is removed.
   - [x] Remove the obsolete lifecycle-sleep fixture copy from `run.sh`. Keep
     the historical fixture file while implementation records link to it.
+  - [x] Put the native `postStart.sleep` handler in
+    `fixtures/kubernetes/lifecycle-sleep-pod-v1.yaml`. Remove the one-use
+    `post_start_sleep` platform operation. Select the mounted ready file from
+    the Pod's hook declaration, not a scenario switch. The unchanged test
+    checks that only PID 1 runs while the Pod is not Ready, then waits for
+    readiness. The 92 unprivileged library tests, the exact Kubernetes hook
+    test, a normal Kubernetes actor-start test, and the full Rust CI procedure
+    passed. Both Kubernetes launchers exited 0 without a K3s rebuild.
   - Proof: the complete serial lightweight suite passed 89 tests. Strict
     Clippy passed. The generated Kubernetes test passed in 132.46 seconds.
     The 18-test Kubernetes run passed 17 tests and exposed a platform lookup

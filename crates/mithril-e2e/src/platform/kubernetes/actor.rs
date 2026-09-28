@@ -5,7 +5,7 @@ use std::os::unix::process::ExitStatusExt as _;
 use std::path::PathBuf;
 use std::process::Command;
 
-use k8s_openapi::api::core::v1::{Lifecycle, LifecycleHandler, Pod, SleepAction};
+use k8s_openapi::api::core::v1::Pod;
 use kube::api::PostParams;
 use kube::Api;
 use snafu::ResultExt as _;
@@ -68,10 +68,6 @@ impl Kubernetes {
         pod.metadata.name = Some(self.actor_name.clone());
         pod.metadata.labels = Some(labels.clone());
         let spec = pod.spec.as_mut().ok_or("the actor Pod has no spec")?;
-        let sleep = self.post_sleep.take();
-        if sleep.is_some() && actors.len() != 1 {
-            return Err("post-start sleep requires one actor".into());
-        }
         if let [base] = spec.containers.as_slice() {
             if actors.len() > 1 && spec.init_containers.as_ref().is_none_or(Vec::is_empty) {
                 spec.containers = actors
@@ -87,9 +83,6 @@ impl Kubernetes {
         let count = spec.containers.len() + spec.init_containers.as_ref().map_or(0, Vec::len);
         if count != actors.len() {
             return Err("the actor names do not match the Pod containers".into());
-        }
-        if let Some(seconds) = sleep {
-            spec.termination_grace_period_seconds = Some(seconds + 10);
         }
         spec.node_selector = Some(BTreeMap::from([(
             "kubernetes.io/hostname".to_owned(),
@@ -113,6 +106,7 @@ impl Kubernetes {
             }
         }
         let mut names = BTreeSet::new();
+        let mut hooked = BTreeSet::new();
         for actor in actors {
             if !names.insert(actor.name) {
                 return Err(format!("duplicate actor name {}", actor.name).into());
@@ -148,14 +142,13 @@ impl Kubernetes {
                 container.command = Some(vec![self.actor_python.clone()]);
                 container.args = Some(args);
             }
-            if let Some(seconds) = sleep {
-                container.lifecycle = Some(Lifecycle {
-                    post_start: Some(LifecycleHandler {
-                        sleep: Some(SleepAction { seconds }),
-                        ..LifecycleHandler::default()
-                    }),
-                    ..Lifecycle::default()
-                });
+            if container
+                .lifecycle
+                .as_ref()
+                .and_then(|value| value.post_start.as_ref())
+                .is_some()
+            {
+                hooked.insert(actor.name);
             }
         }
         let pods = Api::<Pod>::namespaced(self.client.clone(), &self.namespace);
@@ -179,7 +172,7 @@ impl Kubernetes {
                 &path,
                 "Kubernetes actor container identity",
                 READY_LIMIT,
-                || match if sleep.is_some() {
+                || match if hooked.contains(actor.name) && actors.len() == 1 {
                     self.runtime_id()
                 } else {
                     self.container_id_for(actor.name)
@@ -237,7 +230,7 @@ impl Kubernetes {
                 },
             )?;
             if actor.script.is_some() {
-                if sleep.is_some() {
+                if hooked.contains(actor.name) {
                     let ready = self.work_path.join("ready");
                     wait_for(
                         &ready,

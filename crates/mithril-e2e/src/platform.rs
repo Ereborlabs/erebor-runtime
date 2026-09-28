@@ -221,9 +221,6 @@ pub(crate) trait Platform: Sized {
     fn approve(&mut self, _command: &str, _args: &[&str]) -> TestResult<()> {
         pending("approve administrative actor")
     }
-    fn post_start_sleep(&mut self, _delay: Duration) -> TestResult<()> {
-        pending("configure native post-start sleep")
-    }
     fn actor_tasks(&self) -> TestResult<Vec<u32>> {
         pending("read actor cgroup tasks")
     }

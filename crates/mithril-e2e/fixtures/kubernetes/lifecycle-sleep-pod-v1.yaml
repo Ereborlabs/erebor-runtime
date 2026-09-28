@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lifecycle-sleep
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 40
+  containers:
+    - name: worker
+      imagePullPolicy: Never
+      stdin: true
+      stdinOnce: true
+      lifecycle:
+        postStart:
+          sleep:
+            seconds: 30
+      securityContext:
+        privileged: true
+        allowPrivilegeEscalation: true
+        appArmorProfile:
+          type: Unconfined
+        seccompProfile:
+          type: Unconfined
+      volumeMounts:
+        - name: fixtures
+          mountPath: /fixtures
+          readOnly: true
+        - name: work
+          mountPath: /work
+  volumes:
+    - name: fixtures
+      hostPath:
+        path: MITHRIL_TEST_FIXTURE_PATH
+        type: Directory
+    - name: work
+      hostPath:
+        path: MITHRIL_TEST_WORK_PATH
+        type: Directory
