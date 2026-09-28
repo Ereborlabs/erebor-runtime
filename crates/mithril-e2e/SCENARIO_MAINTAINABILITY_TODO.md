@@ -4668,6 +4668,12 @@ setup, production actions, assertions, and focused test.
     45.17 seconds with the production OCI hook. A draft native Kubernetes Pod
     did not write its hook marker. Keep the old probe until its hook identity
     and order assertions pass under the deployed Node.
+  - [ ] Recheck the native hook setup before another Kubernetes run. The
+    unregistered Pod draft used a Protect policy and did not reach its hook
+    marker. An Observe-policy Host draft timed out in runtime admission before
+    it reached identity checks. Both unverified drafts were removed. Do not
+    infer a Kubernetes policy decision from the missing marker. Keep the old
+    identity-only probe until a deployed-Node test proves its assertions.
   - [ ] Split the old three-Pod probe by behavior. Use small standard Rust
     tests and native Pod `postStart.exec` fixtures. Put actor actions in
     mounted Python files. Do not move the 713-line probe into another file.
