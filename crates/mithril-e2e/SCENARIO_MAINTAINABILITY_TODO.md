@@ -3750,7 +3750,7 @@ test does not close a row when its physical condition or an assertion changed.
     `RUNTIME_ENTRY_INFRASTRUCTURE` Exec/Execute evidence with entry rule zero.
     Keep the separate ptrace, startup output, and public inspector checks.
     - [x] Host passed in 35.04 seconds.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Direct `runc` passed in 44.09 seconds with the production OCI hook.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching old event scan, serialized result, and
       `run.sh` predicate after all three pass.
