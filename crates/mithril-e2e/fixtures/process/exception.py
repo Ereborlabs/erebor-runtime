@@ -102,6 +102,21 @@ elif mode in ("symlink", "procfd", "bind", "bind-allowed"):
         name = ctypes.create_string_buffer(f"link-{action}-{error}".encode("ascii"))
         if libc.prctl(15, ctypes.addressof(name), 0, 0, 0) != 0:
             raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
+    if mode == "bind":
+        command = sys.stdin.readline()
+        if command == "mount\n":
+            alias = work / "bind-3"
+            alias.mkdir()
+            result = libc.mount(os.fsencode(secret.parent), os.fsencode(alias), None, 4096, None)
+            write("bind-change-mount", str(ctypes.get_errno() if result else 0))
+            error = open_errno(alias / secret.name, os.O_RDONLY)
+            name = ctypes.create_string_buffer(f"link-change-{error}".encode("ascii"))
+            if libc.prctl(15, ctypes.addressof(name), 0, 0, 0) != 0:
+                raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
+            command = sys.stdin.readline()
+        if command not in ("stop\n", ""):
+            raise RuntimeError("expected stop")
+        sys.exit(0)
 elif mode == "race":
     started = threading.Barrier(9)
     release = threading.Event()

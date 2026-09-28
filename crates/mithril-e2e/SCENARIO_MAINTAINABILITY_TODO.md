@@ -2001,6 +2001,20 @@ test does not close a row when its physical condition or an assertion changed.
     mode, but that mode did not make the required late mount. The draft was
     removed. Keep the old mount-change checks until a physical replacement
     passes.
+    - [x] Add the 95-line `first_bind_read_keeps_deny` test. Reuse the
+      qualified `bind` actor setup, then command that actor to mount one more
+      alias after the exact policy is active. Require mount success, an
+      advanced mutation epoch, physical `EACCES`, and fresh attributed
+      `EXACT_POLICY_DENY` evidence with the original object, composite, and
+      task cookie. The two existing aliases still deny before the new mount.
+    - [x] Pass Host and commit it. The new case passed in 35.92 seconds. The
+      unchanged `bind_alias_keeps_exact_deny` Host case passed in 36.00
+      seconds with the extended shared actor.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching old first-read decision and effect after
+      all three pass. Keep dirty-view, replaced-path, restoration, and cache
+      snapshot checks until their own replacements pass.
   - [ ] Remove the old exact control open only after these alias and mount
     checks and their Protect-mode counterparts pass as platform tests.
 - [ ] `EffectTestRunner::physical_probe` protect scenario: keep every hard
