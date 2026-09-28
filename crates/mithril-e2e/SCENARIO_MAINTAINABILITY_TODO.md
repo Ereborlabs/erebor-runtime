@@ -3853,7 +3853,8 @@ setup, production actions, assertions, and focused test.
     eviction does not explain the live Kubernetes sample. The old direct-runc
     case holds the actor through OCI hook stages. The current Kubernetes Pod
     fixture does not cause the same pre-active action. Do not weaken the effect
-    assertion or count Kubernetes as qualified for this behavior.
+    assertion or count Kubernetes as qualified for this behavior. The user
+    confirmed this deferral on 2026-09-28. Continue other migrations.
   - [x] Remove only the matching old wait, result, and shell gate after the
     focused Host and direct-`runc` cases pass.
   - [x] `bash -n` passed for the changed launcher. The final Rust CI procedure
@@ -3861,6 +3862,12 @@ setup, production actions, assertions, and focused test.
     and the complete rerun passed without a source change.
 - [ ] Initial application activation: keep the entry action and `ACTIVE`,
   role, rule, default-effect, and large-argv assertions explicit.
+  - [x] Retire the duplicate application role and admission-rule check in the
+    old direct-`runc` result. The shared `runtime_entries_stay_distinct` test
+    already checks both fields and the active binding on Host, direct `runc`,
+    and Kubernetes. Keep the old event-driven transition and mount checks. The
+    retained direct-`runc` probe passed after deletion. Its result no longer
+    has the duplicate field. Shell syntax and repository Rust CI passed.
   - [x] Replace the 1,200-argument `cat` action with one standard platform
     test. Reuse `runtime_exec.py`, `runtime_entries_policy.json`, and
     `add_actor`. Do not add a Platform API or another actor program.

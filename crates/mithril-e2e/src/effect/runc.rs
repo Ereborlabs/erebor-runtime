@@ -227,7 +227,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub stale_mount_cache_rebuilt: bool,
     pub unreachable_mount_cache_rows_collected: bool,
     pub path_tree_control_allowed: bool,
-    pub application_admitted_entry_rule_id: u32,
     pub independent_entries: Vec<RuncEntryRoleProbeV1>,
     pub administrative_recovered_runtime_binding: bool,
     pub prestop_retained_during_runtime_inventory_omission: bool,
@@ -4940,14 +4939,6 @@ impl EffectTestRunner {
             }
         );
 
-        ensure!(
-            active.active_role_id == policy.initial_role_id && active.admitted_entry_rule_id > 0,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the application entry did not install its declared role and admission ID",
-            }
-        );
-
         let mut replacement_binding = binding.clone();
         replacement_binding.active_profile_generation_ref_id = NEXT_PROFILE_GENERATION_REF_ID;
         let replacement_config = effect_node_config(
@@ -5695,7 +5686,6 @@ impl EffectTestRunner {
             stale_mount_cache_rebuilt,
             unreachable_mount_cache_rows_collected,
             path_tree_control_allowed: true,
-            application_admitted_entry_rule_id: active.admitted_entry_rule_id,
             independent_entries,
             administrative_recovered_runtime_binding,
             prestop_retained_during_runtime_inventory_omission,

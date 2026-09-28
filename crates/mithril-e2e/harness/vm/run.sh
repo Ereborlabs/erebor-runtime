@@ -559,7 +559,6 @@ if [[ $entry_role_runtime_only == true ]]; then
     .stale_mount_cache_rebuilt and
     .unreachable_mount_cache_rows_collected and
     .path_tree_control_allowed and
-    .application_admitted_entry_rule_id > 0 and
     (.independent_entries | length) == 1 and
     .independent_entries[0].name == "prestop" and
     .independent_entries[0].declaration_name == "prestop" and
