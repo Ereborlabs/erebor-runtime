@@ -2580,6 +2580,17 @@ test does not close a row when its physical condition or an assertion changed.
     Kubernetes fixture now waits for one rollout bundle that contains both
     members; it does not mistake two containers for two rollout bundles.
     Next, rerun the descriptor transfer with the qualified replacement setup.
+    The new Host draft still fails before transfer. Both actors open the
+    descriptors, and policy delivery reaches readiness. The receiver remains
+    on profile generation 2 while the sender reaches generation 4. The
+    production Unix hook denies their connect with `EACCES`. Node also reports
+    that exact selector `path-1` has no proven object in one container. Waiting
+    for the listener and making a receiver file open did not change the result.
+    Sorting the shared Control target facts did not converge the generations:
+    the existing group-role case still observed generation 1 and 2 after a
+    replacement read. The diagnostic sorting and assertion were removed.
+    Do not remove the old transfer checks or commit the draft. Confirm the
+    correct pre-protection startup order before changing this scenario.
     - [ ] Requalify the full identity lifecycles. Host passed 61 of 61 before
       the final private fixture edit. Direct `runc` passed 54 of 56; stock
       entry-isolation exec and the first TID cookie-gap check failed. Both
@@ -4648,6 +4659,29 @@ setup, production actions, assertions, and focused test.
     to delete this Pod. Qualify the matching lightweight condition before the
     Kubernetes case, then remove only the matching old probe and result fields.
 - [ ] `physical_kubernetes_poststart_probe`
+  - [ ] Split the old three-Pod probe by behavior. Use small standard Rust
+    tests and native Pod `postStart.exec` fixtures. Put actor actions in
+    mounted Python files. Do not move the 713-line probe into another file.
+  - [ ] Prove both real hook orders. In one Pod, the entrypoint must record
+    its start before the hook. In another Pod, the hook must record its start
+    before the entrypoint. While both tasks wait, require distinct task
+    cookies and process states. Require each application to keep its initial
+    root and role, and each hook to have the restricted external root and
+    role. Keep the old order and identity assertions until this test passes.
+  - [ ] Prove the held initial-root boundary. Before release, no held task
+    may have identity. After production activation, each root must have a
+    prepared binding with the expected entry instance and initial host PID.
+    The deployed Node must supply this result; do not reconstruct its owner
+    sequence in the test.
+  - [ ] Prove a repeated hook after the Kubernetes service restarts. Keep the
+    first hook live. Start a second hook with the native runtime operation.
+    Require the first hook to survive, the application snapshot to stay
+    unchanged, and the second hook to have a fresh cookie, process state,
+    restricted root, and role. Release both hooks and require Pod readiness.
+  - [ ] Qualify the paired lightweight role and activation conditions before
+    the Kubernetes hook cases. Then remove only the matching old actions,
+    compatibility fields, shell gates, and fixture code. Require namespace,
+    pin, lease, request directory, and work directory cleanup.
 - [ ] `physical_kubernetes_stock_hook_failure_probe`
   - [ ] Keep the timeout, OCI-state mismatch, missing Pod UID, no-payload,
     CRI-removal, and cleanup checks until their exact platform tests pass.
