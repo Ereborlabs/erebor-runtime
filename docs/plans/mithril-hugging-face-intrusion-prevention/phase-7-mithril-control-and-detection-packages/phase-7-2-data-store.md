@@ -1036,6 +1036,17 @@ or reopen pass is established. Read `tenant-memory.log` and
 `tenant-memory-resources.log`. Diagnose this failure before the larger global
 quota run. Do not raise the memory limit to report a pass.
 
+The same release CLI passed `data-store-startup` with 18 assertions and
+`data-store-recovery` with 32 assertions. Their output directories are
+`startup` and `recovery` under the guest artifact directory above. The host
+copies are `startup-result.json` and `recovery-result.json`. Startup took
+0.73 seconds with 72,224 KiB peak RSS. Recovery took 2.09 seconds with
+93,004 KiB peak RSS. Recovery retained cursor 4, floor 2, two exact frames,
+and backup revision 12. The checkpointed database used 9,449,472 bytes with
+no native WAL. These cases use production Node WAL and mTLS intake with
+synthetic inputs. They do not qualify the failed full-quota memory case or
+Kubernetes outage recovery.
+
 ### Previous implementation evidence
 
 **Not done.** AnalysisStore has a writer, bounded reads, exact context
