@@ -2597,6 +2597,18 @@ test does not close a row when its physical condition or an assertion changed.
     replacement read. The diagnostic sorting and assertion were removed.
     Do not remove the old transfer checks or commit the draft. Confirm the
     correct pre-protection startup order before changing this scenario.
+    A later Host draft used the public Node and Control APIs, one bootstrap
+    policy, and a signed exact-file replacement. A two-container Pod did not
+    give both actors one proven file object. A single-container test gave the
+    sender and receiver distinct declared roles, but it did not reproduce the
+    old test's separate bindings. The receiver's direct secret open denied
+    with exact-policy evidence. The sender's Unix-stream connect then returned
+    `EACCES` with `CORRUPT_IDENTITY_OR_GENERATION`, before either descriptor
+    transfer. Node also reported that exact selector `path-1` had no proven
+    object during reconciliation. Moving each actor to the new policy with a
+    file open did not clear the connect denial. The draft was removed; the old
+    transfer assertions remain. Do not change production code or BPF for this
+    migration without a separate approved defect and a lightweight repro.
     - [ ] Requalify the full identity lifecycles. Host passed 61 of 61 before
       the final private fixture edit. Direct `runc` passed 54 of 56; stock
       entry-isolation exec and the first TID cookie-gap check failed. Both
