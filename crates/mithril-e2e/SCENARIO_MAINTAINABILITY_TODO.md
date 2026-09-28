@@ -3777,7 +3777,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Host passed in 33.61 seconds with exact output. A first run found
       that the fixture reread a reaped child status; the corrected method
       uses the status from `wait_exit`.
-    - [ ] Pass direct `runc` and Kubernetes with the same test body.
+    - [x] Direct `runc` passed in 43.22 seconds with the same test body and
+      stock runtime exec.
+    - [ ] Pass Kubernetes with the same test body.
     - [ ] Remove only the matching old output assertion after all three pass.
 
 ### Direct runtime entry roles
