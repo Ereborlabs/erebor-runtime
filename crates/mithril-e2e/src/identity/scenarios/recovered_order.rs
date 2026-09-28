@@ -5,7 +5,7 @@ use rustix::fs::{mkfifoat, Mode, CWD};
 
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = recovery_entry]
 fn readiness_precedes_startup<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("recovered-entry-order")?;

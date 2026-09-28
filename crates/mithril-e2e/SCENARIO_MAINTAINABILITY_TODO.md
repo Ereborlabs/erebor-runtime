@@ -3740,7 +3740,7 @@ test does not close a row when its physical condition or an assertion changed.
     separate shared coverage.
     - [x] Host passed in 43.97 seconds. The formatted test has 85 lines.
     - [x] Direct `runc` passed in 47.82 seconds with the production OCI hook.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Kubernetes passed in 88.11 seconds. The launcher exited 0.
     - [ ] Remove only the matching old competing-readiness action and
       identity comparison after all three pass. Keep the startup action.
 
