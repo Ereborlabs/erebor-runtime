@@ -4021,6 +4021,16 @@ setup, production actions, assertions, and focused test.
   node reconciliation calls and exact map absence checks visible.
 - [ ] Independent additional entries: keep each declaration, stock exec,
   role, rule, process state, and isolation assertion.
+  - [x] Retire only the old overlapping PostStart and StartupProbe role
+    comparison. `runtime_entries_stay_distinct` holds both stock entries at
+    the same time and checks their signed roles, admission rules, task
+    cookies, process states, and execution IDs on all three platforms. Keep
+    the old actors and their identity-readiness waits for the later mount
+    mutation checks.
+    The exact shared test passed on Host in 29.33 seconds, direct `runc` in
+    36.95 seconds, and Kubernetes in 66.94 seconds. The old direct-`runc`
+    probe passed after the duplicate comparison was removed. Its later
+    mount, entry, and cleanup checks remain.
 - [x] Use one entry-isolation platform test for stock `cat`, `grep`, and `wc`.
   Use one Control, Node, main actor, policy, and FIFO. Keep each command name,
   arguments, live identity, denial, and kernel evidence assertion explicit.

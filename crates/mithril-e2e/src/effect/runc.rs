@@ -4177,7 +4177,7 @@ impl EffectTestRunner {
                     .build()
                 },
             )?;
-        let poststart_overlap_snapshot = wait_for_task_snapshot(
+        wait_for_task_snapshot(
             &inspector,
             poststart_overlap_host_pid,
             &mut poststart_overlap,
@@ -4208,7 +4208,7 @@ impl EffectTestRunner {
                 }
                 .build()
             })?;
-        let startup_overlap_snapshot = wait_for_task_snapshot(
+        wait_for_task_snapshot(
             &inspector,
             startup_overlap_host_pid,
             &mut startup_overlap,
@@ -4217,23 +4217,6 @@ impl EffectTestRunner {
             overlap_marker,
             &startup_overlap_stderr,
         )?;
-        let concurrent_initial_entries_converged = poststart_overlap_snapshot.active_role_id
-            == policy.role_ids["poststart"]
-            && poststart_overlap_snapshot.admitted_entry_rule_id > 0
-            && startup_overlap_snapshot.active_role_id == policy.role_ids["startup"]
-            && startup_overlap_snapshot.admitted_entry_rule_id > 0
-            && poststart_overlap_snapshot.active_role_id != startup_overlap_snapshot.active_role_id
-            && poststart_overlap_snapshot.admitted_entry_rule_id
-                != startup_overlap_snapshot.admitted_entry_rule_id;
-        ensure!(
-            concurrent_initial_entries_converged,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: format!(
-                    "PostStart and StartupProbe did not converge on distinct signed roles: poststart={poststart_overlap_snapshot:?}, startup={startup_overlap_snapshot:?}"
-                ),
-            }
-        );
         let container_bind_mount_result = role_directory.join("container-bind-mount.result");
         fs::write(role_directory.join("effects-ready"), b"ready\n").context(IoSnafu {
             path: &role_directory,
