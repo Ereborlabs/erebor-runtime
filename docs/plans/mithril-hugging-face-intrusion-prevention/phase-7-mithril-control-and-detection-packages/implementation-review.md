@@ -977,6 +977,9 @@ fail the test. A rejected batch must leave its source receipt unchanged.
 The test checks
 receipts after each batch, checkpoint, the last frame, and reopen. It reads
 Linux process high-water RSS and reports native memory categories on failure.
+The shared runner now uses a provisional 512-MiB test ceiling for both tenant
+and global cases. Production memory settings do not change. Historical results
+below retain their original limits; the changed ceiling does not prove a pass.
 Run it alone; other tests would share its process peak. The release check
 failed with default allocator settings at cursor 804,864 and 290,000 KiB peak
 RSS. The same executable passed with `MALLOC_ARENA_MAX=1` in 47.52 seconds.

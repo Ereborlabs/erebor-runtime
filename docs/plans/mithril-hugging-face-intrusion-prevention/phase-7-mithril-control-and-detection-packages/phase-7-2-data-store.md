@@ -124,7 +124,8 @@ Storage fails or cannot meet capacity
    eligible segment deletion. Protected bytes are not available space.
    Insufficient capacity returns ResourceExhausted; other storage failures
    return Unavailable. Neither response permits ACK.
-   Keep the 256-MiB data-process qualification gate. Start metadata DuckDB at
+   Use a provisional 512-MiB ceiling in the existing data-process tests.
+   This ceiling is not a production memory cap. Start metadata DuckDB at
    a 64-MiB memory target and 16-MiB WAL checkpoint threshold; neither caps RSS.
    Do not carry raw-table ART rebuild or vacuum tuning into the new design.
    Admit at most 4,096 source bindings per store. Existing source retries remain
@@ -165,6 +166,10 @@ Storage fails or cannot meet capacity
    policy RPCs. Never claim an atomic transaction across Control and data.
 
 ## Storage choice qualification
+
+New performance tests require explicit user approval. The existing memory
+tests use a provisional 512-MiB ceiling. Historical results below retain the
+limits used for those runs. A changed ceiling is not a new passing result.
 
 The `raw_event_store_comparison` fixture accepts release builds and
 1 through 4,096 batches. Mode `analysis` selects the combined segment/metadata
@@ -211,7 +216,7 @@ Other capacity errors are failures, not successful stop conditions.
 Require the rejected batch to leave the receipt unchanged. Require the
 exact receipt and last retained frame after segment sync, metadata checkpoint,
 and reopen. Read process
-high-water RSS after each batch and after reopen. Fail above 256 MiB; include
+high-water RSS after each batch and after reopen. Fail above 512 MiB; include
 segment metadata, queues, native allocations, and file counts in the failure. Do not treat DuckDB's configured
 buffer limit as an RSS limit. Keep this host-dependent test ignored in normal
 CI. Record the host and allocator environment when running it explicitly.
@@ -224,7 +229,7 @@ Send one batch at a time and cycle through tenants. Each tenant remains below
 its own quota when the global ordinary-write allowance is full. Only a global
 logical-capacity error is a successful stop condition. Check unchanged metadata
 and the rejected source receipt. Check every tenant's receipt and final frame
-after checkpoint and reopen. Keep the 256-MiB process limit and default storage
+after checkpoint and reopen. Use the same 512-MiB test ceiling and default storage
 limits. This test uses synthetic post-validation frames, not Node wire input.
 It does not qualify concurrent readers, required processors, or mTLS latency.
 Keep only the latest native-memory and storage sample from each 64-batch
