@@ -85,6 +85,8 @@ mod path_wildcards;
 #[cfg(test)]
 mod policy_replace;
 #[cfg(test)]
+mod poststart_hook_exec;
+#[cfg(test)]
 mod recovered_order;
 #[cfg(test)]
 mod recovery_tasks;

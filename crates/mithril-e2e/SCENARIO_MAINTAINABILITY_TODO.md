@@ -4659,6 +4659,14 @@ setup, production actions, assertions, and focused test.
     to delete this Pod. Qualify the matching lightweight condition before the
     Kubernetes case, then remove only the matching old probe and result fields.
 - [ ] `physical_kubernetes_poststart_probe`
+  - [x] Reproduce the undeclared hook-exec condition on Host. The small
+    `undeclared_hook_is_denied` test uses the shared Python actor and a signed
+    policy. It confirms `EACCES`, no hook marker, and a live initial root.
+    The exact Host case passed in 31.81 seconds. This denial test does not
+    replace the old native Kubernetes hook-order probe.
+  - [ ] Pass the same denial test on direct `runc`. A draft native Kubernetes
+    Pod did not write its hook marker. Keep the old probe until its hook
+    identity and order assertions pass under the deployed Node.
   - [ ] Split the old three-Pod probe by behavior. Use small standard Rust
     tests and native Pod `postStart.exec` fixtures. Put actor actions in
     mounted Python files. Do not move the 713-line probe into another file.
