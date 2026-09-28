@@ -174,7 +174,8 @@ p95/p99 and separate raw-sync and post-sync intervals. The post-sync interval
 includes metadata commit, notification, and return; it is not native SQL time
 alone. Test hooks add measurement overhead. `raw_commit_clock` passed, and the
 fixture passed compilation and strict Clippy in
-`/tmp/araphor-maintenance-final-ci.log`. No new release measurement is claimed.
+`/tmp/araphor-maintenance-final-ci.log`. The current release measurements appear
+under `Release storage qualification` below.
 
 Use release builds on the same declared host. Compare the combined segment
 append plus metadata commit with the recorded old-segment and DuckDB-raw
@@ -959,6 +960,81 @@ copy reserves, replay, and two exact retained records after recovery. The
 harness removed its mount. Read `/tmp/araphor-retirement-disk-full.log` for the
 binary digest, source status, and results. This pass does not prove a native
 fsync failure, hardware power loss, or Kubernetes partition recovery.
+
+### Release storage qualification
+
+**Not done.** These measurements cover Rust source `7ef9d59d`; `ba6d684b`
+changes documentation only. The release build commands were:
+
+```sh
+CARGO_BUILD_JOBS=2 cargo test --release --locked -p araphor-data -p mithril-control -p mithril-e2e --lib --all-features --no-run
+CARGO_BUILD_JOBS=2 cargo build --release --locked -p mithril-e2e --bin mithril_discovery_test
+```
+
+Both builds passed. Run artifacts are in
+`/tmp/araphor-segment-release.Q67O1yva` on the build host and
+`/tmp/araphor-segment-release.ryZuuaci` on VM
+`mithril-runtime-qualification-2249801`. The VM has four x86_64 vCPUs,
+7,941 MiB usable RAM, no swap, Linux 6.8.0-142-generic, and ext4 storage.
+No allocator environment override was set. No task-owned build or second
+measurement ran during these tests. `environment.log` records the host and
+background processes. Guest executable SHA-256 values match the host:
+
+| Executable | SHA-256 |
+| --- | --- |
+| `data-tests` | `9a18b80671e5010343893bd609ef0c6b14072db7f8308088d706e19f867f9991` |
+| `control-tests` | `649a9955c67ff001fe740d66d3579917305c75c4f513b9c80491861e9863c6a6` |
+| `e2e-tests` | `193bdaa000a10244713130c16f03467cf47656d0656cb889e55a5b50cb139b96` |
+| `discovery-test` | `664b6a305949c8a9349ea52dbaabd2faaaced78e507b22ac1928457bc8b8d482` |
+
+`analysis::extraction::tests::analysis_extract_history`, run with
+`--exact --ignored --nocapture --test-threads=1`, passed one test in 1.64 seconds.
+Peak RSS was 113,456 KiB. The 72-MiB history case scanned four MiB for the
+recent range in 11.625 ms and all 72 MiB for the sparse selection in 76.620 ms.
+Charged projected input was 1,137 and 801 bytes respectively. The test also
+rejected complete raw extraction above 64 MiB. Eighteen exact witnesses used
+2,359,296 bytes and pinned six segments with 75,497,898 committed bytes.
+Extra retained bytes were 73,138,602. Result commit took 139.112 ms; witness
+accounting took 4.801 ms. Retention preserved all pinned segments. This is
+component extraction proof, not public SQL or Node wire validation.
+Read `history.log` and `history-resources.log`.
+
+The `store::raw_bench::raw_event_store_comparison` test passed once for each
+row below. Each process used mode `analysis`, 256 records per batch,
+`--exact --ignored --nocapture --test-threads=1`, and `/usr/bin/time -v`.
+Set `ARAPHOR_STORE_BENCH_MODE=analysis` and
+`ARAPHOR_STORE_BENCH_BATCHES` to the listed batch count.
+
+| Run | Batches | Write records/s | Call p95 / p99, ms | Read records/s | Reopen, ms | Peak RSS, KiB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Small | 64 | 10,167.5 | 30.142 / 52.701 | 74,481.1 | 101.283 | 55,528 |
+| Large | 1,024 | 9,508.6 | 32.255 / 44.938 | 65,379.1 | 916.219 | 117,604 |
+| Repeat | 1,024 | 9,316.8 | 35.323 / 46.969 | 71,559.4 | 941.543 | 118,932 |
+
+The large runs each accepted 262,144 records and 37,445,318 framed input bytes.
+Total write times were 27.569 and 28.137 seconds. Raw append/sync intervals
+totalled 2.145 and 2.006 seconds; post-sync intervals totalled 4.644 and
+4.573 seconds. Most time was before the raw append hook. This result does not
+identify the cause. Post-sync time includes metadata commit, notification,
+and return. The fixture does not measure a network ACK.
+File lengths were 59,398,068 bytes after writes and 45,322,154 after close and
+reopen. Allocated bytes after reopen were 45,338,624 and 45,346,816.
+Read `raw-small.log`, `raw-large.log`, `raw-repeat.log`, and their resource logs.
+
+The recorded original segment writer reached 99,163 records/s on the declared
+VM. The combined owner does not restore that write rate at this batch size.
+The original writer did not perform the new metadata transactions. This
+comparison is not proof of production mTLS throughput or policy isolation.
+
+`analysis::capacity::tests::analysis_store_thread_memory`, with the same test
+arguments and default limits, failed after 306.82 seconds. It accepted through
+cursor 5,096,448, then exceeded the 256-MiB process gate: peak RSS was
+263,420 KiB. The native sample after failure reported 15,990,784 bytes of base
+tables and 262,144 bytes of ART indexes. That sample is not a full allocation
+profile or the peak allocation. No tenant-quota rejection, final checkpoint,
+or reopen pass is established. Read `tenant-memory.log` and
+`tenant-memory-resources.log`. Diagnose this failure before the larger global
+quota run. Do not raise the memory limit to report a pass.
 
 ### Previous implementation evidence
 
