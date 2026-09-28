@@ -1,5 +1,11 @@
 # Verification Rules
 
+## Performance Test Approval
+
+Obtain explicit user approval before adding a performance test or benchmark.
+Include its workload, runtime, and pass/fail limits in the approval request.
+A plan or general implementation request does not replace this approval.
+
 ## Required Quality Gate
 
 For a Rust change, run this repository-owned CI procedure after the final edit

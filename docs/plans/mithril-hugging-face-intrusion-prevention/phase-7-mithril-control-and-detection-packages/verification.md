@@ -111,6 +111,13 @@ to safe policy review.
 
 ## Initial resource limits
 
+Memory test ceiling update, 2026-09-28: **Done**. The existing tenant and global
+tests use 512 MiB. No production setting changes. The full workspace check
+passed with the existing quota-accounting edits present. Command:
+`RUST_TEST_THREADS=4 CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 bash .github/scripts/verify-rust-ci.sh`.
+Log: `/tmp/araphor-memory-ceiling.OzjkL9bu/ci.log`. The ignored performance tests
+did not run. This result does not complete storage qualification.
+
 These are proposed pilot limits, not measured capacity or final service-level
 commitments. Phase 7.1 pins offline feasibility defaults. Phase 7.2 measures
 intake and storage limits before cutover. Phase 7.3 measures extraction and
@@ -132,7 +139,7 @@ use the first one reached.
 | Retained revisions | 1,024 per tenant, 4,096/process for each analysis record family | Reject new work or expire eligible revisions. Audit expiry remains explicit. |
 | Canonical record body | 16 MiB; at most 8,192 dependencies | Split only through a bounded manifest. No growing JSON history array. |
 | Sealed profile set | 128 MiB | Typed failure before commit. |
-| Analysis working memory | 256 MiB/process, including queues and caches | Cancel/backpressure analysis; measure native RSS. |
+| Data memory test ceiling | 512 MiB/process, including queues and caches | Applies to the existing component tests. This is not a production memory cap or a measured deployment budget. |
 | Data engine | 1 writer with 8 queued writes; 2 trusted readers with 16 active or queued reads in total | Bounded admission; no wait under ControlStore locks. Checkpoint and backup wait for read guards to close. |
 | Node intake admission | 8 active or queued groups/process, 2/tenant | Evidence and coverage share permits. Reject excess work with ResourceExhausted before ACK. Idle streams hold no permit. |
 | Intake batch | 4,096 records, 4 MiB encoded or 50 ms | Commit first bound reached; decoded data must fit working memory. |

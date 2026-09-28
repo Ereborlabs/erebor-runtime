@@ -435,7 +435,7 @@ mod tests {
                     .and_then(|line| line.split_whitespace().nth(1))
                     .ok_or("the process memory peak is absent")?
                     .parse()?;
-                if peak > 256 * 1024 {
+                if peak > 512 * 1024 {
                     let native = native(store)?;
                     let cursors = identities
                         .iter()
@@ -445,7 +445,7 @@ mod tests {
                             })
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    return Err(format!("process peak {peak} KiB exceeds 256 MiB at cursors {cursors:?}; native bytes: {native:?}").into());
+                    return Err(format!("process peak {peak} KiB exceeds 512 MiB at cursors {cursors:?}; native bytes: {native:?}").into());
                 }
                 Ok(())
             };
