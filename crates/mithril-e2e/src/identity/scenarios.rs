@@ -101,6 +101,8 @@ mod runtime_exec;
 #[cfg(test)]
 mod runtime_outage;
 #[cfg(test)]
+mod runtime_prepared;
+#[cfg(test)]
 mod subreaper;
 #[cfg(test)]
 mod terminal_exec;

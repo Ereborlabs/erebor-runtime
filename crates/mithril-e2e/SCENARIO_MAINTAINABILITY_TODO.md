@@ -3800,6 +3800,16 @@ setup, production actions, assertions, and focused test.
 - [ ] Held OCI route publication: keep policy installation, background binding
   reconciliation, `createContainer`, route publication, and activation calls
   in their real order through public production APIs.
+- [ ] Replace the prepared-runtime effect result. Start Control and Node,
+  install the signed runtime-entries policy, then start the shared application
+  actor. Require a fresh production `PREPARED_RUNTIME_INFRASTRUCTURE` effect
+  from the prepared-to-active runtime transition. Use the same Rust test on
+  each platform where that physical transition occurs. Keep the old wait and
+  result field until the paired platforms pass.
+  - [x] Host passed in 63.25 seconds. The standard test has fewer than 100
+    lines and checks the active runtime binding and fresh effect.
+  - [ ] Pass direct `runc` and Kubernetes with the same test body.
+  - [ ] Remove only the matching old wait, result, and shell gate.
 - [ ] Initial application activation: keep the entry action and `ACTIVE`,
   role, rule, default-effect, and large-argv assertions explicit.
   - [x] Replace the 1,200-argument `cat` action with one standard platform
