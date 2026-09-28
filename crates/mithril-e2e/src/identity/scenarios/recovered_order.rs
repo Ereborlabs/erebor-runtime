@@ -77,6 +77,7 @@ fn readiness_precedes_startup<P: Platform>() -> TestResult<()> {
         "startup failed: {status}; {:?}",
         cat.stderr()?
     );
+    assert_eq!(cat.stdout(status)?, b"READY\nrelease\n");
 
     cat.stop()?;
     grep.stop()?;

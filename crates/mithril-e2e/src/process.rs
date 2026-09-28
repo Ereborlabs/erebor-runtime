@@ -1092,6 +1092,69 @@ impl ProcessFixture {
         Ok(String::from_utf8_lossy(&output).trim().to_owned())
     }
 
+    #[cfg(test)]
+    pub(crate) fn stdout(&mut self, status: ExitStatus) -> Result<Vec<u8>> {
+        let mut stdout = self.stdout.take().context(InvalidInputSnafu {
+            path: &self.path,
+            reason: "the process stdout is not captured",
+        })?;
+        let flags = rustix::fs::fcntl_getfl(&stdout).map_err(|source| {
+            InvalidInputSnafu {
+                path: &self.path,
+                reason: format!("read stdout pipe flags: {source}"),
+            }
+            .build()
+        })?;
+        rustix::fs::fcntl_setfl(&stdout, flags | rustix::fs::OFlags::NONBLOCK).map_err(
+            |source| {
+                InvalidInputSnafu {
+                    path: &self.path,
+                    reason: format!("make stdout pipe nonblocking: {source}"),
+                }
+                .build()
+            },
+        )?;
+        let path = self.path.clone();
+        let output = RefCell::new(Vec::new());
+        let result = wait_for(
+            &path,
+            "captured actor stdout",
+            START_LIMIT,
+            || {
+                let mut buffer = [0_u8; 1024];
+                match stdout.read(&mut buffer) {
+                    Ok(0) => Ok(Some(())),
+                    Ok(count) => {
+                        let mut output = output.borrow_mut();
+                        output.extend_from_slice(&buffer[..count]);
+                        ensure!(
+                            output.len() <= LOG_LIMIT,
+                            InvalidInputSnafu {
+                                path: &path,
+                                reason: format!("actor stdout exceeds {LOG_LIMIT} bytes"),
+                            }
+                        );
+                        Ok(None)
+                    }
+                    Err(source) if source.kind() == ErrorKind::WouldBlock => Ok(None),
+                    Err(source) => Err(source).context(IoSnafu { path: &path }),
+                }
+            },
+            || format!("captured {} bytes", output.borrow().len()),
+        );
+        if let Err(source) = result {
+            return InvalidInputSnafu {
+                path: &path,
+                reason: format!(
+                    "{source}; exit status: {status:?}; stderr: {:?}",
+                    self.stderr()?
+                ),
+            }
+            .fail();
+        }
+        Ok(output.into_inner())
+    }
+
     pub(crate) fn close(&mut self) {
         #[cfg(test)]
         {

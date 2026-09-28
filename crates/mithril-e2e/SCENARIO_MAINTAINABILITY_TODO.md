@@ -3768,6 +3768,17 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Remove only the matching old marker, result, and shell gate. The
       reduced old probe passed its startup, role, inspector, and cleanup
       checks. Its remaining launcher predicate returned `true`.
+  - [ ] Replace the recovered startup entry output check. Extend the existing
+    shared recovery-order test, not its platform implementations. After the
+    declared `cat` entry exits, require the exact `READY\nrelease\n` bytes.
+    Add bounded stdout reading to `ProcessFixture`. Keep the old startup
+    action for the separate public inspector capture until that check has
+    shared coverage.
+    - [x] Host passed in 33.61 seconds with exact output. A first run found
+      that the fixture reread a reaped child status; the corrected method
+      uses the status from `wait_exit`.
+    - [ ] Pass direct `runc` and Kubernetes with the same test body.
+    - [ ] Remove only the matching old output assertion after all three pass.
 
 ### Direct runtime entry roles
 
