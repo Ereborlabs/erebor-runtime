@@ -4319,7 +4319,8 @@ setup, production actions, assertions, and focused test.
         tests and all 62 Host identity tests passed without test changes.
       - [x] Direct `runc` passed in 75.92 seconds with the production OCI
         hook on 2026-09-28.
-      - [ ] Pass Kubernetes and commit it.
+      - [x] Kubernetes passed in 106.05 seconds on the retained K3s
+        cluster on 2026-09-28. The test body is unchanged.
     - [ ] Replace the separate runtime-inventory omission case before its
       legacy result is removed. The new restart test uses the normal CRI
       inventory. It does not prove that a populated cgroup retains its binding
