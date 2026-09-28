@@ -3768,7 +3768,7 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Remove only the matching old marker, result, and shell gate. The
       reduced old probe passed its startup, role, inspector, and cleanup
       checks. Its remaining launcher predicate returned `true`.
-  - [ ] Replace the recovered startup entry output check. Extend the existing
+  - [x] Replace the recovered startup entry output check. Extend the existing
     shared recovery-order test, not its platform implementations. After the
     declared `cat` entry exits, require the exact `READY\nrelease\n` bytes.
     Add bounded stdout reading to `ProcessFixture`. Keep the old startup
@@ -3781,7 +3781,9 @@ test does not close a row when its physical condition or an assertion changed.
       stock runtime exec.
     - [x] Kubernetes passed in 82.91 seconds with the same test body. The
       launcher exited 0 and removed the test resources.
-    - [ ] Remove only the matching old output assertion after all three pass.
+    - [x] Remove only the matching old output assertion after all three pass.
+      The reduced old probe passed its inspector, role, and cleanup checks.
+      Its remaining launcher predicate returned `true`.
 
 ### Direct runtime entry roles
 

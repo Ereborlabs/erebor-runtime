@@ -2922,9 +2922,6 @@ impl EffectTestRunner {
             .context(InterceptorSnafu)?;
         ensure!(
             probe_status.success()
-                && fs::read(&probe_stdout).context(IoSnafu {
-                    path: &probe_stdout,
-                })? == b"READY\nrelease\n"
                 && probe_snapshot.active_role_id == policy.role_ids["startup"]
                 && probe_snapshot.admitted_entry_rule_id != 0,
             InvalidInputSnafu {
