@@ -234,7 +234,51 @@ harness scripts and documents. No rebuild, test-code change, or limit change
 was needed. This host correctness run is not an isolated throughput result,
 default-capacity qualification, or physical reserve proof. The fixture checks
 its event count internally but does not retain its temporary result JSON.
-Item 2 has not started. Stop for the user's decision.
+The user subsequently approved item 2. Its result follows.
+
+### Ordered review: item 2
+
+**Done: PASS**, 2026-09-28. The user approved this case separately after item 1.
+One `data-store-quota` case passed with the default 2,147,483,648-byte tenant
+budget and its unchanged 25-percent maintenance reserve. Rust debug assertions
+were disabled. The test accepted 13,317,120 events before logical quota
+rejection, with 1,553,876,018 framed input bytes. Rejection preserved the source
+receipt and Node pending input. A policy RPC and retained duplicate retry worked
+at capacity. The complete retained-input digest matched. Result commit,
+protected witness retention, eligible segment expiry, and checkpoint succeeded.
+The rejected 1,024-event batch then succeeded exactly once, for a receipt of
+13,318,144. Reopen preserved source state, result, witness, and replayed bytes.
+
+Command, from the implementing worktree:
+
+```sh
+/usr/bin/time -v -o /tmp/araphor-quota-full.WgeQiL8O/resources.log target/release/mithril_discovery_test --case data-store-quota --output-directory /tmp/araphor-quota-full.WgeQiL8O/result
+```
+
+The command returned zero in 33 minutes 41.36 seconds. Peak process RSS was
+300,412 KiB. Intake took 1,554.012 seconds; the complete read/digest check took
+446.402 seconds. Result commit took 0.285 seconds, retention 0.964 seconds,
+checkpoint 0.022 seconds, and reopen 16.974 seconds. At capacity, file and
+allocated bytes were both 1,637,998,592. After recovery, both were 1,340,563,456.
+The result retained 13,005 ACK timing samples and the exact input digest.
+Sorted ACK samples gave p50 68.517 ms, p95 244.679 ms, p99 306.376 ms, and
+maximum 486.428 ms. These are observed timings on this shared host, not a
+latency guarantee. The five-second ACK deadline was unchanged.
+
+Read `result/result.json`, `run.log`, `resources.log`, and `environment.log`
+under `/tmp/araphor-quota-full.WgeQiL8O`. The release executable SHA-256 is
+`4ac2b96f06f565b1da2301c96fa30cdcb409e5bf7f149d8b7ecc8fc3314242c4`.
+The source at `a67b4069` contains the same Rust as `adbcb3a8`; later changes
+were harness scripts and documents only. The existing binary was reused.
+No code, timeout, quota, allocator setting, or assertion changed for this run.
+
+The shared development host has 16 reported CPUs, 31,492 MiB RAM, x86_64 Linux
+6.8.0-139-generic, and swap enabled. `MALLOC_ARENA_MAX` was unset. No second
+qualification case or build was started by this task. Other host activity was
+not isolated. This result qualifies this default-tenant synthetic mTLS workload,
+not global saturation, kernel effects, worst-case payloads, physical reserve
+sizing, or a dedicated-host latency commitment. Item 3 has not started.
+Stop for the user's decision.
 
 ### Measurement contracts
 
