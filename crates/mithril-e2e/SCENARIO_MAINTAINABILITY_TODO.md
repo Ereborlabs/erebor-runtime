@@ -2084,6 +2084,12 @@ test does not close a row when its physical condition or an assertion changed.
       own non-mountpoint parent gave the same result. The attempted actor and
       test were removed. Keep the legacy assertion. Check exact-object mount
       authority before another replacement attempt; do not accept the read.
+    - On 2026-09-28, a Host draft also self-bound the source directory before
+      `open_tree`, as the old probe does. The original and repeat path opens
+      returned `EACCES`, but `openat` through the detached mount succeeded.
+      Node reported that exact selector `path-0` had no proven object in the
+      container. The unverified actor mode and test were removed. Do not
+      retire the old denial or infer that the detached mount is protected.
 - [ ] `EffectTestRunner::physical_probe` mount mutation cases: keep each
   production reconciliation call and mount syscall action visible.
   - [x] Replace the pre-existing bind-alias block with one actor-driven
