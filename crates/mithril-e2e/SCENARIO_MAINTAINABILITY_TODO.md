@@ -3755,6 +3755,16 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Remove only the matching old event scan, serialized result, and
       `run.sh` predicate after all three pass. The reduced old probe passed
       its remaining ptrace, role, and cleanup checks.
+  - [ ] Replace the recovered runtime ptrace marker. This is a runtime exec
+    check, so run one shared test on direct `runc` and Kubernetes. Start the
+    actor before Node, recover it, then hold a declared `cat` entry. Require
+    a fresh `RUNTIME_ENTRY_INFRASTRUCTURE` Privilege event whose target task
+    cookie is the recovered initial actor and whose entry rule is zero.
+    Keep the old marker, result, and shell gate until both cases pass.
+    - [x] Direct `runc` passed in 44.29 seconds through the production OCI
+      hook. The standard test has 73 lines.
+    - [ ] Pass Kubernetes with the same test body.
+    - [ ] Remove only the matching old marker, result, and shell gate.
 
 ### Direct runtime entry roles
 

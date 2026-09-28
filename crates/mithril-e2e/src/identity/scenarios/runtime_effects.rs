@@ -171,3 +171,79 @@ fn recovered_bootstrap_exec<P: Platform>() -> TestResult<()> {
     main.stop()?;
     env.stop()
 }
+
+#[platform_test(runc)]
+#[lifecycle = recovery_entry]
+fn recovered_ptrace_is_scoped<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("recovered-ptrace")?;
+    env.start_control()?;
+    env.stop_node()?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../../fixtures/process/entry_isolation_policy.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut main = env.start_actor("ready.py", &[], &labels)?;
+    env.place(main.id())?;
+    env.install_policy("entry_isolation_policy.json")?;
+    env.start_node()?;
+    env.sync_policy()?;
+    env.node_ready()?;
+    env.running(main.id())?;
+    let root = env.recovered(main.id(), "recovered application")?;
+    assert_eq!(
+        root.snapshot.root_class.as_deref(),
+        Some("recovered_application_root")
+    );
+
+    let gate = env.work().join("ptrace-gate");
+    mkfifoat(CWD, &gate, Mode::RUSR | Mode::WUSR)?;
+    let seen = env
+        .snapshot()?
+        .recent_effects
+        .into_iter()
+        .map(|event| (event.source_cpu_id, event.source_sequence))
+        .collect::<BTreeSet<_>>();
+    let mut cat = env.add_actor("cat", &["/work/ptrace-gate"])?;
+    let mut release = cat.fifo_writer(&gate, "ptrace gate", Duration::from_secs(5))?;
+    let task = env.task(cat.id(), "recovered declared entry")?;
+    assert_ne!(task.snapshot.admitted_entry_rule_id, 0);
+
+    let path = env.maps().0.to_owned();
+    let last = RefCell::new(String::from("<none>"));
+    let family = u32::from(KernelEffectFamilyV1::Privilege as u16);
+    let operation = u32::from(KernelEffectOperationV1::Ptrace as u16);
+    let event = wait_for(
+        &path,
+        "recovered runtime ptrace",
+        Duration::from_secs(30),
+        || {
+            let effects = env.snapshot().map_err(|source| {
+                InvalidInputSnafu {
+                    path: &path,
+                    reason: source.to_string(),
+                }
+                .build()
+            })?;
+            *last.borrow_mut() = format!("{:?}", effects.recent_effects.iter().rev().take(8));
+            Ok(effects.recent_effects.into_iter().find(|event| {
+                !seen.contains(&(event.source_cpu_id, event.source_sequence))
+                    && event.reason == "RUNTIME_ENTRY_INFRASTRUCTURE"
+                    && event.effect_family == family
+                    && event.operation == operation
+                    && event.target_task_cookie == root.snapshot.task_cookie
+                    && event.admitted_entry_rule_id == 0
+            }))
+        },
+        || format!("last effects: {}", last.borrow()),
+    )?;
+    assert_eq!(event.target_task_cookie, root.snapshot.task_cookie);
+
+    release.write_all(b"release\n")?;
+    drop(release);
+    cat.close();
+    let status = cat.wait_exit("ptrace cat", Duration::from_secs(5))?;
+    assert!(status.success(), "ptrace cat failed: {status}");
+    cat.stop()?;
+    main.stop()?;
+    env.stop()
+}
