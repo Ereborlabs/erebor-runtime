@@ -3731,7 +3731,7 @@ test does not close a row when its physical condition or an assertion changed.
       direct `runc` before removing the old action and capture. The current
       shared test checks the production observation API, but does not call the
       CLI. The deployed two-node Kubernetes lane checks the CLI separately.
-  - [ ] Replace the recovered readiness-before-startup identity order. Reuse
+  - [x] Replace the recovered readiness-before-startup identity order. Reuse
     `ready.py` and the entry-isolation policy. Start the actor before Node,
     recover it, run a declared `grep` readiness entry, then run a declared
     `cat` startup entry. Require both to succeed with distinct task cookies,
@@ -3741,8 +3741,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Host passed in 43.97 seconds. The formatted test has 85 lines.
     - [x] Direct `runc` passed in 47.82 seconds with the production OCI hook.
     - [x] Kubernetes passed in 88.11 seconds. The launcher exited 0.
-    - [ ] Remove only the matching old competing-readiness action and
-      identity comparison after all three pass. Keep the startup action.
+    - [x] Remove only the matching old competing-readiness action and
+      identity comparison. Keep the startup action. The reduced recovered-
+      container probe passed with its output, bootstrap, and inspector checks.
 
 ### Direct runtime entry roles
 

@@ -2878,28 +2878,6 @@ impl EffectTestRunner {
             }
         );
 
-        let competing_probe_marker = observations.cursor();
-        let mut readiness_probe = container.spawn_exec(
-            "/bin/grep",
-            &[
-                "-q",
-                "READY",
-                "/var/lib/mithril-convergence/protected.lifecycle-ready",
-            ],
-            &fixture_root.join("readiness-probe.pid"),
-            &output_directory.join("recovered-readiness.stdout"),
-            &output_directory.join("recovered-readiness.stderr"),
-        )?;
-        ensure!(
-            wait_for_child(&mut readiness_probe)?.success(),
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the competing readiness probe did not pass",
-            }
-        );
-        reader
-            .poll(Duration::from_millis(100))
-            .context(InterceptorSnafu)?;
         let probe_marker = observations.cursor();
         let probe_pid_path = fixture_root.join("startup-probe.pid");
         let probe_stdout = output_directory.join("recovered-startup-probe.stdout");
@@ -2937,26 +2915,6 @@ impl EffectTestRunner {
             probe_marker,
             &probe_stderr,
         )?;
-        let competing_effects = observations.recent_since(competing_probe_marker);
-        let first_probe = competing_effects
-            .iter()
-            .find(|event| {
-                event.active_role_id > 0
-                    && event.admitted_entry_rule_id > 0
-                    && event.active_role_id != recovered_initial.active_role_id
-            })
-            .context(InvalidInputSnafu {
-                path: pin_root,
-                reason: "the competing probe has no admitted identity evidence",
-            })?;
-        ensure!(
-            first_probe.active_role_id == policy.role_ids["readiness"]
-                && first_probe.active_role_id != probe_snapshot.active_role_id,
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the readiness-before-startup regression condition is missing",
-            }
-        );
         fs::write(role_directory.join("application.denied"), b"release\n").context(IoSnafu {
             path: &role_directory,
         })?;
