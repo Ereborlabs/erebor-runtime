@@ -1993,6 +1993,14 @@ test does not close a row when its physical condition or an assertion changed.
       Host, direct `runc`, and Kubernetes with the same actor and policies.
   - [ ] Replace the exact-secret mount-change checks. Keep the first decision
     after mutation, dirty view, replaced-path denial, and restored decision.
+    A focused Host draft on 2026-09-28 used the shared Python actor to bind
+    a new alias after policy activation. Node did not establish that actor's
+    recovered identity, so the draft stopped before the mount. The existing
+    `bind_alias_keeps_exact_deny` Host control passed with the actor's original
+    bind mode. The draft also reached an exact-file denial in that original
+    mode, but that mode did not make the required late mount. The draft was
+    removed. Keep the old mount-change checks until a physical replacement
+    passes.
   - [ ] Remove the old exact control open only after these alias and mount
     checks and their Protect-mode counterparts pass as platform tests.
 - [ ] `EffectTestRunner::physical_probe` protect scenario: keep every hard
