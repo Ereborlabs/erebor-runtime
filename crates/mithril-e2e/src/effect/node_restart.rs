@@ -18,6 +18,9 @@ fn node_restart_keeps_actor<P: Platform>() -> TestResult<()> {
     let mut actor = env.start_actor("ready.py", &[], &labels)?;
     let before = env.task(actor.id(), "actor before Node restart")?;
     env.stop_node()?;
+    let gap = env.task(actor.id(), "actor during Node gap")?;
+    assert_eq!(gap.snapshot, before.snapshot);
+    assert_eq!(gap.coordinate, before.coordinate);
     env.start_node()?;
     env.node_ready()?;
     let after = env.task(actor.id(), "actor after Node restart")?;

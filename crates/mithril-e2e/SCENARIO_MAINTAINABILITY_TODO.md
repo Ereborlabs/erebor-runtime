@@ -4627,6 +4627,17 @@ setup, production actions, assertions, and focused test.
   running before Node starts. Require public production recovery, exact
   identity retention across the Kubernetes service and Node outages, and
   fresh identity after same-name Pod and container recreation.
+  - [ ] Extend the existing `node_restart_keeps_actor` platform test with the
+    live application's full task snapshot during the Node gap. It already
+    compares the before and after snapshots. The separate PostStart test
+    requires a fresh exact-file denial after restart. These checks do not
+    replace the old external-task, Kubernetes-service-outage, BPF-label-loss,
+    or same-name recreation checks.
+    - [x] Pass Host and commit. The exact test passed in 51.62 seconds with
+      equal full snapshots and task coordinates before shutdown, during the
+      Node gap, and after restart.
+    - [ ] Pass direct `runc` and commit.
+    - [ ] Pass Kubernetes and commit.
 - [x] `physical_kubernetes_network_probe`
   - [x] Add one `Platform::start_actor_group` operation. Kubernetes starts the
     group in one Pod from a checked YAML fixture. Host and direct `runc` start
