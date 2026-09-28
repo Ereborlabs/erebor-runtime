@@ -1151,6 +1151,18 @@ bytes after checkpoint, with no native WAL. Host results are
 Resource logs record exit zero, 0.75/2.43 seconds, and peak RSS of
 72,768/92,052 KiB. These cases do not qualify full quotas or Kubernetes outage.
 
+Full-tenant component qualification: **Done** on the same release test binary.
+`analysis::capacity::tests::analysis_store_thread_memory --exact --ignored
+--nocapture --test-threads=1` passed one test in 954.37 seconds. It reached the
+default tenant logical quota, checked an unchanged rejected receipt, then
+verified checkpoint, reopen, and the final retained frame. Peak process RSS
+was 258,304 KiB, below the provisional 512-MiB ceiling. The default allocator
+was used, with `MALLOC_ARENA_MAX` unset. No task build or second qualification
+workload overlapped this run. Read `tenant-memory.log` and
+`tenant-memory-resources.log` in `/tmp/araphor-memory-ceiling.OzjkL9bu`.
+This pass does not erase the earlier peaks or prove a fixed memory bound.
+Global capacity, full-capacity mTLS, and physical outage qualification remain.
+
 The earlier release CLI from `7ef9d59d` passed `data-store-startup` with 18 assertions and
 `data-store-recovery` with 32 assertions. Their output directories are
 `startup` and `recovery` under the guest artifact directory above. The host
