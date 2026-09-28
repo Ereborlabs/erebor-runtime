@@ -7,6 +7,66 @@ use crate::{AnalysisDatabaseSnafu, Result, StorageCapacitySnafu};
 const TENANT_REVISIONS: u64 = 1_024;
 const GLOBAL_REVISIONS: u64 = 4_096;
 
+#[derive(Default)]
+pub(super) struct UsageChange {
+    pub bytes: i64,
+    pub coverage: i64,
+    pub contexts: i64,
+    pub results: i64,
+}
+
+impl From<i64> for UsageChange {
+    fn from(bytes: i64) -> Self {
+        Self {
+            bytes,
+            ..Self::default()
+        }
+    }
+}
+
+impl UsageChange {
+    pub(super) fn apply(&self, writer: &Transaction<'_>, tenant: &[u8]) -> Result<()> {
+        writer
+            .execute(
+                "INSERT INTO tenant_usage VALUES (?, 0, 0, 0, 0) ON CONFLICT DO NOTHING",
+                params![tenant],
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "initialize tenant usage",
+            })?;
+        writer
+            .execute(
+                "UPDATE tenant_usage SET
+                logical_bytes = (logical_bytes::HUGEINT + ?)::UBIGINT,
+                coverage_count = (coverage_count::HUGEINT + ?)::UBIGINT,
+                context_count = (context_count::HUGEINT + ?)::UBIGINT,
+                result_count = (result_count::HUGEINT + ?)::UBIGINT WHERE tenant_id = ?",
+                params![
+                    self.bytes,
+                    self.coverage,
+                    self.contexts,
+                    self.results,
+                    tenant
+                ],
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "update tenant usage",
+            })?;
+        if self.bytes < 0 {
+            writer
+                .execute(
+                    "DELETE FROM tenant_usage WHERE tenant_id = ? AND logical_bytes = 0
+                    AND coverage_count = 0 AND context_count = 0 AND result_count = 0",
+                    params![tenant],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "remove empty tenant usage",
+                })?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct WitnessUsageV1 {
     pub read_revision: u64,
@@ -84,52 +144,78 @@ impl AnalysisStore {
             })
     }
 
+    const USAGE_CHARGES: &'static str = "WITH charges AS (
+                    SELECT tenant_id, 'segments' AS family,
+                        256 + committed_end + octet_length(encode(identity_json)) AS bytes FROM segments
+                    UNION ALL SELECT tenant_id, 'batches',
+                        256 + 4 * (last_cursor::HUGEINT - first_cursor + 1) FROM batch_ranges
+                    UNION ALL SELECT tenant_id, 'coverage',
+                        256 + octet_length(report) FROM coverage
+                    UNION ALL SELECT tenant_id, 'receipts',
+                        256 + octet_length(encode(identity_json)) FROM source_receipts
+                    UNION ALL SELECT tenant_id, 'bindings', 256 FROM source_bindings
+                    UNION ALL SELECT tenant_id, 'context',
+                        256 + octet_length(encode(owner_id)) + octet_length(entity_key)
+                        + octet_length(lifetime_key) + octet_length(body) FROM context_versions
+                    UNION ALL SELECT tenant_id, 'progress',
+                        256 + octet_length(encode(processor_id)) + octet_length(encode(retirement_id))
+                        + octet_length(encode(retirement_reason)) FROM processor_progress
+                    UNION ALL SELECT tenant_id, 'witnesses',
+                        256 + octet_length(encode(ref_id)) FROM evidence_refs
+                    UNION ALL SELECT tenant_id, 'context_refs',
+                        256 + octet_length(encode(ref_id)) + octet_length(encode(owner_id))
+                        + octet_length(entity_key) + octet_length(lifetime_key) FROM context_refs
+                    UNION ALL SELECT tenant_id, 'results',
+                        256 + octet_length(encode(result_id)) + octet_length(encode(processor_id))
+                        + octet_length(body) FROM analysis_results
+                    UNION ALL SELECT tenant_id, 'processor_gaps',
+                        256 + octet_length(encode(processor_id)) FROM processor_gaps
+                    UNION ALL SELECT tenant_id, 'recovery_gaps', 256 FROM recovery_gaps
+                    UNION ALL SELECT tenant_id, 'expired_ranges', 256 FROM expired_ranges
+                ) SELECT tenant_id, SUM(bytes)::UBIGINT AS logical_bytes,
+                    COUNT(*) FILTER (WHERE family = 'coverage')::UBIGINT AS coverage_count,
+                    COUNT(*) FILTER (WHERE family = 'context')::UBIGINT AS context_count,
+                    COUNT(*) FILTER (WHERE family = 'results')::UBIGINT AS result_count
+                    FROM charges GROUP BY tenant_id";
+
+    pub(super) fn validate_usage(writer: &Connection, root: &std::path::Path) -> Result<()> {
+        let invalid: bool = writer
+            .query_row(
+                &format!(
+                    "WITH expected AS ({}) SELECT EXISTS (
+                SELECT 1 FROM expected e FULL JOIN tenant_usage u USING (tenant_id)
+                WHERE e.tenant_id IS NULL OR u.tenant_id IS NULL
+                    OR e.logical_bytes <> u.logical_bytes
+                    OR e.coverage_count <> u.coverage_count
+                    OR e.context_count <> u.context_count
+                    OR e.result_count <> u.result_count)",
+                    Self::USAGE_CHARGES
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "validate tenant usage",
+            })?;
+        if invalid {
+            return Self::reject_path(root, "stored tenant usage does not match retained data");
+        }
+        Ok(())
+    }
+
     fn logical_usage(
         &self,
         transaction: &Transaction<'_>,
         tenant: [u8; 16],
     ) -> Result<(u64, u64, u64, u64)> {
-        // ponytail: scan native columns per write or retention pass. Use transactional counters if load tests exceed the intake budget.
         transaction
             .query_row(
-                "WITH charges AS (
-                    SELECT tenant_id, 'segments' AS family, false AS limited,
-                        256 + committed_end + octet_length(encode(identity_json)) AS bytes FROM segments
-                    UNION ALL SELECT tenant_id, 'batches', false,
-                        256 + 4 * len(frame_ends) FROM batch_ranges
-                    UNION ALL SELECT tenant_id, 'coverage', true,
-                        256 + octet_length(report) FROM coverage
-                    UNION ALL SELECT tenant_id, 'receipts', false,
-                        256 + octet_length(encode(identity_json)) FROM source_receipts
-                    UNION ALL SELECT tenant_id, 'bindings', false, 256 FROM source_bindings
-                    UNION ALL SELECT tenant_id, 'context', true,
-                        256 + octet_length(encode(owner_id)) + octet_length(entity_key)
-                        + octet_length(lifetime_key) + octet_length(body) FROM context_versions
-                    UNION ALL SELECT tenant_id, 'progress', false,
-                        256 + octet_length(encode(processor_id)) + octet_length(encode(retirement_id))
-                        + octet_length(encode(retirement_reason)) FROM processor_progress
-                    UNION ALL SELECT tenant_id, 'witnesses', false,
-                        256 + octet_length(encode(ref_id)) FROM evidence_refs
-                    UNION ALL SELECT tenant_id, 'context_refs', false,
-                        256 + octet_length(encode(ref_id)) + octet_length(encode(owner_id))
-                        + octet_length(entity_key) + octet_length(lifetime_key) FROM context_refs
-                    UNION ALL SELECT tenant_id, 'results', true,
-                        256 + octet_length(encode(result_id)) + octet_length(encode(processor_id))
-                        + octet_length(body) FROM analysis_results
-                    UNION ALL SELECT tenant_id, 'processor_gaps', false,
-                        256 + octet_length(encode(processor_id)) FROM processor_gaps
-                    UNION ALL SELECT tenant_id, 'recovery_gaps', false, 256 FROM recovery_gaps
-                    UNION ALL SELECT tenant_id, 'expired_ranges', false, 256 FROM expired_ranges
-                ), families AS (
-                    SELECT family, limited, SUM(bytes) AS bytes,
-                        SUM(CASE WHEN tenant_id = ? THEN bytes ELSE 0 END) AS scoped,
-                        COUNT(*) AS revisions, COUNT(*) FILTER (WHERE tenant_id = ?) AS scoped_count
-                    FROM charges GROUP BY family, limited
-                )
-                SELECT COALESCE(SUM(bytes), 0)::UBIGINT,
-                    COALESCE(SUM(scoped), 0)::UBIGINT,
-                    COALESCE(MAX(revisions) FILTER (WHERE limited), 0)::UBIGINT,
-                    COALESCE(MAX(scoped_count) FILTER (WHERE limited), 0)::UBIGINT FROM families",
+                "SELECT COALESCE(SUM(logical_bytes), 0)::UBIGINT,
+                    COALESCE(SUM(logical_bytes) FILTER (WHERE tenant_id = ?), 0)::UBIGINT,
+                    GREATEST(COALESCE(SUM(coverage_count), 0), COALESCE(SUM(context_count), 0),
+                        COALESCE(SUM(result_count), 0))::UBIGINT,
+                    COALESCE(MAX(GREATEST(coverage_count, context_count, result_count))
+                        FILTER (WHERE tenant_id = ?), 0)::UBIGINT FROM tenant_usage",
                 params![tenant.as_slice(), tenant.as_slice()],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
@@ -259,6 +345,72 @@ mod tests {
             );
             assert!(store.context_version(&context(1, 2).key)?.is_none());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_batch_charges() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let identity = EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "n".into(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        };
+        let mut cursor = 1;
+        let mut previous = None;
+        for count in [1, 3, crate::MAX_EVIDENCE_BATCH_RECORDS] {
+            let mut frames = Vec::new();
+            let mut frame_ends = Vec::new();
+            for index in 0..count {
+                frames.extend(std::iter::repeat_n(1, index % 3 + 1));
+                frame_ends.push(frames.len());
+            }
+            let bytes = frames.len() as u64;
+            let batch = ValidatedEvidenceBatchV1 {
+                cpu_id: 0,
+                first_cursor: cursor,
+                last_cursor: cursor + count as u64 - 1,
+                intake_utc_ns: 1,
+                framed_records: frames.into(),
+                frame_ends,
+            };
+            store.accept_validated_batch(identity.clone(), batch.clone())?;
+            store.accept_validated_batch(identity.clone(), batch)?;
+            let mut writer = store.writer()?;
+            let transaction = writer.get_mut()?.transaction()?;
+            let usage = store.logical_usage(&transaction, identity.tenant_id)?;
+            assert_eq!(usage.0, usage.1);
+            assert_eq!((usage.2, usage.3), (0, 0));
+            if let Some(prior) = previous {
+                assert_eq!(usage.0 - prior, bytes + 256 + 4 * count as u64);
+            }
+            let offset_charge: u64 = transaction.query_row(
+                "SELECT SUM(256 + 4 * len(frame_ends))::UBIGINT FROM batch_ranges",
+                [],
+                |row| row.get(0),
+            )?;
+            let range_charge: u64 = transaction.query_row(
+                "SELECT SUM(256 + 4 * (last_cursor::HUGEINT - first_cursor + 1))::UBIGINT FROM batch_ranges",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(range_charge, offset_charge);
+            previous = Some(usage.0);
+            cursor += count as u64;
+        }
+        drop(store);
+        let store = AnalysisStore::open(root)?;
+        let mut writer = store.writer()?;
+        let transaction = writer.get_mut()?.transaction()?;
+        assert_eq!(
+            Some(store.logical_usage(&transaction, identity.tenant_id)?.0),
+            previous
+        );
         Ok(())
     }
 
@@ -422,6 +574,7 @@ mod tests {
             1
         );
         assert_eq!(store.read_result([1; 16], "s")?, Some(vec![1]));
+        AnalysisStore::validate_usage(store.writer()?.get()?, &store.root)?;
         Ok(())
     }
 
@@ -524,6 +677,7 @@ mod tests {
             0
         );
         assert!(store.maintenance.try_write().is_ok());
+        AnalysisStore::validate_usage(store.writer()?.get()?, &store.root)?;
         Ok(())
     }
 
@@ -540,6 +694,12 @@ mod tests {
                  1, NULL, 'tenant', 'b'::BLOB, 'digest'::BLOB, 1 FROM range(1, 1025) t(i)",
                 params![[tenant; 16].as_slice()],
             )?;
+            UsageChange {
+                bytes: 260 * 1024,
+                contexts: 1024,
+                ..Default::default()
+            }
+            .apply(&transaction, &[tenant; 16])?;
             store.check_logical(&transaction, [tenant; 16], false)?;
         }
         transaction.execute(
@@ -547,6 +707,12 @@ mod tests {
              1, NULL, 'tenant', 'b'::BLOB, 'digest'::BLOB, 1)",
             params![[4_u8; 16].as_slice()],
         )?;
+        UsageChange {
+            bytes: 260,
+            contexts: 1,
+            ..Default::default()
+        }
+        .apply(&transaction, &[4; 16])?;
         assert!(matches!(
             store.check_logical(&transaction, [4; 16], false),
             Err(crate::Error::StorageCapacity {
@@ -564,6 +730,72 @@ mod tests {
         transaction.rollback()?;
         drop(writer);
         assert_eq!(store.meta()?.commit_revision, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn usage_rejects_corruption() -> TestResult {
+        for mutation in [
+            "UPDATE tenant_usage SET logical_bytes = logical_bytes + 1",
+            "UPDATE tenant_usage SET context_count = 0",
+            "UPDATE tenant_usage SET coverage_count = 1",
+            "UPDATE tenant_usage SET result_count = 1",
+            "DELETE FROM tenant_usage",
+            "INSERT INTO tenant_usage VALUES ('extra'::BLOB, 0, 0, 0, 0)",
+        ] {
+            let directory = tempfile::tempdir()?;
+            let root = directory.path().join("analysis");
+            let store = AnalysisStore::open(&root)?;
+            store.commit_context(&context(1, 1))?;
+            {
+                let writer = store.writer()?;
+                AnalysisStore::validate_usage(writer.get()?, &root)?;
+                writer.get()?.execute(mutation, [])?;
+            }
+            drop(store);
+            assert!(
+                matches!(
+                    AnalysisStore::open(&root),
+                    Err(crate::Error::AnalysisState { .. })
+                ),
+                "{mutation}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn usage_updates_are_atomic() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        store.commit_context(&context(1, 1))?;
+        let mut writer = store.writer()?;
+        for change in [
+            UsageChange::from(-261),
+            UsageChange {
+                contexts: -2,
+                ..Default::default()
+            },
+        ] {
+            let transaction = writer.get_mut()?.transaction()?;
+            assert!(change.apply(&transaction, &[1; 16]).is_err());
+            transaction.rollback()?;
+            AnalysisStore::validate_usage(writer.get()?, &store.root)?;
+        }
+        let transaction = writer.get_mut()?.transaction()?;
+        transaction.execute(
+            "UPDATE tenant_usage SET logical_bytes = 18446744073709551615",
+            [],
+        )?;
+        assert!(UsageChange::from(1).apply(&transaction, &[1; 16]).is_err());
+        transaction.rollback()?;
+        AnalysisStore::validate_usage(writer.get()?, &store.root)?;
+        let transaction = writer.get_mut()?.transaction()?;
+        UsageChange::from(256).apply(&transaction, &[2; 16])?;
+        UsageChange::from(-256).apply(&transaction, &[2; 16])?;
+        assert_eq!(store.logical_usage(&transaction, [2; 16])?, (260, 0, 1, 0));
+        AnalysisStore::validate_usage(&transaction, &store.root)?;
+        transaction.rollback()?;
         Ok(())
     }
 }

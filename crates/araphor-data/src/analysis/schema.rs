@@ -185,6 +185,7 @@ impl AnalysisStore {
         if invalid {
             return Self::reject_path(root, "the stored revision or pending bound is invalid");
         }
+        Self::validate_usage(writer, root)?;
         Ok(())
     }
 
@@ -323,6 +324,7 @@ impl AnalysisStore {
 
     pub(super) fn validate_tables(writer: &Connection) -> Result<()> {
         let projections = [
+            "tenant_id, logical_bytes, coverage_count, context_count, result_count FROM tenant_usage",
             "singleton, store_uuid, schema_version, recovery_epoch, commit_revision FROM store_meta",
             "relation_name, last_changed_revision FROM relation_revisions",
             "stream_key, identity_json, tenant_id, cpu_id, contiguous_cursor, coverage_revision, retained_floor FROM source_receipts",
@@ -405,7 +407,7 @@ impl AnalysisStore {
     }
 
     pub(super) fn bind_source(
-        writer: &Connection,
+        writer: &duckdb::Transaction<'_>,
         root: &Path,
         identity: &EvidenceIntakeIdentityV1,
     ) -> Result<bool> {
@@ -453,6 +455,7 @@ impl AnalysisStore {
             .context(AnalysisDatabaseSnafu {
                 operation: "bind source epoch",
             })?;
+        super::quota::UsageChange::from(256).apply(writer, &identity.tenant_id)?;
         Ok(true)
     }
 

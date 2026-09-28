@@ -118,6 +118,13 @@ Storage fails or cannot meet capacity
    logical budgets: 8 GiB/store, 2 GiB/tenant, 512 MiB/tenant witness reserve,
    and 25 percent for maintenance/result writes. Charge raw frames once and
    metadata/derived rows at 256 bytes plus variable payload/key bytes.
+   Store one `tenant_usage` row per tenant. Keep logical bytes and coverage,
+   context, and result counts in that row. Each mutation updates its charge
+   in the same transaction. Quota checks read these totals, not retained
+   batches. Reserved and Deleting segments remain charged until cleanup
+   commits. Startup and backup validation compare totals with retained data
+   and reject a mismatch. Do not repair counters or import old schemas.
+   Physical file and available-space checks remain separate.
    Retain revision-family limits of 1,024/tenant and 4,096/store. Count pending
    appends, segment files, native metadata WAL, backups, and temporary files
    in physical admission. At 90 percent of ordinary allowance, attempt bounded
@@ -205,6 +212,8 @@ segment-sync/metadata-commit recovery, post-commit lost ACK, conflicting duplica
 batches, explicit gaps, checked overflow, cross-tenant references, required
 processor stall, review pins, retirement, expiry, late context, segment/catalog recovery,
 disk full, unsupported schema and rejected old evidence state.
+Check stored usage after replay, rollback, deletion recovery, and restore.
+Reject missing, extra, incorrect, overflowing, and underflowing totals.
 
 Run `analysis_store_thread_memory` alone in a release test process on Linux.
 Use four calling threads with one batch in flight and the default store limits.
@@ -1040,6 +1049,76 @@ profile or the peak allocation. No tenant-quota rejection, final checkpoint,
 or reopen pass is established. Read `tenant-memory.log` and
 `tenant-memory-resources.log`. Diagnose this failure before the larger global
 quota run. Do not raise the memory limit to report a pass.
+
+A diagnostic repeated that test on the same executable with only
+`MALLOC_ARENA_MAX=1` added to its environment. It passed one test in
+1,431.74 seconds, including quota rejection, checkpoint, and reopen. Peak RSS
+was 177,044 KiB. This result supports an allocator contribution; it does not
+qualify the default environment or change the production allocator policy.
+Host release compilation and the workspace gate overlapped this diagnostic.
+Do not use its elapsed time as a clean performance comparison. Read
+`tenant-arena.log` and `tenant-arena-resources.log`.
+
+The first tested correction after `f42b4f56` changed `AnalysisStore::logical_usage`
+to calculate each batch's offset count as `last_cursor - first_cursor + 1`.
+Intake and startup already require this count to equal the frame-array length.
+The old quota query loaded the arrays to count their elements on every write.
+The new query reads the existing cursor columns. It adds no stored counter,
+index, or data copy. The metadata charge stays 256 bytes plus four bytes per
+offset. Raw segment charges, quotas, and native settings are unchanged.
+All five quota tests passed in 3.20 seconds on the corrected release binary.
+The new `analysis_batch_charges` case compares exact charges for unequal frame
+sizes, maximum-size batches, duplicate replay, and reopen. Read
+`quota-range-tests.log`. The complete release test build passed in 12 minutes
+52 seconds at `quota-range-build.log`; it reused the existing native library.
+The data test executable SHA-256 is
+`83716c7a72f1e8b6f296bb1203c646b13b0cd76ecb4d4a4fb36a123328dace1a`.
+The workspace gate passed, but the unchanged full-tenant memory case failed
+after 618.10 seconds at cursor 6,796,288. The assertion recorded 262,432 KiB;
+the external process peak was 268,168 KiB. Read `quota-range-ci.log`,
+`tenant-range.log`, and `tenant-range-resources.log`. Host checks overlapped
+this run. The cursor-count change did not fix the memory failure.
+
+The approved follow-up stores tenant totals in metadata schema 7. Each data
+mutation updates these totals in its transaction. Admission no longer scans
+all retained metadata. Startup compares totals with retained data and rejects
+a mismatch. Allocator settings and quota limits remain unchanged.
+All seven release accounting tests passed in 4.53 seconds. The final data
+suite passed 77 tests with five ignored. The complete workspace gate passed:
+`RUST_TEST_THREADS=4 CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 bash
+.github/scripts/verify-rust-ci.sh`. This run followed the final Rust edit.
+Formatting, workspace check, strict Clippy, and all enabled workspace tests
+passed. The release build passed in 12 minutes 59 seconds and reused the
+native library. The data executable SHA-256 is
+`d03d2882c2d21ebf02f1bf2b35c9ef9a1e39604b6a9ba6235cfc8333baeaa666`.
+The unchanged default-environment tenant memory test failed after 617.19
+seconds at cursor 6,636,544. Its assertion recorded 262,788 KiB; the external
+peak was 272,092 KiB. No successful quota stop, final checkpoint, or reopen
+is established by this run. Read `quota-totals-tests.log`,
+`quota-totals-release.log`, `quota-totals-final-ci.log`, `tenant-totals.log`,
+and `tenant-totals-resources.log` in the host artifact directory above.
+Host builds and tests overlapped this run. Do not compare elapsed times as an
+isolated throughput measurement. Stored totals remove the repeated logical
+quota scan, but they do not fix the process memory failure. Memory
+qualification remained **Not done** under that ceiling.
+
+Stored quota totals: **Done** for implementation and correctness checks.
+The latest workspace gate passed with `ff017852` and the accounting change
+present. Read `/tmp/araphor-memory-ceiling.OzjkL9bu/ci.log`. This gate ran
+after the final Rust edit and did not run ignored performance tests.
+The user approved a higher memory-test ceiling; both existing cases now use
+512 MiB. This change does not alter production memory settings.
+
+A temporary release diagnostic used the accounting implementation and four
+calling threads. It accepted 12,177,408 events, expired that history, and
+accepted another 12,177,408 events in the same process. Peak RSS was
+283,280 KiB across both cycles and reopen. Current RSS was 209,756 KiB at the
+first quota stop and 212,632 KiB at the second. The run exited zero in
+1,656.67 seconds. Read `/tmp/araphor-memory-growth.MnreQlRj/memory-growth.log`
+and `memory-growth-resources.log` in the same directory. This diagnostic
+checked receipts but did not compare all retained frames. It does not replace
+the committed tenant/global cases or prove an unlimited-runtime memory bound.
+Full storage qualification remains **Not done**.
 
 The same release CLI passed `data-store-startup` with 18 assertions and
 `data-store-recovery` with 32 assertions. Their output directories are

@@ -106,6 +106,15 @@ impl AnalysisStore {
             params![input.change_id, input.reason, accepted, revision,
                 scope.processor_id, scope.method_version, tenant, key.as_slice()],
         ).context(AnalysisDatabaseSnafu { operation: "retire required processor" })?;
+        let bytes = input.change_id.len() as i64 + input.reason.len() as i64
+            - change_id.len() as i64
+            - reason.len() as i64
+            + if consumed < accepted {
+                256 + scope.processor_id.len() as i64
+            } else {
+                0
+            };
+        super::quota::UsageChange::from(bytes).apply(&transaction, tenant)?;
         self.check_logical(&transaction, scope.identity.tenant_id, true)?;
         let relations: &[&str] = if consumed < accepted {
             &["processor_progress", "processor_gaps"]

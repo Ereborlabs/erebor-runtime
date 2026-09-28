@@ -140,8 +140,8 @@ do not enter the earlier snapshot. The range test reads 257 batches and checks
 every cursor. File-fault tests restore their temporary files and require a later
 successful read. `data_store_recovery` decodes production Node frames, selects
 one operation field, and proves a policy RPC while its fixture holds extraction
-open. The ignored 72-MiB history test is release qualification, not completed
-proof. It also checks 18 witnesses across six segments and reports the exact
+open. The ignored 72-MiB history test passed in release mode on source
+`7ef9d59d`. It checks 18 witnesses across six segments and reports the exact
 frame bytes, full segment charge, extra retained bytes, and operation times.
 Read the phase result for current verification and remaining work.
 
@@ -232,7 +232,8 @@ blocks. Duplicate result references do not charge the same frame or segment
 twice. `analysis_witness_segment_cost` checks unequal frame sizes, two pinned
 segments, duplicate references, expiry, reopen, and deletion after pin expiry.
 `data_store_recovery` compares charges with actual retained segment lengths
-after authenticated intake. Release many-segment qualification remains pending.
+after authenticated intake. The release history case passed with 18 witnesses
+across six segments. Read the storage phase result for measurements and limits.
 
 [AnalysisStore::reserve_segment](../../../../crates/araphor-data/src/analysis/segments.rs) An accepted batch needs segment space.<br>
 -> [StorageLimitsV1::check_append](../../../../crates/araphor-data/src/analysis/capacity.rs) Admission adds pending payload and any new header to file bytes and subtracts them from available bytes.<br>
@@ -243,6 +244,35 @@ changing a receipt or reserved file. `analysis_source_count_bound` checks the
 last binding and the next rejected binding. Startup validates the same count.
 The quota runners derive their iteration bound from their input size and quota;
 the runner bound is not a release-capacity result.
+
+[UsageChange::apply](../../../../crates/araphor-data/src/analysis/quota.rs) A data mutation updates one tenant's logical bytes and revision-family counts in its transaction.<br>
+-> [AnalysisStore::logical_usage](../../../../crates/araphor-data/src/analysis/quota.rs) Admission reads stored totals, not all retained batches.<br>
+-> [AnalysisStore::validate_usage](../../../../crates/araphor-data/src/analysis/quota.rs) Startup and backup validation compare totals with retained data and reject a mismatch.
+
+This change uses metadata schema 7. It adds no raw copy or per-event index.
+`PendingBatch::insert` adds frame bytes and batch metadata charges.
+Reservation adds the segment header and catalog charge. Deletion cleanup
+subtracts the segment and batch charges after unlink and directory sync.
+Other writers charge receipts, bindings, coverage, context, results,
+references, progress, and gaps in their data transactions. Counter errors
+abort those transactions. Physical disk checks remain separate.
+`analysis_batch_charges` checks unequal frame sizes, maximum batches,
+duplicate replay, exact charges, and reopen. `usage_updates_are_atomic`
+checks subtraction, overflow, underflow, and rollback.
+`usage_rejects_corruption` checks missing, extra, and incorrect totals.
+The working change after `f42b4f56` passed all seven release accounting tests
+and 77 data-crate tests. The full workspace gate passed after the final Rust
+edit, including formatting, workspace check, strict Clippy, and all enabled
+workspace tests. The log is `quota-totals-final-ci.log` in the phase artifact
+directory. No code changed after that run.
+The unchanged default-environment memory test failed at cursor 6,636,544;
+external peak RSS was 272,092 KiB against the 256-MiB limit. Stored totals
+remove the repeated quota scan but are not a qualified memory fix. This
+memory result used the former ceiling. The latest workspace gate passed with
+the 512-MiB test ceiling in `ff017852` and the accounting change present.
+Read `/tmp/araphor-memory-ceiling.OzjkL9bu/ci.log`. The ignored memory tests
+did not run in that gate. The earlier cursor-count-only correction also failed
+the former ceiling.
 
 [AnalysisStore::storage_health](../../../../crates/araphor-data/src/analysis/health.rs)
 reports writer readiness independently of disk capacity and retention health.
@@ -1264,7 +1294,7 @@ The harness unmounts only its temporary filesystem. This is real filesystem
 exhaustion with synthetic mTLS input. It is not hardware power-loss, native
 commit-failure, reserve-sizing, or Kubernetes partition proof.
 
-[AnalysisStore::logical_usage](../../../../crates/araphor-data/src/analysis/quota.rs) DuckDB totals variable bytes and a fixed 256-byte charge for each tenant-owned row.<br>
+[AnalysisStore::logical_usage](../../../../crates/araphor-data/src/analysis/quota.rs) DuckDB reads stored tenant charges for variable bytes and fixed row costs.<br>
 -> [AnalysisStore::check_logical](../../../../crates/araphor-data/src/analysis/quota.rs) A mutating transaction checks global and tenant bytes and per-family revision counts before commit.<br>
 -> [AnalysisStore::check_witnesses](../../../../crates/araphor-data/src/analysis/quota.rs) A result transaction checks unique live raw witnesses and pinned context against the tenant witness budget.<br>
 -> [AnalysisStore::logical_pressure](../../../../crates/araphor-data/src/analysis/quota.rs) Logical usage reaches 90 percent of the ordinary limit.<br>
@@ -1293,11 +1323,10 @@ The release data suite also passed 49 tests with four ignored. The release
 data-store gRPC suite passed 17 tests with four ignored. These isolated VM
 runs use the same Rust source. The phase plan records executable digests,
 commands, environment, and logs. They do not qualify full-capacity operation.
-The owner computes usage from native columns inside the write transaction;
-there is no separate accounting ledger to recover. A quota failure rolls back
-rows, references, progress, and receipts together. Size-reducing raw retention
-does not need logical admission. The aggregate scan is proportional to retained
-rows; performance qualification is still required.
+The owner updates tenant totals inside each data transaction. A quota failure
+rolls back totals, rows, references, progress, and receipts together.
+Size-reducing raw retention does not need logical admission. Admission reads
+one row per tenant. Startup verifies totals against retained metadata.
 `analysis_store_logical_limits` proves tenant/global boundaries, isolation,
 no-op retry, and restart through context commits. `analysis_store_witness_limits`
 proves exact raw/context charges, shared references, result rollback, reserved
