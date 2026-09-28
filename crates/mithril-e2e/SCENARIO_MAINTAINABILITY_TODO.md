@@ -3779,7 +3779,8 @@ test does not close a row when its physical condition or an assertion changed.
       uses the status from `wait_exit`.
     - [x] Direct `runc` passed in 43.22 seconds with the same test body and
       stock runtime exec.
-    - [ ] Pass Kubernetes with the same test body.
+    - [x] Kubernetes passed in 82.91 seconds with the same test body. The
+      launcher exited 0 and removed the test resources.
     - [ ] Remove only the matching old output assertion after all three pass.
 
 ### Direct runtime entry roles
