@@ -6,7 +6,7 @@ use mithril_control::WorkloadProtectionPolicy as Policy;
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = mount_alias]
 fn first_bind_read_keeps_deny<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("file-mount-change")?;

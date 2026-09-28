@@ -2010,7 +2010,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Pass Host and commit it. The new case passed in 35.92 seconds. The
       unchanged `bind_alias_keeps_exact_deny` Host case passed in 36.00
       seconds with the extended shared actor.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The same test body passed in
+      42.97 seconds through stock `runc` and the production OCI hook. The
+      unchanged bind-alias case passed in 42.47 seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the matching old first-read decision and effect after
       all three pass. Keep dirty-view, replaced-path, restoration, and cache
