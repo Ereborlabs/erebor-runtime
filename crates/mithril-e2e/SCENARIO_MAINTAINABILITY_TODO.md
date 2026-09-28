@@ -3744,6 +3744,16 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Remove only the matching old competing-readiness action and
       identity comparison. Keep the startup action. The reduced recovered-
       container probe passed with its output, bootstrap, and inspector checks.
+  - [ ] Replace the recovered runtime-internal Exec result. Reuse `ready.py`
+    and the entry-isolation policy. Start the actor before Node, recover it,
+    and start a declared `cat` entry. Require fresh
+    `RUNTIME_ENTRY_INFRASTRUCTURE` Exec/Execute evidence with entry rule zero.
+    Keep the separate ptrace, startup output, and public inspector checks.
+    - [x] Host passed in 35.04 seconds.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching old event scan, serialized result, and
+      `run.sh` predicate after all three pass.
 
 ### Direct runtime entry roles
 
