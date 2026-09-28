@@ -85,6 +85,8 @@ mod path_wildcards;
 #[cfg(test)]
 mod policy_replace;
 #[cfg(test)]
+mod recovered_order;
+#[cfg(test)]
 mod recovery_tasks;
 #[cfg(test)]
 mod restricted_roots;

@@ -3703,10 +3703,10 @@ test does not close a row when its physical condition or an assertion changed.
       `SIGCONT` after its probe child exited. Do not treat that launcher
       behavior as a test assertion.
   - [x] Replace the recovered startup entry's missing-file and signed-denial
-    contrast. Reuse the
-    shared entry-isolation policy and `ready.py` actor. Start the actor before
-    Node, recover it, then start a declared `cat` entry. Remove its protected
-    file while the entry waits at a FIFO. Require `ENOENT`, a nonzero entry
+    contrast. Reuse the shared entry-isolation policy and `ready.py` actor.
+    Start the actor before Node and recover it. Then start a declared `cat`
+    entry. Remove its protected file while the entry waits at a FIFO. Require
+    `ENOENT`, a nonzero entry
     rule, and no fresh signed-policy denial for that entry. Restore the file,
     start the declared entry again, and require the same role and rule, a
     failed read, and attributed `EXACT_POLICY_DENY` File/OpenRead evidence.
@@ -3731,6 +3731,18 @@ test does not close a row when its physical condition or an assertion changed.
       direct `runc` before removing the old action and capture. The current
       shared test checks the production observation API, but does not call the
       CLI. The deployed two-node Kubernetes lane checks the CLI separately.
+  - [ ] Replace the recovered readiness-before-startup identity order. Reuse
+    `ready.py` and the entry-isolation policy. Start the actor before Node,
+    recover it, run a declared `grep` readiness entry, then run a declared
+    `cat` startup entry. Require both to succeed with distinct task cookies,
+    distinct roles, nonzero entry rules, and one policy generation. Keep the
+    old startup output and runtime-internal bootstrap checks until they have
+    separate shared coverage.
+    - [x] Host passed in 43.97 seconds. The test has 77 lines.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the matching old competing-readiness action and
+      identity comparison after all three pass. Keep the startup action.
 
 ### Direct runtime entry roles
 
