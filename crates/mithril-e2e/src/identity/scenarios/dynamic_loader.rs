@@ -4,7 +4,7 @@ use mithril_control::{lower_kubernetes_policy, WorkloadProtectionPolicy};
 
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn dynamic_loader_needs_no_rule<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("dynamic-loader")?;

@@ -3974,7 +3974,8 @@ setup, production actions, assertions, and focused test.
     - [x] Pass Host and commit it. The 60-line test passed in 48.94 seconds.
       It observed the live loader mapping, its declared shell role and entry
       rule, and the loader's absence from the lowered signed policy.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The unchanged test passed in
+      38.59 seconds after obsolete copied binaries were removed from the VM.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only `dynamic_loader_paths`,
       `dynamic_loader_paths_absent_from_policy`, their old builder check,
