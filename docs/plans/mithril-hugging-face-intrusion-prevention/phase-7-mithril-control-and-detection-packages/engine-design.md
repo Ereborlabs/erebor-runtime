@@ -16,8 +16,9 @@ name. Do not infer application verbs from opaque network effects.
 AnalysisStore owns one segment store for raw events and diagnostic output.
 DuckDB stores the segment catalog, receipts, context, and derived state. It
 also runs isolated SQL queries over bounded authorized input. Raw payloads
-are not copied into DuckDB or discovery archives. A segment sync followed by
-a metadata commit precedes each source acknowledgement. ControlStore keeps policy, trust, rollout,
+are not copied into DuckDB or discovery archives. Durable segment acceptance
+precedes each source acknowledgement; catalogue publication does not delay it.
+ControlStore keeps policy, trust, rollout,
 and approval authority in its existing format. Node keeps its existing delivery
 WAL. Neither store replaces the other's authority.
 
@@ -515,7 +516,9 @@ the first noise controls; optional classification is not a release dependency.
 
 Use one AnalysisStore in `araphor-data`. Reuse the existing segment codec,
 checksums, bounded append, and reader from Control. Retain the pinned DuckDB
-binding for metadata and derived-state transactions and isolated SQL workers.
+binding for rebuildable catalogue publication, derived-state transactions,
+and isolated SQL workers. Raw acceptance uses the original segment writer
+inside `araphor-data`; it does not commit DuckDB per raw batch.
 Do not add SQLite, DataFusion, a broker, an ORM, or a storage-driver framework.
 
 ### Storage owner and schema
@@ -554,7 +557,7 @@ relations; create later result families only in their owning phase.
 | --- | --- |
 | `store_meta`, `relation_revisions` | Store UUID, schema, recovery epoch, commit revision, and last change for each exposed relation. |
 | `tenant_usage` | One row per tenant with logical bytes and coverage, context, and result counts. Each mutation updates its charge in the same transaction. Admission reads these totals. Startup and backup validation reject totals that differ from retained data. Physical disk checks remain separate. |
-| `segments`, `batch_ranges` | Exact source/kind, file ID, committed byte end, cursor range, byte range, count, digest, commit/ordinal range, intake-time bounds, and Reserved/Live/Deleting state. One entry per segment or batch, not a second row per event. |
+| `segments`, `batch_ranges` | Rebuildable catalogue of exact source/kind, file ID/name, committed byte end, cursor range, byte range, count, digest, commit/ordinal range, intake-time bounds, and Live/Deleting state. One entry per segment or batch, not a second row per event. Durable deletion intent is not rebuildable from deleted raw data. |
 | `events` | A logical query relation decoded from committed segment ranges. Derived revision notices have distinct kinds and are not sensor actions. No persisted raw-event table. |
 | `source_receipts`, `coverage` | Source/session binding, contiguous ACK position, bounded pending ranges, explicit expiry/loss intervals, and coverage revisions. Kernel sequence stays separate. |
 | `context_versions` | Exact owner/lifetime/revision, validity, sensitivity, bounded body, and digest. |
@@ -570,8 +573,10 @@ events in memory. Do not add a per-event ART index, full-text index, custom
 B-tree, compactor, or persistent raw query cache.
 
 `StorePositionV1` remains `(commit_revision: u64, ordinal: u32)`.
-The metadata transaction assigns one revision and distinct ordinals to newly
-visible records. An exact retry changes neither revision nor notification.
+The serialized data owner assigns one revision and distinct ordinals to newly
+visible records. A raw segment commit persists those positions. Derived
+transactions persist their positions in DuckDB. Catalogue publication keeps
+the original raw positions. An exact retry changes neither revision nor notification.
 Source cursor, kernel sequence, and store position remain separate. Revisions
 order commits, not cross-node causality. Ordinary restart keeps the store UUID
 and epoch; restore changes the recovery epoch.
@@ -595,12 +600,9 @@ Authenticated Node submits a batch
   -> EvidenceIntakeOwner validates source, wire format, sizes, and grants
   -> AnalysisStore reserves segment, metadata, and recovery capacity
   -> writer checks source ranges and retained duplicate bytes
-  -> on rotation, writer commits an internal Reserved file ID before file creation
-  -> writer appends complete framed records at the known committed file end
+  -> writer appends complete self-contained raw commits through the original segment owner
   -> writer syncs affected segment files and any new directory entries
-  -> one DuckDB transaction commits batch ranges, receipts, context/coverage,
-     commit positions, and affected relation revisions
-  -> writer publishes the committed revision
+  -> writer publishes the durable raw receipt and committed revision
   -> Control returns the durable contiguous source cursor
 
 A processor submits calculated results
@@ -609,20 +611,33 @@ A processor submits calculated results
   -> writer publishes the new revision
 ```
 
-The metadata commit makes synced segment bytes visible. Raw append and result
-calculation do not need one shared transaction. If a crash occurs before that
-commit, appended bytes have no receipt and cannot be read or acknowledged.
-Recovery discards only uncommitted tails and catalog-reserved new files.
-Reservation is per rotation, not per event. It advances no public relation
-revision or source receipt. Successful intake changes Reserved to Live in its
-metadata commit. Never reuse file IDs or delete unknown files as a repair.
-Missing or corrupt committed bytes
-stop data readiness; do not create an empty replacement.
+Synced segment commits make raw bytes visible. Each commit carries source
+binding, CPU, cursor ranges, offsets, intake time, and store positions. Reuse
+the original framed checksum and active/sealed recovery rules. Complete valid
+commits survive restart even if ACK or catalogue publication did not occur.
+Only an incomplete active tail can be discarded. Corrupt complete frames,
+missing referenced files, and invalid sealed tails stop data readiness.
+Never reuse file IDs or delete unknown files as a repair.
 
-If the metadata commit outcome is uncertain, stop writes and recover the
-catalog before truncating or retrying. If it committed, a lost ACK retries as
-a duplicate. If it did not, recovery removes the uncommitted append. Keep the
-writer unavailable if recovery fails. Node retains unacknowledged input.
+Raw receipt and replay lookups do not query DuckDB. Keep compact descriptors
+and checked admission totals in the serialized owner, not decoded history.
+Raw quota checks include commits that are not yet in the database catalogue.
+Derived mutations update required-progress, witness, and quota state under
+that same coordinator. No stale projection can authorize deletion or intake.
+
+Publish raw range descriptors to DuckDB in bounded groups outside the raw
+ACK operation. This catalogue contains no second copy of event payloads.
+Before a derived transaction, retention decision, or catalogue snapshot needs
+new input, publish the required descriptors. The existing maintenance owner
+also advances this catalogue. Read deadlines and scan bounds still apply;
+return an explicit error instead of an incomplete result. Catalogue failure
+cannot roll back a raw ACK. Backups include all durable raw commits.
+
+If a raw sync outcome is uncertain, stop writes and recover the segment owner
+before retry. A recovered complete commit is a duplicate on replay. If a
+derived metadata commit is uncertain, recover that database transaction
+before accepting further dependent mutations. Keep data readiness false if
+recovery fails. Node retains unacknowledged input.
 
 Start group limits at 4,096 records, 4 MiB encoded input, or 50 ms, whichever
 comes first. Existing wire limits still apply. The retained duplicate path
@@ -1006,7 +1021,7 @@ Node evidence and output still enter authenticated Control intake. Forward
 bounded batches; acknowledge only the remote durable receipt. Use private
 protobuf gRPC domain operations for accepted evidence, owner-qualified context, trace
 intent/output/result, and shared query/discovery requests. These operations
-validate schema, scope and owner before the local append/metadata commit protocol. Do not export
+validate schema, scope and owner before the local raw or derived commit protocol. Do not export
 table CRUD, SQL writes or begin/commit RPCs. TraceOwner waits for durable intent
 before dispatch. A lost reply is reconciled by request key and content digest;
 retry cannot duplicate a capture or source write.

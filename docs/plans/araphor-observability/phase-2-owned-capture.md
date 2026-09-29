@@ -21,8 +21,8 @@ TraceOwner accepts an authorized request
   -> Node records intent and revalidates each lifetime before attachment
   -> Interceptor runs the reviewed or separately privileged script
   -> Node appends output to its bounded diagnostic spool
-  -> AnalysisStore syncs output segments, then commits ranges, receipt and revisions
-  -> Control returns an output ACK only after that metadata commit
+  -> AnalysisStore syncs self-contained output commits and publishes its raw receipt
+  -> Control returns an output ACK after the durable segment commit
 
 Identity changes, the lease expires, or cancellation arrives
   -> Node stops that execution without following replacements
@@ -68,8 +68,10 @@ Control or Node restarts after dispatch
 7. Add `traces`, `trace_output` and `trace_measurements` to AnalysisStore in
    `araphor-data`. Reuse Control's `observability/{model,owner,dispatch,recipe}.rs`;
    adapt `TraceOwner` to owner-qualified data commits and reads.
-   Store raw output only in diagnostic segments. After segment sync, commit
-   range metadata, deduplication receipt, state and relation revisions together.
+   Store raw output only in diagnostic segments. The durable segment commit
+   contains the output sequence and replay metadata. Catalogue publication
+   does not delay output ACK. Trace intent and lifecycle changes remain
+   transactional derived-state operations.
    Reuse 7.2 snapshot leases, exact references, whole-segment retention charges,
    and complete-bundle backup. No duplicate raw trace table is permitted.
    Equal execution/source sequence and bytes is a retry; changed bytes reject.
