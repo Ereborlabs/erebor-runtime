@@ -4207,7 +4207,8 @@ setup, production actions, assertions, and focused test.
     queue-drop, lost-event, decoder-error, evidence-error, and WAL-block counts.
     - [x] Pass Host and commit it. The exact ignored Host test passed in the
       retained VM in 35.64 seconds with 70,000 denied reads.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The exact ignored direct-`runc`
+      test passed in the retained VM in 41.76 seconds.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove the matching legacy actor commands, private observation store,
       result field, and shell predicate after all three platforms pass.

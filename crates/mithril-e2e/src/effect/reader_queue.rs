@@ -6,7 +6,7 @@ use crate::error::InvalidInputSnafu;
 use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = identity]
 fn reader_burst_keeps_events<P: Platform>() -> TestResult<()> {
     const COUNT: u64 = 70_000;
