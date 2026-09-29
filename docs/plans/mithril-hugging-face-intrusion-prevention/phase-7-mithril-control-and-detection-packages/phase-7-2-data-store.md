@@ -326,7 +326,62 @@ It qualifies this global-capacity workload and its checkpoint/reopen path.
 It does not prove concurrent intake throughput, Node WAL or mTLS behavior,
 protected retention, a complete historical-record digest, or memory behavior
 beyond the configured quota. The 512-MiB ceiling remains provisional, not a
-production memory cap. Item 4 has not started. Stop for the user's decision.
+production memory cap. The user subsequently selected item 6. Items 4 and 5
+have not run in this ordered review.
+
+### Ordered review: item 6
+
+**Done: PASS**, 2026-09-29 UTC. The user selected this item after item 3.
+The release prerequisite `discovery::data_store::rollout::tests::data_rollout_load`
+passed one test, with zero failures and 371 filtered tests, in 0.63 seconds.
+It checked two pairs, four rollout transitions, and 8,192 records, plus invalid
+pair counts and refusal to overwrite an existing output directory.
+
+One release `data-store-rollout` case then passed in 11.21 seconds with exit
+status zero. It completed 32 idle/loaded pairs, 64 Active rollout transitions,
+and 131,072 evidence records. Sixteen pairs used each order. Exact policy
+inventory and bundle bytes, evidence ACKs, duplicate replay without source-state
+changes, the complete retained-input digest, and durable rollout and evidence
+state after reopen all passed. The old Control raw writer was not used.
+
+| Measurement | Idle rollout | Loaded rollout | Loaded evidence ACK |
+| --- | --- | --- | --- |
+| Mean | 56.273 ms | 61.767 ms | 70.049 ms |
+| p50 | 51.761 ms | 57.902 ms | 63.627 ms |
+| p95 | 110.450 ms | 117.949 ms | 118.254 ms |
+| Maximum | 111.821 ms | 123.174 ms | 123.267 ms |
+
+Percentiles use nearest ranks over 32 samples per column. The evidence ACK
+interval includes the preceding loaded rollout. The five-second evidence wait
+was unchanged. No five-percent slowdown gate applies. Peak process RSS was
+118,512 KiB (115.7 MiB). File and allocated bytes after reopen were 20,574,208.
+
+Commands, from the implementing worktree:
+
+```sh
+/usr/bin/time -v -o /tmp/araphor-rollout.UMo7LUkd/component-resources.log target/release/deps/mithril_e2e-36858fcf1fbc2e49 discovery::data_store::rollout::tests::data_rollout_load --exact --nocapture --test-threads=1
+/usr/bin/time -v -o /tmp/araphor-rollout.UMo7LUkd/resources.log target/release/mithril_discovery_test --case data-store-rollout --output-directory /tmp/araphor-rollout.UMo7LUkd/result
+```
+
+Read `result/result.json`, `run.log`, `resources.log`, `component.log`,
+`component-resources.log`, and `environment.log` under that host directory.
+The CLI SHA-256 is
+`4ac2b96f06f565b1da2301c96fa30cdcb409e5bf7f149d8b7ecc8fc3314242c4`;
+the prerequisite test SHA-256 is
+`4b1d814f9117dc97116278940a07b9f590f6801520b505f10f3d5dacc7e8117c`.
+The source at `71de8ab` contains the same Rust as `adbcb3a8`. Existing release
+binaries were reused. No code, deadline, quota, allocator setting, or assertion
+changed. The shared host has 16 reported CPUs, 31,492 MiB RAM, swap enabled,
+and x86_64 Linux 6.8.0-139-generic. `MALLOC_ARENA_MAX` was unset. Initial
+available filesystem space was 7,168,286,720 bytes. No other task test or build
+ran with this case; unrelated host activity was not isolated.
+
+This result proves Control rollout progress with evidence in flight through
+Node WAL and mTLS for this workload. The fixture supplies Node activation
+reports; no kernel policy is installed. One run does not prove timing stability,
+physical activation, full-quota behavior, or filesystem reserve adequacy.
+Items 4, 5, 7, and 8 remain unrun in this ordered review. Stop for the user's
+decision; do not start another item automatically.
 
 ### Measurement contracts
 
