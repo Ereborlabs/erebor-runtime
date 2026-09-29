@@ -30,7 +30,8 @@ declarative captures are not delivered by these changes.
 
 ### Segment storage conversion
 
-Source state: `150033ef` and the missing-metadata guard under verification. The raw writer lives in
+Source state: `6d6b2780`, including the raw writer in `150033ef`.
+The raw writer lives in
 `araphor-data`. Control has no raw writer or reader. This implementation uses
 metadata schema 8 and fresh development stores. Qualification is not complete.
 Earlier pass records below apply only to their named source revisions.
@@ -2178,3 +2179,22 @@ passed 114 with 248 ignored; Node passed 256 with one ignored.
 The CLI binary SHA-256 for these artifacts is
 `8dfb226c5147f347c0803b011c0dfb85a5188677f20c5631bd7e7e8f806ca9cf`.
 These tests do not prove Kubernetes scheduling of the periodic Node report.
+
+## Current segment verification
+
+The final workspace gate passed at `6d6b2780`: formatting, workspace check,
+strict Clippy, and all enabled workspace tests. Data passed 81 tests with five
+ignored; Control passed 174 with two ignored; Mithril e2e passed 123 with 249
+ignored; Node passed 256 with one ignored. The command was
+`bash .github/scripts/verify-rust-ci.sh`, with two build jobs, incremental
+compilation disabled, offline dependency resolution, and one test thread.
+Its log is `/tmp/araphor-metadata-guard-ci.log`.
+
+The metadata-loss test proves that startup rejects an existing store without
+its metadata and preserves required-processor state after that file is restored.
+The mTLS failure cases prove raw-write rejection and recovery after catalogue
+publication fails. These synthetic checks do not qualify physical Kubernetes
+storage, full-capacity operation, or performance. The short comparison at
+`150033ef` missed the speed target. See the
+[acceptance record](phase-7-2-data-store.md#segment-authoritative-acceptance)
+for exact measurements and limits. No new performance test was added.
