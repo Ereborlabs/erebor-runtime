@@ -4542,6 +4542,10 @@ setup, production actions, assertions, and focused test.
       in 29.48 seconds on 2026-09-21.
     - [x] Pass Kubernetes and commit it. The exact Kubernetes test passed in
       69.69 seconds on 2026-09-21.
+    - [x] Let shared member setup reuse a pre-created actor `bin` directory.
+      The terminal fixture creates its executable before platform setup. The
+      unchanged test passed on Host, direct `runc`, and Kubernetes after this
+      correction.
     - [x] Remove only the matching legacy terminal-status assertion and result
       field after all three platforms pass. Keep the action and pending row
       until the evidence-retention and generation-retirement test replaces

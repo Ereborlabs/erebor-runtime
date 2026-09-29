@@ -245,7 +245,7 @@ impl SharedState {
                 )?
             };
             let bin = work.path().join("bin");
-            fs::create_dir(&bin)?;
+            fs::create_dir_all(&bin)?;
             fs::copy(fs::canonicalize("/usr/bin/python3")?, bin.join("python"))?;
             self.actors.insert(
                 key,
