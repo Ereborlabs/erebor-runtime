@@ -3963,6 +3963,22 @@ setup, production actions, assertions, and focused test.
     and the complete rerun passed without a source change.
 - [ ] Initial application activation: keep the entry action and `ACTIVE`,
   role, rule, default-effect, and large-argv assertions explicit.
+  - [ ] Replace the dynamic-loader policy exception with one standard
+    platform test. Start one declared `bash` entry under
+    `runtime_entries_policy.json`. Read its live mappings and require at
+    least one mapped dynamic loader. Lower the public policy and require
+    every mapped loader path to be absent from its signed path selectors.
+    Require the entry to keep its declared role and nonzero admission rule.
+    Reuse the existing actor, policy, and Platform operations. Add no fixture
+    or Platform API. Keep the test below 100 lines.
+    - [x] Pass Host and commit it. The 60-line test passed in 48.94 seconds.
+      It observed the live loader mapping, its declared shell role and entry
+      rule, and the loader's absence from the lowered signed policy.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only `dynamic_loader_paths`,
+      `dynamic_loader_paths_absent_from_policy`, their old builder check,
+      and the matching shell gate after all three platforms pass.
   - [x] Retire the duplicate application role and admission-rule check in the
     old direct-`runc` result. The shared `runtime_entries_stay_distinct` test
     already checks both fields and the active binding on Host, direct `runc`,

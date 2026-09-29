@@ -13,6 +13,8 @@ mod container_kinds;
 #[cfg(test)]
 mod double_fork;
 #[cfg(test)]
+mod dynamic_loader;
+#[cfg(test)]
 mod entry_isolation;
 #[cfg(test)]
 mod exec_fatal;
