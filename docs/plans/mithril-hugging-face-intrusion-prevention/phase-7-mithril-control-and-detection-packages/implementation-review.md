@@ -30,7 +30,7 @@ declarative captures are not delivered by these changes.
 
 ### Segment storage conversion
 
-Source state: working changes after `7115c5da`. The raw writer lives in
+Source state: `150033ef` and the missing-metadata guard under verification. The raw writer lives in
 `araphor-data`. Control has no raw writer or reader. This implementation uses
 metadata schema 8 and fresh development stores. Qualification is not complete.
 Earlier pass records below apply only to their named source revisions.
@@ -100,6 +100,12 @@ commits survive restart without catalogue publication or ACK. Recovery trims
 only incomplete active tails. It does not trim through a catalogued commit.
 A catalogue failure cannot reverse a raw ACK. Backup seals the raw files and
 publishes all descriptors before it copies the database and segment bundle.
+`AnalysisStore::open_leased` creates a database only when the leased directory
+contains no other entry. Missing metadata in an existing data directory stops
+startup before native open. Raw recovery cannot replace lost processor state
+or witness pins. `analysis_rejects_missing_metadata` checks repeated refusal,
+no replacement file, and intact records and required progress after the exact
+database file is restored.
 
 `raw_acceptance_defers_catalogue` checks writes, raw pages, binding lookups,
 and receipts while DuckDB still has no raw descriptors. It then reopens the

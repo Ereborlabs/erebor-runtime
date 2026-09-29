@@ -633,6 +633,12 @@ also advances this catalogue. Read deadlines and scan bounds still apply;
 return an explicit error instead of an incomplete result. Catalogue failure
 cannot roll back a raw ACK. Backups include all durable raw commits.
 
+Create a store only in an empty leased directory. The lease file can remain.
+If the metadata database is missing while other store entries remain, reject
+startup without creating a replacement database. Restore the complete bundle.
+Raw segments can rebuild descriptors, but cannot rebuild required progress,
+witness pins, or derived results that were stored only in that database.
+
 If a raw sync outcome is uncertain, stop writes and recover the segment owner
 before retry. A recovered complete commit is a duplicate on replay. If a
 derived metadata commit is uncertain, recover that database transaction
