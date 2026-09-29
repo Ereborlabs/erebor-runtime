@@ -326,8 +326,63 @@ It qualifies this global-capacity workload and its checkpoint/reopen path.
 It does not prove concurrent intake throughput, Node WAL or mTLS behavior,
 protected retention, a complete historical-record digest, or memory behavior
 beyond the configured quota. The 512-MiB ceiling remains provisional, not a
-production memory cap. The user subsequently selected item 6. Items 4 and 5
-have not run in this ordered review.
+production memory cap. The user subsequently selected item 6, then item 5.
+Their results follow. Item 4 has not run in this ordered review.
+
+### Ordered review: item 5
+
+**Done: PASS**, 2026-09-29 UTC. The user selected this item after item 6.
+The release prerequisite `discovery::data_store::tests::data_tenant_load`
+passed one test, with zero failures and 371 filtered tests, in 2.30 seconds.
+It checked two groups per tenant, 16,384 total records, isolation, replay,
+restart, and invalid workload sizes.
+
+One release `data-store-tenants` case then passed in 19.73 seconds with exit
+status zero. Two authenticated tenants shared one Control and AnalysisStore.
+Each tenant sent 32 groups and retained 131,072 records, for 262,144 total
+records and 30,080,920 framed input bytes. Both groups were sent before either
+ACK wait. Both complete retained-input digests matched. Foreign-tenant reads
+were rejected, duplicate replay left metadata unchanged, and each Node cleared
+its acknowledged input. Checkpoint and reopen preserved metadata and both
+source states. The old Control raw writer was not used.
+
+| Measurement | Tenant 0 | Tenant 1 |
+| --- | --- | --- |
+| ACK p50 | 50.280 ms | 63.810 ms |
+| ACK p95 | 107.714 ms | 87.183 ms |
+| ACK maximum | 118.062 ms | 89.694 ms |
+| Policy RPC p95 | 3.766 ms | 3.858 ms |
+| Policy RPC maximum | 3.869 ms | 3.875 ms |
+
+Percentiles use nearest ranks over 32 samples per tenant. ACK times include
+the policy inventory RPC. Intake took 8.197 seconds, complete reads and digest
+checks 10.107 seconds, checkpoint 0.027 seconds, and reopen 0.269 seconds.
+Peak process RSS was 101,904 KiB (99.5 MiB). Sampled peak store file size was
+51,228,672 bytes; file and allocated bytes after checkpoint were 37,195,776.
+The reopened metadata database was 7,090,176 bytes, with an empty native WAL.
+
+Commands, from the implementing worktree:
+
+```sh
+/usr/bin/time -v -o /tmp/araphor-tenants.9wN0MwBb/component-resources.log target/release/deps/mithril_e2e-36858fcf1fbc2e49 discovery::data_store::tests::data_tenant_load --exact --nocapture --test-threads=1
+/usr/bin/time -v -o /tmp/araphor-tenants.9wN0MwBb/resources.log target/release/mithril_discovery_test --case data-store-tenants --output-directory /tmp/araphor-tenants.9wN0MwBb/result
+```
+
+Read `result/result.json`, `run.log`, `resources.log`, `component.log`,
+`component-resources.log`, and `environment.log` under that host directory.
+The source at `ebde17c` contains the same Rust as `adbcb3a8`. Existing release
+binaries were reused; their SHA-256 values match those recorded for item 6.
+No code, deadline, quota, allocator setting, or assertion changed. The shared
+host has 16 reported CPUs, 31,492 MiB RAM, swap enabled, and x86_64 Linux
+6.8.0-139-generic. `MALLOC_ARENA_MAX` was unset. Initial available filesystem
+space was 5,393,035,264 bytes. No other test or build was started by this task;
+unrelated host activity was not isolated.
+
+This result covers shared-store intake through Node WAL and mTLS for these two
+synthetic sources. It does not prove physical kernel evidence, policy rollout,
+full-quota capacity, worst-case payloads, or timing stability across runs.
+Items 4, 7, and 8 remain unrun in this ordered review. Stop for the user's
+decision; do not start another item automatically.
 
 ### Ordered review: item 6
 
@@ -380,8 +435,7 @@ This result proves Control rollout progress with evidence in flight through
 Node WAL and mTLS for this workload. The fixture supplies Node activation
 reports; no kernel policy is installed. One run does not prove timing stability,
 physical activation, full-quota behavior, or filesystem reserve adequacy.
-Items 4, 5, 7, and 8 remain unrun in this ordered review. Stop for the user's
-decision; do not start another item automatically.
+The user subsequently selected item 5; its result is recorded above.
 
 ### Measurement contracts
 
