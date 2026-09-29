@@ -2632,7 +2632,16 @@ test does not close a row when its physical condition or an assertion changed.
     Confirm the cause in lightweight and pass Host, then direct `runc`, before
     running the same Kubernetes test. Keep the old transfer checks until all
     three cases pass with the same assertions.
-    A later Host draft used the public Node and Control APIs, one bootstrap
+    A later focused Host run used the Node-first bootstrap order and one
+    shared `/tmp` mount. Both actors opened the files, and the signed exact
+    replacement reached readiness. Node then reported that exact selector
+    `path-0` had no proven object in the container. The sender's Unix connect
+    returned `EACCES` before transfer. Deferring the fixture's first member
+    publication until both targets were ready did not change this result.
+    The draft actor, Pod, policies, test, and fixture changes were removed.
+    Keep the old transfer actions. Do not run Kubernetes for this case until
+    the same physical sequence passes on Host and direct `runc`.
+    An earlier Host draft used the public Node and Control APIs, one bootstrap
     policy, and a signed exact-file replacement. A two-container Pod did not
     give both actors one proven file object. A single-container test gave the
     sender and receiver distinct declared roles, but it did not reproduce the
