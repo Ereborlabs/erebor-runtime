@@ -461,8 +461,8 @@ unrelated host activity was not isolated.
 This result covers shared-store intake through Node WAL and mTLS for these two
 synthetic sources. It does not prove physical kernel evidence, policy rollout,
 full-quota capacity, worst-case payloads, or timing stability across runs.
-Items 4, 7, and 8 remain unrun in this ordered review. Stop for the user's
-decision; do not start another item automatically.
+At this run, items 4, 7, and 8 had not run in this ordered review. The later
+item 7 result appears below. Do not start another item automatically.
 
 #### Ten-tenant run
 
@@ -581,6 +581,67 @@ Node WAL and mTLS for this workload. The fixture supplies Node activation
 reports; no kernel policy is installed. One run does not prove timing stability,
 physical activation, full-quota behavior, or filesystem reserve adequacy.
 The user subsequently selected item 5; its result is recorded above.
+
+### Ordered review: item 7
+
+**Done: PASS**, 2026-09-29 UTC. The user selected this existing case after the
+intake admission change. The release test
+`analysis::extraction::tests::analysis_extract_history` passed once: one test,
+zero failures, and 81 filtered tests. Test and process time were 0.95 seconds;
+exit status was zero and `debug=false`. Peak process RSS was 112,816 KiB
+(110.17 MiB).
+
+The fixture stored 576 synthetic 128-KiB frames in 18 batches for one source.
+Raw history was 72 MiB. The last batch had a separate intake timestamp.
+
+| Read | Scanned raw bytes | Projected payload | Charged input | Time |
+| --- | --- | --- | --- | --- |
+| Recent timestamp window: last 32 records | 4,194,304 (4 MiB) | 256 bytes | 1,137 bytes | 8.765 ms |
+| Sparse selection: one record per batch | 75,497,472 (72 MiB) | 144 bytes | 801 bytes | 70.631 ms |
+
+Projection returned eight-byte cursors, not complete raw frames. Charged input
+also includes row descriptors, page headers, and coverage metadata. Both reads
+completed within the unchanged one-second deadline and 256-MiB scan limit.
+Selecting complete raw frames failed with `selected input bytes` at the
+64-MiB input limit. The failed read released the maintenance lock.
+
+The test committed 18 exact witnesses, one per batch. These witnesses used
+2,359,296 bytes (2.25 MiB), but pinned all six segment files: 75,497,898 bytes,
+including headers. Extra retained bytes were 73,138,602. The witness charge
+equaled the full distinct segment size, about 32 times the useful witness
+payload. Witness commit took 130.991 ms; usage accounting took 4.357 ms.
+Retention with a one-byte raw budget and one-nanosecond raw age removed zero
+records while those witnesses remained valid.
+
+Command, from the implementing worktree:
+
+```sh
+/usr/bin/time -v -o /tmp/araphor-history.Oaa535VK/resources.log target/release/deps/araphor_data-56c66faf3a80bf1e analysis::extraction::tests::analysis_extract_history --exact --ignored --nocapture --test-threads=1
+```
+
+Source: `a73a747ece359c36c413da3d9392b0f594aa689d`, with Rust from `74792df`.
+The current-source release test executable has SHA-256
+`b0f5c33cc76d608a6efb63c558e17a95918722c1afd56256e3d558251c0fb90b`.
+Read `run.log` and `resources.log` under the named host directory.
+The initial package-only build selected a different dependency configuration
+and was stopped when it started a native DuckDB build. The replacement build
+used `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true cargo test
+--locked --release -p araphor-data -p mithril-e2e --lib --no-run`. It reused the
+native dependency and completed the data test executable. The remaining build
+was stopped before measurement; no complete multi-package build pass is claimed.
+Build logs are `build.log` and `build-cached.log` in the same directory.
+
+The shared host reported 16 CPUs, 31,492 MiB RAM, swap enabled, and x86_64 Linux
+6.8.0-139-generic. Initial available filesystem space was 42,783,932,416 bytes.
+`MALLOC_ARENA_MAX` was unset. No task build or other task test ran during this
+measurement. Unrelated host activity was not isolated. No source, assertion,
+deadline, quota, or allocator setting changed.
+
+This proves bounded extraction and whole-segment witness protection for this
+component fixture. It also measures the cost of sparse reads and sparse pins.
+It does not prove public SQL, Node wire validation, Kubernetes behavior,
+default capacity, or timing stability. Full qualification remains **Not done**.
+Items 4 and 8 have not run in this ordered review. Stop for the user's decision.
 
 ### Measurement contracts
 
