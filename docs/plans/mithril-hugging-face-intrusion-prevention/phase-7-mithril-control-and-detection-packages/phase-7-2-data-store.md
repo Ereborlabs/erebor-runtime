@@ -15,8 +15,9 @@ No raw-event table or copied discovery archive is part of the target.
 Control keeps policy/trust/rollout persistence and authority. Node keeps its
 delivery WAL. The same complete data owner can later run remotely. Storage
 and trace intake do not require discovery. Entry: 7.1.
-Status: **Not done** for final verification and full qualification of the
-segment-authoritative ACK implementation. Prior segment intake, reads, recovery,
+Status: **Done** for implementation and workspace correctness checks at
+`6d6b2780`. **Not done** for the speed target and full qualification of the
+segment-authoritative ACK implementation. Segment intake, reads, recovery,
 retention, complete-bundle backup, and trusted bounded extraction are
 implemented. The old Control raw writer and its callers are removed. Stored
 tenant totals replace repeated quota scans. The recorded workspace gate,
@@ -1267,14 +1268,16 @@ qualification separate. Do not claim unmeasured capacity or latency.
 
 ## Implementation result
 
-**Not done for final verification and full qualification.**
+**Done for implementation and workspace correctness checks at `6d6b2780`.**
+**Not done for the speed target and full qualification.**
 All nine ordered implementation changes are present. AnalysisStore owns raw
 segments, transactional metadata and totals, bounded reads and extraction,
 result/progress commits, retention, and complete-bundle recovery. Control uses
 that owner for intake and keeps its policy authority and context projection.
 Control has no raw writer. The data crate reuses the original segment writer.
 No raw-event table stores a second copy. Correctness and physical results
-below apply to their named source states. Performance gates remain unverified.
+below apply to their named source states. The short comparison missed the
+speed target. Full performance qualification remains incomplete.
 The records under
 `Previous implementation evidence` describe previous raw-DuckDB revisions only. Their native-memory settings,
 raw-table maintenance, and pass counts are not instructions or qualification
@@ -1282,7 +1285,8 @@ for the selected segment design.
 
 ### Segment-authoritative acceptance
 
-Source state: `150033ef` and the missing-metadata guard under verification. The original segment owner now
+Source state: `6d6b2780`, including the raw writer in `150033ef`.
+The original segment owner now
 lives in `araphor-data/src/analysis/raw_segments.rs`. `raw.rs` owns admission,
 exact retries, source receipts, and bounded raw reads. A complete raw commit
 contains its source header, CPU, ranges, offsets, intake time, revision, and
@@ -1321,9 +1325,24 @@ healthy. That fixture now uses the same bounded readiness wait as the other
 capacity-recovery paths. The log is
 `/tmp/araphor-segment-owner-serial-ci.log`. The focused metadata-loss test and
 both mTLS intake-failure cases passed after the guard and readiness-wait edits.
-Their log is `/tmp/araphor-metadata-guard-result.log`. The final workspace gate
-is running. Its log is `/tmp/araphor-metadata-guard-ci.log`.
-No timeout was increased.
+Their log is `/tmp/araphor-metadata-guard-result.log`. No timeout was increased.
+
+The final workspace gate passed at `6d6b2780`: formatting, workspace check,
+strict Clippy, and all enabled workspace tests. Data passed 81 tests with five
+ignored; Control passed 174 with two ignored; Mithril e2e passed 123 with 249
+ignored; Node passed 256 with one ignored. Both mTLS intake-failure cases passed
+in this run. The command was:
+
+```sh
+CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 \
+  bash .github/scripts/verify-rust-ci.sh
+```
+
+The command returned zero. Its log is `/tmp/araphor-metadata-guard-ci.log`.
+No other build or benchmark ran during this gate. These checks do not qualify
+physical Kubernetes storage recovery, full-capacity operation, or performance
+at this source state. Earlier physical results apply only to their recorded
+revisions.
 
 The approved short comparison used the existing
 `store::raw_bench::raw_event_store_comparison` fixture. It ran 64 batches of 256
@@ -1336,7 +1355,7 @@ writer. This is one short pair, not a repeated qualification result.
 | Writer | Write events/s | Write p95 ms/batch | Read events/s | Reopen ms | Peak RSS KiB |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Original segments, `293762be` | 204,801.9 | 1.322 | 719,635.1 | 10.536 | 17,412 |
-| Data-owned segments, current change | 192,188.7 | 1.434 | 2,016,722.9 | 87.726 | 54,192 |
+| Data-owned segments, `150033ef` | 192,188.7 | 1.434 | 2,016,722.9 | 87.726 | 54,192 |
 
 **Not done for the speed target.** Current throughput is 93.84 percent of the
 original rate. Current p95 is 108.47 percent of the original p95. Total write
