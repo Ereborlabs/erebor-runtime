@@ -233,6 +233,16 @@ impl AnalysisStore {
             Err(source) => return Err(source).context(IoSnafu { path: &path }),
         };
 
+        if !existing {
+            for entry in fs::read_dir(&root).context(IoSnafu { path: &root })? {
+                if entry.context(IoSnafu { path: &root })?.file_name() != "analysis.lock" {
+                    return Self::reject_path(
+                        &root,
+                        "the analysis metadata is missing from a nonempty data directory",
+                    );
+                }
+            }
+        }
         let mut writer = Self::open_native(&path)?;
         let metadata = fs::symlink_metadata(&path).context(IoSnafu { path: &path })?;
         if !metadata.is_file() {

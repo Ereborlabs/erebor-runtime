@@ -720,6 +720,59 @@ mod tests {
     }
 
     #[test]
+    fn analysis_rejects_missing_metadata() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("analysis");
+        let store = AnalysisStore::open(&root)?;
+        let identity = EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "node-a".into(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        };
+        store.accept_validated_batch(
+            identity.clone(),
+            super::super::ValidatedEvidenceBatchV1 {
+                cpu_id: 0,
+                first_cursor: 1,
+                last_cursor: 1,
+                intake_utc_ns: 1,
+                framed_records: vec![7].into(),
+                frame_ends: vec![1],
+            },
+        )?;
+        let scope = crate::ProcessorScopeV1 {
+            processor_id: "required".into(),
+            method_version: 1,
+            identity: identity.clone(),
+        };
+        store.register_processor(&scope, crate::ProcessorClassV1::Required, 1)?;
+        let health = store.processor_health(&scope)?.ok_or("health absent")?;
+        let meta = store.meta()?;
+        let records = store.read_page(&identity, 1)?.records;
+        drop(store);
+        let database = root.join("analysis.duckdb");
+        let saved = directory.path().join("saved.duckdb");
+        std::fs::rename(&database, &saved)?;
+        for _ in 0..2 {
+            assert!(matches!(
+                AnalysisStore::open(&root),
+                Err(crate::Error::AnalysisState { reason, .. })
+                    if reason == "the analysis metadata is missing from a nonempty data directory"
+            ));
+            assert!(!database.exists());
+        }
+        std::fs::rename(&saved, &database)?;
+        let store = AnalysisStore::open(&root)?;
+        assert_eq!(store.meta()?, meta);
+        assert_eq!(store.read_page(&identity, 1)?.records, records);
+        assert_eq!(store.processor_health(&scope)?, Some(health));
+        Ok(())
+    }
+
+    #[test]
     fn analysis_rejects_missing_table() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");

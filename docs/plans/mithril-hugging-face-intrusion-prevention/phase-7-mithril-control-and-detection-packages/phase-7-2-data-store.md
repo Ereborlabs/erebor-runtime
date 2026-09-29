@@ -1282,7 +1282,7 @@ for the selected segment design.
 
 ### Segment-authoritative acceptance
 
-Source state: working changes after `7115c5da`. The original segment owner now
+Source state: `150033ef` and the missing-metadata guard under verification. The original segment owner now
 lives in `araphor-data/src/analysis/raw_segments.rs`. `raw.rs` owns admission,
 exact retries, source receipts, and bounded raw reads. A complete raw commit
 contains its source header, CPU, ranges, offsets, intake time, revision, and
@@ -1301,15 +1301,29 @@ raw files and includes their actual names in the checked manifest. A failed
 header write removes only the newly created incomplete file. A catalogue
 failure after raw sync cannot reverse an ACK.
 
+Startup creates a metadata database only in a directory that contains the
+lease file and no other entry. Missing metadata in an existing data directory
+is an error. Startup cannot discard required progress or witness pins by
+creating an empty database. `analysis_rejects_missing_metadata` checks this
+refusal and recovery after the original metadata file is restored.
+
 The review route is in
 [implementation-review.md](implementation-review.md#segment-storage-conversion).
-The focused `data_intake_failure` test passes both raw-write and catalogue
+The focused `data_intake_failure` run passed both raw-write and catalogue
 failure cases. The first final gate passed formatting, check, and strict
 Clippy. Its data suite passed 79 tests and failed `analysis_extract_range_pages`
 at the one-second read deadline while a release build ran. That same test then
 passed alone with no source or timeout change. The isolated log is
-`/tmp/araphor-extraction-isolated.log`. The final serial workspace gate is
-pending at `/tmp/araphor-segment-owner-serial-ci.log`.
+`/tmp/araphor-extraction-isolated.log`. The next serial gate passed all 80
+enabled data tests and 174 Control unit tests. The e2e suite passed 122 tests
+and failed the catalogue-recovery retry before background retention became
+healthy. That fixture now uses the same bounded readiness wait as the other
+capacity-recovery paths. The log is
+`/tmp/araphor-segment-owner-serial-ci.log`. The focused metadata-loss test and
+both mTLS intake-failure cases passed after the guard and readiness-wait edits.
+Their log is `/tmp/araphor-metadata-guard-result.log`. The final workspace gate
+is running. Its log is `/tmp/araphor-metadata-guard-ci.log`.
+No timeout was increased.
 
 The approved short comparison used the existing
 `store::raw_bench::raw_event_store_comparison` fixture. It ran 64 batches of 256
@@ -1342,7 +1356,7 @@ Artifacts are in `/tmp/araphor-segment-compare.484rmPNy/`: `original.log`,
 `current.log`, their `*-resources.log` files, and both release executables.
 Original SHA-256:
 `76bb12980296227aacbc3bb23b3af8f6472f3471d971c74f9e26e25f42472b54`.
-Current SHA-256:
+Current SHA-256, built from the raw writer committed in `150033ef`:
 `9e4f12afeac6336787445c5f0511dc0c259420565b852e15ca61d48fef24adbb`.
 Each command set `ARAPHOR_STORE_BENCH_BATCHES=64`, selected mode `segments` or
 `analysis`, and used `--exact --ignored --nocapture --test-threads=1` with a

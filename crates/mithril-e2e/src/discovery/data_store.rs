@@ -1934,6 +1934,20 @@ mod tests {
             Ok(())
         }
 
+        async fn wait_capacity(data: &AnalysisStore) -> Result<()> {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let health = data.storage_health()?;
+                    if health.write_ready && health.retention_healthy && health.intake_capacity {
+                        break Ok::<_, araphor_data::Error>(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await??;
+            Ok(())
+        }
+
         async fn capacity_recovery(&self, fault: IntakeFault<'_>) -> Result<()> {
             use rustix::process::{getrlimit, setrlimit, Resource};
             use std::io::{Seek as _, SeekFrom, Write as _};
@@ -2152,6 +2166,7 @@ mod tests {
                 data.recover()?;
                 assert_eq!(data.meta()?.commit_revision, before.commit_revision + 1);
                 assert_eq!(data.read_page(&identity, 1)?.records.len(), 2);
+                Self::wait_capacity(&data).await?;
                 connection.send_evidence_batch(pending).await?;
                 assert_eq!(Self::ack(&mut connection).await?.contiguous_cursor, 2);
                 assert_eq!(data.meta()?.commit_revision, before.commit_revision + 1);
@@ -2214,16 +2229,7 @@ mod tests {
                 wire.framed_records
             );
             drop(connection);
-            tokio::time::timeout(Duration::from_secs(5), async {
-                loop {
-                    let health = data.storage_health()?;
-                    if health.write_ready && health.retention_healthy && health.intake_capacity {
-                        break Ok::<_, araphor_data::Error>(());
-                    }
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-            })
-            .await??;
+            Self::wait_capacity(&data).await?;
             let mut connection = self.connect(&tls, &server).await?;
             connection.send_evidence_batch(pending.clone()).await?;
             let ack = Self::ack(&mut connection).await?;
