@@ -102,14 +102,8 @@ impl TryFrom<&duckdb::Row<'_>> for WitnessUsageV1 {
 
 impl AnalysisStore {
     const WITNESS_USAGE: &'static str = "WITH pins AS (
-            SELECT DISTINCT b.segment_id, b.stream_key, r.durable_cursor,
-                b.frame_ends[(r.durable_cursor - b.first_cursor + 1)::BIGINT]
-                - CASE WHEN r.durable_cursor = b.first_cursor THEN 0
-                  ELSE b.frame_ends[(r.durable_cursor - b.first_cursor)::BIGINT] END AS bytes
-            FROM batch_ranges b JOIN evidence_refs r
-                ON r.tenant_id = b.tenant_id AND r.stream_key = b.stream_key
-                AND r.durable_cursor BETWEEN b.first_cursor AND b.last_cursor
-            WHERE r.tenant_id = ? AND r.expires_utc_ns > ?
+            SELECT DISTINCT segment_id FROM evidence_refs
+            WHERE tenant_id = ? AND expires_utc_ns > ?
         ), usage AS (
             SELECT COALESCE((SELECT SUM(s.committed_end) FROM segments s
                 SEMI JOIN pins p USING (segment_id) WHERE s.state = 'Live'), 0)::UBIGINT AS segments,
@@ -118,9 +112,8 @@ impl AnalysisStore {
             SEMI JOIN (
                 SELECT tenant_id, owner_id, entity_key, lifetime_key, owner_revision
                 FROM context_refs WHERE tenant_id = ?
-            ) r USING (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)), 0)::UBIGINT AS context,
-            COALESCE((SELECT SUM(bytes) FROM pins), 0)::UBIGINT AS referenced
-        ) SELECT segments + context, segments, context, referenced, segments - referenced,
+            ) r USING (tenant_id, owner_id, entity_key, lifetime_key, owner_revision)), 0)::UBIGINT AS context
+        ) SELECT segments + context, segments, context, 0::UBIGINT, segments,
             (SELECT commit_revision FROM store_meta) FROM usage";
 
     /// Count distinct live witnesses and their whole segments. This read does not pin data.
@@ -141,7 +134,7 @@ impl AnalysisStore {
         tenant: [u8; 16],
         now: u64,
     ) -> Result<WitnessUsageV1> {
-        connection
+        let mut usage = connection
             .query_row(
                 Self::WITNESS_USAGE,
                 params![tenant.as_slice(), now, tenant.as_slice()],
@@ -149,14 +142,68 @@ impl AnalysisStore {
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "count exact witness storage",
+            })?;
+        let mut statement = connection
+            .prepare(
+                "SELECT DISTINCT stream_key, durable_cursor, segment_id FROM evidence_refs
+             WHERE tenant_id = ? AND expires_utc_ns > ? ORDER BY stream_key, durable_cursor",
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare witness record sizes",
+            })?;
+        let rows = statement
+            .query_map(params![tenant.as_slice(), now], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, u64>(2)?,
+                ))
             })
+            .context(AnalysisDatabaseSnafu {
+                operation: "read witness record sizes",
+            })?;
+        let raw = self
+            .raw
+            .lock()
+            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
+        let mut cached = None;
+        for row in rows {
+            let (key, cursor, segment) = row.context(AnalysisDatabaseSnafu {
+                operation: "decode witness record size",
+            })?;
+            let key = key
+                .try_into()
+                .map_err(|_| self.state_error("the witness key is invalid"))?;
+            let (entry, index) = raw.locate(key, cursor, usage.read_revision)?;
+            if entry.reference.id != segment {
+                return self.reject("the witness segment differs");
+            }
+            if cached
+                .as_ref()
+                .is_none_or(|(revision, _)| *revision != entry.commit.revision)
+            {
+                cached = Some((entry.commit.revision, raw.read_entry(entry)?));
+            }
+            let span = &cached
+                .as_ref()
+                .ok_or_else(|| self.state_error("the witness batch is absent"))?
+                .1
+                .spans[index];
+            let position = (cursor - span.first) as usize;
+            let end = span.ends[position];
+            let start = position.checked_sub(1).map_or(0, |prior| span.ends[prior]);
+            usage.referenced_bytes += u64::from(end - start);
+        }
+        usage.extra_segment_bytes = usage
+            .segment_bytes
+            .checked_sub(usage.referenced_bytes)
+            .ok_or_else(|| self.state_error("the witness byte count exceeds its segments"))?;
+        Ok(usage)
     }
 
     const USAGE_CHARGES: &'static str = "WITH charges AS (
                     SELECT tenant_id, 'segments' AS family,
                         256 + committed_end + octet_length(encode(identity_json)) AS bytes FROM segments
-                    UNION ALL SELECT tenant_id, 'batches',
-                        256 + 4 * (last_cursor::HUGEINT - first_cursor + 1) FROM batch_ranges
                     UNION ALL SELECT tenant_id, 'coverage',
                         256 + octet_length(report) FROM coverage
                     UNION ALL SELECT tenant_id, 'receipts',
@@ -410,23 +457,10 @@ mod tests {
             assert_eq!(usage.0, usage.1);
             assert_eq!((usage.2, usage.3), (0, 0));
             if let Some(prior) = previous {
-                assert_eq!(
-                    usage.0 - prior,
-                    physical - previous_bytes + 256 + 4 * count as u64
-                );
+                assert_eq!(usage.0 - prior, physical - previous_bytes);
             }
             previous_bytes = physical;
-            let offset_charge: u64 = transaction.query_row(
-                "SELECT SUM(256 + 4 * len(frame_ends))::UBIGINT FROM batch_ranges",
-                [],
-                |row| row.get(0),
-            )?;
-            let range_charge: u64 = transaction.query_row(
-                "SELECT SUM(256 + 4 * (last_cursor::HUGEINT - first_cursor + 1))::UBIGINT FROM batch_ranges",
-                [],
-                |row| row.get(0),
-            )?;
-            assert_eq!(range_charge, offset_charge);
+            assert!(transaction.prepare("SELECT * FROM batch_ranges").is_err());
             previous = Some(usage.0);
             cursor += count as u64;
         }
@@ -498,7 +532,7 @@ mod tests {
                 .logical_usage(&transaction, input.scope.identity.tenant_id)?
                 .1
         };
-        store.storage.tenant_max_bytes = current_bytes + 776;
+        store.storage.tenant_max_bytes = current_bytes;
         let before = store.meta()?;
         assert!(matches!(
             store.accept_validated_batch(
@@ -518,6 +552,7 @@ mod tests {
             })
         ));
         assert_eq!(store.meta()?, before);
+        store.storage.tenant_max_bytes = current_bytes + 776;
         let witness_bytes =
             std::fs::metadata(super::super::segments::SegmentRange::path(&store.root, 1))?.len()
                 + 260;

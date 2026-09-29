@@ -216,7 +216,7 @@ impl AnalysisStore {
         let mut reader = self.reader_until(control)?;
         control.run(&mut reader, |snapshot| {
             let meta = Self::read_meta_from(snapshot, &self.root.join("analysis.duckdb"))?;
-            // The transaction fixes later catalog reads. The lease prevents segment deletion.
+            // The revision fixes raw selection. The lease prevents segment deletion.
             drop(coordinator);
             let mut output = AnalysisExtractionV1 {
                 meta,
@@ -253,15 +253,7 @@ impl AnalysisStore {
                         }
                         for (range, received) in ranges {
                             control.check()?;
-                            output.scan(
-                                range
-                                    .byte_end
-                                    .checked_sub(range.byte_start)
-                                    .and_then(|bytes| usize::try_from(bytes).ok())
-                                    .ok_or_else(|| {
-                                        self.state_error("the scan byte count is invalid")
-                                    })?,
-                            )?;
+                            output.scan(range.scan_bytes)?;
                             for record in range.read(&self.root)? {
                                 control.check()?;
                                 if record.cursor > receipt.contiguous_cursor {
@@ -335,40 +327,26 @@ impl AnalysisStore {
         accepted: u64,
         time: (u64, u64),
     ) -> Result<Vec<(SegmentRange, u64)>> {
-        let mut statement = snapshot
-            .prepare(
-                "SELECT b.segment_id, b.byte_start, b.byte_end, b.first_cursor, b.last_cursor,
-                    b.frame_ends::VARCHAR, b.content_sha256, b.commit_revision, b.ordinal,
-                    s.committed_end, s.file_name, b.intake_utc_ns
-             FROM batch_ranges b JOIN segments s USING (segment_id)
-             WHERE b.stream_key = ? AND b.tenant_id = ? AND s.state = 'Live'
-                 AND b.first_cursor > ? AND b.first_cursor <= ?
-                 AND b.intake_utc_ns >= ? AND b.intake_utc_ns <= ?
-             ORDER BY b.first_cursor LIMIT ?",
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare selected batch ranges",
-            })?;
-        statement
-            .query_map(
-                params![
-                    source_key(identity).as_slice(),
-                    identity.tenant_id.as_slice(),
-                    after,
-                    accepted,
-                    time.0,
-                    time.1,
-                    MAX_ANALYSIS_PAGE_RECORDS as u64
-                ],
-                |row| Ok((SegmentRange::try_from(row)?, row.get(11)?)),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read selected batch ranges",
-            })?
-            .collect::<duckdb::Result<Vec<_>>>()
-            .context(AnalysisDatabaseSnafu {
-                operation: "decode selected batch ranges",
+        let revision = Self::read_meta_from(snapshot, &self.root)?.commit_revision;
+        let raw = self
+            .raw
+            .lock()
+            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
+        Ok(raw
+            .select_ranges(
+                identity,
+                after.saturating_add(1),
+                accepted,
+                revision,
+                Some(time),
+                MAX_ANALYSIS_PAGE_RECORDS,
+            )?
+            .into_iter()
+            .map(|range| {
+                let intake = range.intake;
+                (range, intake)
             })
+            .collect())
     }
 
     fn check_selected_source(
@@ -378,13 +356,12 @@ impl AnalysisStore {
         expired: &[AnalysisGapV1],
     ) -> Result<()> {
         let identity = &receipt.identity;
-        let retained: u64 = snapshot.query_row(
-            "SELECT COALESCE(SUM(LEAST(b.last_cursor, ?)::HUGEINT - b.first_cursor + 1), 0)::UBIGINT
-             FROM batch_ranges b JOIN segments s USING (segment_id)
-             WHERE b.stream_key = ? AND b.tenant_id = ? AND s.state = 'Live' AND b.first_cursor <= ?",
-            params![receipt.contiguous_cursor, source_key(identity).as_slice(), identity.tenant_id.as_slice(), receipt.contiguous_cursor],
-            |row| row.get(0),
-        ).context(AnalysisDatabaseSnafu { operation: "check selected input completeness" })?;
+        let revision = Self::read_meta_from(snapshot, &self.root)?.commit_revision;
+        let retained = self
+            .raw
+            .lock()
+            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?
+            .record_count(source_key(identity), 1, receipt.contiguous_cursor, revision);
         let covered = expired.iter().try_fold(retained, |count, gap| {
             gap.last_cursor
                 .checked_sub(gap.first_cursor)
@@ -510,7 +487,18 @@ mod tests {
             Ok(Some(record.cursor.to_be_bytes().to_vec()))
         })?;
         assert_eq!(output.meta, before);
-        assert_eq!(output.scanned_bytes, 1);
+        assert_eq!(
+            output.scanned_bytes,
+            store
+                .raw
+                .lock()
+                .map_err(|_| "raw lock poisoned")?
+                .entries
+                .values()
+                .filter(|entry| entry.identity == identity && entry.commit.intake == 20)
+                .map(|entry| entry.frame_bytes)
+                .sum::<usize>()
+        );
         assert_eq!(output.projected_bytes, 8);
         assert_eq!(output.pages[0].rows[0].as_ref(), &3_u64.to_be_bytes());
         assert_eq!(output.sources[0].receipt.contiguous_cursor, 3);
@@ -650,7 +638,17 @@ mod tests {
                 _ => store.reject("unexpected relation"),
             },
         )?;
-        assert_eq!(output.scanned_bytes, 257);
+        assert_eq!(
+            output.scanned_bytes,
+            store
+                .raw
+                .lock()
+                .map_err(|_| "raw lock poisoned")?
+                .entries
+                .values()
+                .map(|entry| entry.frame_bytes)
+                .sum::<usize>()
+        );
         assert!(matches!(
             store.extract(&selection, &AnalysisReadControl::default(), |_| {
                 Ok(Some(vec![0; 512 * 1024]))
@@ -693,7 +691,7 @@ mod tests {
         store.accept_validated_batch(identity.clone(), batch(1, 1, 1))?;
         let (path, offset) = {
             let reader = store.reader()?;
-            let ranges = AnalysisStore::raw_ranges(reader.get()?, &identity, 1, 1, 1)?;
+            let ranges = store.raw_ranges(reader.get()?, &identity, 1, 1, 1)?;
             let range = ranges.first().ok_or("batch absent")?;
             (
                 SegmentRange::path(&store.root, range.segment_id),
@@ -745,7 +743,18 @@ mod tests {
         let output = store.extract(&selection, &AnalysisReadControl::default(), |_| {
             Ok(Some(vec![2]))
         })?;
-        assert_eq!(output.scanned_bytes, 1);
+        assert_eq!(
+            output.scanned_bytes,
+            store
+                .raw
+                .lock()
+                .map_err(|_| "raw lock poisoned")?
+                .entries
+                .values()
+                .filter(|entry| entry.commit.intake == 20 || entry.commit.intake == 100)
+                .map(|entry| entry.frame_bytes)
+                .sum::<usize>()
+        );
         assert_eq!(output.sources[0].expired.len(), 1);
         assert_eq!(
             (
@@ -761,12 +770,12 @@ mod tests {
             ),
             (3, 4)
         );
-        {
-            let writer = store.writer()?;
-            writer
-                .get()?
-                .execute("DELETE FROM batch_ranges WHERE first_cursor = 2", [])?;
-        }
+        store
+            .raw
+            .lock()
+            .map_err(|_| "raw lock poisoned")?
+            .ranges
+            .remove(&(source_key(&identity), 2));
         assert!(store
             .extract(&selection, &AnalysisReadControl::default(), |_| Ok(None))
             .is_err());
@@ -793,7 +802,17 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![256, 1]
         );
-        assert_eq!(output.scanned_bytes, 257);
+        assert_eq!(
+            output.scanned_bytes,
+            store
+                .raw
+                .lock()
+                .map_err(|_| "raw lock poisoned")?
+                .entries
+                .values()
+                .map(|entry| entry.frame_bytes)
+                .sum::<usize>()
+        );
         let control = AnalysisReadControl::default();
         let mut calls = 0;
         assert!(matches!(
@@ -890,7 +909,18 @@ mod tests {
             },
         )?;
         let recent_us = started.elapsed().as_micros();
-        assert_eq!(recent.scanned_bytes, 4 * 1024 * 1024);
+        assert_eq!(
+            recent.scanned_bytes,
+            store
+                .raw
+                .lock()
+                .map_err(|_| "raw lock poisoned")?
+                .entries
+                .values()
+                .filter(|entry| entry.commit.intake == 20)
+                .map(|entry| entry.frame_bytes)
+                .sum::<usize>()
+        );
         assert_eq!(recent.projected_bytes, 32 * 8);
         selection.received_from = Bound::Unbounded;
         let started = std::time::Instant::now();
@@ -905,7 +935,17 @@ mod tests {
             },
         )?;
         let sparse_us = started.elapsed().as_micros();
-        assert_eq!(sparse.scanned_bytes, 72 * 1024 * 1024);
+        assert_eq!(
+            sparse.scanned_bytes,
+            store
+                .raw
+                .lock()
+                .map_err(|_| "raw lock poisoned")?
+                .entries
+                .values()
+                .map(|entry| entry.frame_bytes)
+                .sum::<usize>()
+        );
         assert_eq!(sparse.projected_bytes, 18 * 8);
         let full = store.extract(
             &selection,
@@ -957,7 +997,10 @@ mod tests {
         let usage_us = started.elapsed().as_micros();
         let header_bytes = super::super::SegmentFile::encode_identity(&identity)?.len() as u64;
         assert_eq!(std::fs::read_dir(store.root.join("segments"))?.count(), 6);
-        assert_eq!(usage.segment_bytes, 72 * 1024 * 1024 + 6 * header_bytes);
+        assert_eq!(
+            usage.segment_bytes,
+            sparse.scanned_bytes as u64 + 6 * header_bytes
+        );
         assert_eq!(usage.referenced_bytes, 18 * frame_bytes as u64);
         assert_eq!(
             usage.extra_segment_bytes,

@@ -495,7 +495,7 @@ impl DataStoreQualification {
             StartupFault::Pending,
             StartupFault::Sql("UPDATE source_receipts SET contiguous_cursor = 2"),
             StartupFault::Sql("UPDATE store_meta SET schema_version = 99"),
-            StartupFault::Sql("ALTER TABLE batch_ranges RENAME TO missing_ranges"),
+            StartupFault::Sql("ALTER TABLE segments RENAME TO missing_segments"),
             StartupFault::Corrupt,
         ];
         for fault in faults {

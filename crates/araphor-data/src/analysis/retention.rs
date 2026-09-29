@@ -1,10 +1,9 @@
-use duckdb::{params, OptionalExt as _};
+use duckdb::params;
 use snafu::ResultExt as _;
 
 use super::{source_key, valid_source_identity, AnalysisStore};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
 
-const RETENTION_BATCH: usize = 1;
 const SWEEP_SOURCES: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
@@ -44,20 +43,6 @@ pub struct EvidenceRetentionOwner<'a> {
 }
 
 impl<'a> EvidenceRetentionOwner<'a> {
-    const ELIGIBLE_RAW: &'static str = "WITH pins AS (
-             SELECT DISTINCT b.segment_id FROM batch_ranges b JOIN evidence_refs r
-                 ON r.stream_key = b.stream_key AND r.tenant_id = b.tenant_id
-                 AND r.durable_cursor BETWEEN b.first_cursor AND b.last_cursor
-             WHERE r.expires_utc_ns > ?
-         )
-         SELECT s.segment_id, s.committed_end FROM segments s
-         JOIN batch_ranges b USING (segment_id)
-         LEFT JOIN pins p ON p.segment_id = s.segment_id
-         WHERE s.stream_key = ? AND s.tenant_id = ? AND s.state = 'Live' AND p.segment_id IS NULL
-         GROUP BY s.segment_id, s.committed_end
-         HAVING MAX(b.last_cursor) <= ? AND (MAX(b.intake_utc_ns) <= ? OR ?)
-         ORDER BY MIN(b.first_cursor) LIMIT ?";
-
     pub fn new(store: &'a AnalysisStore, limits: RetentionLimitsV1) -> Result<Self> {
         if limits.raw_max_age_ns == 0 || limits.raw_max_bytes == 0 {
             return store.reject("the raw retention limits must be positive");
@@ -190,26 +175,62 @@ impl<'a> EvidenceRetentionOwner<'a> {
         let pressure = self
             .store
             .logical_pressure(&transaction, identity.tenant_id)?;
-        let selected: Option<(u64, u64)> = transaction
-            .query_row(
-                Self::ELIGIBLE_RAW,
-                params![
-                    now_utc_ns,
-                    key.as_slice(),
-                    identity.tenant_id.as_slice(),
-                    consumed.min(receipt.contiguous_cursor),
-                    now_utc_ns.saturating_sub(self.limits.raw_max_age_ns),
-                    tenant_bytes > self.limits.raw_max_bytes || pressure,
-                    RETENTION_BATCH as u32,
-                ],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .context(AnalysisDatabaseSnafu {
-                operation: "select eligible segment",
-            })?;
-        let meta =
-            AnalysisStore::read_meta_from(&transaction, &self.store.root.join("analysis.duckdb"))?;
+        let meta = AnalysisStore::read_meta_from(&transaction, &self.store.root)?;
+        // Read current pins. Cached intake totals cannot authorize deletion.
+        let pins = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT DISTINCT segment_id FROM evidence_refs WHERE stream_key = ?
+                 AND tenant_id = ? AND expires_utc_ns > ?",
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "prepare retention pins",
+                })?;
+            statement
+                .query_map(
+                    params![key.as_slice(), identity.tenant_id.as_slice(), now_utc_ns],
+                    |row| row.get::<_, u64>(0),
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "read retention pins",
+                })?
+                .collect::<duckdb::Result<std::collections::BTreeSet<_>>>()
+                .context(AnalysisDatabaseSnafu {
+                    operation: "decode retention pins",
+                })?
+        };
+        let mut raw = self
+            .store
+            .raw
+            .lock()
+            .map_err(|_| self.store.state_error("the raw owner lock is poisoned"))?;
+        let mut candidates = std::collections::BTreeMap::<u64, (u64, u64, u64, u64)>::new();
+        for entry in raw
+            .entries
+            .values()
+            .filter(|entry| entry.identity == *identity)
+        {
+            let candidate = candidates
+                .entry(entry.reference.id)
+                .or_insert((u64::MAX, 0, 0, 0));
+            for span in &entry.commit.spans {
+                candidate.0 = candidate.0.min(span.first);
+                candidate.1 = candidate.1.max(span.last);
+            }
+            candidate.2 = candidate.2.max(entry.commit.intake);
+            candidate.3 = entry.reference.offset;
+        }
+        let selected = candidates
+            .into_iter()
+            .filter(|(id, (_, last, intake, _))| {
+                *last <= consumed.min(receipt.contiguous_cursor)
+                    && (*intake <= now_utc_ns.saturating_sub(self.limits.raw_max_age_ns)
+                        || tenant_bytes > self.limits.raw_max_bytes
+                        || pressure)
+                    && !pins.contains(id)
+            })
+            .min_by_key(|(_, (first, _, _, _))| *first)
+            .map(|(id, (_, _, _, bytes))| (id, bytes));
         let Some((segment_id, segment_bytes)) = selected else {
             return Ok(RetentionResultV1 {
                 removed_records: 0,
@@ -222,36 +243,68 @@ impl<'a> EvidenceRetentionOwner<'a> {
             self.store
                 .state_error("the analysis commit revision is exhausted")
         })?;
-        let removed_records: u32 = transaction
-            .query_row(
-                "SELECT SUM(last_cursor::HUGEINT - first_cursor + 1)::UINTEGER
-             FROM batch_ranges WHERE segment_id = ?",
-                params![segment_id],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "count expired segment records",
+        let mut intervals: Vec<(u64, u64)> = raw
+            .entries
+            .values()
+            .filter(|entry| entry.reference.id == segment_id)
+            .flat_map(|entry| {
+                entry
+                    .commit
+                    .spans
+                    .iter()
+                    .map(|span| (span.first, span.last))
+            })
+            .collect();
+        intervals.sort_unstable();
+        let removed_records = intervals
+            .iter()
+            .try_fold(0_u32, |count, (first, last)| {
+                u32::try_from(last - first + 1)
+                    .ok()
+                    .and_then(|added| count.checked_add(added))
+            })
+            .ok_or_else(|| {
+                self.store
+                    .state_error("the expired record count is invalid")
             })?;
+        let mut merged: Vec<(u64, u64)> = Vec::new();
+        for (first, last) in intervals {
+            if let Some(prior) = merged
+                .last_mut()
+                .filter(|prior| prior.1.checked_add(1) == Some(first))
+            {
+                prior.1 = last;
+            } else {
+                merged.push((first, last));
+            }
+        }
         let retained_bytes = retained_bytes
             .checked_sub(segment_bytes)
             .ok_or_else(|| self.store.state_error("retained segment bytes underflow"))?;
+        raw.segments.seal_all()?;
+        raw.project_paths(&transaction)?;
         transaction.execute(
             "UPDATE segments SET state = 'Deleting', sealed = true WHERE segment_id = ? AND state = 'Live'",
             params![segment_id],
         ).context(AnalysisDatabaseSnafu { operation: "mark eligible segment deletion" })?;
-        let expired = transaction.execute(
-            "INSERT INTO expired_ranges
-             WITH ordered AS (
-                 SELECT first_cursor, last_cursor, LAG(last_cursor) OVER (ORDER BY first_cursor) AS prior
-                 FROM batch_ranges WHERE segment_id = ?
-             ), grouped AS (
-                 SELECT first_cursor, last_cursor, SUM(CASE
-                     WHEN first_cursor::HUGEINT = prior::HUGEINT + 1 THEN 0 ELSE 1 END)
-                     OVER (ORDER BY first_cursor) AS run FROM ordered
-             )
-             SELECT ?, ?, MIN(first_cursor), MAX(last_cursor), ? FROM grouped GROUP BY run",
-            params![segment_id, key.as_slice(), identity.tenant_id.as_slice(), revision],
-        ).context(AnalysisDatabaseSnafu { operation: "record expired segment intervals" })?;
+        for (first, last) in &merged {
+            transaction
+                .execute(
+                    "INSERT INTO expired_ranges VALUES (?, ?, ?, ?, ?, ?)",
+                    params![
+                        segment_id,
+                        key.as_slice(),
+                        identity.tenant_id.as_slice(),
+                        first,
+                        last,
+                        revision
+                    ],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "record expired segment interval",
+                })?;
+        }
+        let expired = merged.len();
         let released: i64 = transaction
             .query_row(
                 "SELECT COALESCE(SUM(256 + octet_length(encode(ref_id))), 0)::BIGINT
@@ -268,12 +321,14 @@ impl<'a> EvidenceRetentionOwner<'a> {
         ).context(AnalysisDatabaseSnafu { operation: "remove expired witness references" })?;
         super::quota::UsageChange::from(256 * expired as i64 - released)
             .apply(&transaction, &identity.tenant_id)?;
-        let next_retained: Option<u64> = transaction.query_row(
-            "SELECT MIN(b.first_cursor) FROM batch_ranges b JOIN segments s USING (segment_id)
-             WHERE b.stream_key = ? AND b.tenant_id = ? AND s.state = 'Live' AND b.first_cursor <= ?",
-            params![key.as_slice(), identity.tenant_id.as_slice(), receipt.contiguous_cursor],
-            |row| row.get(0),
-        ).context(AnalysisDatabaseSnafu { operation: "find retained segment floor" })?;
+        let next_retained = raw
+            .entries
+            .values()
+            .filter(|entry| entry.identity == *identity && entry.reference.id != segment_id)
+            .flat_map(|entry| &entry.commit.spans)
+            .filter(|span| span.first <= receipt.contiguous_cursor)
+            .map(|span| span.first)
+            .min();
         let retained_floor = next_retained.map_or(receipt.contiguous_cursor, |cursor| cursor - 1);
         let mut relations = vec!["events", "expired_ranges", "evidence_refs"];
         if retained_floor > receipt.retained_floor {
@@ -296,19 +351,15 @@ impl<'a> EvidenceRetentionOwner<'a> {
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit segment deletion",
         })?;
-        if let Some(source) = self
-            .store
-            .raw
-            .lock()
-            .map_err(|_| self.store.state_error("the raw owner lock is poisoned"))?
-            .sources
-            .get_mut(&key)
-        {
+        if let Some(source) = raw.sources.get_mut(&key) {
             source.receipt.retained_floor = retained_floor;
         }
         #[cfg(test)]
         self.store.crash_at("retention.after");
-        AnalysisStore::remove_segment(writer, &self.store.root, segment_id, "Deleting")?;
+        let cleanup = AnalysisStore::remove_segment(writer, &self.store.root, &raw, segment_id);
+        raw.forget_segment(segment_id)?;
+        cleanup?;
+        raw.refresh_budget(writer)?;
         self.store
             .write_ready
             .store(true, std::sync::atomic::Ordering::Release);
@@ -388,23 +439,11 @@ mod tests {
             assert_eq!(raw.budget.protected.get(&source.tenant_id), Some(&2));
         }
         drop(writer);
-        let reader = store.reader()?;
-        let plan: String = reader.get()?.query_row(
-            &format!("EXPLAIN {}", EvidenceRetentionOwner::ELIGIBLE_RAW),
-            params![
-                101_u64,
-                source_key(&source).as_slice(),
-                source.tenant_id.as_slice(),
-                1_u64,
-                0_u64,
-                true,
-                RETENTION_BATCH as u32,
-            ],
-            |row| row.get(1),
-        )?;
-        assert!(
-            !plan.contains("DELIM_JOIN"),
-            "retention correlates each event:\n{plan}"
+        assert_eq!(
+            EvidenceRetentionOwner::new(&store, Default::default())?
+                .retain(&source, 101)?
+                .removed_records,
+            0
         );
         Ok(())
     }
@@ -724,8 +763,29 @@ mod tests {
         assert_eq!(owner.sweep(None, 100)?.removed_records, 0);
         assert!(store.retention_healthy());
         store.accept_validated_batch(source.clone(), batch(2, b"b"))?;
+        assert_eq!(std::fs::read_dir(store.root.join("segments"))?.count(), 2);
         let reader = store.writer()?.get()?.try_clone()?;
-        reader.execute_batch("BEGIN TRANSACTION; SELECT * FROM batch_ranges")?;
+        reader.execute_batch("BEGIN TRANSACTION; SELECT * FROM segments")?;
+        let failed = owner.sweep(None, u64::MAX);
+        assert!(
+            matches!(
+                failed,
+                Err(crate::Error::AnalysisDatabase {
+                    operation: "checkpoint analysis database",
+                    ..
+                })
+            ),
+            "{failed:?}"
+        );
+        assert!(!store.retention_healthy());
+        assert_eq!(
+            store
+                .source_status(&source)?
+                .ok_or("source status absent")?
+                .retained_event_count,
+            1
+        );
+        assert_eq!(store.read_page(&source, 2)?.records[0].framed_record, b"b");
         assert!(owner.sweep(None, u64::MAX).is_err());
         assert!(!store.retention_healthy());
         assert_eq!(
@@ -735,8 +795,6 @@ mod tests {
                 .retained_event_count,
             0
         );
-        assert!(owner.sweep(None, u64::MAX).is_err());
-        assert!(!store.retention_healthy());
         reader.execute_batch("ROLLBACK")?;
         assert_eq!(owner.sweep(None, u64::MAX)?.removed_records, 0);
         assert!(store.retention_healthy());
