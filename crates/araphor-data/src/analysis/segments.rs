@@ -5,11 +5,10 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use duckdb::{params, Connection};
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
-use super::{source_key, AnalysisRecordV1, AnalysisStore, SegmentFile, StorePositionV1};
-use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, JsonSnafu, Result};
+use super::{source_key, AnalysisRecordV1, AnalysisStore};
+use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, Result};
 
 pub(super) struct SegmentRange {
     pub(super) segment_id: u64,
@@ -17,102 +16,21 @@ pub(super) struct SegmentRange {
     pub(super) byte_end: u64,
     pub(super) first_cursor: u64,
     pub(super) last_cursor: u64,
-    pub(super) frame_ends: String,
-    pub(super) content_sha256: Vec<u8>,
-    pub(super) commit_revision: u64,
-    pub(super) ordinal: u32,
-    committed_end: u64,
-    pub(super) file_name: String,
-}
-
-impl TryFrom<&duckdb::Row<'_>> for SegmentRange {
-    type Error = duckdb::Error;
-
-    fn try_from(row: &duckdb::Row<'_>) -> std::result::Result<Self, Self::Error> {
-        Ok(Self {
-            segment_id: row.get(0)?,
-            byte_start: row.get(1)?,
-            byte_end: row.get(2)?,
-            first_cursor: row.get(3)?,
-            last_cursor: row.get(4)?,
-            frame_ends: row.get(5)?,
-            content_sha256: row.get(6)?,
-            commit_revision: row.get(7)?,
-            ordinal: row.get(8)?,
-            committed_end: row.get(9)?,
-            file_name: row.get(10)?,
-        })
-    }
+    pub(super) reader: super::raw::RawRead,
+    pub(super) scan_bytes: usize,
+    pub(super) intake: u64,
 }
 
 impl SegmentRange {
     pub(super) fn read(&self, root: &Path) -> Result<Vec<AnalysisRecordV1>> {
-        if !self
-            .file_name
-            .starts_with(&format!("{:016x}.", self.segment_id))
+        if self
+            .byte_end
+            .checked_sub(self.byte_start)
+            .is_none_or(|bytes| bytes == 0 || bytes > self.scan_bytes as u64)
         {
-            return AnalysisStore::reject_path(
-                root,
-                "the segment file name differs from its identity",
-            );
+            return AnalysisStore::reject_path(root, "the selected raw byte range is invalid");
         }
-        let path = super::raw::RawJournal::file_path(root, &self.file_name)?;
-        let length = self.byte_end.checked_sub(self.byte_start);
-        let count = self
-            .last_cursor
-            .checked_sub(self.first_cursor)
-            .and_then(|count| count.checked_add(1));
-        if self.first_cursor == 0
-            || self.commit_revision == 0
-            || self.byte_end > self.committed_end
-            || length.is_none_or(|size| {
-                size == 0 || size > crate::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES as u64
-            })
-            || count.is_none_or(|count| count > crate::MAX_EVIDENCE_BATCH_RECORDS as u64)
-            || self.frame_ends.len() > crate::MAX_EVIDENCE_BATCH_RECORDS * 16
-        {
-            return AnalysisStore::reject_path(root, "the committed batch bounds are invalid");
-        }
-        let bytes =
-            SegmentFile::reader(&path)?.read(self.byte_start, length.unwrap_or(0) as usize)?;
-        let ends: Vec<usize> =
-            serde_json::from_str(&self.frame_ends).context(JsonSnafu { path: &path })?;
-        let mut digest = Sha256::new();
-        digest.update((ends.len() as u64).to_be_bytes());
-        for end in &ends {
-            digest.update((*end as u64).to_be_bytes());
-        }
-        digest.update(&bytes);
-        if digest.finalize().as_slice() != self.content_sha256 {
-            return AnalysisStore::reject_path(root, "the committed batch digest is invalid");
-        }
-        if Some(ends.len() as u64) != count || ends.last() != Some(&bytes.len()) {
-            return AnalysisStore::reject_path(root, "the committed frame count or end is invalid");
-        }
-        let mut records = Vec::with_capacity(ends.len());
-        let mut start = 0;
-        for (index, end) in ends.into_iter().enumerate() {
-            if end <= start || end > bytes.len() {
-                return AnalysisStore::reject_path(root, "the committed frame offsets are invalid");
-            }
-            let ordinal = self.ordinal.checked_add(index as u32).ok_or_else(|| {
-                crate::AnalysisStateSnafu {
-                    path: root,
-                    reason: "the committed ordinal is exhausted",
-                }
-                .build()
-            })?;
-            records.push(AnalysisRecordV1 {
-                cursor: self.first_cursor + index as u64,
-                framed_record: bytes[start..end].to_vec(),
-                position: StorePositionV1 {
-                    commit_revision: self.commit_revision,
-                    ordinal,
-                },
-            });
-            start = end;
-        }
-        Ok(records)
+        self.reader.read(root)
     }
 
     #[cfg(test)]
@@ -159,64 +77,53 @@ impl AnalysisStore {
     }
 
     pub(super) fn raw_ranges(
+        &self,
         writer: &Connection,
         identity: &EvidenceIntakeIdentityV1,
         first: u64,
         last: u64,
         limit: usize,
     ) -> Result<Vec<SegmentRange>> {
-        let mut statement = writer
-            .prepare(
-                "SELECT b.segment_id, b.byte_start, b.byte_end, b.first_cursor, b.last_cursor,
-                        b.frame_ends::VARCHAR, b.content_sha256, b.commit_revision, b.ordinal, s.committed_end, s.file_name
-                 FROM batch_ranges b JOIN segments s USING (segment_id)
-                 WHERE b.stream_key = ? AND b.tenant_id = ? AND s.state = 'Live'
-                   AND b.first_cursor <= ? AND b.last_cursor >= ?
-                 ORDER BY b.first_cursor LIMIT ?",
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "prepare committed batch ranges",
-            })?;
-        statement
-            .query_map(
-                params![
-                    source_key(identity).as_slice(),
-                    identity.tenant_id.as_slice(),
-                    last,
-                    first,
-                    limit as u64
-                ],
-                |row| SegmentRange::try_from(row),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read committed batch ranges",
-            })?
-            .collect::<duckdb::Result<Vec<_>>>()
-            .context(AnalysisDatabaseSnafu {
-                operation: "decode committed batch ranges",
-            })
+        let revision = Self::read_meta_from(writer, &self.root)?.commit_revision;
+        let raw = self
+            .raw
+            .lock()
+            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
+        raw.select_ranges(identity, first, last, revision, None, limit)
     }
 
     pub(super) fn remove_segment(
         writer: &mut Connection,
         root: &Path,
+        raw: &super::raw::RawJournal,
         segment_id: u64,
-        state: &str,
     ) -> Result<()> {
         let removable: bool = writer.query_row(
-            "SELECT EXISTS(SELECT 1 FROM segments s WHERE s.segment_id = ? AND s.state = ?
-                AND s.state = 'Deleting' AND NOT EXISTS (
-                    SELECT 1 FROM batch_ranges b WHERE b.segment_id = s.segment_id
-                        AND (NOT EXISTS (SELECT 1 FROM expired_ranges x
-                            WHERE x.stream_key = b.stream_key AND x.tenant_id = b.tenant_id
-                                AND x.first_cursor <= b.first_cursor AND x.last_cursor >= b.last_cursor)
-                        OR EXISTS (SELECT 1 FROM evidence_refs r WHERE r.stream_key = b.stream_key
-                            AND r.tenant_id = b.tenant_id AND r.durable_cursor
-                                BETWEEN b.first_cursor AND b.last_cursor))))",
-            params![segment_id, state], |row| row.get(0),
+            "SELECT EXISTS(SELECT 1 FROM segments s WHERE s.segment_id = ? AND s.state = 'Deleting'
+                AND NOT EXISTS (SELECT 1 FROM evidence_refs r WHERE r.segment_id = s.segment_id)
+                AND EXISTS (SELECT 1 FROM expired_ranges x WHERE x.segment_id = s.segment_id
+                    AND x.stream_key = s.stream_key AND x.tenant_id = s.tenant_id))",
+            params![segment_id], |row| row.get(0),
         ).context(AnalysisDatabaseSnafu { operation: "check recorded segment removal" })?;
         if !removable {
             return Self::reject_path(root, "the segment has no complete removal authorization");
+        }
+        for entry in raw
+            .entries
+            .values()
+            .filter(|entry| entry.reference.id == segment_id)
+        {
+            for span in &entry.commit.spans {
+                let expired: bool = writer.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM expired_ranges WHERE segment_id = ? AND stream_key = ?
+                        AND tenant_id = ? AND first_cursor <= ? AND last_cursor >= ?)",
+                    params![segment_id, source_key(&entry.identity).as_slice(), entry.identity.tenant_id.as_slice(),
+                        span.first, span.last], |row| row.get(0)
+                ).context(AnalysisDatabaseSnafu { operation: "check segment expiry coverage" })?;
+                if !expired {
+                    return Self::reject_path(root, "the removed segment has unrecorded expiry");
+                }
+            }
         }
         let path = super::raw::RawJournal::catalog_path(writer, root, segment_id)?;
         match fs::symlink_metadata(&path) {
@@ -241,11 +148,9 @@ impl AnalysisStore {
         })?;
         let (tenant, bytes): (Vec<u8>, i64) = transaction
             .query_row(
-                "SELECT tenant_id, (256 + committed_end + octet_length(encode(identity_json))
-                + COALESCE((SELECT SUM(256 + 4 * (last_cursor::HUGEINT - first_cursor + 1))
-                    FROM batch_ranges WHERE segment_id = ?), 0))::BIGINT
-                FROM segments WHERE segment_id = ? AND state = ?",
-                params![segment_id, segment_id, state],
+                "SELECT tenant_id, (256 + committed_end + octet_length(encode(identity_json)))::BIGINT
+                FROM segments WHERE segment_id = ? AND state = 'Deleting'",
+                params![segment_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .context(AnalysisDatabaseSnafu {
@@ -253,16 +158,8 @@ impl AnalysisStore {
             })?;
         transaction
             .execute(
-                "DELETE FROM batch_ranges WHERE segment_id = ?",
+                "DELETE FROM segments WHERE segment_id = ? AND state = 'Deleting'",
                 params![segment_id],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "remove expired batch metadata",
-            })?;
-        transaction
-            .execute(
-                "DELETE FROM segments WHERE segment_id = ? AND state = ?",
-                params![segment_id, state],
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "remove expired segment metadata",

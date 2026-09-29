@@ -180,16 +180,12 @@ fn raw_event_store_comparison() -> Result<(), Box<dyn std::error::Error>> {
     let root = directory.path().join("store");
     let open_start = Instant::now();
     let mut latency = Vec::new();
-    #[cfg(feature = "test-fixtures")]
-    let mut commit_times = Vec::new();
     let (open, write, reopen, read, empty, written, closed) = {
         let store = std::sync::Arc::new(araphor_data::AnalysisStore::open(&root)?);
         let open = open_start.elapsed();
         let empty = sizes_in(&root)?;
         let write_start = Instant::now();
         for batch in &batches {
-            #[cfg(feature = "test-fixtures")]
-            let clock = CommitClock::start(&store)?;
             let start = Instant::now();
             assert_eq!(
                 store.accept_validated_batch(
@@ -207,8 +203,6 @@ fn raw_event_store_comparison() -> Result<(), Box<dyn std::error::Error>> {
             );
             let end = Instant::now();
             latency.push(end.duration_since(start));
-            #[cfg(feature = "test-fixtures")]
-            commit_times.push(clock.finish(end)?);
         }
         let write = write_start.elapsed();
         assert_eq!(
@@ -253,20 +247,6 @@ fn raw_event_store_comparison() -> Result<(), Box<dyn std::error::Error>> {
     let p50 = latency[latency.len() / 2];
     let p95 = latency[latency.len() * 95 / 100];
     let p99 = latency[latency.len() * 99 / 100];
-    #[cfg(feature = "test-fixtures")]
-    if !commit_times.is_empty() {
-        let mut raw: Vec<_> = commit_times.iter().map(|sample| sample.0).collect();
-        let mut metadata: Vec<_> = commit_times.iter().map(|sample| sample.1).collect();
-        raw.sort_unstable();
-        metadata.sort_unstable();
-        println!("COMMIT_INTERVALS batches={} raw_sync_s={:.6} raw_p95_ms={:.3} raw_p99_ms={:.3} metadata_s={:.6} metadata_p95_ms={:.3} metadata_p99_ms={:.3}",
-            raw.len(), raw.iter().sum::<std::time::Duration>().as_secs_f64(),
-            raw[raw.len() * 95 / 100].as_secs_f64() * 1000.0,
-            raw[raw.len() * 99 / 100].as_secs_f64() * 1000.0,
-            metadata.iter().sum::<std::time::Duration>().as_secs_f64(),
-            metadata[metadata.len() * 95 / 100].as_secs_f64() * 1000.0,
-            metadata[metadata.len() * 99 / 100].as_secs_f64() * 1000.0);
-    }
     println!(
         "RAW_EVENT_BENCH mode={mode} records={total} batches={batch_count} input_bytes={input_bytes} \
          open_s={:.6} write_s={:.6} write_records_s={:.1} p50_ms={:.3} p95_ms={:.3} p99_ms={:.3} \

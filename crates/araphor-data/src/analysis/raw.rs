@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use prost::Message as _;
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use super::raw_segments::{
@@ -62,7 +61,6 @@ impl AnalysisStore {
         let page_end = expiry.map_or(receipt.contiguous_cursor, |first| first - 1);
         let mut frozen = Vec::new();
         let mut count = 0;
-        let mut encoded_bytes = 0;
         let mut bounded = false;
         if first_cursor <= page_end {
             let start = raw
@@ -81,31 +79,14 @@ impl AnalysisStore {
                 if first_cursor.checked_add(count as u64) != Some(first) {
                     return self.reject("the accepted evidence range has a missing record");
                 }
-                let mut last = None;
-                for cursor in first..=span.last.min(page_end) {
-                    let offset = (cursor - span.first) as usize;
-                    let bytes = (span.ends[offset]
-                        - if offset == 0 {
-                            0
-                        } else {
-                            span.ends[offset - 1]
-                        }) as usize;
-                    if count == super::MAX_ANALYSIS_PAGE_RECORDS
-                        || encoded_bytes + bytes > super::MAX_ANALYSIS_PAGE_BYTES
-                    {
-                        if count == 0 {
-                            return self.reject("one evidence frame exceeds the read page bound");
-                        }
-                        bounded = true;
-                        break;
-                    }
-                    encoded_bytes += bytes;
-                    count += 1;
-                    last = Some(cursor);
-                }
-                if let Some(last) = last {
-                    frozen.push(raw.freeze(entry, index, first, last)?);
-                }
+                let available = super::MAX_ANALYSIS_PAGE_RECORDS - count;
+                let last = span
+                    .last
+                    .min(page_end)
+                    .min(first.saturating_add(available as u64 - 1));
+                count += (last - first + 1) as usize;
+                frozen.push(raw.freeze(entry, index, first, last)?);
+                bounded = count == super::MAX_ANALYSIS_PAGE_RECORDS;
                 if bounded {
                     break;
                 }
@@ -115,15 +96,28 @@ impl AnalysisStore {
         if next_cursor.is_some_and(|next| next <= page_end) && !bounded {
             return self.reject("the accepted evidence range has a missing record");
         }
-        let next_cursor = next_cursor.filter(|next| *next <= receipt.contiguous_cursor);
+        let accepted = receipt.contiguous_cursor;
         let read_revision = *self.revision.borrow();
         drop(raw);
         drop(coordinator);
         let mut records = Vec::with_capacity(count);
-        for range in frozen {
+        let mut encoded_bytes = 0;
+        'pages: for range in frozen {
             control.check()?;
-            records.extend(range.read(&self.root)?);
+            for record in range.read(&self.root)? {
+                if encoded_bytes + record.framed_record.len() > super::MAX_ANALYSIS_PAGE_BYTES {
+                    if records.is_empty() {
+                        return self.reject("one evidence frame exceeds the read page bound");
+                    }
+                    break 'pages;
+                }
+                encoded_bytes += record.framed_record.len();
+                records.push(record);
+            }
         }
+        let next_cursor = first_cursor
+            .checked_add(records.len() as u64)
+            .filter(|next| *next <= accepted);
         control.check()?;
         Ok(super::AnalysisReadPageV1 {
             first_cursor,
@@ -186,12 +180,7 @@ impl AnalysisStore {
         )?;
         let json =
             serde_json::to_string(&identity).context(crate::JsonSnafu { path: &self.root })?;
-        let mut charge = added
-            + commit
-                .spans
-                .iter()
-                .map(|span| 256 + 4 * span.ends.len() as u64)
-                .sum::<u64>();
+        let mut charge = added;
         if created {
             charge += 256 + json.len() as u64;
         }
@@ -361,16 +350,56 @@ pub(super) struct RawCommit {
     pub body: prost::bytes::Bytes,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct RawRange {
+    pub first: u64,
+    pub last: u64,
+    pub start: u32,
+    pub bytes: u32,
+    pub ordinal: u32,
+}
+
+impl From<&RawSpan> for RawRange {
+    fn from(span: &RawSpan) -> Self {
+        Self {
+            first: span.first,
+            last: span.last,
+            start: span.start,
+            bytes: *span.ends.last().unwrap_or(&0),
+            ordinal: span.ordinal,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct RawMeta {
+    pub revision: u64,
+    pub cpu: u32,
+    pub intake: u64,
+    pub spans: Vec<RawRange>,
+}
+
+impl From<&RawCommit> for RawMeta {
+    fn from(commit: &RawCommit) -> Self {
+        Self {
+            revision: commit.revision,
+            cpu: commit.cpu,
+            intake: commit.intake,
+            spans: commit.spans.iter().map(RawRange::from).collect(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct RawEntry {
     pub identity: EvidenceIntakeIdentityV1,
-    pub commit: RawCommit,
+    pub commit: RawMeta,
     pub reference: EvidenceSegmentRefV1,
     pub stream: u64,
     pub sequence: u64,
     pub body_start: u64,
     pub body_bytes: usize,
-    pub digests: Vec<[u8; 32]>,
+    pub frame_bytes: usize,
 }
 
 pub(super) struct RawSource {
@@ -391,8 +420,7 @@ impl From<AnalysisSourceReceiptV1> for RawSource {
 
 pub(super) struct RawRead {
     reader: EvidenceSegmentReadV1,
-    span: RawSpan,
-    digest: [u8; 32],
+    span: RawRange,
     revision: u64,
     cpu: u32,
     intake: u64,
@@ -401,7 +429,7 @@ pub(super) struct RawRead {
 }
 
 impl RawRead {
-    pub(super) fn read(self, root: &Path) -> Result<Vec<super::AnalysisRecordV1>> {
+    pub(super) fn read(&self, root: &Path) -> Result<Vec<super::AnalysisRecordV1>> {
         let commit = self.reader.decode::<RawCommit>()?.pop().ok_or_else(|| {
             crate::AnalysisStateSnafu {
                 path: root,
@@ -410,33 +438,35 @@ impl RawRead {
             .build()
         })?;
         commit.validate(root)?;
+        let span = commit
+            .spans
+            .iter()
+            .find(|span| RawRange::from(*span) == self.span);
         if commit.revision != self.revision
             || commit.cpu != self.cpu
             || commit.intake != self.intake
-            || !commit.spans.contains(&self.span)
+            || span.is_none()
         {
             return AnalysisStore::reject_path(root, "the frozen raw commit changed its metadata");
         }
-        let bytes = &commit.body[self.span.start as usize
-            ..self.span.start as usize + *self.span.ends.last().unwrap_or(&0) as usize];
-        let mut digest = Sha256::new();
-        digest.update((self.span.ends.len() as u64).to_be_bytes());
-        for end in &self.span.ends {
-            digest.update(u64::from(*end).to_be_bytes());
-        }
-        digest.update(bytes);
-        if digest.finalize().as_slice() != self.digest {
-            return AnalysisStore::reject_path(root, "the frozen raw range changed its content");
-        }
+        let span = span.ok_or_else(|| {
+            crate::AnalysisStateSnafu {
+                path: root,
+                reason: "the frozen raw span is absent",
+            }
+            .build()
+        })?;
+        let bytes =
+            &commit.body[span.start as usize..span.start as usize + self.span.bytes as usize];
         let mut records = Vec::new();
         for cursor in self.first..=self.last {
             let index = (cursor - self.span.first) as usize;
             let start = if index == 0 {
                 0
             } else {
-                self.span.ends[index - 1] as usize
+                span.ends[index - 1] as usize
             };
-            let end = self.span.ends[index] as usize;
+            let end = span.ends[index] as usize;
             records.push(super::AnalysisRecordV1 {
                 cursor,
                 framed_record: bytes[start..end].to_vec(),
@@ -461,6 +491,99 @@ pub(super) struct RawJournal {
 }
 
 impl RawJournal {
+    pub(super) fn forget_segment(&mut self, id: u64) -> Result<()> {
+        self.segments.forget(id)?;
+        self.entries.retain(|_, entry| entry.reference.id != id);
+        self.ranges
+            .retain(|_, (revision, _)| self.entries.contains_key(revision));
+        Ok(())
+    }
+
+    pub(super) fn locate(
+        &self,
+        key: [u8; 32],
+        cursor: u64,
+        revision: u64,
+    ) -> Result<(&RawEntry, usize)> {
+        let (_, &(id, index)) = self
+            .ranges
+            .range((key, 0)..=(key, cursor))
+            .next_back()
+            .ok_or_else(|| self.invalid("the raw witness range is absent"))?;
+        let entry = &self.entries[&id];
+        if id > revision || cursor > entry.commit.spans[index].last {
+            return Err(self.invalid("the raw witness cursor is absent"));
+        }
+        Ok((entry, index))
+    }
+
+    pub(super) fn select_ranges(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+        first: u64,
+        last: u64,
+        revision: u64,
+        time: Option<(u64, u64)>,
+        limit: usize,
+    ) -> Result<Vec<super::segments::SegmentRange>> {
+        if first > last || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let key = source_key(identity);
+        let start = self
+            .ranges
+            .range((key, 0)..=(key, first))
+            .next_back()
+            .filter(|(_, (id, index))| self.entries[id].commit.spans[*index].last >= first)
+            .map_or(first, |((_, start), _)| *start);
+        let mut ranges = Vec::new();
+        for (_, &(id, index)) in self.ranges.range((key, start)..=(key, last)) {
+            let entry = &self.entries[&id];
+            if &entry.identity != identity
+                || id > revision
+                || time.is_some_and(|(from, until)| {
+                    entry.commit.intake < from || entry.commit.intake > until
+                })
+            {
+                continue;
+            }
+            let span = &entry.commit.spans[index];
+            ranges.push(super::segments::SegmentRange {
+                segment_id: entry.reference.id,
+                byte_start: entry.body_start + u64::from(span.start),
+                byte_end: entry.body_start + u64::from(span.start) + u64::from(span.bytes),
+                first_cursor: span.first,
+                last_cursor: span.last,
+                scan_bytes: entry.frame_bytes,
+                intake: entry.commit.intake,
+                reader: self.freeze(entry, index, span.first, span.last)?,
+            });
+            if ranges.len() == limit {
+                break;
+            }
+        }
+        Ok(ranges)
+    }
+
+    pub(super) fn record_count(&self, key: [u8; 32], first: u64, last: u64, revision: u64) -> u64 {
+        if first > last {
+            return 0;
+        }
+        let start = self
+            .ranges
+            .range((key, 0)..=(key, first))
+            .next_back()
+            .filter(|(_, (id, index))| self.entries[id].commit.spans[*index].last >= first)
+            .map_or(first, |((_, start), _)| *start);
+        self.ranges
+            .range((key, start)..=(key, last))
+            .filter_map(|(_, &(id, index))| {
+                let span = &self.entries[&id].commit.spans[index];
+                (id <= revision).then(|| span.last.min(last) - span.first.max(first) + 1)
+            })
+            .sum()
+    }
+
     pub(super) fn freeze(
         &self,
         entry: &RawEntry,
@@ -471,7 +594,6 @@ impl RawJournal {
         Ok(RawRead {
             reader: self.reader(entry.reference.id, entry.stream, entry.sequence)?,
             span: entry.commit.spans[index].clone(),
-            digest: entry.digests[index],
             revision: entry.commit.revision,
             cpu: entry.commit.cpu,
             intake: entry.commit.intake,
@@ -535,13 +657,13 @@ impl RawJournal {
                     .ok_or_else(|| journal.invalid("the raw payload offset is invalid"))?;
                 journal.publish(RawEntry {
                     identity: identity.clone(),
-                    commit,
+                    commit: RawMeta::from(&commit),
                     reference,
                     stream: stream_id,
                     sequence,
                     body_start,
                     body_bytes,
-                    digests: Vec::new(),
+                    frame_bytes: commit.encoded_len() + 8,
                 })?;
             }
         }
@@ -585,6 +707,28 @@ impl RawJournal {
         {
             return Err(self.invalid("out-of-order evidence exceeds the pending window"));
         }
+        let overlap = self
+            .ranges
+            .range((key, 0)..=(key, batch.last_cursor))
+            .next_back()
+            .is_some_and(|(_, &(id, index))| {
+                self.entries[&id].commit.spans[index].last >= batch.first_cursor
+            });
+        if !overlap && batch.first_cursor > contiguous {
+            return Ok(RawCommit {
+                revision,
+                cpu: batch.cpu_id,
+                intake: batch.intake_utc_ns,
+                spans: vec![RawSpan {
+                    first: batch.first_cursor,
+                    last: batch.last_cursor,
+                    start: 0,
+                    ends: batch.frame_ends.iter().map(|end| *end as u32).collect(),
+                    ordinal: 0,
+                }],
+                body: batch.framed_records.clone(),
+            });
+        }
         let mut retained = vec![false; batch.frame_ends.len()];
         for (_, &(stored_revision, index)) in
             self.ranges.range((key, 0)..=(key, batch.last_cursor)).rev()
@@ -595,13 +739,14 @@ impl RawJournal {
                 break;
             }
             let commit = self.read_entry(entry)?;
+            let saved_span = &commit.spans[index];
             for cursor in span.first.max(batch.first_cursor)..=span.last.min(batch.last_cursor) {
                 let saved = (cursor - span.first) as usize;
                 let input = (cursor - batch.first_cursor) as usize;
                 let saved_start = if saved == 0 {
                     0
                 } else {
-                    span.ends[saved - 1] as usize
+                    saved_span.ends[saved - 1] as usize
                 };
                 let input_start = if input == 0 {
                     0
@@ -609,7 +754,7 @@ impl RawJournal {
                     batch.frame_ends[input - 1]
                 };
                 let stored = &commit.body[span.start as usize + saved_start
-                    ..span.start as usize + span.ends[saved] as usize];
+                    ..span.start as usize + saved_span.ends[saved] as usize];
                 if stored != &batch.framed_records[input_start..batch.frame_ends[input]] {
                     return Err(self.invalid("an evidence retry has conflicting record content"));
                 }
@@ -669,12 +814,13 @@ impl RawJournal {
         let key = source_key(identity);
         let (stream, sequence) = self.next_position(identity)?;
         let body_bytes = commit.body.len();
-        let payload = commit.encode_to_vec();
-        let length = u32::try_from(payload.len())
+        let length = u32::try_from(commit.encoded_len())
             .map_err(|_| self.invalid("the raw commit is too large"))?;
-        let mut frame = Vec::with_capacity(payload.len() + 8);
+        let mut frame = Vec::with_capacity(length as usize + 8);
         frame.extend_from_slice(&length.to_be_bytes());
-        frame.extend_from_slice(&payload);
+        commit
+            .encode(&mut frame)
+            .map_err(|_| self.invalid("the raw commit encoding failed"))?;
         frame.extend_from_slice(&crc32c::crc32c(&frame).to_be_bytes());
         let end = frame.len();
         let written = self.segments.write_frames(
@@ -695,13 +841,13 @@ impl RawJournal {
         let body_start = reference.offset - 4 - body_bytes as u64;
         self.publish(RawEntry {
             identity: identity.clone(),
-            commit,
+            commit: RawMeta::from(&commit),
             reference,
             stream,
             sequence,
             body_start,
             body_bytes,
-            digests: Vec::new(),
+            frame_bytes: end,
         })?;
         self.refresh_source(&key)?;
         Ok(())
@@ -729,7 +875,7 @@ impl RawJournal {
         Ok((stream, sequence))
     }
 
-    fn publish(&mut self, mut entry: RawEntry) -> Result<()> {
+    fn publish(&mut self, entry: RawEntry) -> Result<()> {
         if !super::valid_source_identity(&entry.identity) {
             return Err(self.invalid("the raw source identity is invalid"));
         }
@@ -761,16 +907,6 @@ impl RawJournal {
             {
                 return Err(self.invalid("raw cursor ranges overlap"));
             }
-            let mut digest = Sha256::new();
-            digest.update((span.ends.len() as u64).to_be_bytes());
-            for end in &span.ends {
-                digest.update(u64::from(*end).to_be_bytes());
-            }
-            let start = span.start as usize;
-            digest.update(
-                &entry.commit.body[start..start + *span.ends.last().unwrap_or(&0) as usize],
-            );
-            entry.digests.push(digest.finalize().into());
         }
         let source = self.sources.entry(key).or_insert_with(|| RawSource {
             receipt: AnalysisSourceReceiptV1 {
@@ -797,7 +933,6 @@ impl RawJournal {
         for (index, span) in entry.commit.spans.iter().enumerate() {
             self.ranges.insert((key, span.first), (revision, index));
         }
-        entry.commit.body = prost::bytes::Bytes::new();
         self.entries.insert(revision, entry);
         Ok(())
     }
@@ -878,7 +1013,7 @@ impl RawJournal {
         if commit.revision != entry.commit.revision
             || commit.cpu != entry.commit.cpu
             || commit.intake != entry.commit.intake
-            || commit.spans != entry.commit.spans
+            || commit.spans.iter().map(RawRange::from).collect::<Vec<_>>() != entry.commit.spans
             || commit.body.len() != entry.body_bytes
         {
             return Err(self.invalid("the raw commit changed its metadata"));
@@ -994,7 +1129,7 @@ mod tests {
             let guard = store.writer.lock().map_err(|_| "writer lock poisoned")?;
             let writer = guard.as_ref().ok_or("writer closed")?;
             assert_eq!(
-                writer.query_row("SELECT COUNT(*) FROM batch_ranges", [], |row| row
+                writer.query_row("SELECT COUNT(*) FROM segments", [], |row| row
                     .get::<_, u64>(0))?,
                 0
             );

@@ -59,7 +59,7 @@ pub use segment_file::{SegmentFile, MAX_EVIDENCE_SEGMENT_BYTES};
 
 pub const ANALYSIS_DUCKDB_BINDING_VERSION: &str = "1.10505.0";
 pub const ANALYSIS_SQLPARSER_VERSION: &str = "0.63.0";
-const ANALYSIS_SCHEMA_VERSION: i64 = 8;
+const ANALYSIS_SCHEMA_VERSION: i64 = 9;
 pub const MAX_ANALYSIS_PAGE_RECORDS: usize = 256;
 pub const MAX_ANALYSIS_PAGE_BYTES: usize = 1024 * 1024;
 
@@ -323,21 +323,6 @@ impl AnalysisStore {
                     committed_end UBIGINT NOT NULL,
                     file_name VARCHAR NOT NULL
                 );
-                CREATE TABLE batch_ranges (
-                    segment_id UBIGINT NOT NULL,
-                    stream_key BLOB NOT NULL,
-                    tenant_id BLOB NOT NULL,
-                    byte_start UBIGINT NOT NULL,
-                    byte_end UBIGINT NOT NULL,
-                    first_cursor UBIGINT NOT NULL,
-                    last_cursor UBIGINT NOT NULL,
-                    frame_ends UINTEGER[] NOT NULL,
-                    content_sha256 BLOB NOT NULL,
-                    commit_revision UBIGINT NOT NULL,
-                    ordinal UINTEGER NOT NULL,
-                    intake_utc_ns UBIGINT NOT NULL,
-                    PRIMARY KEY (tenant_id, stream_key, first_cursor)
-                );
                 CREATE TABLE IF NOT EXISTS coverage (
                     stream_key BLOB NOT NULL,
                     tenant_id BLOB NOT NULL,
@@ -387,7 +372,7 @@ impl AnalysisStore {
                     stream_key BLOB NOT NULL,
                     durable_cursor UBIGINT NOT NULL,
                     expires_utc_ns UBIGINT NOT NULL,
-                    frame_sha256 BLOB NOT NULL,
+                    segment_id UBIGINT NOT NULL,
                     PRIMARY KEY (ref_id, stream_key, durable_cursor)
                 );
                 CREATE TABLE IF NOT EXISTS context_refs (
@@ -428,6 +413,7 @@ impl AnalysisStore {
                     PRIMARY KEY (stream_key, first_cursor)
                 );
                 CREATE TABLE IF NOT EXISTS expired_ranges (
+                    segment_id UBIGINT NOT NULL,
                     stream_key BLOB NOT NULL,
                     tenant_id BLOB NOT NULL,
                     first_cursor UBIGINT NOT NULL,
@@ -574,17 +560,12 @@ impl AnalysisStore {
             let Some(receipt) = Self::read_receipt_from(writer, &self.root, identity, &key)? else {
                 return Ok(None);
             };
-            let retained_event_count = writer
-                .query_row(
-                    "SELECT COALESCE(SUM(b.last_cursor::HUGEINT - b.first_cursor + 1), 0)::UBIGINT
-                 FROM batch_ranges b JOIN segments s USING (segment_id)
-                 WHERE b.stream_key = ? AND b.tenant_id = ? AND s.state = 'Live'",
-                    params![key.as_slice(), identity.tenant_id.as_slice()],
-                    |row| row.get(0),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "count retained source events",
-                })?;
+            let revision = Self::read_meta_from(writer, &self.root)?.commit_revision;
+            let retained_event_count = self
+                .raw
+                .lock()
+                .map_err(|_| self.state_error("the raw owner lock is poisoned"))?
+                .record_count(key, 1, u64::MAX, revision);
             let latest_coverage_report = if receipt.coverage_revision == 0 {
                 None
             } else {
@@ -1023,7 +1004,7 @@ mod tests {
         let root = directory.path().join("analysis");
         let store = AnalysisStore::open(&root)?;
         let initial = store.meta()?;
-        assert_eq!(initial.schema_version, 8);
+        assert_eq!(i64::from(initial.schema_version), ANALYSIS_SCHEMA_VERSION);
         assert_eq!(initial.commit_revision, 0);
         assert!(AnalysisStore::open(&root).is_err());
         {
@@ -1059,7 +1040,7 @@ mod tests {
     #[test]
     fn analysis_store_schema_permissions() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        for version in [0, 2, 3, 4, 5, 6, 7, 9] {
+        for version in [0, 2, 3, 4, 5, 6, 7, 8, 10] {
             let root = directory.path().join(format!("schema-{version}"));
             let store = AnalysisStore::open(&root)?;
             {
@@ -1207,13 +1188,17 @@ mod tests {
                 .retained_event_count,
             7
         );
-        let reader = reopened.reader()?;
-        let count: u64 =
-            reader
-                .get()?
-                .query_row("SELECT COUNT(*) FROM batch_ranges", [], |row| row.get(0))?;
-        assert_eq!(count, 5);
-        drop(reader);
+        assert_eq!(
+            reopened
+                .raw
+                .lock()
+                .map_err(|_| "raw lock poisoned")?
+                .ranges
+                .keys()
+                .filter(|(key, _)| key == &source_key(&identity))
+                .count(),
+            5
+        );
 
         let revision = reopened.meta()?.commit_revision;
         reopened.accept_validated_coverage(coverage(&identity, 1, b"coverage"))?;
@@ -1353,7 +1338,7 @@ mod tests {
         {
             let writer = reopened.writer()?;
             writer.get()?.execute(
-                "DELETE FROM batch_ranges WHERE stream_key = ?",
+                "DELETE FROM segments WHERE stream_key = ?",
                 params![source_key(&identity).as_slice()],
             )?;
         }

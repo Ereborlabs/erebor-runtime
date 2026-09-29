@@ -42,62 +42,27 @@ impl AnalysisStore {
                 OR e.committed_end < 70 OR e.committed_end > 16777216
                 OR s.stream_key IS NULL OR e.tenant_id <> s.tenant_id
                 OR e.cpu_id <> s.cpu_id OR e.identity_json <> s.identity_json"),
-            ("invalid batch range", "SELECT 1 FROM batch_ranges b LEFT JOIN segments s USING (segment_id)
-                WHERE s.segment_id IS NULL
-                    OR b.stream_key <> s.stream_key OR b.tenant_id <> s.tenant_id
-                    OR b.first_cursor = 0 OR b.last_cursor < b.first_cursor
-                    OR b.last_cursor::HUGEINT - b.first_cursor + 1 > 4096
-                    OR b.byte_start < 70 OR b.byte_end <= b.byte_start OR b.byte_end > s.committed_end
-                    OR b.byte_end - b.byte_start > 4194304 OR b.intake_utc_ns = 0
-                    OR octet_length(b.content_sha256) <> 32
-                    OR len(b.frame_ends) <> b.last_cursor::HUGEINT - b.first_cursor + 1
-                    OR b.ordinal::HUGEINT + len(b.frame_ends) > 4096"),
-            ("overlapping batch cursors", "SELECT 1 FROM (
-                SELECT first_cursor, LAG(last_cursor) OVER (
-                    PARTITION BY tenant_id, stream_key ORDER BY first_cursor) AS prior
-                FROM batch_ranges) WHERE first_cursor <= prior"),
-            ("overlapping batch bytes", "SELECT 1 FROM (
-                SELECT byte_start, LAG(byte_end) OVER (
-                    PARTITION BY segment_id ORDER BY byte_start) AS prior
-                FROM batch_ranges) WHERE byte_start < prior"),
-            ("invalid retained batch floor", "SELECT 1 FROM batch_ranges b JOIN segments e USING (segment_id)
-                JOIN source_receipts s ON s.stream_key = b.stream_key AND s.tenant_id = b.tenant_id
-                WHERE e.state = 'Live' AND b.first_cursor <= s.retained_floor"),
             ("invalid coverage source or digest", "SELECT 1 FROM coverage c LEFT JOIN source_receipts s USING (stream_key)
                 WHERE s.stream_key IS NULL OR c.tenant_id <> s.tenant_id OR c.revision = 0
                 OR c.revision > s.coverage_revision OR sha256(c.report) <> lower(hex(c.report_sha256))"),
             ("invalid coverage receipt", "SELECT 1 FROM source_receipts s WHERE s.coverage_revision <>
                 COALESCE((SELECT MAX(c.revision) FROM coverage c WHERE c.stream_key = s.stream_key), 0)"),
             ("invalid expiry range", "SELECT 1 FROM expired_ranges x LEFT JOIN source_receipts s USING (stream_key)
-                WHERE s.stream_key IS NULL OR x.tenant_id <> s.tenant_id OR x.first_cursor = 0
+                WHERE s.stream_key IS NULL OR x.tenant_id <> s.tenant_id OR x.first_cursor = 0 OR x.segment_id = 0
+                OR x.segment_id >= (SELECT next_segment_id FROM store_meta)
                 OR x.last_cursor < x.first_cursor OR x.last_cursor > s.contiguous_cursor
-                OR EXISTS (SELECT 1 FROM batch_ranges b JOIN segments e USING (segment_id)
-                    WHERE b.stream_key = x.stream_key AND b.tenant_id = x.tenant_id AND e.state = 'Live'
-                    AND b.first_cursor <= x.last_cursor AND b.last_cursor >= x.first_cursor)
                 OR EXISTS (SELECT 1 FROM expired_ranges y WHERE y.stream_key = x.stream_key
                     AND y.first_cursor > x.first_cursor AND y.first_cursor <= x.last_cursor)"),
-            ("incomplete acknowledged range", "SELECT 1 FROM source_receipts s WHERE s.contiguous_cursor::HUGEINT <>
-                COALESCE((SELECT SUM(LEAST(b.last_cursor, s.contiguous_cursor)::HUGEINT - b.first_cursor + 1)
-                    FROM batch_ranges b JOIN segments e USING (segment_id)
-                    WHERE b.stream_key = s.stream_key AND b.tenant_id = s.tenant_id AND e.state = 'Live'
-                        AND b.first_cursor <= s.contiguous_cursor), 0)
-                + COALESCE((SELECT SUM(x.last_cursor::HUGEINT - x.first_cursor + 1)
-                    FROM expired_ranges x WHERE x.stream_key = s.stream_key), 0)"),
-            ("invalid retained floor", "SELECT 1 FROM source_receipts s WHERE s.retained_floor <>
-                COALESCE((SELECT MIN(b.first_cursor) - 1 FROM batch_ranges b JOIN segments e USING (segment_id)
-                    WHERE b.stream_key = s.stream_key AND b.tenant_id = s.tenant_id AND e.state = 'Live'
-                        AND b.first_cursor <= s.contiguous_cursor), s.contiguous_cursor)"),
             ("invalid result body", "SELECT 1 FROM analysis_results WHERE octet_length(tenant_id) <> 16
                 OR result_id = '' OR length(result_id) > 256 OR processor_id = ''
                 OR octet_length(body) = 0 OR octet_length(body) > 16777216 OR sha256(body) <> lower(hex(body_sha256))
                 OR octet_length(request_sha256) <> 32"),
             ("invalid witness reference", "SELECT 1 FROM evidence_refs r
                 LEFT JOIN analysis_results a ON a.result_id = r.ref_id AND a.tenant_id = r.tenant_id
-                LEFT JOIN batch_ranges b ON b.stream_key = r.stream_key
-                    AND r.durable_cursor BETWEEN b.first_cursor AND b.last_cursor AND b.tenant_id = r.tenant_id
-                LEFT JOIN segments e ON e.segment_id = b.segment_id AND e.state = 'Live'
+                LEFT JOIN segments e ON e.segment_id = r.segment_id AND e.state = 'Live'
+                    AND e.stream_key = r.stream_key AND e.tenant_id = r.tenant_id
                 WHERE a.result_id IS NULL OR e.segment_id IS NULL OR r.expires_utc_ns = 0
-                    OR octet_length(r.frame_sha256) <> 32"),
+                    OR r.durable_cursor = 0"),
             ("invalid context reference", "SELECT 1 FROM context_refs r
                 LEFT JOIN analysis_results a ON a.result_id = r.ref_id AND a.tenant_id = r.tenant_id
                 LEFT JOIN context_versions c ON c.tenant_id = r.tenant_id AND c.owner_id = r.owner_id
@@ -156,7 +121,6 @@ impl AnalysisStore {
             }
         }
         for (relation, notice) in [
-            ("batch_ranges", "events"),
             ("coverage", "coverage"),
             ("context_versions", "context_versions"),
             ("analysis_results", "analysis_results"),
@@ -176,10 +140,8 @@ impl AnalysisStore {
         }
         let invalid: bool = writer.query_row(
             "SELECT EXISTS (SELECT 1 FROM relation_revisions WHERE last_changed_revision = 0 OR last_changed_revision > ?)
-                OR EXISTS (SELECT 1 FROM batch_ranges e JOIN source_receipts s USING (stream_key)
-                    WHERE e.last_cursor::HUGEINT > s.contiguous_cursor::HUGEINT + ?)
                 OR EXISTS (SELECT 1 FROM store_meta WHERE next_segment_id = 0)",
-            params![meta.commit_revision, crate::MAX_PENDING_EVIDENCE_RECORDS], |row| row.get(0),
+            params![meta.commit_revision], |row| row.get(0),
         ).context(AnalysisDatabaseSnafu { operation: "validate revision and pending bounds" })?;
         if invalid {
             return Self::reject_path(root, "the stored revision or pending bound is invalid");
@@ -330,16 +292,15 @@ impl AnalysisStore {
             "epoch_key, tenant_id, node_boot_id, label_epoch FROM source_bindings",
             "next_segment_id FROM store_meta",
             "segment_id, stream_key, tenant_id, identity_json, cpu_id, stream_kind, state, sealed, committed_end FROM segments",
-            "segment_id, stream_key, tenant_id, byte_start, byte_end, first_cursor, last_cursor, frame_ends, content_sha256, commit_revision, ordinal, intake_utc_ns FROM batch_ranges",
             "stream_key, tenant_id, revision, report, report_sha256, commit_revision, ordinal FROM coverage",
             "tenant_id, owner_id, entity_key, lifetime_key, owner_revision, valid_from_utc_ns, valid_until_utc_ns, sensitivity, body, content_sha256, commit_revision FROM context_versions",
             "processor_id, method_version, tenant_id, stream_key, class, consumed_cursor, resume_floor, coverage_revision, context_revision, start_cursor, required_floor, retired, retirement_id, retirement_reason, retirement_cursor, retirement_revision FROM processor_progress",
-            "ref_id, tenant_id, stream_key, durable_cursor, expires_utc_ns, frame_sha256 FROM evidence_refs",
+            "ref_id, tenant_id, stream_key, durable_cursor, expires_utc_ns, segment_id FROM evidence_refs",
             "ref_id, tenant_id, owner_id, entity_key, lifetime_key, owner_revision, content_sha256 FROM context_refs",
             "result_id, tenant_id, processor_id, body, body_sha256, request_sha256, commit_revision FROM analysis_results",
             "processor_id, method_version, tenant_id, stream_key, first_cursor, last_cursor, commit_revision FROM processor_gaps",
             "stream_key, tenant_id, first_cursor, last_cursor, commit_revision FROM recovery_gaps",
-            "stream_key, tenant_id, first_cursor, last_cursor, commit_revision FROM expired_ranges",
+            "segment_id, stream_key, tenant_id, first_cursor, last_cursor, commit_revision FROM expired_ranges",
         ];
         for projection in projections {
             writer
@@ -548,20 +509,18 @@ mod tests {
             "UPDATE source_receipts SET retained_floor = 2",
             "DELETE FROM source_receipts",
             "UPDATE source_bindings SET label_epoch = 9",
-            "UPDATE batch_ranges SET content_sha256 = 'changed'::BLOB",
             "UPDATE segments SET cpu_id = 9",
-            "UPDATE batch_ranges SET frame_ends = [0]",
-            "UPDATE batch_ranges SET byte_end = byte_end + 1",
             "UPDATE segments SET committed_end = committed_end + 1",
+            "DELETE FROM segments",
             "UPDATE store_meta SET next_segment_id = 1",
             "UPDATE evidence_refs SET durable_cursor = 2",
+            "UPDATE evidence_refs SET segment_id = segment_id + 1",
             "UPDATE evidence_refs SET tenant_id = 'foreign'::BLOB",
             "UPDATE context_refs SET content_sha256 = 'changed'::BLOB",
             "DELETE FROM context_versions",
             "UPDATE context_versions SET body = 'changed'::BLOB",
             "UPDATE processor_progress SET consumed_cursor = 2",
             "UPDATE analysis_results SET body = 'changed'::BLOB",
-            "UPDATE batch_ranges SET commit_revision = 99",
             "UPDATE relation_revisions SET last_changed_revision = 99",
             "UPDATE store_meta SET recovery_epoch = 0",
         ];
@@ -780,12 +739,12 @@ mod tests {
         store
             .writer()?
             .get()?
-            .execute("ALTER TABLE batch_ranges RENAME TO missing_ranges", [])?;
+            .execute("ALTER TABLE segments RENAME TO missing_segments", [])?;
         drop(store);
         assert!(AnalysisStore::open(&root).is_err());
         let writer = Connection::open(root.join("analysis.duckdb"))?;
-        assert!(writer.prepare("SELECT * FROM batch_ranges").is_err());
-        assert!(writer.prepare("SELECT * FROM missing_ranges").is_ok());
+        assert!(writer.prepare("SELECT * FROM segments").is_err());
+        assert!(writer.prepare("SELECT * FROM missing_segments").is_ok());
         Ok(())
     }
 }

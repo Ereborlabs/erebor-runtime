@@ -551,7 +551,7 @@ mod tests {
             let mut reader = store.reader()?;
             let snapshot = reader.get_mut()?.transaction()?;
             assert_eq!(
-                snapshot.query_row("SELECT COUNT(*) FROM batch_ranges", [], |row| row
+                snapshot.query_row("SELECT COUNT(*) FROM segments", [], |row| row
                     .get::<_, u64>(0))?,
                 1
             );
@@ -571,7 +571,7 @@ mod tests {
             let pending = receiver.recv_timeout(Duration::from_millis(50));
             assert!(matches!(pending, Err(mpsc::RecvTimeoutError::Timeout)));
             assert_eq!(
-                snapshot.query_row("SELECT COUNT(*) FROM batch_ranges", [], |row| row
+                snapshot.query_row("SELECT COUNT(*) FROM segments", [], |row| row
                     .get::<_, u64>(0))?,
                 1
             );
@@ -582,11 +582,11 @@ mod tests {
                 1
             );
             assert_eq!(
-                snapshot.query_row("SELECT first_cursor FROM batch_ranges", [], |row| row
+                snapshot.query_row("SELECT commit_revision FROM store_meta", [], |row| row
                     .get::<_, u64>(0))?,
                 1
             );
-            let ranges = AnalysisStore::raw_ranges(&snapshot, &identity(), 1, 1, 1)?;
+            let ranges = store.raw_ranges(&snapshot, &identity(), 1, 1, 1)?;
             assert_eq!(ranges[0].read(&store.root)?.len(), 1);
             drop(snapshot);
             drop(reader);

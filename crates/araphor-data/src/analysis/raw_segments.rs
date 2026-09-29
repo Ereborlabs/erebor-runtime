@@ -208,7 +208,7 @@ pub(crate) struct EvidenceSegmentReadV1 {
 }
 
 impl EvidenceSegmentReadV1 {
-    pub(crate) fn decode<M: Message + Default>(self) -> Result<Vec<M>> {
+    pub(crate) fn decode<M: Message + Default>(&self) -> Result<Vec<M>> {
         let mut records = Vec::with_capacity(self.frames.len());
         for frame in &self.frames {
             let bytes = self.read_frame(frame)?;

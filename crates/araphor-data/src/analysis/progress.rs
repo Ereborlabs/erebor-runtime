@@ -416,26 +416,17 @@ impl AnalysisStore {
             return self.reject("the result claims unavailable source or coverage progress");
         }
         let expected = input.consumed_cursor - input.expected_cursor;
-        let available: u64 = transaction
-            .query_row(
-                "SELECT COALESCE(SUM(LEAST(b.last_cursor, ?)::HUGEINT
-                    - GREATEST(b.first_cursor::HUGEINT, ?::HUGEINT + 1) + 1), 0)::UBIGINT
-                 FROM batch_ranges b JOIN segments s USING (segment_id)
-                 WHERE b.stream_key = ? AND b.tenant_id = ? AND s.state = 'Live'
-                    AND b.last_cursor > ? AND b.first_cursor <= ?",
-                params![
-                    input.consumed_cursor,
-                    input.expected_cursor,
-                    key.as_slice(),
-                    input.scope.identity.tenant_id.as_slice(),
-                    input.expected_cursor,
-                    input.consumed_cursor,
-                ],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "check consumed input",
-            })?;
+        let revision = Self::read_meta_from(&transaction, &self.root)?.commit_revision;
+        let available = self
+            .raw
+            .lock()
+            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?
+            .record_count(
+                key,
+                input.expected_cursor.saturating_add(1),
+                input.consumed_cursor,
+                revision,
+            );
         if available != expected {
             return self.reject("the processor result skips unavailable raw input");
         }
@@ -458,9 +449,10 @@ impl AnalysisStore {
         if input.context_revision != context_revision {
             return self.reject("the result context revision differs from its references");
         }
-        let mut witness_digests = Vec::<[u8; 32]>::with_capacity(input.witnesses.len());
+        let mut witness_segments = Vec::<u64>::with_capacity(input.witnesses.len());
         let mut cached = Vec::<super::AnalysisRecordV1>::new();
         let mut source = None;
+        let mut segment = 0;
         for witness in &input.witnesses {
             if source != Some(&witness.identity)
                 || cached
@@ -470,7 +462,7 @@ impl AnalysisStore {
                     .last()
                     .is_none_or(|record| witness.cursor > record.cursor)
             {
-                let ranges = Self::raw_ranges(
+                let ranges = self.raw_ranges(
                     &transaction,
                     &witness.identity,
                     witness.cursor,
@@ -481,12 +473,13 @@ impl AnalysisStore {
                     return self.reject("the result witness is not retained exactly once");
                 }
                 cached = ranges[0].read(&self.root)?;
+                segment = ranges[0].segment_id;
                 source = Some(&witness.identity);
             }
-            let index = cached
+            cached
                 .binary_search_by_key(&witness.cursor, |record| record.cursor)
                 .map_err(|_| self.state_error("the result witness is not retained"))?;
-            witness_digests.push(Sha256::digest(&cached[index].framed_record).into());
+            witness_segments.push(segment);
         }
         let revision = Self::read_meta_from(&transaction, &path)?
             .commit_revision
@@ -514,7 +507,7 @@ impl AnalysisStore {
             results: 1,
             ..Default::default()
         };
-        for (witness, digest) in input.witnesses.iter().zip(&witness_digests) {
+        for (witness, segment) in input.witnesses.iter().zip(&witness_segments) {
             transaction
                 .execute(
                     "INSERT INTO evidence_refs VALUES (?, ?, ?, ?, ?, ?)",
@@ -524,7 +517,7 @@ impl AnalysisStore {
                         source_key(&witness.identity).as_slice(),
                         witness.cursor,
                         witness.expires_utc_ns,
-                        digest.as_slice(),
+                        segment,
                     ],
                 )
                 .context(AnalysisDatabaseSnafu {

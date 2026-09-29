@@ -151,9 +151,6 @@ impl AnalysisStore {
                     operation: "decode raw deletion recovery",
                 })?
         };
-        for id in deleting {
-            Self::remove_segment(writer, root, id, "Deleting")?;
-        }
         let committed = {
             let mut statement = writer
                 .prepare("SELECT segment_id, committed_end FROM segments")
@@ -172,6 +169,10 @@ impl AnalysisStore {
         };
         let mut raw = RawJournal::open(root, u64::MAX, &committed)?;
         raw.restore_receipts(writer)?;
+        for id in deleting {
+            Self::remove_segment(writer, root, &raw, id)?;
+            raw.forget_segment(id)?;
+        }
         raw.validate_catalog(writer)?;
         raw.project(writer, None)?;
         raw.project_paths(writer)?;
@@ -205,10 +206,12 @@ impl RawJournal {
                 .range(..=revision)
                 .map(|(_, entry)| (entry.reference.id, entry))
                 .collect();
+            let mut seen = BTreeSet::new();
             for row in rows {
                 let (id, end, json, cpu, name) = row.context(AnalysisDatabaseSnafu {
                     operation: "decode raw segment catalogue check",
                 })?;
+                seen.insert(id);
                 let entry = projected
                     .get(&id)
                     .ok_or_else(|| self.invalid("a catalogued raw segment is absent"))?;
@@ -231,121 +234,120 @@ impl RawJournal {
                     );
                 }
             }
+            if seen.len() != projected.len() {
+                return Err(self.invalid("a committed raw segment has no metadata"));
+            }
         }
-        let mut statement = writer.prepare("SELECT segment_id, byte_start, byte_end, first_cursor, last_cursor, frame_ends::VARCHAR, content_sha256, commit_revision, ordinal, intake_utc_ns FROM batch_ranges")
-            .context(AnalysisDatabaseSnafu { operation: "prepare raw catalogue validation" })?;
-        let mut rows = statement.query([]).context(AnalysisDatabaseSnafu {
-            operation: "read raw catalogue validation",
-        })?;
-        while let Some(row) = rows.next().context(AnalysisDatabaseSnafu {
-            operation: "read raw catalogue range",
-        })? {
-            let decode = (|| -> duckdb::Result<_> {
+        let mut statement = writer.prepare(
+            "SELECT stream_key, identity_json, contiguous_cursor, retained_floor FROM source_receipts"
+        ).context(AnalysisDatabaseSnafu { operation: "prepare raw source validation" })?;
+        let rows = statement
+            .query_map([], |row| {
                 Ok((
-                    row.get::<_, u64>(0)?,
-                    row.get::<_, u64>(1)?,
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, String>(1)?,
                     row.get::<_, u64>(2)?,
                     row.get::<_, u64>(3)?,
-                    row.get::<_, u64>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, Vec<u8>>(6)?,
-                    row.get::<_, u64>(7)?,
-                    row.get::<_, u32>(8)?,
-                    row.get::<_, u64>(9)?,
                 ))
-            })();
-            let (id, start, end, first, last, ends, digest, revision, ordinal, intake) = decode
-                .context(AnalysisDatabaseSnafu {
-                    operation: "decode raw catalogue range",
-                })?;
-            let entry = self
-                .entries
-                .get(&revision)
-                .ok_or_else(|| self.invalid("a catalogued raw commit is absent"))?;
-            let index = entry
-                .commit
-                .spans
-                .iter()
-                .position(|span| span.first == first)
-                .ok_or_else(|| self.invalid("a catalogued raw range is absent"))?;
-            let span = &entry.commit.spans[index];
-            let ends: Vec<u32> =
-                serde_json::from_str(&ends).context(JsonSnafu { path: &self.root })?;
-            if id != entry.reference.id
-                || start != entry.body_start + u64::from(span.start)
-                || end != start + u64::from(*span.ends.last().unwrap_or(&0))
-                || last != span.last
-                || ends != span.ends
-                || digest != entry.digests[index]
-                || ordinal != span.ordinal
-                || intake != entry.commit.intake
-            {
-                return Err(self.invalid("the raw catalogue differs from its segment commit"));
-            }
-        }
-        let count: u64 = writer
-            .query_row("SELECT COUNT(*) FROM batch_ranges", [], |row| row.get(0))
+            })
             .context(AnalysisDatabaseSnafu {
-                operation: "count projected raw ranges",
+                operation: "read raw source validation",
             })?;
-        let expected: usize = self
-            .entries
-            .range(..=revision)
-            .map(|(_, entry)| entry.commit.spans.len())
-            .sum();
-        if count != expected as u64 {
-            return Err(self.invalid("the raw catalogue is missing a committed range"));
-        }
-        {
-            use sha2::{Digest as _, Sha256};
-            let mut statement = writer
-                .prepare(
-                    "SELECT r.stream_key, r.durable_cursor, r.frame_sha256 FROM evidence_refs r",
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "prepare raw witness validation",
-                })?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((
-                        row.get::<_, Vec<u8>>(0)?,
-                        row.get::<_, u64>(1)?,
-                        row.get::<_, Vec<u8>>(2)?,
-                    ))
-                })
-                .context(AnalysisDatabaseSnafu {
-                    operation: "read raw witness validation",
-                })?;
-            for row in rows {
-                let (key, cursor, digest) = row.context(AnalysisDatabaseSnafu {
-                    operation: "decode raw witness validation",
-                })?;
-                let key: [u8; 32] = key
-                    .try_into()
-                    .map_err(|_| self.invalid("the raw witness key is invalid"))?;
-                let (_, &(revision, index)) = self
-                    .ranges
-                    .range((key, 0)..=(key, cursor))
-                    .next_back()
-                    .ok_or_else(|| self.invalid("the raw witness range is absent"))?;
-                let entry = &self.entries[&revision];
-                let span = &entry.commit.spans[index];
-                if cursor > span.last {
-                    return Err(self.invalid("the raw witness cursor is absent"));
-                }
-                let offset = (cursor - span.first) as usize;
-                let start = span.start as usize
-                    + if offset == 0 {
-                        0
-                    } else {
-                        span.ends[offset - 1] as usize
-                    };
-                let end = span.start as usize + span.ends[offset] as usize;
-                let commit = self.read_entry(entry)?;
-                if Sha256::digest(&commit.body[start..end]).as_slice() != digest {
-                    return Err(self.invalid("the retained witness digest is invalid"));
+        for row in rows {
+            let (key, json, accepted, floor) = row.context(AnalysisDatabaseSnafu {
+                operation: "decode raw source validation",
+            })?;
+            let key: [u8; 32] = key
+                .try_into()
+                .map_err(|_| self.invalid("the raw source key is invalid"))?;
+            let identity: EvidenceIntakeIdentityV1 =
+                serde_json::from_str(&json).context(JsonSnafu { path: &self.root })?;
+            let expired: u64 = writer.query_row(
+                "SELECT COALESCE(SUM(last_cursor::HUGEINT - first_cursor + 1), 0)::UBIGINT FROM expired_ranges WHERE stream_key = ?",
+                params![key.as_slice()], |row| row.get(0)
+            ).context(AnalysisDatabaseSnafu { operation: "count expired raw ranges" })?;
+            if self
+                .record_count(key, 1, accepted, revision)
+                .checked_add(expired)
+                != Some(accepted)
+            {
+                return Err(self.invalid("the acknowledged raw range is incomplete"));
+            }
+            let ranges = self.select_ranges(&identity, 1, accepted, revision, None, 1)?;
+            let expected = ranges
+                .first()
+                .map_or(accepted, |range| range.first_cursor - 1);
+            if floor != expected {
+                return Err(self.invalid("the retained raw floor is invalid"));
+            }
+            for entry in self
+                .entries
+                .values()
+                .filter(|entry| source_key(&entry.identity) == key)
+            {
+                if entry.commit.spans.iter().any(|span| {
+                    span.last > accepted.saturating_add(crate::MAX_PENDING_EVIDENCE_RECORDS)
+                }) {
+                    return Err(self.invalid("the raw pending range exceeds its bound"));
                 }
             }
+        }
+        let mut statement = writer
+            .prepare("SELECT stream_key, first_cursor, last_cursor FROM expired_ranges")
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare expiry overlap validation",
+            })?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, u64>(2)?,
+                ))
+            })
+            .context(AnalysisDatabaseSnafu {
+                operation: "read expiry overlap validation",
+            })?;
+        for row in rows {
+            let (key, first, last) = row.context(AnalysisDatabaseSnafu {
+                operation: "decode expiry overlap validation",
+            })?;
+            let key = key
+                .try_into()
+                .map_err(|_| self.invalid("the expired source key is invalid"))?;
+            if self.record_count(key, first, last, revision) != 0 {
+                return Err(self.invalid("an expired raw range is still live"));
+            }
+        }
+        let mut statement = writer
+            .prepare("SELECT stream_key, durable_cursor, segment_id FROM evidence_refs")
+            .context(AnalysisDatabaseSnafu {
+                operation: "prepare raw witness validation",
+            })?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, u64>(2)?,
+                ))
+            })
+            .context(AnalysisDatabaseSnafu {
+                operation: "read raw witness validation",
+            })?;
+        for row in rows {
+            let (key, cursor, segment) = row.context(AnalysisDatabaseSnafu {
+                operation: "decode raw witness validation",
+            })?;
+            let key = key
+                .try_into()
+                .map_err(|_| self.invalid("the raw witness key is invalid"))?;
+            let (entry, index) = self.locate(key, cursor, revision)?;
+            if entry.reference.id != segment {
+                return Err(self.invalid("the retained witness segment differs"));
+            }
+            self.freeze(entry, index, cursor, cursor)?
+                .read(&self.root)?;
         }
         Ok(())
     }
@@ -402,8 +404,9 @@ impl RawJournal {
             }
         }
         {
-            let mut statement = writer.prepare("SELECT b.segment_id, b.tenant_id, MAX(r.expires_utc_ns)::UBIGINT FROM evidence_refs r JOIN batch_ranges b ON r.stream_key = b.stream_key AND r.tenant_id = b.tenant_id AND r.durable_cursor BETWEEN b.first_cursor AND b.last_cursor GROUP BY b.segment_id, b.tenant_id")
-                .context(AnalysisDatabaseSnafu { operation: "prepare raw witness pins" })?;
+            let mut statement = writer.prepare(
+                "SELECT segment_id, tenant_id, MAX(expires_utc_ns)::UBIGINT FROM evidence_refs GROUP BY segment_id, tenant_id"
+            ).context(AnalysisDatabaseSnafu { operation: "prepare raw witness pins" })?;
             let rows = statement
                 .query_map([], |row| {
                     Ok((
@@ -506,31 +509,27 @@ impl RawJournal {
             .filter(|id| !ids.contains(id))
             .collect();
         for id in removed {
-            self.segments.forget(id)?;
+            self.forget_segment(id)?;
         }
-        self.entries
-            .retain(|_, entry| ids.contains(&entry.reference.id));
-        self.ranges
-            .retain(|_, (revision, _)| self.entries.contains_key(revision));
         for entry in self.entries.values() {
             let key = source_key(&entry.identity);
             let Some(&floor) = budget.required.get(&key) else {
                 continue;
             };
             let contiguous = self.sources[&key].receipt.contiguous_cursor;
-            for span in &entry.commit.spans {
+            for (index, span) in entry.commit.spans.iter().enumerate() {
                 if span.last <= floor {
                     continue;
                 }
                 let consumed = if floor >= span.first {
-                    span.ends[(floor - span.first) as usize]
+                    self.read_entry(entry)?.spans[index].ends[(floor - span.first) as usize]
                 } else {
                     0
                 };
                 *budget
                     .protected
                     .entry(entry.identity.tenant_id)
-                    .or_default() += u64::from(*span.ends.last().unwrap_or(&0) - consumed);
+                    .or_default() += u64::from(span.bytes - consumed);
                 if span.first <= contiguous {
                     budget
                         .oldest
@@ -569,7 +568,12 @@ impl RawJournal {
             ))
             .take(64)
             .scan(0_usize, |records, (_, entry)| {
-                let count: usize = entry.commit.spans.iter().map(|span| span.ends.len()).sum();
+                let count: usize = entry
+                    .commit
+                    .spans
+                    .iter()
+                    .map(|span| (span.last - span.first + 1) as usize)
+                    .sum();
                 if *records != 0 && *records + count > crate::MAX_EVIDENCE_BATCH_RECORDS {
                     return None;
                 }
@@ -592,40 +596,11 @@ impl RawJournal {
         let mut sources = BTreeMap::new();
         let mut binding_revision = 0;
         let mut segments = BTreeMap::new();
-        let mut insert = transaction.prepare("INSERT INTO batch_ranges VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS UINTEGER[]), ?, ?, ?, ?)")
-            .context(AnalysisDatabaseSnafu { operation: "prepare raw range publication" })?;
         for entry in &pending {
             let key = source_key(&entry.identity);
             sources.entry(key).or_insert(entry.commit.revision);
             segments.insert(entry.reference.id, *entry);
-            for (span, digest) in entry.commit.spans.iter().zip(&entry.digests) {
-                let ends =
-                    serde_json::to_string(&span.ends).context(JsonSnafu { path: &self.root })?;
-                let start = entry.body_start + u64::from(span.start);
-                let end = start + u64::from(*span.ends.last().unwrap_or(&0));
-                insert
-                    .execute(params![
-                        entry.reference.id,
-                        key.as_slice(),
-                        entry.identity.tenant_id.as_slice(),
-                        start,
-                        end,
-                        span.first,
-                        span.last,
-                        ends,
-                        digest.as_slice(),
-                        entry.commit.revision,
-                        span.ordinal,
-                        entry.commit.intake
-                    ])
-                    .context(AnalysisDatabaseSnafu {
-                        operation: "publish raw range",
-                    })?;
-                *charges.entry(entry.identity.tenant_id).or_default() +=
-                    256 + 4 * span.ends.len() as i64;
-            }
         }
-        drop(insert);
         for (id, entry) in segments {
             let key = source_key(&entry.identity);
             let json =
