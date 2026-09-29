@@ -1725,7 +1725,7 @@ test does not close a row when its physical condition or an assertion changed.
     Host, direct `runc`, and Kubernetes. Then remove the legacy block, result
     field, and shell gate. Keep the later restart behavior intact.
     - [x] Host passed in 28.66 seconds on 2026-09-29.
-    - [ ] Direct `runc` passes.
+    - [x] Direct `runc` passed in 29.70 seconds on 2026-09-29.
     - [ ] Kubernetes passes.
     - [ ] The legacy block, result field, and shell gate are removed.
 - [x] Four-task workload-first recovery: add one small parameterized Rust
