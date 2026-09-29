@@ -42,6 +42,9 @@ fn workload_recovers<P: Platform>() -> TestResult<()> {
         binding.prepared_container_entry_instance_id,
         root.snapshot.entry_instance_id
     );
+    assert_eq!(binding.prepared_container_exec_task_cookie, 0);
+    assert_eq!(binding.prepared_container_initial_host_tgid, pid);
+    assert_eq!(binding.prepared_container_bootstrap_state, 0);
     assert_eq!(
         root.snapshot.root_class.as_deref(),
         Some("recovered_application_root")

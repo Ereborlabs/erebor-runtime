@@ -1718,6 +1718,16 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Rerun the old direct-runtime probe. Its remaining iterator retry,
     ptrace bootstrap, internal exec, probe isolation, denial, post-cutover,
     and cleanup checks passed.
+  - [ ] Retire the separate legacy administrative-recovery block. Add only
+    the three missing public binding assertions to `workload_recovers`: the
+    recovered exec cookie is zero, the initial host TGID is the actor PID,
+    and the bootstrap state is zero. Pass the unchanged recovery operation on
+    Host, direct `runc`, and Kubernetes. Then remove the legacy block, result
+    field, and shell gate. Keep the later restart behavior intact.
+    - [x] Host passed in 28.66 seconds on 2026-09-29.
+    - [ ] Direct `runc` passes.
+    - [ ] Kubernetes passes.
+    - [ ] The legacy block, result field, and shell gate are removed.
 - [x] Four-task workload-first recovery: add one small parameterized Rust
   test. Start one application root and its child. Add one external root and
   its child before policy and Node start. Recover the same four tasks on Host,
