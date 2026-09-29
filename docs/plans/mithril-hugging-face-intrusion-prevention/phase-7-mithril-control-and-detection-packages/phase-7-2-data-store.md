@@ -21,9 +21,9 @@ No raw-event table or copied discovery archive is part of the target.
 Control keeps policy/trust/rollout persistence and authority. Node keeps its
 delivery WAL. The same complete data owner can later run remotely. Storage
 and trace intake do not require discovery. Entry: 7.1.
-Status: **Not done** for the approved segment-metadata simplification.
-The implementation at `6d6b2780` passed workspace correctness checks but still
-duplicates batch offsets in DuckDB. Its speed target remains unmet.
+Status: **Done** for the approved segment-metadata implementation in `f02473bf`.
+Full performance and capacity qualification is **Not done**. Use the current
+result below for new-source proof. Earlier results apply to their named source.
 Segment intake, reads, recovery,
 retention, complete-bundle backup, and trusted bounded extraction are
 implemented. The old Control raw writer and its callers are removed. Stored
@@ -179,6 +179,9 @@ Storage fails or cannot meet capacity
    validation. Keep a compact directory per batch in memory. Load event
    offsets from the selected batch. Store no batch-offset arrays, batch
    digests, or per-event index in DuckDB.
+   Directory memory grows with retained batches. Deletion removes their
+   entries. This is not a constant RSS bound. Small-batch memory at the
+   default quota requires measurement.
    Keep DuckDB for transactional context, results, progress, pins, source
    receipts, and segment deletion state. Raw segment commits contain replay
    metadata. Raw ACK follows segment sync and receipt publication. Do not run
@@ -392,13 +395,111 @@ an assertion, or repeat a passing case without that decision.
 | 5 | `data-store-tenants` | Shared-store contention measurement. Keep small isolation and replay checks mandatory; report large-run results separately. |
 | 6 | `data-store-rollout` | Check policy progress during intake and measure delay. Keep correctness and existing deadlines mandatory. No five-percent completion threshold applies. |
 | 7 | `analysis_extract_history` | Required bounded extraction and whole-segment witness proof. Keep scan/input limits and measure scanned/selected and pinned/useful bytes. |
-| 8 | `raw_event_store_comparison` | Diagnostic comparison with recorded old-writer results. The old writer has different work; matching its rate is not a completion gate. |
+| 8 | `raw_event_store_comparison` | Run the approved short release comparison against the original writer. The short pair is diagnostic. Qualification must meet the latency and throughput targets above. |
 
-The one-tenant component memory case already passed on the current Rust source.
+The earlier one-tenant component memory case passed on its named Rust source.
 Retain that result; it does not add a ninth required run. The 512-MiB test
 ceiling remains provisional, not a production memory budget. Exceeding it
 fails that test but does not by itself prove a leak. No test code or production
 limit changes as part of this classification.
+
+### Segment-owned metadata result
+
+**Done for implementation; Not done for full qualification.** Raw ownership
+is implemented in `f02473bf`. The recovery fixture correction is `846adec5`.
+Metadata schema 9 requires fresh development stores. No migration is added.
+
+Segments contain batch bounds, event offsets, CPU, intake time, and store
+positions. Recovery rebuilds compact batch entries from those segments.
+Raw pages, extraction, result input checks, witness lookup, and retention use
+that same owner. DuckDB contains file lifecycle totals, receipts, results,
+progress, pins, and expiry/deletion state. It contains no `batch_ranges` table
+or copied raw offsets. Raw batch and raw witness SHA-256 are removed. CRC32C
+and unrelated artifact and policy hashes remain.
+
+Extraction charges the complete checked batch, not only its event payload.
+The mTLS recovery fixture checks that this count exceeds payload bytes and
+does not exceed actual segment bytes. Its scope, projection, policy progress,
+retention, backup, restore, and replay checks remain.
+
+**Correctness: Done, PASS** on `846adec5`. The final workspace procedure
+returned zero after the last Rust edit. Formatting, workspace compilation,
+strict Clippy, and all enabled workspace tests passed. Data passed 81 tests
+with five ignored. Control passed 174 with two ignored. Mithril e2e passed
+123 with 249 ignored. The ignored capacity, history, and physical cases did
+not run. Read `/tmp/araphor-layout-final-gate.log`.
+
+```sh
+CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh
+```
+
+**Short release comparison: Done. Latency target: Not done.** On 2026-09-29
+UTC, one fresh-store pair compared original writer `293762be`, mode `segments`,
+with `846adec5`, mode `analysis`. Both processes returned zero and verified
+all 16,384 records after reopen. The fixture used 64 batches of 256 events,
+2,301,638 encoded input bytes, and one outstanding write. Both binaries used
+Rust 1.97.1 release builds on the same ext4 host with Linux 6.8.0-139-generic
+and 16 reported CPUs. No task build or test ran with the measurement. Other
+host activity was not isolated. The 30-second process limit was unchanged.
+
+| Measurement | Original writer | Shared segment owner |
+| --- | --- | --- |
+| Write time | 79.929 ms | 81.721 ms |
+| Write throughput | 204,981.4 events/s | 200,487.4 events/s |
+| Write p50 | 1.192 ms | 1.241 ms |
+| Write p95 | 1.306 ms | 1.333 ms |
+| Write p99 | Not reported | 2.083 ms |
+| Initial open | 0.263 ms | 41.930 ms |
+| Reopen | 9.046 ms | 65.101 ms |
+| Complete read | 22.068 ms | 7.050 ms |
+| Peak process RSS | 17,312 KiB | 50,780 KiB |
+| Written logical bytes | 2,302,522 | 2,368,167 |
+| Closed logical bytes | 2,302,853 | 6,027,760 |
+
+Throughput is 97.81 percent of original and meets the 95-percent target in
+this pair. The observed p95 is 2.07 percent higher; it does not meet the
+required five-percent decrease. Complete reads are 3.13 times as fast.
+Write-loop time divided by 64 is 1.249 ms versus 1.277 ms. This is a loop
+average, not an exact durable-call mean. Neither fixture reports that mean.
+Five-pair stability and the complete latency target are not qualified.
+The larger open/reopen, RSS, and closed-file measurements include the metadata
+database. They do not identify the cost of each operation. No additional
+experiment or storage change started from this result. A next bounded step is
+the existing five-pair comparison, subject to the user's decision.
+
+Read `original.log`, `current.log`, both `*-resources.log` files, and
+`release-rebuild.log` in `/tmp/araphor-layout-compare.V8YpTOUa`.
+Original executable SHA-256:
+`76bb12980296227aacbc3bb23b3af8f6472f3471d971c74f9e26e25f42472b54`.
+Current executable SHA-256:
+`f78d1056617771e9ed368bc311e434d35ac4c2dd0cc0ec974b7e75b66009f0f4`.
+
+```sh
+CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true cargo test -p araphor-data -p mithril-control -p mithril-e2e --release --features mithril-control/test-fixtures --lib --no-run
+ARAPHOR_STORE_BENCH_MODE=segments ARAPHOR_STORE_BENCH_BATCHES=64 timeout 30s /usr/bin/time -v -o /tmp/araphor-layout-compare.V8YpTOUa/original-resources.log /tmp/araphor-layout-compare.V8YpTOUa/original-control store::raw_bench::raw_event_store_comparison --exact --ignored --nocapture --test-threads=1
+ARAPHOR_STORE_BENCH_MODE=analysis ARAPHOR_STORE_BENCH_BATCHES=64 timeout 30s /usr/bin/time -v -o /tmp/araphor-layout-compare.V8YpTOUa/current-resources.log /tmp/araphor-layout-compare.V8YpTOUa/current-control store::raw_bench::raw_event_store_comparison --exact --ignored --nocapture --test-threads=1
+```
+
+The following table lists the eight requested items. Earlier results below
+apply only to their recorded source. No large or physical run starts from
+this table without a new user decision.
+
+| Item | Previous requested result | New-source action |
+| --- | --- | --- |
+| 1: quota recovery | The 64-MiB mTLS case passed. | PASS in the final workspace correctness run. This does not prove the default quota. |
+| 2: tenant quota | The 2-GiB tenant case passed through Node WAL and mTLS. | Rerun before advertising default tenant capacity. |
+| 3: global memory | Five tenants filled the ordinary-write allowance under the 8-GiB global quota; peak RSS was 270.2 MiB. | Rerun before using this as current capacity or memory proof. The 512-MiB ceiling is provisional. |
+| 4: single-tenant load | Not run in the ordered review. | Run the requested load case; small correctness checks do not replace it. |
+| 5: tenant contention | The two-tenant run passed. The ten-tenant rerun passed after admission waiting was added. | Rerun the ten-tenant release case for current contention proof. |
+| 6: rollout under intake | 32 idle/loaded pairs, 64 Active transitions, and 131,072 records passed. | Rerun the release measurement; small rollout correctness checks remain separate. |
+| 7: historical extraction | The 72-MiB release case passed with 18 witnesses across six files. | Rerun with complete-batch scan accounting and shared witness lookup. Small scan-limit checks do not replace it. |
+| 8: old-writer comparison | Earlier short pairs measured different implementations. | Done: the approved new-source 64-by-256 pair is recorded above. The p95 target is not met. Five-pair stability and exact mean latency remain unqualified. |
+
+The paired disk-full and Kubernetes storage/outage cases also need new-source
+qualification. Their earlier results are not proof of this implementation.
+The compact directory has one entry per retained batch or cursor span, not a
+constant memory bound. This short comparison does not qualify small-batch
+memory at the default quota.
 
 ### Ordered review: item 1
 
