@@ -30,12 +30,16 @@ declarative captures are not delivered by these changes.
 
 ### Segment storage conversion
 
-The current conversion follows design commit `8d3fa270` and the raw writer in
-`150033ef`. The earlier source `6d6b2780` had a duplicated SQL offset directory.
+The current conversion is implemented in `f02473bf`. It follows design commit
+`8d3fa270` and reuses the raw writer from `150033ef`.
 The raw writer lives in
 `araphor-data`. Control has no raw writer or reader. This implementation uses
 metadata schema 9 and fresh development stores. Qualification is not complete.
 Earlier pass records below apply only to their named source revisions.
+The final workspace gate passed on `846adec5`: 81 data-owner tests, 174 Control
+tests, and 123 Mithril e2e tests passed. No Rust edit followed that run. Read
+the [current storage result](phase-7-2-data-store.md#segment-owned-metadata-result)
+for commands, measurements, and pending qualification.
 
 [ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Control starts.<br>
 -> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) AnalysisStore obtains the complete data-directory lease.<br>
@@ -68,7 +72,9 @@ sequenceDiagram
 
 The data owner retains compact batch bounds and source receipts in memory.
 It loads event offsets with a selected batch. It does not retain decoded event
-bodies or a resident end offset for each event. Each raw commit
+bodies or a resident end offset for each event. Directory memory grows with
+retained batches, and deletion removes their entries. Default-quota memory
+with small batches is not qualified. Each raw commit
 contains CPU, cursor ranges, intake time, and store positions. The segment
 header contains the complete source identity. Frame checksums protect both.
 `RawJournal::prepare` compares retained retry bytes before append. The owner
@@ -83,7 +89,7 @@ query DuckDB or use query-reader permits.
 [AnalysisStore::read_page_cancel](../../../../crates/araphor-data/src/analysis/raw.rs) A trusted consumer requests one raw page.<br>
 -> [RawJournal::freeze](../../../../crates/araphor-data/src/analysis/raw.rs) The owner selects exact ranges and opens bounded file handles under the writer guard.<br>
 -> [RawRead::read](../../../../crates/araphor-data/src/analysis/raw.rs) The reader checks CRC32C and batch metadata after the writer guard is released.<br>
--> [AnalysisStore::read_page_cancel](../../../../crates/araphor-data/src/analysis/raw.rs) The reader returns at most 256 records or one MiB. The maintenance lease prevents deletion and rotation until the read ends.
+-> [AnalysisStore::read_page_cancel](../../../../crates/araphor-data/src/analysis/raw.rs) The reader returns at most 256 records or one MiB. The maintenance lease prevents deletion until the read ends. A frozen file handle remains valid during ordinary append and rotation.
 
 ### Raw layout and shared lookup
 
@@ -149,8 +155,8 @@ syscall; raw reads check the deadline before and after bounded I/O.
 An uncertain raw write blocks later writes until recovery. Complete valid raw
 commits survive restart without catalogue publication or ACK. Recovery trims
 only incomplete active tails. It does not trim through a catalogued commit.
-A catalogue failure cannot reverse a raw ACK. Backup seals the raw files and
-publishes all descriptors before it copies the database and segment bundle.
+A metadata failure cannot reverse a raw ACK. Backup seals the raw files and
+publishes all file and receipt state before it copies the database and segment bundle.
 `AnalysisStore::open_leased` creates a database only when the leased directory
 contains no other entry. Missing metadata in an existing data directory stops
 startup before native open. Raw recovery cannot replace lost processor state
@@ -159,10 +165,10 @@ no replacement file, and intact records and required progress after the exact
 database file is restored.
 
 `raw_acceptance_defers_catalogue` checks writes, raw pages, binding lookups,
-and receipts while DuckDB still has no raw descriptors. It then reopens the
+and receipts while file totals and source receipts are not yet published. It then reopens the
 store and checks every record. `raw_recovers_without_database` checks
 raw recovery, partial retries, incomplete tails, and corruption without a
-database. `catalogue_recovers_partial_group` checks restart between descriptor
+database. `catalogue_recovers_partial_group` checks restart between metadata
 groups. Existing quota, witness, retention, crash, backup, and mTLS tests remain
 required. See the phase result for the exact verification state.
 
@@ -170,8 +176,8 @@ required. See the phase result for the exact verification state.
 -> [AnalysisSelectionV1::valid](../../../../crates/araphor-data/src/analysis/extraction.rs) The owner rejects foreign, duplicate, invalid, or excessive keys.<br>
 -> [AnalysisStore::extract](../../../../crates/araphor-data/src/analysis/extraction.rs) The owner fixes one metadata snapshot and revision under the writer coordinator, then releases that coordinator.<br>
 -> [AnalysisStore::check_selected_source](../../../../crates/araphor-data/src/analysis/extraction.rs) The owner checks accepted input against retained ranges and recorded expiry.<br>
--> [AnalysisStore::selected_ranges](../../../../crates/araphor-data/src/analysis/extraction.rs) Fixed SQL selects bounded catalog pages by exact source and proven batch intake time.<br>
--> [SegmentRange::read](../../../../crates/araphor-data/src/analysis/segments.rs) The owner reads each selected batch within its committed end and checks its digest.<br>
+-> [AnalysisStore::selected_ranges](../../../../crates/araphor-data/src/analysis/extraction.rs) The raw owner selects bounded range pages by exact source, snapshot revision, and proven batch intake time.<br>
+-> [SegmentRange::read](../../../../crates/araphor-data/src/analysis/segments.rs) The shared raw reader checks each complete batch with CRC32C and validates its metadata.<br>
 -> [AnalysisStore::extract](../../../../crates/araphor-data/src/analysis/extraction.rs) Trusted code selects permitted rows and fields before buffering output.<br>
 -> [AnalysisExtractionV1::push](../../../../crates/araphor-data/src/analysis/extraction.rs) The owner checks page and complete-input limits before adding a projected row.<br>
 -> [AnalysisStore::extract](../../../../crates/araphor-data/src/analysis/extraction.rs) The owner reads exact context and result versions from that same snapshot and closes all leases before return.
@@ -187,7 +193,7 @@ syscall. No public query endpoint or arbitrary SQL runs against the store.
 The output owns in-memory pages only. It has no file or database handle.
 Each page has at most 256 rows and one MiB of row input. The 64-MiB input budget
 charges projected bytes, row descriptors, page headers, and gap metadata.
-The separate 256-MiB scan budget charges complete selected raw batch ranges.
+The separate 256-MiB scan budget charges complete checked batch envelopes.
 Time exclusion uses validated batch intake times, not cursor order. Context and
 result keys keep exact versions regardless of event-time selection. Expiry and
 recovery gaps have no proved time interval and remain in coverage metadata.
@@ -276,8 +282,8 @@ The `test-fixtures` feature adds a one-use callback before raw append or after
 raw sync. `data_commit_failure` and `data_intake_failure` apply file-size limits
 at those points. A failed raw append sends no ACK. A synced raw commit remains
 accepted when later catalogue publication fails. Recovery rebuilds the missing
-descriptors. A failed header write removes only its newly created incomplete
-file. The startup fixture changes `batch_ranges`, not a raw-event table. The
+file totals and receipts. A failed header write removes only its newly created
+incomplete file. The startup fixture changes `segments`, not a raw-event table. The
 retention fixture seals the disposable segment before it adds a witness to
 the next segment. These checks do not qualify hardware power loss or release
 performance. Read the phase result for exact commands and source revisions.
@@ -310,11 +316,11 @@ the runner bound is not a release-capacity result.
 -> [AnalysisStore::logical_usage](../../../../crates/araphor-data/src/analysis/quota.rs) Admission reads stored totals, not all retained batches.<br>
 -> [AnalysisStore::validate_usage](../../../../crates/araphor-data/src/analysis/quota.rs) Startup and backup validation compare totals with retained data and reject a mismatch.
 
-The current change uses metadata schema 8. It adds no raw copy or per-event
-database index. Raw intake charges frame bytes and batch metadata in memory.
-Catalogue publication persists those charges in bounded groups. A new segment
-adds its header and catalogue charge. Deletion cleanup
-subtracts the segment and batch charges after unlink and directory sync.
+The current change uses metadata schema 9. It adds no raw copy or persisted
+batch directory. Raw intake charges actual frame bytes in memory. Metadata
+publication stores file totals and receipts in bounded groups. A new segment
+adds its header and lifecycle-row charge. Deletion cleanup subtracts these
+charges after unlink and directory sync.
 Other writers charge receipts, bindings, coverage, context, results,
 references, progress, and gaps in their data transactions. Counter errors
 abort those transactions. Physical disk checks remain separate.
@@ -841,7 +847,8 @@ and refusal to replace a prior result. This report is not a recovery pass.
 [RawJournal::refresh_budget](../../../../crates/araphor-data/src/analysis/raw_catalog.rs)
 groups active required processors by source after a derived-state mutation.
 The minimum consumed cursor protects the union of their unprocessed input.
-The owner counts the protected bytes from each retained batch's frame offsets.
+The owner counts complete protected batches from their compact byte totals.
+It loads event offsets only when progress stops inside a batch.
 [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/raw.rs)
 then checks and updates these cached totals without a query for each batch.
 The accepted cursor bounds the source age calculation.
@@ -1960,7 +1967,7 @@ These checks cannot reconstruct an ID that was never observed.
 | Existing BPF effect record to [Node observation](../../../../crates/mithril-node/src/observation.rs) | Existing `EffectObservationV1` is a native-layout, all-bit-valid integer structure. `FromBytes::read_from_bytes` rejects a wrong size. Semantic normalization remains a separate check. | Bad records affect decode/coverage health; byte-length acceptance is not semantic proof. No kernel record layout changes in this branch. |
 | Existing exact-file measurement to [KernelHost](../../../../crates/erebor-interceptor/src/host.rs) | `TryFromBytes::try_read_from_bytes` validates enum-bearing ABI values as well as size. This differs from all-bit-valid `FromBytes`. | The host returns its checked measurement error. This pre-existing decoder is a dependency, not a new diagnostic ABI. |
 | Node observation to [Control protobuf](../../../../crates/mithril-control/proto/erebor/mithril/control/v1/control.proto) | Optional decision context is field 21. Fields 1–20 remain unchanged. Identity byte fields have exact 16-byte big-endian encoding. Original kernel sequence is separate from WAL cursor. | [Evidence model validation](../../../../crates/mithril-control/src/evidence/model.rs) checks schema, sizes, catalogue digest, IDs, object handle, effect, and operation. Invalid values return `EvidenceModelError`. Missing context remains explicit. |
-| Evidence file to [bounded decoder](../../../../crates/araphor-data/src/analysis/segments.rs) | Existing protobuf frame; big-endian 32-bit length and CRC32C. The data reader checks the committed batch digest, offsets, frame length, and checksum. | Changed frames return data-store errors. A read lease protects selected files until extraction completes. |
+| Evidence file to [bounded decoder](../../../../crates/araphor-data/src/analysis/segments.rs) | Existing protobuf frame; big-endian 32-bit length and CRC32C. The shared segment reader checks cursor bounds, offsets, frame length, canonical encoding, and checksum. No raw SHA-256 is required. | Changed frames return data-store errors. A read lease protects selected files until extraction completes. |
 | Control owner to [artifact store](../../../../crates/mithril-control/src/store/discovery.rs) | Versioned MessagePack, SHA-256, bounded payload and dependencies. No cross-platform raw Rust struct serialization. | Typed `Discovery` codes distinguish schema, digest, quota, and reference failures. |
 | Index positions to [SQLite](../../../../crates/mithril-control/src/discovery/index.rs) | Unsigned 64-bit positions use fixed eight-byte big-endian blobs where ordered full-range values are required. Constraints and checked arithmetic protect counts and uniqueness. | Overflow or mismatched replay fails the transaction; no partial count/progress commit. |
 | Control dispatch to [Node](../../../../crates/mithril-control/src/observability/dispatch.rs) | Versioned typed request inside bounded diagnostic transport; Ed25519 signature over domain-separated complete inputs. | Session, trust, digest, scope, lifetime, or signature failure rejects execution through typed trace errors. |

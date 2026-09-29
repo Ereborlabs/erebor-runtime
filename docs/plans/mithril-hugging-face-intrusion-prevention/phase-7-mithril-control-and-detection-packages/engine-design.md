@@ -556,7 +556,7 @@ relations; create later result families only in their owning phase.
 | Relation | Key and content |
 | --- | --- |
 | `store_meta`, `relation_revisions` | Store UUID, schema, recovery epoch, commit revision, and last change for each exposed relation. |
-| `tenant_usage` | One row per tenant with logical bytes and coverage, context, and result counts. Each mutation updates its charge in the same transaction. Admission reads these totals. Startup and backup validation reject totals that differ from retained data. Physical disk checks remain separate. |
+| `tenant_usage` | One row per tenant with logical bytes and coverage, context, and result counts. Metadata publication and derived mutations commit their charges in the same transaction. Raw admission includes unpublished charges under the writer lock. Startup and backup validation reject totals that differ from retained data. Physical disk checks remain separate. |
 | `segments` | One lifecycle row per file: source, file ID/name, accounted byte end, and Live/Deleting state. This row supports quota accounting, bundle backup, and durable deletion intent. It contains no batch offsets or event offsets. |
 | `events` | A logical query relation decoded from committed segment ranges. Derived revision notices have distinct kinds and are not sensor actions. No persisted raw-event table. |
 | `source_receipts`, `coverage` | Source/session binding, contiguous ACK position, bounded pending ranges, explicit expiry/loss intervals, and coverage revisions. Kernel sequence stays separate. |
