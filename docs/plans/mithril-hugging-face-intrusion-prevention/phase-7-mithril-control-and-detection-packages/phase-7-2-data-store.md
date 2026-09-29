@@ -641,7 +641,64 @@ This proves bounded extraction and whole-segment witness protection for this
 component fixture. It also measures the cost of sparse reads and sparse pins.
 It does not prove public SQL, Node wire validation, Kubernetes behavior,
 default capacity, or timing stability. Full qualification remains **Not done**.
-Items 4 and 8 have not run in this ordered review. Stop for the user's decision.
+At this run, items 4 and 8 had not run in this ordered review. The later short
+item 8 result appears below. Stop for the user's decision.
+
+### Ordered review: item 8, short run
+
+**Done: PASS for the short diagnostic**, 2026-09-29 UTC. The user requested
+a short benchmark. One release case passed with zero failures and 175 filtered
+tests in 1.47 seconds. It wrote 64 batches of 256 events for one source:
+16,384 events and 2,301,638 framed bytes. Every write returned Accepted. The
+durable cursor reached 16,384. After reopen, every record decoded with the
+expected cursor. No speed threshold applies.
+
+| Measurement | Current combined owner, host | Recorded original Control segment writer, VM |
+| --- | ---: | ---: |
+| Write events/s | 15,082.4 | 92,318 |
+| Durable call p95, ms/batch | 18.002 | 3.209 |
+| Read events/s | 74,540.3 | 573,085 |
+| Reopen, ms | 104.428 | 11.135 |
+| Peak process RSS, KiB | 56,232 | 17,944 |
+| Allocated bytes after reopen | 6,512,640 | 2,310,144 |
+
+Current write time was 1.086297 seconds. Durable call p50 was 16.687 ms;
+p99 was 32.971 ms. Read time was 0.219801 seconds. Across the 64 batches,
+the measured raw append/sync intervals totaled 0.053226 seconds and the
+post-sync intervals totaled 0.076732 seconds. Their p95 values were 0.895 ms
+and 1.369 ms. Post-sync includes commit, notification, and return, not only
+SQL execution. These two intervals do not cover the complete write loop:
+0.956339 seconds remained outside them. This run does not identify that cost.
+
+Command, from the implementing worktree:
+
+```sh
+ARAPHOR_STORE_BENCH_MODE=analysis ARAPHOR_STORE_BENCH_BATCHES=64 /usr/bin/time -v -o /tmp/araphor-short-bench.JsrT5LXQ/resources.log target/release/deps/mithril_control-ea8df412454d0ab3 store::raw_bench::raw_event_store_comparison --exact --ignored --nocapture --test-threads=1
+```
+
+Source: `337e9b14104d0ca2e8071b62ce91b6df43521d06`, with Rust from `74792df`.
+Executable SHA-256:
+`c15b3dee1c0bdf2db11c6538ec4cef9c36e55753a39b22f7ab95dffeab36153e`.
+Read `run.log`, `resources.log`, and `build.log` in the named host directory.
+The release build used `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0
+CARGO_NET_OFFLINE=true cargo test --locked --release -p mithril-control
+-p mithril-e2e --lib --no-run`. It reused the native DuckDB dependency and
+completed the Control test executable. The remaining build was stopped before
+measurement; no complete multi-package build pass is claimed.
+
+The current host reported 16 CPUs, 31,492 MiB RAM, swap enabled, and x86_64
+Linux 6.8.0-139-generic. Initial available disk space was 42,740,928,512 bytes.
+No task build or other task test ran during measurement. Unrelated host activity
+was not isolated. No code, assertion, limit, or allocator setting changed.
+
+The historical figures come from the 16,384-event row in the
+[original comparison](raw-event-store-decision.md#direct-store-comparison).
+That run used a four-CPU VM with no swap and a different owner contract.
+The table is context, not a controlled speed ratio or a measured regression.
+No old writer was rebuilt or run. This short case excludes gRPC, discovery,
+retention, concurrent readers, backup, and crash recovery. It does not qualify
+capacity or sustained throughput. Full qualification remains **Not done**.
+Item 4 has not run in this ordered review. No larger run or fix followed.
 
 ### Measurement contracts
 
