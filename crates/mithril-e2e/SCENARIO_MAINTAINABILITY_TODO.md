@@ -4831,6 +4831,23 @@ setup, production actions, assertions, and focused test.
     removing the old probe.
 - [ ] `physical_kubernetes_ephemeral_probe`
 - [ ] `physical_kubernetes_probe_impersonation`
+  - [x] Replace the three stock exec-probe identities with
+    `stock_probes_are_entries`. This is a Kubernetes-only physical condition.
+    Use one Pod with readiness, liveness, and startup probes that run the same
+    shared Python command. Start real Control and Node, install the signed
+    policy, and use the existing actor-group operation.
+  - [x] While all three probe processes are live, require each container PID 1
+    to keep its initial root and each probe to have a creator-free external
+    root, its declared role and rule, and distinct task, process, and execution
+    identities. Release each probe and require ordinary Pod readiness and
+    cleanup.
+  - [x] Pass the small Kubernetes test. The focused test passed in 79.56
+    seconds. The existing Kubernetes container-kind test passed in 72.48
+    seconds with the shared policy.
+  - [ ] Remove only the matching startup, readiness, and liveness actions,
+    result fields, and old fixture containers. Keep the native-child,
+    kubectl-exec, and direct-CRI assertions until their exact replacements
+    pass.
 - [ ] `physical_kubernetes_prestop_probe`
   - [ ] Keep the real Pod `preStop.exec` hook. Deleting the Pod starts a new
     task in the application cgroup. The hook writes its namespace PID and

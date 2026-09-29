@@ -7,10 +7,10 @@
     "mode": "Protect",
     "containers": [
       {
-        "names": ["sidecar"], "kinds": ["Sidecar"],
+        "names": ["sidecar", "readiness", "liveness", "startup"], "kinds": ["Sidecar"],
         "images": ["fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
         "applicationEntry": {"executionRule": "python-sidecar", "role": "sidecar"},
-        "additionalEntries": [], "administrativeEntry": {"role": "administrator"},
+        "additionalEntries": [{"name": "probe", "kind": "StartupProbe", "executionRule": "python-probe", "role": "external"}], "administrativeEntry": {"role": "administrator"},
         "externalRole": "external"
       },
       {
@@ -33,7 +33,7 @@
       {"name": "init", "files": [], "execution": [{"name": "python-init", "path": "/usr/bin/python3", "recursive": false, "operations": ["Execute"], "action": "Allow"}], "network": {"destinations": []}, "processControl": [], "unixStreams": []},
       {"name": "application", "files": [{"name": "deny-application-read", "path": "/fixtures/policy_replace.py", "recursive": false, "operations": ["OpenRead"], "action": "Deny"}], "execution": [{"name": "python-application", "path": "/usr/bin/python3", "recursive": false, "operations": ["Execute"], "action": "Allow"}], "network": {"destinations": []}, "processControl": [], "unixStreams": []},
       {"name": "administrator", "files": [], "execution": [], "network": {"destinations": []}, "processControl": [], "unixStreams": []},
-      {"name": "external", "files": [], "execution": [], "network": {"destinations": []}, "processControl": [], "unixStreams": []}
+      {"name": "external", "files": [], "execution": [{"name": "python-probe", "path": "/work/bin/python", "recursive": false, "operations": ["Execute"], "action": "Allow"}], "network": {"destinations": []}, "processControl": [], "unixStreams": []}
     ],
     "exceptionGrants": []
   }

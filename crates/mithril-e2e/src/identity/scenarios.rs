@@ -89,6 +89,8 @@ mod policy_replace;
 #[cfg(test)]
 mod poststart_hook_exec;
 #[cfg(test)]
+mod probe_entries;
+#[cfg(test)]
 mod recovered_order;
 #[cfg(test)]
 mod recovery_tasks;

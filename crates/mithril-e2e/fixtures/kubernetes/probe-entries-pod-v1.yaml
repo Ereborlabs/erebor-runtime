@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: probe-entries
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 1
+  initContainers:
+    - name: readiness
+      image: MITHRIL_TEST_ACTOR_IMAGE
+      imagePullPolicy: Never
+      restartPolicy: Always
+      stdin: true
+      stdinOnce: true
+      env:
+        - {name: PATH, value: "/work/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+        - {name: MITHRIL_PROBE_SLOT, value: readiness}
+      readinessProbe:
+        exec: {command: [python, /fixtures/probe_entry.py, /work]}
+        periodSeconds: 1
+        timeoutSeconds: 60
+      securityContext: &security
+        privileged: true
+        appArmorProfile: {type: Unconfined}
+        seccompProfile: {type: Unconfined}
+      volumeMounts: &mounts
+        - {name: fixtures, mountPath: /fixtures, readOnly: true}
+        - {name: work, mountPath: /work}
+    - name: liveness
+      image: MITHRIL_TEST_ACTOR_IMAGE
+      imagePullPolicy: Never
+      restartPolicy: Always
+      stdin: true
+      stdinOnce: true
+      env:
+        - {name: PATH, value: "/work/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+        - {name: MITHRIL_PROBE_SLOT, value: liveness}
+      livenessProbe:
+        exec: {command: [python, /fixtures/probe_entry.py, /work]}
+        periodSeconds: 1
+        timeoutSeconds: 60
+      securityContext: *security
+      volumeMounts: *mounts
+    - name: startup
+      image: MITHRIL_TEST_ACTOR_IMAGE
+      imagePullPolicy: Never
+      restartPolicy: Always
+      stdin: true
+      stdinOnce: true
+      env:
+        - {name: PATH, value: "/work/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+        - {name: MITHRIL_PROBE_SLOT, value: startup}
+      startupProbe:
+        exec: {command: [python, /fixtures/probe_entry.py, /work]}
+        periodSeconds: 1
+        timeoutSeconds: 60
+      securityContext: *security
+      volumeMounts: *mounts
+  containers:
+    - name: application
+      image: MITHRIL_TEST_ACTOR_IMAGE
+      imagePullPolicy: Never
+      env:
+        - {name: PATH, value: "/work/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+      stdin: true
+      stdinOnce: true
+      securityContext: *security
+      volumeMounts: *mounts
+  volumes:
+    - name: fixtures
+      hostPath: {path: MITHRIL_TEST_FIXTURE_PATH, type: Directory}
+    - name: work
+      hostPath: {path: MITHRIL_TEST_WORK_PATH, type: Directory}
