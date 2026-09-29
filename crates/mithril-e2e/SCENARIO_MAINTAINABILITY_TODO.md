@@ -1246,6 +1246,9 @@ starting the complete privileged scenarios.
 
 - [ ] Replace duplicated native child exit and exec readiness loops with the
   shared wait. Preserve child status and snapshot diagnostics.
+  `CloneIntoCgroupFixture::wait_root` now uses the shared bounded wait. Its
+  owner check and all six production-backed clone scenarios passed in the
+  retained VM. Other native waits remain.
 - [x] Delete `NativeProcessFixture` after its generic lifecycle and readiness
   behavior moves to `ProcessFixture`.
 - [ ] Replace native child, failed-exec, post-PONR, subreaper, namespace-init,

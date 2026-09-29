@@ -158,32 +158,39 @@ impl CloneIntoCgroupFixture {
             .root_gate
             .as_ref()
             .ok_or_else(|| invalid_state("CLONE_INTO_CGROUP root has no readiness gate"))?;
-        for _ in 0..500 {
-            let state = self.root_state();
-            if state == 1 {
-                return Ok(());
-            }
-            let mut status = 0;
-            let waited =
-                unsafe { libc::waitpid(pid as libc::pid_t, &raw mut status, libc::WNOHANG) };
-            if waited == pid as libc::pid_t {
-                let reason = if libc::WIFEXITED(status) {
-                    format!("exit status {}", libc::WEXITSTATUS(status))
-                } else if libc::WIFSIGNALED(status) {
-                    format!("signal {}", libc::WTERMSIG(status))
-                } else {
-                    format!("wait status {status}")
-                };
-                return Err(invalid_state(format!(
-                    "root exited before readiness: {reason}; last gate state {state}"
-                )));
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-        Err(invalid_state(format!(
-            "root readiness timed out; PID {pid}; last gate state {}",
-            gate(map).load(Ordering::Acquire)
-        )))
+        wait_for(
+            &self.cgroup_path,
+            "CLONE_INTO_CGROUP root readiness",
+            Duration::from_secs(5),
+            || {
+                let state = gate(map).load(Ordering::Acquire);
+                if state == 1 {
+                    return Ok(Some(()));
+                }
+                let mut status = 0;
+                let waited =
+                    unsafe { libc::waitpid(pid as libc::pid_t, &raw mut status, libc::WNOHANG) };
+                if waited == pid as libc::pid_t {
+                    let reason = if libc::WIFEXITED(status) {
+                        format!("exit status {}", libc::WEXITSTATUS(status))
+                    } else if libc::WIFSIGNALED(status) {
+                        format!("signal {}", libc::WTERMSIG(status))
+                    } else {
+                        format!("wait status {status}")
+                    };
+                    return Err(invalid_state(format!(
+                        "root exited before readiness: {reason}; last gate state {state}"
+                    )));
+                }
+                Ok(None)
+            },
+            || {
+                format!(
+                    "PID {pid}; last gate state {}",
+                    gate(map).load(Ordering::Acquire)
+                )
+            },
+        )
     }
 
     pub(super) fn release_root(&mut self) -> Result<()> {
