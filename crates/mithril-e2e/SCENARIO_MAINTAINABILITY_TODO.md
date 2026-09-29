@@ -3963,7 +3963,7 @@ setup, production actions, assertions, and focused test.
     and the complete rerun passed without a source change.
 - [ ] Initial application activation: keep the entry action and `ACTIVE`,
   role, rule, default-effect, and large-argv assertions explicit.
-  - [ ] Replace the dynamic-loader policy exception with one standard
+  - [x] Replace the dynamic-loader policy exception with one standard
     platform test. Ask the shared Python actor to report its live dynamic
     loader mapping. Start one declared `bash` entry under
     `runtime_entries_policy.json`. Lower the public policy and require every
@@ -3977,9 +3977,11 @@ setup, production actions, assertions, and focused test.
     - [x] Pass direct `runc` and commit it. The test passed in 31.44 seconds.
     - [x] Pass Kubernetes and commit it. The same test passed against the
       retained K3s cluster in 71.02 seconds.
-    - [ ] Remove only `dynamic_loader_paths`,
+    - [x] Remove only `dynamic_loader_paths`,
       `dynamic_loader_paths_absent_from_policy`, their old builder check,
-      and the matching shell gate after all three platforms pass.
+      and the matching shell gate after all three platforms pass. The
+      focused direct-`runc` entry-role probe and its complete remaining JSON
+      gate passed after removal.
   - [x] Retire the duplicate application role and admission-rule check in the
     old direct-`runc` result. The shared `runtime_entries_stay_distinct` test
     already checks both fields and the active binding on Host, direct `runc`,

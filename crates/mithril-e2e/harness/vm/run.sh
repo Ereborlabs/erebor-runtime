@@ -574,8 +574,6 @@ if [[ $entry_role_runtime_only == true ]]; then
     .kernel_upgrade_preserved_map_ids and
     .kernel_upgrade_preserved_link_pins and
     .kernel_upgrade_replaced_changed_programs and
-    (.dynamic_loader_paths | length) > 0 and
-    .dynamic_loader_paths_absent_from_policy and
     .container_exit_success and
     .pin_root_removed and
     .lease_removed and

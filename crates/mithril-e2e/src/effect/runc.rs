@@ -234,8 +234,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub kernel_upgrade_preserved_map_ids: bool,
     pub kernel_upgrade_preserved_link_pins: bool,
     pub kernel_upgrade_replaced_changed_programs: bool,
-    pub dynamic_loader_paths: Vec<String>,
-    pub dynamic_loader_paths_absent_from_policy: bool,
     pub container_exit_success: bool,
     pub pin_root_removed: bool,
     pub lease_removed: bool,
@@ -2301,9 +2299,8 @@ impl EffectTestRunner {
             path: &overlay_work,
         })?;
         fs::create_dir(&state_root).context(IoSnafu { path: &state_root })?;
-        let dynamic_loader_paths =
-            prepare_entry_role_root(&rootfs, workload_path, &role_directory)?;
-        let policy = self.build_runc_artifact(&fixture_root, &dynamic_loader_paths)?;
+        prepare_entry_role_root(&rootfs, workload_path, &role_directory)?;
+        let policy = self.build_runc_artifact(&fixture_root)?;
         let mut containerd_server =
             ContainerdServer::start(containerd_path, runc_path, &fixture_root, output_directory)?;
 
@@ -3190,9 +3187,8 @@ impl EffectTestRunner {
             },
         )?;
         fs::create_dir(&state_root).context(IoSnafu { path: &state_root })?;
-        let dynamic_loader_paths =
-            prepare_entry_role_root(&rootfs, workload_path, &role_directory)?;
-        let policy = self.build_runc_artifact(&fixture_root, &dynamic_loader_paths)?;
+        prepare_entry_role_root(&rootfs, workload_path, &role_directory)?;
+        let policy = self.build_runc_artifact(&fixture_root)?;
         let mut kubernetes_subpath_mounts = FixtureBindMounts::default();
         let kubernetes_mount_root = if containerd_server.is_some() {
             let mount_root = fixture_root.join("kubernetes-mounts");
@@ -5693,8 +5689,6 @@ impl EffectTestRunner {
             kernel_upgrade_preserved_map_ids,
             kernel_upgrade_preserved_link_pins,
             kernel_upgrade_replaced_changed_programs,
-            dynamic_loader_paths,
-            dynamic_loader_paths_absent_from_policy: true,
             container_exit_success: true,
             pin_root_removed: !pin_root.exists(),
             lease_removed: !lease_path.exists(),
@@ -5703,11 +5697,7 @@ impl EffectTestRunner {
         })
     }
 
-    fn build_runc_artifact(
-        &self,
-        fixture_root: &Path,
-        dynamic_loader_paths: &[String],
-    ) -> Result<RuncPolicyFixture> {
+    fn build_runc_artifact(&self, fixture_root: &Path) -> Result<RuncPolicyFixture> {
         let policy_fixture = self
             .repo_root
             .join("crates/mithril-e2e/fixtures/mithril-policy");
@@ -5732,18 +5722,6 @@ impl EffectTestRunner {
             "10000000-0000-4000-8000-000000000003",
         )
         .context(PolicySnafu)?;
-        ensure!(
-            dynamic_loader_paths.iter().all(|dependency| {
-                document
-                    .path_selectors
-                    .iter()
-                    .all(|selector| selector.path_expression() != dependency)
-            }),
-            InvalidInputSnafu {
-                path: &policy_source,
-                reason: "the direct runc policy must not list dynamic runtime dependencies",
-            }
-        );
         let role_ids = document
             .roles
             .iter()
@@ -5798,7 +5776,7 @@ fn prepare_entry_role_root(
     rootfs: &Path,
     workload_path: &Path,
     role_directory: &Path,
-) -> Result<Vec<String>> {
+) -> Result<()> {
     let executable = rootfs.join("bin/busybox");
     fs::copy(workload_path, &executable).context(IoSnafu {
         path: workload_path,
@@ -5893,7 +5871,7 @@ fn prepare_entry_role_root(
         }
         fs::copy(source, &destination).context(IoSnafu { path: source })?;
     }
-    Ok(dependencies.into_iter().collect())
+    Ok(())
 }
 
 fn privileged_capabilities() -> &'static [&'static str] {
