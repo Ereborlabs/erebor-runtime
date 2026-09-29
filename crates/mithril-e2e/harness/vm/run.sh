@@ -540,9 +540,6 @@ entry_role_output=$remote_root/runc-entry-roles
 if [[ $entry_role_runtime_only == true ]]; then
   jq -e '
     .schema_version == 40 and
-    .prepared_state_before_exec == "prepared" and
-    .prepared_state_after_exec == "active" and
-    .seccomp_start_gate_unlinked and
     .create_runtime_path_authority_deferred and
     .runtime_topology_uninitialized_at_create_container and
     .stable_entry_policy_preserved_after_mount_mutation and

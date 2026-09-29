@@ -3947,8 +3947,13 @@ setup, production actions, assertions, and focused test.
 - [ ] Fixture construction: create the rootfs, runtime paths, bind mounts,
   output files, containerd owner, `runc` owner, pin root, lease, and cleanup
   in a fixture. Do not install policy or reconcile bindings in this fixture.
-- [ ] Unprotected control and prepared-container start: keep the stock runtime
+- [x] Unprotected control and prepared-container start: keep the stock runtime
   calls and `PREPARED` assertions in the scenario.
+  `unprotected_actor_runs` owns stock startup without policy on Host, direct
+  `runc`, and Kubernetes. `prepared_start_emits_effect` requires the fresh
+  `PREPARED_RUNTIME_INFRASTRUCTURE` transition and resulting active binding on
+  Host and direct `runc`. The old spec-only seccomp boolean and duplicate
+  lifecycle strings are removed.
 - [ ] Held OCI route publication: keep policy installation, background binding
   reconciliation, `createContainer`, route publication, and activation calls
   in their real order through public production APIs.

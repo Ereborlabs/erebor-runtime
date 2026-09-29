@@ -207,9 +207,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub schema_version: u32,
     pub runc_version: String,
     pub initial_host_pid: u32,
-    pub prepared_state_before_exec: String,
-    pub prepared_state_after_exec: String,
-    pub seccomp_start_gate_unlinked: bool,
     pub create_runtime_path_authority_deferred: bool,
     pub runtime_topology_uninitialized_at_create_container: bool,
     pub stable_entry_policy_preserved_after_mount_mutation: bool,
@@ -3139,14 +3136,6 @@ impl EffectTestRunner {
             (PROFILE_ID_ANNOTATION): policy.profile_id.clone(),
             (POLICY_SOURCE_REVISION_ANNOTATION): "d".repeat(64),
         });
-        let seccomp_start_gate_unlinked = config["linux"].get("seccomp").is_none();
-        ensure!(
-            seccomp_start_gate_unlinked,
-            InvalidInputSnafu {
-                path: &config_path,
-                reason: "the direct runc spec still has a seccomp start gate",
-            }
-        );
         config["hooks"]["createRuntime"] = json!([{
             "path": oci_stage_hook,
             "args": [
@@ -3580,37 +3569,6 @@ impl EffectTestRunner {
         startup_reader
             .poll(Duration::from_millis(25))
             .context(InterceptorSnafu)?;
-        let prepared = inspector
-            .snapshot(initial_pid)
-            .map_err(|error| {
-                InvalidInputSnafu {
-                    path: pin_root,
-                    reason: format!(
-                        "the held direct runc task disappeared after prepared activation: {error}; effects={:?}",
-                        recent_effect_summary(&startup_observations, 0),
-                    ),
-                }
-                .build()
-            })?
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: pin_root,
-                    reason: "the held direct runc task has no prepared identity",
-                }
-                .build()
-            })?;
-        let lifecycle_state_before_exec = prepared
-            .runtime_binding
-            .as_ref()
-            .map(|binding| binding.lifecycle_state.clone())
-            .unwrap_or_default();
-        ensure!(
-            lifecycle_state_before_exec == "prepared",
-            InvalidInputSnafu {
-                path: pin_root,
-                reason: "the held direct runc task is not in PREPARED state",
-            }
-        );
         drop(startup_reader);
 
         let observations = EffectObservationStore::default();
@@ -4348,17 +4306,11 @@ impl EffectTestRunner {
                 }
                 .build()
             })?;
-        let lifecycle_state_after_exec = active
-            .runtime_binding
-            .as_ref()
-            .map(|binding| binding.lifecycle_state.clone())
-            .unwrap_or_default();
         ensure!(
-            lifecycle_state_after_exec == "active"
-                && active.profile_generation_ref_id == PROFILE_GENERATION_REF_ID,
+            active.profile_generation_ref_id == PROFILE_GENERATION_REF_ID,
             InvalidInputSnafu {
                 path: pin_root,
-                reason: "the first configured executable did not activate normal policy",
+                reason: "the first configured executable used the wrong policy generation",
             }
         );
         reader
@@ -5170,9 +5122,6 @@ impl EffectTestRunner {
             schema_version: 40,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
-            prepared_state_before_exec: lifecycle_state_before_exec,
-            prepared_state_after_exec: lifecycle_state_after_exec,
-            seccomp_start_gate_unlinked,
             create_runtime_path_authority_deferred,
             runtime_topology_uninitialized_at_create_container,
             stable_entry_policy_preserved_after_mount_mutation,
