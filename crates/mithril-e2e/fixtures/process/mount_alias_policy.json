@@ -58,6 +58,11 @@
             "name": "deny-secret-tree",
             "path": "/work/mount/secret",
             "operations": ["OpenRead"]
+          },
+          {
+            "name": "deny-kubernetes-secret-tree",
+            "path": "/home/secret",
+            "operations": ["OpenRead"]
           }
         ],
         "execution": [

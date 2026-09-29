@@ -4058,6 +4058,19 @@ setup, production actions, assertions, and focused test.
       Kubernetes tests in 951.49 seconds.
 - [ ] Kubernetes subpath, bind alias, and wildcard paths: keep the same mount
   order and protected reads as the Kubernetes workload.
+  - [x] Replace both legacy Kubernetes `subPath` alias results with one
+    Kubernetes platform test. Use a Pod fixture with two real `subPath`
+    mounts of the protected source. Command the shared mount actor to read the
+    source and both aliases. Require `EACCES` for all three reads and fresh,
+    task-attributed `PATH_TREE_POLICY_DENY` evidence. Add no Platform API.
+    Remove only the two old results and their shell gates after this test
+    passes against the retained K3s cluster.
+    The 46-line test passed against the retained K3s cluster in 61.85
+    seconds. It used two real Pod `subPath` mounts. The source and both
+    aliases returned `EACCES`, and fresh attributed denial evidence was
+    present. The two serialized legacy results and shell gates are removed.
+    The reduced direct-`runc` probe passed, and its complete updated result
+    predicate returned `true`.
   - [x] Reuse `EffectCheck` in `mount_protected.rs` for the protected bind
     denial. Keep the actor's successful mount, protected `EACCES`, allowed
     read, and task-attributed production evidence explicit. Pass Host,

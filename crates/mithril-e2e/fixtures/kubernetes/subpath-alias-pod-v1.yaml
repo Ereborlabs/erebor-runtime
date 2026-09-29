@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pid-reuse
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: worker
+      imagePullPolicy: Never
+      stdin: true
+      stdinOnce: true
+      securityContext:
+        privileged: true
+        allowPrivilegeEscalation: true
+        appArmorProfile:
+          type: Unconfined
+        seccompProfile:
+          type: Unconfined
+      volumeMounts:
+        - name: fixtures
+          mountPath: /fixtures
+          readOnly: true
+        - name: work
+          mountPath: /work
+        - name: work
+          mountPath: /home/secret
+          subPath: path-tree
+          readOnly: true
+        - name: work
+          mountPath: /home/kubelet-attack
+          subPath: path-tree/models
+          readOnly: true
+        - name: work
+          mountPath: /home/kubelet-attack-newer
+          subPath: path-tree/models
+          readOnly: true
+  volumes:
+    - name: fixtures
+      hostPath:
+        path: MITHRIL_TEST_FIXTURE_PATH
+        type: Directory
+    - name: work
+      hostPath:
+        path: MITHRIL_TEST_WORK_PATH
+        type: Directory

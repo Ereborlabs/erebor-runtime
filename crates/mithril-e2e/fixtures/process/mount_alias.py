@@ -75,7 +75,7 @@ def move_tree(tree, target):
 
 args = sys.argv[2:]
 if args not in (
-    [], ["late"], ["recursive"], ["move"], ["prepared"], ["setattr"], ["propagate"], ["future"], ["race"], ["runtime"]
+    [], ["late"], ["recursive"], ["move"], ["prepared"], ["setattr"], ["propagate"], ["future"], ["race"], ["runtime"], ["subpath"]
 ):
     sys.exit(2)
 mode = args[0] if args else "early"
@@ -93,6 +93,25 @@ with open(os.path.join(allowed, "open"), "w", encoding="utf-8") as output:
 result_path = os.path.join(sys.argv[1], "mount-result.json")
 with open(result_path, "w", encoding="utf-8"):
     pass
+
+if mode == "subpath":
+    print("native-fixture-ready", flush=True)
+    if sys.stdin.readline() != "read\n":
+        sys.exit(2)
+    denied = {}
+    for name, path in {
+        "source": "/home/secret/models/secret",
+        "older": "/home/kubelet-attack/secret",
+        "newer": "/home/kubelet-attack-newer/secret",
+    }.items():
+        try:
+            with open(path, encoding="utf-8"):
+                denied[name] = 0
+        except OSError as error:
+            denied[name] = error.errno
+    with open(result_path, "w", encoding="utf-8") as output:
+        json.dump(denied, output)
+    sys.exit(0)
 
 mount_error = 0
 if mode not in ("future", "runtime"):
