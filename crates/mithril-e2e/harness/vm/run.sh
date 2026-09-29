@@ -565,7 +565,6 @@ if [[ $entry_role_runtime_only == true ]]; then
       .own_policy_deny_observed and
       .application_policy_not_inherited
     )) and
-    .administrative_recovered_runtime_binding and
     .prestop_retained_during_runtime_inventory_omission and
     .kernel_upgrade_preserved_map_ids and
     .kernel_upgrade_preserved_link_pins and

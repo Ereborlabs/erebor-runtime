@@ -1718,7 +1718,7 @@ test does not close a row when its physical condition or an assertion changed.
   - [x] Rerun the old direct-runtime probe. Its remaining iterator retry,
     ptrace bootstrap, internal exec, probe isolation, denial, post-cutover,
     and cleanup checks passed.
-  - [ ] Retire the separate legacy administrative-recovery block. Add only
+  - [x] Retire the separate legacy administrative-recovery block. Add only
     the three missing public binding assertions to `workload_recovers`: the
     recovered exec cookie is zero, the initial host TGID is the actor PID,
     and the bootstrap state is zero. Pass the unchanged recovery operation on
@@ -1727,7 +1727,15 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Host passed in 28.66 seconds on 2026-09-29.
     - [x] Direct `runc` passed in 29.70 seconds on 2026-09-29.
     - [x] Kubernetes passed in 62.67 seconds on 2026-09-29.
-    - [ ] The legacy block, result field, and shell gate are removed.
+    - [x] Remove the legacy block, result field, and shell gate. This removed
+      314 lines. The reduced direct-`runc` probe and its complete result
+      predicate passed on 2026-09-29.
+    - [x] Retire the coupled retained-mount-view flag. The old flag performed
+      no production action after source exit. It only inspected the internal
+      policy owner after the administrative block populated a handle. Keep the
+      exact owner lifetime test and the existing platform alias and cache
+      enforcement tests. Remove the test-only result. The exact owner test and
+      the reduced direct-`runc` probe passed on 2026-09-29.
 - [x] Four-task workload-first recovery: add one small parameterized Rust
   test. Start one application root and its child. Add one external root and
   its child before policy and Node start. Recover the same four tasks on Host,
