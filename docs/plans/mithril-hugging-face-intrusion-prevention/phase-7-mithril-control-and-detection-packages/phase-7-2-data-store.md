@@ -6,14 +6,17 @@ in DuckDB. Reuse the existing segment code instead of building a storage engine.
 ## Intended end state
 
 AnalysisStore in `araphor-data` owns segments, metadata, receipts, retention,
-backup, and recovery. Existing authenticated intake ACKs only after segment
-sync and metadata commit. Discovery reads those committed records directly.
+backup, and recovery. Reuse the original segment writer inside `araphor-data`.
+Existing authenticated intake ACKs after the complete raw commit is synced.
+It does not wait for DuckDB catalogue publication. Discovery reads those
+committed records directly.
 No raw-event table or copied discovery archive is part of the target.
 
 Control keeps policy/trust/rollout persistence and authority. Node keeps its
 delivery WAL. The same complete data owner can later run remotely. Storage
 and trace intake do not require discovery. Entry: 7.1.
-Status: **Not done** for full qualification. Segment intake, reads, recovery,
+Status: **Not done** for the segment-authoritative ACK contract and full
+qualification. Prior segment intake, reads, recovery,
 retention, complete-bundle backup, and trusted bounded extraction are
 implemented. The old Control raw writer and its callers are removed. Stored
 tenant totals replace repeated quota scans. The recorded workspace gate,
@@ -33,19 +36,19 @@ of the combined segment and metadata implementation.
 
 ## Implementation flow
 
-### Required performance target and proposed work
+### Required performance target
 
-**Target approved; replacement design not selected.** The user requires both
+**Target approved; original writer selected inside araphor-data.** Require both
 lower latency and comparable throughput against the original segment writer.
 For the same workload, require durable-call mean and p95 at or below 95 percent
 of the old writer, and write throughput at or above 95 percent of that writer.
 Report p99 separately. Do not claim a pass from the historical VM measurements
 or the 15.1-percent improvement against `a7cde81b`.
 
-The following order is a proposal. It does not replace the current commit
-contract or authorize a storage rewrite. Obtain approval before adding a
-performance test, changing its workload or limits, or implementing a database
-replacement. Stop when the target and correctness checks pass.
+Use the original segment append, sync, and restart model. No database
+replacement is required. Obtain approval before adding a performance test
+or changing its workload or limits. Stop when the target and correctness
+checks pass.
 
 1. **Establish the comparison.** Use the original writer and its existing
    `store::raw_bench::raw_event_store_comparison` fixture at `293762be`, mode
@@ -61,36 +64,31 @@ replacement. Stop when the target and correctness checks pass.
    improve the comparison. This is a proposed qualification procedure, not a
    result or permission to add a new test.
 
-2. **Test the smallest transactional alternative first.** The recommended
-   candidate keeps the current segment format and commit order but uses SQLite
-   for the data owner's metadata and derived state. DuckDB remains the isolated
-   analytical query engine; it does not keep a second persistent catalogue.
-   ControlStore and Node persistence do not change. Reuse the workspace's
-   `rusqlite` dependency. Use WAL mode with `synchronous=FULL`, a single writer,
-   bounded readers, and prepared statements. Do not use NORMAL/OFF durability.
-   First measure the real metadata statements and durable commit with the same
-   batch descriptors. This component experiment estimates available headroom;
-   it cannot qualify the complete owner. If that cost already exceeds the old
-   writer's latency budget after raw sync, stop before porting the owner.
+2. **Move the original raw owner.** Reuse `EvidenceSegmentOwner` from
+   `293762be:crates/mithril-control/src/evidence_segment.rs` inside
+   `araphor-data/src/analysis`. Keep the `AnalysisStore` API. Control only
+   authenticates, validates, forwards, and sends ACK after durable acceptance.
+   Retain framed checksums, bounded append, active/sealed recovery, and exact
+   replay. Store the batch's source, CPU, cursor range, frame offsets, intake
+   time, and store position with its raw commit. No separate raw archive or
+   per-batch database transaction is permitted.
 
-3. **Port one owner only if the candidate has sufficient headroom.** Keep the
-   `AnalysisStore` API and the `sync raw -> commit metadata -> ACK` boundary.
-   Change `analysis/connection.rs`, schema, transactions, reads, quota,
-   retention, backup, and recovery together. Keep results, progress, and pins
-   in one database transaction. Preserve the full unsigned cursor/revision
-   range; SQLite signed integers must not narrow it silently. Specify and
-   test the ordered encoding before porting range queries. Replace DuckDB
-   array operations with bounded encoded-offset reads. Do not add a backend
-   trait, dual write, legacy importer, raw-event table, or deployment flag.
-   Use fresh development stores. Update the shared design and query/trace
-   plans before selecting this implementation.
+3. **Integrate the data consumers.** Rebuild the raw receipt and bounded
+   catalogue from segments at startup. Raw reads and ACK lookups use that
+   owner. Publish raw catalogue descriptors to DuckDB in bounded groups for
+   query and derived-state operations; do not copy payloads. Coordinate quota,
+   required-progress, and witness state under the same writer. Persist
+   results, progress, and pins together in DuckDB. Before deletion or backup,
+   include all affected durable raw commits and preserve exact expiry state.
+   Keep one raw owner, no backend trait, no SQLite replacement, no legacy
+   importer, and no deployment flag. Use fresh development stores.
 
 4. **Prove the unchanged contracts.** Run owner tests for identity conflicts,
    retries, pending gaps, quota rollback, expired intervals, exact witnesses,
    required progress, and unsigned limits. Run the existing `mithril-e2e`
    startup, commit-failure, intake-failure, capacity, retention, and restore
    cases through production APIs. Kill before raw sync, after raw sync,
-   during metadata commit, and after commit before ACK. Reopen must preserve
+   during catalogue publication, and after raw commit before ACK. Reopen must preserve
    every acknowledged event and reject corruption. Then run the workspace
    gate. Component timing is not a substitute for these tests.
 
@@ -100,26 +98,12 @@ replacement. Stop when the target and correctness checks pass.
    target fails or variation prevents a conclusion, report the remaining cost
    and request the next bounded experiment. Do not start an automatic rewrite.
 
-The alternative of acknowledging self-contained segment commits before
-DuckDB catalogue updates remains unselected. It can remove database work from
-ACK, but it also needs bounded catalogue lag, replayable batch metadata,
-ordered revisions across raw and derived commits, immediate reads, pin/delete
-coordination, and complete backup of unindexed records. It is not equivalent
-to moving the current metadata transaction into a background task. Prefer
-the transactional candidate first to avoid a new recovery protocol.
-
-DuckDB documents its focus on larger analytical requests rather than many
-small queries. This supports the candidate choice, not a speed guarantee.
-SQLite documents that WAL commits with FULL synchronization retain durability.
-Sources: [DuckDB workload guidance](https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads)
-and [SQLite WAL durability](https://www.sqlite.org/wal.html).
-
 ### Current approved flow
 
 ```text
 Control starts
   -> AnalysisStore obtains the complete data-directory lease
-  -> owner recovers metadata and validates committed segment ranges
+  -> owner recovers authoritative raw commits and validates derived state
   -> owner completes recorded deletions and removes only uncommitted tails
   -> owner publishes durable relation revisions and data readiness
   -> policy service remains independent if data recovery fails
@@ -129,7 +113,7 @@ Node sends an authenticated batch
   -> EvidenceIntakeOwner validates source and reserves bounded capacity
   -> AnalysisStore checks retries and appends framed raw records
   -> owner syncs segment bytes and new file directory entries
-  -> one metadata transaction commits ranges, receipts, and revisions
+  -> owner publishes the durable raw receipt and revision
   -> Control acknowledges the durable contiguous source position
 
 A processor submits results
@@ -164,28 +148,26 @@ Storage fails or cannot meet capacity
    Persist source/kind, file/range, committed end, cursor/count, digest,
    commit/ordinal, and intake-time bounds per batch/segment. Do not keep
    one database row or a resident index per raw event.
-   Keep DuckDB for transactional metadata, context, results, and progress.
-   It is not the raw-event owner. Raw sync must precede metadata commit.
-   Before new file creation, commit its Reserved catalog entry. Recovery can
-   then remove an uncommitted new file without guessing which files it owns.
-   This reservation occurs on rotation and advances no receipt or public revision.
-   On an uncertain metadata result, stop writes and recover before retry.
+   Keep DuckDB for the rebuildable raw catalogue and transactional context,
+   results, and progress. Raw segment commits contain their own replay
+   metadata. Raw ACK follows segment sync and receipt publication. Do not run
+   SQL statements or a database commit for each raw batch. Rebuild receipts
+   and range descriptors from checked segment commits during recovery.
+   On an uncertain raw write, stop writes and recover before retry.
    Reuse current source binding, gap, coverage, replay, and conflict checks.
    AlreadyAcceptedExpired does not claim retained-byte comparison.
 
-   Reduce repeated SQL work during intake. Hold the writer guard from receipt
-   lookup through publication. A validated receipt proves the immutable source
-   binding for an existing source. Check and insert a binding only for a new
-   source. Keep the preliminary admission transaction only for that case.
-   Query expired intervals only when the batch overlaps acknowledged cursors;
-   expiry cannot exceed the contiguous receipt. Use the existing committed
-   revision notification under the writer guard instead of another metadata
-   query. Recovery reloads that revision before writes resume. Update all
-   changed relation revisions with one statement. Keep raw sync, metadata
-   commit, quota checks, and ACK order unchanged. Do not add a metadata cache.
-   Verify identity conflicts, replay, expiry, rollback, and revision changes
-   across other owners and recovery. Reuse the approved 64-batch release
-   comparison; do not add another performance test.
+   Hold the writer guard from admission through raw receipt publication.
+   Keep checked tenant totals, source bindings, required-input state, and
+   witness charges in that owner. Derived-state mutations refresh the affected
+   admission state under the same guard. A database catalogue cannot omit new
+   raw charges from a quota decision. Store no raw payload in this state.
+   Publish pending catalogue descriptors in bounded groups before a derived
+   transaction or catalogue snapshot needs them. Existing maintenance also
+   publishes pending descriptors. No new service or public job is required.
+   Catalogue failure returns no partial query result and cannot undo a raw
+   ACK. Retention cannot delete an unaccounted raw commit. Backup includes all
+   durable raw commits and the corresponding derived-state snapshot.
 
 3. Implement bounded snapshot reads over committed ranges: 256 records or
    1 MiB per page. Capture metadata revision and committed byte ends together.
@@ -223,8 +205,10 @@ Storage fails or cannot meet capacity
    and 25 percent for maintenance/result writes. Charge raw frames once and
    metadata/derived rows at 256 bytes plus variable payload/key bytes.
    Store one `tenant_usage` row per tenant. Keep logical bytes and coverage,
-   context, and result counts in that row. Each mutation updates its charge
-   in the same transaction. Quota checks read these totals, not retained
+   context, and result counts in that row. Derived mutations update their
+   charge in the same transaction. Raw admission adds exact pending charges
+   to the owner's checked totals. Catalogue publication records those charges
+   once. Quota checks use these totals, not retained
    batches. Reserved and Deleting segments remain charged until cleanup
    commits. Startup and backup validation compare totals with retained data
    and reject a mismatch. Do not repair counters or import old schemas.

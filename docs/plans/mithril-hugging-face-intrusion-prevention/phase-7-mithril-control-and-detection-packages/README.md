@@ -22,8 +22,8 @@ and dispatch, policy, approval, publication, and response authority.
 
 ControlStore retains policy, trust, rollout and authority state. AnalysisStore
 owns one raw segment store and one DuckDB metadata/derived-state database.
-Node retains its delivery WAL. A source ACK follows segment sync and metadata
-commit, not receipt in memory. Discovery creates no second raw archive. Raw input can expire while bounded profiles, findings and exact
+Node retains its delivery WAL. A source ACK follows a durable segment commit.
+DuckDB catalogue publication is not on that ACK path. Discovery creates no second raw archive. Raw input can expire while bounded profiles, findings and exact
 witnesses remain available. Summary retention is not full raw-history retention.
 
 Development changes do not require backward compatibility. Use a fresh data
@@ -37,7 +37,7 @@ backup and restore remain required.
 ```text
 Node produces evidence under installed local policy
   -> existing authenticated Control intake validates it
-  -> AnalysisStore syncs raw segments, then commits metadata, receipts and revisions
+  -> AnalysisStore syncs self-contained raw commits and publishes its raw receipt
   -> Control acknowledges the durable contiguous source position
   -> QueryOwner wakes interested readers
   -> DiscoveryOwner derives profiles, context, methods and draft changes

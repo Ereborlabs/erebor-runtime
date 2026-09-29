@@ -1,7 +1,9 @@
 # Raw Event Storage: Selected Segment Design
 
 **Decision: Option 2 approved.** Raw events and trace output live once in
-segments. DuckDB holds transactional metadata and derived state and runs
+segments. The original segment writer runs inside `araphor-data`, not Control.
+Synced segments are authoritative for raw acceptance and replay. DuckDB holds
+a rebuildable raw catalogue and transactional derived state and runs
 isolated queries over bounded authorized input. The implementation belongs to
 [7.2](phase-7-2-data-store.md); shared contracts are in
 [engine-design.md](engine-design.md#embedded-storage-and-query-contract).
@@ -23,14 +25,15 @@ background compactor, witness archive, dual write, or backend framework.
 
 | Choice | Benefit | Cost or limit |
 | --- | --- | --- |
-| Selected: raw segments plus transactional derived state | One raw copy; reuse append/read code; SQL remains independent of raw persistence; one component in embedded or remote mode. | Raw sync and metadata commit are separate durable steps. Recovery, pin/delete races, complete backups, and scan bounds need proof. One witness can retain a whole segment. |
+| Selected: original segment writer plus transactional derived state | One raw copy; reuse append/read/recovery code inside araphor-data; no database transaction per raw ACK; one embedded or remote data component. | Rebuildable catalogue publication, pin/delete coordination, complete backups, and scan bounds need proof. One witness can retain a whole segment. |
 | Raw and derived rows in DuckDB | One database transaction can coordinate raw rows and results; logical retention can select individual rows. | The tested implementation had lower raw throughput and failed its capacity memory gate. SQL alone does not require this raw format. |
 | Change only old discovery | Removes the duplicate archive with the narrowest algorithm change. | The old consumption-based deletion contract does not provide historical retention, witness protection, portable ownership, or bounded query selection. |
 
 The [release comparison](raw-event-store-decision.md) supports raw segments as
-a candidate; it does not qualify the combined design. Metadata still commits
-per admitted batch. Measure that cost instead of promising the old writer's
-throughput. Count remaining implementation work, not sunk effort.
+a candidate; it does not qualify the combined design. Catalogue updates use
+bounded groups outside raw acceptance. Measure the complete owner before
+claiming the required latency and throughput. Do not replace DuckDB with SQLite
+or move the raw owner back into Control.
 
 ## Acceptance boundary
 
@@ -47,8 +50,8 @@ satisfies the required bounded-window case.
 
 ## Implementation status
 
-**Not done.** Configured AnalysisStore intake writes raw segments and commits
-batch metadata in DuckDB. Complete-bundle backup and guarded recovery are
+**Not done.** The database-independent raw ACK path requires implementation.
+Complete-bundle backup and guarded recovery are
 implemented. Bounded extraction is implemented. The old Control raw writer and
 its callers are removed. The complete workspace gate and paired disk-full case
 pass for this source. Release measurements and Kubernetes qualification remain
