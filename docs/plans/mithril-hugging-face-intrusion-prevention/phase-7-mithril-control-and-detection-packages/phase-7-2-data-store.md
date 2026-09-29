@@ -33,6 +33,89 @@ of the combined segment and metadata implementation.
 
 ## Implementation flow
 
+### Required performance target and proposed work
+
+**Target approved; replacement design not selected.** The user requires both
+lower latency and comparable throughput against the original segment writer.
+For the same workload, require durable-call mean and p95 at or below 95 percent
+of the old writer, and write throughput at or above 95 percent of that writer.
+Report p99 separately. Do not claim a pass from the historical VM measurements
+or the 15.1-percent improvement against `a7cde81b`.
+
+The following order is a proposal. It does not replace the current commit
+contract or authorize a storage rewrite. Obtain approval before adding a
+performance test, changing its workload or limits, or implementing a database
+replacement. Stop when the target and correctness checks pass.
+
+1. **Establish the comparison.** Use the original writer and its existing
+   `store::raw_bench::raw_event_store_comparison` fixture at `293762be`, mode
+   `segments`. Compare with the current fixture, mode `analysis`. Build both
+   in release mode with the same Rust toolchain and allocator. Use the same
+   filesystem, CPU allocation, 64 batches, 256 events per batch, encoded bytes,
+   and one outstanding call. Verify complete reads after reopen. Run five
+   alternating pairs on fresh stores, without concurrent builds. Report every
+   pair and the median ratios; do not select the best pair. Keep each measured
+   process below 30 seconds; stop and report a timeout. Compilation is separate.
+   Audit timer boundaries and include validation, quota checks, sync, and ACK
+   work in the current writer. Do not add a batching delay or remove checks to
+   improve the comparison. This is a proposed qualification procedure, not a
+   result or permission to add a new test.
+
+2. **Test the smallest transactional alternative first.** The recommended
+   candidate keeps the current segment format and commit order but uses SQLite
+   for the data owner's metadata and derived state. DuckDB remains the isolated
+   analytical query engine; it does not keep a second persistent catalogue.
+   ControlStore and Node persistence do not change. Reuse the workspace's
+   `rusqlite` dependency. Use WAL mode with `synchronous=FULL`, a single writer,
+   bounded readers, and prepared statements. Do not use NORMAL/OFF durability.
+   First measure the real metadata statements and durable commit with the same
+   batch descriptors. This component experiment estimates available headroom;
+   it cannot qualify the complete owner. If that cost already exceeds the old
+   writer's latency budget after raw sync, stop before porting the owner.
+
+3. **Port one owner only if the candidate has sufficient headroom.** Keep the
+   `AnalysisStore` API and the `sync raw -> commit metadata -> ACK` boundary.
+   Change `analysis/connection.rs`, schema, transactions, reads, quota,
+   retention, backup, and recovery together. Keep results, progress, and pins
+   in one database transaction. Preserve the full unsigned cursor/revision
+   range; SQLite signed integers must not narrow it silently. Specify and
+   test the ordered encoding before porting range queries. Replace DuckDB
+   array operations with bounded encoded-offset reads. Do not add a backend
+   trait, dual write, legacy importer, raw-event table, or deployment flag.
+   Use fresh development stores. Update the shared design and query/trace
+   plans before selecting this implementation.
+
+4. **Prove the unchanged contracts.** Run owner tests for identity conflicts,
+   retries, pending gaps, quota rollback, expired intervals, exact witnesses,
+   required progress, and unsigned limits. Run the existing `mithril-e2e`
+   startup, commit-failure, intake-failure, capacity, retention, and restore
+   cases through production APIs. Kill before raw sync, after raw sync,
+   during metadata commit, and after commit before ACK. Reopen must preserve
+   every acknowledged event and reject corruption. Then run the workspace
+   gate. Component timing is not a substitute for these tests.
+
+5. **Accept or stop.** Repeat step 1 against the complete production owner.
+   Both target ratios must pass without lost features. Record memory, read,
+   and reopen results, but do not invent additional pass limits. If either
+   target fails or variation prevents a conclusion, report the remaining cost
+   and request the next bounded experiment. Do not start an automatic rewrite.
+
+The alternative of acknowledging self-contained segment commits before
+DuckDB catalogue updates remains unselected. It can remove database work from
+ACK, but it also needs bounded catalogue lag, replayable batch metadata,
+ordered revisions across raw and derived commits, immediate reads, pin/delete
+coordination, and complete backup of unindexed records. It is not equivalent
+to moving the current metadata transaction into a background task. Prefer
+the transactional candidate first to avoid a new recovery protocol.
+
+DuckDB documents its focus on larger analytical requests rather than many
+small queries. This supports the candidate choice, not a speed guarantee.
+SQLite documents that WAL commits with FULL synchronization retain durability.
+Sources: [DuckDB workload guidance](https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads)
+and [SQLite WAL durability](https://www.sqlite.org/wal.html).
+
+### Current approved flow
+
 ```text
 Control starts
   -> AnalysisStore obtains the complete data-directory lease
@@ -89,6 +172,20 @@ Storage fails or cannot meet capacity
    On an uncertain metadata result, stop writes and recover before retry.
    Reuse current source binding, gap, coverage, replay, and conflict checks.
    AlreadyAcceptedExpired does not claim retained-byte comparison.
+
+   Reduce repeated SQL work during intake. Hold the writer guard from receipt
+   lookup through publication. A validated receipt proves the immutable source
+   binding for an existing source. Check and insert a binding only for a new
+   source. Keep the preliminary admission transaction only for that case.
+   Query expired intervals only when the batch overlaps acknowledged cursors;
+   expiry cannot exceed the contiguous receipt. Use the existing committed
+   revision notification under the writer guard instead of another metadata
+   query. Recovery reloads that revision before writes resume. Update all
+   changed relation revisions with one statement. Keep raw sync, metadata
+   commit, quota checks, and ACK order unchanged. Do not add a metadata cache.
+   Verify identity conflicts, replay, expiry, rollback, and revision changes
+   across other owners and recovery. Reuse the approved 64-batch release
+   comparison; do not add another performance test.
 
 3. Implement bounded snapshot reads over committed ranges: 256 records or
    1 MiB per page. Capture metadata revision and committed byte ends together.
@@ -768,6 +865,53 @@ Control passed 174 with two ignored in 621.19 seconds. Mithril e2e passed
 the complete result. No Rust source changed after this run. Full phase
 qualification remains **Not done**. No larger benchmark or storage redesign
 is part of this fix.
+
+#### Intake SQL reduction
+
+**Not done: final workspace verification is running.** The working change
+after `a7cde81b` removes five SQL statements from an ordinary batch for an
+existing source. It also removes the preliminary begin/rollback pair in that
+case. New-source admission retains its preliminary transaction. Publication
+still commits after raw sync. No quota, replay, retention, schema, or ACK rule
+changes. No metadata cache is added.
+
+The 2026-09-29 short release comparison used 64 batches of 256 events on the
+same host. Both runs verified all 16,384 records after reopen. The unchanged
+executable came from `a7cde81b`; it was copied before the release rebuild.
+No task build or other task test ran during this comparison.
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Write time, seconds | 0.705165 | 0.612416 |
+| Write events/s | 23,234.3 | 26,753.1 |
+| Durable call p50, ms | 10.879 | 9.242 |
+| Durable call p95, ms | 11.595 | 10.267 |
+| Durable call p99, ms | 19.336 | 23.341 |
+| Read events/s | 81,412.4 | 81,996.4 |
+| Reopen, ms | 95.912 | 93.533 |
+| Peak process RSS, KiB | 54,052 | 53,788 |
+
+Write throughput increased by 15.1 percent and write time decreased by
+13.2 percent in this pair. P99 did not improve. An earlier unchanged run on
+this host measured 25,016.4 events/s. These short runs show host variation;
+they do not establish production throughput or stable tail latency. This
+comparison does not rerun the original Control writer or close its measured
+gap under equal conditions.
+
+Evidence is in `/tmp/araphor-intake-sql.dsX8h6hT`: `before.log`, `after.log`,
+`before-resources.log`, and `after-resources.log`. Both commands used
+`ARAPHOR_STORE_BENCH_MODE=analysis ARAPHOR_STORE_BENCH_BATCHES=64`, the exact
+`store::raw_bench::raw_event_store_comparison` case, `--ignored --nocapture`,
+and `--test-threads=1`. The unchanged executable SHA-256 is
+`07e983218e9fc746905dab9664d46731eea09a33d2a42302b7ced21d997a4a52`.
+The changed executable SHA-256 is
+`4f7dfb56122b2ee777cc4b66745a0362a6eafc363c632367331208d62457b0ef`.
+
+The release build passed in 7 minutes 50 seconds. Eleven focused release
+checks passed: the extended receipt case, uncertain commit, seven quota
+cases, retention guards, and crash replay. The extended receipt case checks
+boot/CPU conflicts and revision ordering across coverage, recovery, and
+later intake. No performance test or speed threshold was added.
 
 ### Measurement contracts
 
