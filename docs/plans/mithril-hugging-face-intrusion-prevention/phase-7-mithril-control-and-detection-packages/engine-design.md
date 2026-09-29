@@ -557,7 +557,7 @@ relations; create later result families only in their owning phase.
 | --- | --- |
 | `store_meta`, `relation_revisions` | Store UUID, schema, recovery epoch, commit revision, and last change for each exposed relation. |
 | `tenant_usage` | One row per tenant with logical bytes and coverage, context, and result counts. Each mutation updates its charge in the same transaction. Admission reads these totals. Startup and backup validation reject totals that differ from retained data. Physical disk checks remain separate. |
-| `segments`, `batch_ranges` | Rebuildable catalogue of exact source/kind, file ID/name, committed byte end, cursor range, byte range, count, digest, commit/ordinal range, intake-time bounds, and Live/Deleting state. One entry per segment or batch, not a second row per event. Durable deletion intent is not rebuildable from deleted raw data. |
+| `segments` | One lifecycle row per file: source, file ID/name, accounted byte end, and Live/Deleting state. This row supports quota accounting, bundle backup, and durable deletion intent. It contains no batch offsets or event offsets. |
 | `events` | A logical query relation decoded from committed segment ranges. Derived revision notices have distinct kinds and are not sensor actions. No persisted raw-event table. |
 | `source_receipts`, `coverage` | Source/session binding, contiguous ACK position, bounded pending ranges, explicit expiry/loss intervals, and coverage revisions. Kernel sequence stays separate. |
 | `context_versions` | Exact owner/lifetime/revision, validity, sensitivity, bounded body, and digest. |
@@ -567,10 +567,25 @@ relations; create later result families only in their owning phase.
 | `assessments`, `requirements`, `proposals`, `reviews`, `publications` | Bounded immutable bodies, parent references, expected revisions, request digests, and owner state. |
 | `traces`, `trace_measurements` | Intent, source/grant/target digests, execution state, output receipts, and reviewed derived measurements. `trace_output` is a segment-backed logical relation. |
 
-Reuse the existing batch ranges and frame offsets for exact reads. Keep
-metadata proportional to batches/segments and bounded sources, not all decoded
-events in memory. Do not add a per-event ART index, full-text index, custom
-B-tree, compactor, or persistent raw query cache.
+Raw batch headers store cursor ranges, event end offsets, CPU, intake time,
+and commit/ordinal positions. The segment owner reconstructs one compact
+directory entry per range at startup. It loads event offsets with the selected
+batch. Raw pages, historical extraction, and witness lookup use this owner.
+DuckDB contains no `batch_ranges` table. CRC32C checks raw bytes. Do not compute
+or store SHA-256 for raw batches or raw witnesses. Exact references identify
+the source, cursor, and containing segment; segment IDs cannot be reused.
+Keep metadata proportional to batches/segments and bounded sources. Do not
+add a per-event ART index, full-text index, custom B-tree, compactor, or
+persistent raw query cache.
+
+An active file contains a checked source header followed by length-prefixed
+batches. Each batch has metadata, event bytes, and CRC32C. The next batch starts
+after that batch's declared length. A sealed file retains this layout. No
+footer is required for this implementation. Recovery reads complete batches,
+checks CRC32C and metadata bounds, and reconstructs the directory. Recovery
+can trim only an incomplete active tail above recorded committed boundaries.
+A committed corruption is an error. A sealed directory footer requires a
+separate measured need and is outside this change.
 
 `StorePositionV1` remains `(commit_revision: u64, ordinal: u32)`.
 The serialized data owner assigns one revision and distinct ordinals to newly
@@ -582,7 +597,7 @@ order commits, not cross-node causality. Ordinary restart keeps the store UUID
 and epoch; restore changes the recovery epoch.
 
 Store result bodies and canonical manifests in DuckDB. References identify
-segment records by exact source/cursor/digest; they do not copy their payloads.
+segment records by exact source/cursor/segment identity; they do not copy their payloads.
 A retained summary cannot answer arbitrary queries over expired raw input.
 Recovery of results needs their database, not a rebuild from incomplete history.
 

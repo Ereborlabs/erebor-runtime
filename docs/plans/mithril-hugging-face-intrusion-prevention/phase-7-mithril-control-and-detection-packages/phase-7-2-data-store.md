@@ -10,14 +10,21 @@ backup, and recovery. Reuse the original segment writer inside `araphor-data`.
 Existing authenticated intake ACKs after the complete raw commit is synced.
 It does not wait for DuckDB catalogue publication. Discovery reads those
 committed records directly.
+Raw batch headers own event offsets and recovery metadata. One segment owner
+serves raw pages, historical extraction, and evidence lookup. DuckDB stores
+results, progress, pins, source state, and transactional deletion intent. It
+does not store a batch-offset catalogue. CRC32C checks raw frames; raw batches
+and raw witness references do not require SHA-256. Policy and artifact
+signatures retain their existing contracts.
 No raw-event table or copied discovery archive is part of the target.
 
 Control keeps policy/trust/rollout persistence and authority. Node keeps its
 delivery WAL. The same complete data owner can later run remotely. Storage
 and trace intake do not require discovery. Entry: 7.1.
-Status: **Done** for implementation and workspace correctness checks at
-`6d6b2780`. **Not done** for the speed target and full qualification of the
-segment-authoritative ACK implementation. Segment intake, reads, recovery,
+Status: **Not done** for the approved segment-metadata simplification.
+The implementation at `6d6b2780` passed workspace correctness checks but still
+duplicates batch offsets in DuckDB. Its speed target remains unmet.
+Segment intake, reads, recovery,
 retention, complete-bundle backup, and trusted bounded extraction are
 implemented. The old Control raw writer and its callers are removed. Stored
 tenant totals replace repeated quota scans. The recorded workspace gate,
@@ -101,6 +108,27 @@ checks pass.
 
 ### Current approved flow
 
+The approved metadata change has four deliverables:
+
+1. Remove persisted batch offsets and raw SHA-256. Keep CRC32C, source/cursor
+   identity, and compact batch directory entries. Load event offsets on read.
+2. Route historical extraction, result input checks, witness resolution, and
+   retention selection through that same directory. Keep read leases and the
+   shared writer coordinator. Commit progress, pins, expiry, and deletion intent
+   in DuckDB. Keep one lifecycle row per segment; no batch directory is stored.
+3. Update recovery, backup, quotas, and corruption checks. Use fresh stores
+   after the schema change. Prove the production paths with owner and mTLS tests.
+4. Run the existing short 64-by-256 release comparison against the original
+   writer on the same host. Report rates, latency, read/reopen time, and memory.
+   Record the eight earlier items and which large or physical cases need a
+   new-source run. Do not start those long runs automatically.
+
+The current request authorizes this implementation and the existing short
+performance comparison. The existing target remains at least 95 percent of
+original throughput and at least five percent lower write latency. Report a
+miss without weakening the target. Keep performance and correctness results
+separate.
+
 ```text
 Control starts
   -> AnalysisStore obtains the complete data-directory lease
@@ -144,13 +172,15 @@ Storage fails or cannot meet capacity
    `commit_result`, `retain`, `backup`, and `restore` where applicable.
    Remove the persisted raw `events` table from the desired schema.
 
-2. Implement the catalog and commit protocol in
+2. Implement the segment and commit protocol in
    [engine-design.md](engine-design.md#commit-and-acknowledgement).
-   Persist source/kind, file/range, committed end, cursor/count, digest,
-   commit/ordinal, and intake-time bounds per batch/segment. Do not keep
-   one database row or a resident index per raw event.
-   Keep DuckDB for the rebuildable raw catalogue and transactional context,
-   results, and progress. Raw segment commits contain their own replay
+   Persist source, CPU, cursor ranges, frame end offsets, intake time, and
+   commit/ordinal in segment headers and batch headers. Use CRC32C for frame
+   validation. Keep a compact directory per batch in memory. Load event
+   offsets from the selected batch. Store no batch-offset arrays, batch
+   digests, or per-event index in DuckDB.
+   Keep DuckDB for transactional context, results, progress, pins, source
+   receipts, and segment deletion state. Raw segment commits contain replay
    metadata. Raw ACK follows segment sync and receipt publication. Do not run
    SQL statements or a database commit for each raw batch. Rebuild receipts
    and range descriptors from checked segment commits during recovery.
@@ -163,11 +193,10 @@ Storage fails or cannot meet capacity
    witness charges in that owner. Derived-state mutations refresh the affected
    admission state under the same guard. A database catalogue cannot omit new
    raw charges from a quota decision. Store no raw payload in this state.
-   Publish pending catalogue descriptors in groups of at most 64 commits and
-   4,096 records before a derived
-   transaction or catalogue snapshot needs them. Existing maintenance also
-   publishes pending descriptors. No new service or public job is required.
-   Catalogue failure returns no partial query result and cannot undo a raw
+   Publish pending source receipts and segment totals in bounded groups before
+   a derived transaction or snapshot needs them. Store one lifecycle row per
+   segment, with no batch directory. No new service or public job is required.
+   Metadata failure returns no partial query result and cannot undo a raw
    ACK. Retention cannot delete an unaccounted raw commit. Backup includes all
    durable raw commits and the corresponding derived-state snapshot.
 
