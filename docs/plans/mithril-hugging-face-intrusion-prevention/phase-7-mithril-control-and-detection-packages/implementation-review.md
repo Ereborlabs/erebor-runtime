@@ -30,17 +30,18 @@ declarative captures are not delivered by these changes.
 
 ### Segment storage conversion
 
-Source state: `6d6b2780`, including the raw writer in `150033ef`.
+The current conversion follows design commit `8d3fa270` and the raw writer in
+`150033ef`. The earlier source `6d6b2780` had a duplicated SQL offset directory.
 The raw writer lives in
 `araphor-data`. Control has no raw writer or reader. This implementation uses
-metadata schema 8 and fresh development stores. Qualification is not complete.
+metadata schema 9 and fresh development stores. Qualification is not complete.
 Earlier pass records below apply only to their named source revisions.
 
 [ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Control starts.<br>
 -> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) AnalysisStore obtains the complete data-directory lease.<br>
 -> [AnalysisStore::recover_segments](../../../../crates/araphor-data/src/analysis/raw_catalog.rs) The owner completes recorded deletions and recovers authoritative raw commits.<br>
--> [RawJournal::validate_catalog](../../../../crates/araphor-data/src/analysis/raw_catalog.rs) The owner checks existing catalogue ranges and witnesses against raw commits.<br>
--> [RawJournal::project](../../../../crates/araphor-data/src/analysis/raw_catalog.rs) The owner publishes missing descriptors without copying raw payloads.<br>
+-> [RawJournal::validate_catalog](../../../../crates/araphor-data/src/analysis/raw_catalog.rs) The owner checks file totals, source coverage, expiry intervals, and witness locations against raw commits.<br>
+-> [RawJournal::project](../../../../crates/araphor-data/src/analysis/raw_catalog.rs) The owner publishes missing file totals and receipts. It does not copy offsets or raw payloads.<br>
 -> [AnalysisStore::open_leased](../../../../crates/araphor-data/src/analysis/mod.rs) The owner publishes the recovered revision and data readiness.
 
 [EvidenceIntakeOwner](../../../../crates/mithril-control/src/evidence.rs) Node sends an authenticated batch.<br>
@@ -61,12 +62,13 @@ sequenceDiagram
     S-->>A: Durable bytes
     A-->>C: Accepted receipt
     Note over C,A: Control can send ACK
-    A->>D: Publish descriptors when needed
+    A->>D: Publish file totals and receipts when needed
     Note over A,D: Results, progress, and pins commit together
 ```
 
-The data owner retains compact batch descriptors, frame offsets, and source
-receipts in memory. It does not retain decoded event bodies. Each raw commit
+The data owner retains compact batch bounds and source receipts in memory.
+It loads event offsets with a selected batch. It does not retain decoded event
+bodies or a resident end offset for each event. Each raw commit
 contains CPU, cursor ranges, intake time, and store positions. The segment
 header contains the complete source identity. Frame checksums protect both.
 `RawJournal::prepare` compares retained retry bytes before append. The owner
@@ -80,8 +82,56 @@ query DuckDB or use query-reader permits.
 
 [AnalysisStore::read_page_cancel](../../../../crates/araphor-data/src/analysis/raw.rs) A trusted consumer requests one raw page.<br>
 -> [RawJournal::freeze](../../../../crates/araphor-data/src/analysis/raw.rs) The owner selects exact ranges and opens bounded file handles under the writer guard.<br>
--> [RawRead::read](../../../../crates/araphor-data/src/analysis/raw.rs) The reader checks checksums, metadata, and digests after the writer guard is released.<br>
+-> [RawRead::read](../../../../crates/araphor-data/src/analysis/raw.rs) The reader checks CRC32C and batch metadata after the writer guard is released.<br>
 -> [AnalysisStore::read_page_cancel](../../../../crates/araphor-data/src/analysis/raw.rs) The reader returns at most 256 records or one MiB. The maintenance lease prevents deletion and rotation until the read ends.
+
+### Raw layout and shared lookup
+
+Read [SegmentFile::encode_identity](../../../../crates/araphor-data/src/analysis/segment_file.rs),
+[RawCommit](../../../../crates/araphor-data/src/analysis/raw.rs), and
+[EvidenceSegmentReadV1::read_frame](../../../../crates/araphor-data/src/analysis/raw_segments.rs).
+The file starts with a source header. It stores tenant, Node boot, source ID,
+label epoch, source epoch, a two-byte Node-name length, Node-name bytes, and
+CRC32C. Integers in this header use big-endian order. The header is 70 bytes
+plus the Node-name length.
+
+Each following batch has this layout:
+
+```text
+4-byte big-endian encoded length
+canonical protobuf RawCommit:
+  revision, CPU, intake time
+  spans: first/last cursor, body start, relative event ends, first ordinal
+  framed event body
+4-byte big-endian CRC32C of the length and encoded RawCommit
+```
+
+The next batch starts after these bytes. A sealed file has the same layout,
+without a footer. Files remain at most 16 MiB. Raw intake remains at most
+4,096 records and 4 MiB of framed input. Recovery validates complete batches
+and rebuilds the compact range directory. A selected read loads its offsets
+from the checked batch. CRC32C detects corruption; it is not an evidence ID or
+a signature. Raw witnesses use source, cursor, and segment ID. No raw-batch or
+raw-witness SHA-256 remains. Policy signatures and result, context, request,
+and backup-manifest hashes are unchanged.
+
+[RawJournal::select_ranges](../../../../crates/araphor-data/src/analysis/raw.rs)
+serves extraction and result references through
+[SegmentRange::read](../../../../crates/araphor-data/src/analysis/segments.rs).
+[RawJournal::locate](../../../../crates/araphor-data/src/analysis/raw.rs)
+serves exact witness validation and quota measurement. All paths use the same
+range directory and CRC reader. A metadata snapshot selects only raw commits
+at or below its revision. An extraction scan charges the complete checked
+batch envelope, not only the selected event bytes.
+
+Read [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs)
+and [AnalysisStore::remove_segment](../../../../crates/araphor-data/src/analysis/segments.rs)
+next. Retention reads batch bounds from the raw owner, checks required input
+and live witness pins, and seals active files before deletion. One transaction
+records the exact expired intervals with their segment ID, advances the floor,
+and marks the file Deleting. Removal checks that intent and the absence of
+witness references before unlink. Recovery uses the same owner and completes
+only recorded deletions. A missing Live file is an error.
 
 Raw pages do not publish the catalogue. SQL extraction and derived mutations
 publish pending descriptors in groups of at most 64 commits and 4,096 records.

@@ -38,7 +38,8 @@ Reader is slow, revoked or disconnected
 1. Add `QueryOwner::{query,follow}` under `crates/araphor-data/src/query/` and
    the isolated query-worker entry point under its `src/bin/`. Reuse 7.1 admission
    and sandbox proof. Do not expose a storage handle or arbitrary SQL to
-   credentialed Control. Trusted catalog selection and segment decoding run inside AnalysisStore.
+   credentialed Control. The segment owner selects committed ranges and decodes
+   batches inside AnalysisStore. DuckDB does not supply physical batch offsets.
    The events and trace_output relations are logical views, not raw DB tables.
 2. Implement typed request/result/frame/cursor records and documented
    `catalog`, `events`, `coverage` and context-version reads. Bind scope,

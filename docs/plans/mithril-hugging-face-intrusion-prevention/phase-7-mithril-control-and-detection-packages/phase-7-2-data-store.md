@@ -81,10 +81,10 @@ checks pass.
    time, and store position with its raw commit. No separate raw archive or
    per-batch database transaction is permitted.
 
-3. **Integrate the data consumers.** Rebuild the raw receipt and bounded
-   catalogue from segments at startup. Raw reads and ACK lookups use that
-   owner. Publish raw catalogue descriptors to DuckDB in bounded groups for
-   query and derived-state operations; do not copy payloads. Coordinate quota,
+3. **Integrate the data consumers.** Rebuild raw receipts and compact batch
+   bounds from segments at startup. Raw reads and ACK lookups use that
+   owner. Publish file byte totals and source receipts to DuckDB in bounded
+   groups; do not publish batch ranges, offsets, or payloads. Coordinate quota,
    required-progress, and witness state under the same writer. Persist
    results, progress, and pins together in DuckDB. Before deletion or backup,
    include all affected durable raw commits and preserve exact expiry state.
@@ -96,7 +96,7 @@ checks pass.
    required progress, and unsigned limits. Run the existing `mithril-e2e`
    startup, commit-failure, intake-failure, capacity, retention, and restore
    cases through production APIs. Kill before raw sync, after raw sync,
-   during catalogue publication, and after raw commit before ACK. Reopen must preserve
+   during metadata publication, and after raw commit before ACK. Reopen must preserve
    every acknowledged event and reject corruption. Then run the workspace
    gate. Component timing is not a substitute for these tests.
 
