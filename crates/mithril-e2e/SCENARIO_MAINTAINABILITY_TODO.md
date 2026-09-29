@@ -4134,6 +4134,13 @@ setup, production actions, assertions, and focused test.
         test now has 58 lines and requires a fresh, task-attributed
         `EXACT_POLICY_ALLOW` Mount/Mount result. The focused Host, direct
         `runc`, and Kubernetes cases passed again without a platform change.
+    - [x] Retire the duplicate path-tree control allow result. The existing
+      `preexisting_bind_keeps_policy` test requires the control read content
+      and its fresh, task-attributed `EXACT_POLICY_ALLOW` after the bind
+      change on Host, direct `runc`, and Kubernetes. Remove only
+      `path_tree_control_allowed` and its shell gate. Keep the old action for
+      the remaining mount sequence. The focused old direct-`runc` probe and
+      its complete remaining JSON gate passed after removal.
   - [x] Retire the duplicate in-container bind-mount result and shell gate.
     `late_bind_keeps_policy` requires the mount to succeed after production
     policy activation on Host, direct `runc`, and Kubernetes. Keep the legacy

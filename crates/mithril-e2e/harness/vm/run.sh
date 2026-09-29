@@ -558,7 +558,6 @@ if [[ $entry_role_runtime_only == true ]]; then
     .recursive_wildcard_stable_after_concurrent_exec and
     .stale_mount_cache_rebuilt and
     .unreachable_mount_cache_rows_collected and
-    .path_tree_control_allowed and
     (.independent_entries | length) == 1 and
     .independent_entries[0].name == "prestop" and
     .independent_entries[0].declaration_name == "prestop" and
