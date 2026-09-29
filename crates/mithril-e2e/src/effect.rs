@@ -72,6 +72,8 @@ mod prestop_path;
 mod privilege;
 #[cfg(test)]
 mod process_control;
+#[cfg(test)]
+mod reader_queue;
 mod runc;
 #[cfg(test)]
 mod socket_cross;

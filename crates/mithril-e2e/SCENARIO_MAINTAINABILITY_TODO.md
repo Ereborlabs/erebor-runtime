@@ -4201,6 +4201,16 @@ setup, production actions, assertions, and focused test.
 - [ ] Concurrent exec and reader-queue saturation: keep the same containerd
   exec operation, topology snapshots, bounded queue, and fail-closed results
   as `two-node-convergence.sh`.
+  - [ ] Replace the 70,000-read queue burst with `reader_burst_keeps_events`.
+    Use the deployed Node observation path. Require the public attempted count,
+    a later application child exec, a drained evidence backlog, and unchanged
+    queue-drop, lost-event, decoder-error, evidence-error, and WAL-block counts.
+    - [x] Pass Host and commit it. The exact ignored Host test passed in the
+      retained VM in 35.64 seconds with 70,000 denied reads.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove the matching legacy actor commands, private observation store,
+      result field, and shell predicate after all three platforms pass.
 - [ ] Stale cache repair and unreachable-row retirement: keep the production
   node reconciliation calls and exact map absence checks visible.
 - [x] Independent additional entries: keep each declaration, stock exec,
