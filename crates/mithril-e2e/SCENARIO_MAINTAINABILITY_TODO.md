@@ -2597,6 +2597,26 @@ test does not close a row when its physical condition or an assertion changed.
     replacement read. The diagnostic sorting and assertion were removed.
     Do not remove the old transfer checks or commit the draft. Confirm the
     correct pre-protection startup order before changing this scenario.
+    The Kubernetes setup must use one Pod with two application containers.
+    They need separate CRI cgroups and Node bindings, one network namespace
+    for an abstract Unix stream, and one shared file object for each transfer.
+    Keep Python code in `/fixtures`, but do not put the protected files in that
+    hostPath mount. Its canonical object path is not the signed `/fixtures`
+    path. A focused Host run reached two distinct bindings, one network
+    namespace, and matching file device and inode. Its exact-policy replacement
+    then failed with `signed path selector path-0 resolved to a different
+    canonical path`. The transfer did not run.
+    Try one memory-backed `emptyDir` mounted at `/tmp` in both Pod containers.
+    Put the two files in that shared volume before either actor opens them.
+    Confirm that Node resolves both signed `/tmp` exact paths in each container
+    view, not only that `stat` reports matching device and inode. Host and
+    direct `runc` need the same shared filesystem and Pod network semantics
+    inside their existing `start_actor_group` implementations; do not add a
+    scenario-specific Platform API or runner. Start both actors under an open
+    bootstrap policy, hold the descriptors, install the signed exact policy,
+    then check direct open, denied secret transfer, and allowed benign transfer.
+    This is a setup to qualify, not a passing replacement. Keep the old checks
+    until the shared test passes on Host, direct `runc`, and Kubernetes.
     A later Host draft used the public Node and Control APIs, one bootstrap
     policy, and a signed exact-file replacement. A two-container Pod did not
     give both actors one proven file object. A single-container test gave the
