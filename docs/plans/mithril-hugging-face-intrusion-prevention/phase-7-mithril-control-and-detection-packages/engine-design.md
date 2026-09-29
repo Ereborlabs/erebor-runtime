@@ -516,7 +516,7 @@ the first noise controls; optional classification is not a release dependency.
 
 Use one AnalysisStore in `araphor-data`. Reuse the existing segment codec,
 checksums, bounded append, and reader from Control. Retain the pinned DuckDB
-binding for rebuildable catalogue publication, derived-state transactions,
+binding for file lifecycle state, derived-state transactions,
 and isolated SQL workers. Raw acceptance uses the original segment writer
 inside `araphor-data`; it does not commit DuckDB per raw batch.
 Do not add SQLite, DataFusion, a broker, an ORM, or a storage-driver framework.
@@ -561,7 +561,8 @@ relations; create later result families only in their owning phase.
 | `events` | A logical query relation decoded from committed segment ranges. Derived revision notices have distinct kinds and are not sensor actions. No persisted raw-event table. |
 | `source_receipts`, `coverage` | Source/session binding, contiguous ACK position, bounded pending ranges, explicit expiry/loss intervals, and coverage revisions. Kernel sequence stays separate. |
 | `context_versions` | Exact owner/lifetime/revision, validity, sensitivity, bounded body, and digest. |
-| `processor_progress`, `evidence_refs`, `context_refs` | Processor/version/scope, consumed position, exact dependencies, reason, expiry, and required input floor. |
+| `processor_progress`, `evidence_refs`, `context_refs` | Processor/version/scope, consumed position, exact dependencies, reason, expiry, and required input floor. A raw witness stores source, cursor, and segment ID, not a raw-frame digest. |
+| `expired_ranges` | Source, tenant, segment ID, exact expired cursor interval, and commit revision. The segment ID binds the interval to its deletion intent. This relation contains no byte offsets. |
 | `profiles`, `behavior_atoms`, `behavior_buckets` | Derived counts, keys, manifests, lifecycle coverage, and method version. Working rows are separate from sealed results. |
 | `relationships`, `findings`, `notifications` | Owner-qualified revisions, references, route attempts, and deadlines. |
 | `assessments`, `requirements`, `proposals`, `reviews`, `publications` | Bounded immutable bodies, parent references, expected revisions, request digests, and owner state. |
@@ -640,12 +641,12 @@ Raw quota checks include commits that are not yet in the database catalogue.
 Derived mutations update required-progress, witness, and quota state under
 that same coordinator. No stale projection can authorize deletion or intake.
 
-Publish raw range descriptors to DuckDB in bounded groups outside the raw
-ACK operation. This catalogue contains no second copy of event payloads.
-Before a derived transaction, retention decision, or catalogue snapshot needs
-new input, publish the required descriptors. The existing maintenance owner
-also advances this catalogue. Read deadlines and scan bounds still apply;
-return an explicit error instead of an incomplete result. Catalogue failure
+Publish file byte totals and source receipts to DuckDB in bounded groups outside
+the raw ACK operation. Do not publish batch ranges or event offsets.
+Before a derived transaction, retention decision, or metadata snapshot needs
+new input, publish the required file and receipt state. The existing maintenance
+owner also advances this state. Read deadlines and scan bounds still apply;
+return an explicit error instead of an incomplete result. Metadata failure
 cannot roll back a raw ACK. Backups include all durable raw commits.
 
 Create a store only in an empty leased directory. The lease file can remain.
@@ -662,8 +663,8 @@ recovery fails. Node retains unacknowledged input.
 
 Start group limits at 4,096 records, 4 MiB encoded input, or 50 ms, whichever
 comes first. Existing wire limits still apply. The retained duplicate path
-reads the bounded committed batch range and compares exact bytes/digests.
-Conflicting bytes reject. Below the retained digest floor, return
+reads the bounded committed batch and compares exact bytes.
+Conflicting bytes reject. Below the retained raw floor, return
 AlreadyAcceptedExpired, not a claim that unavailable bytes match.
 Preserve pending-gap bounds and authenticated coverage rules. Reject capacity
 before ACK; no new delivery journal or dual-write raw path is required.
