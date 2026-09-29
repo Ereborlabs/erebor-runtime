@@ -4,14 +4,13 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use duckdb::{params, OptionalExt as _};
+use duckdb::params;
 use snafu::ResultExt as _;
 
 use super::{
-    source_key, valid_source_identity, AnalysisReadPageV1, AnalysisStore, MAX_ANALYSIS_PAGE_BYTES,
-    MAX_ANALYSIS_PAGE_RECORDS,
+    source_key, valid_source_identity, AnalysisReadPageV1, AnalysisStore, MAX_ANALYSIS_PAGE_RECORDS,
 };
-use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result, RetainedRangeExpiredSnafu};
+use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
 
 /// One snapshot deadline and cancellation flag. The deadline is one second.
 pub struct AnalysisReadControl {
@@ -229,147 +228,6 @@ impl AnalysisStore {
     ) -> Result<AnalysisReadPageV1> {
         self.read_page_cancel(identity, first_cursor, &AnalysisReadControl::default())
     }
-
-    pub fn read_page_cancel(
-        &self,
-        identity: &EvidenceIntakeIdentityV1,
-        first_cursor: u64,
-        control: &AnalysisReadControl,
-    ) -> Result<AnalysisReadPageV1> {
-        control.check()?;
-        let coordinator = self.read_coordinator(control)?;
-        let mut reader_guard = self.reader_until(control)?;
-        control.run(&mut reader_guard, |writer| {
-            let key = source_key(identity);
-            let receipt = Self::read_receipt_from(writer, &self.root, identity, &key)?
-                .ok_or_else(|| self.state_error("the evidence source is absent"))?;
-            if first_cursor == 0 || first_cursor > receipt.contiguous_cursor.saturating_add(1) {
-                return self.reject("the evidence read cursor is outside the accepted range");
-            }
-            if first_cursor <= receipt.retained_floor {
-                return RetainedRangeExpiredSnafu {
-                    first_cursor,
-                    last_cursor: receipt.retained_floor,
-                }
-                .fail();
-            }
-            self.check_expired(writer, &key, identity, first_cursor)?;
-            let expiry: Option<u64> = writer
-                .query_row(
-                    "SELECT MIN(first_cursor) FROM expired_ranges
-             WHERE stream_key = ? AND tenant_id = ? AND first_cursor > ? AND first_cursor <= ?",
-                    params![
-                        key.as_slice(),
-                        identity.tenant_id.as_slice(),
-                        first_cursor,
-                        receipt.contiguous_cursor
-                    ],
-                    |row| row.get(0),
-                )
-                .context(AnalysisDatabaseSnafu {
-                    operation: "bound read before expired input",
-                })?;
-            let page_end = expiry.map_or(receipt.contiguous_cursor, |cursor| cursor - 1);
-            let read_revision =
-                Self::read_meta_from(writer, &self.root.join("analysis.duckdb"))?.commit_revision;
-            let ranges = Self::raw_ranges(
-                writer,
-                identity,
-                first_cursor,
-                page_end.min(first_cursor.saturating_add(MAX_ANALYSIS_PAGE_RECORDS as u64)),
-                MAX_ANALYSIS_PAGE_RECORDS + 1,
-            )?;
-            // The reader guard prevents deletion until extraction ends.
-            drop(coordinator);
-            let mut records = Vec::new();
-            let mut encoded_bytes = 0;
-            let mut bounded = false;
-            'ranges: for range in ranges {
-                control.check()?;
-                for record in range.read(&self.root)? {
-                    control.check()?;
-                    if record.cursor < first_cursor || record.cursor > page_end {
-                        continue;
-                    }
-                    let expected = first_cursor
-                        .checked_add(records.len() as u64)
-                        .ok_or_else(|| self.state_error("the evidence read cursor is exhausted"))?;
-                    if record.cursor != expected {
-                        return self.expired_or_missing(writer, &key, identity, expected);
-                    }
-                    if records.len() == MAX_ANALYSIS_PAGE_RECORDS {
-                        bounded = true;
-                        break 'ranges;
-                    }
-                    if encoded_bytes + record.framed_record.len() > MAX_ANALYSIS_PAGE_BYTES {
-                        if records.is_empty() {
-                            return self.reject("one evidence frame exceeds the read page bound");
-                        }
-                        bounded = true;
-                        break 'ranges;
-                    }
-                    encoded_bytes += record.framed_record.len();
-                    records.push(record);
-                }
-            }
-            let next_cursor = first_cursor.checked_add(records.len() as u64);
-            if let Some(next) = next_cursor.filter(|next| *next <= page_end && !bounded) {
-                return self.expired_or_missing(writer, &key, identity, next);
-            }
-            Ok(AnalysisReadPageV1 {
-                first_cursor,
-                records,
-                encoded_bytes,
-                next_cursor: next_cursor.filter(|next| *next <= receipt.contiguous_cursor),
-                read_revision,
-            })
-        })
-    }
-
-    fn check_expired(
-        &self,
-        writer: &duckdb::Connection,
-        key: &[u8; 32],
-        identity: &EvidenceIntakeIdentityV1,
-        cursor: u64,
-    ) -> Result<()> {
-        let last: Option<u64> = writer
-            .query_row(
-                "SELECT last_cursor FROM expired_ranges
-                 WHERE stream_key = ? AND tenant_id = ?
-                 AND first_cursor <= ? AND last_cursor >= ? LIMIT 1",
-                params![
-                    key.as_slice(),
-                    identity.tenant_id.as_slice(),
-                    cursor,
-                    cursor
-                ],
-                |row| row.get(0),
-            )
-            .optional()
-            .context(AnalysisDatabaseSnafu {
-                operation: "classify missing evidence",
-            })?;
-        if let Some(last_cursor) = last {
-            return RetainedRangeExpiredSnafu {
-                first_cursor: cursor,
-                last_cursor,
-            }
-            .fail();
-        }
-        Ok(())
-    }
-
-    fn expired_or_missing<T>(
-        &self,
-        writer: &duckdb::Connection,
-        key: &[u8; 32],
-        identity: &EvidenceIntakeIdentityV1,
-        cursor: u64,
-    ) -> Result<T> {
-        self.check_expired(writer, key, identity, cursor)?;
-        self.reject("the accepted evidence range has a missing record")
-    }
 }
 
 #[cfg(test)]
@@ -470,10 +328,20 @@ mod tests {
                 deadline: Instant::now() + Duration::from_millis(50),
                 ..Default::default()
             };
-            assert!(matches!(
-                store.read_page_cancel(&identity, 1, &control),
-                Err(crate::Error::AnalysisReadDeadline { .. })
-            ));
+            if held == 2 {
+                assert_eq!(
+                    store
+                        .read_page_cancel(&identity, 1, &control)?
+                        .records
+                        .len(),
+                    1
+                );
+            } else {
+                assert!(matches!(
+                    store.read_page_cancel(&identity, 1, &control),
+                    Err(crate::Error::AnalysisReadDeadline { .. })
+                ));
+            }
             drop((writer, maintenance, readers));
             assert_eq!(store.read_slots.available_permits(), 16);
             assert!(store.maintenance.try_write().is_ok());

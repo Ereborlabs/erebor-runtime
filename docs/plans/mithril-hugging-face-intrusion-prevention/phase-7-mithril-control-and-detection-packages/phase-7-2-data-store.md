@@ -15,8 +15,8 @@ No raw-event table or copied discovery archive is part of the target.
 Control keeps policy/trust/rollout persistence and authority. Node keeps its
 delivery WAL. The same complete data owner can later run remotely. Storage
 and trace intake do not require discovery. Entry: 7.1.
-Status: **Not done** for the segment-authoritative ACK contract and full
-qualification. Prior segment intake, reads, recovery,
+Status: **Not done** for final verification and full qualification of the
+segment-authoritative ACK implementation. Prior segment intake, reads, recovery,
 retention, complete-bundle backup, and trusted bounded extraction are
 implemented. The old Control raw writer and its callers are removed. Stored
 tenant totals replace repeated quota scans. The recorded workspace gate,
@@ -162,7 +162,8 @@ Storage fails or cannot meet capacity
    witness charges in that owner. Derived-state mutations refresh the affected
    admission state under the same guard. A database catalogue cannot omit new
    raw charges from a quota decision. Store no raw payload in this state.
-   Publish pending catalogue descriptors in bounded groups before a derived
+   Publish pending catalogue descriptors in groups of at most 64 commits and
+   4,096 records before a derived
    transaction or catalogue snapshot needs them. Existing maintenance also
    publishes pending descriptors. No new service or public job is required.
    Catalogue failure returns no partial query result and cannot undo a raw
@@ -1266,17 +1267,91 @@ qualification separate. Do not claim unmeasured capacity or latency.
 
 ## Implementation result
 
-**Done for implementation. Not done for full qualification.**
+**Not done for final verification and full qualification.**
 All nine ordered implementation changes are present. AnalysisStore owns raw
 segments, transactional metadata and totals, bounded reads and extraction,
 result/progress commits, retention, and complete-bundle recovery. Control uses
 that owner for intake and keeps its policy authority and context projection.
-The old raw writer and raw-event table are removed. Current correctness and
-physical results are recorded below. Performance gates remain unverified.
+Control has no raw writer. The data crate reuses the original segment writer.
+No raw-event table stores a second copy. Correctness and physical results
+below apply to their named source states. Performance gates remain unverified.
 The records under
 `Previous implementation evidence` describe previous raw-DuckDB revisions only. Their native-memory settings,
 raw-table maintenance, and pass counts are not instructions or qualification
 for the selected segment design.
+
+### Segment-authoritative acceptance
+
+Source state: working changes after `7115c5da`. The original segment owner now
+lives in `araphor-data/src/analysis/raw_segments.rs`. `raw.rs` owns admission,
+exact retries, source receipts, and bounded raw reads. A complete raw commit
+contains its source header, CPU, ranges, offsets, intake time, revision, and
+checksums. Append and sync precede receipt publication and ACK. No DuckDB
+transaction runs for each raw batch.
+
+`raw_catalog.rs` publishes only descriptors to DuckDB. Each transaction contains
+at most 64 commits and 4,096 records. Its receipt cannot exceed that group's
+committed input. Recovery checks existing descriptors, restores missing groups,
+and rejects corrupt committed bytes. Metadata schema 8 requires fresh stores;
+there is no compatibility reader or importer.
+
+Derived results, progress, and witness references still commit together.
+Retention publishes all raw descriptors before selecting deletion. Backup seals
+raw files and includes their actual names in the checked manifest. A failed
+header write removes only the newly created incomplete file. A catalogue
+failure after raw sync cannot reverse an ACK.
+
+The review route is in
+[implementation-review.md](implementation-review.md#segment-storage-conversion).
+The focused `data_intake_failure` test passes both raw-write and catalogue
+failure cases. The first final gate passed formatting, check, and strict
+Clippy. Its data suite passed 79 tests and failed `analysis_extract_range_pages`
+at the one-second read deadline while a release build ran. That same test then
+passed alone with no source or timeout change. The isolated log is
+`/tmp/araphor-extraction-isolated.log`. The final serial workspace gate is
+pending at `/tmp/araphor-segment-owner-serial-ci.log`.
+
+The approved short comparison used the existing
+`store::raw_bench::raw_event_store_comparison` fixture. It ran 64 batches of 256
+events on Linux 6.8.0-139-generic, ext4, with Rust 1.97.1 release builds and
+the default allocator. Both owners used their default limits. Both received
+2,301,638 input bytes and returned all 16,384 events after reopen. No build or
+other test ran during timing. The original writer ran first, then the current
+writer. This is one short pair, not a repeated qualification result.
+
+| Writer | Write events/s | Write p95 ms/batch | Read events/s | Reopen ms | Peak RSS KiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Original segments, `293762be` | 204,801.9 | 1.322 | 719,635.1 | 10.536 | 17,412 |
+| Data-owned segments, current change | 192,188.7 | 1.434 | 2,016,722.9 | 87.726 | 54,192 |
+
+**Not done for the speed target.** Current throughput is 93.84 percent of the
+original rate. Current p95 is 108.47 percent of the original p95. Total write
+time divided by 64 is 1.250 ms/batch for the original and 1.332 ms/batch for the
+current owner. This last value includes loop overhead; the fixture does not
+report an exact durable-call mean. Current p99 is 2.152 ms. The original
+fixture does not report p99.
+
+The current append/sync hook interval totals 81.207 ms. That interval includes
+raw receipt publication, not only disk sync. The post-sync return interval
+totals 0.186 ms and contains no SQL. The existing output calls that interval
+`metadata_s`; it now measures in-memory accounting and notification.
+This pair does not isolate the remaining raw-write cost or qualify gRPC,
+concurrent discovery, retention, or full-capacity behavior.
+
+Artifacts are in `/tmp/araphor-segment-compare.484rmPNy/`: `original.log`,
+`current.log`, their `*-resources.log` files, and both release executables.
+Original SHA-256:
+`76bb12980296227aacbc3bb23b3af8f6472f3471d971c74f9e26e25f42472b54`.
+Current SHA-256:
+`9e4f12afeac6336787445c5f0511dc0c259420565b852e15ca61d48fef24adbb`.
+Each command set `ARAPHOR_STORE_BENCH_BATCHES=64`, selected mode `segments` or
+`analysis`, and used `--exact --ignored --nocapture --test-threads=1` with a
+30-second process limit. The original Control executable finished compiling;
+the remaining unrelated baseline e2e compilation was stopped.
+
+Proposed next check: repeat the same short pair in reverse order before any
+further optimization. This check needs user approval. Do not start another
+rewrite or add a performance test from this result alone.
 
 ### Segment storage implementation
 

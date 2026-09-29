@@ -384,6 +384,7 @@ mod tests {
         };
         let mut cursor = 1;
         let mut previous = None;
+        let mut previous_bytes = 0;
         for count in [1, 3, crate::MAX_EVIDENCE_BATCH_RECORDS] {
             let mut frames = Vec::new();
             let mut frame_ends = Vec::new();
@@ -391,7 +392,6 @@ mod tests {
                 frames.extend(std::iter::repeat_n(1, index % 3 + 1));
                 frame_ends.push(frames.len());
             }
-            let bytes = frames.len() as u64;
             let batch = ValidatedEvidenceBatchV1 {
                 cpu_id: 0,
                 first_cursor: cursor,
@@ -402,14 +402,20 @@ mod tests {
             };
             store.accept_validated_batch(identity.clone(), batch.clone())?;
             store.accept_validated_batch(identity.clone(), batch)?;
+            let physical =
+                std::fs::metadata(super::super::segments::SegmentRange::path(&root, 1))?.len();
             let mut writer = store.writer()?;
             let transaction = writer.get_mut()?.transaction()?;
             let usage = store.logical_usage(&transaction, identity.tenant_id)?;
             assert_eq!(usage.0, usage.1);
             assert_eq!((usage.2, usage.3), (0, 0));
             if let Some(prior) = previous {
-                assert_eq!(usage.0 - prior, bytes + 256 + 4 * count as u64);
+                assert_eq!(
+                    usage.0 - prior,
+                    physical - previous_bytes + 256 + 4 * count as u64
+                );
             }
+            previous_bytes = physical;
             let offset_charge: u64 = transaction.query_row(
                 "SELECT SUM(256 + 4 * len(frame_ends))::UBIGINT FROM batch_ranges",
                 [],
@@ -512,10 +518,9 @@ mod tests {
             })
         ));
         assert_eq!(store.meta()?, before);
-        let witness_bytes = super::super::SegmentFile::encode_identity(&input.scope.identity)?.len()
-            as u64
-            + 5
-            + 260;
+        let witness_bytes =
+            std::fs::metadata(super::super::segments::SegmentRange::path(&store.root, 1))?.len()
+                + 260;
         store.storage.witness_max_bytes = witness_bytes - 1;
         let before = store.meta()?;
         assert!(matches!(
@@ -671,8 +676,11 @@ mod tests {
             context_refs: Vec::new(),
         };
         store.commit_result(&input)?;
-        let header_bytes = super::super::SegmentFile::encode_identity(&identity)?.len() as u64;
-        let segment_bytes = 16 * 1024 * 1024 + 2 * header_bytes;
+        let segment_bytes = std::fs::read_dir(root.join("segments"))?
+            .try_fold(0_u64, |bytes, entry| {
+                Ok::<_, std::io::Error>(bytes + entry?.metadata()?.len())
+            })?;
+        assert!(segment_bytes > 16 * 1024 * 1024);
         let before = store.meta()?;
         let usage = store.witness_usage(identity.tenant_id, 3)?;
         assert_eq!(usage.read_revision, before.commit_revision);

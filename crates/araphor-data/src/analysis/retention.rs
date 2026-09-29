@@ -296,6 +296,16 @@ impl<'a> EvidenceRetentionOwner<'a> {
         transaction.commit().context(AnalysisDatabaseSnafu {
             operation: "commit segment deletion",
         })?;
+        if let Some(source) = self
+            .store
+            .raw
+            .lock()
+            .map_err(|_| self.store.state_error("the raw owner lock is poisoned"))?
+            .sources
+            .get_mut(&key)
+        {
+            source.receipt.retained_floor = retained_floor;
+        }
         #[cfg(test)]
         self.store.crash_at("retention.after");
         AnalysisStore::remove_segment(writer, &self.store.root, segment_id, "Deleting")?;
@@ -309,63 +319,6 @@ impl<'a> EvidenceRetentionOwner<'a> {
             retained_floor,
             commit_revision: revision,
         })
-    }
-}
-
-impl AnalysisStore {
-    const REQUIRED_BUDGET: &'static str =
-        "SELECT MIN(CASE WHEN e.stream_key = ? AND e.first_cursor <= r.contiguous_cursor
-                        THEN e.intake_utc_ns END),
-                    CAST(COALESCE(SUM(e.byte_end - e.byte_start - CASE
-                        WHEN p.consumed_cursor >= e.first_cursor
-                        THEN e.frame_ends[(p.consumed_cursor - e.first_cursor + 1)::BIGINT]
-                        ELSE 0 END), 0) AS UBIGINT)
-             FROM batch_ranges e JOIN segments s USING (segment_id) JOIN (
-                 SELECT tenant_id, stream_key, MIN(consumed_cursor) AS consumed_cursor
-                 FROM processor_progress WHERE tenant_id = ?
-                 AND class = 'required' AND retired = false
-                 GROUP BY tenant_id, stream_key
-             ) p ON p.stream_key = e.stream_key AND p.tenant_id = e.tenant_id
-                 AND e.last_cursor > p.consumed_cursor
-             LEFT JOIN source_receipts r ON e.stream_key = r.stream_key
-                 AND e.tenant_id = r.tenant_id WHERE s.state = 'Live'";
-
-    pub(super) fn check_required(
-        &self,
-        transaction: &duckdb::Transaction<'_>,
-        identity: &EvidenceIntakeIdentityV1,
-        now: u64,
-    ) -> Result<()> {
-        let key = source_key(identity);
-        let required: bool = transaction
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM processor_progress
-             WHERE tenant_id = ? AND stream_key = ? AND class = 'required' AND retired = false)",
-                params![identity.tenant_id.as_slice(), key.as_slice()],
-                |row| row.get(0),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "check required source scope",
-            })?;
-        if !required {
-            return Ok(());
-        }
-        let (oldest, bytes): (Option<u64>, u64) = transaction
-            .query_row(
-                Self::REQUIRED_BUDGET,
-                params![key.as_slice(), identity.tenant_id.as_slice()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "read required input budget",
-            })?;
-        if oldest.is_some_and(|time| now.saturating_sub(time) >= self.retention.raw_max_age_ns) {
-            return crate::ProtectedInputCapacitySnafu { resource: "age" }.fail();
-        }
-        if bytes > self.retention.raw_max_bytes {
-            return crate::ProtectedInputCapacitySnafu { resource: "bytes" }.fail();
-        }
-        Ok(())
     }
 }
 
@@ -428,16 +381,14 @@ mod tests {
             }],
             context_refs: vec![],
         })?;
+        let writer = store.raw_access()?;
+        {
+            let raw = store.raw.lock().map_err(|_| "raw owner lock poisoned")?;
+            assert_eq!(raw.budget.required.get(&source_key(&source)), Some(&1));
+            assert_eq!(raw.budget.protected.get(&source.tenant_id), Some(&2));
+        }
+        drop(writer);
         let reader = store.reader()?;
-        let plan: String = reader.get()?.query_row(
-            &format!("EXPLAIN {}", AnalysisStore::REQUIRED_BUDGET),
-            params![source_key(&source).as_slice(), source.tenant_id.as_slice()],
-            |row| row.get(1),
-        )?;
-        assert!(
-            !plan.contains("DELIM_JOIN"),
-            "required budget correlates each event:\n{plan}"
-        );
         let plan: String = reader.get()?.query_row(
             &format!("EXPLAIN {}", EvidenceRetentionOwner::ELIGIBLE_RAW),
             params![

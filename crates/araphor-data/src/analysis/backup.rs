@@ -11,7 +11,6 @@ use uuid::Uuid;
 
 use super::{
     capacity::{StorageLimitsV1, StorageUsageV1},
-    segments::SegmentRange,
     source_key, valid_source_identity, AnalysisStore, AnalysisStoreMetaV1, ANALYSIS_SCHEMA_VERSION,
 };
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, JsonSnafu, Result};
@@ -32,6 +31,7 @@ pub struct AnalysisBackupManifestV1 {
 #[serde(deny_unknown_fields)]
 pub struct AnalysisBackupSegmentV1 {
     pub segment_id: u64,
+    pub file_name: String,
     pub bytes: u64,
     pub sha256: [u8; 32],
 }
@@ -202,16 +202,19 @@ impl AnalysisStore {
                 .lock()
                 .map_err(|_| self.state_error("the analysis reader lock is poisoned"))?,
         ];
-        let files = Self::backup_segments(writer.get()?)?;
         self.write_ready.store(false, Ordering::Release);
-        writer
-            .get()?
-            .execute("UPDATE segments SET sealed = true WHERE state = 'Live'", [])
-            .context(AnalysisDatabaseSnafu {
-                operation: "seal backup segments",
-            })?;
-        for (segment_id, bytes) in &files {
-            let file = super::SegmentFile::open(&SegmentRange::path(&self.root, *segment_id))?;
+        {
+            let mut raw = self
+                .raw
+                .lock()
+                .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
+            raw.segments.seal_all()?;
+            raw.project_paths(writer.get()?)?;
+        }
+        let files = Self::backup_segments(writer.get()?)?;
+        for (_, bytes, name) in &files {
+            let file =
+                super::SegmentFile::open(&super::raw::RawJournal::file_path(&self.root, name)?)?;
             if file.length()? != *bytes {
                 return self.reject("the backup segment size differs from its committed end");
             }
@@ -266,7 +269,7 @@ impl AnalysisStore {
         Ok(connection)
     }
 
-    fn backup_segments(writer: &duckdb::Connection) -> Result<Vec<(u64, u64)>> {
+    fn backup_segments(writer: &duckdb::Connection) -> Result<Vec<(u64, u64, String)>> {
         let pending: bool = writer
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM segments WHERE state <> 'Live')",
@@ -283,14 +286,14 @@ impl AnalysisStore {
             );
         }
         let mut statement = writer
-            .prepare("SELECT segment_id, committed_end FROM segments ORDER BY segment_id LIMIT ?")
+            .prepare("SELECT segment_id, committed_end, file_name FROM segments ORDER BY segment_id LIMIT ?")
             .context(AnalysisDatabaseSnafu {
                 operation: "prepare backup segment list",
             })?;
         let files = statement
             .query_map(
                 params![super::capacity::MAX_STORAGE_ENTRIES as u64 + 1],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "read backup segment list",
@@ -312,7 +315,7 @@ impl AnalysisStore {
         &self,
         destination: &Path,
         meta: &AnalysisStoreMetaV1,
-        files: &[(u64, u64)],
+        files: &[(u64, u64, String)],
     ) -> Result<AnalysisBackupManifestV1> {
         let parent = destination
             .parent()
@@ -336,10 +339,11 @@ impl AnalysisStore {
             database_sha256: Self::file_digest(&source)?,
             segments: Vec::with_capacity(files.len()),
         };
-        for (segment_id, bytes) in files {
-            let path = SegmentRange::path(&self.root, *segment_id);
+        for (segment_id, bytes, name) in files {
+            let path = super::raw::RawJournal::file_path(&self.root, name)?;
             manifest.segments.push(AnalysisBackupSegmentV1 {
                 segment_id: *segment_id,
+                file_name: name.clone(),
                 bytes: *bytes,
                 sha256: Self::file_digest(&path)?,
             });
@@ -365,8 +369,8 @@ impl AnalysisStore {
         Self::copy_bundle_file(&source, &destination.join("analysis.duckdb"), source_bytes)?;
         for segment in &manifest.segments {
             Self::copy_bundle_file(
-                &SegmentRange::path(&self.root, segment.segment_id),
-                &SegmentRange::path(destination, segment.segment_id),
+                &super::raw::RawJournal::file_path(&self.root, &segment.file_name)?,
+                &super::raw::RawJournal::file_path(destination, &segment.file_name)?,
                 segment.bytes,
             )?;
         }
@@ -483,7 +487,7 @@ impl AnalysisStore {
             let name = entry.file_name();
             let segment_id = name
                 .to_str()
-                .and_then(|name| name.strip_suffix(".seg"))
+                .and_then(|name| name.split('.').next())
                 .filter(|stem| stem.len() == 16)
                 .and_then(|stem| u64::from_str_radix(stem, 16).ok())
                 .ok_or_else(|| {
@@ -504,7 +508,7 @@ impl AnalysisStore {
                     .build()
                 })?;
             let segment = &manifest.segments[index];
-            let path = SegmentRange::path(root, segment_id);
+            let path = super::raw::RawJournal::file_path(root, &segment.file_name)?;
             if path != entry.path()
                 || super::SegmentFile::reader(&path)?.length()? != segment.bytes
                 || Self::file_digest(&path)? != segment.sha256
@@ -609,8 +613,8 @@ impl AnalysisStore {
         )?;
         for segment in &manifest.segments {
             Self::copy_bundle_file(
-                &SegmentRange::path(backup, segment.segment_id),
-                &SegmentRange::path(root, segment.segment_id),
+                &super::raw::RawJournal::file_path(backup, &segment.file_name)?,
+                &super::raw::RawJournal::file_path(root, &segment.file_name)?,
                 segment.bytes,
             )?;
         }
@@ -639,10 +643,16 @@ impl AnalysisStore {
         {
             let mut writer = store.writer()?;
             let files = Self::backup_segments(writer.get()?)?;
-            if files.iter().copied().ne(manifest
-                .segments
+            if files
                 .iter()
-                .map(|segment| (segment.segment_id, segment.bytes)))
+                .map(|(id, bytes, name)| (*id, *bytes, name.as_str()))
+                .ne(manifest.segments.iter().map(|segment| {
+                    (
+                        segment.segment_id,
+                        segment.bytes,
+                        segment.file_name.as_str(),
+                    )
+                }))
             {
                 return store.reject("the restored catalog differs from its segment manifest");
             }
@@ -955,7 +965,8 @@ mod tests {
         store.accept_validated_batch(identity(), batch(1))?;
         let backup = root.join("backups/saved");
         let manifest = store.backup(&backup)?;
-        let segment = SegmentRange::path(&backup, manifest.segments[0].segment_id);
+        let segment =
+            super::super::raw::RawJournal::file_path(&backup, &manifest.segments[0].file_name)?;
         let bytes = fs::read(&segment)?;
         let target = directory.path().join("restored");
         let rejected = || {

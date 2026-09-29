@@ -298,7 +298,10 @@ fn analysis_store_processor_crashes() -> std::result::Result<(), Box<dyn std::er
                 assert!(store.processor_retirement(&foreign)?.is_none());
                 Ok(())
             };
-            verify(&store, boundary == "after")?;
+            verify(
+                &store,
+                boundary == "after" || (kind == "segment" && boundary != "reserved"),
+            )?;
             apply(&store, kind)?;
             verify(&store, true)?;
             let watch = store.subscribe_revision();
@@ -513,7 +516,10 @@ fn analysis_store_input_crashes() -> std::result::Result<(), Box<dyn std::error:
                 );
                 Ok(())
             };
-            verify(&store, boundary == "after")?;
+            verify(
+                &store,
+                boundary == "after" || (kind == "segment" && boundary != "reserved"),
+            )?;
             let mut watch = store.subscribe_revision();
             apply(&store, kind)?;
             verify(&store, true)?;
