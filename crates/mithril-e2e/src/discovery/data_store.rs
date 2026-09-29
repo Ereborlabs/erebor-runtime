@@ -1510,6 +1510,19 @@ mod tests {
             _ => return Err("unknown commit kind".into()),
         }
         let failure = DataStoreQualification::native_commit(&data, result);
+        let failure = if kind == "metadata" {
+            failure?;
+            assert!(watch.has_changed()?);
+            assert_eq!(
+                data.source_receipt(&DataStoreQualification::native_scope().identity)?
+                    .ok_or("receipt absent")?
+                    .contiguous_cursor,
+                2
+            );
+            data.checkpoint()
+        } else {
+            failure
+        };
         setrlimit(Resource::Fsize, prior)?;
         let error = failure
             .err()
@@ -1517,12 +1530,12 @@ mod tests {
         let expected = if result {
             "commit analysis result"
         } else {
-            "commit evidence"
+            "commit raw catalogue publication"
         };
         if kind == "segment" {
             assert!(
                 matches!(&error, araphor_data::Error::Io { path, source, .. }
-                if path.extension().is_some_and(|extension| extension == "seg")
+                if path.extension().is_some_and(|extension| extension == "open")
                     && source.raw_os_error() == Some(libc::EFBIG)),
                 "{error}"
             );
@@ -1535,7 +1548,7 @@ mod tests {
                 "{error}"
             );
         }
-        assert!(!watch.has_changed()?);
+        assert_eq!(watch.has_changed()?, kind == "metadata");
         std::process::exit(73);
     }
 
@@ -1579,9 +1592,14 @@ mod tests {
                 let exit = tokio::time::timeout(Duration::from_secs(10), child.wait()).await??;
                 assert_eq!(exit.code(), Some(73));
                 let data = AnalysisStore::open(&root)?;
-                assert_eq!(data.meta()?, before);
-                assert_eq!(data.source_status(&scope.identity)?, status);
-                assert_eq!(data.read_page(&scope.identity, 1)?.records, records);
+                if kind == "metadata" {
+                    assert_eq!(data.meta()?.commit_revision, before.commit_revision + 1);
+                    assert_eq!(data.read_page(&scope.identity, 1)?.records.len(), 2);
+                } else {
+                    assert_eq!(data.meta()?, before);
+                    assert_eq!(data.source_status(&scope.identity)?, status);
+                    assert_eq!(data.read_page(&scope.identity, 1)?.records, records);
+                }
                 assert_eq!(
                     data.read_result(scope.identity.tenant_id, "native-result")?,
                     None
@@ -1593,11 +1611,14 @@ mod tests {
                     0
                 );
                 let mut watch = data.subscribe_revision();
-                assert_eq!(*watch.borrow_and_update(), before.commit_revision);
+                assert_eq!(
+                    *watch.borrow_and_update(),
+                    before.commit_revision + u64::from(kind == "metadata")
+                );
                 DataStoreQualification::native_commit(&data, result)?;
                 let after = data.meta()?;
                 assert_eq!(after.commit_revision, before.commit_revision + 1);
-                assert!(watch.has_changed()?);
+                assert_eq!(watch.has_changed()?, kind != "metadata");
                 assert_eq!(*watch.borrow_and_update(), after.commit_revision);
                 DataStoreQualification::native_commit(&data, result)?;
                 assert!(!watch.has_changed()?);
@@ -2011,7 +2032,7 @@ mod tests {
                 fs::copy(managed.join(file), backup_path.join(file))?;
             }
             for segment in &manifest.segments {
-                let file = format!("segments/{:016x}.seg", segment.segment_id);
+                let file = format!("segments/{}", segment.file_name);
                 fs::copy(managed.join(&file), backup_path.join(&file))?;
             }
             let saved = AnalysisStore::restore(&backup_path, &backup_root.join("source"))?;
@@ -2109,8 +2130,47 @@ mod tests {
                 Ok(tokio::time::timeout(Duration::from_secs(5), connection.next_message()).await?)
             }
             .await;
+            let catalogue = matches!(fault, IntakeFault::CommitLimit).then(|| data.checkpoint());
             if native {
                 setrlimit(Resource::Fsize, prior)?;
+            }
+            if let Some(catalogue) = catalogue {
+                let NodeControlMessage::EvidenceAck(ack) = received?? else {
+                    return Err("raw acceptance did not return its ACK".into());
+                };
+                assert_eq!(ack.contiguous_cursor, 2);
+                observations.acknowledge_evidence(ack)?;
+                assert_eq!(observations.pending_evidence_records(), 0);
+                assert!(catalogue.is_err());
+                assert!(changed.has_changed()?);
+                assert_eq!(
+                    data.source_receipt(&identity)?
+                        .ok_or("receipt absent")?
+                        .contiguous_cursor,
+                    2
+                );
+                data.recover()?;
+                assert_eq!(data.meta()?.commit_revision, before.commit_revision + 1);
+                assert_eq!(data.read_page(&identity, 1)?.records.len(), 2);
+                connection.send_evidence_batch(pending).await?;
+                assert_eq!(Self::ack(&mut connection).await?.contiguous_cursor, 2);
+                assert_eq!(data.meta()?.commit_revision, before.commit_revision + 1);
+                drop(connection);
+                server.shutdown().await?;
+                let after = data.meta()?;
+                drop(data);
+                let data = Self::reopen_data(&directory.path().join("evidence/analysis")).await?;
+                assert_eq!(data.meta()?, after);
+                assert_eq!(data.read_page(&identity, 1)?.records.len(), 2);
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "case": "data-catalogue-recovery", "result": "PASS",
+                        "raw_ack_before_catalogue": true, "contiguous_cursor": 2,
+                        "proof_kind": "synthetic-mtls", "kernel_evidence": false,
+                    })
+                );
+                return Ok(());
             }
             let error = received?.err().ok_or("failed write received an ACK")?;
             let mithril_node::Error::ControlRpc { source, .. } = error else {
@@ -2120,7 +2180,7 @@ mod tests {
                 assert_eq!(source.code(), tonic::Code::Unavailable);
                 assert!(source.message().contains("File too large"), "{source}");
                 if matches!(fault, IntakeFault::SegmentLimit) {
-                    assert!(source.message().contains(".seg"), "{source}");
+                    assert!(source.message().contains(".open"), "{source}");
                 } else {
                     assert!(source.message().contains("commit evidence"), "{source}");
                     assert!(source.message().contains("analysis.duckdb.wal"), "{source}");

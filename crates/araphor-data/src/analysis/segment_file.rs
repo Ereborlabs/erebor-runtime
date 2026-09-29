@@ -117,7 +117,21 @@ impl SegmentFile {
             file,
             path: path.to_owned(),
         };
-        owner.append(0, header)?;
+        if let Err(error) = owner.append(0, header) {
+            std::fs::remove_file(path).context(IoSnafu { path })?;
+            let parent = path.parent().ok_or_else(|| {
+                AnalysisStateSnafu {
+                    path,
+                    reason: "the new segment has no parent directory",
+                }
+                .build()
+            })?;
+            File::open(parent)
+                .context(IoSnafu { path: parent })?
+                .sync_all()
+                .context(IoSnafu { path: parent })?;
+            return Err(error);
+        }
         Ok(owner)
     }
 

@@ -339,7 +339,7 @@ impl AnalysisStore {
             .prepare(
                 "SELECT b.segment_id, b.byte_start, b.byte_end, b.first_cursor, b.last_cursor,
                     b.frame_ends::VARCHAR, b.content_sha256, b.commit_revision, b.ordinal,
-                    s.committed_end, b.intake_utc_ns
+                    s.committed_end, s.file_name, b.intake_utc_ns
              FROM batch_ranges b JOIN segments s USING (segment_id)
              WHERE b.stream_key = ? AND b.tenant_id = ? AND s.state = 'Live'
                  AND b.first_cursor > ? AND b.first_cursor <= ?
@@ -360,7 +360,7 @@ impl AnalysisStore {
                     time.1,
                     MAX_ANALYSIS_PAGE_RECORDS as u64
                 ],
-                |row| Ok((SegmentRange::try_from(row)?, row.get(10)?)),
+                |row| Ok((SegmentRange::try_from(row)?, row.get(11)?)),
             )
             .context(AnalysisDatabaseSnafu {
                 operation: "read selected batch ranges",

@@ -38,13 +38,12 @@ impl AnalysisStore {
             ("invalid segment identity or state", "SELECT 1 FROM segments e
                 LEFT JOIN source_receipts s USING (stream_key)
                 WHERE e.segment_id = 0 OR e.segment_id >= (SELECT next_segment_id FROM store_meta)
-                OR e.state NOT IN ('Reserved', 'Live', 'Deleting') OR e.stream_kind <> 'records'
+                OR e.state NOT IN ('Live', 'Deleting') OR e.stream_kind <> 'records'
                 OR e.committed_end < 70 OR e.committed_end > 16777216
-                OR (e.state <> 'Reserved' AND (s.stream_key IS NULL OR e.tenant_id <> s.tenant_id
-                    OR e.cpu_id <> s.cpu_id OR e.identity_json <> s.identity_json))
-                OR (e.state = 'Reserved' AND EXISTS (SELECT 1 FROM batch_ranges b WHERE b.segment_id = e.segment_id))"),
+                OR s.stream_key IS NULL OR e.tenant_id <> s.tenant_id
+                OR e.cpu_id <> s.cpu_id OR e.identity_json <> s.identity_json"),
             ("invalid batch range", "SELECT 1 FROM batch_ranges b LEFT JOIN segments s USING (segment_id)
-                WHERE s.segment_id IS NULL OR s.state = 'Reserved'
+                WHERE s.segment_id IS NULL
                     OR b.stream_key <> s.stream_key OR b.tenant_id <> s.tenant_id
                     OR b.first_cursor = 0 OR b.last_cursor < b.first_cursor
                     OR b.last_cursor::HUGEINT - b.first_cursor + 1 > 4096
@@ -359,14 +358,6 @@ impl AnalysisStore {
         source_id: [u8; 16],
         source_epoch: u64,
     ) -> Result<Option<EvidenceIntakeIdentityV1>> {
-        let mut identity = EvidenceIntakeIdentityV1 {
-            tenant_id,
-            node_id: node_id.to_owned(),
-            node_boot_id: [0; 16],
-            label_epoch: 0,
-            source_id,
-            source_epoch,
-        };
         if !crate::node_id_is_valid(node_id)
             || tenant_id == [0; 16]
             || source_id == [0; 16]
@@ -374,36 +365,21 @@ impl AnalysisStore {
         {
             return Self::reject_path(&self.root, "the source epoch lookup is invalid");
         }
-        let guard = self.writer_access()?;
-        let writer = guard.get()?;
-        let saved: Option<(Vec<u8>, Vec<u8>, u64)> = writer
-            .query_row(
-                "SELECT tenant_id, node_boot_id, label_epoch FROM source_bindings WHERE epoch_key = ?",
-                params![identity.epoch_key().as_slice()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .context(AnalysisDatabaseSnafu {
-                operation: "read source epoch binding",
-            })?;
-        let Some((tenant, boot, label)) = saved else {
-            return Ok(None);
-        };
-        identity.node_boot_id = boot
-            .try_into()
-            .map_err(|_| self.state_error("the source epoch boot identity is invalid"))?;
-        identity.label_epoch = label;
-        if tenant != identity.tenant_id
-            || !valid_source_identity(&identity)
-            || Self::read_receipt_from(writer, &self.root, &identity, &source_key(&identity))?
-                .is_none()
-        {
-            return Self::reject_path(
-                &self.root,
-                "the source epoch binding has no matching receipt",
-            );
-        }
-        Ok(Some(identity))
+        let raw = self
+            .raw
+            .lock()
+            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
+        Ok(raw
+            .sources
+            .values()
+            .map(|source| &source.receipt.identity)
+            .find(|identity| {
+                identity.tenant_id == tenant_id
+                    && identity.node_id == node_id
+                    && identity.source_id == source_id
+                    && identity.source_epoch == source_epoch
+            })
+            .cloned())
     }
 
     pub(super) fn bind_source(
@@ -718,7 +694,8 @@ mod tests {
             "UPDATE source_bindings SET node_boot_id = ? WHERE epoch_key = ?",
             params![[5_u8; 16].as_slice(), identity.epoch_key().as_slice()],
         )?;
-        assert!(lookup().is_err());
+        assert_eq!(lookup()?, Some(identity.clone()));
+        assert!(AnalysisStore::validate_sources(store.writer()?.get()?, &store.root).is_err());
         Ok(())
     }
 

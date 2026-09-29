@@ -81,6 +81,7 @@ impl Drop for AnalysisLease {
 pub(super) struct AnalysisConnection<'a> {
     pub(super) connection: MutexGuard<'a, Option<Connection>>,
     root: &'a Path,
+    dirty: Option<&'a std::sync::atomic::AtomicBool>,
     _snapshot: Option<RwLockReadGuard<'a, ()>>,
     _permit: Option<SemaphorePermit<'a>>,
 }
@@ -97,6 +98,9 @@ impl AnalysisConnection<'_> {
     }
 
     pub(super) fn get_mut(&mut self) -> Result<&mut Connection> {
+        if let Some(dirty) = self.dirty {
+            dirty.store(true, Ordering::Release);
+        }
         self.connection.as_mut().ok_or_else(|| {
             AnalysisStateSnafu {
                 path: self.root,
@@ -139,13 +143,22 @@ impl AnalysisStore {
         let meta = Self::read_meta_from(&connection, &path)?;
         if meta.schema_version != super::ANALYSIS_SCHEMA_VERSION as u32
             || meta.store_uuid != self.store_uuid
-            || meta.commit_revision < *self.revision.borrow()
         {
             return self.reject("the recovered database differs from the active store");
         }
         Self::validate_tables(&connection)?;
         Self::validate_state(&connection, &self.root)?;
-        Self::recover_segments(&mut connection, &self.root)?;
+        let raw = Self::recover_segments(&mut connection, &self.root)?;
+        let meta = Self::read_meta_from(&connection, &path)?;
+        if meta.commit_revision < *self.revision.borrow() {
+            return self.reject("the recovered store lost an accepted revision");
+        }
+        *self
+            .raw
+            .lock()
+            .map_err(|_| self.state_error("the raw owner lock is poisoned"))? = raw;
+        self.raw_dirty.store(false, Ordering::Release);
+        self.raw_pending.store(false, Ordering::Release);
         let first = connection.try_clone().context(AnalysisDatabaseSnafu {
             operation: "recover first trusted reader",
         })?;
@@ -212,18 +225,33 @@ impl AnalysisStore {
     }
 
     pub(super) fn writer_access(&self) -> Result<AnalysisConnection<'_>> {
-        self.writer_wait(None)
+        self.writer_wait(None, true)
+    }
+
+    pub(super) fn raw_access(&self) -> Result<AnalysisConnection<'_>> {
+        self.writer_wait(None, false)
+    }
+
+    pub(super) fn raw_coordinator(
+        &self,
+        control: &AnalysisReadControl,
+    ) -> Result<AnalysisConnection<'_>> {
+        self.writer_wait(Some(control), false)
     }
 
     pub(super) fn read_coordinator(
         &self,
         control: &AnalysisReadControl,
     ) -> Result<AnalysisConnection<'_>> {
-        self.writer_wait(Some(control))
+        self.writer_wait(Some(control), true)
     }
 
-    fn writer_wait(&self, control: Option<&AnalysisReadControl>) -> Result<AnalysisConnection<'_>> {
-        let connection = match control {
+    fn writer_wait(
+        &self,
+        control: Option<&AnalysisReadControl>,
+        project: bool,
+    ) -> Result<AnalysisConnection<'_>> {
+        let mut connection = match control {
             Some(control) => control.lock(|| self.writer.try_lock())?,
             None => self
                 .writer
@@ -233,9 +261,36 @@ impl AnalysisStore {
         if !self.write_ready.load(Ordering::Acquire) {
             return self.reject("the data writer requires catalog recovery before retry");
         }
+        let mut raw = self
+            .raw
+            .lock()
+            .map_err(|_| self.state_error("the raw owner lock is poisoned"))?;
+        let writer = connection
+            .as_mut()
+            .ok_or_else(|| self.state_error("the analysis connections are closed"))?;
+        if project && self.raw_pending.load(Ordering::Acquire) {
+            self.write_ready.store(false, Ordering::Release);
+            let result = raw.project(writer, control);
+            if matches!(
+                &result,
+                Err(crate::Error::AnalysisReadDeadline { .. }
+                    | crate::Error::AnalysisReadCancelled { .. })
+            ) {
+                self.write_ready.store(true, Ordering::Release);
+            }
+            result?;
+            self.raw_pending.store(false, Ordering::Release);
+            self.write_ready.store(true, Ordering::Release);
+        }
+        if !project && self.raw_dirty.load(Ordering::Acquire) {
+            raw.refresh_budget(writer)?;
+            self.raw_dirty.store(false, Ordering::Release);
+        }
+        drop(raw);
         Ok(AnalysisConnection {
             connection,
             root: &self.root,
+            dirty: Some(&self.raw_dirty),
             _snapshot: None,
             _permit: None,
         })
@@ -254,6 +309,9 @@ impl AnalysisStore {
     }
 
     fn reader_wait(&self, control: Option<&AnalysisReadControl>) -> Result<AnalysisConnection<'_>> {
+        if self.raw_pending.load(Ordering::Acquire) {
+            drop(self.writer_wait(control, true)?);
+        }
         let permit = self
             .read_slots
             .try_acquire()
@@ -272,6 +330,7 @@ impl AnalysisStore {
                     return Ok(AnalysisConnection {
                         connection,
                         root: &self.root,
+                        dirty: None,
                         _snapshot: Some(snapshot),
                         _permit: Some(permit),
                     });
@@ -292,6 +351,7 @@ impl AnalysisStore {
         Ok(AnalysisConnection {
             connection,
             root: &self.root,
+            dirty: None,
             _snapshot: Some(snapshot),
             _permit: Some(permit),
         })

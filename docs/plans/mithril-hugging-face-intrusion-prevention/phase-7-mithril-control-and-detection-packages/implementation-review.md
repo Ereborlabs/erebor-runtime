@@ -30,102 +30,84 @@ declarative captures are not delivered by these changes.
 
 ### Segment storage conversion
 
-Source state: the working raw-owner removal after `3e5bfcea`. All intake
-constructors require AnalysisStore. Control has no raw writer or reader.
-The complete workspace gate and paired disk-full case pass for this source.
-Release and Kubernetes qualification remain incomplete.
-Backup and restore copy the complete metadata and segment bundle.
-Storage pass records outside this section predate this conversion
-and do not qualify the current storage implementation.
+Source state: working changes after `7115c5da`. The raw writer lives in
+`araphor-data`. Control has no raw writer or reader. This implementation uses
+metadata schema 8 and fresh development stores. Qualification is not complete.
+Earlier pass records below apply only to their named source revisions.
 
 [ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Control starts.<br>
 -> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) AnalysisStore obtains the complete data-directory lease.<br>
--> [AnalysisStore::recover_segments](../../../../crates/araphor-data/src/analysis/segments.rs) owner recovers metadata and validates committed segment ranges.<br>
--> [AnalysisStore::recover_segments](../../../../crates/araphor-data/src/analysis/segments.rs) owner completes recorded deletions and removes only uncommitted tails.<br>
--> [AnalysisStore::open_leased](../../../../crates/araphor-data/src/analysis/mod.rs) owner publishes durable relation revisions and data readiness.
+-> [AnalysisStore::recover_segments](../../../../crates/araphor-data/src/analysis/raw_catalog.rs) The owner completes recorded deletions and recovers authoritative raw commits.<br>
+-> [RawJournal::validate_catalog](../../../../crates/araphor-data/src/analysis/raw_catalog.rs) The owner checks existing catalogue ranges and witnesses against raw commits.<br>
+-> [RawJournal::project](../../../../crates/araphor-data/src/analysis/raw_catalog.rs) The owner publishes missing descriptors without copying raw payloads.<br>
+-> [AnalysisStore::open_leased](../../../../crates/araphor-data/src/analysis/mod.rs) The owner publishes the recovered revision and data readiness.
 
 [EvidenceIntakeOwner](../../../../crates/mithril-control/src/evidence.rs) Node sends an authenticated batch.<br>
--> [receive_group](../../../../crates/mithril-control/src/evidence.rs) EvidenceIntakeOwner validates source and reserves bounded capacity.<br>
--> [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/mod.rs) AnalysisStore checks retries and appends framed raw records through its reserved segment.<br>
--> [AnalysisStore::sync_append](../../../../crates/araphor-data/src/analysis/segments.rs) owner syncs segment bytes and new file directory entries.<br>
--> [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/mod.rs) one metadata transaction commits ranges, receipts, and revisions.<br>
--> [receive_group](../../../../crates/mithril-control/src/evidence.rs) Control acknowledges the durable contiguous source position.
+-> [receive_group](../../../../crates/mithril-control/src/evidence.rs) Control validates source and obtains bounded admission.<br>
+-> [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/raw.rs) The data owner checks exact retries, expiry, quotas, and required input.<br>
+-> [EvidenceSegmentOwner::write_frames](../../../../crates/araphor-data/src/analysis/raw_segments.rs) The original segment writer appends and syncs a self-contained raw commit.<br>
+-> [RawJournal::publish](../../../../crates/araphor-data/src/analysis/raw.rs) The owner advances its raw receipt and revision.<br>
+-> [receive_group](../../../../crates/mithril-control/src/evidence.rs) Control returns the durable contiguous cursor. No DuckDB commit precedes this ACK.
 
-[EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) Retention selects an eligible sealed segment.<br>
--> Partial [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) owner checks age, required progress, pins, and bounded read leases.<br>
--> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) metadata commit marks Deleting and records exact expiry intervals.<br>
--> [AnalysisStore::remove_segment](../../../../crates/araphor-data/src/analysis/segments.rs) owner unlinks that file, syncs the directory, and completes catalog cleanup.<br>
--> [AnalysisStore::recover_segments](../../../../crates/araphor-data/src/analysis/segments.rs) restart resumes incomplete deletion without deleting Live segments.
+```mermaid
+sequenceDiagram
+    participant C as Control
+    participant A as AnalysisStore
+    participant S as Segments
+    participant D as DuckDB
+    C->>A: Validated batch
+    A->>S: Append raw commit and sync
+    S-->>A: Durable bytes
+    A-->>C: Accepted receipt
+    Note over C,A: Control can send ACK
+    A->>D: Publish descriptors when needed
+    Note over A,D: Results, progress, and pins commit together
+```
 
-The write-path change after `e73ad22e` keeps the same transaction and sync
-boundaries. Read [UsageChange::apply](../../../../crates/araphor-data/src/analysis/quota.rs)
-for quota updates and [AnalysisStore::record_revision](../../../../crates/araphor-data/src/analysis/mod.rs)
-for relation revisions. Each method updates an existing row first. It inserts
-a row only when the update matches no row. The single writer prevents a
-concurrent insert between these operations. The transaction retains rollback
-and checked unsigned quota arithmetic.
+The data owner retains compact batch descriptors, frame offsets, and source
+receipts in memory. It does not retain decoded event bodies. Each raw commit
+contains CPU, cursor ranges, intake time, and store positions. The segment
+header contains the complete source identity. Frame checksums protect both.
+`RawJournal::prepare` compares retained retry bytes before append. The owner
+never deletes a raw segment because a processor consumed it.
 
-[AnalysisStore::check_witnesses](../../../../crates/araphor-data/src/analysis/quota.rs)
-checks live evidence references and all context references for the tenant in
-the current transaction. With neither type of reference, the witness charge
-is zero. Otherwise, the existing complete witness query still checks the
-limit. No cached quota, reference state, or query result is used. The extended
-`analysis_store_witness_limits` case checks live witnesses, expired witnesses
-with retained context, and a foreign tenant with no references. Existing
-`usage_updates_are_atomic`, `analysis_batch_charges`, and
-`analysis_store_revision_limits` cases check the shared quota paths. See the
-[write-path result](phase-7-2-data-store.md#short-benchmark-rerun-and-write-path-fix)
-for measured improvement and verification status. This change has no BPF or
-wire-format effect.
+`RawJournal::refresh_budget` loads quota totals, required floors, and witness
+pins after derived metadata changes. Raw intake adds unprojected charges to
+these totals under the same writer guard. Coverage and retention update the
+in-memory receipt after their database commit. Binding and ACK lookups do not
+query DuckDB or use query-reader permits.
 
-The catalog has one row per segment and one row per batch range. Frame offsets
-use a native UINTEGER array. The batch digest binds the offset count, offsets,
-and raw bytes. The writer retains no full-store event index. Reserved file IDs
-come from a durable, increasing counter. An uncertain raw publication or
-deletion commit keeps the writer unavailable. A raw file I/O failure also
-requires recovery; immediate cleanup must not hide that failure. A validation
-failure before append can remove only its reserved file or uncommitted tail.
-Other metadata owners use
-`AnalysisStore::commit_metadata` and block writes on a commit error. An eligible idle active segment is
-sealed when the deletion transaction marks it Deleting. Reader count and page
-bytes are bounded. Event pages and source listing have a one-second deadline.
-Trusted selected-input extraction is implemented below. Public SQL authorization
-and complete query-service integration remain outside this implementation.
+[AnalysisStore::read_page_cancel](../../../../crates/araphor-data/src/analysis/raw.rs) A trusted consumer requests one raw page.<br>
+-> [RawJournal::freeze](../../../../crates/araphor-data/src/analysis/raw.rs) The owner selects exact ranges and opens bounded file handles under the writer guard.<br>
+-> [RawRead::read](../../../../crates/araphor-data/src/analysis/raw.rs) The reader checks checksums, metadata, and digests after the writer guard is released.<br>
+-> [AnalysisStore::read_page_cancel](../../../../crates/araphor-data/src/analysis/raw.rs) The reader returns at most 256 records or one MiB. The maintenance lease prevents deletion and rotation until the read ends.
 
-[AnalysisStore::read_page_cancel](../../../../crates/araphor-data/src/analysis/read.rs) A trusted caller requests one source page with a cancellation control.<br>
--> [AnalysisStore::read_coordinator](../../../../crates/araphor-data/src/analysis/connection.rs) The owner obtains the writer coordinator within the request deadline.<br>
--> [AnalysisStore::reader_until](../../../../crates/araphor-data/src/analysis/connection.rs) The owner obtains a reader and a deletion-protection lease within the same deadline.<br>
--> [AnalysisReadControl::run](../../../../crates/araphor-data/src/analysis/read.rs) The owner attaches a connection-local interrupt and starts a scoped deadline worker.<br>
--> [AnalysisStore::read_page_cancel](../../../../crates/araphor-data/src/analysis/read.rs) The owner captures metadata and committed ranges, then releases the writer before segment reads.<br>
--> [AnalysisReadControl::check](../../../../crates/araphor-data/src/analysis/read.rs) The owner checks cancellation and time between ranges and records, and before returning a complete page.<br>
--> [ReadInterrupt::drop](../../../../crates/araphor-data/src/analysis/read.rs) The owner clears the interrupt handle after the timer joins.<br>
--> [AnalysisReadControl::run](../../../../crates/araphor-data/src/analysis/read.rs) The owner rolls back the snapshot before reader reuse and closes a reader whose snapshot start or cleanup fails.
+Raw pages do not publish the catalogue. SQL extraction and derived mutations
+publish pending descriptors in groups of at most 64 commits and 4,096 records.
+Each group commits its own receipt frontier and original revisions. A read
+checks its deadline between groups. A failed or cancelled read returns no
+partial result. Native query interruption cannot cancel a blocked filesystem
+syscall; raw reads check the deadline before and after bounded I/O.
 
-`read_page` creates the default control. `source_page` uses the same deadline
-for its reader and metadata query. The shared runner owns the transaction.
-The timer joins and cancellation detaches before explicit rollback. The runner
-checks the rollback result. A failed start or rollback closes that reader;
-`AnalysisStore::recover` restores the reader pool. The connection and read
-lease return only after cleanup. A late cancellation cannot interrupt a later
-request on that connection. Errors release admission permits and return no
-partial page. The native interrupt cannot cancel a blocked filesystem syscall;
-segment reads check the deadline before and after each bounded range.
+[EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) Retention selects an eligible segment.<br>
+-> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) The owner checks age, required progress, exact pins, and read leases.<br>
+-> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) A metadata commit marks Deleting and records expiry intervals.<br>
+-> [AnalysisStore::remove_segment](../../../../crates/araphor-data/src/analysis/segments.rs) The owner unlinks that file, syncs the directory, and removes its catalogue charge.<br>
+-> [AnalysisStore::recover_segments](../../../../crates/araphor-data/src/analysis/raw_catalog.rs) Restart completes any recorded deletion.
 
-`analysis_read_lock_deadline` checks writer, reader, and maintenance lock
-timeouts, cancellation while waiting, released permits, and subsequent reads.
-`analysis_read_native_deadline` repeats a native timeout 16 times on one reader.
-Each iteration opens a new transaction and reads again. The test also checks
-unchanged metadata and checkpoint after failure. `analysis_read_cancel_cleanup`
-repeats concurrent cancellation, then checks failed rollback, reader removal,
-permit release, and owner recovery.
-`data_capacity_recovery` checks a cancelled read through the shared data owner,
-then calls a policy RPC and reads the retained frame. Both new component tests,
-the mTLS capacity case, and the private full-tmpfs harness passed on `40bd114b`.
-For that revision, `bash .github/scripts/verify-rust-ci.sh` passed with 63 data
-tests, 197 Control unit tests, 124 Mithril e2e tests, and 256 Node unit tests.
-Read `/tmp/araphor-read-deadline-ci.log` and the phase result for ignored counts
-and physical evidence. These checks do not prove complete authorized
-extraction or the release scan-performance gate.
+An uncertain raw write blocks later writes until recovery. Complete valid raw
+commits survive restart without catalogue publication or ACK. Recovery trims
+only incomplete active tails. It does not trim through a catalogued commit.
+A catalogue failure cannot reverse a raw ACK. Backup seals the raw files and
+publishes all descriptors before it copies the database and segment bundle.
+
+`raw_acceptance_defers_catalogue` checks writes, raw pages, binding lookups,
+and receipts while DuckDB still has no raw descriptors. It then reopens the
+store and checks every record. `raw_recovers_without_database` checks
+raw recovery, partial retries, incomplete tails, and corruption without a
+database. `catalogue_recovers_partial_group` checks restart between descriptor
+groups. Existing quota, witness, retention, crash, backup, and mTLS tests remain
+required. See the phase result for the exact verification state.
 
 [AnalysisStore::extract](../../../../crates/araphor-data/src/analysis/extraction.rs) A trusted caller supplies exact source, context, and result selections.<br>
 -> [AnalysisSelectionV1::valid](../../../../crates/araphor-data/src/analysis/extraction.rs) The owner rejects foreign, duplicate, invalid, or excessive keys.<br>
@@ -153,7 +135,8 @@ Time exclusion uses validated batch intake times, not cursor order. Context and
 result keys keep exact versions regardless of event-time selection. Expiry and
 recovery gaps have no proved time interval and remain in coverage metadata.
 Absent selected sources reject; absent exact context/result keys are explicit.
-No receipt, progress, revision, raw file, or database row changes during a read.
+Extraction can publish pending raw descriptors before it opens the snapshot.
+The snapshot does not change raw bytes, derived progress, or accepted receipts.
 
 The six `analysis_extract_` component tests check these paths. The snapshot test
 injects later event, context, and result commits during projection. These commits
@@ -174,7 +157,7 @@ cover the staged deliverable before the next witness-accounting edits.
 
 `analysis_store_batch_receipt` checks exact retries, gaps, receipt positions,
 reopen, and batch-proportional metadata. `segment_recovery_checks_ownership`
-checks reserved files, non-reused IDs, uncommitted tails, and unknown files.
+checks non-reused IDs, incomplete active tails, and unknown files.
 `segment_retention_keeps_witnesses` checks whole-segment pins and expiry holes.
 `segment_growth_keeps_budget` checks the witness budget during later appends.
 Bounded-extraction, resource, and physical Kubernetes qualification remain
@@ -212,7 +195,7 @@ added.
 
 `analysis_store_uncertain_commit` tests both durable outcomes before a failed
 commit response. Raw publication and deletion retain a longer guard around
-their file work. `analysis_store_input_crashes` covers new-file reservation,
+their file work. `analysis_store_input_crashes` covers new-file creation,
 append, and sync. `analysis_store_commit_crashes` covers deletion marking,
 unlink, and catalog cleanup with a separate pinned witness segment.
 `segment_recovery_rejects_corruption` proves repeated rejection without removal
@@ -233,14 +216,14 @@ checks both commit outcomes. `analysis_recovery_rejects_corruption` checks that
 repeated recovery does not remove or repair corrupt committed bytes.
 
 The `test-fixtures` feature adds a one-use callback before raw append or after
-raw sync. `data_commit_failure` and `data_intake_failure` use this callback to
-fail the intended durable operation. The quota fixture now uses 64 MiB. The
-startup fixture changes `batch_ranges`, not the removed raw table. The
+raw sync. `data_commit_failure` and `data_intake_failure` apply file-size limits
+at those points. A failed raw append sends no ACK. A synced raw commit remains
+accepted when later catalogue publication fails. Recovery rebuilds the missing
+descriptors. A failed header write removes only its newly created incomplete
+file. The startup fixture changes `batch_ranges`, not a raw-event table. The
 retention fixture seals the disposable segment before it adds a witness to
-the next segment. All five previously failing data-store cases passed in the
-current-source workspace gate. The paired capacity harness also passed on a
-private 1-GiB tmpfs. These checks do not qualify hardware power loss or release
-performance. Read the phase result for the exact commands and evidence paths.
+the next segment. These checks do not qualify hardware power loss or release
+performance. Read the phase result for exact commands and source revisions.
 
 [AnalysisStore::witness_usage](../../../../crates/araphor-data/src/analysis/quota.rs) A trusted caller requests witness costs for one tenant and time.<br>
 -> [AnalysisReadControl::run](../../../../crates/araphor-data/src/analysis/read.rs) The owner reads one bounded metadata snapshot.<br>
@@ -256,12 +239,12 @@ segments, duplicate references, expiry, reopen, and deletion after pin expiry.
 after authenticated intake. The release history case passed with 18 witnesses
 across six segments. Read the storage phase result for measurements and limits.
 
-[AnalysisStore::reserve_segment](../../../../crates/araphor-data/src/analysis/segments.rs) An accepted batch needs segment space.<br>
--> [StorageLimitsV1::check_append](../../../../crates/araphor-data/src/analysis/capacity.rs) Admission adds pending payload and any new header to file bytes and subtracts them from available bytes.<br>
--> [AnalysisStore::bind_source](../../../../crates/araphor-data/src/analysis/schema.rs) The shared binding owner admits at most 4,096 source bindings while allowing existing retries.
+[EvidenceSegmentOwner::append_plan](../../../../crates/araphor-data/src/analysis/raw_segments.rs) An admitted batch needs segment space.<br>
+-> [StorageLimitsV1::check_append](../../../../crates/araphor-data/src/analysis/capacity.rs) Admission adds the complete raw frame and any new header to file bytes and subtracts them from available bytes.<br>
+-> [RawJournal::prepare](../../../../crates/araphor-data/src/analysis/raw.rs) The raw owner admits at most 4,096 source bindings while allowing existing retries.
 
 `analysis_store_capacity_bounds` checks exact pending-byte boundaries without
-changing a receipt or reserved file. `analysis_source_count_bound` checks the
+changing a receipt or raw file. `analysis_source_count_bound` checks the
 last binding and the next rejected binding. Startup validates the same count.
 The quota runners derive their iteration bound from their input size and quota;
 the runner bound is not a release-capacity result.
@@ -270,9 +253,10 @@ the runner bound is not a release-capacity result.
 -> [AnalysisStore::logical_usage](../../../../crates/araphor-data/src/analysis/quota.rs) Admission reads stored totals, not all retained batches.<br>
 -> [AnalysisStore::validate_usage](../../../../crates/araphor-data/src/analysis/quota.rs) Startup and backup validation compare totals with retained data and reject a mismatch.
 
-This change uses metadata schema 7. It adds no raw copy or per-event index.
-`PendingBatch::insert` adds frame bytes and batch metadata charges.
-Reservation adds the segment header and catalog charge. Deletion cleanup
+The current change uses metadata schema 8. It adds no raw copy or per-event
+database index. Raw intake charges frame bytes and batch metadata in memory.
+Catalogue publication persists those charges in bounded groups. A new segment
+adds its header and catalogue charge. Deletion cleanup
 subtracts the segment and batch charges after unlink and directory sync.
 Other writers charge receipts, bindings, coverage, context, results,
 references, progress, and gaps in their data transactions. Counter errors
@@ -306,13 +290,13 @@ Read the phase result for the exact verification state.
 
 [AnalysisStore::read_snapshot](../../../../crates/araphor-data/src/analysis/read.rs)
 routes public metadata reads through the existing deadline and snapshot
-cleanup owner. Store metadata, source receipt/status/binding, context, results,
+cleanup owner. Store metadata, source status, context, results,
 processor health/retirement, and recovery gaps use this method. The unbounded
 reader accessor is test-only. Retention lists its bounded source page through
 the maintenance writer and releases that writer before processing sources.
 `retention_waits_for_maintenance` checks that maintenance longer than the query
 deadline does not cause a retention failure.
-`analysis_metadata_read_deadlines` holds the maintenance lock and checks nine
+`analysis_metadata_read_deadlines` holds the maintenance lock and checks
 public metadata reads. Each read must time out, release its permit, and succeed
 after the lock is released. The existing native-interrupt tests cover the shared
 runner. `intake_read_failure_status` checks Unavailable for deadline and
@@ -320,17 +304,17 @@ cancellation errors. These errors do not permit an intake ACK.
 
 The reusable segment path has these implemented calls:
 
-[AnalysisStore::reserve_segment](../../../../crates/araphor-data/src/analysis/segments.rs) The data owner reserves the segment for a bounded batch.<br>
+[EvidenceSegmentOwner::write_frames](../../../../crates/araphor-data/src/analysis/raw_segments.rs) The data owner selects the segment for a bounded raw commit.<br>
 -> [SegmentFile::encode_identity](../../../../crates/araphor-data/src/analysis/segment_file.rs) The data crate encodes the existing source header and CRC32C checksum.<br>
 -> [SegmentFile::create](../../../../crates/araphor-data/src/analysis/segment_file.rs) A new segment is a private file created without replacing an existing path.<br>
 -> [SegmentFile::open](../../../../crates/araphor-data/src/analysis/segment_file.rs) An append opens a private regular file without following its final symlink.<br>
 -> [SegmentFile::append](../../../../crates/araphor-data/src/analysis/segment_file.rs) The file owner checks the exact prior end and 16-MiB limit before writing.<br>
--> [AnalysisStore::sync_append](../../../../crates/araphor-data/src/analysis/segments.rs) The data owner syncs the segment before metadata commit.
+-> [EvidenceSegmentOwner::write_frames](../../../../crates/araphor-data/src/analysis/raw_segments.rs) The data owner syncs the segment before receipt publication and ACK. Catalogue publication follows separately.
 
 [SegmentRange::read](../../../../crates/araphor-data/src/analysis/segments.rs) A bounded read opens the selected committed range.<br>
 -> [SegmentFile::reader](../../../../crates/araphor-data/src/analysis/segment_file.rs) The data crate checks the private file and retains a read-only descriptor.<br>
 -> [SegmentFile::read](../../../../crates/araphor-data/src/analysis/segment_file.rs) Positional I/O reads an exact bounded range.<br>
--> [SegmentRange::read](../../../../crates/araphor-data/src/analysis/segments.rs) The data owner checks the batch digest, frame lengths, and CRC32C before returning bytes.
+-> [SegmentRange::read](../../../../crates/araphor-data/src/analysis/segments.rs) The data owner checks the batch digest and frame lengths before returning bytes.
 
 SegmentFile owns one file descriptor and its diagnostic path. Drop closes the
 descriptor; it does not delete, truncate, sync, or acknowledge the file.
@@ -547,7 +531,7 @@ until restart. This path does not change Control policy persistence.
 -> [AnalysisStore::crash_at](../../../../crates/araphor-data/src/analysis/crash.rs) A test child exits immediately before or after the production commit.<br>
 -> [analysis_store_commit_crashes](../../../../crates/araphor-data/src/analysis/crash.rs) Reopen preserves the accepted cursor and live witness. Raw count and expiry agree with the recovered floor. Retry and a second reopen preserve the same result.
 
-[AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/mod.rs) New events, receipt progress, and relation revisions are ready to commit.<br>
+[AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/raw.rs) New events, receipt progress, and relation revisions are ready to commit.<br>
 -> [AnalysisStore::crash_at](../../../../crates/araphor-data/src/analysis/crash.rs) A test child exits immediately before or after the production commit, before notification.<br>
 -> [analysis_store_input_crashes](../../../../crates/araphor-data/src/analysis/crash.rs) Reopen returns the exact prior or new records, receipt, and revisions. Retry adds no second effect.
 
@@ -797,17 +781,17 @@ store receipt. Samples record ACK arrival before Node applies that ACK, plus
 database, WAL, and total file bytes. `data_quota_failure` checks the error record
 and refusal to replace a prior result. This report is not a recovery pass.
 
-[AnalysisStore::check_required](../../../../crates/araphor-data/src/analysis/retention.rs)
-groups active required processors by tenant and source before joining events.
+[RawJournal::refresh_budget](../../../../crates/araphor-data/src/analysis/raw_catalog.rs)
+groups active required processors by source after a derived-state mutation.
 The minimum consumed cursor protects the union of their unprocessed input.
-Each event contributes once to the tenant byte total. The accepted-cursor check
-still limits the source age calculation. `analysis_store_required_scopes`
-checks multiple processors, unequal progress, retirement, optional processors,
-and foreign tenants. `analysis_store_required_plan` checks the actual prepared
-query with the pinned DuckDB engine. The old query produced `LEFT_DELIM_JOIN`
-and grouped by event cursor. The regression failed before the SQL change and
-passed after it. No ledger, cache, schema, quota, or timeout changes are added.
-The larger quota case must run again before throughput is qualified.
+The owner counts the protected bytes from each retained batch's frame offsets.
+[AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/raw.rs)
+then checks and updates these cached totals without a query for each batch.
+The accepted cursor bounds the source age calculation.
+`analysis_store_required_scopes` checks multiple processors, unequal progress,
+retirement, optional processors, and foreign tenants.
+`analysis_store_required_plan` checks the cached floor and protected-byte total.
+These correctness checks do not qualify throughput.
 
 The full workspace gate passed on `020d09a2` with two build jobs and serial
 test execution. The data crate passed 49 tests with two ignored; Control passed
@@ -1226,7 +1210,7 @@ rollout under load or repeated full-quota performance.
 -> [serve](../../../../crates/mithril-control/src/server.rs) Control runs retention with the existing service. Shutdown drops the timer; a bounded blocking pass can finish and release its data handle.<br>
 -> [EvidenceIntakeOwner::run_retention](../../../../crates/mithril-control/src/evidence.rs) A one-second timer calls the data owner through the existing clock seam. A failed pass retries without stopping policy service.<br>
 -> [EvidenceRetentionOwner::sweep](../../../../crates/araphor-data/src/analysis/retention.rs) One pass visits at most 16 sources and removes at most one eligible segment per source. The pass checkpoints after deletion. Failure blocks intake until a later pass and checkpoint succeed.<br>
--> [AnalysisStore::check_required](../../../../crates/araphor-data/src/analysis/retention.rs) A new batch cannot exceed the required-input age or tenant byte reservation.
+-> [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/raw.rs) A new batch cannot exceed the required-input age or tenant byte reservation.
 
 [NodeEvidence::open](../../../../crates/mithril-control/src/service.rs) An authenticated Node sends evidence on an open stream.<br>
 -> [ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Startup applies positive `evidence_admission.total_slots` and `slots_per_node` values. Defaults are eight and two. Configure before cloning or serving Control.<br>
@@ -1237,21 +1221,21 @@ rollout under load or repeated full-quota performance.
 -> [ControlPlane::receive_evidence_stream_group](../../../../crates/mithril-control/src/service.rs) The worker checks session and current trust again after admission. Blocking validation checks all records, source, CPU, continuity, and the 4,096-record group limit before the store writer lock.<br>
 -> [AnalysisStore::accept_validated_batch](../../../../crates/araphor-data/src/analysis/mod.rs) A durable commit precedes the ACK. The blocking closure releases its admission guard before client output can wait.
 
-[AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/mod.rs)
-reads retained SHA-256 digests for the admitted cursor range in one statement.
-The range contains at most 4,096 rows. The pinned DuckDB appender inserts new
-rows. An explicit flush precedes the contiguous-cursor scan. The same transaction
-commits rows, receipt, and revisions. A conflict rolls back all appended rows.
+[AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/raw.rs)
+compares retained retry bytes before it changes the segment. The admitted batch
+contains at most 4,096 records. The owner appends only new cursor ranges in one
+checksummed raw commit, syncs the file, and publishes the receipt and revision.
+A conflict writes no new bytes. DuckDB is not part of this raw commit.
 `analysis_store_bulk_rollback` checks a conflict at the last row of a full batch,
 then retry and restart. An exact retry does not send a revision notification.
 
 [AnalysisStore::writer](../../../../crates/araphor-data/src/analysis/connection.rs) Admitted mutations wait for the existing writer mutex. There is no second fixed writer-slot limit. Internal workers bound their own work outside the async executor.<br>
 -> [AnalysisConnection](../../../../crates/araphor-data/src/analysis/connection.rs) One mutation runs. The guard releases the connection on return or error. Read coordinator waits retain their cancellation and deadline checks.<br>
--> [AnalysisStore::source_binding](../../../../crates/araphor-data/src/analysis/schema.rs) Intake authentication reads the durable binding under the writer mutex. [AnalysisStore::source_receipt](../../../../crates/araphor-data/src/analysis/mod.rs) uses the same mutex for the ACK lookup. Neither operation uses query-reader permits. The binding test checks both with all 16 reader permits held.<br>
+-> [AnalysisStore::source_binding](../../../../crates/araphor-data/src/analysis/schema.rs) Intake authentication reads the binding under the raw-state mutex. [AnalysisStore::source_receipt](../../../../crates/araphor-data/src/analysis/mod.rs) uses that mutex for the ACK lookup. Neither operation needs DuckDB, the writer mutex, or query-reader permits. The binding test checks both with all 16 reader permits held.<br>
 -> [EvidenceIntakeOwner::data_status](../../../../crates/mithril-control/src/evidence.rs) Storage quota exhaustion still returns ResourceExhausted without ACK. A full intake semaphore waits instead.<br>
 
-[AnalysisStore::reader](../../../../crates/araphor-data/src/analysis/connection.rs) A bounded read reserves one of 16 read permits and one of two private connections.<br>
--> [AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/read.rs) A read transaction freezes receipt, expiry, revision, and row statements together. Source-status reads use the same snapshot rule.<br>
+[AnalysisStore::reader](../../../../crates/araphor-data/src/analysis/connection.rs) A metadata read reserves one of 16 read permits and one of two private connections.<br>
+-> [AnalysisStore::read_page_cancel](../../../../crates/araphor-data/src/analysis/raw.rs) A raw page uses one read permit and freezes receipt, expiry, revision, and file ranges under the writer guard. It needs no native connection.<br>
 -> [AnalysisStore::checkpoint](../../../../crates/araphor-data/src/analysis/backup.rs) Checkpoint and backup hold the writer, then wait for all read guards to close. Normal data writes do not take this maintenance lock.<br>
 
 AnalysisStore creates and closes all three native connections. Its directory
@@ -1287,7 +1271,7 @@ existing ControlStore lease; it adds no new persistence format.
 -> [AnalysisStore::open_with_limits](../../../../crates/araphor-data/src/analysis/mod.rs) The owner sets native memory, thread, temporary-file, and WAL checkpoint limits.<br>
 -> Partial [AnalysisStore::require_capacity](../../../../crates/araphor-data/src/analysis/capacity.rs) Writer admission checks directory usage and available filesystem bytes. It does not reserve physical blocks.<br>
 -> [AnalysisStore::require_retention](../../../../crates/araphor-data/src/analysis/mod.rs) Unhealthy retention checks maintenance capacity first. Exhausted capacity remains a capacity error; other retention failures remain unavailable.<br>
--> [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/mod.rs) A new row requires ordinary capacity. An exact durable retry can use maintenance admission without a new commit.<br>
+-> [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/raw.rs) A new raw frame requires ordinary capacity. An exact durable retry can use maintenance admission without a new commit.<br>
 -> [EvidenceIntakeOwner::data_status](../../../../crates/mithril-control/src/evidence.rs) Capacity rejection returns ResourceExhausted. Node keeps unacknowledged input.<br>
 -> [data_capacity_retry](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The mTLS test checks unchanged revision, available policy RPCs, restart with normal limits, and durable retry ACK.
 
@@ -1434,9 +1418,9 @@ coordination; it is not a production corruption retry or an empty-store fallback
 -> [DataStoreQualification::startup](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The test checks that Node retains unacknowledged input and policy inventory remains available under unsupported schema, missing table, and corrupt file failures.
 
 [DataStoreQualification::recovery](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The test clock advances while optional discovery remains disabled.<br>
--> [AnalysisStore::check_required](../../../../crates/araphor-data/src/analysis/retention.rs) Required progress protects raw input. The age bound rejects a new batch without a receipt change. Node retains the batch, and policy RPCs remain available.<br>
+-> [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/raw.rs) Required progress protects raw input. The age bound rejects a new batch without a receipt change. Node retains the batch, and policy RPCs remain available.<br>
 -> [AnalysisStore::commit_result](../../../../crates/araphor-data/src/analysis/progress.rs) A result transaction advances required progress and retains one exact witness. Node retries its retained batch and receives a durable ACK.<br>
--> [EvidenceRetentionOwner::sweep](../../../../crates/araphor-data/src/analysis/retention.rs) The service timer removes eligible rows without a manual retention call.<br>
+-> [EvidenceRetentionOwner::sweep](../../../../crates/araphor-data/src/analysis/retention.rs) The service timer removes eligible segments without a manual retention call.<br>
 -> [AnalysisStore::resume_optional](../../../../crates/araphor-data/src/analysis/progress.rs) The optional processor records the expired range before resuming.<br>
 -> [AnalysisStore::read_result](../../../../crates/araphor-data/src/analysis/progress.rs) A tenant-scoped read checks the retained result digest.<br>
 -> [AnalysisStore::restore](../../../../crates/araphor-data/src/analysis/backup.rs) The case checks result, witness, coverage, and receipt preservation after expiry. A stale backup reports purged Node input as Partial.
@@ -1449,9 +1433,9 @@ and backup methods. It does not implement their transactions.
 [RetentionLimitsV1](../../../../crates/araphor-data/src/analysis/retention.rs)
 defaults to 24 hours and 2 GiB of raw data per tenant. Control configuration
 exposes these limits as `data_retention.raw_max_age_ns` and
-`data_retention.raw_max_bytes`. AnalysisStore checks required-input protection
-after appender flush and before receipt commit. An exact retained retry remains
-valid at the bound. Pending rows count toward protected bytes; an old pending
+`data_retention.raw_max_bytes`. AnalysisStore checks cached required-input
+protection before raw append. An exact retained retry remains valid at the
+bound. Pending records count toward protected bytes; an old pending
 gap alone does not age-block gap repair. This check does not enforce all-family
 logical quotas or a physical filesystem reserve.
 
@@ -1541,7 +1525,7 @@ facts; it does not resolve a name or broaden a cohort on retry.
 | [NodePolicyGenerationOwner](../../../../crates/mithril-node/src/policy.rs) | Node owns the installed generations and immutable discovery catalogue. Catalogue replacement drops the old snapshot after readers release it. | Verified policy and measured exact objects produce the catalogue. Node refreshes the catalogue during policy and binding transitions. The observation batch reads one snapshot. | `discovery_catalog_pins_verified_coordinates_and_bounds_lookup` in [policy/discovery.rs](../../../../crates/mithril-node/src/policy/discovery.rs). |
 | [EffectObservationStore](../../../../crates/mithril-node/src/observation.rs) | Node opens the existing observation owner and write-ahead log (WAL). Diagnostic capture does not own this log. | Kernel observations plus the catalogue produce optional decision context before WAL append. The existing observation owner remains the writer. | `discovery_context_old_and_new_wal_frames_reopen_without_reencoding` in [wal.rs](../../../../crates/mithril-node/src/observation/wal.rs). |
 | [ControlStore](../../../../crates/mithril-control/src/store.rs) | Control opens one leased durable store. The last local lease owner explicitly unlocks it. Closing the owner does not delete durable records. | Existing transactions own CPU bindings, immutable artifact references, and bounded heads. Discovery and TraceOwner use these methods; neither writes the state image directly. | `discovery_store_lease_releases_after_last_owner_with_duplicate_descriptor` and `discovery_store_lease_inherited_guard_cannot_unlock_active_parent`. |
-| [AnalysisStore](../../../../crates/araphor-data/src/analysis/mod.rs) | Offline proof opens one private DuckDB store and writer. Reopen retains its UUID, recovery epoch, and source receipts. The data owner also stores context versions, processor results, exact references, expiry ranges, and backup metadata. | Public methods accept Control-validated identity, framed evidence, and coverage. The data owner cannot authenticate a Node or change policy. | [storage_contract.rs](../../../../crates/mithril-e2e/src/discovery/storage_contract.rs), [context.rs tests](../../../../crates/araphor-data/src/analysis/context.rs), [retention.rs tests](../../../../crates/araphor-data/src/analysis/retention.rs), and `analysis_store_crash_replay`. |
+| [AnalysisStore](../../../../crates/araphor-data/src/analysis/mod.rs) | Control opens one leased data owner. Raw commits live in segments. DuckDB holds descriptors, context, results, progress, references, and expiry. Reopen retains the UUID, recovery epoch, and source receipts. | Public methods accept Control-validated identity, framed evidence, and coverage. The data owner cannot authenticate a Node or change policy. | [raw tests](../../../../crates/araphor-data/src/analysis/raw.rs), [context tests](../../../../crates/araphor-data/src/analysis/context.rs), [retention tests](../../../../crates/araphor-data/src/analysis/retention.rs), and [mTLS data tests](../../../../crates/mithril-e2e/src/discovery/data_store.rs). |
 | [DiscoveryOwner](../../../../crates/mithril-control/src/discovery/mod.rs) | Recorded methods are stateless. Artifact callers open one index owner and release its handles on drop. No intake scheduler remains. | Supplied recorded input produces exact atoms. Existing artifacts and imported context produce snapshots and context packets. | [recorded tests](../../../../crates/mithril-control/src/discovery/tests.rs) and [index tests](../../../../crates/mithril-control/src/discovery/index.rs). These tests do not prove direct-read live discovery. |
 | [DiscoveryIndex](../../../../crates/mithril-control/src/discovery/index.rs) | Discovery opens the leased SQLite projection. Closing connections retains the database. Recovery can replace only this derived state. | One writer applies retained artifacts. Two query-only readers serve bounded reads. Authoritative artifacts, not SQL rows, determine recovery. | `discovery_index_replacement_keeps_prior_index_on_invalid_authority` in [recovery.rs](../../../../crates/mithril-control/src/discovery/index/recovery.rs). |
 | [TraceOwner](../../../../crates/mithril-control/src/observability/owner.rs) | Control creates the owner over ControlStore. Accepted inputs and per-execution heads survive owner destruction. | Separate execution/read grants and optional host approval govern acceptance, append, cancellation, and disclosure. Only owner methods change trace heads. | `observability_recovery_commits_once_and_rejects_changed_output` and `observability_target_partial_cohort_never_widens_on_retry`. |
