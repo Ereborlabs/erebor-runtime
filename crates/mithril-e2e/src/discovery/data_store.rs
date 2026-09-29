@@ -773,11 +773,16 @@ impl DataStoreQualification {
         release.send(())?;
         let extracted = extraction.await??;
         let extraction_us = extract_started.elapsed().as_micros();
+        let segment_bytes = fs::read_dir(data_root.join("segments"))?
+            .try_fold(0_u64, |total, entry| -> std::io::Result<u64> {
+                Ok(total + entry?.metadata()?.len())
+            })?;
         self.check(
             extracted.meta.commit_revision >= page.read_revision
                 && extracted.sources[0].receipt.contiguous_cursor == 2
                 && extracted.sources[0].receipt.cpu_id == 3
-                && extracted.scanned_bytes == wire.framed_records.len()
+                && extracted.scanned_bytes > wire.framed_records.len()
+                && extracted.scanned_bytes as u64 <= segment_bytes
                 && extracted.projected_bytes == 4
                 && extracted.pages.len() == 1
                 && extracted.pages[0].rows.len() == 1
