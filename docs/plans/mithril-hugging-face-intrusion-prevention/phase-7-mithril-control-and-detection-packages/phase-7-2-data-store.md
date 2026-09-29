@@ -501,6 +501,26 @@ The compact directory has one entry per retained batch or cursor span, not a
 constant memory bound. This short comparison does not qualify small-batch
 memory at the default quota.
 
+### Serial qualification rerun
+
+The user approved serial reruns and requires a stop at the first failed case.
+Use a 1-GiB global logical quota for item 3 instead of its 8-GiB setting.
+This has a 768-MiB ordinary-write allowance. Keep the other case settings,
+deadlines, assertions, and production defaults unchanged. A reduced-quota
+pass does not qualify the original 8-GiB budget.
+
+**Item 1: Done, PASS.** On `5d9e05f5` (Rust source `846adec5`), the release
+`data_quota_recovery` case passed one test with zero failures and 371 filtered
+tests in 9.51 seconds. Its quota remained 64 MiB. Peak process RSS was
+93,824 KiB (91.6 MiB). Process exit status was zero.
+Read `01-run.log` and `01-resources.log` in `/tmp/araphor-serial.Gql837`.
+Executable SHA-256:
+`ce237133d91077156ad15aabaf25731fe63d14082e5135e89f83e2aff66e1312`.
+
+```sh
+/usr/bin/time -v -o /tmp/araphor-serial.Gql837/01-resources.log target/release/deps/mithril_e2e-ddce46734fc88f15 discovery::data_store::quota::tests::data_quota_recovery --exact --nocapture --test-threads=1
+```
+
 ### Ordered review: item 1
 
 **Done: PASS**, 2026-09-28. The current-source release case
