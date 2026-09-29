@@ -17,6 +17,7 @@ erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-interceptor = { path = "../erebor-interceptor" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
+futures-util.workspace = true
 hex.workspace = true
 k8s-openapi.workspace = true
 k8s-cri.workspace = true
