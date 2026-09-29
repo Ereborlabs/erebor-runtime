@@ -3934,6 +3934,14 @@ setup, production actions, assertions, and focused test.
 - [ ] Held OCI route publication: keep policy installation, background binding
   reconciliation, `createContainer`, route publication, and activation calls
   in their real order through public production APIs.
+  - [x] Remove the legacy `held_runtime_admission_reconciled` result. The old
+    runner assigned literal `true`, so the field did not test reconciliation.
+    `prepared_start_emits_effect` already uses the production held admission
+    route and requires its active binding and prepared-runtime effect on Host
+    and direct `runc`. Do not change or rerun that completed platform test.
+    Remove only the constant result and its shell gate, then run the reduced
+    old probe. The reduced probe passed, and its complete updated result
+    predicate returned `true`.
 - [x] Replace the prepared-runtime effect result. Start Control and Node,
   install the signed runtime-entries policy, then start the shared application
   actor. Require a fresh production `PREPARED_RUNTIME_INFRASTRUCTURE` effect
