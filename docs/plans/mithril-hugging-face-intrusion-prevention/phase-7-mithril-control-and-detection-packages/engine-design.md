@@ -530,8 +530,13 @@ data/analysis/
   tmp/                    bounded query and maintenance spill
 ```
 
-AnalysisStore owns the directory lease, one bounded writer queue, and at most
-two trusted extraction readers. Neither ControlStore nor DiscoveryOwner opens
+AnalysisStore owns the directory lease, one serialized writer, and at most
+two trusted extraction readers. Control bounds active intake with configurable
+global and per-Node slots. Full slots cause asynchronous waiting, not rejection.
+The Node queue precedes the global queue. Storage uses its existing writer
+mutex without a second fixed writer-slot limit. Internal workers bound their
+own work. Source-binding and ACK-receipt lookups use this writer mutex, not
+the query-reader pool. Neither ControlStore nor DiscoveryOwner opens
 a second raw writer. Blocking storage work runs outside Tokio executor threads
 and outside ControlStore locks. Compute results outside the writer guard.
 

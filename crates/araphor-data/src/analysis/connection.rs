@@ -82,7 +82,7 @@ pub(super) struct AnalysisConnection<'a> {
     pub(super) connection: MutexGuard<'a, Option<Connection>>,
     root: &'a Path,
     _snapshot: Option<RwLockReadGuard<'a, ()>>,
-    _permit: SemaphorePermit<'a>,
+    _permit: Option<SemaphorePermit<'a>>,
 }
 
 impl AnalysisConnection<'_> {
@@ -109,10 +109,6 @@ impl AnalysisConnection<'_> {
 
 impl AnalysisStore {
     pub fn recover(&self) -> Result<()> {
-        let _permit = self
-            .write_slots
-            .try_acquire()
-            .map_err(|_| AnalysisBusySnafu { resource: "writer" }.build())?;
         let mut writer = self
             .writer
             .lock()
@@ -227,10 +223,6 @@ impl AnalysisStore {
     }
 
     fn writer_wait(&self, control: Option<&AnalysisReadControl>) -> Result<AnalysisConnection<'_>> {
-        let permit = self
-            .write_slots
-            .try_acquire()
-            .map_err(|_| AnalysisBusySnafu { resource: "writer" }.build())?;
         let connection = match control {
             Some(control) => control.lock(|| self.writer.try_lock())?,
             None => self
@@ -245,7 +237,7 @@ impl AnalysisStore {
             connection,
             root: &self.root,
             _snapshot: None,
-            _permit: permit,
+            _permit: None,
         })
     }
 
@@ -281,7 +273,7 @@ impl AnalysisStore {
                         connection,
                         root: &self.root,
                         _snapshot: Some(snapshot),
-                        _permit: permit,
+                        _permit: Some(permit),
                     });
                 }
                 Err(TryLockError::WouldBlock) => {}
@@ -301,7 +293,7 @@ impl AnalysisStore {
             connection,
             root: &self.root,
             _snapshot: Some(snapshot),
-            _permit: permit,
+            _permit: Some(permit),
         })
     }
 }
@@ -427,23 +419,27 @@ mod tests {
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let held = store.writer()?;
         thread::scope(|scope| -> TestResult {
-            let queued: Vec<_> = (0..8)
-                .map(|_| scope.spawn(|| store.writer().map(|_| ())))
+            let store = &store;
+            let (started, entering) = mpsc::channel();
+            let (finished, completed) = mpsc::channel();
+            let queued: Vec<_> = (0..12)
+                .map(|_| {
+                    let started = started.clone();
+                    let finished = finished.clone();
+                    scope.spawn(move || {
+                        let _result = started.send(());
+                        let result = store.writer().map(|_| ());
+                        let _result = finished.send(());
+                        result
+                    })
+                })
                 .collect();
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            while store.write_slots.available_permits() != 0 {
-                if std::time::Instant::now() >= deadline {
-                    drop(held);
-                    return Err("writers did not enter admission".into());
-                }
-                thread::yield_now();
+            for _ in 0..12 {
+                entering.recv_timeout(Duration::from_secs(5))?;
             }
             assert!(matches!(
-                store.accept_validated_batch(identity(), batch(1)),
-                Err(crate::Error::AnalysisBusy {
-                    resource: "writer",
-                    ..
-                })
+                completed.recv_timeout(Duration::from_millis(50)),
+                Err(mpsc::RecvTimeoutError::Timeout)
             ));
             assert_eq!(store.meta()?.commit_revision, 0);
             drop(held);
@@ -452,7 +448,6 @@ mod tests {
             }
             Ok(())
         })?;
-        assert_eq!(store.write_slots.available_permits(), 9);
         let first = store.reader()?;
         let second = store.reader()?;
         thread::scope(|scope| -> TestResult {

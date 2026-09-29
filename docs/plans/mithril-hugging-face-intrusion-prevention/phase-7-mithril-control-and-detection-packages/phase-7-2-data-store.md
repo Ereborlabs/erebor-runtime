@@ -41,6 +41,7 @@ Control starts
   -> policy service remains independent if data recovery fails
 
 Node sends an authenticated batch
+  -> Control waits for a per-Node slot, then a global slot
   -> EvidenceIntakeOwner validates source and reserves bounded capacity
   -> AnalysisStore checks retries and appends framed raw records
   -> owner syncs segment bytes and new file directory entries
@@ -162,6 +163,29 @@ Storage fails or cannot meet capacity
 
 8. Wire the same owner into Control `evidence.rs`, `service.rs`, `server.rs`,
    `config.rs`, and `main.rs`. Keep source authorization and ACK in Control.
+   Configure intake with `evidence_admission.total_slots` (default 8) and
+   `evidence_admission.slots_per_node` (default 2). Both must be positive
+   and fit a Tokio semaphore. These are active-operation limits, not limits
+   on connected Nodes or tenants. Nodes in one tenant have separate slots.
+   Wait asynchronously for a Node slot, then a global slot. Use the existing
+   semaphore queues. Do not return ResourceExhausted because slots are full.
+   Apply this rule to streaming and unary evidence, coverage, and recovery
+   floor reports. A waiting stream keeps at most its first decoded bounded
+   message; stop reading that stream until admission succeeds. Transport
+   buffers and waiting connections still consume memory. These limits do not
+   bound total process memory or the number of connections.
+   Hold slots through group assembly and storage processing. Release them on
+   completion, error, or cancellation before processing starts. Once durable
+   processing starts, let it finish even if the client disconnects; Node can
+   retry without duplicate records. Check session and trust again in the
+   processing owner. A closed response stream cancels its admission wait.
+   Use the existing storage writer mutex to serialize admitted operations.
+   Do not add a second fixed writer-slot limit. Trusted internal writers use
+   this mutex outside the async executor. Keep reader limits and read deadlines.
+   Intake source-binding and ACK-receipt lookups use the writer mutex, not
+   the query-reader pool. Query-reader saturation must not reject intake.
+   Configure slots at startup, before cloning or serving Control. Example:
+   `"evidence_admission": {"total_slots": 16, "slots_per_node": 2}`.
    Use a fresh development data directory and new Node source identities.
    Reject unsupported stores without changing them. No import, migration,
    dual write, backward compatibility, or fallback raw writer is required.
@@ -176,6 +200,33 @@ Storage fails or cannot meet capacity
    Preserve exact owner revisions, including zero, and null unproved validity.
    Missing versions stay Unknown. Retry projection failures independently of
    policy RPCs. Never claim an atomic transaction across Control and data.
+
+## Configurable intake admission: 2026-09-29
+
+The working tree based on `2ec1647` implements step 8. Full intake slots wait
+in the existing Tokio semaphore queues. Per-Node limits replace per-tenant
+limits. The data writer mutex has no separate fixed admission count. Limits
+must be set before Control is cloned or served. No wire format, storage
+format, storage quota, Node retry rule, or trace admission limit changes.
+
+Focused checks passed for queue order, cancellation, separate Nodes in one
+tenant, custom limits, invalid configuration, twelve waiting writers, and
+read deadlines. Verification logs are in `/tmp/araphor-admission.Qop5Z92V`.
+The final workspace gate and the existing ten-tenant CLI case are pending.
+The first gate attempt was stopped after the source-binding and ACK-receipt
+lookups were found to use the query-reader pool. The corrected intake path
+uses the writer mutex for those lookups. The existing binding test checks
+both lookups with all query-reader permits held.
+Result: **Not done** until those checks finish. No new performance test or
+threshold is added. The other ordered qualification items remain unchanged.
+
+The user requested artifact cleanup. Package-scoped Cargo cleanup reported
+34.2 GiB removed. The two inactive owned qualification VMs, their disks, and
+previous data-store test output directories were removed. Their recorded
+results remain in this plan; the deleted temporary logs and VM state cannot
+be recovered from Git. Historical paths below identify those original runs,
+not files that must still exist. Unrelated VMs, source files, and completed
+native dependency builds were preserved. Current verification logs are kept.
 
 ## Storage choice qualification
 
@@ -417,14 +468,15 @@ before the run was 4,349,206,528 bytes. No task build or other test ran with
 the CLI case; unrelated host activity was not isolated.
 
 [EvidenceAdmission::acquire](../../../../crates/mithril-control/src/evidence/admission.rs)
-uses eight global permits and two permits per tenant. Acquisition is immediate;
-it returns ResourceExhausted when no permit is available. This is a concurrent
+used eight global permits and two permits per tenant in this failed run.
+Acquisition was immediate and returned ResourceExhausted when no permit was available. This was a concurrent
 work limit, not a limit of eight configured tenants. The test sends all ten
 groups before waiting for replies and does not retry admission rejection.
 This result identifies an admission failure under that burst; it does not
 prove that ten tenants cannot operate with bounded retry or paced intake.
-No such alternative was implemented or measured. Stop before changing the
-admission or retry contract; the user must select the next action.
+No such alternative was measured in that run. The user subsequently approved
+configurable global and per-Node admission with waiting. Implementation step 8
+defines that contract. This failed run does not qualify the changed code.
 
 An earlier combined two/ten-tenant small test also failed with the same error
 in 11.96 seconds. Its log did not identify which tenant-count pass failed,

@@ -17,6 +17,35 @@ use crate::{
     SystemIntakeClock, TrustGenerationV1,
 };
 
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct EvidenceAdmissionLimits {
+    pub total_slots: usize,
+    pub slots_per_node: usize,
+}
+
+impl Default for EvidenceAdmissionLimits {
+    fn default() -> Self {
+        Self {
+            total_slots: 8,
+            slots_per_node: 2,
+        }
+    }
+}
+
+impl EvidenceAdmissionLimits {
+    pub(crate) fn validate(self) -> Result<()> {
+        ensure!(
+            (1..=tokio::sync::Semaphore::MAX_PERMITS).contains(&self.total_slots)
+                && (1..=tokio::sync::Semaphore::MAX_PERMITS).contains(&self.slots_per_node),
+            InvalidConfigurationSnafu {
+                reason: "evidence admission slots must be positive and fit a semaphore",
+            }
+        );
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControlConfig {
@@ -26,6 +55,8 @@ pub struct ControlConfig {
     pub trust: TrustGenerationV1,
     pub administrative_exec: Option<AdministrativeHttpConfigV1>,
     pub evidence_directory: PathBuf,
+    #[serde(default)]
+    pub evidence_admission: EvidenceAdmissionLimits,
     #[serde(default)]
     pub data_retention: araphor_data::RetentionLimitsV1,
     #[serde(default)]
@@ -85,6 +116,7 @@ impl ControlConfig {
                 Some(error),
             ),
         };
+        control = control.with_evidence_limits(self.evidence_admission)?;
         if let Some(policy) = self.kubernetes_policy {
             let owner = PolicyDesiredStateOwner::open(policy, store.clone())?;
             let (key_id, public_key, issuer_epoch) = owner.signer_identity();
@@ -118,6 +150,7 @@ impl ControlConfig {
     }
 
     fn validate(&self) -> Result<()> {
+        self.evidence_admission.validate()?;
         ensure!(
             !self.allowed_nodes.is_empty(),
             InvalidConfigurationSnafu {
@@ -281,8 +314,15 @@ mod tests {
         });
         fs::write(&path, serde_json::to_vec(&source)?)?;
         let config = ControlConfig::load(&path)?;
+        assert_eq!(config.evidence_admission.total_slots, 8);
+        assert_eq!(config.evidence_admission.slots_per_node, 2);
         let parts = config.into_parts()?;
         assert!(parts.data_error.is_none());
+        assert!(parts
+            .control
+            .clone()
+            .with_evidence_limits(EvidenceAdmissionLimits::default())
+            .is_err());
         let initial = parts
             .control
             .analysis_store()
@@ -302,6 +342,24 @@ mod tests {
         assert!(!directory.path().join("discovery-index.sqlite").exists());
         drop(parts);
 
+        source["evidence_admission"] = serde_json::json!({
+            "total_slots": 12, "slots_per_node": 3
+        });
+        fs::write(&path, serde_json::to_vec(&source)?)?;
+        let config = ControlConfig::load(&path)?;
+        assert_eq!(config.evidence_admission.total_slots, 12);
+        assert_eq!(config.evidence_admission.slots_per_node, 3);
+        drop(config.into_parts()?);
+        for field in ["total_slots", "slots_per_node"] {
+            let previous = source["evidence_admission"][field].clone();
+            for invalid in [0, usize::MAX] {
+                source["evidence_admission"][field] = serde_json::json!(invalid);
+                fs::write(&path, serde_json::to_vec(&source)?)?;
+                assert!(ControlConfig::load(&path).is_err());
+            }
+            source["evidence_admission"][field] = previous;
+        }
+        fs::write(&path, serde_json::to_vec(&source)?)?;
         let database = directory.path().join("analysis/analysis.duckdb");
         fs::write(&database, b"invalid database")?;
         let parts = ControlConfig::load(&path)?.into_parts()?;

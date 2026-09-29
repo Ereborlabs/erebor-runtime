@@ -374,7 +374,8 @@ impl AnalysisStore {
         {
             return Self::reject_path(&self.root, "the source epoch lookup is invalid");
         }
-        self.read_snapshot(|writer| {
+        let guard = self.writer_access()?;
+        let writer = guard.get()?;
         let saved: Option<(Vec<u8>, Vec<u8>, u64)> = writer
             .query_row(
                 "SELECT tenant_id, node_boot_id, label_epoch FROM source_bindings WHERE epoch_key = ?",
@@ -403,7 +404,6 @@ impl AnalysisStore {
             );
         }
         Ok(Some(identity))
-        })
     }
 
     pub(super) fn bind_source(
@@ -681,7 +681,9 @@ mod tests {
                 identity.source_epoch,
             )
         };
+        let _readers = store.read_slots.try_acquire_many(16)?;
         assert_eq!(lookup()?, None);
+        assert!(store.source_receipt(&identity)?.is_none());
         store.accept_validated_batch(
             identity.clone(),
             super::super::ValidatedEvidenceBatchV1 {
@@ -694,6 +696,20 @@ mod tests {
             },
         )?;
         assert_eq!(lookup()?, Some(identity.clone()));
+        assert_eq!(
+            store
+                .source_receipt(&identity)?
+                .ok_or("receipt absent")?
+                .contiguous_cursor,
+            1
+        );
+        assert!(matches!(
+            store.source_status(&identity),
+            Err(crate::Error::AnalysisBusy {
+                resource: "reader",
+                ..
+            })
+        ));
         assert_eq!(
             store.source_binding([4; 16], &identity.node_id, identity.source_id, 9)?,
             None

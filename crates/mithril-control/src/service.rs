@@ -225,8 +225,9 @@ impl ControlPlane {
     #[must_use]
     pub fn new(allowed: Vec<AllowedNodeIdentity>, trust: TrustGenerationV1) -> Self {
         Self {
-            evidence_admission: Arc::new(crate::evidence::EvidenceAdmission::from(
-                allowed.as_slice(),
+            evidence_admission: Arc::new(crate::evidence::EvidenceAdmission::new(
+                allowed.iter(),
+                crate::EvidenceAdmissionLimits::default(),
             )),
             allowed_nodes: Arc::new(
                 allowed
@@ -288,8 +289,9 @@ impl ControlPlane {
     ) -> crate::Result<Self> {
         let trust = crate::TrustBundleOwner::open(store.clone(), trust)?;
         Ok(Self {
-            evidence_admission: Arc::new(crate::evidence::EvidenceAdmission::from(
-                allowed.as_slice(),
+            evidence_admission: Arc::new(crate::evidence::EvidenceAdmission::new(
+                allowed.iter(),
+                crate::EvidenceAdmissionLimits::default(),
             )),
             allowed_nodes: Arc::new(
                 allowed
@@ -321,12 +323,29 @@ impl ControlPlane {
         self.evidence_commit_hook = Some(hook);
     }
 
-    fn admit_evidence(&self, node_id: &str) -> Result<crate::evidence::EvidencePermit, Status> {
+    pub fn with_evidence_limits(
+        mut self,
+        limits: crate::EvidenceAdmissionLimits,
+    ) -> crate::Result<Self> {
+        limits.validate()?;
+        let admission = Arc::get_mut(&mut self.evidence_admission).ok_or_else(|| {
+            crate::error::InvalidConfigurationSnafu {
+                reason: "configure evidence admission before cloning or serving Control",
+            }
+            .build()
+        })?;
+        *admission = crate::evidence::EvidenceAdmission::new(self.allowed_nodes.values(), limits);
+        Ok(self)
+    }
+
+    async fn admit_evidence(
+        &self,
+        node_id: &str,
+    ) -> Result<crate::evidence::EvidencePermit, Status> {
         if self.evidence.is_none() {
             return Err(Status::unavailable("Control data intake is unavailable"));
         }
-        self.evidence_admission
-            .acquire(&self.evidence_tenant(node_id)?)
+        self.evidence_admission.acquire(node_id).await
     }
 
     #[must_use]
@@ -1395,7 +1414,7 @@ impl NodeEvidence for ControlPlane {
         request: Request<crate::EvidenceFloorRequest>,
     ) -> Result<Response<crate::EvidenceFloorAccepted>, Status> {
         let node_id = self.authenticated_node(&request)?;
-        let permit = self.admit_evidence(&node_id)?;
+        let permit = self.admit_evidence(&node_id).await?;
         let request = request.into_inner();
         let control = self.clone();
         let accepted = tokio::task::spawn_blocking(move || {
@@ -1426,7 +1445,7 @@ impl NodeEvidence for ControlPlane {
         request: Request<EvidenceBatchRequest>,
     ) -> Result<Response<EvidenceAck>, Status> {
         let node_id = self.authenticated_node(&request)?;
-        let permit = self.admit_evidence(&node_id)?;
+        let permit = self.admit_evidence(&node_id).await?;
         let request = request.into_inner();
         let control = self.clone();
         // Durable evidence intake performs fsync. Keep it off the RPC executor so policy and
@@ -1454,22 +1473,28 @@ impl NodeEvidence for ControlPlane {
             let mut permit = None;
             let mut deadline = None;
             loop {
-                let (message, closing) = if let Some(until) = deadline {
-                    if tokio::time::Instant::now() >= until {
-                        (None, false)
-                    } else {
-                        match tokio::time::timeout_at(until, input.next()).await {
-                            Ok(message) => {
-                                let closing = message.is_none();
-                                (message, closing)
+                let (message, closing) = tokio::select! {
+                    biased;
+                    () = output.closed() => return,
+                    message = async {
+                        if let Some(until) = deadline {
+                            if tokio::time::Instant::now() >= until {
+                                (None, false)
+                            } else {
+                                match tokio::time::timeout_at(until, input.next()).await {
+                                    Ok(message) => {
+                                        let closing = message.is_none();
+                                        (message, closing)
+                                    }
+                                    Err(_) => (None, false),
+                                }
                             }
-                            Err(_) => (None, false),
+                        } else {
+                            let message = input.next().await;
+                            let closing = message.is_none();
+                            (message, closing)
                         }
-                    }
-                } else {
-                    let message = input.next().await;
-                    let closing = message.is_none();
-                    (message, closing)
+                    } => message,
                 };
                 if let Some(message) = message {
                     let request = match message {
@@ -1501,18 +1526,29 @@ impl NodeEvidence for ControlPlane {
                                 "evidence batch identity or bounds are invalid",
                             ));
                         }
-                        if permit.is_none() {
-                            permit = Some(control.admit_evidence(&node_id)?);
-                            deadline = Some(
-                                tokio::time::Instant::now() + std::time::Duration::from_millis(50),
-                            );
-                        }
                         Ok(())
                     })();
                     if let Err(status) = admitted {
                         drop(permit.take());
                         let _result = output.send(Err(status)).await;
                         return;
+                    }
+                    if permit.is_none() {
+                        let admitted = tokio::select! {
+                            biased;
+                            () = output.closed() => return,
+                            admitted = control.admit_evidence(&node_id) => admitted,
+                        };
+                        match admitted {
+                            Ok(slot) => permit = Some(slot),
+                            Err(status) => {
+                                let _result = output.send(Err(status)).await;
+                                return;
+                            }
+                        }
+                        deadline = Some(
+                            tokio::time::Instant::now() + std::time::Duration::from_millis(50),
+                        );
                     }
                     framed_bytes = framed_bytes.saturating_add(batch.framed_records.len());
                     if framed_bytes > crate::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES
@@ -1654,7 +1690,7 @@ impl NodeCoverage for ControlPlane {
         request: Request<CoverageReportRequest>,
     ) -> Result<Response<CoverageAck>, Status> {
         let node_id = self.authenticated_node(&request)?;
-        let permit = self.admit_evidence(&node_id)?;
+        let permit = self.admit_evidence(&node_id).await?;
         let request = request.into_inner();
         let control = self.clone();
         let acknowledgement = tokio::task::spawn_blocking(move || {

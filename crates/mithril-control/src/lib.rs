@@ -16,7 +16,7 @@ mod trust;
 
 pub use administrative_exec::*;
 pub use administrative_http::*;
-pub use config::{ControlConfig, ControlRuntimeParts};
+pub use config::{ControlConfig, ControlRuntimeParts, EvidenceAdmissionLimits};
 pub use decommission::*;
 pub use discovery::*;
 pub use error::{Error, Result};
