@@ -1246,6 +1246,14 @@ reader saturation, permit release, and writes during read saturation.
 `analysis_store_snapshot_maintenance`
 checks a stable snapshot during append and expiry, checkpoint wait, and restart.
 
+Commit `74792df` passed the complete workspace gate and the existing release
+ten-tenant case. The case accepted 1,310,720 records across ten Nodes with the
+default eight global slots. Replay, digests, tenant isolation, and reopen
+checks passed. Elapsed time was 99.21 seconds; peak RSS was 250.17 MiB.
+This is synthetic mTLS evidence, not physical kernel or full-capacity proof.
+The [admission result](phase-7-2-data-store.md#configurable-intake-admission-2026-09-29)
+records the command, executable digest, counts, logs, and cleanup scope.
+
 [AnalysisLease::drop](../../../../crates/araphor-data/src/analysis/connection.rs)
 explicitly unlocks the data lease after the native connections close. Closing
 only the file descriptor is insufficient when another process inherited a
