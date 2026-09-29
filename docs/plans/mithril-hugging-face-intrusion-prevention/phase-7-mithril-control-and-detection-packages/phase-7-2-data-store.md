@@ -209,7 +209,7 @@ Storage fails or cannot meet capacity
    charge in the same transaction. Raw admission adds exact pending charges
    to the owner's checked totals. Catalogue publication records those charges
    once. Quota checks use these totals, not retained
-   batches. Reserved and Deleting segments remain charged until cleanup
+   batches. Pending raw commits and Deleting segments remain charged until cleanup
    commits. Startup and backup validation compare totals with retained data
    and reject a mismatch. Do not repair counters or import old schemas.
    Physical file and available-space checks remain separate.
@@ -852,7 +852,7 @@ is part of this fix.
 
 #### Intake SQL reduction
 
-**Not done: final workspace verification is running.** The working change
+**Done for the SQL reduction, not for the segment-authoritative contract.** The working change
 after `a7cde81b` removes five SQL statements from an ordinary batch for an
 existing source. It also removes the preliminary begin/rollback pair in that
 case. New-source admission retains its preliminary transaction. Publication
@@ -908,18 +908,17 @@ The `raw_event_store_comparison` fixture accepts release builds and
 owner. Compare its results with the recorded original-writer baseline. The
 original writer is not retained for this benchmark. The fixture reports durable-call
 p95/p99 and separate raw-sync and post-sync intervals. The post-sync interval
-includes metadata commit, notification, and return; it is not native SQL time
-alone. Test hooks add measurement overhead. `raw_commit_clock` passed, and the
+includes receipt publication, notification, and return. Historical runs also
+included metadata commit. Test hooks add measurement overhead. `raw_commit_clock` passed, and the
 fixture passed compilation and strict Clippy in
 `/tmp/araphor-maintenance-final-ci.log`. The current release measurements appear
 under `Release storage qualification` below.
 
-Use release builds on the same declared host. Compare the combined segment
-append plus metadata commit with the recorded old-segment and DuckDB-raw
-baselines. Measure append/sync time, metadata commit time, durable ACK p95/p99,
-RSS, restart, backup, file count, and disk use separately. Metadata still
-commits per admitted batch; the old segment benchmark does not predict the
-new ACK rate.
+Use release builds on the same declared host. Compare durable raw acceptance
+with the original segment writer. Measure append/sync time, receipt publication,
+durable ACK p95/p99, RSS, restart, backup, file count, and disk use separately.
+Measure catalogue publication outside the raw ACK interval. Verify the complete
+owner; historical old-segment and DuckDB-raw results are not a same-host pass.
 
 Test a tenant history larger than 64 MiB with a small recent window, a sparse
 target distributed across many segments, and exact witnesses in many segments.
@@ -933,7 +932,7 @@ change. Do not build two production raw owners or add automatic compaction.
 ## Unit tests and end-to-end proof
 
 Add `analysis_store_`, `control_retention_` and `analysis_startup_` tests:
-segment-sync/metadata-commit recovery, post-commit lost ACK, conflicting duplicates, out-of-order
+segment-commit/catalogue recovery, post-commit lost ACK, conflicting duplicates, out-of-order
 batches, explicit gaps, checked overflow, cross-tenant references, required
 processor stall, review pins, retirement, expiry, late context, segment/catalog recovery,
 disk full, unsupported schema and rejected old evidence state.
@@ -994,9 +993,9 @@ rejected cursor. Reopen the store and compare all accepted frames and receipts.
 This component case does not prove transport behavior or full-capacity memory.
 
 Use `analysis_store_input_crashes` before/after raw append, segment sync,
-file reservation, metadata commit, coverage/context commit, and recovery-gap commit. Also exit
+file creation, catalogue publication, coverage/context commit, and recovery-gap commit. Also exit
 after deletion marking, unlink, and deletion cleanup. Race reference admission
-with retention. Uncommitted tails must not become readable or acknowledged;
+with retention. Incomplete active tails must not become readable or acknowledged;
 committed missing bytes must fail readiness. Interrupted deletion must not
 erase an exact witness or be mistaken for corrupt Live input. Reopen through the
 production owner. Require the complete prior or new state, exact receipts and
@@ -1038,12 +1037,13 @@ retry, and persistent state after another reopen. The result case must retain
 its exact witness past raw expiry. These checks do not prove a torn write,
 ENOSPC during commit, hardware power loss, or the mTLS failure response.
 
-Use `data_intake_failure` to check segment and metadata write failures through
+Use `data_intake_failure` to check segment and catalogue write failures through
 mTLS. Run the server and Node client in an isolated child process. Apply the
-file-size limit only after startup and one accepted record. For metadata failure,
-use a test boundary after segment sync to apply the limit before metadata commit.
-Run the segment failure separately before append. Require the intended error,
-not an ACK, unchanged public revision and receipt, and retained Node input.
+file-size limit only after startup and one accepted record. For catalogue failure,
+apply the limit before publication and verify that accepted raw input remains
+durable. Catalogue failure must not undo its ACK. Run the segment failure
+separately before append. Require the intended error, no ACK, unchanged public
+revision and receipt, and retained Node input for that case.
 Remove the limit and recover the data owner. Require a policy RPC and exact
 replay without restarting Control. Reopen and check accepted frames and receipt. This case
 does not qualify hardware power loss or an actual full filesystem during commit.
