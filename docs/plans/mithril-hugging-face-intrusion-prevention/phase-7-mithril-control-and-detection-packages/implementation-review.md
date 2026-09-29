@@ -808,24 +808,44 @@ The parent still requires the exact marker and child exit code 73. The serial
 case failed in 10.06 seconds before this correction and passed in 1.47 seconds
 after it. No readiness or crash timeout was increased.
 
-[DataStoreQualification::tenant_load](../../../../crates/mithril-e2e/src/discovery/data_store.rs)
-selects two tenants and 32 groups per tenant. Both CLI load cases now use
-`load_tenants`. Each Node has a distinct certificate, tenant, and boot ID.
+[Cli::validate](../../../../crates/mithril-e2e/src/bin/mithril_discovery_test.rs) The caller selects `data-store-tenants` with two tenants by default or `--tenants 2` through `--tenants 10`.<br>
+-> [DataStoreQualification::tenant_load](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The owner validates the tenant count and selects 32 groups per tenant.<br>
+-> [DataStoreQualification::load_tenants](../../../../crates/mithril-e2e/src/discovery/data_store.rs) The runner sends all groups before it polls each tenant's policy RPC and ACK concurrently through `try_join_all`.<br>
+-> [DataStoreQualification::load_tenants](../../../../crates/mithril-e2e/src/discovery/data_store.rs) Replay preserves metadata, each digest matches, and reads with the next tenant's ID fail.<br>
+-> [DataStoreQualification::reopen_data](../../../../crates/mithril-e2e/src/discovery/data_store.rs) Reopen preserves metadata and every source state.
+
+Both CLI load cases use `load_tenants`. The single-tenant case keeps 64 groups.
+Each Node has a distinct certificate, tenant, and boot ID.
 The fixture combines its temporary certificate roots for the shared server.
 It waits for each tenant's exact trust-context record through
 [ControlServerFixture::wait_context](../../../../crates/mithril-e2e/src/control_fixture.rs).
 Control projects one tenant per timer pass. Starting the replay check before
 that projection finished caused a valid context commit to change its metadata
 baseline. The fixture now waits for the actual records, not a fixed delay.
-Both groups are sent before concurrent policy RPC and ACK waits. After both
+All groups are sent before concurrent policy RPC and ACK waits. After all
 commits, duplicate replay must leave all metadata unchanged. Each tenant's
 bounded reads must reproduce its own input digest. Foreign-tenant reads must
-report an absent source. Checkpoint and reopen preserve both source states.
+report an absent source. Checkpoint and reopen preserve every source state.
 The result has one source entry per tenant and one sample per group and tenant.
-ACK times include the policy RPC and both group-send calls. File sizes are
-samples, not continuous peaks. `data_tenant_load` uses 16,384 total records and
-checks invalid group and tenant counts. Each sample also records Node generation
-time. No production owner or API changes are added. The final workspace gate
+ACK times include the policy RPC and all group-send calls. File sizes are
+samples, not continuous peaks. `data_tenant_load` keeps two groups per tenant
+and two tenants in CI, plus invalid group and tenant counts. The ten-tenant
+CLI workload is a separately requested measurement, not a CI performance gate.
+`tenant_arguments_are_scoped` checks CLI bounds and rejects the option for
+another case. Each sample also records Node generation time. The ten-tenant
+extension is test-only and covers the working tree based on `896cca6`.
+The explicit release command `data-store-tenants --tenants 10` failed in
+9.87 seconds with `global evidence admission is full`.
+[EvidenceAdmission::acquire](../../../../crates/mithril-control/src/evidence/admission.rs)
+uses eight global permits and rejects immediate acquisition when all permits
+are occupied. This limit bounds concurrent work, not configured tenants.
+The fixture does not retry this rejection. No production limit was changed.
+The run did not produce a final accepted count or complete digest/reopen proof.
+Its command, executable digest, and logs are recorded in the data-store plan.
+The two CLI argument tests passed. Formatting, workspace checking, and strict
+Clippy passed for the final extension. The workspace test build failed while
+linking with no filesystem space available; the full suite did not run.
+No production owner or API changes are added. The earlier workspace gate
 passed for `c69dba4a` after the generation-time field was restored. It passed
 formatting, workspace checks, strict Clippy, and workspace tests. Control passed
 196 tests with two ignored. Mithril e2e passed 119 tests with 251 ignored.

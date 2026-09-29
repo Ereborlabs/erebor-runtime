@@ -90,17 +90,19 @@ impl DataStoreQualification {
         Ok(batches)
     }
 
-    pub async fn tenant_load(&self) -> Result<()> {
-        self.load_tenants(32, 2).await
+    pub async fn tenant_load(&self, tenants: usize) -> Result<()> {
+        self.check((2..=10).contains(&tenants), "the tenant count is invalid")?;
+        self.load_tenants(32, tenants).await
     }
 
     async fn load_tenants(&self, groups: u64, tenants: usize) -> Result<()> {
         use sha2::{Digest as _, Sha256};
 
         self.check(!self.output.exists(), "the output directory already exists")?;
-        self.check(matches!(tenants, 1 | 2), "the tenant count is invalid")?;
+        self.check((1..=10).contains(&tenants), "the tenant count is invalid")?;
+        let group_limit = if tenants == 1 { 64 } else { 32 };
         self.check(
-            (1..=64 / tenants as u64).contains(&groups),
+            (1..=group_limit).contains(&groups),
             "the load group count is invalid",
         )?;
         let fixtures = (0..tenants)
@@ -211,17 +213,12 @@ impl DataStoreQualification {
                     .await?;
             }
             let expected = (group + 1) * 4096;
-            let replies = match connections.as_mut_slice() {
-                [one] => vec![self.load_reply(one, expected, sent).await?],
-                [one, two] => {
-                    let (one, two) = tokio::try_join!(
-                        self.load_reply(one, expected, sent),
-                        self.load_reply(two, expected, sent),
-                    )?;
-                    vec![one, two]
-                }
-                _ => return Err("the load connection count is invalid".into()),
-            };
+            let replies = futures_util::future::try_join_all(
+                connections
+                    .iter_mut()
+                    .map(|connection| self.load_reply(connection, expected, sent)),
+            )
+            .await?;
             let usage = data.storage_usage()?;
             let database_bytes = Self::file_size(&root.join("analysis.duckdb"))?;
             let wal_bytes = Self::file_size(&root.join("analysis.duckdb.wal"))?;
@@ -273,8 +270,8 @@ impl DataStoreQualification {
             let expected = digests[index].clone().finalize();
             self.check(digest.finalize() == expected, "tenant frame digest differs")?;
             let mut foreign = identity.clone();
-            foreign.tenant_id = if tenants == 2 {
-                identities[1 - index].tenant_id
+            foreign.tenant_id = if tenants > 1 {
+                identities[(index + 1) % tenants].tenant_id
             } else {
                 [9; 16]
             };
@@ -329,7 +326,8 @@ impl DataStoreQualification {
             &serde_json::json!({
                 "schema_version": 1, "case": if tenants == 1 { "data-store-load" } else { "data-store-tenants" }, "result": "PASS",
                 "proof_kind": "synthetic-mtls", "kernel_evidence": false,
-                "groups_per_tenant": groups, "record_count": groups * 4096 * tenants as u64,
+                "tenant_count": tenants, "groups_per_tenant": groups,
+                "record_count": groups * 4096 * tenants as u64,
                 "input_bytes": input_bytes.iter().sum::<usize>(),
                 "sources": sources, "samples": samples, "intake_us": intake_us,
                 "read_us": read_us, "checkpoint_us": checkpoint_us, "restart_us": restart_us,
@@ -1458,13 +1456,14 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let output = directory.path().join("tenants");
         let case = DataStoreQualification::new(output.clone());
-        for (groups, tenants) in [(0, 2), (33, 2), (65, 1), (1, 0), (1, 3)] {
+        for (groups, tenants) in [(0, 2), (33, 2), (33, 10), (65, 1), (1, 0), (1, 11)] {
             assert!(case.load_tenants(groups, tenants).await.is_err());
             assert!(!output.exists());
         }
         tokio::time::timeout(Duration::from_secs(30), case.load_tenants(2, 2)).await??;
         let result: serde_json::Value =
             serde_json::from_slice(&fs::read(output.join("result.json"))?)?;
+        assert_eq!(result["tenant_count"], 2);
         assert_eq!(result["record_count"], 16384);
         let sources = result["sources"].as_array().ok_or("sources absent")?;
         assert_eq!(sources.len(), 2);
@@ -1476,11 +1475,9 @@ mod tests {
             assert_eq!(source["record_count"], 8192);
             assert_eq!(source["status"]["retained_event_count"], 8192);
         }
-        assert_eq!(
-            result["samples"].as_array().ok_or("samples absent")?.len(),
-            4
-        );
-        for sample in result["samples"].as_array().ok_or("samples absent")? {
+        let samples = result["samples"].as_array().ok_or("samples absent")?;
+        assert_eq!(samples.len(), 4);
+        for sample in samples {
             assert!(sample["node_us"].as_u64().ok_or("Node time absent")? > 0);
         }
         Ok(())

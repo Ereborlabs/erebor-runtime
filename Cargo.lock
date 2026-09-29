@@ -3699,6 +3699,7 @@ dependencies = [
  "erebor-runtime-error",
  "erebor-runtime-ipc",
  "erebor-telemetry",
+ "futures-util",
  "hex",
  "k8s-cri",
  "k8s-openapi",

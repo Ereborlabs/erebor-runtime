@@ -384,6 +384,70 @@ full-quota capacity, worst-case payloads, or timing stability across runs.
 Items 4, 7, and 8 remain unrun in this ordered review. Stop for the user's
 decision; do not start another item automatically.
 
+#### Ten-tenant run
+
+**Not done: FAIL**, 2026-09-29 UTC. The user requested item 5 with ten tenants.
+The qualification CLI now accepts `--tenants 2` through `--tenants 10` only
+for `data-store-tenants`; the default remains two. The runner polls all replies
+with the existing workspace `futures-util` dependency. Production owners,
+admission limits, quotas, and timeouts are unchanged.
+
+One release CLI run with ten tenants exited with status one in 9.87 seconds:
+`ResourceExhausted: global evidence admission is full`. Peak process RSS was
+145,556 KiB (142.1 MiB). The intended workload was 32 groups per tenant,
+131,072 records per tenant, and 1,310,720 total records. The run did not finish
+that workload. It produced no success JSON or final accepted counts. Do not
+treat its elapsed time as completed-work throughput. Full digest, replay, and
+reopen qualification for ten tenants remain unproved by this run.
+
+Command, from the implementing worktree:
+
+```sh
+/usr/bin/time -v -o /tmp/araphor-tenants10.srJOXq98/resources.log target/release/mithril_discovery_test --case data-store-tenants --tenants 10 --output-directory /tmp/araphor-tenants10.srJOXq98/result
+```
+
+Read `run.log`, `resources.log`, and `environment.log` under that directory.
+The CLI SHA-256 is
+`b673fbe6ae301638b08701133dcea31b5c71cb147ebb78714d5707f0f9d89f84`.
+It covers the test-extension working tree based on `896cca6`. Its release
+build passed in 1 minute 50 seconds and reused native dependency artifacts.
+The shared host has 16 reported CPUs, 31,492 MiB RAM, swap enabled, and
+x86_64 Linux 6.8.0-139-generic. `MALLOC_ARENA_MAX` was unset. Available space
+before the run was 4,349,206,528 bytes. No task build or other test ran with
+the CLI case; unrelated host activity was not isolated.
+
+[EvidenceAdmission::acquire](../../../../crates/mithril-control/src/evidence/admission.rs)
+uses eight global permits and two permits per tenant. Acquisition is immediate;
+it returns ResourceExhausted when no permit is available. This is a concurrent
+work limit, not a limit of eight configured tenants. The test sends all ten
+groups before waiting for replies and does not retry admission rejection.
+This result identifies an admission failure under that burst; it does not
+prove that ten tenants cannot operate with bounded retry or paced intake.
+No such alternative was implemented or measured. Stop before changing the
+admission or retry contract; the user must select the next action.
+
+An earlier combined two/ten-tenant small test also failed with the same error
+in 11.96 seconds. Its log did not identify which tenant-count pass failed,
+so it is not the ten-tenant result above. `component.log` retains that failure.
+The normal `data_tenant_load` test keeps its two-tenant workload; ten tenants
+remain an explicit CLI measurement, not a new CI performance gate. Both CLI
+argument tests passed. `build-tests.log` and `cli-tests.log` retain those
+results. The final workspace gate ran with:
+
+```sh
+CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh
+```
+
+Formatting, workspace checking, and strict Clippy passed. Test compilation
+failed while linking the `mithril-e2e` library test; exit status was 101.
+The host filesystem then reported zero available bytes. `workspace.log`
+contains the linker failure, but its diagnostic ends inside the linker
+arguments. The complete workspace test suite did not run. Its result is
+**Not done**; do not claim a full gate pass. Only the inactive temporary linker
+file `target/debug/deps/mithril_e2e-4c30c4e52191c0c7.tmp6fa94e8` was removed.
+That generated file can be rebuilt. Source, release binaries, native dependency
+outputs, and test evidence remain. No load rerun or admission fix followed.
+
 ### Ordered review: item 6
 
 **Done: PASS**, 2026-09-29 UTC. The user selected this item after item 3.
@@ -706,17 +770,24 @@ to record whole-process CPU time and peak RSS. This fixed single-source workload
 does not prove multi-tenant contention, concurrent policy rollout, worst-case
 payloads, disk-reserve adequacy, or full-quota throughput.
 
-Use `data-store-tenants` for two authenticated tenants sharing one Control
-and AnalysisStore. Give each Node a distinct certificate, tenant, and boot ID.
+Use `data-store-tenants` for two through ten authenticated tenants sharing one
+Control and AnalysisStore. The CLI defaults to two tenants; `--tenants 10`
+selects the user-approved ten-tenant run. Reject this option for other cases.
+Give each Node a distinct certificate, tenant, and boot ID.
 Wait for each tenant's exact initial trust-context record before measurement.
 Send 32 groups of 4,096 records per Node through the production bounded worker.
-Send both groups before waiting for either ACK. Run a policy inventory RPC
-while the groups are in flight. After both commits, replay both groups and
+Send all groups before waiting for ACKs. Poll each tenant's policy RPC and ACK
+concurrently. After all commits, replay all groups and
 require unchanged metadata. Check each Node's pending input, exact retained
-frame digest, source receipt, and rejected foreign-tenant reads. Checkpoint and
-reopen the shared store. Require unchanged metadata and both source states.
+frame digest, source receipt, and a rejected read under the next tenant's ID.
+Checkpoint and reopen the shared store. Require unchanged metadata and every
+source state.
 Record per-tenant ACK and policy RPC times, aggregate elapsed time, and sampled
-segment/database/WAL bytes. `data_tenant_load` uses two groups per Node in CI.
+segment/database/WAL bytes. `data_tenant_load` keeps two groups per Node and
+two tenants in CI. The ten-tenant workload is a separately requested CLI
+measurement, not a new CI performance gate. Keep existing deadlines and quotas.
+The ten-tenant release run submits 1,310,720 records. Its expected runtime is
+minutes, not a pass/fail time limit. Run it once, report the result, and stop.
 This case does not prove concurrent policy rollout, worst-case payloads, or
 full-quota capacity.
 
