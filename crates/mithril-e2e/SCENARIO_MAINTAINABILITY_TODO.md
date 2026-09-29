@@ -4522,6 +4522,11 @@ setup, production actions, assertions, and focused test.
     generation retirement consumers move to small tests.
 - [ ] Kernel object upgrade: keep the second production object, manifest, map
   ID, link pin, program tag, and running-identity checks explicit.
+  - The 2026-09-29 source audit confirms that `retained_maps_recover` does
+    not replace this case. That test restarts the same object. The old
+    direct-runc action loads a second object and requires changed program
+    tags and IDs with retained map IDs and link pins. Keep the old action
+    and the running-identity checks until a matching small test passes.
 - [ ] Post-point-of-no-return evidence and generation retirement: keep the
   terminal exec, evidence retention, holder release, and absence proof.
   - [x] Preserve the declared terminal-entry role. The existing shared fatal
@@ -4850,6 +4855,12 @@ setup, production actions, assertions, and focused test.
     result fields, and old fixture containers. Keep the native-child,
     kubectl-exec, and direct-CRI assertions until their exact replacements
     pass.
+    The 2026-09-29 source audit confirms that `child_exec_keeps_identity`
+    does not replace the retained identical-command check. That test starts
+    a declared Python entry and a native sleep child. The old probe overlaps
+    a native child, kubectl exec, and direct CRI exec with identical command
+    bytes. It also requires a conservative application root and restricted
+    external roots. Keep that action and its result fields.
 - [ ] `physical_kubernetes_prestop_probe`
   - [ ] Keep the real Pod `preStop.exec` hook. Deleting the Pod starts a new
     task in the application cgroup. The hook writes its namespace PID and
