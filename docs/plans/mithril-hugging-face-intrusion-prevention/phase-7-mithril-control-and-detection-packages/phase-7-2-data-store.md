@@ -277,8 +277,56 @@ The shared development host has 16 reported CPUs, 31,492 MiB RAM, x86_64 Linux
 qualification case or build was started by this task. Other host activity was
 not isolated. This result qualifies this default-tenant synthetic mTLS workload,
 not global saturation, kernel effects, worst-case payloads, physical reserve
-sizing, or a dedicated-host latency commitment. Item 3 has not started.
-Stop for the user's decision.
+sizing, or a dedicated-host latency commitment. The user subsequently approved
+item 3. Its result follows.
+
+### Ordered review: item 3
+
+**Done: PASS**, 2026-09-29 UTC. The release case
+`analysis::capacity::tests::analysis_store_global_memory` passed one test,
+with zero failures and 81 filtered tests, in 7,350.99 seconds. The command
+returned zero. External elapsed time was 2 hours 2 minutes 31 seconds; peak
+process RSS was 276,724 KiB (270.2 MiB), below the unchanged 512-MiB test ceiling.
+
+Five tenants filled the default global logical budget to ordinary-write
+rejection: 8 GiB total, with 25 percent reserved for maintenance. The test
+required `global logical bytes` rejection, unchanged store metadata, and an
+unchanged rejected source receipt. It checked all accepted receipts, checkpoint,
+reopen, and each tenant's exact final 128-byte record. The test checked peak
+memory during intake and after checkpoint and reopen. It did not print final
+receipt totals; checkpoint log counts are not a substitute for those totals.
+
+Command, inside the test VM:
+
+```sh
+/usr/bin/time -v -o /tmp/araphor-global.FkuZQlTm/resources.log /mnt/mithril-source/target/release/deps/araphor_data-56c66faf3a80bf1e analysis::capacity::tests::analysis_store_global_memory --exact --ignored --nocapture --test-threads=1
+```
+
+Read `run.log`, `resources.log`, and `environment.log` under
+`/tmp/araphor-global.HUqeHo8b` on the host. The original logs remain in
+`/tmp/araphor-global.FkuZQlTm` in VM `mithril-runtime-qualification-2903752`.
+The release executable SHA-256 is
+`a96ba116d555469ca5e5113d82d13c7d8f6909d59d08c0c698a854b5429bc0f8`.
+The source at `3e864827` contains the same Rust as `adbcb3a8`; later changes
+were harness scripts and documents only. The existing binary was reused.
+No code, quota, timeout, allocator setting, or assertion changed for this run.
+
+The VM has two vCPUs, 3,915 MiB RAM, no swap, x86_64 Linux
+6.8.0-142-generic, and an ext4 filesystem. Initial available filesystem space
+was 16,212,582,400 bytes. `MALLOC_ARENA_MAX` was unset. The existing Kubernetes
+agent and fixture workloads remained active. No second qualification case or
+build was started by this task; other host activity was not isolated. During
+the run, removing one verified unused 1.8-GiB VM image from an earlier failed
+setup increased host free space. That image had never booted and can be
+generated again. The running VM and test data were not changed.
+
+This case submits synthetic validated batches directly to AnalysisStore:
+1,024 records and 128 KiB per batch, four caller threads, one batch in flight.
+It qualifies this global-capacity workload and its checkpoint/reopen path.
+It does not prove concurrent intake throughput, Node WAL or mTLS behavior,
+protected retention, a complete historical-record digest, or memory behavior
+beyond the configured quota. The 512-MiB ceiling remains provisional, not a
+production memory cap. Item 4 has not started. Stop for the user's decision.
 
 ### Measurement contracts
 
