@@ -555,16 +555,6 @@ if [[ $entry_role_runtime_only == true ]]; then
     .recursive_wildcard_stable_after_concurrent_exec and
     .stale_mount_cache_rebuilt and
     .unreachable_mount_cache_rows_collected and
-    (.independent_entries | length) == 1 and
-    .independent_entries[0].name == "prestop" and
-    .independent_entries[0].declaration_name == "prestop" and
-    (.independent_entries | all(
-      .active_role_id > 0 and
-      .profile_generation_ref_id == 2 and
-      .admitted_entry_rule_id > 0 and
-      .own_policy_deny_observed and
-      .application_policy_not_inherited
-    )) and
     .prestop_retained_during_runtime_inventory_omission and
     .kernel_upgrade_preserved_map_ids and
     .kernel_upgrade_preserved_link_pins and

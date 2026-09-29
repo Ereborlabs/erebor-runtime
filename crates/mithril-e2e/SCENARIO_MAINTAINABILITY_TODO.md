@@ -4192,7 +4192,7 @@ setup, production actions, assertions, and focused test.
   as `two-node-convergence.sh`.
 - [ ] Stale cache repair and unreachable-row retirement: keep the production
   node reconciliation calls and exact map absence checks visible.
-- [ ] Independent additional entries: keep each declaration, stock exec,
+- [x] Independent additional entries: keep each declaration, stock exec,
   role, rule, process state, and isolation assertion.
   - [x] Retire only the old overlapping PostStart and StartupProbe role
     comparison. `runtime_entries_stay_distinct` holds both stock entries at
@@ -4438,7 +4438,7 @@ setup, production actions, assertions, and focused test.
       seconds on 2026-09-21.
     - [x] Pass Kubernetes and commit it. The exact test passed in 106.45
       seconds on 2026-09-21.
-    - [ ] Replace the stock `dd` file-role check with
+    - [x] Replace the stock `dd` file-role check with
       `prestop_dd::prestop_keeps_file_role`. After Node restart, require the
       PreStop entry to read the application's denied FIFO, copy its bytes,
       and fail on its own denied file. Require its declared role, admission
@@ -4452,6 +4452,9 @@ setup, production actions, assertions, and focused test.
         hook on 2026-09-28.
       - [x] Kubernetes passed in 106.05 seconds on the retained K3s
         cluster on 2026-09-28. The test body is unchanged.
+      - [x] Remove the duplicate serialized PreStop role result and its shell
+        predicate. Keep the old action and internal checks only for the
+        separate missing-inventory condition below.
     - [ ] Replace the separate runtime-inventory omission case before its
       legacy result is removed. The new restart test uses the normal CRI
       inventory. It does not prove that a populated cgroup retains its binding

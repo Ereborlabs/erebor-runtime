@@ -223,7 +223,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub recursive_wildcard_stable_after_concurrent_exec: bool,
     pub stale_mount_cache_rebuilt: bool,
     pub unreachable_mount_cache_rows_collected: bool,
-    pub independent_entries: Vec<RuncEntryRoleProbeV1>,
     pub prestop_retained_during_runtime_inventory_omission: bool,
     pub kernel_upgrade_preserved_map_ids: bool,
     pub kernel_upgrade_preserved_link_pins: bool,
@@ -233,21 +232,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub lease_removed: bool,
     pub cgroup_removed: bool,
     pub fixture_root_removed: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct RuncEntryRoleProbeV1 {
-    pub name: String,
-    pub declaration_name: String,
-    pub host_pid: u32,
-    pub task_cookie: u64,
-    pub process_state_id: String,
-    pub active_execution_id: String,
-    pub profile_generation_ref_id: u64,
-    pub active_role_id: u32,
-    pub admitted_entry_rule_id: u32,
-    pub own_policy_deny_observed: bool,
-    pub application_policy_not_inherited: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -5265,20 +5249,6 @@ impl EffectTestRunner {
                 ),
             }
         );
-        let independent_entries = vec![RuncEntryRoleProbeV1 {
-            name: name.to_owned(),
-            declaration_name: name.to_owned(),
-            host_pid,
-            task_cookie: snapshot.task_cookie,
-            process_state_id: snapshot.process_state_id,
-            active_execution_id: snapshot.active_execution_id,
-            profile_generation_ref_id: snapshot.profile_generation_ref_id,
-            active_role_id: snapshot.active_role_id,
-            admitted_entry_rule_id: snapshot.admitted_entry_rule_id,
-            own_policy_deny_observed,
-            application_policy_not_inherited: true,
-        }];
-
         fs::write(role_directory.join("release"), b"release\n").context(IoSnafu {
             path: &role_directory,
         })?;
@@ -5345,7 +5315,6 @@ impl EffectTestRunner {
             recursive_wildcard_stable_after_concurrent_exec,
             stale_mount_cache_rebuilt,
             unreachable_mount_cache_rows_collected,
-            independent_entries,
             prestop_retained_during_runtime_inventory_omission,
             kernel_upgrade_preserved_map_ids,
             kernel_upgrade_preserved_link_pins,
