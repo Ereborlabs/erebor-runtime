@@ -141,7 +141,7 @@ Add lightweight `owned-capture` selection to
 Call production Control, Node and Interceptor owner APIs with only external
 runtime/process/clock doubles. Include post-commit lost ACK, source conflict,
 target replacement, duplicate dispatch, Control partition and full-store restart.
-Exit between output append, segment sync, metadata commit and ACK; require
+Exit between output append, segment sync, receipt publication and ACK; require
 exact replay without a second output. Test pin/delete races, expired output,
 and a partial backup bundle. Keep diagnostic quotas separate from enforcement.
 Record accepted spec, target lifetime, source/commit positions, quota and
