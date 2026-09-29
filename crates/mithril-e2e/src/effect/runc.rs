@@ -31,13 +31,13 @@ use mithril_control::{
     WorkloadTargetFactV1,
 };
 use mithril_node::{
-    AdministrativeAuthorizationConfig, EffectObservationStore, EvidenceWalCapacityPolicyV1,
-    EvidenceWalLimits, NativeIdentityInspector, NativeSecurityStateOwner, NativeTaskSnapshotV1,
-    NodeBindingReconciliation, NodePolicyDeliveryOwner, NodePolicyGenerationOwner,
-    ObservationCanonicalizer, RuntimeSeccompTestNotification, RuntimeSeccompTestServer,
-    ScheduledRuntimeBindingV1, TrustCache, WorkloadBindingConfig, WorkloadBindingOwner,
-    CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
-    POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
+    AdministrativeAuthorizationConfig, EffectObservationStore, NativeIdentityInspector,
+    NativeSecurityStateOwner, NativeTaskSnapshotV1, NodeBindingReconciliation,
+    NodePolicyDeliveryOwner, NodePolicyGenerationOwner, RuntimeSeccompTestNotification,
+    RuntimeSeccompTestServer, ScheduledRuntimeBindingV1, TrustCache, WorkloadBindingConfig,
+    WorkloadBindingOwner, CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION,
+    POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION,
+    PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
 };
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
 use serde::Serialize;
@@ -214,7 +214,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub runc_post_create_mount_mutation_observed: bool,
     pub bpf_runtime_topology_initialized: bool,
     pub concurrent_exec_detached_mounts_preserved_view: bool,
-    pub bounded_reader_queue_preserved_concurrent_burst: bool,
     pub recursive_wildcard_stable_after_concurrent_exec: bool,
     pub stale_mount_cache_rebuilt: bool,
     pub unreachable_mount_cache_rows_collected: bool,
@@ -3108,9 +3107,6 @@ impl EffectTestRunner {
                 "concurrent_recursive_result=PATH_TREE_DENIED; concurrent_recursive_count=0; while [ \"$concurrent_recursive_count\" -lt 16384 ] && [ ! -e /var/lib/mithril-convergence/concurrent-recursive-stop ]; do if command : </srv/team/blue/secrets/models/secret; then concurrent_recursive_result=PATH_TREE_ALLOWED; break; fi; concurrent_recursive_count=$((concurrent_recursive_count + 1)); done 2>/dev/null; ",
                 "echo \"$concurrent_recursive_result\" >/var/lib/mithril-convergence/concurrent-recursive.result; echo \"$concurrent_recursive_count\" >/var/lib/mithril-convergence/concurrent-recursive-count; ",
                 "read -r stable_recursive_start </var/lib/mithril-convergence/stable-recursive-start.fifo; if /bin/cat /srv/team/blue/secrets/models/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/var/lib/mithril-convergence/stable-recursive.result; else echo PATH_TREE_DENIED >/var/lib/mithril-convergence/stable-recursive.result; fi; ",
-                "read -r reader_queue_burst_start </var/lib/mithril-convergence/reader-queue-burst-start.fifo; reader_queue_burst_count=0; while [ \"$reader_queue_burst_count\" -lt 70000 ]; do command : </srv/team/blue/secrets/models/secret || true; reader_queue_burst_count=$((reader_queue_burst_count + 1)); done 2>/dev/null; ",
-                "echo READER_QUEUE_BURST_COMPLETE >/var/lib/mithril-convergence/reader-queue-burst.result; read -r reader_queue_post_drain_start </var/lib/mithril-convergence/reader-queue-post-drain-start.fifo; ",
-                "if ( /bin/sleep 0 ); then echo READER_QUEUE_POST_DRAIN_ALLOWED >/var/lib/mithril-convergence/reader-queue-post-drain.result; else echo READER_QUEUE_POST_DRAIN_DENIED >/var/lib/mithril-convergence/reader-queue-post-drain.result; fi; ",
                 "startup_result=/var/lib/mithril-convergence/startup-bootstrap.result; startup_stderr=/var/lib/mithril-convergence/startup-bootstrap.stderr; : >\"$startup_stderr\"; echo BUSYBOX_CHECK >\"$startup_result\"; ",
                 "if [ -r /bin/busybox ]; then echo MKDIR_BEGIN >\"$startup_result\"; if mkdir -p /var/lib/mithril 2>>\"$startup_stderr\"; then echo MKDIR_READY >\"$startup_result\"; else startup_status=$?; echo \"MKDIR_FAILED:$startup_status\" >\"$startup_result\"; exit 91; fi; ",
                 "echo TMPFS_MOUNT_BEGIN >\"$startup_result\"; exec 3<>/var/lib/mithril-convergence/mount-reconciliation.fifo; startup_mount_status=0; mount -t tmpfs -o mode=0755 tmpfs /var/lib/mithril 2>>\"$startup_stderr\" || startup_mount_status=$?; read -r startup_mount_reconciled <&3; exec 3>&-; if [ \"$startup_mount_status\" -eq 0 ]; then echo TMPFS_MOUNT_READY >\"$startup_result\"; else echo \"TMPFS_MOUNT_FAILED:$startup_mount_status\" >\"$startup_result\"; exit 92; fi; ",
@@ -3573,43 +3569,12 @@ impl EffectTestRunner {
 
         let observations = EffectObservationStore::default();
         let physical_effect_capture = EffectObservationStore::new(65_536);
-        let evidence = node_config.evidence.as_ref().ok_or_else(|| {
-            InvalidInputSnafu {
-                path: Path::new("effect evidence configuration"),
-                reason: "the direct runc queue probe requires durable evidence",
-            }
-            .build()
-        })?;
-        let reader_queue_capacity = evidence.maximum_reader_queue_records;
-        let mut reader_queue_wal_limits = EvidenceWalLimits::from(evidence);
-        reader_queue_wal_limits.capacity_policy = EvidenceWalCapacityPolicyV1::Retain;
-        let reader_queue_observations = EffectObservationStore::durable(
-            1,
-            fixture_root.join("reader-queue-wal"),
-            reader_queue_wal_limits,
-            ObservationCanonicalizer::new(
-                Id128V1::new(0xaaaa_aaaa_aaaa_4aaa, 0x8aaa_aaaa_aaaa_aaaa),
-                Id128V1::new(0x6666_6666_6666_4666, 0x8666_6666_6666_6666),
-                1,
-                node_boot_id,
-            )
-            .context(NodeSnafu)?,
-        )
-        .context(NodeSnafu)?;
-        let (reader_queue_ingress, reader_queue_worker) = reader_queue_observations
-            .bounded_ingestion_queue(
-                reader_queue_capacity,
-                evidence.maximum_batch_records.min(reader_queue_capacity),
-            )
-            .context(NodeSnafu)?;
-        let _reader_queue_worker_task = thread::spawn(|| reader_queue_worker.run());
         let sink = observations.clone();
         let capture = physical_effect_capture.clone();
         let reader = host
             .effect_observation_reader(move |bytes| {
                 sink.record_bytes(bytes);
                 capture.record_bytes(bytes);
-                reader_queue_ingress.record_bytes(bytes);
                 0
             })
             .context(InterceptorSnafu)?;
@@ -4546,116 +4511,7 @@ impl EffectTestRunner {
                 ),
             }
         );
-        fs::write(
-            role_directory.join("reader-queue-burst-start.fifo"),
-            b"start\n",
-        )
-        .context(IoSnafu {
-            path: &role_directory,
-        })?;
-        let reader_queue_burst_result = role_directory.join("reader-queue-burst.result");
-        let reader_queue_burst_deadline = Instant::now() + WAIT_LIMIT;
-        while !reader_queue_burst_result.exists() && Instant::now() < reader_queue_burst_deadline {
-            reader
-                .poll(Duration::from_millis(25))
-                .context(InterceptorSnafu)?;
-        }
-        wait_for_path(
-            &reader_queue_burst_result,
-            true,
-            "the production-sized effect reader queue burst",
-        )?;
-        reader
-            .poll(Duration::from_millis(100))
-            .context(InterceptorSnafu)?;
-        let reader_queue_drain_deadline = Instant::now() + WAIT_LIMIT;
-        while reader_queue_observations.reader_queue_pending_records() > 0
-            && Instant::now() < reader_queue_drain_deadline
-        {
-            thread::sleep(Duration::from_millis(25));
-        }
-        let reader_queue_post_drain_marker = observations.cursor();
         let mount_seq = observations.mount_change_sequence();
-        fs::write(
-            role_directory.join("reader-queue-post-drain-start.fifo"),
-            b"start\n",
-        )
-        .context(IoSnafu {
-            path: &role_directory,
-        })?;
-        let reader_queue_post_drain_result = role_directory.join("reader-queue-post-drain.result");
-        let reader_queue_post_drain_deadline = Instant::now() + WAIT_LIMIT;
-        while (!reader_queue_post_drain_result.exists()
-            || !observations
-                .recent_since(reader_queue_post_drain_marker)
-                .iter()
-                .any(|event| {
-                    event.reason == "APPLICATION_DEFAULT_ALLOW"
-                        && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
-                        && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
-                        && event.active_role_id == active.active_role_id
-                        && event.admitted_entry_rule_id == active.admitted_entry_rule_id
-                }))
-            && Instant::now() < reader_queue_post_drain_deadline
-        {
-            reader
-                .poll(Duration::from_millis(25))
-                .context(InterceptorSnafu)?;
-        }
-        wait_for_path(
-            &reader_queue_post_drain_result,
-            true,
-            "the post-drain application exec",
-        )?;
-        let reader_queue_post_drain_exec_observed = observations
-            .recent_since(reader_queue_post_drain_marker)
-            .iter()
-            .any(|event| {
-                event.reason == "APPLICATION_DEFAULT_ALLOW"
-                    && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
-                    && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
-                    && event.active_role_id == active.active_role_id
-                    && event.admitted_entry_rule_id == active.admitted_entry_rule_id
-            });
-        let reader_queue_post_drain_deadline = Instant::now() + WAIT_LIMIT;
-        while reader_queue_observations.reader_queue_pending_records() > 0
-            && Instant::now() < reader_queue_post_drain_deadline
-        {
-            thread::sleep(Duration::from_millis(25));
-        }
-        let reader_queue_health = reader_queue_observations.health(None);
-        let bounded_reader_queue_preserved_concurrent_burst =
-            reader_queue_observations.reader_queue_pending_records() == 0
-                && reader_queue_health.reader_queue_dropped_events == 0
-                && reader_queue_health.evidence_errors == 0
-                && reader_queue_health.wal_capacity_blocked == 0
-                && fs::read_to_string(&reader_queue_burst_result)
-                    .context(IoSnafu {
-                        path: &reader_queue_burst_result,
-                    })?
-                    .trim()
-                    == "READER_QUEUE_BURST_COMPLETE"
-                && fs::read_to_string(&reader_queue_post_drain_result)
-                    .context(IoSnafu {
-                        path: &reader_queue_post_drain_result,
-                    })?
-                    .trim()
-                    == "READER_QUEUE_POST_DRAIN_ALLOWED"
-                && reader_queue_post_drain_exec_observed;
-        ensure!(
-            bounded_reader_queue_preserved_concurrent_burst,
-            InvalidInputSnafu {
-                path: Path::new("effect observation reader queue"),
-                reason: format!(
-                    "the production-sized durable reader queue did not drain the protected BPF burst and preserve its later exec: capacity={reader_queue_capacity}, attempted={}, pending={}, dropped={}, evidence_errors={}, wal_capacity_blocked={}",
-                    physical_effect_capture.cursor(),
-                    reader_queue_observations.reader_queue_pending_records(),
-                    reader_queue_health.reader_queue_dropped_events,
-                    reader_queue_health.evidence_errors,
-                    reader_queue_health.wal_capacity_blocked,
-                ),
-            }
-        );
         let recent_path_tree_effect_count = observations
             .recent_since(marker)
             .iter()
@@ -5129,7 +4985,6 @@ impl EffectTestRunner {
             runc_post_create_mount_mutation_observed,
             bpf_runtime_topology_initialized,
             concurrent_exec_detached_mounts_preserved_view,
-            bounded_reader_queue_preserved_concurrent_burst,
             recursive_wildcard_stable_after_concurrent_exec,
             stale_mount_cache_rebuilt,
             unreachable_mount_cache_rows_collected,
@@ -5280,8 +5135,6 @@ fn prepare_entry_role_root(
         "mount-reconciliation.fifo",
         "concurrent-recursive-start.fifo",
         "stable-recursive-start.fifo",
-        "reader-queue-burst-start.fifo",
-        "reader-queue-post-drain-start.fifo",
     ] {
         let path = role_directory.join(name);
         run_checked(

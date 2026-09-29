@@ -4201,7 +4201,7 @@ setup, production actions, assertions, and focused test.
 - [ ] Concurrent exec and reader-queue saturation: keep the same containerd
   exec operation, topology snapshots, bounded queue, and fail-closed results
   as `two-node-convergence.sh`.
-  - [ ] Replace the 70,000-read queue burst with `reader_burst_keeps_events`.
+  - [x] Replace the 70,000-read queue burst with `reader_burst_keeps_events`.
     Use the deployed Node observation path. Require the public attempted count,
     a later application child exec, a drained evidence backlog, and unchanged
     queue-drop, lost-event, decoder-error, evidence-error, and WAL-block counts.
@@ -4211,8 +4211,12 @@ setup, production actions, assertions, and focused test.
       test passed in the retained VM in 41.76 seconds.
     - [x] Pass Kubernetes and commit it. The exact ignored Kubernetes test
       passed in the retained K3s VM in 84.44 seconds and completed teardown.
-    - [ ] Remove the matching legacy actor commands, private observation store,
-      result field, and shell predicate after all three platforms pass.
+    - [x] Remove the matching legacy actor commands, private observation store,
+      result field, and shell predicate after all three platforms pass. The
+      focused build and shell syntax checks passed. This removes 145 net lines
+      from `effect/runc.rs` and one shell predicate. The old probe reached its
+      separate concurrent mount-topology check after all 32 undeclared execs
+      were denied; that behavior remains for its own migration.
 - [ ] Stale cache repair and unreachable-row retirement: keep the production
   node reconciliation calls and exact map absence checks visible.
 - [x] Independent additional entries: keep each declaration, stock exec,
