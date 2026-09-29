@@ -6,12 +6,15 @@ use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
+use containerd_client::services::v1::{events_client::EventsClient, ForwardRequest};
+use containerd_client::types::Envelope;
 use k8s_cri::v1::{self as cri};
 use mithril_node::CriRuntimeContainerObservationV1;
 use tokio::net::UnixListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::{Request, Response, Status};
+use tower::ServiceExt as _;
 
 use super::TestResult;
 use crate::physical::{wait_for, ProbeFile};
@@ -32,6 +35,8 @@ pub(crate) struct CriFixture {
     service: CriService,
     stop: Option<oneshot::Sender<()>>,
     task: Option<thread::JoinHandle<Result<(), String>>>,
+    runtime: tokio::runtime::Handle,
+    events: Option<EventsClient<tonic::transport::Channel>>,
 }
 
 impl CriFixture {
@@ -48,11 +53,37 @@ impl CriFixture {
                 .map_err(|error| error.to_string())?;
             runtime.block_on(async move {
                 let listener = UnixListener::bind(&socket).map_err(|error| error.to_string())?;
-                let _result = ready.send(());
+                let mut routes = tonic::service::Routes::new(
+                    cri::runtime_service_server::RuntimeServiceServer::new(server),
+                );
+                let channel = match std::env::var_os("MITHRIL_TEST_EVENT_SOCKET") {
+                    Some(path) => Some(
+                        erebor_runtime_ipc::transport::connect_unix(PathBuf::from(path))
+                            .await
+                            .map_err(|error| error.to_string())?,
+                    ),
+                    None => None,
+                };
+                if let Some(channel) = channel.clone() {
+                    routes = routes
+                        .into_axum_router()
+                        .fallback(move |request: axum::extract::Request| {
+                            let channel = channel.clone();
+                            async move {
+                                channel
+                                    .oneshot(request.map(tonic::body::boxed))
+                                    .await
+                                    .unwrap_or_else(|error| {
+                                        Status::unavailable(error.to_string()).into_http()
+                                    })
+                                    .map(axum::body::Body::new)
+                            }
+                        })
+                        .into();
+                }
+                let _result = ready.send((tokio::runtime::Handle::current(), channel));
                 tonic::transport::Server::builder()
-                    .add_service(cri::runtime_service_server::RuntimeServiceServer::new(
-                        server,
-                    ))
+                    .add_routes(routes)
                     .serve_with_incoming_shutdown(UnixListenerStream::new(listener), async move {
                         let _result = stopped.await;
                     })
@@ -60,7 +91,7 @@ impl CriFixture {
                     .map_err(|error| error.to_string())
             })
         });
-        started
+        let (runtime, channel) = started
             .recv_timeout(WAIT_LIMIT)
             .map_err(|error| format!("CRI fixture did not bind {}: {error}", path.display()))?;
         Ok(Self {
@@ -68,17 +99,54 @@ impl CriFixture {
             service,
             stop: Some(stop),
             task: Some(task),
+            runtime,
+            events: channel.map(EventsClient::new),
         })
     }
 
     pub(crate) fn set(&self, value: CriRuntimeContainerObservationV1) -> TestResult<u64> {
+        let id = value.listed.id.clone();
         let revision = self.service.next.fetch_add(1, Ordering::Relaxed) + 1;
         self.service
             .value
             .write()
             .map_err(|_error| "CRI fixture state is poisoned")?
-            .insert(value.listed.id.clone(), (revision, value));
+            .insert(id.clone(), (revision, value));
+        self.notify(&id, false)?;
         Ok(revision)
+    }
+
+    fn notify(&self, id: &str, removed: bool) -> TestResult<()> {
+        let Some(mut client) = self.events.clone() else {
+            return Ok(());
+        };
+        let (topic, event) = if removed {
+            (
+                "/containers/delete",
+                prost_types::Any::from_msg(&containerd_client::events::ContainerDelete {
+                    id: id.to_owned(),
+                })?,
+            )
+        } else {
+            (
+                "/containers/update",
+                prost_types::Any::from_msg(&containerd_client::events::ContainerUpdate {
+                    id: id.to_owned(),
+                    ..Default::default()
+                })?,
+            )
+        };
+        let mut request = Request::new(ForwardRequest {
+            envelope: Some(Envelope {
+                timestamp: Some(std::time::SystemTime::now().into()),
+                namespace: "k8s.io".to_owned(),
+                topic: topic.to_owned(),
+                event: Some(event),
+            }),
+        });
+        request.set_timeout(WAIT_LIMIT);
+        self.runtime.block_on(client.forward(request))?;
+        Ok(())
     }
 
     pub(crate) fn wait_seen(&self, revision: u64) -> TestResult<()> {
@@ -104,16 +172,21 @@ impl CriFixture {
     }
 
     pub(crate) fn clear(&self) -> TestResult<()> {
-        self.service
-            .value
-            .write()
-            .map_err(|_error| "CRI fixture state is poisoned")?
-            .clear();
+        let values = std::mem::take(
+            &mut *self
+                .service
+                .value
+                .write()
+                .map_err(|_error| "CRI fixture state is poisoned")?,
+        );
         self.service
             .seen
             .write()
             .map_err(|_| "CRI observation state is poisoned")?
             .clear();
+        for id in values.keys() {
+            self.notify(id, true)?;
+        }
         Ok(())
     }
 
