@@ -521,6 +521,29 @@ Executable SHA-256:
 /usr/bin/time -v -o /tmp/araphor-serial.Gql837/01-resources.log target/release/deps/mithril_e2e-ddce46734fc88f15 discovery::data_store::quota::tests::data_quota_recovery --exact --nocapture --test-threads=1
 ```
 
+**Item 2: Done, PASS.** On `270e603a` (production Rust source `846adec5`),
+the release CLI passed `data-store-quota` with its unchanged 2-GiB tenant
+quota. It accepted 13,466,624 records before quota rejection and 13,467,648
+after recovery. It checked all retained input bytes, exact witnesses, protected
+progress, expiry, retry, duplicate replay, checkpoint, and reopen.
+Process exit status was zero. Elapsed time was 11 minutes 31.29 seconds.
+Peak RSS was 120,300 KiB (117.5 MiB). Intake took 679.387 seconds, complete
+read took 6.509 seconds, and reopen took 1.354 seconds.
+
+Read `02-run.log`, `02-resources.log`, `02-build.log`, and
+`02-result/result.json` in `/tmp/araphor-serial.Gql837`. The result retains
+per-ACK and storage samples. The CLI executable SHA-256 is
+`9e52b1683b37aa642720f47fef8debc065591b1ff1ae109c34d61fb990a8fc1d`.
+This shared host was not isolated. One unused, rebuildable debug executable
+was removed during intake to restore filesystem headroom. Native libraries,
+source, and test data were retained. No limit or assertion changed.
+This result proves the tenant fixture, not global or physical capacity.
+
+```sh
+CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true cargo build -p mithril-e2e --release --bin mithril_discovery_test
+/usr/bin/time -v -o /tmp/araphor-serial.Gql837/02-resources.log target/release/mithril_discovery_test --case data-store-quota --output-directory /tmp/araphor-serial.Gql837/02-result
+```
+
 ### Ordered review: item 1
 
 **Done: PASS**, 2026-09-28. The current-source release case
