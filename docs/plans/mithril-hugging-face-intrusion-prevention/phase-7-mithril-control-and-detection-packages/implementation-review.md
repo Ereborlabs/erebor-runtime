@@ -37,9 +37,20 @@ The raw writer lives in
 metadata schema 9 and fresh development stores. Qualification is not complete.
 Earlier pass records below apply only to their named source revisions.
 The final workspace gate passed on `846adec5`: 81 data-owner tests, 174 Control
-tests, and 123 Mithril e2e tests passed. No Rust edit followed that run. Read
+tests, and 123 Mithril e2e tests passed. That gate precedes the test-only quota
+input below. Read
 the [current storage result](phase-7-2-data-store.md#segment-owned-metadata-result)
 for commands, measurements, and pending qualification.
+
+The ignored release test
+[analysis_store_global_memory](../../../../crates/araphor-data/src/analysis/capacity.rs)
+accepts `ARAPHOR_GLOBAL_BYTES` as an unsigned byte count. An unset input uses
+the default global quota. The shared runner opens and reopens the store through
+`AnalysisStore::open_with_limits` with the same limits. It caps the tenant
+quota at the selected global quota. It reports the limits and final accepted
+cursors. The single-tenant case and production defaults do not change.
+`ARAPHOR_GLOBAL_BYTES=1073741824` selects the approved 1-GiB global case.
+The existing 512-MiB RSS ceiling and recovery assertions remain unchanged.
 
 [ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Control starts.<br>
 -> [AnalysisStore::open](../../../../crates/araphor-data/src/analysis/mod.rs) AnalysisStore obtains the complete data-directory lease.<br>

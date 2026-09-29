@@ -544,6 +544,39 @@ CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true cargo build -p mit
 /usr/bin/time -v -o /tmp/araphor-serial.Gql837/02-resources.log target/release/mithril_discovery_test --case data-store-quota --output-directory /tmp/araphor-serial.Gql837/02-result
 ```
 
+**Item 3: Not done, FAIL. Serial rerun stopped.** On `ab6f6f87` with the
+test-only quota input described in the implementation guide, the release
+`analysis_store_global_memory` case ran with five tenants and a 1-GiB global
+logical quota. The tenant quota was capped at 1 GiB. It failed with
+`StorageCapacity { resource: "filesystem reserve" }` before any batch was submitted.
+One test failed, zero passed, and 85 were filtered. Exit status was 101.
+Elapsed time was 0.08 seconds; peak RSS was 37,500 KiB (36.6 MiB).
+This does not measure full-quota memory or qualify the reduced capacity.
+
+The physical file budget remained 8 GiB. Its ordinary-write reserve is
+2.5 GiB: 256 MiB for policy, 256 MiB for writes, and one quarter of the file
+budget. A filesystem check after the failure showed 1.6 GiB available.
+The shared host was not isolated. The available-byte value at the failed
+check was not logged. No reserve, assertion, or production default was changed.
+
+Read `03-cached-build.log`, `03-run.log`, and `03-resources.log` in
+`/tmp/araphor-serial.Gql837`. The release executable SHA-256 is
+`7d05b1323b7ac2a4aab2a9daca1640f4470952aa02415f58480f4951606e26e6`.
+The first narrow build selected an uncached native dependency and was
+cancelled. The recorded build below reused the cached native library and
+passed. This preparation cancellation was not a qualification result.
+Items 4 through 8 were not run. No retry, fix, or full workspace gate followed
+the failed case. The earlier workspace pass applies to `846adec5`, not to the
+later test-only quota input.
+The filesystem then became full and blocked the result commit. The unused
+83-MiB Control test executable from this task's release build was removed to
+save this record. It can be rebuilt. No test data or native library was removed.
+
+```sh
+CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true cargo test -p araphor-data -p mithril-control -p mithril-e2e --release --features mithril-control/test-fixtures --lib --no-run
+ARAPHOR_GLOBAL_BYTES=1073741824 /usr/bin/time -v -o /tmp/araphor-serial.Gql837/03-resources.log target/release/deps/araphor_data-56c66faf3a80bf1e analysis::capacity::tests::analysis_store_global_memory --exact --ignored --nocapture --test-threads=1
+```
+
 ### Ordered review: item 1
 
 **Done: PASS**, 2026-09-28. The current-source release case

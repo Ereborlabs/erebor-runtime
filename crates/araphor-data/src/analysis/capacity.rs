@@ -373,16 +373,27 @@ mod tests {
     #[test]
     #[ignore = "release-only isolated process RSS qualification on Linux"]
     fn analysis_store_thread_memory() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        check_thread_memory(1)
+        check_thread_memory(1, StorageLimitsV1::default())
     }
 
     #[test]
     #[ignore = "release-only default global quota RSS qualification on Linux"]
     fn analysis_store_global_memory() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        check_thread_memory(5)
+        let mut limits = StorageLimitsV1::default();
+        if let Some(bytes) = std::env::var_os("ARAPHOR_GLOBAL_BYTES") {
+            limits.logical_max_bytes = bytes
+                .to_str()
+                .ok_or("the global test quota is not UTF-8")?
+                .parse()?;
+            limits.tenant_max_bytes = limits.tenant_max_bytes.min(limits.logical_max_bytes);
+        }
+        check_thread_memory(5, limits)
     }
 
-    fn check_thread_memory(tenants: u8) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn check_thread_memory(
+        tenants: u8,
+        limits: StorageLimitsV1,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         use std::{sync::mpsc, thread};
 
         if cfg!(debug_assertions) {
@@ -390,7 +401,11 @@ mod tests {
         }
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
-        let store = AnalysisStore::open(&root)?;
+        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
+        println!(
+            "MEMORY_QUOTA tenants={tenants} logical_bytes={} tenant_bytes={}",
+            store.storage.logical_max_bytes, store.storage.tenant_max_bytes
+        );
         store.writer()?.get()?.execute_batch(
             "SET logging_storage = 'stdout';
              SET logging_level = 'debug';
@@ -542,9 +557,10 @@ mod tests {
                     );
                     memory(&store)?;
                 }
-                Err(format!("the default {expected_limit} limit was not reached").into())
+                Err(format!("the configured {expected_limit} limit was not reached").into())
             },
         )?;
+        println!("MEMORY_CURSORS {cursors:?}");
         let receipts = identities
             .iter()
             .map(|identity| store.source_receipt(identity))
@@ -559,7 +575,7 @@ mod tests {
         store.checkpoint()?;
         memory(&store)?;
         drop(store);
-        let store = AnalysisStore::open(&root)?;
+        let store = AnalysisStore::open_with_limits(&root, Default::default(), limits)?;
         for ((identity, receipt), cursor) in identities.iter().zip(receipts).zip(cursors) {
             assert_eq!(store.source_receipt(identity)?, receipt);
             let last = store.read_page(identity, cursor)?;
