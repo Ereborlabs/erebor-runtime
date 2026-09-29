@@ -1039,15 +1039,24 @@ impl AnalysisStore {
         relations: &[&str],
     ) -> Result<()> {
         for relation in relations {
-            transaction
+            let changed = transaction
                 .execute(
-                    "INSERT INTO relation_revisions VALUES (?, ?)
-                     ON CONFLICT (relation_name) DO UPDATE SET last_changed_revision = EXCLUDED.last_changed_revision",
-                    params![relation, revision],
+                    "UPDATE relation_revisions SET last_changed_revision = ? WHERE relation_name = ?",
+                    params![revision, relation],
                 )
                 .context(AnalysisDatabaseSnafu {
                     operation: "advance relation revision",
                 })?;
+            if changed == 0 {
+                transaction
+                    .execute(
+                        "INSERT INTO relation_revisions VALUES (?, ?)",
+                        params![relation, revision],
+                    )
+                    .context(AnalysisDatabaseSnafu {
+                        operation: "insert relation revision",
+                    })?;
+            }
         }
         transaction
             .execute(

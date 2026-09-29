@@ -57,6 +57,27 @@ and do not qualify the current storage implementation.
 -> [AnalysisStore::remove_segment](../../../../crates/araphor-data/src/analysis/segments.rs) owner unlinks that file, syncs the directory, and completes catalog cleanup.<br>
 -> [AnalysisStore::recover_segments](../../../../crates/araphor-data/src/analysis/segments.rs) restart resumes incomplete deletion without deleting Live segments.
 
+The write-path change after `e73ad22e` keeps the same transaction and sync
+boundaries. Read [UsageChange::apply](../../../../crates/araphor-data/src/analysis/quota.rs)
+for quota updates and [AnalysisStore::record_revision](../../../../crates/araphor-data/src/analysis/mod.rs)
+for relation revisions. Each method updates an existing row first. It inserts
+a row only when the update matches no row. The single writer prevents a
+concurrent insert between these operations. The transaction retains rollback
+and checked unsigned quota arithmetic.
+
+[AnalysisStore::check_witnesses](../../../../crates/araphor-data/src/analysis/quota.rs)
+checks live evidence references and all context references for the tenant in
+the current transaction. With neither type of reference, the witness charge
+is zero. Otherwise, the existing complete witness query still checks the
+limit. No cached quota, reference state, or query result is used. The extended
+`analysis_store_witness_limits` case checks live witnesses, expired witnesses
+with retained context, and a foreign tenant with no references. Existing
+`usage_updates_are_atomic`, `analysis_batch_charges`, and
+`analysis_store_revision_limits` cases check the shared quota paths. See the
+[write-path result](phase-7-2-data-store.md#short-benchmark-rerun-and-write-path-fix)
+for measured improvement and verification status. This change has no BPF or
+wire-format effect.
+
 The catalog has one row per segment and one row per batch range. Frame offsets
 use a native UINTEGER array. The batch digest binds the offset count, offsets,
 and raw bytes. The writer retains no full-store event index. Reserved file IDs

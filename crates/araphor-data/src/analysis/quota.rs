@@ -26,15 +26,7 @@ impl From<i64> for UsageChange {
 
 impl UsageChange {
     pub(super) fn apply(&self, writer: &Transaction<'_>, tenant: &[u8]) -> Result<()> {
-        writer
-            .execute(
-                "INSERT INTO tenant_usage VALUES (?, 0, 0, 0, 0) ON CONFLICT DO NOTHING",
-                params![tenant],
-            )
-            .context(AnalysisDatabaseSnafu {
-                operation: "initialize tenant usage",
-            })?;
-        writer
+        let changed = writer
             .execute(
                 "UPDATE tenant_usage SET
                 logical_bytes = (logical_bytes::HUGEINT + ?)::UBIGINT,
@@ -52,6 +44,22 @@ impl UsageChange {
             .context(AnalysisDatabaseSnafu {
                 operation: "update tenant usage",
             })?;
+        if changed == 0 {
+            writer
+                .execute(
+                    "INSERT INTO tenant_usage VALUES (?, ?, ?, ?, ?)",
+                    params![
+                        tenant,
+                        self.bytes,
+                        self.coverage,
+                        self.contexts,
+                        self.results
+                    ],
+                )
+                .context(AnalysisDatabaseSnafu {
+                    operation: "initialize tenant usage",
+                })?;
+        }
         if self.bytes < 0 {
             writer
                 .execute(
@@ -276,6 +284,19 @@ impl AnalysisStore {
         tenant: [u8; 16],
         now: u64,
     ) -> Result<()> {
+        let referenced: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM evidence_refs WHERE tenant_id = ? AND expires_utc_ns > ?)
+                    OR EXISTS(SELECT 1 FROM context_refs WHERE tenant_id = ?)",
+                params![tenant.as_slice(), now, tenant.as_slice()],
+                |row| row.get(0),
+            )
+            .context(AnalysisDatabaseSnafu {
+                operation: "check tenant witness references",
+            })?;
+        if !referenced {
+            return Ok(());
+        }
         let usage = self.witness_totals(transaction, tenant, now)?;
         if usage.charged_bytes > self.storage.witness_max_bytes {
             return StorageCapacitySnafu {
@@ -561,6 +582,26 @@ mod tests {
                 );
             }
         }
+        for (tenant, now, expected) in [(1_u8, 2_u64, witness_bytes), (1, 100, 260), (2, 2, 0)] {
+            for limit in [expected.saturating_sub(1), expected] {
+                store.storage.witness_max_bytes = limit;
+                let mut writer = store.writer()?;
+                let transaction = writer.get_mut()?.transaction()?;
+                let checked = store.check_witnesses(&transaction, [tenant; 16], now);
+                if limit < expected {
+                    assert!(matches!(
+                        checked,
+                        Err(crate::Error::StorageCapacity {
+                            resource: "tenant witness bytes",
+                            ..
+                        })
+                    ));
+                } else {
+                    checked?;
+                }
+            }
+        }
+        store.storage.witness_max_bytes = witness_bytes;
         store.storage.tenant_max_bytes = 1;
         let retention = crate::EvidenceRetentionOwner::new(&store, Default::default())?;
         assert_eq!(

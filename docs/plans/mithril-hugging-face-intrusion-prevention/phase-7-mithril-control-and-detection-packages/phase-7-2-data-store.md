@@ -698,7 +698,76 @@ The table is context, not a controlled speed ratio or a measured regression.
 No old writer was rebuilt or run. This short case excludes gRPC, discovery,
 retention, concurrent readers, backup, and crash recovery. It does not qualify
 capacity or sustained throughput. Full qualification remains **Not done**.
-Item 4 has not run in this ordered review. No larger run or fix followed.
+Item 4 has not run in this ordered review. No larger run or fix followed that
+measurement. The later user-approved rerun and fix appear below.
+
+#### Short benchmark rerun and write-path fix
+
+**Done for this write-path fix.** On 2026-09-29 UTC, the
+user requested a rerun and a fix if the result persisted. The unchanged
+64-batch release case confirmed the result. The patch after `e73ad22e`
+removes redundant metadata work, without changing quota limits, transaction
+boundaries, segment sync, acknowledgement rules, or storage formats.
+
+`UsageChange::apply` and `AnalysisStore::record_revision` update an existing
+row first. They insert only when no row matched. `check_witnesses` first
+checks the current transaction for live evidence references and all context
+references in the tenant. It skips full witness accounting only when neither
+type exists. Otherwise, the existing complete quota check runs.
+
+| Same 16,384-event release workload | Unchanged rerun | Final patch |
+| --- | ---: | ---: |
+| Write time, seconds | 1.004394 | 0.807055 |
+| Write events/s | 16,312.3 | 20,301.0 |
+| Durable call p50, ms | 15.325 | 11.653 |
+| Durable call p95, ms | 16.316 | 17.702 |
+| Durable call p99, ms | 32.437 | 22.377 |
+| Read events/s | 76,540.7 | 75,015.9 |
+| Reopen, ms | 102.593 | 104.030 |
+| Peak process RSS, KiB | 54,308 | 54,644 |
+
+Both runs passed one test and verified all records after reopen. The final
+case took 1.18 seconds. Measured write throughput increased by 24.5 percent;
+write time decreased by 19.6 percent. The p95 did not improve. This single
+before/after pair does not establish stable tail latency or production rates.
+The historical old-writer gap is not closed or measured under equal conditions.
+
+Temporary stage timing placed most pre-append time in metadata SQL. A
+prepared-statement cache experiment did not improve throughput and was removed.
+Native DuckDB source permits replanning of prepared table-access statements.
+The final patch contains no statement cache or temporary timing prints. CPU
+sampling was unavailable because the host denied performance-event access;
+no host security setting changed.
+
+All evidence is under `/tmp/araphor-write-fix.OPGvLsZy`: `before.log`,
+`before-resources.log`, `probe.log`, `after.log` (removed cache experiment),
+`final.log`, `final-resources.log`, and build logs. The command in both measured
+runs was the item 8 command above, with logs in this directory. It used mode
+`analysis`, 64 batches, the exact ignored case, and one test thread. No task
+build or other task test ran during either measurement. The shared host and
+allocator settings were unchanged; unrelated host activity was not isolated.
+
+The final release build passed in 8 minutes 59 seconds. The Control test
+SHA-256 is `07e983218e9fc746905dab9664d46731eea09a33d2a42302b7ced21d997a4a52`.
+Seven release quota tests passed in 1.76 seconds, including live, expired,
+context-only, and foreign-tenant witness checks. The commit-clock test passed
+in 0.09 seconds. Seventeen lightweight data-store e2e cases passed in
+42.90 seconds; four long load cases remained ignored. No new performance
+test or speed threshold was added. Final workspace verification uses:
+
+```sh
+CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh
+```
+
+The final workspace procedure passed with exit status zero after the last
+Rust edit. Formatting, workspace checking, strict Clippy, and all non-ignored
+tests passed. Data passed 77 tests with five ignored in 252.66 seconds.
+Control passed 174 with two ignored in 621.19 seconds. Mithril e2e passed
+123 with 249 ignored in 300.82 seconds. Node passed 256 with one ignored in
+14.13 seconds. Other workspace suites also passed. Read `workspace.log` for
+the complete result. No Rust source changed after this run. Full phase
+qualification remains **Not done**. No larger benchmark or storage redesign
+is part of this fix.
 
 ### Measurement contracts
 
