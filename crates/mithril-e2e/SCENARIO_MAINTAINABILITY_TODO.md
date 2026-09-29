@@ -4209,7 +4209,8 @@ setup, production actions, assertions, and focused test.
       retained VM in 35.64 seconds with 70,000 denied reads.
     - [x] Pass direct `runc` and commit it. The exact ignored direct-`runc`
       test passed in the retained VM in 41.76 seconds.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The exact ignored Kubernetes test
+      passed in the retained K3s VM in 84.44 seconds and completed teardown.
     - [ ] Remove the matching legacy actor commands, private observation store,
       result field, and shell predicate after all three platforms pass.
 - [ ] Stale cache repair and unreachable-row retirement: keep the production
