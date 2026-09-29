@@ -16,9 +16,10 @@ and trace intake do not require discovery. Entry: 7.1.
 Status: **Not done** for full qualification. Segment intake, reads, recovery,
 retention, complete-bundle backup, and trusted bounded extraction are
 implemented. The old Control raw writer and its callers are removed. Stored
-tenant totals replace repeated quota scans. The complete workspace gate,
-paired disk-full case, and release startup and recovery cases pass.
-Kubernetes storage and outage recovery also pass on the current Rust source.
+tenant totals replace repeated quota scans. The recorded workspace gate,
+paired disk-full case, and release startup and recovery cases passed at their
+named revisions. Kubernetes storage and outage recovery also passed at the
+recorded source state. These results do not qualify later code changes.
 Capacity and performance qualification are separate from implementation
 completion. The user approved the classification below and a serial review:
 run one table item, report its current result, then stop for the user's decision.
@@ -203,7 +204,7 @@ Storage fails or cannot meet capacity
 
 ## Configurable intake admission: 2026-09-29
 
-The working tree based on `2ec1647` implements step 8. Full intake slots wait
+Commit `74792df` implements step 8. Full intake slots wait
 in the existing Tokio semaphore queues. Per-Node limits replace per-tenant
 limits. The data writer mutex has no separate fixed admission count. Limits
 must be set before Control is cloned or served. No wire format, storage
@@ -212,13 +213,36 @@ format, storage quota, Node retry rule, or trace admission limit changes.
 Focused checks passed for queue order, cancellation, separate Nodes in one
 tenant, custom limits, invalid configuration, twelve waiting writers, and
 read deadlines. Verification logs are in `/tmp/araphor-admission.Qop5Z92V`.
-The final workspace gate and the existing ten-tenant CLI case are pending.
-The first gate attempt was stopped after the source-binding and ACK-receipt
-lookups were found to use the query-reader pool. The corrected intake path
-uses the writer mutex for those lookups. The existing binding test checks
-both lookups with all query-reader permits held.
-Result: **Not done** until those checks finish. No new performance test or
-threshold is added. The other ordered qualification items remain unchanged.
+The binding regression passed with all 16 query-reader permits held.
+The final workspace gate passed on this commit:
+`CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh`.
+Formatting, workspace checking, strict Clippy, and all enabled workspace
+tests passed. Data passed 77 tests with five ignored; Control passed 174 with
+two ignored; Mithril e2e passed 123 with 249 ignored; Node passed 256 with one
+ignored. Read `workspace-final.log` for the complete gate. The earlier stopped
+run in `workspace.log` is not a complete result.
+The existing ten-tenant release case passed on the same commit. It used the
+default eight global slots and two slots per Node. Ten distinct tenants and
+Nodes each sent 32 groups, or 131,072 records. All 1,310,720 records passed
+durable ACK, duplicate replay, digest, foreign-tenant isolation, and restart
+checks. The result contains 320 group samples. There was no slot-full error.
+Elapsed time was 99.21 seconds. Peak RSS was 256,172 KiB (250.17 MiB).
+Intake took 47.477 seconds, reads 41.541 seconds, checkpoint 0.044 seconds,
+and reopen 0.584 seconds. These stage times exclude fixture startup.
+
+```sh
+/usr/bin/time -v -o /tmp/araphor-admission.Qop5Z92V/tenants-resources.log target/release/mithril_discovery_test --case data-store-tenants --tenants 10 --output-directory /tmp/araphor-admission.Qop5Z92V/tenants
+```
+
+Read `tenants/result.json`, `tenants.log`, and `tenants-resources.log` in that
+directory. The release CLI SHA-256 is
+`284bf04e0d3f67aebf8f2d161714f3c89ef92e9f5141c0a3b6f0a0f417052de5`.
+No task build or other task test ran with this case. The host was shared.
+This is one synthetic mTLS run, not kernel, Kubernetes, full-quota, rollout,
+or production capacity qualification. No performance test or threshold was
+added. Result: **Done** for configurable intake admission. The complete phase
+remains **Not done** for its remaining qualification. The other ordered items
+are unchanged.
 
 The user requested artifact cleanup. Package-scoped Cargo cleanup reported
 34.2 GiB removed. The two inactive owned qualification VMs, their disks, and
@@ -227,6 +251,11 @@ results remain in this plan; the deleted temporary logs and VM state cannot
 be recovered from Git. Historical paths below identify those original runs,
 not files that must still exist. Unrelated VMs, source files, and completed
 native dependency builds were preserved. Current verification logs are kept.
+After verification, debug-only package cleanup reported 27.3 GiB removed.
+The filesystem then had 44 GiB available, compared with 581 MiB before this
+task. The current release CLI remains available. Do not add the two Cargo
+cleanup totals to estimate net reclaimed space; verification rebuilt outputs
+between the two cleanup operations.
 
 ## Storage choice qualification
 
