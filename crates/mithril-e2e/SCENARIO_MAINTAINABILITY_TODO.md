@@ -3952,8 +3952,10 @@ setup, production actions, assertions, and focused test.
   `unprotected_actor_runs` owns stock startup without policy on Host, direct
   `runc`, and Kubernetes. `prepared_start_emits_effect` requires the fresh
   `PREPARED_RUNTIME_INFRASTRUCTURE` transition and resulting active binding on
-  Host and direct `runc`. The old spec-only seccomp boolean and duplicate
-  lifecycle strings are removed.
+  Host and direct `runc`. The old spec-only seccomp boolean, duplicate
+  lifecycle strings, and literal `container_exit_success` result are removed.
+  The shared test waits for the real actor exit and requires a successful
+  status on all three platforms.
 - [ ] Held OCI route publication: keep policy installation, background binding
   reconciliation, `createContainer`, route publication, and activation calls
   in their real order through public production APIs.

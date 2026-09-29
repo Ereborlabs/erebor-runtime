@@ -546,7 +546,6 @@ if [[ $entry_role_runtime_only == true ]]; then
     .kernel_upgrade_preserved_map_ids and
     .kernel_upgrade_preserved_link_pins and
     .kernel_upgrade_replaced_changed_programs and
-    .container_exit_success and
     .pin_root_removed and
     .lease_removed and
     .cgroup_removed and
