@@ -80,7 +80,6 @@ pub struct AnalysisStore {
     // Close the cloned readers before their owning writer.
     readers: [Mutex<Option<Connection>>; 2],
     writer: Mutex<Option<Connection>>,
-    write_slots: tokio::sync::Semaphore,
     read_slots: tokio::sync::Semaphore,
     read_next: AtomicUsize,
     maintenance: RwLock<()>,
@@ -455,7 +454,6 @@ impl AnalysisStore {
             _lease: lease,
             writer: Mutex::new(Some(writer)),
             readers,
-            write_slots: tokio::sync::Semaphore::new(9),
             read_slots: tokio::sync::Semaphore::new(16),
             read_next: AtomicUsize::new(0),
             maintenance: RwLock::new(()),
@@ -538,7 +536,8 @@ impl AnalysisStore {
         identity: &EvidenceIntakeIdentityV1,
     ) -> Result<Option<AnalysisSourceReceiptV1>> {
         let key = source_key(identity);
-        self.read_snapshot(|reader| Self::read_receipt_from(reader, &self.root, identity, &key))
+        let writer = self.writer_access()?;
+        Self::read_receipt_from(writer.get()?, &self.root, identity, &key)
     }
 
     pub fn source_status(

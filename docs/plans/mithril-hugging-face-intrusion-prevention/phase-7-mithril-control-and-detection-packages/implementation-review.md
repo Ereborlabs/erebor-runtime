@@ -837,9 +837,10 @@ extension is test-only and covers the working tree based on `896cca6`.
 The explicit release command `data-store-tenants --tenants 10` failed in
 9.87 seconds with `global evidence admission is full`.
 [EvidenceAdmission::acquire](../../../../crates/mithril-control/src/evidence/admission.rs)
-uses eight global permits and rejects immediate acquisition when all permits
-are occupied. This limit bounds concurrent work, not configured tenants.
-The fixture does not retry this rejection. No production limit was changed.
+used eight global permits and rejected immediate acquisition when all permits
+were occupied in that run. This limit bounded concurrent work, not configured tenants.
+The fixture did not retry this rejection. The current admission flow below
+uses configurable global and per-Node waiting. The failed run does not qualify it.
 The run did not produce a final accepted count or complete digest/reopen proof.
 Its command, executable digest, and logs are recorded in the data-store plan.
 The two CLI argument tests passed. Formatting, workspace checking, and strict
@@ -1207,10 +1208,12 @@ rollout under load or repeated full-quota performance.
 -> [AnalysisStore::check_required](../../../../crates/araphor-data/src/analysis/retention.rs) A new batch cannot exceed the required-input age or tenant byte reservation.
 
 [NodeEvidence::open](../../../../crates/mithril-control/src/service.rs) An authenticated Node sends evidence on an open stream.<br>
--> [ControlPlane::admit_evidence](../../../../crates/mithril-control/src/service.rs) The service checks the session and current trust before group assembly. Evidence and coverage use eight permits per process and two per tenant UUID.<br>
--> [EvidenceAdmission](../../../../crates/mithril-control/src/evidence/admission.rs) Semaphore guards bound group assembly and blocking work. Excess work returns ResourceExhausted. Idle streams hold no guard.<br>
+-> [ControlConfig::into_parts](../../../../crates/mithril-control/src/config.rs) Startup applies positive `evidence_admission.total_slots` and `slots_per_node` values. Defaults are eight and two. Configure before cloning or serving Control.<br>
+-> [ControlPlane::admit_evidence](../../../../crates/mithril-control/src/service.rs) Streaming and unary evidence, floor reports, and coverage share global and per-Node limits. Nodes in one tenant have separate slots.<br>
+-> [EvidenceAdmission::acquire](../../../../crates/mithril-control/src/evidence/admission.rs) Wait for a Node semaphore, then the global semaphore. Tokio keeps each queue in arrival order. There is no strict ordering across both queues. Full slots do not return ResourceExhausted. Cancellation drops any acquired permit.<br>
+-> [NodeEvidence::open](../../../../crates/mithril-control/src/service.rs) The service checks session and trust before admission. While waiting, it stops reading after the first bounded message. Closing the response stream cancels the wait. Idle streams hold no guard. Waiting connections and transport buffers still use memory.<br>
 -> [NodeEvidence::open](../../../../crates/mithril-control/src/service.rs) One task reads requests directly. A group flushes on its tail, input closure, or a 50-ms deadline. Framed payload is at most 4 MiB.<br>
--> [EvidenceIntakeOwner::receive_group](../../../../crates/mithril-control/src/evidence.rs) Blocking validation checks all records, source, CPU, continuity, and the 4,096-record group limit before the store writer lock.<br>
+-> [ControlPlane::receive_evidence_stream_group](../../../../crates/mithril-control/src/service.rs) The worker checks session and current trust again after admission. Blocking validation checks all records, source, CPU, continuity, and the 4,096-record group limit before the store writer lock.<br>
 -> [AnalysisStore::accept_validated_batch](../../../../crates/araphor-data/src/analysis/mod.rs) A durable commit precedes the ACK. The blocking closure releases its admission guard before client output can wait.
 
 [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/mod.rs)
@@ -1221,9 +1224,10 @@ commits rows, receipt, and revisions. A conflict rolls back all appended rows.
 `analysis_store_bulk_rollback` checks a conflict at the last row of a full batch,
 then retry and restart. An exact retry does not send a revision notification.
 
-[AnalysisStore::writer](../../../../crates/araphor-data/src/analysis/connection.rs) A data mutation reserves one of nine writer permits before it waits for the single connection.<br>
--> [AnalysisConnection](../../../../crates/araphor-data/src/analysis/connection.rs) One operation runs and at most eight wait. The guard releases the connection and permit on return or error.<br>
--> [EvidenceIntakeOwner::data_status](../../../../crates/mithril-control/src/evidence.rs) Excess admission returns ResourceExhausted. It does not become an ACK.<br>
+[AnalysisStore::writer](../../../../crates/araphor-data/src/analysis/connection.rs) Admitted mutations wait for the existing writer mutex. There is no second fixed writer-slot limit. Internal workers bound their own work outside the async executor.<br>
+-> [AnalysisConnection](../../../../crates/araphor-data/src/analysis/connection.rs) One mutation runs. The guard releases the connection on return or error. Read coordinator waits retain their cancellation and deadline checks.<br>
+-> [AnalysisStore::source_binding](../../../../crates/araphor-data/src/analysis/schema.rs) Intake authentication reads the durable binding under the writer mutex. [AnalysisStore::source_receipt](../../../../crates/araphor-data/src/analysis/mod.rs) uses the same mutex for the ACK lookup. Neither operation uses query-reader permits. The binding test checks both with all 16 reader permits held.<br>
+-> [EvidenceIntakeOwner::data_status](../../../../crates/mithril-control/src/evidence.rs) Storage quota exhaustion still returns ResourceExhausted without ACK. A full intake semaphore waits instead.<br>
 
 [AnalysisStore::reader](../../../../crates/araphor-data/src/analysis/connection.rs) A bounded read reserves one of 16 read permits and one of two private connections.<br>
 -> [AnalysisStore::read_page](../../../../crates/araphor-data/src/analysis/read.rs) A read transaction freezes receipt, expiry, revision, and row statements together. Source-status reads use the same snapshot rule.<br>
@@ -1234,8 +1238,12 @@ lease drops after those connections. These guards are private; callers receive
 bounded values, not connections or retained snapshots. No guard spans client I/O.
 A queued read keeps its selected reader when both readers are busy. There is
 no shared queue or fairness guarantee between those two connections.
-`analysis_store_admission_bounds` checks full queues, rejection without commit,
-permit release, and writes during read saturation. `analysis_store_snapshot_maintenance`
+`admission_waits_and_releases` checks Node and global waiting, queue order,
+cancellation, shared-tenant Node separation, unknown Nodes, and custom limits.
+`analysis_startup_is_independent` checks default, custom, zero, and oversized
+configuration. `analysis_store_admission_bounds` checks twelve waiting writers,
+reader saturation, permit release, and writes during read saturation.
+`analysis_store_snapshot_maintenance`
 checks a stable snapshot during append and expiry, checkpoint wait, and restart.
 
 [AnalysisLease::drop](../../../../crates/araphor-data/src/analysis/connection.rs)

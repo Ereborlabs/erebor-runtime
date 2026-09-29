@@ -402,15 +402,9 @@ mod tests {
             lifetime_key: vec![1],
             owner_revision: 0,
         };
-        let reads: [&dyn Fn() -> Result<()>; 9] = [
+        let reads: [&dyn Fn() -> Result<()>; 7] = [
             &|| store.meta().map(|_| ()),
-            &|| store.source_receipt(&identity).map(|_| ()),
             &|| store.source_status(&identity).map(|_| ()),
-            &|| {
-                store
-                    .source_binding(identity.tenant_id, "n", identity.source_id, 1)
-                    .map(|_| ())
-            },
             &|| store.context_version(&context).map(|_| ()),
             &|| store.read_result(identity.tenant_id, "r").map(|_| ()),
             &|| store.recovery_gaps(&identity, 0).map(|_| ()),
@@ -481,7 +475,6 @@ mod tests {
                 Err(crate::Error::AnalysisReadDeadline { .. })
             ));
             drop((writer, maintenance, readers));
-            assert_eq!(store.write_slots.available_permits(), 9);
             assert_eq!(store.read_slots.available_permits(), 16);
             assert!(store.maintenance.try_write().is_ok());
             assert_eq!(store.read_page(&identity, 1)?.records.len(), 1);
@@ -509,13 +502,6 @@ mod tests {
         let writer = store.writer()?;
         std::thread::scope(|scope| -> TestResult {
             let waiting = scope.spawn(|| store.read_page_cancel(&identity, 1, &control));
-            let deadline = Instant::now() + Duration::from_secs(2);
-            while store.write_slots.available_permits() != 7 {
-                if Instant::now() >= deadline {
-                    return Err("read did not enter admission".into());
-                }
-                std::thread::yield_now();
-            }
             control.cancel()?;
             assert!(matches!(
                 waiting.join().map_err(|_| "read worker panicked")?,
@@ -524,7 +510,6 @@ mod tests {
             Ok(())
         })?;
         drop(writer);
-        assert_eq!(store.write_slots.available_permits(), 9);
         assert_eq!(store.read_page(&identity, 1)?.records.len(), 1);
         Ok(())
     }

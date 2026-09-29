@@ -32,8 +32,14 @@ Create `control.admission.tlsSecretName` with `tls.crt` and `tls.key`. The
 certificate must authenticate `mithril-control.<namespace>.svc`. Set
 `control.admission.caBundle` to the base64-encoded CA bundle.
 
-The Control configuration Secret must contain `control.json`. Its Kubernetes
-fields must use this contract:
+The Control configuration Secret must contain `control.json`. To set evidence
+intake concurrency, add `"evidence_admission": {"total_slots": 16,
+"slots_per_node": 2}` to that file and restart Control. Defaults are eight
+total slots and two slots per Node. Both values must be positive. A full slot
+queue waits; it does not reject the connection. These limits do not limit the
+number of connected Nodes. Storage quotas remain separate.
+
+Its Kubernetes fields must use this contract:
 
 ```json
 {
