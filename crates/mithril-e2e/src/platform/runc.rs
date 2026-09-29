@@ -1,5 +1,6 @@
 use std::env;
-use std::fs;
+use std::fs::{self, File};
+use std::os::fd::AsRawFd as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -24,6 +25,7 @@ pub(crate) struct Runc {
     cleanup: Option<ProbeDirectory>,
     container_id: Option<String>,
     containers: Vec<String>,
+    netns: Option<File>,
 }
 
 impl Runc {
@@ -60,6 +62,20 @@ impl Runc {
 
         let path = self.bundle_path.join("config.json");
         let mut config: Value = serde_json::from_slice(&fs::read(&path)?)?;
+        if let Some(netns) = &self.netns {
+            let namespaces = config["linux"]["namespaces"]
+                .as_array_mut()
+                .ok_or("runc spec has no Linux namespaces")?;
+            let network = namespaces
+                .iter_mut()
+                .find(|entry| entry["type"] == "network")
+                .ok_or("runc spec has no network namespace")?;
+            network["path"] = json!(format!(
+                "/proc/{}/fd/{}",
+                std::process::id(),
+                netns.as_raw_fd()
+            ));
+        }
         let mut args = vec![
             "/usr/bin/python3".to_owned(),
             format!("/fixtures/{name}"),
@@ -157,6 +173,9 @@ impl Runc {
             .ok_or("runc state has no actor PID")?;
         self.shared.move_out(parent)?;
         actor.set_init(pid)?;
+        if self.netns.is_none() {
+            self.netns = Some(File::open(format!("/proc/{pid}/ns/net"))?);
+        }
         actor.set_group(self.shared.cgroup());
         if self.shared.has_policy() {
             self.shared.running(pid)?;
@@ -273,6 +292,7 @@ impl Runc {
         deleted?;
         self.container_id = None;
         self.containers.clear();
+        self.netns = None;
         if let Some(cleanup) = self.cleanup.take() {
             cleanup.cleanup()?;
         }
@@ -336,6 +356,7 @@ impl Platform for Runc {
             cleanup: Some(cleanup),
             container_id: None,
             containers: Vec::new(),
+            netns: None,
         })
     }
 
@@ -369,6 +390,7 @@ impl Platform for Runc {
         extra: &[&str],
         labels: &Labels,
     ) -> TestResult<ProcessFixture> {
+        self.netns = None;
         self.shared.begin_pod(labels);
         self.start_named(
             name,
@@ -388,6 +410,7 @@ impl Platform for Runc {
     where
         F: FnOnce(&mut Self, &mut Vec<(ProcessFixture, PathBuf)>) -> TestResult<()>,
     {
+        self.netns = None;
         self.shared.begin_pod(labels);
         let mut group = Vec::with_capacity(actors.len());
         let mut before_app = Some(before_app);

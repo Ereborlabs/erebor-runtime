@@ -2627,6 +2627,13 @@ test does not close a row when its physical condition or an assertion changed.
     scenario namespace. Do not add a Platform API or a shell Pod runner.
     Host and direct `runc` need equivalent shared-file and Pod-network setup
     inside their existing `start_actor_group` implementations.
+    The shared group-role test now checks that two group members use one
+    network namespace. Direct `runc` keeps the first member's namespace open
+    and joins each later member to it. The exact Host, direct `runc`, and
+    Kubernetes cases passed. The Host identity lifecycle passed 62 tests. The
+    direct-`runc` identity lifecycle passed 57 tests. Both lifecycles removed
+    their pin root, lease, and cgroup. The repository Rust CI gate passed.
+    This does not qualify descriptor transfer.
     This is a design, not a passing replacement. A Host draft with one shared
     `/tmp` mount proved matching file device/inode and reached exact-policy
     readiness, but the sender's Unix connect returned `EACCES` before transfer.

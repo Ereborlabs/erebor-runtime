@@ -26,6 +26,9 @@ fn container_roles_are_distinct<P: Platform>() -> TestResult<()> {
         },
     ];
     let mut group = env.start_actor_group(&actors, &labels, |_, _| Ok(()))?;
+    let first_net = std::fs::read_link(format!("/proc/{}/ns/net", group[0].0.id()))?;
+    let second_net = std::fs::read_link(format!("/proc/{}/ns/net", group[1].0.id()))?;
+    assert_eq!(first_net, second_net);
     let first = env.task(group[0].0.id(), "worker identity")?;
     let second = env.task(group[1].0.id(), "helper identity")?;
     assert_ne!(first.snapshot.task_cookie, second.snapshot.task_cookie);
