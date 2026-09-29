@@ -2606,17 +2606,32 @@ test does not close a row when its physical condition or an assertion changed.
     namespace, and matching file device and inode. Its exact-policy replacement
     then failed with `signed path selector path-0 resolved to a different
     canonical path`. The transfer did not run.
-    Try one memory-backed `emptyDir` mounted at `/tmp` in both Pod containers.
-    Put the two files in that shared volume before either actor opens them.
-    Confirm that Node resolves both signed `/tmp` exact paths in each container
-    view, not only that `stat` reports matching device and inode. Host and
-    direct `runc` need the same shared filesystem and Pod network semantics
-    inside their existing `start_actor_group` implementations; do not add a
-    scenario-specific Platform API or runner. Start both actors under an open
-    bootstrap policy, hold the descriptors, install the signed exact policy,
-    then check direct open, denied secret transfer, and allowed benign transfer.
-    This is a setup to qualify, not a passing replacement. Keep the old checks
-    until the shared test passes on Host, direct `runc`, and Kubernetes.
+    Kubernetes setup design: keep the retained K3s cluster, Control Deployment,
+    and Node DaemonSet. Install the open bootstrap policy through its CRD.
+    Call the existing `start_actor_group` once. It creates one Pod with sender
+    and receiver application containers. Each has its own CRI cgroup and Node
+    binding. Both use the Pod network namespace and one memory-backed
+    `emptyDir` mounted at `/tmp`. Mount Python fixtures read-only at
+    `/fixtures`; do not store protected files there. The receiver creates the
+    secret and benign files in `/tmp`. Both actors open them and report ready
+    before policy replacement. Replace the same policy CRD with the signed
+    exact-file policy, wait for rollout readiness, then release the receiver
+    and sender through their normal actor input. Require distinct bindings,
+    cgroups, and roles; the same network namespace and file device/inode;
+    direct-open denial; denied secret transfer without an installed descriptor;
+    allowed benign transfer with one readable descriptor; and exact File
+    evidence. Stop both actors and use normal platform cleanup to delete the
+    scenario namespace. Do not add a Platform API or a shell Pod runner.
+    Host and direct `runc` need equivalent shared-file and Pod-network setup
+    inside their existing `start_actor_group` implementations.
+    This is a design, not a passing replacement. A Host draft with one shared
+    `/tmp` mount proved matching file device/inode and reached exact-policy
+    readiness, but the sender's Unix connect returned `EACCES` before transfer.
+    A Node-after-actor Host draft failed initial exact-policy activation:
+    Node reported that selector `path-0` had no proven object in the container.
+    Confirm the cause in lightweight and pass Host, then direct `runc`, before
+    running the same Kubernetes test. Keep the old transfer checks until all
+    three cases pass with the same assertions.
     A later Host draft used the public Node and Control APIs, one bootstrap
     policy, and a signed exact-file replacement. A two-container Pod did not
     give both actors one proven file object. A single-container test gave the
