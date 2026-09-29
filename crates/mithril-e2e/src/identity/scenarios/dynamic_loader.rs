@@ -1,10 +1,10 @@
-use std::{collections::BTreeSet, fs, path::Path};
+use std::{collections::BTreeSet, path::Path, time::Duration};
 
 use mithril_control::{lower_kubernetes_policy, WorkloadProtectionPolicy};
 
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = identity]
 fn dynamic_loader_needs_no_rule<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("dynamic-loader")?;
@@ -19,7 +19,16 @@ fn dynamic_loader_needs_no_rule<P: Platform>() -> TestResult<()> {
     assert_eq!(task.snapshot.active_role_id, 7);
     assert_ne!(task.snapshot.admitted_entry_rule_id, 0);
 
-    let maps = fs::read_to_string(format!("/proc/{}/maps", shell.id()))?;
+    shell.stop()?;
+    main.send(b"loader\nstop\n")?;
+    main.close();
+    let status = main.wait_exit("loader report", Duration::from_secs(5))?;
+    assert!(
+        status.success(),
+        "actor failed: {status}; {:?}",
+        main.stderr()?
+    );
+    let maps = String::from_utf8(main.stdout(status)?)?;
     let loaders = maps
         .lines()
         .filter_map(|line| line.split_ascii_whitespace().last())
@@ -54,7 +63,6 @@ fn dynamic_loader_needs_no_rule<P: Platform>() -> TestResult<()> {
         );
     }
 
-    shell.stop()?;
     main.stop()?;
     env.stop()
 }

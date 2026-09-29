@@ -3964,19 +3964,19 @@ setup, production actions, assertions, and focused test.
 - [ ] Initial application activation: keep the entry action and `ACTIVE`,
   role, rule, default-effect, and large-argv assertions explicit.
   - [ ] Replace the dynamic-loader policy exception with one standard
-    platform test. Start one declared `bash` entry under
-    `runtime_entries_policy.json`. Read its live mappings and require at
-    least one mapped dynamic loader. Lower the public policy and require
-    every mapped loader path to be absent from its signed path selectors.
-    Require the entry to keep its declared role and nonzero admission rule.
+    platform test. Ask the shared Python actor to report its live dynamic
+    loader mapping. Start one declared `bash` entry under
+    `runtime_entries_policy.json`. Lower the public policy and require every
+    mapped loader path to be absent from its signed path selectors. Require
+    the Bash entry to keep its declared role and nonzero admission rule.
     Reuse the existing actor, policy, and Platform operations. Add no fixture
     or Platform API. Keep the test below 100 lines.
-    - [x] Pass Host and commit it. The 60-line test passed in 48.94 seconds.
-      It observed the live loader mapping, its declared shell role and entry
-      rule, and the loader's absence from the lowered signed policy.
-    - [x] Pass direct `runc` and commit it. The unchanged test passed in
-      38.59 seconds after obsolete copied binaries were removed from the VM.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Host and commit it. The 68-line test passed in 31.41 seconds. It
+      observed the declared shell role and entry rule. The Python actor
+      reported the loader's absence from the lowered signed policy.
+    - [x] Pass direct `runc` and commit it. The test passed in 31.44 seconds.
+    - [x] Pass Kubernetes and commit it. The same test passed against the
+      retained K3s cluster in 71.02 seconds.
     - [ ] Remove only `dynamic_loader_paths`,
       `dynamic_loader_paths_absent_from_policy`, their old builder check,
       and the matching shell gate after all three platforms pass.

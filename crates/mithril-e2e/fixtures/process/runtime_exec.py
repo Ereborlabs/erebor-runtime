@@ -20,6 +20,16 @@ for command in sys.stdin:
         name = ctypes.create_string_buffer(b"app-read-0")
         if libc.prctl(PR_SET_NAME, ctypes.addressof(name), 0, 0, 0) != 0:
             raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
+    elif command == "loader\n":
+        paths = {
+            line.split()[-1]
+            for line in Path("/proc/self/maps").read_text(encoding="ascii").splitlines()
+            if "ld-linux" in line or "ld-musl" in line
+        }
+        if not paths:
+            raise RuntimeError("no mapped dynamic loader")
+        for path in sorted(paths):
+            print(path, flush=True)
     elif command == "stop\n":
         break
     else:
