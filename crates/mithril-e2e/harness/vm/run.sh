@@ -435,7 +435,6 @@ if [[ $entry_role_runtime_only == false && $recovered_entry_only == false ]]; th
     platform "$remote_bin/mithril-inspect" "$remote_root" \
     >"$output_directory/platform.txt"
 
-  identity_output=$remote_root/identity
   host_lifecycles=$("$test_bin" --list --ignored |
     sed -nE 's/^.*::([a-z0-9_]+)_host: test$/\1/p' | sort -u)
   [[ -n $host_lifecycles ]] || {
@@ -486,13 +485,6 @@ if [[ $entry_role_runtime_only == false && $recovered_entry_only == false ]]; th
     verify_absent "/sys/fs/cgroup/$vm_name-$lifecycle-runc"
     verify_absent "$runc_output/owner.lock"
   done <<<"$runc_lifecycles"
-  "$provider" run "$vm_name" sudo "$remote_bin/mithril-identity-test" \
-    --repo-root "$remote_source" --output-directory "$identity_output" \
-    physical-probe --pin-root "/sys/fs/bpf/$vm_name-identity" \
-    --lease-path "$identity_output/owner.lock" \
-    --cgroup-path "/sys/fs/cgroup/$vm_name-identity"
-  "$provider" get "$vm_name" "$identity_output/identity-physical-probe.json" \
-    "$output_directory/identity-physical-probe.json"
 fi
 
 if [[ $recovered_entry_only == true ]]; then
@@ -701,25 +693,19 @@ if [[ $with_k3s == true ]]; then
   "$provider" run "$vm_name" sudo "$remote_bin/mithril-identity-test" \
     --repo-root "$remote_source" --output-directory "$kubernetes_identity_output" \
     physical-probe --pin-root "/sys/fs/bpf/$vm_name-kubernetes-identity" \
-    --lease-path "$kubernetes_identity_output/owner.lock" \
-    --cgroup-path "/sys/fs/cgroup/$vm_name-kubernetes-identity" \
-    --with-kubernetes \
-    --previous-bundle "$identity_output/identity-physical-probe.json"
+    --lease-path "$kubernetes_identity_output/owner.lock"
   "$provider" get "$vm_name" \
     "$kubernetes_identity_output/identity-physical-probe.json" \
     "$output_directory/identity-physical-probe.json"
 fi
 
-verify_absent "/sys/fs/bpf/$vm_name-identity"
 verify_absent "/sys/fs/bpf/$vm_name-runc-entry-roles"
 verify_absent "/sys/fs/bpf/$vm_name-effect-observation"
 verify_absent "/sys/fs/bpf/$vm_name-local-enforcement"
 verify_absent "/sys/fs/bpf/$vm_name-network-enforcement"
-verify_absent "/sys/fs/cgroup/$vm_name-identity"
 verify_absent "/sys/fs/cgroup/$vm_name-effect-observation"
 verify_absent "/sys/fs/cgroup/$vm_name-local-enforcement"
 verify_absent "/sys/fs/cgroup/$vm_name-network-enforcement"
-verify_absent "$identity_output/owner.lock"
 verify_absent "$entry_role_output/owner.lock"
 if [[ $with_k3s == true ]]; then
   verify_absent "$remote_root/kubernetes-identity/kubernetes-entry"

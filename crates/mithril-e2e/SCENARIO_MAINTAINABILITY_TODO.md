@@ -4603,8 +4603,14 @@ setup, production actions, assertions, and focused test.
 
 - [x] Replace the `IdentityTestRunner::physical_probe` authorization replay
   with small standard tests. Remove its result flags and hidden stateful helper.
-- [ ] Remove the now-empty native base-bundle command and its obsolete pin,
+- [x] Remove the now-empty native base-bundle command and its obsolete pin,
   lease, and cgroup arguments after the Kubernetes launcher no longer uses it.
+  The Kubernetes command now creates its result bundle and runs the remaining
+  physical probes directly. The affected Rust targets compile, the VM launcher
+  passes its shell syntax check, and the retained K3s run completed the
+  container and ephemeral groups without the old bundle handoff. That run then
+  failed in the open probe-impersonation group; it does not prove the complete
+  legacy Kubernetes probe.
 - [ ] Migrate native binding-gap, external ambiguity, cgroup escape, fork,
   exec, reparent, PID reuse, owner restart, object upgrade, and authorization
   replay groups one commit at a time. Keep their `KernelHostOwner`,

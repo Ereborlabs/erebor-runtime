@@ -172,7 +172,7 @@ pub struct IdentityVerificationBundleV1 {
     pub identity_fixture_ids: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct IdentityPhysicalProbeBundleV1 {
     pub schema_version: u32,
     pub object_sha256: String,
@@ -343,384 +343,55 @@ impl IdentityTestRunner {
         })
     }
 
-    pub fn physical_probe(
-        &self,
-        output_directory: &Path,
-        _pin_root: &Path,
-        _lease_path: &Path,
-        _cgroup_path: &Path,
-    ) -> Result<IdentityPhysicalProbeBundleV1> {
-        self.materialize_object(output_directory)?;
-        let object_sha256 = bundled_bpf_sha256();
-        Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 29,
-            object_sha256,
-            kubernetes_lifecycle_sleep_no_task: None,
-            kubernetes_http_probe_no_task: None,
-            kubernetes_tcp_probe_no_task: None,
-            kubernetes_grpc_probe_no_task: None,
-            kubernetes_init_container_root: None,
-            kubernetes_sidecar_container_root: None,
-            kubernetes_application_container_root: None,
-            kubernetes_containers_distinct_execution_sets: None,
-            kubernetes_ephemeral_target_root: None,
-            kubernetes_ephemeral_container_root: None,
-            kubernetes_ephemeral_shared_pid_namespace: None,
-            kubernetes_ephemeral_distinct_execution_set_and_profile: None,
-            kubernetes_startup_exec_probe_root: None,
-            kubernetes_readiness_exec_probe_root: None,
-            kubernetes_liveness_exec_probe_root: None,
-            kubernetes_probe_native_parent: None,
-            kubernetes_probe_native_child: None,
-            kubernetes_probe_kubectl_exec_root: None,
-            kubernetes_probe_direct_cri_exec_root: None,
-            kubernetes_probe_identities_distinct: None,
-            kubernetes_prestop_application_before: None,
-            kubernetes_prestop_application_during: None,
-            kubernetes_prestop_exec_root: None,
-            kubernetes_prestop_profile_refs_during: None,
-            kubernetes_prestop_profile_refs_after: None,
-            kubernetes_poststart_entrypoint_first_application: None,
-            kubernetes_poststart_entrypoint_first_hook: None,
-            kubernetes_poststart_hook_first_application: None,
-            kubernetes_poststart_hook_first_hook: None,
-            kubernetes_poststart_both_orders_observed: None,
-            kubernetes_poststart_repeat_application_before: None,
-            kubernetes_poststart_repeat_application_after: None,
-            kubernetes_poststart_first_hook: None,
-            kubernetes_poststart_repeated_hook: None,
-            kubernetes_poststart_repeat_fresh_identity: None,
-            kubernetes_stock_hook_timeout_seconds: None,
-            kubernetes_stock_hook_timeout_result: None,
-            kubernetes_stock_hook_timeout_no_payload: None,
-            kubernetes_stock_hook_mismatch_result: None,
-            kubernetes_stock_hook_mismatch_rejected: None,
-            kubernetes_stock_hook_mismatch_no_payload: None,
-            kubernetes_stock_hook_missing_field_result: None,
-            kubernetes_stock_hook_missing_field_rejected: None,
-            kubernetes_stock_hook_missing_field_no_payload: None,
-            kubernetes_stock_hook_failure_fixture_removed: None,
-            kubernetes_loss_audit_absent_root: None,
-            kubernetes_loss_bpf_recovered_root: None,
-            kubernetes_loss_bpf_recovered_fresh_restricted: None,
-            kubernetes_loss_runtime_root: None,
-            kubernetes_loss_runtime_identity_unhealthy: None,
-            kubernetes_restart_discovered_root: None,
-            kubernetes_restart_bound_root: None,
-            kubernetes_restart_runtime_recovered_root: None,
-            kubernetes_restart_node_gap_root: None,
-            kubernetes_restart_node_recovered_root: None,
-            kubernetes_restart_node_observation_unavailable: None,
-            kubernetes_restart_identity_stable: None,
-            kubernetes_reuse_first_root: None,
-            kubernetes_reuse_second_root: None,
-            kubernetes_reuse_first_pod_uid: None,
-            kubernetes_reuse_second_pod_uid: None,
-            kubernetes_reuse_first_sandbox_id: None,
-            kubernetes_reuse_second_sandbox_id: None,
-            kubernetes_reuse_first_container_id: None,
-            kubernetes_reuse_second_container_id: None,
-            kubernetes_reuse_first_cgroup_path: None,
-            kubernetes_reuse_second_cgroup_path: None,
-            kubernetes_reuse_first_root_cgroup_id: None,
-            kubernetes_reuse_second_root_cgroup_id: None,
-            kubernetes_reuse_first_binding_nonce: None,
-            kubernetes_reuse_second_binding_nonce: None,
-            kubernetes_reuse_first_live_interval_id: None,
-            kubernetes_reuse_second_live_interval_id: None,
-            kubernetes_reuse_same_names: None,
-            kubernetes_reuse_fresh_full_identity: None,
-            kubernetes_reuse_fresh_binding_identity: None,
-        })
-    }
-
     pub fn physical_kubernetes_probe(
         &self,
         output_directory: &Path,
-        previous_bundle_path: &Path,
         pin_root: &Path,
         lease_path: &Path,
     ) -> Result<IdentityPhysicalProbeBundleV1> {
-        let bytes = fs::read(previous_bundle_path).context(IoSnafu {
-            path: previous_bundle_path,
-        })?;
-        let mut bundle: IdentityPhysicalProbeBundleV1 =
-            serde_json::from_slice(&bytes).context(JsonSnafu {
-                path: previous_bundle_path,
-            })?;
-        let network_results_missing = bundle.kubernetes_http_probe_no_task.is_none()
-            && bundle.kubernetes_tcp_probe_no_task.is_none()
-            && bundle.kubernetes_grpc_probe_no_task.is_none();
-        let network_results_present = bundle.kubernetes_http_probe_no_task == Some(true)
-            && bundle.kubernetes_tcp_probe_no_task == Some(true)
-            && bundle.kubernetes_grpc_probe_no_task == Some(true);
-        let container_results_missing = bundle.kubernetes_init_container_root.is_none()
-            && bundle.kubernetes_sidecar_container_root.is_none()
-            && bundle.kubernetes_application_container_root.is_none()
-            && bundle
-                .kubernetes_containers_distinct_execution_sets
-                .is_none();
-        let container_results_present = bundle.kubernetes_init_container_root.is_some()
-            && bundle.kubernetes_sidecar_container_root.is_some()
-            && bundle.kubernetes_application_container_root.is_some()
-            && bundle.kubernetes_containers_distinct_execution_sets == Some(true);
-        let ephemeral_results_missing = bundle.kubernetes_ephemeral_target_root.is_none()
-            && bundle.kubernetes_ephemeral_container_root.is_none()
-            && bundle.kubernetes_ephemeral_shared_pid_namespace.is_none()
-            && bundle
-                .kubernetes_ephemeral_distinct_execution_set_and_profile
-                .is_none();
-        let ephemeral_results_present = bundle.kubernetes_ephemeral_target_root.is_some()
-            && bundle.kubernetes_ephemeral_container_root.is_some()
-            && bundle.kubernetes_ephemeral_shared_pid_namespace == Some(true)
-            && bundle.kubernetes_ephemeral_distinct_execution_set_and_profile == Some(true);
-        let probe_results_missing = bundle.kubernetes_startup_exec_probe_root.is_none()
-            && bundle.kubernetes_readiness_exec_probe_root.is_none()
-            && bundle.kubernetes_liveness_exec_probe_root.is_none()
-            && bundle.kubernetes_probe_native_parent.is_none()
-            && bundle.kubernetes_probe_native_child.is_none()
-            && bundle.kubernetes_probe_kubectl_exec_root.is_none()
-            && bundle.kubernetes_probe_direct_cri_exec_root.is_none()
-            && bundle.kubernetes_probe_identities_distinct.is_none();
-        let probe_results_present = bundle.kubernetes_startup_exec_probe_root.is_some()
-            && bundle.kubernetes_readiness_exec_probe_root.is_some()
-            && bundle.kubernetes_liveness_exec_probe_root.is_some()
-            && bundle.kubernetes_probe_native_parent.is_some()
-            && bundle.kubernetes_probe_native_child.is_some()
-            && bundle.kubernetes_probe_kubectl_exec_root.is_some()
-            && bundle.kubernetes_probe_direct_cri_exec_root.is_some()
-            && bundle.kubernetes_probe_identities_distinct == Some(true);
-        let prestop_results_missing = bundle.kubernetes_prestop_application_before.is_none()
-            && bundle.kubernetes_prestop_application_during.is_none()
-            && bundle.kubernetes_prestop_exec_root.is_none()
-            && bundle.kubernetes_prestop_profile_refs_during.is_none()
-            && bundle.kubernetes_prestop_profile_refs_after.is_none();
-        let prestop_results_present = bundle.kubernetes_prestop_application_before.is_some()
-            && bundle.kubernetes_prestop_application_during.is_some()
-            && bundle.kubernetes_prestop_exec_root.is_some()
-            && bundle.kubernetes_prestop_profile_refs_during == Some(2)
-            && bundle.kubernetes_prestop_profile_refs_after == Some(0);
-        let poststart_results_missing = bundle
-            .kubernetes_poststart_entrypoint_first_application
-            .is_none()
-            && bundle.kubernetes_poststart_entrypoint_first_hook.is_none()
-            && bundle.kubernetes_poststart_hook_first_application.is_none()
-            && bundle.kubernetes_poststart_hook_first_hook.is_none()
-            && bundle.kubernetes_poststart_both_orders_observed.is_none()
-            && bundle
-                .kubernetes_poststart_repeat_application_before
-                .is_none()
-            && bundle
-                .kubernetes_poststart_repeat_application_after
-                .is_none()
-            && bundle.kubernetes_poststart_first_hook.is_none()
-            && bundle.kubernetes_poststart_repeated_hook.is_none()
-            && bundle.kubernetes_poststart_repeat_fresh_identity.is_none();
-        let poststart_results_present = bundle
-            .kubernetes_poststart_entrypoint_first_application
-            .is_some()
-            && bundle.kubernetes_poststart_entrypoint_first_hook.is_some()
-            && bundle.kubernetes_poststart_hook_first_application.is_some()
-            && bundle.kubernetes_poststart_hook_first_hook.is_some()
-            && bundle.kubernetes_poststart_both_orders_observed == Some(true)
-            && bundle
-                .kubernetes_poststart_repeat_application_before
-                .is_some()
-            && bundle
-                .kubernetes_poststart_repeat_application_after
-                .is_some()
-            && bundle.kubernetes_poststart_first_hook.is_some()
-            && bundle.kubernetes_poststart_repeated_hook.is_some()
-            && bundle.kubernetes_poststart_repeat_fresh_identity == Some(true);
-        let stock_hook_failure_results_missing =
-            bundle.kubernetes_stock_hook_timeout_seconds.is_none()
-                && bundle.kubernetes_stock_hook_timeout_result.is_none()
-                && bundle.kubernetes_stock_hook_timeout_no_payload.is_none()
-                && bundle.kubernetes_stock_hook_mismatch_result.is_none()
-                && bundle.kubernetes_stock_hook_mismatch_rejected.is_none()
-                && bundle.kubernetes_stock_hook_mismatch_no_payload.is_none()
-                && bundle.kubernetes_stock_hook_missing_field_result.is_none()
-                && bundle
-                    .kubernetes_stock_hook_missing_field_rejected
-                    .is_none()
-                && bundle
-                    .kubernetes_stock_hook_missing_field_no_payload
-                    .is_none()
-                && bundle
-                    .kubernetes_stock_hook_failure_fixture_removed
-                    .is_none();
-        let stock_hook_failure_results_present = bundle
-            .kubernetes_stock_hook_timeout_seconds
-            .is_some_and(|seconds| seconds == 30)
-            && bundle
-                .kubernetes_stock_hook_timeout_result
-                .as_deref()
-                .is_some_and(|result| !result.is_empty())
-            && bundle.kubernetes_stock_hook_timeout_no_payload == Some(true)
-            && bundle
-                .kubernetes_stock_hook_mismatch_result
-                .as_deref()
-                .is_some_and(|result| !result.is_empty())
-            && bundle.kubernetes_stock_hook_mismatch_rejected == Some(true)
-            && bundle.kubernetes_stock_hook_mismatch_no_payload == Some(true)
-            && bundle
-                .kubernetes_stock_hook_missing_field_result
-                .as_deref()
-                .is_some_and(|result| !result.is_empty())
-            && bundle.kubernetes_stock_hook_missing_field_rejected == Some(true)
-            && bundle.kubernetes_stock_hook_missing_field_no_payload == Some(true)
-            && bundle.kubernetes_stock_hook_failure_fixture_removed == Some(true);
-        let loss_results_missing = bundle.kubernetes_loss_audit_absent_root.is_none()
-            && bundle.kubernetes_loss_bpf_recovered_root.is_none()
-            && bundle
-                .kubernetes_loss_bpf_recovered_fresh_restricted
-                .is_none()
-            && bundle.kubernetes_loss_runtime_root.is_none()
-            && bundle.kubernetes_loss_runtime_identity_unhealthy.is_none();
-        let loss_results_present = bundle.kubernetes_loss_audit_absent_root.is_some()
-            && bundle.kubernetes_loss_bpf_recovered_root.is_some()
-            && bundle.kubernetes_loss_bpf_recovered_fresh_restricted == Some(true)
-            && bundle.kubernetes_loss_runtime_root.is_some()
-            && bundle.kubernetes_loss_runtime_identity_unhealthy == Some(true);
-        let restart_results_missing = bundle.kubernetes_restart_discovered_root.is_none()
-            && bundle.kubernetes_restart_bound_root.is_none()
-            && bundle.kubernetes_restart_runtime_recovered_root.is_none()
-            && bundle.kubernetes_restart_node_gap_root.is_none()
-            && bundle.kubernetes_restart_node_recovered_root.is_none()
-            && bundle
-                .kubernetes_restart_node_observation_unavailable
-                .is_none()
-            && bundle.kubernetes_restart_identity_stable.is_none();
-        let restart_results_present = bundle.kubernetes_restart_discovered_root.is_some()
-            && bundle.kubernetes_restart_bound_root.is_some()
-            && bundle.kubernetes_restart_runtime_recovered_root.is_some()
-            && bundle.kubernetes_restart_node_gap_root.is_some()
-            && bundle.kubernetes_restart_node_recovered_root.is_some()
-            && bundle.kubernetes_restart_node_observation_unavailable == Some(true)
-            && bundle.kubernetes_restart_identity_stable == Some(true);
-        let reuse_results_missing = bundle.kubernetes_reuse_first_root.is_none()
-            && bundle.kubernetes_reuse_second_root.is_none()
-            && bundle.kubernetes_reuse_first_pod_uid.is_none()
-            && bundle.kubernetes_reuse_second_pod_uid.is_none()
-            && bundle.kubernetes_reuse_first_sandbox_id.is_none()
-            && bundle.kubernetes_reuse_second_sandbox_id.is_none()
-            && bundle.kubernetes_reuse_first_container_id.is_none()
-            && bundle.kubernetes_reuse_second_container_id.is_none()
-            && bundle.kubernetes_reuse_first_cgroup_path.is_none()
-            && bundle.kubernetes_reuse_second_cgroup_path.is_none()
-            && bundle.kubernetes_reuse_first_root_cgroup_id.is_none()
-            && bundle.kubernetes_reuse_second_root_cgroup_id.is_none()
-            && bundle.kubernetes_reuse_first_binding_nonce.is_none()
-            && bundle.kubernetes_reuse_second_binding_nonce.is_none()
-            && bundle.kubernetes_reuse_first_live_interval_id.is_none()
-            && bundle.kubernetes_reuse_second_live_interval_id.is_none()
-            && bundle.kubernetes_reuse_same_names.is_none()
-            && bundle.kubernetes_reuse_fresh_full_identity.is_none()
-            && bundle.kubernetes_reuse_fresh_binding_identity.is_none();
-        let reuse_results_present = bundle.kubernetes_reuse_first_root.is_some()
-            && bundle.kubernetes_reuse_second_root.is_some()
-            && bundle.kubernetes_reuse_first_pod_uid.is_some()
-            && bundle.kubernetes_reuse_second_pod_uid.is_some()
-            && bundle.kubernetes_reuse_first_sandbox_id.is_some()
-            && bundle.kubernetes_reuse_second_sandbox_id.is_some()
-            && bundle.kubernetes_reuse_first_container_id.is_some()
-            && bundle.kubernetes_reuse_second_container_id.is_some()
-            && bundle.kubernetes_reuse_first_cgroup_path.is_some()
-            && bundle.kubernetes_reuse_second_cgroup_path.is_some()
-            && bundle.kubernetes_reuse_first_root_cgroup_id.is_some()
-            && bundle.kubernetes_reuse_second_root_cgroup_id.is_some()
-            && bundle.kubernetes_reuse_first_binding_nonce.is_some()
-            && bundle.kubernetes_reuse_second_binding_nonce.is_some()
-            && bundle.kubernetes_reuse_first_live_interval_id.is_some()
-            && bundle.kubernetes_reuse_second_live_interval_id.is_some()
-            && bundle.kubernetes_reuse_same_names == Some(true)
-            && bundle.kubernetes_reuse_fresh_full_identity == Some(true)
-            && bundle.kubernetes_reuse_fresh_binding_identity == Some(true);
-        let schema_compatible = bundle.schema_version == 29
-            || bundle.schema_version == 28
-            || (bundle.schema_version == 27 && stock_hook_failure_results_missing)
-            || (bundle.schema_version == 26
-                && reuse_results_missing
-                && stock_hook_failure_results_missing)
-            || (bundle.schema_version == 25
-                && restart_results_missing
-                && reuse_results_missing
-                && stock_hook_failure_results_missing)
-            || (bundle.schema_version == 24
-                && loss_results_missing
-                && restart_results_missing
-                && reuse_results_missing
-                && stock_hook_failure_results_missing);
-        ensure!(
-            schema_compatible
-                && matches!(bundle.kubernetes_lifecycle_sleep_no_task, None | Some(true))
-                && (network_results_missing || network_results_present)
-                && (container_results_missing || container_results_present)
-                && (ephemeral_results_missing || ephemeral_results_present)
-                && (probe_results_missing || probe_results_present)
-                && (prestop_results_missing || prestop_results_present)
-                && (poststart_results_missing || poststart_results_present)
-                && (stock_hook_failure_results_missing || stock_hook_failure_results_present)
-                && (loss_results_missing || loss_results_present)
-                && (restart_results_missing || restart_results_present)
-                && (reuse_results_missing || reuse_results_present),
-            InvalidInputSnafu {
-                path: previous_bundle_path,
-                reason: "the prior identity bundle cannot accept the next Kubernetes result",
-            }
-        );
-        bundle.schema_version = 29;
-        if container_results_missing {
-            self.physical_kubernetes_containers_probe(
-                output_directory,
-                pin_root,
-                lease_path,
-                &mut bundle,
-            )?;
-        }
-        if ephemeral_results_missing {
-            self.physical_kubernetes_ephemeral_probe(
-                output_directory,
-                pin_root,
-                lease_path,
-                &mut bundle,
-            )?;
-        }
-        if probe_results_missing {
-            self.physical_kubernetes_probe_impersonation(
-                output_directory,
-                pin_root,
-                lease_path,
-                &mut bundle,
-            )?;
-        }
-        if prestop_results_missing {
-            self.physical_kubernetes_prestop_probe(
-                output_directory,
-                pin_root,
-                lease_path,
-                &mut bundle,
-            )?;
-        }
-        if poststart_results_missing {
-            self.physical_kubernetes_poststart_probe(
-                output_directory,
-                pin_root,
-                lease_path,
-                &mut bundle,
-            )?;
-        }
-        if stock_hook_failure_results_missing {
-            self.physical_kubernetes_stock_hook_failure_probe(output_directory, &mut bundle)?;
-        }
-        if loss_results_missing || restart_results_missing || reuse_results_missing {
-            self.physical_kubernetes_resilience_probe(
-                output_directory,
-                pin_root,
-                lease_path,
-                &mut bundle,
-            )?;
-        }
+        self.materialize_object(output_directory)?;
+        let mut bundle = IdentityPhysicalProbeBundleV1 {
+            schema_version: 29,
+            object_sha256: bundled_bpf_sha256(),
+            ..IdentityPhysicalProbeBundleV1::default()
+        };
+        self.physical_kubernetes_containers_probe(
+            output_directory,
+            pin_root,
+            lease_path,
+            &mut bundle,
+        )?;
+        self.physical_kubernetes_ephemeral_probe(
+            output_directory,
+            pin_root,
+            lease_path,
+            &mut bundle,
+        )?;
+        self.physical_kubernetes_probe_impersonation(
+            output_directory,
+            pin_root,
+            lease_path,
+            &mut bundle,
+        )?;
+        self.physical_kubernetes_prestop_probe(
+            output_directory,
+            pin_root,
+            lease_path,
+            &mut bundle,
+        )?;
+        self.physical_kubernetes_poststart_probe(
+            output_directory,
+            pin_root,
+            lease_path,
+            &mut bundle,
+        )?;
+        self.physical_kubernetes_stock_hook_failure_probe(output_directory, &mut bundle)?;
+        self.physical_kubernetes_resilience_probe(
+            output_directory,
+            pin_root,
+            lease_path,
+            &mut bundle,
+        )?;
         Ok(bundle)
     }
 
