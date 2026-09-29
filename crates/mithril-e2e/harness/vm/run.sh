@@ -549,7 +549,6 @@ if [[ $entry_role_runtime_only == true ]]; then
     .stable_canonical_mount_policy_preserved_after_mount_mutation and
     .runc_post_create_mount_mutation_observed and
     .bpf_runtime_topology_initialized and
-    .application_exec_transition_event_driven and
     .concurrent_exec_detached_mounts_preserved_view and
     .bounded_reader_queue_preserved_concurrent_burst and
     .recursive_wildcard_stable_after_concurrent_exec and

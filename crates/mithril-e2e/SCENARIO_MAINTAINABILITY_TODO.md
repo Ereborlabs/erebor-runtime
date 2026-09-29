@@ -4011,9 +4011,15 @@ setup, production actions, assertions, and focused test.
   - [x] Retire the duplicate application role and admission-rule check in the
     old direct-`runc` result. The shared `runtime_entries_stay_distinct` test
     already checks both fields and the active binding on Host, direct `runc`,
-    and Kubernetes. Keep the old event-driven transition and mount checks. The
+    and Kubernetes. Keep the old mount checks. The
     retained direct-`runc` probe passed after deletion. Its result no longer
     has the duplicate field. Shell syntax and repository Rust CI passed.
+  - [x] Retire the synthetic application exec-transition check. The old runner
+    froze the cgroup, wrote `CommitPending` directly to `process_states`, and
+    called the identity verifier. `child_exec_keeps_identity` instead performs
+    a real child exec through Node on Host, direct `runc`, and Kubernetes. It
+    requires the task cookie and parent links to remain stable, a new execution
+    and image provenance, and an active runnable state with no exec guard.
   - [x] Replace the 1,200-argument `cat` action with one standard platform
     test. Reuse `runtime_exec.py`, `runtime_entries_policy.json`, and
     `add_actor`. Do not add a Platform API or another actor program.
