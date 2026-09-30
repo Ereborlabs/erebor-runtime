@@ -14,7 +14,7 @@ image = open(target, "rb") if mode in {"fd", "fork-fd"} else None
 print("native-fixture-ready", flush=True)
 if sys.stdin.readline() != "exec\n":
     raise RuntimeError("expected exec")
-if mode == "fork-fd":
+if mode in {"fork-fd", "fork-path"}:
     pid = os.fork()
     if pid != 0:
         _, status = os.waitpid(pid, 0)
@@ -24,7 +24,7 @@ if mode == "fork-fd":
 try:
     if image is not None:
         os.execve(image.fileno(), [target], os.environ)
-    elif mode == "path":
+    elif mode in {"path", "fork-path"}:
         os.execv(target, [target])
     else:
         raise ValueError(f"unknown exec mode: {mode}")

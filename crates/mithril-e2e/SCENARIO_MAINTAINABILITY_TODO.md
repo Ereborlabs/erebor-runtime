@@ -2979,6 +2979,27 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace the denied `Execve` action with `forked_path_exec_is_denied`.
+    Reuse `exec_on_release.py`, `exec_deny_policy.json`, and the existing
+    process and evidence owners. Add a forked path mode to the actor. Start
+    the actor before Node, then use production recovery. Observe the child
+    cookie, creator, role, and zero entry rule before releasing path exec.
+    Require actual `EACCES`, fresh child-attributed `EXACT_POLICY_DENY`
+    Exec/Execute evidence, a nonzero composite atom, and zero exact-object
+    key, inode, and inode generation. Keep the Rust file below 100 lines.
+    - [x] Host passed in 28.23 seconds with the actual child syscall errno,
+      creator and role assertions, fresh denial, and every legacy path-object
+      field assertion. Pin, lease, and cgroup cleanup passed.
+      The existing forked descriptor case passed in 27.33 seconds after the
+      actor's two opt-in branch changes. The final repository Rust CI passed.
+    - [ ] Pass and commit direct `runc`, then Kubernetes. Register each
+      platform only after its exact case passes. Add no Platform API.
+    - [ ] Remove only the legacy `Execve` enum arm, action, and result field
+      after all three platforms pass. Keep `Execveat`, script exec, and their
+      shared path fixture and syscall helper.
+    - Use a fresh `exec_path_recovery` lifecycle. Actor-before-Node cases
+      cannot inherit a previous installed admission policy while Node is down.
+      Keep the ordinary Node-first cases in their existing shared lifecycles.
   - [x] Replace the denied `Fexecve` action with `forked_fd_exec_is_denied`.
     Use `exec_on_release.py` with a forked descriptor mode and one signed
     execution-Deny policy. Hold the descriptor before Node starts. After

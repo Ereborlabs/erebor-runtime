@@ -231,6 +231,30 @@ retirement. `Exec`, `Execveat`, non-leader exec, and their descriptor and libc
 helper remain for their separate migrations. No production or Platform API
 changed.
 
+### Path-exec denial
+
+Intended end state: replace the legacy forked `Execve` dispatch with one
+shared test. Preserve actual denial and every path-object evidence check.
+
+[forked_path_exec_is_denied](src/effect/exec_path_deny.rs) starts both actors before Node.
+  -> [Shared::install_policy](src/platform/shared.rs) supplies the common [policy input](fixtures/process/exec_deny_policy.json) to Control for compilation and signing.
+  -> [Platform recovery](src/platform/shared.rs) observes the recovered actor after Node starts.
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) forks a child and waits for the test's release file.
+  -> [forked_path_exec_is_denied](src/effect/exec_path_deny.rs) checks the distinct child cookie, parent creator, inherited role, and zero entry rule.
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) calls path exec and reports the syscall errno in its task name.
+  -> [EffectCheck](src/effect/check.rs) requires the child's fresh Exec/Execute exact-policy denial and the four path-object fields.
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) lets the parent reap the child after the final release file.
+  -> [ProcessFixture](src/process.rs) confirms both processes are gone before normal platform cleanup.
+
+The replacement has 80 lines and reuses the actor, policy, and evidence owner.
+It adds no Platform or production API. Run
+`effect::exec_path_deny::forked_path_exec_is_denied::exec_path_recovery_host`
+with the exact-test flags below. Host passed in 28.23 seconds with pin, lease,
+and cgroup cleanup. Direct `runc` and Kubernetes remain pending. Keep the old
+`Execve` dispatch until all three platforms pass. This review covers the
+path-exec replacement based on `8373b68b`; kernel and result schemas do not
+change.
+
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
 requires a newer READY generation, fresh attributed path-tree denial, and
