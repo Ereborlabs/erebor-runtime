@@ -26,12 +26,20 @@
         "applicationEntry": {"executionRule": "python-application", "role": "application"},
         "additionalEntries": [], "administrativeEntry": {"role": "administrator"},
         "externalRole": "external"
+      },
+      {
+        "names": ["debugger"], "kinds": ["Ephemeral"],
+        "images": ["fixture/python@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+        "applicationEntry": {"executionRule": "python-ephemeral", "role": "ephemeral"},
+        "additionalEntries": [], "administrativeEntry": {"role": "administrator"},
+        "externalRole": "external"
       }
     ],
     "roles": [
       {"name": "sidecar", "files": [], "execution": [{"name": "python-sidecar", "path": "/usr/bin/python3", "recursive": false, "operations": ["Execute"], "action": "Allow"}], "network": {"destinations": []}, "processControl": [], "unixStreams": []},
       {"name": "init", "files": [], "execution": [{"name": "python-init", "path": "/usr/bin/python3", "recursive": false, "operations": ["Execute"], "action": "Allow"}], "network": {"destinations": []}, "processControl": [], "unixStreams": []},
       {"name": "application", "files": [{"name": "deny-application-read", "path": "/fixtures/policy_replace.py", "recursive": false, "operations": ["OpenRead"], "action": "Deny"}], "execution": [{"name": "python-application", "path": "/usr/bin/python3", "recursive": false, "operations": ["Execute"], "action": "Allow"}], "network": {"destinations": []}, "processControl": [], "unixStreams": []},
+      {"name": "ephemeral", "files": [], "execution": [{"name": "python-ephemeral", "path": "/usr/bin/python3", "recursive": false, "operations": ["Execute"], "action": "Allow"}], "network": {"destinations": []}, "processControl": [], "unixStreams": []},
       {"name": "administrator", "files": [], "execution": [], "network": {"destinations": []}, "processControl": [], "unixStreams": []},
       {"name": "external", "files": [], "execution": [{"name": "python-probe", "path": "/work/bin/python", "recursive": false, "operations": ["Execute"], "action": "Allow"}], "network": {"destinations": []}, "processControl": [], "unixStreams": []}
     ],

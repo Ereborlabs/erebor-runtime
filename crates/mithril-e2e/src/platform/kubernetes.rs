@@ -346,6 +346,13 @@ impl KubernetesState {
                     .into_iter()
                     .flat_map(|items| items.iter()),
             )
+            .chain(
+                status
+                    .ephemeral_container_statuses
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|items| items.iter()),
+            )
             .find(|item| item.name == name)
     }
 

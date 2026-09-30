@@ -74,6 +74,27 @@ the actor kinds, not Kubernetes YAML. The
 [native network-probe test](src/identity/scenarios/network_probes.rs) keeps its
 HTTP, TCP, and gRPC probe definitions in its Kubernetes Pod fixture.
 
+For a Kubernetes Ephemeral container, include an Application actor and an
+Ephemeral actor in the same group call. The Application name must match the
+policy selector. Kubernetes creates one Pod, then adds the Ephemeral container
+through the `ephemeralcontainers` subresource. The Ephemeral container targets
+the first Application container's PID namespace. Each container keeps its own
+cgroup, entry role, and process identity.
+
+Read the implemented path in this order:
+
+[ephemeral_actor_is_isolated](src/identity/scenarios/ephemeral_container.rs) starts Control, Node, and the signed policy.
+  -> [Kubernetes::start_group](src/platform/kubernetes/actor.rs) creates the Application Pod and patches the Ephemeral subresource.
+  -> [KubernetesAdmissionOwner](../mithril-control/src/policy/kubernetes_workloads.rs) validates the Pod against its admitted policy revision.
+  -> [Kubernetes::task](src/platform/kubernetes.rs) reads both identities through the production inspector.
+  -> [ephemeral_actor_is_isolated](src/identity/scenarios/ephemeral_container.rs) checks distinct roles, rules, identities, profiles, and cgroups in one PID namespace.
+  -> [ProcessFixture::stop](src/process.rs) stops both actors before per-test cleanup.
+
+Run the generated `ephemeral_actor_is_isolated::identity_kubernetes` case by
+its full name in the retained VM. This test proves signed container admission.
+The old identity-only Ephemeral probe remains until a small test also proves
+its late-discovery conservative-root condition.
+
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path
 result flags for a shell gate. The 41-line

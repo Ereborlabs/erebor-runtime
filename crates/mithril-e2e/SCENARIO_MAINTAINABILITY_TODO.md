@@ -617,10 +617,10 @@ runner that still needs replacement:
 
 | Source | Current lines | Open work |
 | --- | ---: | --- |
-| `effect/runc.rs` | 6,860 | Size and runner retirement |
-| `identity.rs` | 5,174 | Size and runner retirement |
-| `effect.rs` | 3,127 | Size and runner retirement |
-| `effect/child.rs` | 2,991 | Size and runner retirement |
+| `effect/runc.rs` | 5,930 | Size and runner retirement |
+| `identity.rs` | 4,845 | Size and runner retirement |
+| `effect.rs` | 3,071 | Size and runner retirement |
+| `effect/child.rs` | 2,954 | Size and runner retirement |
 | `control_tls.rs` | 2,416 | Size and runner retirement |
 | `effect/network.rs` | 1,505 | Runner retirement; size limit met |
 
@@ -4837,6 +4837,51 @@ setup, production actions, assertions, and focused test.
     Kubernetes with its real init, sidecar, and application containers before
     removing the old probe.
 - [ ] `physical_kubernetes_ephemeral_probe`
+  - [x] Add one small Kubernetes platform test. Start Control and Node, install
+    one signed Pod policy, and start one Application actor and one Ephemeral
+    actor with one `start_actor_group` call.
+  - [x] Extend the existing Kubernetes actor-group implementation for
+    `ContainerKindV1::Ephemeral`. Use the kube client's native
+    `ephemeralcontainers` subresource. Do not add a Platform operation, Pod
+    fixture, shell action, or embedded actor program.
+  - [x] Keep the standard actor Pod PID namespace private. Target the
+    Application container from the Ephemeral container. Require both actors
+    to share that PID namespace and to use different cgroups.
+  - [x] Require distinct task cookies, process states, execution sets, active
+    roles, and policy profiles. Require both roots to be active initial
+    container roots with no creator task.
+    Require `initial_role` for both container entrypoints. The user approved
+    this correction on 2026-09-29. `qualified_registered_role` describes a
+    later runtime entry, not a new container entrypoint.
+    The 93-line test passed all assertions in 79.39 seconds in the retained
+    Kubernetes VM. Pod cleanup completed. Node, Control, and BPF did not change.
+  - [x] Pass the exact Kubernetes test and the existing actor-group cases.
+    The shared container-kind policy passed on Host in 37.73 seconds and
+    direct `runc` in 56.51 seconds. Its Kubernetes actor-group case and the
+    new Ephemeral case passed in the complete identity lifecycle run.
+  - [x] Pass the complete Kubernetes identity lifecycle before the platform
+    commit. The 2026-09-29 run passed 59 tests and failed
+    `stock_probes_are_entries` in 1788.51 seconds. See its evidence-readiness
+    condition below. Do not accept a container restart or increase a timeout.
+    The repository Rust CI gate passed with `RUST_TEST_THREADS=1`. Earlier
+    parallel runs failed in separate CLI temporary-JSON and Control log tests.
+    Both exact tests passed. Their parallel-run causes remain unproven.
+    The final 2026-09-30 Kubernetes identity lifecycle passed all 60 tests in
+    1562.85 seconds. It included the Ephemeral case, stock probes, socket-stale
+    case, lifecycle churn, and retained-Node checks. Cleanup left no Mithril
+    namespace, Pod, pin root, lease, socket, or per-test output. The VM and K3s
+    cluster remain available. The final repository Rust CI gate passed after
+    restoring the unmatched legacy probe comparisons. Formatting, workspace
+    check, strict Clippy, workspace tests, and all 255 Node library tests passed.
+    This result qualifies the affected identity lifecycle, not every generated
+    lifecycle or the late-discovery conservative-root case.
+  - [ ] Remove only the matching old method, result fields, manifest, and
+    launcher copy after the replacement passes. Keep unrelated Kubernetes
+    identity cases.
+    Keep the old conservative-root oracle until a small test reproduces its
+    late-discovery condition. The new signed-admission test does not prove
+    `restored_or_unknown_root` with `fail_closed_unknown` for both containers.
+    The temporary old-probe deletion was restored after the baseline audit.
 - [ ] `physical_kubernetes_probe_impersonation`
   - [x] Replace the three stock exec-probe identities with
     `stock_probes_are_entries`. This is a Kubernetes-only physical condition.
@@ -4989,6 +5034,17 @@ setup, production actions, assertions, and focused test.
   - [ ] Find why Control did not publish the matching scheduled target for
     the failed Kubernetes Pod. The lightweight test proves the absence
     condition, not its cause. No further production change is approved.
+    The unchanged exact Kubernetes socket-stale test passed in 75.51 seconds
+    on 2026-09-30 after reproduction commit `b50fc61d`. It used the retained
+    VM, cluster, images, four-second admission deadline, and original security
+    assertions. This result does not prove the earlier cause or close this
+    item. The complete affected Kubernetes identity gate then passed all 60
+    tests in 1562.85 seconds. Its output is retained in
+    `/var/tmp/mithril-kube-target-gate.log` in the VM and
+    `/tmp/mithril-kube-target-gate.log` on the host.
+    The uncommitted legacy probe deletion was restored after comparison with
+    `95775f48`. The new stock-probe test does not replace the simultaneous
+    identical-command comparison with native, kubectl, and direct CRI entries.
   - [ ] Remove only the matching startup, readiness, and liveness actions,
     result fields, and old fixture containers. Keep the native-child,
     kubectl-exec, and direct-CRI assertions until their exact replacements

@@ -358,3 +358,37 @@ All 255 Node library tests passed. The ignored physical case ran separately
 in the retained VM. Kubernetes and the complete physical platform matrix
 were not rerun. This result does not prove the cause of the missing Control
 target.
+
+### Subsequent Kubernetes check
+
+After reproduction commit `b50fc61d`, the unchanged exact
+`effect::socket_stale::exited_peer_loses_authority::identity_kubernetes` case
+passed in 75.51 seconds on 2026-09-30. The run used the retained VM and K3s
+cluster. The images, assertions, and four-second admission deadline did not
+change. The guest retained the output in
+`/var/tmp/mithril-socket-target-focus.log`.
+
+[KubernetesWorkloadInventoryOwner::reconcile_once](../mithril-control/src/policy/kubernetes_workloads.rs) lists Pods, Nodes, Namespaces, and ServiceAccounts.
+  -> [KubernetesWorkloadInventoryOwner::bound_pod_targets](../mithril-control/src/policy/kubernetes_workloads.rs) selects a scheduled Pod and resolves its policy and Node identity.
+  -> [KubernetesWorkloadInventoryOwner::replace_inventory](../mithril-control/src/policy/kubernetes_workloads.rs) publishes the external workload inventory to Control.
+  -> [PolicyDesiredStateOwner::reconcile](../mithril-control/src/policy/reconciliation.rs) produces the signed scheduled target.
+  -> [NodeChassis::answer_runtime_stage](../mithril-node/src/node.rs) stages facts only when one signed target matches.
+
+Control skips Pods whose phase is `Failed` or `Succeeded`. A zero-target
+status after the OCI failure therefore does not identify the cause before
+that failure. The failed Pod and its logs were removed by normal cleanup.
+The earlier missing-target cause remains unknown. No production fix is
+approved or applied. This exact result alone does not qualify the complete
+affected Kubernetes identity lifecycle.
+
+The subsequent complete Kubernetes identity lifecycle passed all 60 cases in
+1562.85 seconds. The run included the socket-stale, stock-probe, Ephemeral,
+lifecycle churn, and retained-Node cases. Cleanup removed the Mithril
+namespaces, Pods, pins, leases, sockets, and per-test output. The retained VM
+and K3s cluster remain available. The host retains the complete output in
+`/tmp/mithril-kube-target-gate.log`.
+
+The final Rust CI procedure above passed after the unmatched legacy probe
+comparisons were restored. All 255 Node library tests passed. The broader
+platform matrix remains open. The earlier missing-target cause remains
+unknown; a successful rerun does not prove a production fix.

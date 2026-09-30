@@ -5,8 +5,8 @@ use std::os::unix::process::ExitStatusExt as _;
 use std::path::PathBuf;
 use std::process::Command;
 
-use k8s_openapi::api::core::v1::Pod;
-use kube::api::PostParams;
+use k8s_openapi::api::core::v1::{EphemeralContainer, Pod};
+use kube::api::{Patch, PatchParams, PostParams};
 use kube::Api;
 use snafu::ResultExt as _;
 
@@ -53,7 +53,11 @@ impl Kubernetes {
         } else {
             if actors.iter().any(|actor| {
                 actor.script.is_none()
-                    || actor.kind != mithril_control::ContainerKindV1::Application
+                    || !matches!(
+                        actor.kind,
+                        mithril_control::ContainerKindV1::Application
+                            | mithril_control::ContainerKindV1::Ephemeral
+                    )
             }) {
                 return Err(format!(
                     "{}: the scenario needs a Pod fixture for native or non-application actors",
@@ -69,9 +73,13 @@ impl Kubernetes {
         pod.metadata.labels = Some(labels.clone());
         let spec = pod.spec.as_mut().ok_or("the actor Pod has no spec")?;
         if let [base] = spec.containers.as_slice() {
-            if actors.len() > 1 && spec.init_containers.as_ref().is_none_or(Vec::is_empty) {
-                spec.containers = actors
-                    .iter()
+            let regular = actors
+                .iter()
+                .filter(|actor| actor.kind != mithril_control::ContainerKindV1::Ephemeral)
+                .collect::<Vec<_>>();
+            if !regular.is_empty() && spec.init_containers.as_ref().is_none_or(Vec::is_empty) {
+                spec.containers = regular
+                    .into_iter()
                     .map(|actor| {
                         let mut container = base.clone();
                         container.name = actor.name.to_owned();
@@ -81,7 +89,11 @@ impl Kubernetes {
             }
         }
         let count = spec.containers.len() + spec.init_containers.as_ref().map_or(0, Vec::len);
-        if count != actors.len() {
+        let expected = actors
+            .iter()
+            .filter(|actor| actor.kind != mithril_control::ContainerKindV1::Ephemeral)
+            .count();
+        if count != expected {
             return Err("the actor names do not match the Pod containers".into());
         }
         spec.node_selector = Some(BTreeMap::from([(
@@ -107,9 +119,44 @@ impl Kubernetes {
         }
         let mut names = BTreeSet::new();
         let mut hooked = BTreeSet::new();
+        let target = actors
+            .iter()
+            .find(|actor| actor.kind == mithril_control::ContainerKindV1::Application)
+            .map(|actor| actor.name);
+        let mut ephemeral = Vec::new();
         for actor in actors {
             if !names.insert(actor.name) {
                 return Err(format!("duplicate actor name {}", actor.name).into());
+            }
+            if actor.kind == mithril_control::ContainerKindV1::Ephemeral {
+                let script = actor
+                    .script
+                    .ok_or("ephemeral actor needs a Python script")?;
+                actor_script(&self.root, script)?;
+                KubernetesState::require_image(&self.k3s_path, &self.actor_image)?;
+                let target = target.ok_or("ephemeral actor needs an Application target")?;
+                let base = pod
+                    .spec
+                    .as_ref()
+                    .and_then(|spec| spec.containers.iter().find(|item| item.name == target))
+                    .ok_or("the actor Pod has no Application target")?;
+                let mut args = vec![format!("/fixtures/{script}"), "/work".to_owned()];
+                args.extend(actor.args.iter().map(|arg| (*arg).to_owned()));
+                ephemeral.push(EphemeralContainer {
+                    args: Some(args),
+                    command: Some(vec![self.actor_python.clone()]),
+                    env: base.env.clone(),
+                    image: Some(self.actor_image.clone()),
+                    image_pull_policy: base.image_pull_policy.clone(),
+                    name: actor.name.to_owned(),
+                    security_context: base.security_context.clone(),
+                    stdin: Some(true),
+                    stdin_once: Some(true),
+                    target_container_name: Some(target.to_owned()),
+                    volume_mounts: base.volume_mounts.clone(),
+                    ..EphemeralContainer::default()
+                });
+                continue;
             }
             let kind = actor.pod_kind(&pod)?;
             if kind != actor.kind {
@@ -157,11 +204,22 @@ impl Kubernetes {
 
         let mut group = Vec::with_capacity(actors.len());
         let mut before_app = Some(before_app);
+        let mut ephemeral = Some(ephemeral);
         for actor in actors {
             if actor.kind == mithril_control::ContainerKindV1::Application {
                 if let Some(check) = before_app.take() {
                     check(self, &mut group)?;
                 }
+            }
+            if actor.kind == mithril_control::ContainerKindV1::Ephemeral {
+                let patch = serde_json::json!({
+                    "spec": {"ephemeralContainers": ephemeral.take().unwrap_or_default()}
+                });
+                self.runtime.block_on(pods.patch_ephemeral_containers(
+                    &self.actor_name,
+                    &PatchParams::default(),
+                    &Patch::Strategic(patch),
+                ))?;
             }
             let path = actor
                 .script
@@ -321,7 +379,11 @@ impl Kubernetes {
                     .and_then(|state| state.terminated.as_ref());
                 Ok(exit.map(|exit| std::process::ExitStatus::from_raw(exit.exit_code << 8)))
             });
-            process.set_init(pid)?;
+            if actor.kind == mithril_control::ContainerKindV1::Ephemeral {
+                process.set_actor(pid)?;
+            } else {
+                process.set_init(pid)?;
+            }
             process.set_group(&cgroup);
             if self.actor_id.is_none() {
                 self.actor_id = Some(id);
@@ -336,14 +398,17 @@ impl Kubernetes {
             for actor in actors {
                 let state = KubernetesState::member_status(&pod, actor.name)
                     .ok_or_else(|| format!("the actor Pod has no {} status", actor.name))?;
-                let ready = if actor.kind == mithril_control::ContainerKindV1::Init {
-                    state
+                let ready = match actor.kind {
+                    mithril_control::ContainerKindV1::Init => state
                         .state
                         .as_ref()
                         .and_then(|state| state.terminated.as_ref())
-                        .is_some_and(|exit| exit.exit_code == 0)
-                } else {
-                    state.ready
+                        .is_some_and(|exit| exit.exit_code == 0),
+                    mithril_control::ContainerKindV1::Ephemeral => state
+                        .state
+                        .as_ref()
+                        .is_some_and(|state| state.running.is_some()),
+                    _ => state.ready,
                 };
                 if !ready || state.restart_count != 0 {
                     return Err(format!(
