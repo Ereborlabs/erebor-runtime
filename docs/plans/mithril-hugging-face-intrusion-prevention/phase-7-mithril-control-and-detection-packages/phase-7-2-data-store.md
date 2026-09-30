@@ -763,7 +763,26 @@ ARAPHOR_STORE_BENCH_MODE=analysis ARAPHOR_STORE_BENCH_BATCHES=64 timeout 30s /us
 The user requires the disk-full case and the two-node storage and outage case
 for closure. The user removed the 8-GiB case from this closure. Do not run that
 case or claim that capacity is qualified. The eight ordered review items above
-are accepted. The current workspace gate and the two-node case are **Not done**.
+are accepted. The current workspace gate is **Done**. The two-node case is
+**Not done**.
+
+**Workspace gate: Done, PASS**, 2026-09-29, source `f9c6901e`. The last Rust
+change is the quota-test input in `b56d204e`. Formatting, workspace check,
+Clippy with all targets and features, and all non-ignored workspace tests
+passed. The gate reported 81 data-owner tests, 174 Control tests, and 123
+Mithril e2e tests, with zero failures. The ignored 8-GiB case did not run.
+Read `workspace-gate.log` in `/tmp/araphor-close.D8LyQB`.
+
+```sh
+CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh
+```
+
+**Harness regressions: Done, PASS**, at the same source. `harness/vm/test.sh`
+passed its VM behavior checks. `inspect-data-test.sh` passed as root in a
+disposable container. It checked selected-directory access as user 65532,
+private-parent refusal, unchanged ownership, and mount cleanup after success
+and failure. Read `harness-regression.log` and `inspect-regression.log` in the
+same result directory. These checks do not replace the physical case.
 
 **Disk-full: Done, PASS**, 2026-09-29, source `52b21139`. The existing
 `disk-full.sh` harness ran the current release test executable. Each case
