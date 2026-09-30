@@ -199,6 +199,13 @@ Run `effect::exec_fd_allow::exec_fd_allow_cannot_admit::exec_fd_recovery_host`
 with the exact-test flags below. Use the `exec_fd_recovery_runc` or
 `exec_fd_recovery_kubernetes` suffix for the other platforms. The test uses
 the same actor, signed policy, and assertions on all three platforms.
+The replacement has 82 lines. It removes the legacy allowed-exec dispatch,
+stored descriptor, path field, and result flag after qualification. The
+separate denied-fexecve actions remain. The legacy executable path fixture
+remains for signed policy installation and independent mmap/mprotect Allow
+lowering checks. The retirement deletes 57 Rust lines.
+Nine focused child regressions and the final repository Rust CI procedure
+passed after retirement. No production or Platform API changed.
 
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path

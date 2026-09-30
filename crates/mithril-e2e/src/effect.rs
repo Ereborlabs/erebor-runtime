@@ -464,7 +464,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub script_exec_denied: bool,
     pub deleted_exec_denied: bool,
     pub non_leader_exec_denied: bool,
-    pub external_exec_allow_cannot_admit: bool,
     pub memfd_exec_failed_closed: bool,
     pub unix_stream_relationship_allowed: bool,
     pub ptmx_ioctl_exact_allowed: bool,
@@ -1699,44 +1698,6 @@ impl EffectTestRunner {
                 "UNSUPPORTED_OBJECT",
                 (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
             )?;
-            let external_exec_marker = observations.cursor();
-            let external_exec = fixture.run_prepared(HardClosedOperation::AllowedExec)?;
-            reader
-                .poll(Duration::from_millis(100))
-                .context(InterceptorSnafu)?;
-            ensure!(
-                external_exec.denied(),
-                InvalidInputSnafu {
-                    path: &paths.allowed_exec_target,
-                    reason: format!(
-                        "an action-level executable Allow admitted an external entry: {external_exec:?}; observed {:?}",
-                        observations
-                            .recent_since(external_exec_marker)
-                            .iter()
-                            .map(|event| (
-                                event.reason.as_str(),
-                                event.effect_family,
-                                event.operation,
-                                event.operation_argument,
-                            ))
-                            .collect::<Vec<_>>()
-                    ),
-                }
-            );
-            wait_for_path_exec_effect(
-                &reader,
-                &observations,
-                external_exec_marker,
-                "EXACT_POLICY_ALLOW",
-                KernelEffectOperationV1::Execute,
-            )?;
-            wait_for_effect(
-                &reader,
-                &observations,
-                external_exec_marker,
-                "UNSUPPORTED_OBJECT",
-                (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
-            )?;
         } else {
             let exec_marker = observations.cursor();
             // The signed image decision must be observe-only. A later dynamic
@@ -2769,7 +2730,6 @@ impl EffectTestRunner {
             script_exec_denied: protect,
             deleted_exec_denied: protect,
             non_leader_exec_denied: protect,
-            external_exec_allow_cannot_admit: protect,
             memfd_exec_failed_closed: protect,
             unix_stream_relationship_allowed: protect,
             ptmx_ioctl_exact_allowed: protect,

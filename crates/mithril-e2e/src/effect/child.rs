@@ -121,7 +121,6 @@ enum ChildRequest {
     NetworkBpfSetup,
     PrepareHardClosed {
         exec_path: PathBuf,
-        allowed_exec_path: PathBuf,
         script_path: PathBuf,
         deleted_exec_path: PathBuf,
         secret_path: PathBuf,
@@ -145,7 +144,6 @@ pub(super) enum PreparedOperation {
     DeletedExec,
     MemfdExec,
     NonLeaderExec,
-    AllowedExec,
     SecretMmapExec,
     SecretMprotectReadExec,
     SecretMprotectWriteExec,
@@ -191,7 +189,6 @@ pub(super) struct EffectPaths {
     pub(super) second_bind_alias: PathBuf,
     pub(super) benign: PathBuf,
     pub(super) exec_target: PathBuf,
-    pub(super) allowed_exec_target: PathBuf,
     pub(super) script_target: PathBuf,
     pub(super) deleted_exec_target: PathBuf,
     pub(super) mount_target: PathBuf,
@@ -589,7 +586,6 @@ impl EffectProcessFixture {
     pub(super) fn prepare_operations(&mut self, paths: &EffectPaths) -> Result<()> {
         match self.request(&ChildRequest::PrepareHardClosed {
             exec_path: paths.exec_target.clone(),
-            allowed_exec_path: paths.allowed_exec_target.clone(),
             script_path: paths.script_target.clone(),
             deleted_exec_path: paths.deleted_exec_target.clone(),
             secret_path: paths.secret.clone(),
@@ -1062,7 +1058,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
             }
             ChildRequest::PrepareHardClosed {
                 exec_path,
-                allowed_exec_path,
                 script_path,
                 deleted_exec_path,
                 secret_path,
@@ -1070,7 +1065,6 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 mount_source,
             } => match PreparedOperations::new(
                 &exec_path,
-                &allowed_exec_path,
                 &script_path,
                 &deleted_exec_path,
                 &secret_path,
@@ -1304,7 +1298,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
         second_bind_alias,
         benign,
         exec_target,
-        allowed_exec_target,
         script_target,
         deleted_exec_target,
         mount_target,
@@ -1575,7 +1568,6 @@ struct PreparedOperations {
     exec_path: PathBuf,
     script_path: PathBuf,
     exec_file: fs::File,
-    allowed_exec_file: fs::File,
     deleted_exec_file: fs::File,
     memfd_exec_file: fs::File,
     secret_file: fs::File,
@@ -1599,7 +1591,6 @@ struct PreparedOperations {
 impl PreparedOperations {
     fn new(
         exec_path: &Path,
-        allowed_exec_path: &Path,
         script_path: &Path,
         deleted_exec_path: &Path,
         secret_path: &Path,
@@ -1621,9 +1612,6 @@ impl PreparedOperations {
             path: Path::new("/dev/zero"),
         })?;
         let exec_file = fs::File::open(exec_path).context(IoSnafu { path: exec_path })?;
-        let allowed_exec_file = fs::File::open(allowed_exec_path).context(IoSnafu {
-            path: allowed_exec_path,
-        })?;
         let deleted_exec_file = fs::File::open(deleted_exec_path).context(IoSnafu {
             path: deleted_exec_path,
         })?;
@@ -1707,7 +1695,6 @@ impl PreparedOperations {
             exec_path: exec_path.to_path_buf(),
             script_path: script_path.to_path_buf(),
             exec_file,
-            allowed_exec_file,
             deleted_exec_file,
             memfd_exec_file,
             secret_file,
@@ -1802,10 +1789,6 @@ impl PreparedOperations {
             PreparedOperation::NonLeaderExec => {
                 io_outcome(fixture_syscalls::exec_fd(self.exec_file.as_raw_fd(), true))
             }
-            PreparedOperation::AllowedExec => io_outcome(fixture_syscalls::exec_fd(
-                self.allowed_exec_file.as_raw_fd(),
-                false,
-            )),
             PreparedOperation::SecretMmapExec => {
                 mmap_protection_outcome(&self.secret_file, libc::PROT_EXEC, libc::MAP_PRIVATE, None)
             }

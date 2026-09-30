@@ -2969,7 +2969,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace the protected action-level executable Allow that cannot admit
+  - [x] Replace the protected action-level executable Allow that cannot admit
     an undeclared runtime entry. Reuse `ready.py`. Give the distinct signed
     policy an external-role Allow for `/usr/bin/sleep` but no `sleep` entry
     declaration. Start Control and Node,
@@ -2996,7 +2996,7 @@ test does not close a row when its physical condition or an assertion changed.
         attributed Allow-then-deny Exec evidence.
       - [x] Pass direct `runc` and commit its registration. The exact case
         passed in 43.09 seconds through stock `runc` and the OCI hook.
-      - [ ] Pass Kubernetes and commit its registration. The first exact run
+      - [x] Pass Kubernetes and commit its registration. The first exact run
         stopped at the actor exit check: `kubectl exec` returned status 1,
         not 13. A transport-only `kubectl exec` diagnostic preserved status
         13. Direct containerd used the same Python image and completed
@@ -3030,8 +3030,19 @@ test does not close a row when its physical condition or an assertion changed.
         CI gate passed after registration. No production or Platform API
         changed. The old transport-status failure does not qualify as a
         production admission failure.
-    - [ ] Remove only the matching legacy action, result field, and unused
+    - [x] Remove only the matching legacy action, result field, and unused
       fixture state after the `fexecve` case passes on all three platforms.
+      Compared with baseline `95775f48`, the replacement retains physical
+      `EACCES`, the action Allow, and the independent entry denial. It also
+      requires same-task attribution and entry rule zero. The retirement
+      deletes 57 Rust lines: the action, result flag, enum variant, request
+      argument, path field, and prepared descriptor. Nine child regressions
+      passed in 0.01 seconds. Keep the separate denied-`fexecve` actions.
+      Keep the legacy executable path fixture: the signed policy still uses
+      it, and independent unit checks require its mmap/mprotect Allow cells.
+      The repository Rust CI procedure passed after the retirement edit.
+      This includes formatting, workspace checking, strict Clippy, and
+      workspace tests. No physical matrix rerun was needed for this deletion.
   - [x] Replace the old SQPOLL check for a restricted rule-zero actor in
     Protect and Observe modes. The old binding sets `arm_initial_root=false`.
     The existing Protect platform test covers the same recovered rule-zero
