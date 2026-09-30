@@ -236,9 +236,10 @@ mod tests {
         })?;
         let mut owner = ControlContextOwner::new(store, data.clone(), &allowed)?;
         for _ in 0..2 {
-            let error = owner.reconcile().expect_err("context exceeded its quota");
-            assert!(matches!(error, crate::Error::DataStore { source, .. }
-                if matches!(*source, araphor_data::Error::StorageCapacity { .. })));
+            assert!(
+                matches!(owner.reconcile(), Err(crate::Error::DataStore { source, .. })
+                if matches!(*source, araphor_data::Error::StorageCapacity { .. }))
+            );
             assert!(matches!(owner.cursor, ContextCursor::Trust(None)));
             assert_eq!(data.meta()?.commit_revision, 0);
         }
