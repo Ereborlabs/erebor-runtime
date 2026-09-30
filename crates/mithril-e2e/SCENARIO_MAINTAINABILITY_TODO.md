@@ -2996,9 +2996,12 @@ test does not close a row when its physical condition or an assertion changed.
       policy, and assertions. Pin, lease, and cgroup cleanup passed.
       The existing descriptor-Allow and path-exec runc cases passed in 34.29
       and 33.48 seconds. The final repository Rust CI procedure passed.
-    - [ ] Pass and commit Kubernetes. Add its platform registration only after
-      its exact case passes. Keep the other exec modes in the old runner until
-      their replacements pass.
+    - [x] Kubernetes passed in 71.21 seconds with the same actor, signed policy,
+      and assertions. Namespace, pin, and lease cleanup passed. Keep the other
+      exec modes in the old runner until their replacements pass.
+      The existing descriptor-Allow and path-exec Kubernetes cases passed in
+      69.13 and 114.77 seconds. Their namespace, pin, and lease cleanup passed.
+      The final repository Rust CI procedure passed.
     - [ ] Remove only the legacy `Fexecve` action, enum arm, and result field
       after all three platforms pass. Keep `Exec`, `Execveat`, and non-leader
       descriptor exec and their shared descriptor and libc helper.

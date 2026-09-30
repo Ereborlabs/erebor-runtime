@@ -222,9 +222,10 @@ gone, then stops the process and platform owners.
 Run `effect::exec_fd_deny::forked_fd_exec_is_denied::exec_deny_recovery_host`
 with the exact-test flags below. Host passed in 28.07 seconds with pin, lease,
 and cgroup cleanup. Direct `runc` passed in 28.48 seconds with the same checks
-and cleanup. Use the `exec_deny_recovery_runc` suffix. Kubernetes remains
-pending. Keep the old `Fexecve` action until the same assertions pass on all
-three platforms.
+and cleanup. Use the `exec_deny_recovery_runc` suffix. Kubernetes passed in
+71.21 seconds with the same checks and namespace, pin, and lease cleanup.
+Use the `exec_deny_recovery_kubernetes` suffix. The old `Fexecve` dispatch
+remains until its matched retirement is verified.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
