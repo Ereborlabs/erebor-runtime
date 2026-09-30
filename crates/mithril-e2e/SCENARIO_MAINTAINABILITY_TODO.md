@@ -4929,7 +4929,32 @@ setup, production actions, assertions, and focused test.
     705.64 seconds. Both lifecycle cleanup operations completed. The paired
     Kubernetes `stock_probes_are_entries` test passed in 84.28 seconds. Its
     original readiness, role, identity, and zero-restart checks remain. The
-    complete Kubernetes identity lifecycle is running with the same source.
+    complete Kubernetes identity lifecycle passed 59 tests and failed
+    `effect::socket_stale::exited_peer_loses_authority::identity_kubernetes`
+    in 1593.46 seconds. `stock_probes_are_entries` passed again in that run.
+    The approved recovery fix and its 69-line regression test were committed
+    as `1d9d3792`. Do not mark the complete Kubernetes gate as passed.
+  - [ ] Reproduce the separate signed-target convergence condition in
+    lightweight before another production change or Kubernetes run.
+    - The socket-stale test installed its policy, confirmed Node readiness,
+      and created its first worker Pod. It did not reach the peer-exit action.
+    - From 00:50:03.616 to 00:50:07.606 UTC on 2026-09-30, Node answered
+      staging requests about every 26 milliseconds. Each response was
+      `POLICY_CONVERGENCE_PENDING`: the Pod did not resolve to one signed
+      scheduled target. Node was not blocked in evidence recovery.
+    - At 00:50:07.617 UTC, the production OCI hook reached its four-second
+      deadline and failed closed. The worker container exited with
+      `StartError`, code 128, before the Python actor started.
+    - Control reported zero desired targets for this policy at 00:49:56.178
+      and 00:50:17.486 UTC. The Node log contains no candidate activation for
+      this worker during its staging window. The cause of the missing target
+      is not yet known. Control has no configured CPU or memory limit in this
+      retained test deployment.
+    - This is signed policy delivery for a new Pod, not BPF binding publication.
+      Keep the four-second deadline and the test's security assertions.
+      Do not accept a container restart or replace the socket-stale action.
+      Keep the pending Ephemeral platform changes uncommitted until the
+      complete Kubernetes identity gate passes.
   - [ ] Remove only the matching startup, readiness, and liveness actions,
     result fields, and old fixture containers. Keep the native-child,
     kubectl-exec, and direct-CRI assertions until their exact replacements

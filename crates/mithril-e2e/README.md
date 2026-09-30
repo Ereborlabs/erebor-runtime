@@ -215,8 +215,14 @@ final Host identity lifecycle passed all 65 tests in 705.64 seconds. The final
 direct-`runc` lifecycle passed all 59 tests in 670.16 seconds. The focused
 quiet-stream test passed in 42.51 seconds. Paired Kubernetes verification is
 passing: the unchanged `stock_probes_are_entries` test passed in 84.28 seconds.
-The complete Kubernetes identity lifecycle remains pending. BPF, production
-policy, and admission timeouts remain unchanged.
+The complete Kubernetes identity lifecycle passed 59 tests and failed
+`exited_peer_loses_authority` in 1593.46 seconds. Its first actor did not start.
+Node returned `POLICY_CONVERGENCE_PENDING` because the new Pod did not resolve
+to one signed scheduled target. The four-second staging deadline expired.
+This is not the quiet-stream evidence failure. The cause of the missing target
+is not yet known. The complete Kubernetes gate has not passed. Reproduce this
+condition in lightweight before another production change or Kubernetes run.
+BPF, production policy, assertions, and admission timeouts remain unchanged.
 
 ## Required Order And Result Contract
 
