@@ -30,7 +30,7 @@ declarative captures are not delivered by these changes.
 
 ### Node owners after rebase
 
-The branch now includes committed local `main` at `36cfe7e4`. The rebase keeps
+The branch now includes committed local `main` at `b50fc61d`. The rebase keeps
 main's separate startup, run, admission, and policy installation owners.
 
 [PreparedPolicy::prepare](../../../../crates/mithril-node/src/policy/installation.rs) Node builds context from verified policy and measured binding coordinates.<br>
@@ -55,6 +55,12 @@ coordinates. `observability_recovery_mtls_reconnect_preserves_dispatch_and_outpu
 checks diagnostic retry through the production transport. These checks do not
 replace physical workload qualification.
 
+The final workspace gate passed on `5be548bd`, after the rebase onto
+`b50fc61d`. It reports 1,316 passed tests, zero failures, and 415 ignored tests.
+The VM harness unit checks also passed. Read the
+[rebase verification record](phase-7-2-data-store.md#rebase-verification)
+for commands and logs. No physical or ignored release case ran in this check.
+
 ### Segment storage conversion
 
 The current conversion is implemented in `f02473bf`. It follows design commit
@@ -64,10 +70,10 @@ The raw writer lives in
 metadata schema 9 and fresh development stores. The approved storage
 qualification scope is complete.
 Earlier pass records below apply only to their named source revisions.
-The current workspace gate passed on `f9c6901e`: 81 data-owner tests, 174
+The pre-rebase workspace gate passed on `f9c6901e`: 81 data-owner tests, 174
 Control tests, and 123 Mithril e2e tests passed. This gate includes the test-only
-quota input in `b56d204e`. The current disk-full case and harness regressions
-also passed. The current two-node storage/outage case passed at `dc252f07`,
+quota input in `b56d204e`. The recorded disk-full case and harness regressions
+also passed. The recorded two-node storage/outage case passed at `dc252f07`,
 with no Rust change after the workspace gate. Read the
 [final storage qualification](phase-7-2-data-store.md#final-storage-qualification)
 for commands, result paths, and proof limits. The user excluded the 8-GiB case

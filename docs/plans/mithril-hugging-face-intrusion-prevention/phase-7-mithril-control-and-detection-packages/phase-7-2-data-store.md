@@ -784,7 +784,28 @@ Read `workspace-gate.log` in `/tmp/araphor-close.D8LyQB`.
 CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh
 ```
 
-**Harness regressions: Done, PASS**, at the same source. `harness/vm/test.sh`
+#### Rebase verification
+
+**Done, PASS**, 2026-09-29, source `5be548bd`. The branch includes committed
+local `main` at `b50fc61d`. The rebase keeps Node's separate startup, run,
+admission, and policy installation owners. Raw storage ownership and format
+do not change. The boxed admission error keeps its fatal flag and error text.
+Its existing rollback test also checks the compact error layout.
+
+The workspace command above passed formatting, workspace check, strict Clippy,
+and all enabled workspace tests. It reports 1,316 passed tests, zero failures,
+and 415 ignored tests. Library totals are 81 data-owner tests, 175 Control
+tests, 123 Mithril e2e tests, and 266 Node tests. Read
+`workspace-current-main.log` in `/tmp/araphor-rebase.HVzSPr3F`.
+
+`bash crates/mithril-e2e/harness/vm/test.sh` also passed at this source. Read
+`harness-current-main.log` in the same directory. This command runs harness
+unit checks; it does not create a VM. The new `signed_target_delay_is_closed`
+case compiled but did not run because it requires its physical test
+environment. No physical or ignored release case ran. The physical records
+below cover only their named source revisions, not the rebased Node changes.
+
+**Harness regressions: Done, PASS**, at source `f9c6901e`. `harness/vm/test.sh`
 passed its VM behavior checks. `inspect-data-test.sh` passed as root in a
 disposable container. It checked selected-directory access as user 65532,
 private-parent refusal, unchanged ownership, and mount cleanup after success
