@@ -137,7 +137,6 @@ enum ChildRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) enum PreparedOperation {
     Exec,
-    Execve,
     Execveat,
     ScriptExec,
     DeletedExec,
@@ -1764,9 +1763,6 @@ impl PreparedOperations {
         match operation {
             PreparedOperation::Exec => {
                 io_outcome(fixture_syscalls::exec_fd(self.exec_file.as_raw_fd(), false))
-            }
-            PreparedOperation::Execve => {
-                io_outcome(fixture_syscalls::exec_path(&self.exec_path, false))
             }
             PreparedOperation::Execveat => {
                 io_outcome(fixture_syscalls::exec_path(&self.exec_path, true))

@@ -2979,7 +2979,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace the denied `Execve` action with `forked_path_exec_is_denied`.
+  - [x] Replace the denied `Execve` action with `forked_path_exec_is_denied`.
     Reuse `exec_on_release.py`, `exec_deny_policy.json`, and the existing
     process and evidence owners. Add a forked path mode to the actor. Start
     the actor before Node, then use production recovery. Observe the child
@@ -2998,9 +2998,13 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Kubernetes passed in 71.88 seconds with the same actor, policy, and
       assertions. Namespace, pin, and lease cleanup passed. The final
       repository Rust CI passed. No Platform API or production source changed.
-    - [ ] Remove only the legacy `Execve` enum arm, action, and result field
+    - [x] Remove only the legacy `Execve` enum arm, action, and result field
       after all three platforms pass. Keep `Execveat`, script exec, and their
       shared path fixture and syscall helper.
+      The retirement deletes seven Rust lines. Nine child regressions and the
+      final repository Rust CI passed after the last Rust edit. `effect.rs`
+      remains at 3,005 lines and `effect/child.rs` at 2,874 lines. Neither
+      remaining legacy runner is done.
     - Use a fresh `exec_path_recovery` lifecycle. Actor-before-Node cases
       cannot inherit a previous installed admission policy while Node is down.
       Keep the ordinary Node-first cases in their existing shared lifecycles.
@@ -3032,7 +3036,8 @@ test does not close a row when its physical condition or an assertion changed.
       descriptor exec and their shared descriptor and libc helper.
       The retirement deletes seven Rust lines. Nine child regressions and the
       final repository Rust CI procedure passed after the last Rust edit.
-      `effect.rs` remains at 3,006 lines and `effect/child.rs` at 2,878 lines.
+      At this retirement, `effect.rs` had 3,006 lines and `effect/child.rs`
+      had 2,878 lines.
       Their remaining actions still require migration; neither runner is done.
     - The retained domain `mithril-runtime-qualification-955601` is shut off.
       Its configured `/tmp/mithril-recovered-vm.RSYqtR/root.qcow2` is absent.

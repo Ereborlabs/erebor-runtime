@@ -254,10 +254,12 @@ with the exact-test flags below. Host passed in 28.23 seconds with pin, lease,
 and cgroup cleanup. Direct `runc` passed in 28.63 seconds with the same
 assertions and cleanup. Use the `exec_path_recovery_runc` suffix. Kubernetes
 passed in 71.88 seconds with the same checks and namespace, pin, and lease
-cleanup. Use the `exec_path_recovery_kubernetes` suffix. Keep the old `Execve`
-dispatch until its matched retirement is verified. This review covers the
-path-exec replacement based on `8373b68b`. Production kernel and result schemas
-do not change.
+cleanup. Use the `exec_path_recovery_kubernetes` suffix. The matched legacy
+`Execve` dispatch and result flag are removed. This deletes seven Rust lines.
+Nine child regressions and the final repository Rust CI procedure passed after
+retirement. `Execveat`, script exec, and their shared path fixture remain.
+This review covers the path-exec replacement based on `8373b68b`. Production
+kernel and result schemas do not change.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
