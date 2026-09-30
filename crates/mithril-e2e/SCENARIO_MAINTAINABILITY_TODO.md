@@ -2979,6 +2979,36 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace the denied `Fexecve` action with `forked_fd_exec_is_denied`.
+    Use `exec_on_release.py` with a forked descriptor mode and one signed
+    execution-Deny policy. Hold the descriptor before Node starts. After
+    recovery, fork the child and observe its inherited role and creator before
+    releasing its real descriptor exec. Require actor `EACCES`, fresh
+    child-attributed `EXACT_POLICY_DENY` Exec/Execute evidence, a nonzero
+    composite atom, and zero exact-object key, inode, and inode generation.
+    Keep the Rust file below 100 lines. Add no Platform or production API.
+    - [x] Host passed in 28.07 seconds. The 80-line test requires actual
+      `EACCES`, the child's fresh exact-deny evidence, and every legacy object
+      field assertion. Pin, lease, and cgroup cleanup passed.
+      The existing descriptor-Allow and path-exec Host cases passed in 27.37
+      and 34.04 seconds. The final repository Rust CI procedure passed.
+    - [ ] Pass and commit direct `runc`, then Kubernetes. Add each platform
+      registration only after its exact case passes. Keep the other exec modes
+      in the old runner until their replacements pass.
+    - [ ] Remove only the legacy `Fexecve` action, enum arm, and result field
+      after all three platforms pass. Keep `Exec`, `Execveat`, and non-leader
+      descriptor exec and their shared descriptor and libc helper.
+    - The retained domain `mithril-runtime-qualification-955601` is shut off.
+      Its configured `/tmp/mithril-recovered-vm.RSYqtR/root.qcow2` is absent.
+      The existing `--manual` launcher created the retained test-only domain
+      `mithril-runtime-qualification-13979`. Its source mount, current images,
+      and K3s state remain available for later iterations. Do not try to
+      restart the domain with the missing disk.
+    - The first draft made the governed child read stdin before exec. That
+      added read returned `EACCES`; it is not an exec defect. The actor now
+      uses the existing release-file pattern. Its parent reaps the child before
+      exit, so cleanup must observe parent exit before child disappearance.
+      No assertion, production owner, or process fixture was changed.
   - [x] Replace the protected action-level executable Allow that cannot admit
     an undeclared runtime entry. Reuse `ready.py`. Give the distinct signed
     policy an external-role Allow for `/usr/bin/sleep` but no `sleep` entry

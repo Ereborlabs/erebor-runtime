@@ -22,6 +22,8 @@ mod exec_allow;
 #[cfg(test)]
 mod exec_fd_allow;
 #[cfg(test)]
+mod exec_fd_deny;
+#[cfg(test)]
 mod executable_memory;
 #[cfg(test)]
 mod file_bind;

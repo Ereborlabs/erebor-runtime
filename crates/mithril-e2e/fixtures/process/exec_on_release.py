@@ -10,12 +10,19 @@ work = sys.argv[3] if len(sys.argv) > 3 else None
 libc = ctypes.CDLL(None, use_errno=True)
 libc.prctl.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong,
                        ctypes.c_ulong, ctypes.c_ulong]
-image = open(target, "rb") if mode == "fd" else None
+image = open(target, "rb") if mode in {"fd", "fork-fd"} else None
 print("native-fixture-ready", flush=True)
 if sys.stdin.readline() != "exec\n":
     raise RuntimeError("expected exec")
+if mode == "fork-fd":
+    pid = os.fork()
+    if pid != 0:
+        _, status = os.waitpid(pid, 0)
+        sys.exit(os.waitstatus_to_exitcode(status))
+    while not os.path.exists(os.path.join(work, "exec")):
+        time.sleep(0.01)
 try:
-    if mode == "fd":
+    if image is not None:
         os.execve(image.fileno(), [target], os.environ)
     elif mode == "path":
         os.execv(target, [target])

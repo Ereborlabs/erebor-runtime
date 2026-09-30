@@ -207,6 +207,23 @@ lowering checks. The retirement deletes 57 Rust lines.
 Nine focused child regressions and the final repository Rust CI procedure
 passed after retirement. No production or Platform API changed.
 
+The [denied fd-exec test](src/effect/exec_fd_deny.rs) replaces the legacy
+forked `Fexecve` action. Its 80-line test holds an executable descriptor before
+Node starts. Production recovery assigns the external role. The shared
+[Python actor](fixtures/process/exec_on_release.py) forks a child, then waits
+for a release file before descriptor exec. The test checks the child's distinct
+cookie, parent creator, inherited role, and zero entry rule. It then requires
+the actual `EACCES` and fresh child-attributed Exec/Execute
+`EXACT_POLICY_DENY` evidence through [EffectCheck](src/effect/check.rs).
+The [signed policy](fixtures/process/exec_deny_policy.json) denies the sleep
+executable. No policy rule or production behavior is changed for readiness.
+The parent reaps the child before exit. The test confirms both processes are
+gone, then stops the process and platform owners.
+Run `effect::exec_fd_deny::forked_fd_exec_is_denied::exec_deny_recovery_host`
+with the exact-test flags below. Host passed in 28.07 seconds with pin, lease,
+and cgroup cleanup. Direct `runc` and Kubernetes remain pending. Keep the old
+`Fexecve` action until the same assertions pass on all three platforms.
+
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
 requires a newer READY generation, fresh attributed path-tree denial, and
