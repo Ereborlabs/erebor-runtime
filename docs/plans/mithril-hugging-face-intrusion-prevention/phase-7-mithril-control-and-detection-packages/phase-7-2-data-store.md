@@ -661,6 +661,25 @@ Production Rust and the CLI executable are unchanged from item 4.
 /usr/bin/time -v -o /tmp/araphor-resume.HoOzQx/05-resources.log target/release/mithril_discovery_test --case data-store-tenants --tenants 10 --output-directory /tmp/araphor-resume.HoOzQx/05-result
 ```
 
+**Item 6: Done, PASS.** On `400d4049`, the same release CLI passed one
+`data-store-rollout` case. All 64 rollout records reached Active over 32
+alternating idle/loaded pairs. The loaded calls overlapped acceptance of
+131,072 records. Exact input and existing operation deadlines passed. Exit
+status was zero. Elapsed time was 8.65 seconds; peak RSS was 108,200 KiB
+(105.7 MiB). Idle rollout median/p95 were 62.826/104.599 ms. Loaded rollout
+median/p95 were 67.897/105.327 ms. Maximum durable ACK was 108.310 ms.
+All 32 pair samples and 64 rollout records remain in the result. No
+five-percent completion threshold applies to this case. The host was shared.
+This proves Control progress with synthetic mTLS evidence and fixture Node
+reports. It does not prove kernel policy installation, physical activation,
+full-quota behavior, or reserve sufficiency. Read `06-run.log`,
+`06-resources.log`, and `06-result/result.json` in `/tmp/araphor-resume.HoOzQx`.
+Production Rust and the CLI executable are unchanged from item 4.
+
+```sh
+/usr/bin/time -v -o /tmp/araphor-resume.HoOzQx/06-resources.log target/release/mithril_discovery_test --case data-store-rollout --output-directory /tmp/araphor-resume.HoOzQx/06-result
+```
+
 ### Ordered review: item 1
 
 **Done: PASS**, 2026-09-28. The current-source release case
