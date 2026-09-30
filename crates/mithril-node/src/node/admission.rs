@@ -14,14 +14,14 @@ pub(super) struct RuntimePreparation<'a> {
 }
 
 pub(super) struct RuntimeAdmissionFailureV1 {
-    pub(super) source: crate::Error,
+    pub(super) source: Box<crate::Error>,
     pub(super) fatal: bool,
 }
 
 impl RuntimeAdmissionFailureV1 {
     fn fatal(source: crate::Error) -> Self {
         Self {
-            source,
+            source: Box::new(source),
             fatal: true,
         }
     }
@@ -45,7 +45,7 @@ impl RuntimeAdmissionFailureV1 {
 impl From<crate::Error> for RuntimeAdmissionFailureV1 {
     fn from(source: crate::Error) -> Self {
         Self {
-            source,
+            source: Box::new(source),
             fatal: false,
         }
     }
@@ -210,12 +210,16 @@ mod tests {
 
     #[test]
     fn rollback_errors_remain_fatal() {
+        assert!(
+            std::mem::size_of::<RuntimeAdmissionFailureV1>() <= 2 * std::mem::size_of::<usize>()
+        );
         for fatal in [false, true] {
             let failure = RuntimeAdmissionFailureV1 {
                 source: IdentityStateSnafu {
                     reason: "preparation failed",
                 }
-                .build(),
+                .build()
+                .into(),
                 fatal,
             };
             let unchanged = failure.with_rollback(Ok(()));

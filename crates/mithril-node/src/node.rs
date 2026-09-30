@@ -520,7 +520,7 @@ impl NodeChassis {
             Err(error) => {
                 let error = error.with_rollback(preparation.rollback());
                 if error.fatal {
-                    return Err(error.source);
+                    return Err(*error.source);
                 }
                 let delivered = call
                     .deliver(crate::RuntimeAdmissionResponseV1 {
