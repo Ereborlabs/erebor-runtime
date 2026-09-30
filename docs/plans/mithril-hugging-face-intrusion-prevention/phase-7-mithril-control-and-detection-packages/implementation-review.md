@@ -36,11 +36,13 @@ The raw writer lives in
 `araphor-data`. Control has no raw writer or reader. This implementation uses
 metadata schema 9 and fresh development stores. Qualification is not complete.
 Earlier pass records below apply only to their named source revisions.
-The final workspace gate passed on `846adec5`: 81 data-owner tests, 174 Control
-tests, and 123 Mithril e2e tests passed. That gate precedes the test-only quota
-input below. Read
-the [current storage result](phase-7-2-data-store.md#segment-owned-metadata-result)
-for commands, measurements, and pending qualification.
+The current workspace gate passed on `f9c6901e`: 81 data-owner tests, 174
+Control tests, and 123 Mithril e2e tests passed. This gate includes the test-only
+quota input in `b56d204e`. The current disk-full case and harness regressions
+also passed. The current two-node physical case remains Not done. Read the
+[final storage qualification](phase-7-2-data-store.md#final-storage-qualification)
+for commands, result paths, and proof limits. The user excluded the 8-GiB case
+from closure. Default-quota memory with small batches remains unqualified.
 
 The ignored release test
 [analysis_store_global_memory](../../../../crates/araphor-data/src/analysis/capacity.rs)
