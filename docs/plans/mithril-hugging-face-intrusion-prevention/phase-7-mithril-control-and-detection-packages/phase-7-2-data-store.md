@@ -577,6 +577,34 @@ CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true cargo test -p arap
 ARAPHOR_GLOBAL_BYTES=1073741824 /usr/bin/time -v -o /tmp/araphor-serial.Gql837/03-resources.log target/release/deps/araphor_data-56c66faf3a80bf1e analysis::capacity::tests::analysis_store_global_memory --exact --ignored --nocapture --test-threads=1
 ```
 
+### Serial qualification resumed after cleanup
+
+The user approved cleanup and a restart at item 3. Keep its 1-GiB logical
+quota and all other limits. Run the remaining cases in order and stop at the
+first failure. Do not repeat items 1 and 2.
+
+**Cleanup: Done.** Package-scoped debug cleanup removed 830 files, reported
+as 26.5 GiB. The default Docker builder removed unused cache reported as
+19.56 GB. Images, containers, volumes, and other builders were not removed.
+Three detached test disks were removed: `root.qcow2` in
+`/tmp/mithril-multi-policy-vms/mithril-vm-test.gzRI0i`,
+`/tmp/mithril-vm-test.X1edNM`, and `/tmp/mithril-vm-test.pimW1B`.
+Their definitions were absent from both libvirt connections. No QEMU process
+used them, and they had no backing image. Their fixture files and logs remain.
+The deleted disk state cannot be recovered. The paused registered VM still
+had a harness process and was retained.
+
+Filesystem availability increased from 50 GiB to 110 GiB. Do not add cache
+reports to calculate physical space recovered. Debug artifacts and Docker
+cache can be rebuilt. Release executable hashes and all three compiled
+DuckDB libraries were unchanged. Source and prior result files were retained.
+Read `cargo-clean.log` and `docker-clean.log` in `/tmp/araphor-resume.HoOzQx`.
+
+```sh
+CARGO_NET_OFFLINE=true cargo clean --profile dev -p araphor-data -p mithril-control -p mithril-e2e -p mithril-node
+docker buildx prune --builder default --all --force
+```
+
 ### Ordered review: item 1
 
 **Done: PASS**, 2026-09-28. The current-source release case
