@@ -28,6 +28,33 @@ declarative captures are not delivered by these changes.
 
 ## Linked implementation flows
 
+### Node owners after rebase
+
+The branch now includes committed local `main` at `36cfe7e4`. The rebase keeps
+main's separate startup, run, admission, and policy installation owners.
+
+[PreparedPolicy::prepare](../../../../crates/mithril-node/src/policy/installation.rs) Node builds context from verified policy and measured binding coordinates.<br>
+-> [PreparedPolicy::finish](../../../../crates/mithril-node/src/policy/installation.rs) The installed policy owner receives the bounded context catalog.<br>
+-> [Evidence::start](../../../../crates/mithril-node/src/node/startup.rs) Startup supplies that catalog to the durable observation owner.
+
+[NodeState::create_endpoints](../../../../crates/mithril-node/src/node/startup.rs) Startup opens the configured diagnostic owner.<br>
+-> [NodeRun::run](../../../../crates/mithril-node/src/node/run.rs) A connected Node polls diagnostics every 500 milliseconds.<br>
+-> [NodeChassis::poll_diagnostics](../../../../crates/mithril-node/src/node.rs) Node exchanges target resolution, signed dispatch, retained output, and acknowledgements.
+
+[EffectObservationStore::evidence_floor](../../../../crates/mithril-node/src/observation.rs) The evidence owner supplies its durable replay floor.<br>
+-> [NodeRun::report_floor](../../../../crates/mithril-node/src/node/run.rs) A connected Node reports the floor once per second.<br>
+-> [ControlConnection::report_evidence_floor](../../../../crates/mithril-node/src/control.rs) The authenticated RPC supplies the floor to Control.
+
+NodeRun resets diagnostic cursors, target resolution, and floor progress after
+each connection succeeds. Decommission drops the diagnostic owner before it
+removes kernel attachments. Admission failures keep their fatal flag and error
+text; the private error payload is boxed. `rollback_errors_remain_fatal`
+checks rollback failure and the compact error layout.
+`discovery_catalog_pins_verified_coordinates_and_bounds_lookup` checks context
+coordinates. `observability_recovery_mtls_reconnect_preserves_dispatch_and_output`
+checks diagnostic retry through the production transport. These checks do not
+replace physical workload qualification.
+
 ### Segment storage conversion
 
 The current conversion is implemented in `f02473bf`. It follows design commit
