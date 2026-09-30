@@ -814,6 +814,21 @@ Read `disk-full-ext4.log` and `disk-full-ext4-container.log` in
 The host used Linux `6.8.0-139-generic`, x86_64. Earlier setup logs in the same
 directory do not establish a product failure or a pass.
 
+**Initial cluster setup: Failed**, at source `7945508d`, with no Rust change
+from the workspace gate. The `--protected-start-only` setup failed its existing
+unreachable mount-cache cleanup assertion. Both Kubernetes Nodes were Ready,
+Control had one ready replica, and Node had two ready replicas. This failure
+occurred before the storage/outage case. It does not establish a storage failure
+or a physical pass. Read `environment.log` and `environment/diagnostics` in the
+same result directory. Do not use this run to claim kernel-cache qualification.
+
+That setup also used the convergence harness's default work directory under
+`target`. The outage harness requires `/tmp/mithril-vm-test.*`. The failed
+run's two UUID-checked VMs and temporary disks were removed. Captured logs
+remain. The replacement setup uses the existing environment-only route under
+`/tmp`. It does not rerun or change the failed kernel assertion. No production
+source or test assertion changed.
+
 ### Ordered review: item 1
 
 **Done: PASS**, 2026-09-28. The current-source release case
