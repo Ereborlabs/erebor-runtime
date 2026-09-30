@@ -2722,7 +2722,9 @@ test does not close a row when its physical condition or an assertion changed.
       second stdin cleanup command failed with a broken pipe. The final actor
       uses the existing release-file cleanup pattern. No production or
       Platform code changed.
-    - [ ] Pass Protect on direct `runc` and commit it.
+    - [x] Protect direct `runc` passed in 28.50 seconds with the same actor,
+      test body, and assertions. The repository Rust CI gate passed. No
+      runtime fixture or production code changed.
     - [ ] Pass Protect on Kubernetes and commit it.
     - [ ] Preserve the same legacy check under Observe mode on all three
       platforms before deleting the old action, result, and prepared segment.

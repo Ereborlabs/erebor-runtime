@@ -6,7 +6,7 @@ use mithril_control::WorkloadProtectionPolicy as Policy;
 use crate::effect::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = ipc_recovery]
 fn ipc_stat_is_closed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("ipc-stat")?;

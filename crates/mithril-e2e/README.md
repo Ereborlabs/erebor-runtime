@@ -95,12 +95,12 @@ its full name in the retained VM. This test proves signed container admission.
 The old identity-only Ephemeral probe remains until a small test also proves
 its late-discovery conservative-root condition.
 
-The SysV shared-memory test currently passes on Host. Run
+The SysV shared-memory test currently passes on Host and direct `runc`. Run
 `identity::scenarios::ipc_stat::ipc_stat_is_closed::ipc_recovery_host` with the
 Host environment and exact-test flags below. Its intended result is a physical
 permission denial for a recovered restricted actor in Protect and Observe
-modes on all three platforms. Only Protect Host is qualified at this source
-state.
+modes on all three platforms. Only Protect Host and direct `runc` are qualified
+at this source state. Use `ipc_recovery_runc` for the direct-runtime case.
 
 [ipc_stat_is_closed](src/identity/scenarios/ipc_stat.rs) starts Control and holds both actors before Node.
   -> [Segment](fixtures/process/ipc_stat.py) creates, attaches, and marks a private segment for deletion before readiness.
