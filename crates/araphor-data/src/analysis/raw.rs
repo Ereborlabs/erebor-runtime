@@ -6,8 +6,7 @@ use prost::Message as _;
 use snafu::ResultExt as _;
 
 use super::raw_segments::{
-    EvidenceSegmentKindV1, EvidenceSegmentOwner, EvidenceSegmentReadV1, EvidenceSegmentRefV1,
-    EvidenceStoreCapacityPolicyV1, EvidenceStoreLimitsV1,
+    EvidenceSegmentBoundsV1, EvidenceSegmentOwner, EvidenceSegmentReadV1, EvidenceSegmentRefV1,
 };
 use super::{source_key, AnalysisSourceReceiptV1, AnalysisStore, ValidatedEvidenceBatchV1};
 use crate::{EvidenceIntakeIdentityV1, EvidenceStoreOutcomeV1, Result};
@@ -492,7 +491,7 @@ pub(super) struct RawJournal {
 
 impl RawJournal {
     pub(super) fn forget_segment(&mut self, id: u64) -> Result<()> {
-        self.segments.forget(id)?;
+        self.segments.forget(id);
         self.entries.retain(|_, entry| entry.reference.id != id);
         self.ranges
             .retain(|_, (revision, _)| self.entries.contains_key(revision));
@@ -601,16 +600,8 @@ impl RawJournal {
             last,
         })
     }
-    pub(super) fn open(root: &Path, maximum: u64, committed: &BTreeMap<u64, u64>) -> Result<Self> {
-        let segments = EvidenceSegmentOwner::open(
-            &root.join("segments"),
-            EvidenceStoreLimitsV1 {
-                maximum_retained_bytes: maximum,
-                maximum_retained_records: u64::MAX,
-                capacity_policy: EvidenceStoreCapacityPolicyV1::Block,
-            },
-            committed,
-        )?;
+    pub(super) fn open(root: &Path, committed: &BTreeMap<u64, u64>) -> Result<Self> {
+        let segments = EvidenceSegmentOwner::open(&root.join("segments"), committed)?;
         let identities: BTreeMap<_, _> = segments
             .identities()
             .map(|(stream, identity)| (stream, identity.clone()))
@@ -626,17 +617,11 @@ impl RawJournal {
             budget: super::raw_catalog::RawBudget::default(),
         };
         for descriptor in descriptors {
-            let EvidenceSegmentKindV1::Records {
+            let EvidenceSegmentBoundsV1 {
                 stream_id,
                 first_cursor,
                 last_cursor,
-            } = descriptor.kind
-            else {
-                return AnalysisStore::reject_path(
-                    root,
-                    "the raw journal has an unknown stream kind",
-                );
-            };
+            } = descriptor.bounds;
             let identity = identities
                 .get(&stream_id)
                 .ok_or_else(|| journal.invalid("the raw stream identity is absent"))?;
@@ -876,7 +861,7 @@ impl RawJournal {
     }
 
     fn publish(&mut self, entry: RawEntry) -> Result<()> {
-        if !super::valid_source_identity(&entry.identity) {
+        if !entry.identity.valid() {
             return Err(self.invalid("the raw source identity is invalid"));
         }
         let key = source_key(&entry.identity);
@@ -991,7 +976,7 @@ impl RawJournal {
         self.segments
             .open_read(
                 id,
-                EvidenceSegmentKindV1::Records {
+                EvidenceSegmentBoundsV1 {
                     stream_id: stream,
                     first_cursor: sequence,
                     last_cursor: sequence,
@@ -1172,7 +1157,7 @@ mod tests {
             framed_records: prost::bytes::Bytes::from_static(b"b"),
             frame_ends: vec![1],
         };
-        let mut journal = RawJournal::open(root, 64 * 1024 * 1024, &BTreeMap::new())?;
+        let mut journal = RawJournal::open(root, &BTreeMap::new())?;
         let commit = journal.prepare(&identity, &batch, 1)?;
         journal.append(&identity, commit)?;
         assert_eq!(
@@ -1201,7 +1186,7 @@ mod tests {
         tail.write_all(&[0, 0])?;
         tail.sync_all()?;
         drop(tail);
-        let journal = RawJournal::open(root, 64 * 1024 * 1024, &BTreeMap::new())?;
+        let journal = RawJournal::open(root, &BTreeMap::new())?;
         assert_eq!(std::fs::metadata(&file)?.len(), length);
         assert_eq!(
             journal.sources[&source_key(&identity)]
@@ -1233,7 +1218,7 @@ mod tests {
         byte[0] ^= 1;
         file.write_all_at(&byte, length - 1)?;
         file.sync_all()?;
-        assert!(RawJournal::open(root, 64 * 1024 * 1024, &BTreeMap::new()).is_err());
+        assert!(RawJournal::open(root, &BTreeMap::new()).is_err());
         Ok(())
     }
 }

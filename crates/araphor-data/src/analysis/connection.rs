@@ -544,7 +544,15 @@ mod tests {
     #[test]
     fn analysis_store_snapshot_maintenance() -> TestResult {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let limits = RetentionLimitsV1 {
+            raw_max_age_ns: 50,
+            raw_max_bytes: 100,
+        };
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            limits,
+            Default::default(),
+        )?;
         store.accept_validated_batch(identity(), batch(1))?;
         let (sender, receiver) = mpsc::channel();
         thread::scope(|scope| -> TestResult {
@@ -556,13 +564,7 @@ mod tests {
                 1
             );
             store.accept_validated_batch(identity(), batch(2))?;
-            let owner = EvidenceRetentionOwner::new(
-                &store,
-                RetentionLimitsV1 {
-                    raw_max_age_ns: 50,
-                    raw_max_bytes: 100,
-                },
-            )?;
+            let owner = EvidenceRetentionOwner::new(&store);
             let worker = scope.spawn(move || {
                 sender
                     .send(owner.retain(&identity(), 300))
@@ -602,7 +604,11 @@ mod tests {
         store.checkpoint()?;
         assert_eq!(store.meta()?.commit_revision, 3);
         drop(store);
-        let reopened = AnalysisStore::open(directory.path().join("analysis"))?;
+        let reopened = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            limits,
+            Default::default(),
+        )?;
         assert!(matches!(
             reopened.read_page(&identity(), 2),
             Err(crate::Error::RetainedRangeExpired { .. })

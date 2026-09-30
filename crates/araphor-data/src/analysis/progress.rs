@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
-use super::{source_key, valid_source_identity, AnalysisContextKeyV1, AnalysisStore};
+use super::{source_key, AnalysisContextKeyV1, AnalysisStore};
 use crate::{
     AnalysisConflictSnafu, AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, JsonSnafu, Result,
 };
@@ -93,7 +93,7 @@ impl ProcessorScopeV1 {
         !self.processor_id.is_empty()
             && self.processor_id.len() <= 128
             && self.method_version > 0
-            && valid_source_identity(&self.identity)
+            && self.identity.valid()
     }
 }
 
@@ -350,7 +350,7 @@ impl AnalysisStore {
             .ok_or_else(|| self.state_error("the witness deadline is exhausted"))?;
         if input.witnesses.iter().any(|witness| {
             witness.identity.tenant_id != input.scope.identity.tenant_id
-                || !valid_source_identity(&witness.identity)
+                || !witness.identity.valid()
                 || witness.cursor == 0
                 || witness.expires_utc_ns < input.created_utc_ns
                 || witness.expires_utc_ns > witness_deadline

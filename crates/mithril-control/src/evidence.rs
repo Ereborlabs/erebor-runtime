@@ -140,8 +140,8 @@ impl EvidenceIntakeOwner {
                     }
                     .build()
                 })?;
-                araphor_data::EvidenceRetentionOwner::new(&data, data.retention_limits())
-                    .and_then(|owner| owner.sweep(after, now))
+                araphor_data::EvidenceRetentionOwner::new(&data)
+                    .sweep(after, now)
                     .map_err(|source| crate::Error::DataStore {
                         source: Box::new(source),
                         location: snafu::Location::default(),
@@ -409,7 +409,7 @@ impl EvidenceIntakeOwner {
         authenticated: &AuthenticatedEvidenceNodeV1,
         batch: EvidenceBatch,
     ) -> std::result::Result<(EvidenceIntakeIdentityV1, EvidenceBatchInputV1), Status> {
-        validate_authenticated_node(authenticated)?;
+        authenticated.validate()?;
         let node_boot_id: [u8; 16] = batch
             .node_boot_id
             .as_slice()
@@ -547,13 +547,13 @@ impl EvidenceIntakeOwner {
         authenticated: &AuthenticatedEvidenceNodeV1,
         report: &CoverageReport,
     ) -> std::result::Result<CoverageAck, Status> {
-        validate_authenticated_node(authenticated)?;
+        authenticated.validate()?;
         let source_id: [u8; 16] = report
             .source_id
             .as_slice()
             .try_into()
             .map_err(|_| Status::invalid_argument("coverage source identity is not Id128"))?;
-        validate_coverage_report(report)?;
+        report.validate()?;
         let identity = EvidenceIntakeIdentityV1 {
             tenant_id: authenticated.tenant_id,
             node_id: authenticated.node_id.clone(),
@@ -613,95 +613,97 @@ impl TryFrom<crate::ControlStore> for EvidenceIntakeOwner {
     }
 }
 
-#[allow(clippy::result_large_err)]
-fn validate_authenticated_node(
-    authenticated: &AuthenticatedEvidenceNodeV1,
-) -> std::result::Result<(), Status> {
-    if !crate::node_id_is_valid(&authenticated.node_id)
-        || authenticated.tenant_id == [0; 16]
-        || authenticated.node_boot_id == [0; 16]
-        || authenticated.label_epoch == 0
-    {
-        return Err(Status::invalid_argument(
-            "authenticated evidence identity is invalid",
-        ));
-    }
-    Ok(())
-}
-
-#[allow(clippy::result_large_err)]
-fn validate_coverage_report(report: &CoverageReport) -> std::result::Result<(), Status> {
-    if report.source_epoch == 0
-        || report.source_id.len() != 16
-        || report.source_id.iter().all(|byte| *byte == 0)
-        || report.revision == 0
-        || report.intervals.is_empty()
-        || report.intervals.len() > MAX_COVERAGE_INTERVALS
-    {
-        return Err(Status::invalid_argument(
-            "coverage report epoch, revision, or interval bounds are invalid",
-        ));
-    }
-    let mut interval_ids = std::collections::BTreeSet::new();
-    let mut current_count = 0_usize;
-    for interval in &report.intervals {
-        let ids_valid = interval.interval_id.len() == 16
-            && interval.interval_id.iter().any(|byte| *byte != 0)
-            && interval_ids.insert(interval.interval_id.as_slice());
-        let state = CoverageStateV1::try_from(interval.state.as_str()).ok();
-        let mut reasons = std::collections::BTreeSet::new();
-        let reasons_valid = interval.gap_reasons.iter().all(|reason| {
-            CoverageGapReasonV1::try_from(reason.as_str())
-                .ok()
-                .is_some_and(|reason| reasons.insert(reason))
-        });
-        let state_reasons_valid = match state {
-            Some(CoverageStateV1::Healthy | CoverageStateV1::Closed) => reasons.is_empty(),
-            Some(CoverageStateV1::Gapped) => !reasons.is_empty(),
-            Some(CoverageStateV1::Unknown) => reasons.is_empty(),
-            None => false,
-        } && (!interval.current
-            || state != Some(CoverageStateV1::Closed));
-        let counter_regression = reasons.contains(&CoverageGapReasonV1::CounterRegression);
-        let opening = interval.opening_counters.as_ref();
-        let closing = interval.closing_counters.as_ref();
-        let counters_valid = opening.is_some_and(valid_coverage_counters)
-            && closing.is_none_or(valid_coverage_counters)
-            && closing.is_none_or(|closing| {
-                opening.is_some_and(|opening| coverage_counters_do_not_regress(opening, closing))
-            });
-        // Counter regression is valid only when both counter snapshots preserve the proof.
-        let exact_regression_record = state == Some(CoverageStateV1::Gapped)
-            && counter_regression
-            && opening.is_some()
-            && closing.is_some();
-        if !ids_valid
-            || !reasons_valid
-            || !state_reasons_valid
-            || interval.source_epoch == 0
-            || (interval.current && interval.source_epoch != report.source_epoch)
-            || (!interval.current && interval.source_epoch > report.source_epoch)
-            || interval.revision == 0
-            || interval.first_sequence == 0
-            || interval
-                .last_sequence
-                .is_some_and(|last| last < interval.first_sequence)
-            || (!counters_valid && !exact_regression_record)
+impl AuthenticatedEvidenceNodeV1 {
+    #[allow(clippy::result_large_err)]
+    fn validate(&self) -> std::result::Result<(), Status> {
+        if !crate::node_id_is_valid(&self.node_id)
+            || self.tenant_id == [0; 16]
+            || self.node_boot_id == [0; 16]
+            || self.label_epoch == 0
         {
             return Err(Status::invalid_argument(
-                "coverage interval identity, state, reason, or counters are invalid",
+                "authenticated evidence identity is invalid",
             ));
         }
-        if interval.current {
-            current_count += 1;
+        Ok(())
+    }
+}
+
+impl CoverageReport {
+    #[allow(clippy::result_large_err)]
+    fn validate(&self) -> std::result::Result<(), Status> {
+        if self.source_epoch == 0
+            || self.source_id.len() != 16
+            || self.source_id.iter().all(|byte| *byte == 0)
+            || self.revision == 0
+            || self.intervals.is_empty()
+            || self.intervals.len() > MAX_COVERAGE_INTERVALS
+        {
+            return Err(Status::invalid_argument(
+                "coverage report epoch, revision, or interval bounds are invalid",
+            ));
         }
+        let mut interval_ids = std::collections::BTreeSet::new();
+        let mut current_count = 0_usize;
+        for interval in &self.intervals {
+            let ids_valid = interval.interval_id.len() == 16
+                && interval.interval_id.iter().any(|byte| *byte != 0)
+                && interval_ids.insert(interval.interval_id.as_slice());
+            let state = CoverageStateV1::try_from(interval.state.as_str()).ok();
+            let mut reasons = std::collections::BTreeSet::new();
+            let reasons_valid = interval.gap_reasons.iter().all(|reason| {
+                CoverageGapReasonV1::try_from(reason.as_str())
+                    .ok()
+                    .is_some_and(|reason| reasons.insert(reason))
+            });
+            let state_reasons_valid = match state {
+                Some(CoverageStateV1::Healthy | CoverageStateV1::Closed) => reasons.is_empty(),
+                Some(CoverageStateV1::Gapped) => !reasons.is_empty(),
+                Some(CoverageStateV1::Unknown) => reasons.is_empty(),
+                None => false,
+            } && (!interval.current
+                || state != Some(CoverageStateV1::Closed));
+            let counter_regression = reasons.contains(&CoverageGapReasonV1::CounterRegression);
+            let opening = interval.opening_counters.as_ref();
+            let closing = interval.closing_counters.as_ref();
+            let counters_valid = opening.is_some_and(valid_coverage_counters)
+                && closing.is_none_or(valid_coverage_counters)
+                && closing.is_none_or(|closing| {
+                    opening.is_some_and(|opening| counters_are_monotonic(opening, closing))
+                });
+            // Counter regression is valid only when both counter snapshots preserve the proof.
+            let exact_regression_record = state == Some(CoverageStateV1::Gapped)
+                && counter_regression
+                && opening.is_some()
+                && closing.is_some();
+            if !ids_valid
+                || !reasons_valid
+                || !state_reasons_valid
+                || interval.source_epoch == 0
+                || (interval.current && interval.source_epoch != self.source_epoch)
+                || (!interval.current && interval.source_epoch > self.source_epoch)
+                || interval.revision == 0
+                || interval.first_sequence == 0
+                || interval
+                    .last_sequence
+                    .is_some_and(|last| last < interval.first_sequence)
+                || (!counters_valid && !exact_regression_record)
+            {
+                return Err(Status::invalid_argument(
+                    "coverage interval identity, state, reason, or counters are invalid",
+                ));
+            }
+            if interval.current {
+                current_count += 1;
+            }
+        }
+        if current_count != 1 {
+            return Err(Status::invalid_argument(
+                "coverage report must contain one current interval",
+            ));
+        }
+        Ok(())
     }
-    if current_count != 1 {
-        return Err(Status::invalid_argument(
-            "coverage report must contain one current interval",
-        ));
-    }
-    Ok(())
 }
 
 fn valid_coverage_counters(counters: &CoverageCounters) -> bool {
@@ -709,10 +711,7 @@ fn valid_coverage_counters(counters: &CoverageCounters) -> bool {
         && counters.requested == counters.emitted.saturating_add(counters.lost)
 }
 
-fn coverage_counters_do_not_regress(
-    opening: &CoverageCounters,
-    closing: &CoverageCounters,
-) -> bool {
+fn counters_are_monotonic(opening: &CoverageCounters, closing: &CoverageCounters) -> bool {
     closing.attempted >= opening.attempted
         && closing.suppressed >= opening.suppressed
         && closing.requested >= opening.requested
@@ -876,8 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn discovery_context_intake_preserves_coordinates_and_rejects_conflicting_context(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn context_intake_preserves_binding() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = crate::ControlStore::open(directory.path())?;
         let intake = EvidenceIntakeOwner::try_from(store.clone())?;
@@ -957,8 +955,7 @@ mod tests {
     }
 
     #[test]
-    fn discovery_read_cpu_binding_survives_restart_and_rejects_changed_cpu(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn intake_cpu_binding_recovery() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let owner = EvidenceIntakeOwner::open(directory.path())?;
         let mut first = batch(1, 2)?;
@@ -989,8 +986,7 @@ mod tests {
     }
 
     #[test]
-    fn discovery_read_commit_group_rejects_mixed_cpu_before_acceptance(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn intake_rejects_mixed_cpu() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let owner = EvidenceIntakeOwner::open(directory.path())?;
         let first = batch(1, 1)?;
@@ -1005,8 +1001,7 @@ mod tests {
     }
 
     #[test]
-    fn intake_promotes_out_of_order_batches_and_recovers_exact_records(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn intake_recovers_pending_batches() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let intake = EvidenceIntakeOwner::open(directory.path())?;
         let first = batch(1, 2)?;
@@ -1049,8 +1044,7 @@ mod tests {
     }
 
     #[test]
-    fn data_backed_intake_acks_only_the_analysis_commit() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn intake_acks_raw_commit() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let control = crate::ControlStore::open(directory.path().join("control"))?;
         let data = Arc::new(araphor_data::AnalysisStore::open(
@@ -1265,8 +1259,7 @@ mod tests {
     }
 
     #[test]
-    fn intake_commits_twenty_ready_batches_with_one_cumulative_ack(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn intake_groups_ready_batches() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let intake = EvidenceIntakeOwner::open(directory.path())?;
         let mut batches = Vec::new();
@@ -1291,8 +1284,7 @@ mod tests {
     }
 
     #[test]
-    fn intake_rejects_invalid_records_and_conflicting_retries(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn intake_rejects_conflicting_records() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let intake = EvidenceIntakeOwner::open(directory.path())?;
         let accepted = batch(1, 1)?;
@@ -1312,8 +1304,7 @@ mod tests {
     }
 
     #[test]
-    fn intake_rejects_bad_crc_and_invalid_protobuf_frames() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn intake_rejects_corrupt_frames() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let intake = EvidenceIntakeOwner::open(directory.path())?;
 
@@ -1343,8 +1334,7 @@ mod tests {
     }
 
     #[test]
-    fn coverage_intake_is_durable_monotonic_and_gap_aware() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn coverage_preserves_gaps() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let intake = EvidenceIntakeOwner::open(directory.path())?;
         let healthy = coverage_report(1, "HEALTHY");
@@ -1365,8 +1355,7 @@ mod tests {
     }
 
     #[test]
-    fn coverage_intake_rejects_inconsistent_healthy_claims(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn coverage_rejects_false_health() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let intake = EvidenceIntakeOwner::open(directory.path())?;
         let mut report = coverage_report(1, "HEALTHY");

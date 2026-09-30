@@ -187,7 +187,11 @@ mod tests {
     fn analysis_store_required_retirement() -> TestResult {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
-        let mut store = AnalysisStore::open(&root)?;
+        let limits = RetentionLimitsV1 {
+            raw_max_age_ns: 1,
+            raw_max_bytes: 100,
+        };
+        let mut store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
         let input = request();
         store.register_processor(&input.scope, ProcessorClassV1::Required, 1)?;
         store.accept_validated_batch(
@@ -220,12 +224,8 @@ mod tests {
         let result_receipt = store.commit_result(&result)?;
         let before = store.meta()?;
         let revisions = store.subscribe_revision();
-        let limits = RetentionLimitsV1 {
-            raw_max_age_ns: 1,
-            raw_max_bytes: 100,
-        };
         assert_eq!(
-            EvidenceRetentionOwner::new(&store, limits)?
+            EvidenceRetentionOwner::new(&store)
                 .retain(&input.scope.identity, 10)?
                 .removed_records,
             0
@@ -247,7 +247,7 @@ mod tests {
         assert!(!revisions.has_changed()?);
         assert!(store.processor_retirement(&input.scope)?.is_none());
         assert_eq!(
-            EvidenceRetentionOwner::new(&store, limits)?
+            EvidenceRetentionOwner::new(&store)
                 .retain(&input.scope.identity, 10)?
                 .removed_records,
             0
@@ -270,7 +270,7 @@ mod tests {
             .register_processor(&input.scope, ProcessorClassV1::Required, 1)
             .is_err());
         assert_eq!(
-            EvidenceRetentionOwner::new(&store, limits)?
+            EvidenceRetentionOwner::new(&store)
                 .retain(&input.scope.identity, 10)?
                 .removed_records,
             0
@@ -303,7 +303,7 @@ mod tests {
         next.consumed_cursor = 4;
         assert!(store.commit_result(&next).is_err());
         drop(store);
-        let reopened = AnalysisStore::open(&root)?;
+        let reopened = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
         assert_eq!(
             reopened.processor_retirement(&input.scope)?,
             Some((input.clone(), revision))

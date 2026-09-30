@@ -3,8 +3,8 @@ use serde::Serialize;
 use snafu::ResultExt as _;
 
 use super::{
-    source_key, valid_source_identity, AnalysisGapV1, AnalysisStore, ProcessorClassV1,
-    ProcessorScopeV1, StorageUsageV1, MAX_ANALYSIS_PAGE_RECORDS,
+    source_key, AnalysisGapV1, AnalysisStore, ProcessorClassV1, ProcessorScopeV1, StorageUsageV1,
+    MAX_ANALYSIS_PAGE_RECORDS,
 };
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
 
@@ -45,7 +45,11 @@ mod tests {
     fn analysis_store_processor_health() -> TestResult {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
-        let mut store = AnalysisStore::open(&root)?;
+        let limits = RetentionLimitsV1 {
+            raw_max_age_ns: 1,
+            raw_max_bytes: 100,
+        };
+        let mut store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
         let required = scope();
         assert!(store.processor_health(&required)?.is_none());
         store.register_processor(&required, ProcessorClassV1::Required, 1)?;
@@ -98,14 +102,7 @@ mod tests {
                 .state,
             ProcessorStateV1::Current
         );
-        EvidenceRetentionOwner::new(
-            &store,
-            RetentionLimitsV1 {
-                raw_max_age_ns: 1,
-                raw_max_bytes: 100,
-            },
-        )?
-        .retain(&required.identity, 3)?;
+        EvidenceRetentionOwner::new(&store).retain(&required.identity, 3)?;
         assert!(matches!(
             store
                 .processor_health(&optional)?
@@ -153,7 +150,7 @@ mod tests {
         assert!(!capacity.retention_healthy);
         assert!(capacity.intake_capacity && capacity.maintenance_capacity);
         drop(store);
-        let reopened = AnalysisStore::open(root)?;
+        let reopened = AnalysisStore::open_with_limits(root, limits, Default::default())?;
         assert_eq!(reopened.recovery_gaps(&required.identity, 0)?, gap);
         assert_eq!(
             reopened
@@ -229,7 +226,7 @@ impl AnalysisStore {
         identity: &EvidenceIntakeIdentityV1,
         after_cursor: u64,
     ) -> Result<Vec<AnalysisGapV1>> {
-        if !valid_source_identity(identity) {
+        if !identity.valid() {
             return self.reject("the recovery gap source identity is invalid");
         }
         self.read_snapshot(|reader| {

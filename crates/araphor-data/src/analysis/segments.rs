@@ -330,7 +330,7 @@ mod tests {
             }],
             context_refs: vec![],
         })?;
-        let retention = EvidenceRetentionOwner::new(&store, limits)?;
+        let retention = EvidenceRetentionOwner::new(&store);
         let removed = retention.retain(&identity, 201)?;
         assert_eq!(removed.removed_records, 1024);
         assert_eq!(removed.retained_floor, 0);
@@ -345,7 +345,7 @@ mod tests {
         assert_eq!(fs::read_dir(root.join("segments"))?.count(), 1);
         drop(store);
         let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
-        let removed = EvidenceRetentionOwner::new(&store, limits)?.retain(&identity, 301)?;
+        let removed = EvidenceRetentionOwner::new(&store).retain(&identity, 301)?;
         assert_eq!(removed.removed_records, 3072);
         assert_eq!(removed.retained_floor, 4096);
         assert_eq!(removed.retained_bytes, 0);

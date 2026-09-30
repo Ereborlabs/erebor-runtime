@@ -28,6 +28,45 @@ declarative captures are not delivered by these changes.
 
 ## Linked implementation flows
 
+### Storage owner review
+
+The accepted owner changes remove unused segment modes and duplicate limits.
+The segment format, authenticated intake, quota authority, and deletion
+protocol do not change. These edits are based on `c1971c0d`.
+The 81 enabled data-owner tests and both context tests passed.
+The final workspace gate is **Not done**.
+
+[EvidenceIntakeOwner::validate_batch](../../../../crates/mithril-control/src/evidence.rs) Control receives an authenticated batch.<br>
+-> [AuthenticatedEvidenceNodeV1::validate](../../../../crates/mithril-control/src/evidence.rs) The identity type checks its fields before data intake.<br>
+-> [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/raw.rs) The data owner checks its admission totals and limits.<br>
+-> [EvidenceSegmentOwner::write_frames](../../../../crates/araphor-data/src/analysis/raw_segments.rs) The segment owner appends bounded record frames and syncs them.
+
+[EvidenceIntakeOwner::run_retention](../../../../crates/mithril-control/src/evidence.rs) Control starts a bounded retention pass.<br>
+-> [EvidenceRetentionOwner::new](../../../../crates/araphor-data/src/analysis/retention.rs) The retention owner borrows AnalysisStore without a second limits value.<br>
+-> [EvidenceRetentionOwner::retain](../../../../crates/araphor-data/src/analysis/retention.rs) The owner uses the store limits and checks required progress, pins, and deletion intent.
+
+[ControlContextOwner::reconcile](../../../../crates/mithril-control/src/store/context.rs) Control reads one committed fact.<br>
+-> [AnalysisStore::commit_context](../../../../crates/araphor-data/src/analysis/context.rs) The data owner commits the exact version.<br>
+-> [ControlContextOwner::reconcile](../../../../crates/mithril-control/src/store/context.rs) Success advances the cursor; a storage error keeps the cursor for retry.
+
+AnalysisStore owns the validated retention and storage configuration.
+EvidenceRetentionOwner borrows that store for one pass. It owns no separate
+configuration or store lifetime. EvidenceSegmentOwner keeps record bounds,
+active files, source identities, and the next file ID. It has no Coverage
+variant, retention policy, or quota counters. AnalysisStore and RawJournal
+still own the actual admission totals. File names and CRC32C checks are unchanged.
+EvidenceIntakeIdentityV1::valid and CoverageReport::validate check their own
+fields. Counter checks and error adapters remain stateless helpers.
+
+`control_context_retries_write` checks that repeated quota failures keep the
+same trust cursor and commit no context version.
+`control_context_bounded_replay` checks that an encoding error does not block
+the next valid fact. The existing segment, quota, retention, crash, extraction,
+and mTLS cases check the unchanged storage contracts.
+The renamed functions contain at most four name parts. Stable stored and
+protocol field names do not change. No performance or physical case is part
+of this review check.
+
 ### Node owners after rebase
 
 The branch now includes committed local `main` at `b50fc61d`. The rebase keeps
@@ -1100,16 +1139,17 @@ Missing versions remain Unknown. In particular, the reconciler cannot recover
 a rollout transition that Control replaced before it read that transition.
 
 The task shares the server's lifetime. It skips missed timer ticks and runs
-blocking reads and commits outside Tokio executor threads. A failed entry
-advances the scan cursor and is retried on the next pass. Other entries can
-continue. A worker panic resets the in-memory scan. Neither failure exits the
+blocking reads and commits outside Tokio executor threads. A storage error
+keeps the scan cursor for the next tick. An encoding error advances the cursor
+so that later facts can continue. A worker panic resets the in-memory scan. Neither failure exits the
 policy server. Restart repeats bounded reads and exact commits; it needs no
 outbox, persisted projection cursor, or cross-store transaction. The scan is
 linear per configured tenant; large multi-tenant scan performance is unqualified.
 
 Read `control_context_bounded_replay` for bounded scans, tenant isolation,
 restart, unchanged Control state, and an oversized body followed by a valid
-body. Read `data_context_projection` in
+body. Read `control_context_retries_write` for repeated storage failure without
+cursor advancement. Read `data_context_projection` in
 [data_store.rs](../../../../crates/mithril-e2e/src/discovery/data_store.rs) for
 the background server route, complete policy bytes, initial rollout revision
 zero, source replacement, retained prior copies, restart, and policy RPCs.

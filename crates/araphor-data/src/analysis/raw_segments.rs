@@ -20,46 +20,6 @@ pub(super) struct StoredEvidenceBatchV1 {
     pub(super) segment: EvidenceSegmentRefV1,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum EvidenceStoreCapacityPolicyV1 {
-    #[default]
-    Block,
-    Retain,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct EvidenceStoreLimitsV1 {
-    pub maximum_retained_bytes: u64,
-    pub maximum_retained_records: u64,
-    #[serde(default)]
-    pub capacity_policy: EvidenceStoreCapacityPolicyV1,
-}
-
-impl EvidenceStoreLimitsV1 {
-    pub fn validate(self) -> Result<()> {
-        if self.maximum_retained_bytes < MAX_SEGMENT_BYTES || self.maximum_retained_records == 0 {
-            return AnalysisStateSnafu {
-                path: PathBuf::from("<evidence-store-limits>"),
-                reason: "evidence store bounds are zero or smaller than one segment".to_owned(),
-            }
-            .fail();
-        }
-        Ok(())
-    }
-}
-
-impl Default for EvidenceStoreLimitsV1 {
-    fn default() -> Self {
-        Self {
-            maximum_retained_bytes: 1_024 * 1_024 * 1_024,
-            maximum_retained_records: 1_000_000,
-            capacity_policy: EvidenceStoreCapacityPolicyV1::Block,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EvidenceSegmentRefV1 {
@@ -67,131 +27,17 @@ pub(crate) struct EvidenceSegmentRefV1 {
     pub(crate) offset: u64,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub(crate) enum EvidenceSegmentStreamKindV1 {
-    Records,
-    Coverage,
-}
-
-impl EvidenceSegmentStreamKindV1 {
-    fn field(self) -> &'static str {
-        match self {
-            Self::Records => "r",
-            Self::Coverage => "c",
-        }
-    }
-
-    fn parse(value: &str, path: &Path) -> Result<Self> {
-        match value {
-            "r" => Ok(Self::Records),
-            _ => AnalysisStateSnafu {
-                path: path.to_owned(),
-                reason: "the evidence segment kind is invalid".to_owned(),
-            }
-            .fail(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct EvidenceSegmentStreamV1 {
-    pub(crate) stream_id: u64,
-    pub(crate) kind: EvidenceSegmentStreamKindV1,
-}
-
-impl EvidenceSegmentStreamV1 {
-    pub(crate) fn records(stream_id: u64) -> Self {
-        Self {
-            stream_id,
-            kind: EvidenceSegmentStreamKindV1::Records,
-        }
-    }
-
-    pub(crate) fn coverage(stream_id: u64) -> Self {
-        Self {
-            stream_id,
-            kind: EvidenceSegmentStreamKindV1::Coverage,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EvidenceSegmentKindV1 {
-    Records {
-        stream_id: u64,
-        first_cursor: u64,
-        last_cursor: u64,
-    },
-    Coverage {
-        stream_id: u64,
-        first_revision: u64,
-        last_revision: u64,
-    },
-}
-
-impl EvidenceSegmentKindV1 {
-    pub(crate) fn stream(self) -> EvidenceSegmentStreamV1 {
-        match self {
-            Self::Records { stream_id, .. } => EvidenceSegmentStreamV1::records(stream_id),
-            Self::Coverage { stream_id, .. } => EvidenceSegmentStreamV1::coverage(stream_id),
-        }
-    }
-
-    fn first(self) -> u64 {
-        match self {
-            Self::Records { first_cursor, .. } => first_cursor,
-            Self::Coverage { first_revision, .. } => first_revision,
-        }
-    }
-
-    fn last(self) -> u64 {
-        match self {
-            Self::Records { last_cursor, .. } => last_cursor,
-            Self::Coverage { last_revision, .. } => last_revision,
-        }
-    }
-
-    fn retained_records(self) -> u64 {
-        match self {
-            Self::Records {
-                first_cursor,
-                last_cursor,
-                ..
-            } => last_cursor - first_cursor + 1,
-            Self::Coverage { .. } => 0,
-        }
-    }
-
-    fn with_last(self, last: u64) -> Self {
-        match self {
-            Self::Records {
-                stream_id,
-                first_cursor,
-                ..
-            } => Self::Records {
-                stream_id,
-                first_cursor,
-                last_cursor: last,
-            },
-            Self::Coverage {
-                stream_id,
-                first_revision,
-                ..
-            } => Self::Coverage {
-                stream_id,
-                first_revision,
-                last_revision: last,
-            },
-        }
-    }
+pub(crate) struct EvidenceSegmentBoundsV1 {
+    pub(crate) stream_id: u64,
+    pub(crate) first_cursor: u64,
+    pub(crate) last_cursor: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct EvidenceSegmentDescriptorV1 {
     pub(crate) reference: EvidenceSegmentRefV1,
-    pub(crate) kind: EvidenceSegmentKindV1,
+    pub(crate) bounds: EvidenceSegmentBoundsV1,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -306,44 +152,36 @@ struct EvidenceSegmentStateV1 {
 }
 
 impl EvidenceSegmentStateV1 {
-    fn active_path(root: &Path, id: u64, stream: EvidenceSegmentStreamV1, first: u64) -> PathBuf {
-        root.join(format!(
-            "{id:016x}.{}.{:016x}.{first:016x}.open",
-            stream.kind.field(),
-            stream.stream_id
-        ))
+    fn active_path(root: &Path, id: u64, stream: u64, first: u64) -> PathBuf {
+        root.join(format!("{id:016x}.r.{stream:016x}.{first:016x}.open"))
     }
 
     fn sealed_path(&self, root: &Path) -> PathBuf {
         let id = self.descriptor.reference.id;
-        let kind = self.descriptor.kind;
-        let stream = kind.stream();
-        let first = kind.first();
-        let last = kind.last();
+        let bounds = self.descriptor.bounds;
+        let stream = bounds.stream_id;
+        let first = bounds.first_cursor;
+        let last = bounds.last_cursor;
         root.join(format!(
-            "{id:016x}.{}.{:016x}.{first:016x}.{last:016x}.seg",
-            stream.kind.field(),
-            stream.stream_id
+            "{id:016x}.r.{stream:016x}.{first:016x}.{last:016x}.seg"
         ))
     }
 
-    fn parse_name(path: &Path) -> Result<(u64, EvidenceSegmentStreamV1, u64, Option<u64>)> {
+    fn parse_name(path: &Path) -> Result<(u64, u64, u64, Option<u64>)> {
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or_default();
         let fields = name.split('.').collect::<Vec<_>>();
-        let (id, kind, stream_id, first, last) = match fields.as_slice() {
-            [id, kind, stream_id, first, "open"] => (
+        let (id, stream_id, first, last) = match fields.as_slice() {
+            [id, "r", stream_id, first, "open"] => (
                 Self::field(id, path)?,
-                EvidenceSegmentStreamKindV1::parse(kind, path)?,
                 Self::field(stream_id, path)?,
                 Self::field(first, path)?,
                 None,
             ),
-            [id, kind, stream_id, first, last, "seg"] => (
+            [id, "r", stream_id, first, last, "seg"] => (
                 Self::field(id, path)?,
-                EvidenceSegmentStreamKindV1::parse(kind, path)?,
                 Self::field(stream_id, path)?,
                 Self::field(first, path)?,
                 Some(Self::field(last, path)?),
@@ -363,7 +201,7 @@ impl EvidenceSegmentStateV1 {
             }
             .fail();
         }
-        Ok((id, EvidenceSegmentStreamV1 { stream_id, kind }, first, last))
+        Ok((id, stream_id, first, last))
     }
 
     fn field(value: &str, path: &Path) -> Result<u64> {
@@ -386,7 +224,7 @@ impl EvidenceSegmentStateV1 {
     fn read(
         path: PathBuf,
         id: u64,
-        stream: EvidenceSegmentStreamV1,
+        stream: u64,
         first: u64,
         sealed_last: Option<u64>,
         committed_end: u64,
@@ -414,11 +252,7 @@ impl EvidenceSegmentStateV1 {
             let payload_bytes =
                 u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap_or_default())
                     as usize;
-            let maximum_payload = match stream.kind {
-                EvidenceSegmentStreamKindV1::Records => RAW_COMMIT_LIMIT,
-                EvidenceSegmentStreamKindV1::Coverage => RAW_COMMIT_LIMIT,
-            };
-            if payload_bytes == 0 || payload_bytes > maximum_payload {
+            if payload_bytes == 0 || payload_bytes > RAW_COMMIT_LIMIT {
                 return AnalysisStateSnafu {
                     path,
                     reason: "the evidence segment contains a record outside its size bound"
@@ -506,17 +340,10 @@ impl EvidenceSegmentStateV1 {
             }
             .fail();
         }
-        let kind = match stream.kind {
-            EvidenceSegmentStreamKindV1::Records => EvidenceSegmentKindV1::Records {
-                stream_id: stream.stream_id,
-                first_cursor: first,
-                last_cursor: last,
-            },
-            EvidenceSegmentStreamKindV1::Coverage => EvidenceSegmentKindV1::Coverage {
-                stream_id: stream.stream_id,
-                first_revision: first,
-                last_revision: last,
-            },
+        let bounds = EvidenceSegmentBoundsV1 {
+            stream_id: stream,
+            first_cursor: first,
+            last_cursor: last,
         };
         Ok(Some(Self {
             descriptor: EvidenceSegmentDescriptorV1 {
@@ -524,7 +351,7 @@ impl EvidenceSegmentStateV1 {
                     id,
                     offset: bytes.len() as u64,
                 },
-                kind,
+                bounds,
             },
             identity,
             path,
@@ -554,12 +381,9 @@ impl EvidenceSegmentStateV1 {
 pub(crate) struct EvidenceSegmentOwner {
     root: PathBuf,
     segments: BTreeMap<u64, EvidenceSegmentStateV1>,
-    active: BTreeMap<EvidenceSegmentStreamV1, u64>,
+    active: BTreeMap<u64, u64>,
     identities: BTreeMap<u64, crate::EvidenceIntakeIdentityV1>,
-    retained_bytes: u64,
-    retained_records: u64,
     next_id: u64,
-    limits: EvidenceStoreLimitsV1,
 }
 
 impl EvidenceSegmentOwner {
@@ -587,10 +411,10 @@ impl EvidenceSegmentOwner {
     ) -> Result<(u64, u64, bool)> {
         if let Some(state) = self
             .active
-            .get(&EvidenceSegmentStreamV1::records(stream))
+            .get(&stream)
             .and_then(|id| self.segments.get(id))
             .filter(|state| {
-                state.descriptor.kind.last().checked_add(1) == Some(sequence)
+                state.descriptor.bounds.last_cursor.checked_add(1) == Some(sequence)
                     && state
                         .descriptor
                         .reference
@@ -629,46 +453,17 @@ impl EvidenceSegmentOwner {
         self.next_id = self.next_id.max(next);
     }
 
-    pub(super) fn forget(&mut self, id: u64) -> Result<()> {
-        if let Some(state) = self.segments.remove(&id) {
-            self.retained_bytes = self
-                .retained_bytes
-                .checked_sub(state.descriptor.reference.offset)
-                .ok_or_else(|| {
-                    AnalysisStateSnafu {
-                        path: &self.root,
-                        reason: "the removed raw bytes exceed retained bytes",
-                    }
-                    .build()
-                })?;
-            self.retained_records = self
-                .retained_records
-                .checked_sub(state.descriptor.kind.retained_records())
-                .ok_or_else(|| {
-                    AnalysisStateSnafu {
-                        path: &self.root,
-                        reason: "the removed raw frames exceed retained frames",
-                    }
-                    .build()
-                })?;
-            self.active.retain(|_, active| *active != id);
-        }
-        Ok(())
+    pub(super) fn forget(&mut self, id: u64) {
+        self.segments.remove(&id);
+        self.active.retain(|_, active| *active != id);
     }
 
-    pub(crate) fn open(
-        raw_root: &Path,
-        limits: EvidenceStoreLimitsV1,
-        committed: &BTreeMap<u64, u64>,
-    ) -> Result<Self> {
-        limits.validate()?;
+    pub(crate) fn open(raw_root: &Path, committed: &BTreeMap<u64, u64>) -> Result<Self> {
         let root = raw_root.to_path_buf();
         fs::create_dir_all(&root).context(IoSnafu { path: &root })?;
         let mut segments = BTreeMap::new();
         let mut active = BTreeMap::new();
         let mut identities = BTreeMap::new();
-        let mut retained_bytes = 0_u64;
-        let mut retained_records = 0_u64;
         let mut next_id = 1_u64;
         let mut directory_changed = false;
         for (count, entry) in fs::read_dir(&root)
@@ -712,7 +507,7 @@ impl EvidenceSegmentOwner {
                 continue;
             };
             if identities
-                .insert(stream.stream_id, segment.identity.clone())
+                .insert(stream, segment.identity.clone())
                 .is_some_and(|existing| existing != segment.identity)
             {
                 return AnalysisStateSnafu {
@@ -721,24 +516,6 @@ impl EvidenceSegmentOwner {
                 }
                 .fail();
             }
-            retained_bytes = retained_bytes
-                .checked_add(segment.descriptor.reference.offset)
-                .ok_or_else(|| {
-                    AnalysisStateSnafu {
-                        path: root.clone(),
-                        reason: "the retained evidence byte count is exhausted".to_owned(),
-                    }
-                    .build()
-                })?;
-            retained_records = retained_records
-                .checked_add(segment.descriptor.kind.retained_records())
-                .ok_or_else(|| {
-                    AnalysisStateSnafu {
-                        path: root.clone(),
-                        reason: "the retained evidence record count is exhausted".to_owned(),
-                    }
-                    .build()
-                })?;
             if segment.active && active.insert(stream, id).is_some() {
                 return AnalysisStateSnafu {
                     path: segment.path,
@@ -757,18 +534,13 @@ impl EvidenceSegmentOwner {
         if directory_changed {
             EvidenceSegmentStateV1::sync_directory(&root)?;
         }
-        let owner = Self {
+        Ok(Self {
             root,
             segments,
             active,
             identities,
-            retained_bytes,
-            retained_records,
             next_id,
-            limits,
-        };
-        owner.validate_retention()?;
-        Ok(owner)
+        })
     }
 
     pub(crate) fn write_frames(
@@ -792,7 +564,7 @@ impl EvidenceSegmentOwner {
             .fail();
         }
         let mut frames = EncodedEvidenceFramesV1::validated(framed_records, frame_ends)?;
-        let stream = EvidenceSegmentStreamV1::records(stream_id);
+        let stream = stream_id;
         let mut first = first_cursor;
         let mut last_written = 0;
         let mut batches = Vec::new();
@@ -849,7 +621,7 @@ impl EvidenceSegmentOwner {
     pub(crate) fn open_read(
         &self,
         segment_id: u64,
-        expected: EvidenceSegmentKindV1,
+        expected: EvidenceSegmentBoundsV1,
         maximum_records: usize,
         maximum_bytes: usize,
     ) -> Result<Option<EvidenceSegmentReadV1>> {
@@ -860,11 +632,11 @@ impl EvidenceSegmentOwner {
             }
             .build()
         })?;
-        let actual = state.descriptor.kind;
-        if expected.stream() != actual.stream()
-            || expected.first() < actual.first()
-            || expected.first() > actual.last()
-            || expected.last() < expected.first()
+        let actual = state.descriptor.bounds;
+        if expected.stream_id != actual.stream_id
+            || expected.first_cursor < actual.first_cursor
+            || expected.first_cursor > actual.last_cursor
+            || expected.last_cursor < expected.first_cursor
         {
             return AnalysisStateSnafu {
                 path: state.path.clone(),
@@ -872,16 +644,19 @@ impl EvidenceSegmentOwner {
             }
             .fail();
         }
-        let start = usize::try_from(expected.first() - actual.first()).map_err(|error| {
-            AnalysisStateSnafu {
-                path: state.path.clone(),
-                reason: format!("the evidence read start exceeds local bounds: {error}"),
-            }
-            .build()
-        })?;
-        let count = usize::try_from(expected.last().min(actual.last()) - expected.first() + 1)
-            .unwrap_or(usize::MAX)
-            .min(maximum_records);
+        let start =
+            usize::try_from(expected.first_cursor - actual.first_cursor).map_err(|error| {
+                AnalysisStateSnafu {
+                    path: state.path.clone(),
+                    reason: format!("the evidence read start exceeds local bounds: {error}"),
+                }
+                .build()
+            })?;
+        let count = usize::try_from(
+            expected.last_cursor.min(actual.last_cursor) - expected.first_cursor + 1,
+        )
+        .unwrap_or(usize::MAX)
+        .min(maximum_records);
         let selected = state
             .frames
             .get(start..start.saturating_add(count))
@@ -938,7 +713,7 @@ impl EvidenceSegmentOwner {
             .build()
         })?;
         let index = position
-            .checked_sub(state.descriptor.kind.first())
+            .checked_sub(state.descriptor.bounds.first_cursor)
             .and_then(|index| usize::try_from(index).ok())
             .ok_or_else(|| {
                 AnalysisStateSnafu {
@@ -960,24 +735,10 @@ impl EvidenceSegmentOwner {
         })
     }
 
-    pub(crate) fn validate_retention(&self) -> Result<()> {
-        if self.limits.capacity_policy == EvidenceStoreCapacityPolicyV1::Block
-            && (self.retained_bytes > self.limits.maximum_retained_bytes
-                || self.retained_records > self.limits.maximum_retained_records)
-        {
-            return AnalysisStateSnafu {
-                path: self.root.clone(),
-                reason: "the evidence store exceeds its configured retention capacity".to_owned(),
-            }
-            .fail();
-        }
-        Ok(())
-    }
-
     fn append_capacity(
         &self,
         identity: &crate::EvidenceIntakeIdentityV1,
-        stream: EvidenceSegmentStreamV1,
+        stream: u64,
         first: u64,
         first_frame_bytes: usize,
     ) -> Result<usize> {
@@ -985,7 +746,7 @@ impl EvidenceSegmentOwner {
             .active
             .get(&stream)
             .and_then(|id| self.segments.get(id))
-            .filter(|state| state.descriptor.kind.last().checked_add(1) == Some(first))
+            .filter(|state| state.descriptor.bounds.last_cursor.checked_add(1) == Some(first))
             .and_then(|state| {
                 MAX_SEGMENT_BYTES
                     .checked_sub(state.descriptor.reference.offset)
@@ -1018,7 +779,7 @@ impl EvidenceSegmentOwner {
     fn append_without_sync(
         &mut self,
         identity: &crate::EvidenceIntakeIdentityV1,
-        stream: EvidenceSegmentStreamV1,
+        stream: u64,
         first: u64,
         last: u64,
         frames: EncodedEvidenceFramesV1,
@@ -1035,7 +796,7 @@ impl EvidenceSegmentOwner {
         }
         if self
             .identities
-            .get(&stream.stream_id)
+            .get(&stream)
             .is_some_and(|existing| existing != identity)
         {
             return AnalysisStateSnafu {
@@ -1062,16 +823,11 @@ impl EvidenceSegmentOwner {
             }
             .fail();
         }
-        let added_records = if stream.kind == EvidenceSegmentStreamKindV1::Records {
-            frames.frames.len() as u64
-        } else {
-            0
-        };
         let active_id = self.active.get(&stream).copied();
         let active_fits = active_id
             .and_then(|id| self.segments.get(&id))
             .is_some_and(|state| {
-                state.descriptor.kind.last().checked_add(1) == Some(first)
+                state.descriptor.bounds.last_cursor.checked_add(1) == Some(first)
                     && state
                         .descriptor
                         .reference
@@ -1079,24 +835,6 @@ impl EvidenceSegmentOwner {
                         .checked_add(frame_bytes)
                         .is_some_and(|bytes| bytes <= MAX_SEGMENT_BYTES)
             });
-        let appended_bytes = if active_fits {
-            frame_bytes
-        } else {
-            new_segment_bytes
-        };
-        let next_bytes = self.retained_bytes.checked_add(appended_bytes);
-        let next_records = self.retained_records.checked_add(added_records);
-        if self.limits.capacity_policy == EvidenceStoreCapacityPolicyV1::Block
-            && (next_bytes.is_none_or(|bytes| bytes > self.limits.maximum_retained_bytes)
-                || next_records
-                    .is_none_or(|records| records > self.limits.maximum_retained_records))
-        {
-            return AnalysisStateSnafu {
-                path: self.root.clone(),
-                reason: "the evidence store retention capacity is exhausted".to_owned(),
-            }
-            .fail();
-        }
         if !active_fits {
             if let Some(id) = active_id {
                 let state = self.segments.get_mut(&id).ok_or_else(|| {
@@ -1136,7 +874,7 @@ impl EvidenceSegmentOwner {
             let file = super::SegmentFile::open(&state.path)?;
             file.append(state.descriptor.reference.offset, &frames.bytes)?;
             Self::extend_frames(&mut state.frames, start, &frames.frames);
-            state.descriptor.kind = state.descriptor.kind.with_last(last);
+            state.descriptor.bounds.last_cursor = last;
             state.descriptor.reference.offset += frame_bytes;
         } else {
             let path = EvidenceSegmentStateV1::active_path(&self.root, id, stream, first);
@@ -1147,17 +885,10 @@ impl EvidenceSegmentOwner {
                 "segment.reserved",
             );
             file.append(identity_bytes.len() as u64, &frames.bytes)?;
-            let kind = match stream.kind {
-                EvidenceSegmentStreamKindV1::Records => EvidenceSegmentKindV1::Records {
-                    stream_id: stream.stream_id,
-                    first_cursor: first,
-                    last_cursor: last,
-                },
-                EvidenceSegmentStreamKindV1::Coverage => EvidenceSegmentKindV1::Coverage {
-                    stream_id: stream.stream_id,
-                    first_revision: first,
-                    last_revision: last,
-                },
+            let bounds = EvidenceSegmentBoundsV1 {
+                stream_id: stream,
+                first_cursor: first,
+                last_cursor: last,
             };
             let mut indexes = Vec::with_capacity(frames.frames.len());
             Self::extend_frames(&mut indexes, identity_bytes.len(), &frames.frames);
@@ -1169,7 +900,7 @@ impl EvidenceSegmentOwner {
                             id,
                             offset: new_segment_bytes,
                         },
-                        kind,
+                        bounds,
                     },
                     identity: identity.clone(),
                     path,
@@ -1179,11 +910,9 @@ impl EvidenceSegmentOwner {
             );
             self.active.insert(stream, id);
             self.identities
-                .entry(stream.stream_id)
+                .entry(stream)
                 .or_insert_with(|| identity.clone());
         }
-        self.retained_bytes = next_bytes.unwrap_or(u64::MAX);
-        self.retained_records = next_records.unwrap_or(u64::MAX);
         self.segments
             .get(&id)
             .map(|state| state.descriptor.reference)

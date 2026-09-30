@@ -12,7 +12,6 @@ use std::{
 use araphor_data::{
     AnalysisResultCommitV1, AnalysisStore, AnalysisWitnessV1, EvidenceIntakeIdentityV1,
     EvidenceRetentionOwner, ProcessorClassV1, ProcessorScopeV1, ProcessorStateV1,
-    RetentionLimitsV1,
 };
 use mithril_control::{
     ControlStore, EvidenceIdV1, EvidenceIntakeOwner, IntakeClock, NodeRegistration,
@@ -864,10 +863,6 @@ impl DataStoreQualification {
             "disabled discovery stopped intake",
         )?;
         observations.acknowledge_evidence(ack)?;
-        let limits = RetentionLimitsV1 {
-            raw_max_age_ns: 24 * HOUR,
-            raw_max_bytes: 1024 * 1024,
-        };
         let health = data
             .processor_health(&required)?
             .ok_or("required health is absent")?;
@@ -878,7 +873,7 @@ impl DataStoreQualification {
             "required lag was hidden or changed intake health",
         )?;
         self.check(
-            EvidenceRetentionOwner::new(&data, limits)?
+            EvidenceRetentionOwner::new(&data)
                 .retain(&identity, START + 8 * HOUR)?
                 .removed_records
                 == 0,
@@ -886,7 +881,7 @@ impl DataStoreQualification {
         )?;
         clock.0.store(START + 48 * HOUR, Ordering::SeqCst);
         self.check(
-            EvidenceRetentionOwner::new(&data, limits)?
+            EvidenceRetentionOwner::new(&data)
                 .retain(&identity, START + 48 * HOUR)?
                 .removed_records
                 == 0,
@@ -1639,9 +1634,8 @@ mod tests {
                         data.read_result(scope.identity.tenant_id, "native-result")?,
                         Some(b"finding".to_vec())
                     );
-                    let retained =
-                        EvidenceRetentionOwner::new(&data, RetentionLimitsV1::default())?
-                            .retain(&scope.identity, START + 25 * HOUR)?;
+                    let retained = EvidenceRetentionOwner::new(&data)
+                        .retain(&scope.identity, START + 25 * HOUR)?;
                     assert_eq!(retained.removed_records, 0);
                 } else {
                     assert_eq!(
@@ -2082,7 +2076,7 @@ mod tests {
                 assert!(matches!(padding.write_all(b"full"),
                     Err(error) if error.raw_os_error() == Some(libc::ENOSPC)));
                 assert!(matches!(
-                    EvidenceRetentionOwner::new(&data, data.retention_limits())?.sweep(None, START),
+                    EvidenceRetentionOwner::new(&data).sweep(None, START),
                     Err(araphor_data::Error::StorageCapacity {
                         resource: "filesystem reserve",
                         ..
@@ -2637,7 +2631,7 @@ mod tests {
             let data = parts.control.analysis_store().ok_or("data owner absent")?;
             if seeded {
                 assert!(matches!(
-                    EvidenceRetentionOwner::new(&data, data.retention_limits())?.sweep(None, START),
+                    EvidenceRetentionOwner::new(&data).sweep(None, START),
                     Err(araphor_data::Error::StorageCapacity {
                         resource: "filesystem reserve",
                         ..

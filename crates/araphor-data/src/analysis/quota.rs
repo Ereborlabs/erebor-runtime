@@ -643,7 +643,7 @@ mod tests {
         }
         store.storage.witness_max_bytes = witness_bytes;
         store.storage.tenant_max_bytes = 1;
-        let retention = crate::EvidenceRetentionOwner::new(&store, Default::default())?;
+        let retention = crate::EvidenceRetentionOwner::new(&store);
         assert_eq!(
             retention.retain(&second.scope.identity, 3)?.removed_records,
             0
@@ -663,7 +663,11 @@ mod tests {
     fn analysis_witness_segment_cost() -> TestResult {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
-        let store = AnalysisStore::open(&root)?;
+        let limits = crate::RetentionLimitsV1 {
+            raw_max_age_ns: 1,
+            raw_max_bytes: 32 * 1024 * 1024,
+        };
+        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
         let identity = EvidenceIntakeIdentityV1 {
             tenant_id: [1; 16],
             node_id: "n".into(),
@@ -744,15 +748,9 @@ mod tests {
         assert_eq!(expired.referenced_bytes, 8192);
         assert_eq!(expired.segment_bytes, segment_bytes);
         drop(store);
-        let store = AnalysisStore::open(&root)?;
+        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
         assert_eq!(store.witness_usage(identity.tenant_id, 100)?, expired);
-        let owner = crate::EvidenceRetentionOwner::new(
-            &store,
-            crate::RetentionLimitsV1 {
-                raw_max_age_ns: 1,
-                raw_max_bytes: 32 * 1024 * 1024,
-            },
-        )?;
+        let owner = crate::EvidenceRetentionOwner::new(&store);
         assert_eq!(owner.retain(&identity, 100)?.removed_records, 0);
         assert_eq!(owner.retain(&identity, 201)?.removed_records, 3072);
         assert_eq!(owner.retain(&identity, 201)?.removed_records, 1024);

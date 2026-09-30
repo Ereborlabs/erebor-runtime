@@ -1,7 +1,7 @@
 use duckdb::params;
 use snafu::ResultExt as _;
 
-use super::{source_key, valid_source_identity, AnalysisStore};
+use super::{source_key, AnalysisStore};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
 
 const SWEEP_SOURCES: usize = 16;
@@ -39,15 +39,11 @@ pub struct RetentionResultV1 {
 
 pub struct EvidenceRetentionOwner<'a> {
     store: &'a AnalysisStore,
-    limits: RetentionLimitsV1,
 }
 
 impl<'a> EvidenceRetentionOwner<'a> {
-    pub fn new(store: &'a AnalysisStore, limits: RetentionLimitsV1) -> Result<Self> {
-        if limits.raw_max_age_ns == 0 || limits.raw_max_bytes == 0 {
-            return store.reject("the raw retention limits must be positive");
-        }
-        Ok(Self { store, limits })
+    pub fn new(store: &'a AnalysisStore) -> Self {
+        Self { store }
     }
 
     pub fn sweep(&self, after: Option<[u8; 32]>, now_utc_ns: u64) -> Result<RetentionSweepV1> {
@@ -101,7 +97,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
                 serde_json::from_str(json).context(crate::JsonSnafu {
                     path: &self.store.root,
                 })?;
-            if !valid_source_identity(&identity) || source_key(&identity).as_slice() != key {
+            if !identity.valid() || source_key(&identity).as_slice() != key {
                 return self
                     .store
                     .reject("the retention source identity is invalid");
@@ -122,7 +118,7 @@ impl<'a> EvidenceRetentionOwner<'a> {
         identity: &EvidenceIntakeIdentityV1,
         now_utc_ns: u64,
     ) -> Result<RetentionResultV1> {
-        if !valid_source_identity(identity) || now_utc_ns == 0 {
+        if !identity.valid() || now_utc_ns == 0 {
             return self.store.reject("the retention source or time is invalid");
         }
         let key = source_key(identity);
@@ -224,8 +220,8 @@ impl<'a> EvidenceRetentionOwner<'a> {
             .into_iter()
             .filter(|(id, (_, last, intake, _))| {
                 *last <= consumed.min(receipt.contiguous_cursor)
-                    && (*intake <= now_utc_ns.saturating_sub(self.limits.raw_max_age_ns)
-                        || tenant_bytes > self.limits.raw_max_bytes
+                    && (*intake <= now_utc_ns.saturating_sub(self.store.retention.raw_max_age_ns)
+                        || tenant_bytes > self.store.retention.raw_max_bytes
                         || pressure)
                     && !pins.contains(id)
             })
@@ -440,7 +436,7 @@ mod tests {
         }
         drop(writer);
         assert_eq!(
-            EvidenceRetentionOwner::new(&store, Default::default())?
+            EvidenceRetentionOwner::new(&store)
                 .retain(&source, 101)?
                 .removed_records,
             0
@@ -648,7 +644,15 @@ mod tests {
     #[test]
     fn analysis_store_sweep_pages() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let limits = RetentionLimitsV1 {
+            raw_max_age_ns: 50,
+            raw_max_bytes: 100,
+        };
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            limits,
+            Default::default(),
+        )?;
         let mut sources = Vec::new();
         for index in 1..=SWEEP_SOURCES + 1 {
             let mut source = identity(1);
@@ -665,13 +669,7 @@ mod tests {
             ProcessorClassV1::Required,
             1,
         )?;
-        let owner = EvidenceRetentionOwner::new(
-            &store,
-            RetentionLimitsV1 {
-                raw_max_age_ns: 50,
-                raw_max_bytes: 100,
-            },
-        )?;
+        let owner = EvidenceRetentionOwner::new(&store);
         let first = owner.sweep(None, 200)?;
         assert_eq!(first.checked_sources, SWEEP_SOURCES as u32);
         assert!(first.next_source.is_some());
@@ -706,8 +704,7 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::channel();
         let (early, result) = std::thread::scope(|scope| {
             let worker = scope.spawn(|| {
-                let result = EvidenceRetentionOwner::new(&store, Default::default())
-                    .and_then(|owner| owner.sweep(None, 100));
+                let result = EvidenceRetentionOwner::new(&store).sweep(None, 100);
                 let _sent = sender.send(());
                 result
             });
@@ -737,7 +734,7 @@ mod tests {
         let source = identity(1);
         store.accept_validated_batch(source.clone(), batch(1, b"a"))?;
         let before = store.meta()?;
-        let owner = EvidenceRetentionOwner::new(&store, Default::default())?;
+        let owner = EvidenceRetentionOwner::new(&store);
         store
             .writer()?
             .get()?
@@ -804,7 +801,15 @@ mod tests {
     #[test]
     fn analysis_store_retention_guards() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let limits = RetentionLimitsV1 {
+            raw_max_age_ns: 50,
+            raw_max_bytes: 10,
+        };
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            limits,
+            Default::default(),
+        )?;
         let source = identity(1);
         let other = identity(2);
         assert_eq!(
@@ -839,13 +844,7 @@ mod tests {
             ProcessorClassV1::Required,
             1,
         )?;
-        let owner = EvidenceRetentionOwner::new(
-            &store,
-            RetentionLimitsV1 {
-                raw_max_age_ns: 50,
-                raw_max_bytes: 10,
-            },
-        )?;
+        let owner = EvidenceRetentionOwner::new(&store);
         assert_eq!(owner.retain(&source, 200)?.removed_records, 0);
         store.commit_result(&AnalysisResultCommitV1 {
             scope: scope.clone(),
@@ -953,15 +952,13 @@ mod tests {
         const FRAME_BYTES: usize = 16 * 1024;
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
-        let store = AnalysisStore::open(&root)?;
+        let limits = RetentionLimitsV1 {
+            raw_max_age_ns: 100,
+            raw_max_bytes: 1024 * 1024 * 1024,
+        };
+        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
         let source = identity(1);
-        let owner = EvidenceRetentionOwner::new(
-            &store,
-            RetentionLimitsV1 {
-                raw_max_age_ns: 100,
-                raw_max_bytes: 1024 * 1024 * 1024,
-            },
-        )?;
+        let owner = EvidenceRetentionOwner::new(&store);
         let mut first_peak = 0;
         let mut witness = Vec::new();
         for cycle in 0..CYCLES {
@@ -1071,7 +1068,7 @@ mod tests {
         );
         let before = store.meta()?;
         drop(store);
-        let reopened = AnalysisStore::open(root)?;
+        let reopened = AnalysisStore::open_with_limits(root, limits, Default::default())?;
         assert_eq!(reopened.meta()?, before);
         let receipt = reopened
             .source_receipt(&source)?
@@ -1093,17 +1090,15 @@ mod tests {
             method_version: 1,
             identity: source.clone(),
         };
+        let limits = RetentionLimitsV1 {
+            raw_max_age_ns: 1_000,
+            raw_max_bytes: 1,
+        };
         {
-            let store = AnalysisStore::open(&path)?;
+            let store = AnalysisStore::open_with_limits(&path, limits, Default::default())?;
             store.accept_validated_batch(source.clone(), batch(1, b"abc"))?;
             store.register_processor(&optional, ProcessorClassV1::Optional, 1)?;
-            let owner = EvidenceRetentionOwner::new(
-                &store,
-                RetentionLimitsV1 {
-                    raw_max_age_ns: 1_000,
-                    raw_max_bytes: 1,
-                },
-            )?;
+            let owner = EvidenceRetentionOwner::new(&store);
             let result = owner.retain(&source, 101)?;
             assert_eq!(result.removed_records, 3);
             assert_eq!(result.retained_bytes, 0);
@@ -1113,7 +1108,7 @@ mod tests {
                 Err(crate::Error::RetainedRangeExpired { .. })
             ));
         }
-        let reopened = AnalysisStore::open(path)?;
+        let reopened = AnalysisStore::open_with_limits(path, limits, Default::default())?;
         assert!(matches!(
             reopened.read_page(&source, 1),
             Err(crate::Error::RetainedRangeExpired { .. })
