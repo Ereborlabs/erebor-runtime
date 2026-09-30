@@ -2979,7 +2979,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace the denied `Fexecve` action with `forked_fd_exec_is_denied`.
+  - [x] Replace the denied `Fexecve` action with `forked_fd_exec_is_denied`.
     Use `exec_on_release.py` with a forked descriptor mode and one signed
     execution-Deny policy. Hold the descriptor before Node starts. After
     recovery, fork the child and observe its inherited role and creator before
@@ -3002,9 +3002,13 @@ test does not close a row when its physical condition or an assertion changed.
       The existing descriptor-Allow and path-exec Kubernetes cases passed in
       69.13 and 114.77 seconds. Their namespace, pin, and lease cleanup passed.
       The final repository Rust CI procedure passed.
-    - [ ] Remove only the legacy `Fexecve` action, enum arm, and result field
+    - [x] Remove only the legacy `Fexecve` action, enum arm, and result field
       after all three platforms pass. Keep `Exec`, `Execveat`, and non-leader
       descriptor exec and their shared descriptor and libc helper.
+      The retirement deletes seven Rust lines. Nine child regressions and the
+      final repository Rust CI procedure passed after the last Rust edit.
+      `effect.rs` remains at 3,006 lines and `effect/child.rs` at 2,878 lines.
+      Their remaining actions still require migration; neither runner is done.
     - The retained domain `mithril-runtime-qualification-955601` is shut off.
       Its configured `/tmp/mithril-recovered-vm.RSYqtR/root.qcow2` is absent.
       The existing `--manual` launcher created the retained test-only domain
@@ -3036,7 +3040,8 @@ test does not close a row when its physical condition or an assertion changed.
       `add_actor` case proves runtime entry, but the legacy action calls
       `fexecve` from a recovered external actor. Reuse the Python exec actor
       with a file-descriptor mode and require the same two decisions on all
-      three platforms. The separate denied-`fexecve` case remains.
+      three platforms. The separate denied-`fexecve` case uses
+      `forked_fd_exec_is_denied`; its matched legacy action is removed.
       - [x] Pass Host and commit. The actor opened the executable before Node
         policy activation, then tried file-descriptor exec after recovery.
         The exact case passed in 40.68 seconds with physical `EACCES` and

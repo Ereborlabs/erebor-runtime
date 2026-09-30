@@ -139,7 +139,6 @@ pub(super) enum PreparedOperation {
     Exec,
     Execve,
     Execveat,
-    Fexecve,
     ScriptExec,
     DeletedExec,
     MemfdExec,
@@ -1771,9 +1770,6 @@ impl PreparedOperations {
             }
             PreparedOperation::Execveat => {
                 io_outcome(fixture_syscalls::exec_path(&self.exec_path, true))
-            }
-            PreparedOperation::Fexecve => {
-                io_outcome(fixture_syscalls::exec_fd(self.exec_file.as_raw_fd(), false))
             }
             PreparedOperation::ScriptExec => {
                 io_outcome(fixture_syscalls::exec_path(&self.script_path, false))

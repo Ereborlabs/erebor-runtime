@@ -201,8 +201,8 @@ with the exact-test flags below. Use the `exec_fd_recovery_runc` or
 the same actor, signed policy, and assertions on all three platforms.
 The replacement has 82 lines. It removes the legacy allowed-exec dispatch,
 stored descriptor, path field, and result flag after qualification. The
-separate denied-fexecve actions remain. The legacy executable path fixture
-remains for signed policy installation and independent mmap/mprotect Allow
+separate denied-fexecve replacement is described below. The executable path
+fixture remains for signed policy installation and independent mmap/mprotect Allow
 lowering checks. The retirement deletes 57 Rust lines.
 Nine focused child regressions and the final repository Rust CI procedure
 passed after retirement. No production or Platform API changed.
@@ -224,8 +224,12 @@ with the exact-test flags below. Host passed in 28.07 seconds with pin, lease,
 and cgroup cleanup. Direct `runc` passed in 28.48 seconds with the same checks
 and cleanup. Use the `exec_deny_recovery_runc` suffix. Kubernetes passed in
 71.21 seconds with the same checks and namespace, pin, and lease cleanup.
-Use the `exec_deny_recovery_kubernetes` suffix. The old `Fexecve` dispatch
-remains until its matched retirement is verified.
+Use the `exec_deny_recovery_kubernetes` suffix. The matched legacy `Fexecve`
+dispatch and result flag are removed. This deletes seven Rust lines. Nine
+child regressions and the final repository Rust CI procedure passed after
+retirement. `Exec`, `Execveat`, non-leader exec, and their descriptor and libc
+helper remain for their separate migrations. No production or Platform API
+changed.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It

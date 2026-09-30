@@ -462,7 +462,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub benign_read_allowed: bool,
     pub execve_denied: bool,
     pub execveat_denied: bool,
-    pub fexecve_denied: bool,
     pub script_exec_denied: bool,
     pub deleted_exec_denied: bool,
     pub non_leader_exec_denied: bool,
@@ -1660,7 +1659,6 @@ impl EffectTestRunner {
             for (operation, label) in [
                 (HardClosedOperation::Execve, "execve image"),
                 (HardClosedOperation::Execveat, "execveat image"),
-                (HardClosedOperation::Fexecve, "fexecve image"),
                 (HardClosedOperation::ScriptExec, "script image"),
                 (
                     HardClosedOperation::NonLeaderExec,
@@ -2728,7 +2726,6 @@ impl EffectTestRunner {
             benign_read_allowed: true,
             execve_denied: protect,
             execveat_denied: protect,
-            fexecve_denied: protect,
             script_exec_denied: protect,
             deleted_exec_denied: protect,
             non_leader_exec_denied: protect,
