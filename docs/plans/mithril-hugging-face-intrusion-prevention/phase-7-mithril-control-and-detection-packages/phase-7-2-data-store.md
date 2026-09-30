@@ -680,6 +680,30 @@ Production Rust and the CLI executable are unchanged from item 4.
 /usr/bin/time -v -o /tmp/araphor-resume.HoOzQx/06-resources.log target/release/mithril_discovery_test --case data-store-rollout --output-directory /tmp/araphor-resume.HoOzQx/06-result
 ```
 
+**Item 7: Done, PASS.** On `91f0774a`, the unchanged release data executable
+passed one `analysis_extract_history` test with zero failures and 85 filtered
+tests. Exit status was zero. Elapsed time was 0.79 seconds; peak RSS was
+113,588 KiB (110.9 MiB). The fixture stored 576 records, each 128 KiB, in
+18 batches and six segment files. Raw history was 75,497,472 bytes (72 MiB).
+The recent selection scanned 4,194,444 bytes and admitted 1,137 bytes in
+23.031 ms. The sparse selection scanned 75,499,985 bytes and admitted 801
+bytes in 119.330 ms. Both remained inside the unchanged 256-MiB scan and
+one-second limits. Full-payload selection correctly failed the 64-MiB input
+limit without returning partial input or retaining a read lease.
+
+All 18 dispersed witnesses protected their containing segments against
+retention. Useful witness bytes were 2,359,296 (2.25 MiB). Charged segment
+bytes were 75,500,411; extra retained bytes were 73,141,115. The fixture
+checked exact complete-batch scan charges and all six file headers. Pin
+commit took 223.712 ms; witness usage lookup took 52.958 ms. These values
+measure this shared-host fixture, not arbitrary SQL or physical storage.
+Read `07-run.log` and `07-resources.log` in `/tmp/araphor-resume.HoOzQx`.
+The executable and test source are unchanged from item 3.
+
+```sh
+/usr/bin/time -v -o /tmp/araphor-resume.HoOzQx/07-resources.log target/release/deps/araphor_data-56c66faf3a80bf1e analysis::extraction::tests::analysis_extract_history --exact --ignored --nocapture --test-threads=1
+```
+
 ### Ordered review: item 1
 
 **Done: PASS**, 2026-09-28. The current-source release case
