@@ -76,8 +76,10 @@ quota input in `b56d204e`. The recorded disk-full case and harness regressions
 also passed. The recorded two-node storage/outage case passed at `dc252f07`,
 with no Rust change after the workspace gate. Read the
 [final storage qualification](phase-7-2-data-store.md#final-storage-qualification)
-for commands, result paths, and proof limits. The user excluded the 8-GiB case
-from closure. Default-quota memory with small batches remains unqualified.
+for commands, result paths, and proof limits. The user replaced the 8-GiB
+global-quota test with the 1-GiB test. The approved 1-GiB test passed; no
+8-GiB run is required. Default-quota memory with small batches remains
+unqualified.
 An initial protected-start setup failed its unreachable mount-cache cleanup
 assertion. The storage/outage case ran separately on a fresh environment with
 current release images. Its exact retained-data checks, evidence replay,
@@ -2311,11 +2313,14 @@ for exact measurements and limits. No new performance test was added.
 
 ## Current storage verification
 
-The current workspace gate passed at `f9c6901e`. The current two-node
-storage/outage case passed at `dc252f07`, with no subsequent Rust change.
+The rebased workspace gate passed at `5be548bd`. The two-node
+storage/outage case passed at `dc252f07`. Raw data-owner source is unchanged
+since that result. The physical result does not qualify the rebased Node changes.
 The actual disk-full case and all eight accepted review items complete the
 user-approved 7.2 scope. Read the
 [closure record](phase-7-2-data-store.md#final-storage-qualification) for proof.
-The 8-GiB capacity and original latency target remain unqualified. The failed
+The approved 1-GiB global-quota test replaced the 8-GiB test and passed.
+No additional global-quota run is required for closure. The 8-GiB capacity
+and original latency target remain unqualified. The failed
 preliminary kernel-cache check remains unresolved. This result does not
 qualify that behavior or implement public SQL, follow, or remote placement.

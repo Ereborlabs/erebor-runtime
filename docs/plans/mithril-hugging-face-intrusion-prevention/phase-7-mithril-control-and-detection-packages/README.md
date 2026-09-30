@@ -141,8 +141,10 @@ Each row is a bounded deliverable. The required test level appears below.
 review items are accepted. The current workspace gate, actual disk-full case,
 and two-node storage/outage case passed. Read its
 [final result](phase-7-2-data-store.md#final-storage-qualification) for source
-identities and limits. The user excluded the 8-GiB case. Full-capacity memory
-and the original latency target remain unqualified. A separate preliminary
+identities and limits. The user replaced the 8-GiB global-quota test with the
+1-GiB test. The approved 1-GiB test passed; no 8-GiB run is required.
+Full-capacity memory and the original latency target remain unqualified.
+A separate preliminary
 kernel-cache setup check failed; this closure does not qualify that behavior.
 The data crate now owns segment storage. The DuckDB raw-row path and
 Control-owned raw writer are removed. 7.4 removes discovery's copied raw

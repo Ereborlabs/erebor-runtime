@@ -25,9 +25,11 @@ Status: **Done** for the approved implementation and qualification scope.
 The segment-metadata implementation is in `f02473bf`. Read
 [Final storage qualification](#final-storage-qualification) for the current
 workspace gate, actual disk-full case, and two-node storage/outage result.
-The eight ordered review items are accepted. The user excluded the 8-GiB test
-from closure. That capacity remains unqualified. The original five-percent
-latency target remains unproven; the user accepted the recorded short pair.
+The eight ordered review items are accepted. The user replaced the 8-GiB
+global-quota test with the 1-GiB test. The approved 1-GiB test passed.
+No 8-GiB run is required for closure. The 8-GiB capacity remains unqualified.
+The original five-percent latency target remains unproven; the user accepted
+the recorded short pair.
 The initial kernel-cache setup failure remains a separate failed result.
 This closure does not qualify that kernel behavior. Earlier results apply
 only to their named source.
@@ -401,7 +403,7 @@ an assertion, or repeat a passing case without that decision.
 | --- | --- | --- |
 | 1 | `data_quota_recovery` | Required correctness: fill the 64-MiB tenant fixture, reject without ACK, retain Node input, preserve a witness, reclaim eligible segments, retry, and reopen. This does not qualify the default capacity. |
 | 2 | `data-store-quota` | Default tenant capacity qualification through Node WAL and mTLS. Required before advertising that capacity, not for each implementation deliverable. |
-| 3 | `analysis_store_global_memory` | Store-wide capacity and memory measurement with five tenants. Supplementary qualification, not a mandatory repeat of each implementation change. |
+| 3 | `analysis_store_global_memory` | Store-wide capacity and memory measurement with five tenants and the approved 1-GiB global quota. This replaces the 8-GiB test. Do not repeat the passing case without approval. |
 | 4 | `data-store-load` | Single-tenant throughput and latency measurement. Keep the small correctness case mandatory; no minimum event rate is specified. |
 | 5 | `data-store-tenants` | Shared-store contention measurement. Keep small isolation and replay checks mandatory; report large-run results separately. |
 | 6 | `data-store-rollout` | Check policy progress during intake and measure delay. Keep correctness and existing deadlines mandatory. No five-percent completion threshold applies. |
@@ -767,9 +769,12 @@ ARAPHOR_STORE_BENCH_MODE=analysis ARAPHOR_STORE_BENCH_BATCHES=64 timeout 30s /us
 ### Final storage qualification
 
 The user requires the disk-full case and the two-node storage and outage case
-for closure. The user removed the 8-GiB case from this closure. Do not run that
-case or claim that capacity is qualified. The eight ordered review items above
-are accepted. The current workspace gate, disk-full case, and two-node case
+for closure. The user replaced the 8-GiB global-quota test with the 1-GiB test.
+The approved 1-GiB test passed with five tenants and peak RSS of 73.5 MiB.
+Read [item 3](#serial-qualification-resumed-after-cleanup) for its source and logs.
+No additional global-quota run is required. Do not claim 8-GiB qualification.
+The eight ordered review items above are accepted. The current workspace
+gate, disk-full case, and two-node case
 are **Done, PASS**. This completes 7.2 under the approved scope. Do not infer
 full-capacity or kernel-cache qualification from this result.
 
@@ -777,7 +782,8 @@ full-capacity or kernel-cache qualification from this result.
 change is the quota-test input in `b56d204e`. Formatting, workspace check,
 Clippy with all targets and features, and all non-ignored workspace tests
 passed. The gate reported 81 data-owner tests, 174 Control tests, and 123
-Mithril e2e tests, with zero failures. The ignored 8-GiB case did not run.
+Mithril e2e tests, with zero failures. Ignored release cases did not run in
+this gate. The approved 1-GiB release result is recorded under item 3 above.
 Read `workspace-gate.log` in `/tmp/araphor-close.D8LyQB`.
 
 ```sh
@@ -1492,14 +1498,18 @@ CI. Record the host and allocator environment when running it explicitly.
 This component test does not prove wire validation, global-quota memory,
 concurrent readers, or the memory of embedded Node and Control owners.
 
-Use `analysis_store_global_memory` for the default global logical quota.
+Use `analysis_store_global_memory` with `ARAPHOR_GLOBAL_BYTES=1073741824`
+for the approved 1-GiB global logical quota. This replaces the 8-GiB test;
+production defaults remain unchanged. The approved case passed. Do not repeat
+the case without user approval.
 Reuse the same component runner with five tenants and four calling threads.
 Send one batch at a time and cycle through tenants. Each tenant remains below
 its own quota when the global ordinary-write allowance is full. Only a global
 logical-capacity error is a successful stop condition. Check unchanged metadata
 and the rejected source receipt. Check every tenant's receipt and final frame
-after checkpoint and reopen. Use the same 512-MiB test ceiling and default storage
-limits. This test uses synthetic post-validation frames, not Node wire input.
+after checkpoint and reopen. Use the same 512-MiB test ceiling. Cap the tenant
+quota at the selected global quota. Keep the other storage limits unchanged.
+This test uses synthetic post-validation frames, not Node wire input.
 It does not qualify concurrent readers, required processors, or mTLS latency.
 Keep only the latest native-memory and storage sample from each 64-batch
 interval. On an unexpected write error, report that sample's batch number,
