@@ -53,6 +53,11 @@ of the old writer, and write throughput at or above 95 percent of that writer.
 Report p99 separately. Do not claim a pass from the historical VM measurements
 or the 15.1-percent improvement against `a7cde81b`.
 
+The user accepted the recorded short pair as PASS for ordered item 8 despite
+the latency target miss. This acceptance applies to that result. No latency
+fix or additional pair is required to close that item. It does not establish
+a new performance threshold or prove the original target.
+
 Use the original segment append, sync, and restart model. No database
 replacement is required. Obtain approval before adding a performance test
 or changing its workload or limits. Stop when the target and correctness
@@ -704,7 +709,7 @@ The executable and test source are unchanged from item 3.
 /usr/bin/time -v -o /tmp/araphor-resume.HoOzQx/07-resources.log target/release/deps/araphor_data-56c66faf3a80bf1e analysis::extraction::tests::analysis_extract_history --exact --ignored --nocapture --test-threads=1
 ```
 
-**Item 8: Not done, performance target missed in the short pair. Stopped.**
+**Item 8: Done, user-accepted PASS for the short pair.**
 On `001aeabe`, the preserved release executables ran the existing original
 `293762be` writer and current `846adec5` writer. Each used a fresh store,
 64 batches, 256 records per batch, 16,384 total records, and 2,301,638 input
@@ -732,9 +737,12 @@ latency target requires at most 95 percent, or 1.23975 ms for this baseline.
 It was not met. Neither fixture reports an exact durable-call mean; dividing
 the complete loop time by 64 is not that mean. The result is a short-pair
 measurement, not five-pair qualification or proof of a stable regression.
-The sequence stopped at this target miss. No further pairs, tests, or fixes
-ran. Items 3 through 7 passed after cleanup. Full qualification remains
-**Not done**, including the original global capacity and physical cases.
+The sequence initially stopped at this target miss. The user then accepted
+the result as PASS. No further pairs, tests, or fixes ran. Items 1 and 2 passed
+before cleanup; items 3 through 7 passed after cleanup. All eight ordered
+items are now accepted. This closes item 8 without five-pair measurements or
+an exact durable-call mean. Separate full qualification remains **Not done**,
+including the original global capacity and physical cases.
 No Rust source changed in this resumed sequence. The workspace gate was not
 rerun; its last complete pass remains scoped to `846adec5`.
 
