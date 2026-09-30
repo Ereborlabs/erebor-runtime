@@ -187,6 +187,19 @@ final Rust CI procedure passed after the retirement edit. Its first command
 failed in the unchanged Control log test recorded above. That test passed in
 isolation, then the unchanged full procedure passed. No logging fix is claimed.
 
+The [fd-exec test](src/effect/exec_fd_allow.rs) holds the Python actor and its
+open executable descriptor before Node starts. After production recovery,
+the actor calls file-descriptor exec. Its signed external role allows the
+executable action but declares no entry for the executable. The test requires
+the real syscall errno `EACCES`, fresh same-task `EXACT_POLICY_ALLOW` and
+`UNSUPPORTED_OBJECT` evidence, and entry rule zero. The actor closes its
+descriptor before it reports the errno through its task name. A release file
+permits normal exit. An exec transport status is not an actor syscall result.
+Run `effect::exec_fd_allow::exec_fd_allow_cannot_admit::exec_fd_recovery_host`
+with the exact-test flags below. Use the `exec_fd_recovery_runc` or
+`exec_fd_recovery_kubernetes` suffix for the other platforms. The test uses
+the same actor, signed policy, and assertions on all three platforms.
+
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path
 result flags for a shell gate. The 41-line

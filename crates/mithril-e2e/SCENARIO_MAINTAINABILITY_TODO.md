@@ -2985,7 +2985,7 @@ test does not close a row when its physical condition or an assertion changed.
       case passed in 54.60 seconds through stock `runc` and the OCI hook.
     - [x] Pass Kubernetes and commit its platform registration. The exact
       case passed in 81.36 seconds in retained K3s; the launcher exited 0.
-    - [ ] Preserve the old `fexecve` variant before retirement. The new
+    - [x] Preserve the old `fexecve` variant before retirement. The new
       `add_actor` case proves runtime entry, but the legacy action calls
       `fexecve` from a recovered external actor. Reuse the Python exec actor
       with a file-descriptor mode and require the same two decisions on all
@@ -3024,6 +3024,12 @@ test does not close a row when its physical condition or an assertion changed.
         The other caller also passed on Kubernetes in 82.37 seconds, and its
         namespace, pin root, and lease were removed. The repository Rust CI
         gate passed after the final Rust edit.
+        The corrected fd-exec case passed Kubernetes in 75.62 seconds with
+        actual errno 13, both attributed decisions, and entry rule zero.
+        Namespace, pin root, and lease cleanup passed. The repository Rust
+        CI gate passed after registration. No production or Platform API
+        changed. The old transport-status failure does not qualify as a
+        production admission failure.
     - [ ] Remove only the matching legacy action, result field, and unused
       fixture state after the `fexecve` case passes on all three platforms.
   - [x] Replace the old SQPOLL check for a restricted rule-zero actor in
