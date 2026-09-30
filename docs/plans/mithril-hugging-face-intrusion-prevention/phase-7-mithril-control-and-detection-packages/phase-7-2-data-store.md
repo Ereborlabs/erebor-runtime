@@ -605,6 +605,25 @@ CARGO_NET_OFFLINE=true cargo clean --profile dev -p araphor-data -p mithril-cont
 docker buildx prune --builder default --all --force
 ```
 
+**Item 3: Done, PASS for the 1-GiB case.** On `17ee6810`, the unchanged
+release executable from test source `b56d204e` passed one test with zero
+failures and 85 filtered tests. Exit status was zero. It accepted 6,151,168
+records across five tenants. Final cursors were 1,230,848; 1,230,848;
+1,229,824; 1,229,824; and 1,229,824. Global logical capacity rejected the next
+batch before any tenant limit. Receipts and metadata remained unchanged on
+rejection. Checkpoint, reopen, and each tenant's final exact record passed.
+Elapsed time was 103.77 seconds. Peak RSS was 75,276 KiB (73.5 MiB), below
+the unchanged 512-MiB test ceiling. The reduced case does not qualify 8 GiB,
+concurrent readers, or Node/mTLS intake. The host was shared. No source, limit,
+or assertion changed after the failed attempt; only cleanup preceded this run.
+Read `03-run.log` and `03-resources.log` in `/tmp/araphor-resume.HoOzQx`.
+The executable SHA-256 remains
+`7d05b1323b7ac2a4aab2a9daca1640f4470952aa02415f58480f4951606e26e6`.
+
+```sh
+ARAPHOR_GLOBAL_BYTES=1073741824 /usr/bin/time -v -o /tmp/araphor-resume.HoOzQx/03-resources.log target/release/deps/araphor_data-56c66faf3a80bf1e analysis::capacity::tests::analysis_store_global_memory --exact --ignored --nocapture --test-threads=1
+```
+
 ### Ordered review: item 1
 
 **Done: PASS**, 2026-09-28. The current-source release case
