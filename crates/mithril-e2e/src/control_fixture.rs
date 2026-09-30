@@ -6,12 +6,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ed25519_dalek::SigningKey;
+#[cfg(test)]
+use mithril_control::EvidenceIntakeIdentityV1;
 use mithril_control::{
     lower_kubernetes_policy, serve, workload_target_fact_digest, AllowedNodeIdentity,
     ContainerKindV1, ControlPlane, ControlServerTls, ControlStore, KubernetesWorkloadIdentityV1,
     NodeRegistration, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicySignerConfigV1,
     PolicySourceRevisionV1, PolicySourceStateV1, ProfileSealRequestV1, RegistryDigestsV1,
-    EvidenceIntakeIdentityV1, TrustGenerationV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
+    TrustGenerationV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
 };
 #[cfg(test)]
 use mithril_control::{
@@ -19,12 +21,13 @@ use mithril_control::{
     NodeDecommissionAuthorizationV1,
     SignedNodeDecommissionV1,
 };
+#[cfg(test)]
 use mithril_node::{
-    EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, NodeControlConfig,
-    NodeControlConnector, ObservationCanonicalizer,
+    EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, ObservationCanonicalizer,
 };
 #[cfg(test)]
 use mithril_node::{ControlConnection, NodeDecommissionConfig, TrustCache};
+use mithril_node::{NodeControlConfig, NodeControlConnector};
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa,
     KeyPair,
@@ -314,6 +317,7 @@ impl MtlsFixture {
         self.directory.path()
     }
 
+    #[cfg(test)]
     pub(crate) fn wal(
         &self,
         limits: EvidenceWalLimits,
@@ -331,6 +335,7 @@ impl MtlsFixture {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn identity(&self, source_id: [u8; 16]) -> EvidenceIntakeIdentityV1 {
         EvidenceIntakeIdentityV1 {
             tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),

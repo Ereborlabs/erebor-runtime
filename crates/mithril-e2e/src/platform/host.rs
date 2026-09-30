@@ -42,7 +42,12 @@ impl Host {
         env.shared.configure_diagnostics(config)?;
         env.start_control()?;
         env.shared.enable_diagnostic_partition()?;
-        let mut init = env.start_actor("ready.py", &[])?;
+        let policy = serde_json::from_slice(&fs::read(super::policy_path(
+            env.source(),
+            "python_policy.json",
+        )?)?)?;
+        let labels = super::policy_labels(&policy)?;
+        let mut init = env.start_actor("ready.py", &[], &labels)?;
         env.place(init.id())?;
         let mut probe = env.add_actor("python", &["/fixtures/proc_read.py", "/work"])?;
         probe.ready()?;
@@ -296,7 +301,12 @@ impl Host {
             qualification: qualification.clone(),
         })?;
         env.start_control()?;
-        let mut init = env.start_actor("ready.py", &[])?;
+        let policy = serde_json::from_slice(&fs::read(super::policy_path(
+            env.source(),
+            "python_policy.json",
+        )?)?)?;
+        let labels = super::policy_labels(&policy)?;
+        let mut init = env.start_actor("ready.py", &[], &labels)?;
         env.place(init.id())?;
         let mut actor = env.add_actor("python", &["/fixtures/observability.py", "/work"])?;
         actor.ready()?;

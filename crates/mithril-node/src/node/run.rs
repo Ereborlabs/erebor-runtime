@@ -504,9 +504,17 @@ impl NodeRun {
         let Some(connection) = self.connection.as_mut() else {
             return;
         };
-        match self.node.observations.evidence_floor(self.floor_cursor.as_ref()) {
+        match self
+            .node
+            .observations
+            .evidence_floor(self.floor_cursor.as_ref())
+        {
             Ok(Some(floor)) => {
-                match self.node.await_control_rpc(connection.report_evidence_floor(&floor)).await {
+                match self
+                    .node
+                    .await_control_rpc(connection.report_evidence_floor(&floor))
+                    .await
+                {
                     Ok(()) => self.floor_cursor = Some(floor),
                     Err(error) => self.rpc_failed(error, "report evidence replay floor"),
                 }
@@ -855,7 +863,9 @@ impl NodeRun {
             Self::stop_server(&mut self.local_task, true).await?;
             self.stop_effects().await?;
             if let Some(trace) = self.node.trace.take() {
-                tokio::task::spawn_blocking(move || drop(trace)).await.context(LocalTaskSnafu)?;
+                tokio::task::spawn_blocking(move || drop(trace))
+                    .await
+                    .context(LocalTaskSnafu)?;
             }
             self.node
                 .host
