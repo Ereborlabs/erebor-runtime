@@ -95,6 +95,25 @@ its full name in the retained VM. This test proves signed container admission.
 The old identity-only Ephemeral probe remains until a small test also proves
 its late-discovery conservative-root condition.
 
+The SysV shared-memory test currently passes on Host. Run
+`identity::scenarios::ipc_stat::ipc_stat_is_closed::ipc_recovery_host` with the
+Host environment and exact-test flags below. Its intended result is a physical
+permission denial for a recovered restricted actor in Protect and Observe
+modes on all three platforms. Only Protect Host is qualified at this source
+state.
+
+[ipc_stat_is_closed](src/identity/scenarios/ipc_stat.rs) starts Control and holds both actors before Node.
+  -> [Segment](fixtures/process/ipc_stat.py) creates, attaches, and marks a private segment for deletion before readiness.
+  -> [Platform recovery](src/platform/shared.rs) waits for the production recovered binding and actor identity.
+  -> [Segment::stat](fixtures/process/ipc_stat.py) calls libc `shmctl(IPC_STAT)`.
+  -> [EffectCheck](src/effect/check.rs) requires fresh attributed `UNSUPPORTED_OBJECT` IPC/Access evidence with `EACCES` and no policy object.
+  -> [ipc_stat_is_closed](src/identity/scenarios/ipc_stat.rs) releases the actor and requires successful exit before cleanup.
+
+The actor uses the Linux 64-bit libc SysV structures on x86-64 and AArch64.
+The actor detaches the segment on normal exit. Linux removes a segment marked
+for deletion when its last attachment closes, including process exit. The
+legacy check remains until both policy modes pass on every platform.
+
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path
 result flags for a shell gate. The 41-line

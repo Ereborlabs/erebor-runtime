@@ -2696,13 +2696,32 @@ test does not close a row when its physical condition or an assertion changed.
       and exact-file checks.
   - [ ] Replace the SysV shared-memory permission check with one small
     standard platform test. The shared Python actor must create and attach a
-    private segment outside the protected cgroup. It must mark the segment
-    for deletion before readiness, then move into the active binding and call
+    private segment before protection starts. It must mark the segment
+    for deletion before readiness, then wait for production recovery and call
     `shmctl(IPC_STAT)`. Require `EACCES`, the restricted external role, attributed
     `UNSUPPORTED_OBJECT` IPC/Access evidence, and no exact policy object.
     Reuse the signed Python policies and existing Platform operations. Keep
     the Rust test below 100 lines and add no Platform API.
-    - [ ] Pass Protect on Host and commit it.
+    - [x] Use the existing actor-before-Node recovery flow, not late placement
+      into an already-active binding. Start one namespace init and one Python
+      actor before Node. The actor creates and attaches the private segment
+      and marks it for deletion before readiness. Install the existing signed
+      Python policy, start Node, and wait for production recovery before the
+      action. Check the actor's rule-zero identity and restricted role before
+      `IPC_STAT`. Require physical `EACCES`, fresh attributed IPC/Access denial,
+      and zero exact-object and composite IDs. Add only the shared actor and
+      small test; do not change Platform, Node, Control, or BPF. Qualify Host,
+      direct `runc`, and Kubernetes in that order. Keep both old mode checks
+      until Protect and Observe replacements pass.
+    - [x] Protect Host passed in 28.02 seconds. The 65-line
+      `identity/scenarios/ipc_stat.rs` uses `ipc_stat.py`, the existing signed
+      Python policy, and production recovery. It checks rule zero, restricted
+      role 2, physical `EACCES`, fresh attributed IPC/Access denial, and zero
+      object IDs. The segment is marked for deletion before readiness. Actor
+      cleanup returns success. A first draft passed the denial checks but its
+      second stdin cleanup command failed with a broken pipe. The final actor
+      uses the existing release-file cleanup pattern. No production or
+      Platform code changed.
     - [ ] Pass Protect on direct `runc` and commit it.
     - [ ] Pass Protect on Kubernetes and commit it.
     - [ ] Preserve the same legacy check under Observe mode on all three
