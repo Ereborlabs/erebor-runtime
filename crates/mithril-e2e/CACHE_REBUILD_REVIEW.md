@@ -86,7 +86,10 @@ cleanup; the VM command also checks pin, lease, and cgroup removal.
 The 86-line Host case passed in 28.17 seconds on the retained VM. The Host
 addition is committed in `c06a6892`. The unchanged direct-`runc` case passed
 in 28.79 seconds through stock `runc` and the production OCI hook. Its pin,
-lease, and cgroup cleanup passed. Kubernetes is not yet qualified.
+lease, and cgroup cleanup passed. That registration is committed in
+`abb5e75e`. The unchanged Kubernetes case passed in 68.10 seconds with
+deployed Control, Node, policy CRDs, and the actor Pod. Its namespace, pin,
+and lease cleanup passed. No production or Platform API changed.
 The final repository Rust CI procedure passed. It checked formatting,
 workspace compilation, strict Clippy, and workspace tests.
 

@@ -4424,7 +4424,11 @@ setup, production actions, assertions, and focused test.
       production OCI hook. Pin, lease, and cgroup cleanup passed. The final
       repository Rust CI procedure passed after registration. No fixture or
       production source changed.
-    - [ ] Pass and commit the same test on Kubernetes after lightweight.
+    - [x] Pass and commit the same test on Kubernetes after lightweight. The
+      unchanged 86-line body passed in 68.10 seconds with deployed Control,
+      Node, policy CRDs, and the actor Pod. Namespace, pin, and lease cleanup
+      passed. The final repository Rust CI procedure passed. No Kubernetes
+      fixture, launcher, or production source changed.
     - [ ] Remove only the old rebuild assertion, result flag, and launcher
       gates after all three pass. Keep the old corruption/read setup and both
       obsolete-row checks until production collection has a verified shared

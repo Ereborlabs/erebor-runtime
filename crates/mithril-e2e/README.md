@@ -216,6 +216,7 @@ and the `mount_late` lifecycle. Run
 with the exact-test flags below. See the
 [source review](CACHE_REBUILD_REVIEW.md) for the fault input and map lifetime.
 Use the `mount_late_runc` suffix for the qualified direct-`runc` case.
+Use the `mount_late_kubernetes` suffix for the qualified real Kubernetes case.
 Old-row collection remains in the legacy probe until a separate test passes.
 
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
