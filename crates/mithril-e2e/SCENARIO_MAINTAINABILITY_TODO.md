@@ -619,8 +619,8 @@ runner that still needs replacement:
 | --- | ---: | --- |
 | `effect/runc.rs` | 5,930 | Size and runner retirement |
 | `identity.rs` | 4,845 | Size and runner retirement |
-| `effect.rs` | 3,071 | Size and runner retirement |
-| `effect/child.rs` | 2,954 | Size and runner retirement |
+| `effect.rs` | 3,057 | Size and runner retirement |
+| `effect/child.rs` | 2,899 | Size and runner retirement |
 | `control_tls.rs` | 2,416 | Size and runner retirement |
 | `effect/network.rs` | 1,505 | Runner retirement; size limit met |
 
@@ -2694,7 +2694,7 @@ test does not close a row when its physical condition or an assertion changed.
     - [ ] Remove only the matching legacy transfer actions and private child
       machinery after all three platforms pass. Keep unrelated Unix-stream
       and exact-file checks.
-  - [ ] Replace the SysV shared-memory permission check with one small
+  - [x] Replace the SysV shared-memory permission check with one small
     standard platform test. The shared Python actor must create and attach a
     private segment before protection starts. It must mark the segment
     for deletion before readiness, then wait for production recovery and call
@@ -2771,8 +2771,21 @@ test does not close a row when its physical condition or an assertion changed.
         seconds. The full Rust CI procedure then passed without a source
         change. The cause of the missing log is not established. No legacy
         SysV code has been removed yet.
-      - [ ] Remove only the matching SysV legacy operation, segment resources,
+      - [x] Remove only the matching SysV legacy operation, segment resources,
         result flag, and shell gate after both modes pass on all platforms.
+        The retirement deletes 14 lines from `effect.rs` and 55 lines from
+        `effect/child.rs`. It removes the enum variant, segment fields, setup,
+        detach, permission action, result field, and result initializer. No
+        SysV shell gate remains to remove. All nine child regressions passed.
+        The adjacent Unix-stream IPC action and assertions remain unchanged.
+        The final repository Rust CI procedure passed after the last source
+        edit.
+        - The remaining legacy physical probe is not qualified. Its baseline
+          opens fail before the SysV action: 0 allowed and 6,000 denied. The
+          pre-deletion binary fails at the same step under Observe and Protect.
+          Both post-deletion modes also fail at that step. Do not
+          weaken its baseline or change production code for this retirement.
+          Keep the remaining runner work open.
     - Host draft failed: after placement in the active cgroup,
       `shmctl(IPC_STAT)` returned success. The only IPC effect was
       `RUNTIME_ENTRY_INFRASTRUCTURE`; there was no `UNSUPPORTED_OBJECT` denial.

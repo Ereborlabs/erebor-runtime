@@ -159,7 +159,6 @@ pub(super) enum PreparedOperation {
     Ioctl,
     IoctlDerivedPeer,
     IoctlUnsupported,
-    Ipc,
     UnixStream,
     SelfProtect { path: PathBuf },
 }
@@ -1594,8 +1593,6 @@ struct PreparedOperations {
     unix_stream_signal: Option<SharedMailbox>,
     unix_stream_signal_path: PathBuf,
     unix_stream_target: Option<UnixStreamTarget>,
-    shared_memory_id: libc::c_int,
-    shared_memory: *mut libc::c_void,
 }
 
 #[allow(unsafe_code)]
@@ -1706,43 +1703,6 @@ impl PreparedOperations {
             .unwrap_or_else(|| Path::new("/tmp"))
             .join(".mithril-unix-stream-state");
         let unix_stream_signal = SharedMailbox::create(&unix_stream_signal_path)?;
-        // IPC_PRIVATE plus immediate IPC_RMID keeps the segment addressable for
-        // the permission probe while making kernel cleanup automatic on exit.
-        // SAFETY: the size and flags are ordinary shmget inputs.
-        let shared_memory_id = unsafe { libc::shmget(libc::IPC_PRIVATE, 4096, 0o600) };
-        if shared_memory_id < 0 {
-            return Err(invalid_state(format!(
-                "cannot prepare SysV shared memory: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        // SAFETY: the returned address is checked against SHM_FAILED and retained
-        // until the matching shmdt in Drop.
-        let shared_memory =
-            unsafe { libc::shmat(shared_memory_id, std::ptr::null(), libc::SHM_RDONLY) };
-        if shared_memory == (-1_isize) as *mut libc::c_void {
-            // SAFETY: shared_memory_id was just returned by shmget.
-            unsafe {
-                libc::shmctl(shared_memory_id, libc::IPC_RMID, std::ptr::null_mut());
-            }
-            return Err(invalid_state(format!(
-                "cannot attach SysV shared memory: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        // SAFETY: marking an attached private segment for deletion is the SysV
-        // mechanism for ensuring it cannot survive this process.
-        if unsafe { libc::shmctl(shared_memory_id, libc::IPC_RMID, std::ptr::null_mut()) } != 0 {
-            // SAFETY: both values are live results from shmget/shmat above.
-            unsafe {
-                libc::shmdt(shared_memory);
-                libc::shmctl(shared_memory_id, libc::IPC_RMID, std::ptr::null_mut());
-            }
-            return Err(invalid_state(format!(
-                "cannot mark SysV shared memory for deletion: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
         Ok(Self {
             exec_path: exec_path.to_path_buf(),
             script_path: script_path.to_path_buf(),
@@ -1765,8 +1725,6 @@ impl PreparedOperations {
             unix_stream_signal: Some(unix_stream_signal),
             unix_stream_signal_path,
             unix_stream_target: None,
-            shared_memory_id,
-            shared_memory,
         })
     }
 
@@ -1910,14 +1868,6 @@ impl PreparedOperations {
                 };
                 libc_outcome(result.into())
             }
-            PreparedOperation::Ipc => {
-                let mut info = std::mem::MaybeUninit::<libc::shmid_ds>::uninit();
-                // SAFETY: info points to enough writable storage for IPC_STAT.
-                let result = unsafe {
-                    libc::shmctl(self.shared_memory_id, libc::IPC_STAT, info.as_mut_ptr())
-                };
-                libc_outcome(result.into())
-            }
             PreparedOperation::UnixStream => self
                 .unix_stream_target
                 .as_mut()
@@ -1930,13 +1880,8 @@ impl PreparedOperations {
     }
 }
 
-#[allow(unsafe_code)]
 impl Drop for PreparedOperations {
     fn drop(&mut self) {
-        // SAFETY: shared_memory is the still-attached address returned by shmat.
-        unsafe {
-            libc::shmdt(self.shared_memory);
-        }
         self.unix_stream_target.take();
         let _cleanup = fs::remove_file(&self.unix_stream_signal_path);
     }

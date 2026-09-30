@@ -466,7 +466,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub non_leader_exec_denied: bool,
     pub external_exec_allow_cannot_admit: bool,
     pub memfd_exec_failed_closed: bool,
-    pub sysv_ipc_access_hard_closed: bool,
     pub unix_stream_relationship_allowed: bool,
     pub ptmx_ioctl_exact_allowed: bool,
     pub ptmx_derived_peer_hard_closed: bool,
@@ -1838,18 +1837,6 @@ impl EffectTestRunner {
                 )?;
             }
         }
-        require_hard_close(
-            &mut fixture,
-            &reader,
-            &observations,
-            HardClosedOperation::Ipc,
-            "UNSUPPORTED_OBJECT",
-            (
-                KernelEffectFamilyV1::Ipc,
-                KernelEffectOperationV1::IpcAccess,
-            ),
-            "SysV IPC access",
-        )?;
         let unix_stream_marker = observations.cursor();
         let unix_stream_outcome = fixture.run_prepared(HardClosedOperation::UnixStream)?;
         reader
@@ -2794,7 +2781,6 @@ impl EffectTestRunner {
             non_leader_exec_denied: protect,
             external_exec_allow_cannot_admit: protect,
             memfd_exec_failed_closed: protect,
-            sysv_ipc_access_hard_closed: true,
             unix_stream_relationship_allowed: protect,
             ptmx_ioctl_exact_allowed: protect,
             ptmx_derived_peer_hard_closed: protect,

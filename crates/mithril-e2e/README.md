@@ -112,7 +112,8 @@ Use `ipc_recovery_runc` or `ipc_recovery_kubernetes` for the other platforms.
 The actor uses the Linux 64-bit libc SysV structures on x86-64 and AArch64.
 The actor detaches the segment on normal exit. Linux removes a segment marked
 for deletion when its last attachment closes, including process exit. The
-legacy check remains until both policy modes pass on every platform.
+matching legacy SysV action and result flag are removed after both policy modes
+passed on every platform. The adjacent Unix-stream IPC checks remain.
 The 70-line test passed Host in 28.01 seconds, direct `runc` in 35.04 seconds,
 and Kubernetes in 69.70 seconds. The final Rust CI procedure passed. The
 existing lightweight `transport_waits_for_actor` test proves that a failed
@@ -131,6 +132,18 @@ The final Rust CI gate passed. Its first command failed because an unchanged
 Control log test did not find its record. That test passed in isolation, then
 the unchanged full gate passed. The cause of that log-test failure is not
 established.
+Before this migration, `PreparedOperations` allocated the segment inside the
+large legacy actor, dispatched a private operation, and set a result flag.
+The replacement has two standard tests of 70 and 75 lines. Both use one Python
+actor, existing signed policies, production recovery, and the same explicit
+physical-denial and evidence assertions on all three platforms.
+
+The retirement removes 69 lines from the two legacy Rust files. Nine focused
+child regressions passed. The remaining legacy physical probe fails its
+baseline file-open assertion before the IPC action. An exact pre-deletion
+comparison fails the same way in Observe and Protect. That runner remains
+open for migration; this SysV result does not qualify its other actions.
+The final repository Rust CI procedure passed after the retirement edit.
 
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path
