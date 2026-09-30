@@ -2757,7 +2757,9 @@ test does not close a row when its physical condition or an assertion changed.
         recovery, physical denial, attribution, and normal cleanup checks.
         It checks external role ID 1 and recovered class `fail_closed_unknown`.
         The repository Rust CI gate passed.
-      - [ ] Pass Observe on direct `runc` and commit it.
+      - [x] Observe direct `runc` passed in 32.32 seconds with the same
+        75-line test, shared actor, policy, and assertions. The repository
+        Rust CI gate passed. No Platform or production code changed.
       - [ ] Pass Observe on Kubernetes and commit it.
       - [ ] Remove only the matching SysV legacy operation, segment resources,
         result flag, and shell gate after both modes pass on all platforms.
