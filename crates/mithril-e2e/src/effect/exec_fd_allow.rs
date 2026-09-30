@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{fs, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
 use mithril_control::WorkloadProtectionPolicy as Policy;
@@ -20,7 +20,12 @@ fn exec_fd_allow_cannot_admit<P: Platform>() -> TestResult<()> {
     env.place(init.id())?;
     let mut actor = env.add_actor(
         "python",
-        &["/fixtures/exec_on_release.py", "/usr/bin/sleep", "fd"],
+        &[
+            "/fixtures/exec_on_release.py",
+            "/usr/bin/sleep",
+            "fd",
+            "/work",
+        ],
     )?;
     actor.ready()?;
     env.place(actor.id())?;
@@ -40,9 +45,12 @@ fn exec_fd_allow_cannot_admit<P: Platform>() -> TestResult<()> {
     let effects = EffectCheck::new(&env, task)?;
 
     actor.send(b"exec\n")?;
-    actor.close();
-    let status = actor.wait_exit("file-descriptor exec denial", Duration::from_secs(5))?;
-    assert_eq!(status.code(), Some(libc::EACCES));
+    actor.wait_name(
+        actor.id(),
+        &format!("exec-{}", libc::EACCES),
+        "file-descriptor exec errno",
+        Duration::from_secs(5),
+    )?;
     let allowed = effects.wait(
         &env,
         "EXACT_POLICY_ALLOW",
@@ -66,6 +74,8 @@ fn exec_fd_allow_cannot_admit<P: Platform>() -> TestResult<()> {
     assert_eq!(denied.task_cookie, allowed.task_cookie);
     assert_eq!(denied.admitted_entry_rule_id, 0);
 
+    fs::write(env.work().join("release"), b"release\n")?;
+    actor.wait_gone(actor.id(), "file-descriptor exec actor exit")?;
     actor.stop()?;
     init.stop()?;
     env.stop()

@@ -3003,6 +3003,27 @@ test does not close a row when its physical condition or an assertion changed.
         file-descriptor exec without Mithril. The cause of the protected
         Kubernetes result is not yet proven. Do not weaken this assertion or
         rerun the case before reproducing the condition in lightweight.
+      - [x] Reproduce the actor/transport distinction in lightweight before
+        the next Kubernetes run. `process::tests::transport_waits_for_actor`
+        passed in 0.03 seconds. A transport exits with status 1 while its
+        actor remains alive and later exits with status 0. The transport
+        status is not the actor status. The Kubernetes added-actor path
+        records the actor PID but has no actor exit-status probe.
+      - [x] Report the real exec errno before actor exit. Reuse the existing
+        actor name wait and release file. Close the executable descriptor
+        before reporting the result. Keep immediate exit for the other
+        `exec_on_release.py` caller. Keep physical `EACCES`, the attributed
+        Allow and denial, and all object and entry assertions. Verify Host
+        and direct `runc` before Kubernetes. Add no Platform or production
+        API. This check does not yet explain the previous Kubernetes result.
+        Host passed in 28.38 seconds and direct `runc` passed in 31.51
+        seconds. Both require the actual syscall errno 13 and the same-task
+        Allow and denial. Cleanup passed. The other exec-actor caller kept
+        its immediate-exit behavior and passed on Host in 43.29 seconds and
+        direct `runc` in 62.08 seconds. The shared Rust file has 82 lines.
+        The other caller also passed on Kubernetes in 82.37 seconds, and its
+        namespace, pin root, and lease were removed. The repository Rust CI
+        gate passed after the final Rust edit.
     - [ ] Remove only the matching legacy action, result field, and unused
       fixture state after the `fexecve` case passes on all three platforms.
   - [x] Replace the old SQPOLL check for a restricted rule-zero actor in

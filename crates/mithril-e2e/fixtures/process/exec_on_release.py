@@ -1,9 +1,15 @@
+import ctypes
 import os
 import sys
+import time
 
 
 target = sys.argv[1]
 mode = sys.argv[2] if len(sys.argv) > 2 else "path"
+work = sys.argv[3] if len(sys.argv) > 3 else None
+libc = ctypes.CDLL(None, use_errno=True)
+libc.prctl.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong,
+                       ctypes.c_ulong, ctypes.c_ulong]
 image = open(target, "rb") if mode == "fd" else None
 print("native-fixture-ready", flush=True)
 if sys.stdin.readline() != "exec\n":
@@ -16,4 +22,13 @@ try:
     else:
         raise ValueError(f"unknown exec mode: {mode}")
 except OSError as error:
-    sys.exit(error.errno or 255)
+    code = error.errno or 255
+    if image is not None:
+        image.close()
+    if work is not None:
+        name = ctypes.create_string_buffer(f"exec-{code}".encode("ascii"))
+        if libc.prctl(15, name, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
+        while not os.path.exists(os.path.join(work, "release")):
+            time.sleep(0.01)
+    sys.exit(code)
