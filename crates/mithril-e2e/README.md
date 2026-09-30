@@ -237,8 +237,9 @@ Intended end state: replace the legacy forked `Execve` dispatch with one
 shared test. Preserve actual denial and every path-object evidence check.
 
 [forked_path_exec_is_denied](src/effect/exec_path_deny.rs) starts both actors before Node.
-  -> [Shared::install_policy](src/platform/shared.rs) supplies the common [policy input](fixtures/process/exec_deny_policy.json) to Control for compilation and signing.
-  -> [Platform recovery](src/platform/shared.rs) observes the recovered actor after Node starts.
+  -> [Platform::install_policy](src/platform.rs) installs the common [policy input](fixtures/process/exec_deny_policy.json).
+  -> [Platform::sync_policy](src/platform.rs) waits for Control compilation and signed policy delivery after Node starts.
+  -> [Platform recovery](src/platform.rs) observes the recovered actor.
   -> [exec_on_release.py](fixtures/process/exec_on_release.py) forks a child and waits for the test's release file.
   -> [forked_path_exec_is_denied](src/effect/exec_path_deny.rs) checks the distinct child cookie, parent creator, inherited role, and zero entry rule.
   -> [exec_on_release.py](fixtures/process/exec_on_release.py) calls path exec and reports the syscall errno in its task name.
@@ -250,10 +251,12 @@ The replacement has 80 lines and reuses the actor, policy, and evidence owner.
 It adds no Platform or production API. Run
 `effect::exec_path_deny::forked_path_exec_is_denied::exec_path_recovery_host`
 with the exact-test flags below. Host passed in 28.23 seconds with pin, lease,
-and cgroup cleanup. Direct `runc` and Kubernetes remain pending. Keep the old
-`Execve` dispatch until all three platforms pass. This review covers the
-path-exec replacement based on `8373b68b`; kernel and result schemas do not
-change.
+and cgroup cleanup. Direct `runc` passed in 28.63 seconds with the same
+assertions and cleanup. Use the `exec_path_recovery_runc` suffix. Kubernetes
+remains pending. Keep the old `Execve` dispatch until all three platforms pass.
+This review covers the
+path-exec replacement based on `8373b68b`; production kernel and result
+schemas do not change.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It

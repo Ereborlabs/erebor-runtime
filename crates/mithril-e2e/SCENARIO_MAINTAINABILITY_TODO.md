@@ -2992,8 +2992,11 @@ test does not close a row when its physical condition or an assertion changed.
       field assertion. Pin, lease, and cgroup cleanup passed.
       The existing forked descriptor case passed in 27.33 seconds after the
       actor's two opt-in branch changes. The final repository Rust CI passed.
-    - [ ] Pass and commit direct `runc`, then Kubernetes. Register each
-      platform only after its exact case passes. Add no Platform API.
+    - [x] Direct `runc` passed in 28.63 seconds with the same actor, policy,
+      child attribution, errno, and object-field assertions. Pin, lease, and
+      cgroup cleanup passed. The final repository Rust CI passed.
+    - [ ] Pass and commit Kubernetes. Register the platform only after its
+      exact case passes. Add no Platform API.
     - [ ] Remove only the legacy `Execve` enum arm, action, and result field
       after all three platforms pass. Keep `Execveat`, script exec, and their
       shared path fixture and syscall helper.
