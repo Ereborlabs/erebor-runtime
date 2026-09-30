@@ -177,6 +177,9 @@ cleanup. The final repository Rust CI gate passed after the last Rust edit.
 The same test passed direct `runc` in 39.00 seconds through the production OCI
 hook. Its resource cleanup passed. Use the `ioctl_observe_runc` suffix. No
 runc fixture or production source changed.
+Kubernetes passed in 92.49 seconds with the same test, actor, policy, and
+assertions. Its namespace, pin, and lease cleanup passed. Use the
+`ioctl_observe_kubernetes` suffix. The final Rust CI procedure passed.
 
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path

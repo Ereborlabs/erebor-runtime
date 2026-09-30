@@ -3091,7 +3091,11 @@ test does not close a row when its physical condition or an assertion changed.
       case passed in 39.00 seconds through stock `runc` and the production OCI
       hook. Pin, lease, and cgroup cleanup passed. The final Rust CI gate
       passed. No runc fixture or production source changed.
-    - [ ] Pass Kubernetes and commit it.
+    - [x] Pass Kubernetes and commit it. The same 74-line test passed in
+      92.49 seconds against real Control, Node, the signed CRD policy, and
+      Kubernetes exec in retained K3s. Namespace, pin, and lease cleanup
+      passed. The final repository Rust CI procedure passed. No Kubernetes
+      fixture, launcher, or production source changed.
     - [ ] Remove only the Observe ioctl action after all three pass. Keep
       Protect-mode PTMX Allow, derived-peer denial, zero-device denial, and
       their shared descriptor resources until their replacements pass.
