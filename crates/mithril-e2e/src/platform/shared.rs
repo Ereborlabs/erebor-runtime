@@ -1648,7 +1648,10 @@ impl Shared {
     pub(super) fn diagnostic_context(&self) -> TestResult<(ControlPlane, WorkloadTargetFactV1)> {
         Ok((
             self.plane.clone().ok_or("Control is not running")?,
-            self.target.clone().ok_or("the target is not installed")?,
+            self.targets
+                .get(&self.key())
+                .cloned()
+                .ok_or("the target is not installed")?,
         ))
     }
 
