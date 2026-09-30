@@ -6,7 +6,7 @@ use crate::effect::EffectCheck;
 use crate::physical::mount_cache::MountCache;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = mount_late]
 fn stale_cache_keeps_deny<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("cache-rebuild")?;

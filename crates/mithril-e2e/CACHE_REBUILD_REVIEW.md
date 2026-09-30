@@ -83,9 +83,10 @@ cleanup; the VM command also checks pin, lease, and cgroup removal.
 
 ## Verification limits
 
-The 86-line Host case passed in 28.17 seconds on the retained VM. The source
-state is the working-tree addition based on `25d667f0`. Direct `runc` and
-Kubernetes are not yet qualified for this addition.
+The 86-line Host case passed in 28.17 seconds on the retained VM. The Host
+addition is committed in `c06a6892`. The unchanged direct-`runc` case passed
+in 28.79 seconds through stock `runc` and the production OCI hook. Its pin,
+lease, and cgroup cleanup passed. Kubernetes is not yet qualified.
 The final repository Rust CI procedure passed. It checked formatting,
 workspace compilation, strict Clippy, and workspace tests.
 

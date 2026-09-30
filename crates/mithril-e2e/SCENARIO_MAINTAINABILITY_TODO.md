@@ -4419,7 +4419,11 @@ setup, production actions, assertions, and focused test.
       Pin, lease, and cgroup cleanup passed. No production or Platform API
       changed. See [CACHE_REBUILD_REVIEW.md](CACHE_REBUILD_REVIEW.md).
       The repository Rust CI procedure passed after the final Rust edit.
-    - [ ] Pass and commit the same test on direct `runc`.
+    - [x] Pass and commit the same test on direct `runc`. The unchanged
+      86-line body passed in 28.79 seconds through stock `runc` and the
+      production OCI hook. Pin, lease, and cgroup cleanup passed. The final
+      repository Rust CI procedure passed after registration. No fixture or
+      production source changed.
     - [ ] Pass and commit the same test on Kubernetes after lightweight.
     - [ ] Remove only the old rebuild assertion, result flag, and launcher
       gates after all three pass. Keep the old corruption/read setup and both

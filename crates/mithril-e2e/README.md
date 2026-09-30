@@ -215,6 +215,7 @@ and the `mount_late` lifecycle. Run
 `identity::scenarios::cache_rebuild::stale_cache_keeps_deny::mount_late_host`
 with the exact-test flags below. See the
 [source review](CACHE_REBUILD_REVIEW.md) for the fault input and map lifetime.
+Use the `mount_late_runc` suffix for the qualified direct-`runc` case.
 Old-row collection remains in the legacy probe until a separate test passes.
 
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
