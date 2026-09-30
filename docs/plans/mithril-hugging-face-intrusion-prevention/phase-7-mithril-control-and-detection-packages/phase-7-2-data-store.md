@@ -624,6 +624,24 @@ The executable SHA-256 remains
 ARAPHOR_GLOBAL_BYTES=1073741824 /usr/bin/time -v -o /tmp/araphor-resume.HoOzQx/03-resources.log target/release/deps/araphor_data-56c66faf3a80bf1e analysis::capacity::tests::analysis_store_global_memory --exact --ignored --nocapture --test-threads=1
 ```
 
+**Item 4: Done, PASS.** On `954ce8fb`, the existing release CLI passed one
+`data-store-load` case with 64 groups and 262,144 records for one tenant.
+Input size was 30,113,740 bytes. The case checked durable ACK, duplicate
+replay, exact retained input, foreign-tenant isolation, checkpoint, and restart.
+Exit status was zero. Elapsed time was 8.57 seconds. Peak RSS was 86,808 KiB
+(84.8 MiB). Intake took 8.063 seconds, read took 0.231 seconds, checkpoint
+took 0.029 seconds, and reopen took 0.114 seconds. The result retains 64
+group samples. This is synthetic mTLS proof and a measurement, not kernel,
+rollout, full-quota, or physical-reserve qualification. The host was shared.
+Read `04-run.log`, `04-resources.log`, and `04-result/result.json` in
+`/tmp/araphor-resume.HoOzQx`. Production Rust source remains `846adec5`.
+The unchanged CLI SHA-256 is
+`9e52b1683b37aa642720f47fef8debc065591b1ff1ae109c34d61fb990a8fc1d`.
+
+```sh
+/usr/bin/time -v -o /tmp/araphor-resume.HoOzQx/04-resources.log target/release/mithril_discovery_test --case data-store-load --output-directory /tmp/araphor-resume.HoOzQx/04-result
+```
+
 ### Ordered review: item 1
 
 **Done: PASS**, 2026-09-28. The current-source release case
