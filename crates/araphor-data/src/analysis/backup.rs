@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::{
     capacity::{StorageLimitsV1, StorageUsageV1},
-    source_key, valid_source_identity, AnalysisStore, AnalysisStoreMetaV1, ANALYSIS_SCHEMA_VERSION,
+    source_key, AnalysisStore, AnalysisStoreMetaV1, ANALYSIS_SCHEMA_VERSION,
 };
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, JsonSnafu, Result};
 
@@ -70,7 +70,7 @@ impl AnalysisStore {
         identity: &EvidenceIntakeIdentityV1,
         node_retained_floor: u64,
     ) -> Result<AnalysisRecoveryStatusV1> {
-        if !valid_source_identity(identity) {
+        if !identity.valid() {
             return self.reject("the recovery source identity is invalid");
         }
         let key = source_key(identity);

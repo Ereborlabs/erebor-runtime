@@ -312,7 +312,7 @@ mod tests {
         )
         .is_err());
         assert!(
-            EvidenceRetentionOwner::new(&store, store.retention_limits())?
+            EvidenceRetentionOwner::new(&store)
                 .retain(&current.sources[0].identity, u64::MAX)?
                 .removed_records
                 > 0

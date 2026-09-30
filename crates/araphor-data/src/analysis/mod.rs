@@ -514,10 +514,6 @@ impl AnalysisStore {
         Ok(())
     }
 
-    pub fn retention_limits(&self) -> RetentionLimitsV1 {
-        self.retention
-    }
-
     fn require_retention(&self) -> Result<()> {
         if !self.retention_healthy() {
             self.require_capacity(true)?;
@@ -615,7 +611,7 @@ impl AnalysisStore {
     pub fn accept_validated_coverage(&self, input: ValidatedCoverageV1) -> Result<u64> {
         self.require_retention()?;
         let identity = &input.identity;
-        if !valid_source_identity(identity)
+        if !identity.valid()
             || input.revision == 0
             || input.encoded_report.is_empty()
             || input.encoded_report.len() > MAX_EVIDENCE_GRPC_MESSAGE_BYTES
@@ -753,7 +749,7 @@ impl AnalysisStore {
         identity: &EvidenceIntakeIdentityV1,
         batch: &ValidatedEvidenceBatchV1,
     ) -> Result<()> {
-        if !valid_source_identity(identity)
+        if !identity.valid()
             || batch.first_cursor == 0
             || batch.frame_ends.is_empty()
             || batch.frame_ends.len() > MAX_EVIDENCE_BATCH_RECORDS
@@ -927,15 +923,6 @@ impl AnalysisStore {
             commit_revision,
         })
     }
-}
-
-fn valid_source_identity(identity: &EvidenceIntakeIdentityV1) -> bool {
-    crate::node_id_is_valid(&identity.node_id)
-        && identity.tenant_id != [0; 16]
-        && identity.node_boot_id != [0; 16]
-        && identity.source_id != [0; 16]
-        && identity.label_epoch != 0
-        && identity.source_epoch != 0
 }
 
 fn source_key(identity: &EvidenceIntakeIdentityV1) -> [u8; 32] {

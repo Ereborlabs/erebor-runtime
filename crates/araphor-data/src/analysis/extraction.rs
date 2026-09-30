@@ -7,9 +7,9 @@ use snafu::ResultExt as _;
 
 use super::segments::SegmentRange;
 use super::{
-    source_key, valid_source_identity, AnalysisContextKeyV1, AnalysisContextVersionV1,
-    AnalysisGapV1, AnalysisReadControl, AnalysisRecordV1, AnalysisSourceReceiptV1, AnalysisStore,
-    AnalysisStoreMetaV1, MAX_ANALYSIS_PAGE_BYTES, MAX_ANALYSIS_PAGE_RECORDS,
+    source_key, AnalysisContextKeyV1, AnalysisContextVersionV1, AnalysisGapV1, AnalysisReadControl,
+    AnalysisRecordV1, AnalysisSourceReceiptV1, AnalysisStore, AnalysisStoreMetaV1,
+    MAX_ANALYSIS_PAGE_BYTES, MAX_ANALYSIS_PAGE_RECORDS,
 };
 use crate::{AnalysisDatabaseSnafu, AnalysisInputTooLargeSnafu, EvidenceIntakeIdentityV1, Result};
 
@@ -48,7 +48,7 @@ impl AnalysisSelectionV1 {
             && self
                 .sources
                 .iter()
-                .all(|source| source.tenant_id == self.tenant_id && valid_source_identity(source))
+                .all(|source| source.tenant_id == self.tenant_id && source.valid())
             && self
                 .contexts
                 .iter()
@@ -724,19 +724,20 @@ mod tests {
     #[test]
     fn analysis_extract_gaps() -> TestResult {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let limits = RetentionLimitsV1 {
+            raw_max_age_ns: 1,
+            raw_max_bytes: 1024,
+        };
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            limits,
+            Default::default(),
+        )?;
         let identity = identity(1);
         store.accept_validated_batch(identity.clone(), batch(1, 1, 1))?;
         store.backup(&store.root.join("backups/sealed"))?;
         store.accept_validated_batch(identity.clone(), batch(2, 1, 100))?;
-        EvidenceRetentionOwner::new(
-            &store,
-            RetentionLimitsV1 {
-                raw_max_age_ns: 1,
-                raw_max_bytes: 1024,
-            },
-        )?
-        .retain(&identity, 3)?;
+        EvidenceRetentionOwner::new(&store).retain(&identity, 3)?;
         store.record_recovery_floor(&identity, 4)?;
         let mut selection = AnalysisSelectionV1::new(identity.tenant_id, vec![identity.clone()]);
         selection.received_from = Bound::Included(99);
@@ -879,7 +880,15 @@ mod tests {
     #[ignore = "release history scan qualification"]
     fn analysis_extract_history() -> TestResult {
         let directory = tempfile::tempdir()?;
-        let store = AnalysisStore::open(directory.path().join("analysis"))?;
+        let limits = RetentionLimitsV1 {
+            raw_max_age_ns: 1,
+            raw_max_bytes: 1,
+        };
+        let store = AnalysisStore::open_with_limits(
+            directory.path().join("analysis"),
+            limits,
+            Default::default(),
+        )?;
         let identity = identity(1);
         let frame_bytes = 128 * 1024;
         for group in 0..18 {
@@ -1008,15 +1017,9 @@ mod tests {
         );
         assert_eq!(usage.charged_bytes, usage.segment_bytes);
         assert_eq!(
-            EvidenceRetentionOwner::new(
-                &store,
-                RetentionLimitsV1 {
-                    raw_max_age_ns: 1,
-                    raw_max_bytes: 1,
-                }
-            )?
-            .retain(&identity, 50)?
-            .removed_records,
+            EvidenceRetentionOwner::new(&store)
+                .retain(&identity, 50)?
+                .removed_records,
             0
         );
         eprintln!(

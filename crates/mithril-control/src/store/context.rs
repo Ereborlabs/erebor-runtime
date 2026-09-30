@@ -61,7 +61,7 @@ impl ControlContextOwner {
         })
     }
 
-    /// Reads at most 16 Control entries. A failed entry is retried on the next pass.
+    /// Reads at most 16 Control entries. Storage failures keep the retry cursor.
     pub fn reconcile(&mut self) -> Result<usize> {
         if self.tenants.is_empty() {
             return Ok(0);
@@ -71,16 +71,23 @@ impl ControlContextOwner {
             let (record, next) = self
                 .store
                 .next_context(self.tenants[self.tenant], &self.cursor)?;
-            self.cursor = next;
             if let Some(record) = record {
+                let record = match record {
+                    Ok(record) => record,
+                    Err(error) => {
+                        self.cursor = next;
+                        return Err(error);
+                    }
+                };
                 self.data
-                    .commit_context(&record?)
+                    .commit_context(&record)
                     .map_err(|source| crate::Error::DataStore {
                         source: Box::new(source),
                         location: snafu::Location::default(),
                     })?;
                 copied += 1;
             }
+            self.cursor = next;
             if matches!(self.cursor, ContextCursor::End) {
                 self.cursor = ContextCursor::Policy(None);
                 self.tenant = (self.tenant + 1) % self.tenants.len();
@@ -202,6 +209,41 @@ impl ControlStore {
 mod tests {
     use super::*;
     use crate::TrustGenerationV1;
+
+    #[test]
+    fn control_context_retries_write() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path().join("control"))?;
+        let data = Arc::new(AnalysisStore::open_with_limits(
+            directory.path().join("data"),
+            Default::default(),
+            araphor_data::StorageLimitsV1 {
+                logical_max_bytes: 1,
+                tenant_max_bytes: 1,
+                ..Default::default()
+            },
+        )?);
+        let allowed = [AllowedNodeIdentity {
+            node_id: "node-a".into(),
+            certificate_sha256: "a".repeat(64),
+            tenant_id: uuid::Uuid::from_bytes([1; 16]).to_string(),
+        }];
+        store.install_trust_generation(TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: "a".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
+        })?;
+        let mut owner = ControlContextOwner::new(store, data.clone(), &allowed)?;
+        for _ in 0..2 {
+            let error = owner.reconcile().expect_err("context exceeded its quota");
+            assert!(matches!(error, crate::Error::DataStore { source, .. }
+                if matches!(*source, araphor_data::Error::StorageCapacity { .. })));
+            assert!(matches!(owner.cursor, ContextCursor::Trust(None)));
+            assert_eq!(data.meta()?.commit_revision, 0);
+        }
+        Ok(())
+    }
 
     #[test]
     fn control_context_bounded_replay() -> std::result::Result<(), Box<dyn std::error::Error>> {

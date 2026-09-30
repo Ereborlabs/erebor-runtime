@@ -16,6 +16,11 @@ results, progress, pins, source state, and transactional deletion intent. It
 does not store a batch-offset catalogue. CRC32C checks raw frames; raw batches
 and raw witness references do not require SHA-256. Policy and artifact
 signatures retain their existing contracts.
+The segment owner stores record bounds only. AnalysisStore owns admission
+quotas and retention limits. Retention uses those limits; it accepts no
+separate configuration. Control context projection advances its scan cursor
+only after a successful data commit. An encoding error advances the cursor
+so that an invalid fact cannot block later facts.
 No raw-event table or copied discovery archive is part of the target.
 
 Control keeps policy/trust/rollout persistence and authority. Node keeps its
@@ -240,6 +245,8 @@ Storage fails or cannot meet capacity
    shared design. An exact witness pins only its containing segments. Charge
    each distinct pinned segment's full size, plus context, to the witness
    budget. Report useful witness bytes and extra retained bytes separately.
+   Create EvidenceRetentionOwner from AnalysisStore only. Validate retention
+   limits when AnalysisStore opens. Use the same limits for intake and deletion.
    Keep age/byte, required-progress, pending-gap, and tenant checks. Seal idle
    active segments when retention needs them. Persist exact expired intervals
    before unlink; recover interrupted unlink idempotently.

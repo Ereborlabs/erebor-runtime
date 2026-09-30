@@ -155,7 +155,8 @@ fn analysis_store_processor_crashes() -> std::result::Result<(), Box<dyn std::er
         Ok(())
     };
     if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
-        let store = AnalysisStore::open(PathBuf::from(root))?;
+        let store =
+            AnalysisStore::open_with_limits(PathBuf::from(root), limits, Default::default())?;
         let point = std::env::var("ARAPHOR_CRASH_POINT")?;
         let (kind, _) = point.split_once('.').ok_or("invalid crash point")?;
         apply(&store, kind)?;
@@ -166,7 +167,7 @@ fn analysis_store_processor_crashes() -> std::result::Result<(), Box<dyn std::er
             let point = format!("{kind}.{boundary}");
             let directory = tempfile::tempdir()?;
             let root = directory.path().join("analysis");
-            let store = AnalysisStore::open(&root)?;
+            let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
             store.accept_validated_batch(
                 scope.identity.clone(),
                 ValidatedEvidenceBatchV1 {
@@ -180,7 +181,7 @@ fn analysis_store_processor_crashes() -> std::result::Result<(), Box<dyn std::er
             )?;
             if kind == "resume" {
                 store.register_processor(&scope, ProcessorClassV1::Optional, 1)?;
-                EvidenceRetentionOwner::new(&store, limits)?.retain(&scope.identity, 200)?;
+                EvidenceRetentionOwner::new(&store).retain(&scope.identity, 200)?;
             } else if kind == "retire" {
                 store.register_processor(&scope, ProcessorClassV1::Required, 1)?;
                 store.commit_result(&AnalysisResultCommitV1 {
@@ -211,7 +212,7 @@ fn analysis_store_processor_crashes() -> std::result::Result<(), Box<dyn std::er
                 .env("ARAPHOR_CRASH_POINT", &point)
                 .status()?;
             assert_eq!(status.code(), Some(73), "{point}");
-            let store = AnalysisStore::open(&root)?;
+            let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
             let verify = |store: &AnalysisStore,
                           applied: bool|
              -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -309,14 +310,13 @@ fn analysis_store_processor_crashes() -> std::result::Result<(), Box<dyn std::er
             assert!(!watch.has_changed()?);
             verify(&store, true)?;
             drop(store);
-            let store = AnalysisStore::open(&root)?;
+            let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
             verify(&store, true)?;
             if kind == "retire" {
                 assert!(store
                     .register_processor(&scope, ProcessorClassV1::Required, 1)
                     .is_err());
-                let result =
-                    EvidenceRetentionOwner::new(&store, limits)?.retain(&scope.identity, 200)?;
+                let result = EvidenceRetentionOwner::new(&store).retain(&scope.identity, 200)?;
                 assert_eq!(result.removed_records, 0);
                 assert_eq!(
                     store.read_page(&scope.identity, 1)?.records[0].framed_record,
@@ -585,12 +585,13 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
         raw_max_bytes: 1024,
     };
     if let Some(root) = std::env::var_os("ARAPHOR_CRASH_ROOT") {
-        let store = AnalysisStore::open(PathBuf::from(root))?;
+        let store =
+            AnalysisStore::open_with_limits(PathBuf::from(root), limits, Default::default())?;
         let point = std::env::var("ARAPHOR_CRASH_POINT")?;
         if point.starts_with("result.") {
             store.commit_result(&input)?;
         } else {
-            EvidenceRetentionOwner::new(&store, limits)?.retain(&source, 200)?;
+            EvidenceRetentionOwner::new(&store).retain(&source, 200)?;
         }
         return Err("the requested commit crash did not occur".into());
     }
@@ -605,7 +606,7 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
     ] {
         let directory = tempfile::tempdir()?;
         let root = directory.path().join("analysis");
-        let store = AnalysisStore::open(&root)?;
+        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
         store.register_processor(&input.scope, ProcessorClassV1::Required, 1)?;
         store.accept_validated_batch(
             source.clone(),
@@ -642,7 +643,7 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
             .env("ARAPHOR_CRASH_POINT", point)
             .status()?;
         assert_eq!(status.code(), Some(73), "{point}");
-        let store = AnalysisStore::open(&root)?;
+        let store = AnalysisStore::open_with_limits(&root, limits, Default::default())?;
         let after = !point.ends_with(".before");
         let meta = store.meta()?;
         assert_eq!(meta.store_uuid, before.store_uuid, "{point}");
@@ -713,7 +714,7 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
         let revision = store.meta()?.commit_revision;
         assert_eq!(store.commit_result(&input)?, receipt, "{point}");
         assert_eq!(store.meta()?.commit_revision, revision, "{point}");
-        let result = EvidenceRetentionOwner::new(&store, limits)?.retain(&source, 200)?;
+        let result = EvidenceRetentionOwner::new(&store).retain(&source, 200)?;
         assert_eq!(
             result.removed_records,
             if expired { 0 } else { 2 },
@@ -722,7 +723,7 @@ fn analysis_store_commit_crashes() -> std::result::Result<(), Box<dyn std::error
         assert_eq!(result.retained_floor, 2, "{point}");
         assert_eq!(store.meta()?.commit_revision, 6, "{point}");
         drop(store);
-        let store = AnalysisStore::open(root)?;
+        let store = AnalysisStore::open_with_limits(root, limits, Default::default())?;
         assert_eq!(store.meta()?.commit_revision, 6, "{point}");
         assert_eq!(
             store.read_page(&source, 3)?.records[0].framed_record,

@@ -167,7 +167,7 @@ impl AnalysisStore {
                     operation: "decode protected raw boundaries",
                 })?
         };
-        let mut raw = RawJournal::open(root, u64::MAX, &committed)?;
+        let mut raw = RawJournal::open(root, &committed)?;
         raw.restore_receipts(writer)?;
         for id in deleting {
             Self::remove_segment(writer, root, &raw, id)?;

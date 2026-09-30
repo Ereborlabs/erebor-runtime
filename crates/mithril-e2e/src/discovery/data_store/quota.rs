@@ -219,7 +219,7 @@ impl DataStoreQualification {
         data.commit_result(&result)?;
         let result_us = maintenance.elapsed().as_micros();
         clock.0.store(START + 25 * HOUR, Ordering::SeqCst);
-        let retention = EvidenceRetentionOwner::new(&data, data.retention_limits())?;
+        let retention = EvidenceRetentionOwner::new(&data);
         let maintenance = Instant::now();
         for _ in 0..16 {
             retention.retain(&identity, START + 25 * HOUR)?;

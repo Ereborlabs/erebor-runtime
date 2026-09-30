@@ -587,14 +587,14 @@ fn consumed_events_follow_retention() -> Result<(), Box<dyn StdError>> {
         context_refs: Vec::new(),
     })?;
     assert_eq!(
-        araphor_data::EvidenceRetentionOwner::new(&data, Default::default())?
+        araphor_data::EvidenceRetentionOwner::new(&data)
             .retain(&identity, now)?
             .removed_records,
         0
     );
     assert_eq!(data.read_page(&identity, 1)?.records.len(), 3);
     assert_eq!(
-        araphor_data::EvidenceRetentionOwner::new(&data, Default::default())?
+        araphor_data::EvidenceRetentionOwner::new(&data)
             .retain(&identity, u64::MAX)?
             .removed_records,
         3

@@ -7,9 +7,7 @@ use std::time::{Duration, Instant};
 use duckdb::params;
 use snafu::ResultExt as _;
 
-use super::{
-    source_key, valid_source_identity, AnalysisReadPageV1, AnalysisStore, MAX_ANALYSIS_PAGE_RECORDS,
-};
+use super::{source_key, AnalysisReadPageV1, AnalysisStore, MAX_ANALYSIS_PAGE_RECORDS};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, Result};
 
 /// One snapshot deadline and cancellation flag. The deadline is one second.
@@ -168,9 +166,7 @@ impl AnalysisStore {
         after: Option<&EvidenceIntakeIdentityV1>,
     ) -> Result<Vec<EvidenceIntakeIdentityV1>> {
         if tenant_id == [0; 16]
-            || after.is_some_and(|source| {
-                source.tenant_id != tenant_id || !valid_source_identity(source)
-            })
+            || after.is_some_and(|source| source.tenant_id != tenant_id || !source.valid())
         {
             return self.reject("the source page tenant or cursor is invalid");
         }
@@ -209,7 +205,7 @@ impl AnalysisStore {
                 let identity: EvidenceIntakeIdentityV1 =
                     serde_json::from_str(&json).context(crate::JsonSnafu { path: &self.root })?;
                 if identity.tenant_id != tenant_id
-                    || !valid_source_identity(&identity)
+                    || !identity.valid()
                     || source_key(&identity).as_slice() != key
                 {
                     return self

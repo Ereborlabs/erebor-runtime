@@ -7,12 +7,21 @@ use duckdb::{params, Connection, OptionalExt as _};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
-use super::{source_key, valid_source_identity, AnalysisStore};
+use super::{source_key, AnalysisStore};
 use crate::{AnalysisDatabaseSnafu, EvidenceIntakeIdentityV1, IoSnafu, JsonSnafu, Result};
 
 const MAX_SOURCES: u64 = 4096;
 
 impl EvidenceIntakeIdentityV1 {
+    pub(super) fn valid(&self) -> bool {
+        crate::node_id_is_valid(&self.node_id)
+            && self.tenant_id != [0; 16]
+            && self.node_boot_id != [0; 16]
+            && self.source_id != [0; 16]
+            && self.label_epoch != 0
+            && self.source_epoch != 0
+    }
+
     fn epoch_key(&self) -> [u8; 32] {
         let mut hash = Sha256::new();
         hash.update(b"ARAPHOR-ANALYSIS-EPOCH-V1\0");
@@ -236,7 +245,7 @@ impl AnalysisStore {
                     serde_json::from_str(&json).context(JsonSnafu {
                         path: root.join("analysis.duckdb"),
                     })?;
-                if !valid_source_identity(&identity) || key != source_key(&identity) {
+                if !identity.valid() || key != source_key(&identity) {
                     return Self::reject_path(root, "the stored source identity or key is invalid");
                 }
                 let receipt =
@@ -596,8 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn source_binding_keeps_the_committed_boot_and_label(
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn source_binding_preserves_identity() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = AnalysisStore::open(directory.path().join("analysis"))?;
         let identity = EvidenceIntakeIdentityV1 {
