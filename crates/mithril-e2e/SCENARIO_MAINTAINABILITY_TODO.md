@@ -2742,6 +2742,25 @@ test does not close a row when its physical condition or an assertion changed.
       Kubernetes run. No security assertion or production code changed.
     - [ ] Preserve the same legacy check under Observe mode on all three
       platforms before deleting the old action, result, and prepared segment.
+      Reuse `ipc_stat.py`, the existing `memory_observe.json` policy, and the
+      actor-before-Node recovery order. Keep physical `EACCES`, fresh IPC/Access
+      evidence, rule zero, the restricted role, zero policy-object IDs, segment
+      detach, and actor exit explicit in the small standard test.
+      The recovered actor uses the policy's external role ID. Its installed
+      class is `fail_closed_unknown`, not `runtime_external_restricted`:
+      `create_external_root` and `label_restored_root` preserve the missing
+      entry-history claim. Check both values; do not treat the class as a
+      policy role name. The first Host draft rejected the wrong class
+      expectation before the IPC action. No production change is required.
+      - [x] Observe Host passed in 28.09 seconds. The 75-line
+        `ipc_stat_observe.rs` retains the existing actor, policy, production
+        recovery, physical denial, attribution, and normal cleanup checks.
+        It checks external role ID 1 and recovered class `fail_closed_unknown`.
+        The repository Rust CI gate passed.
+      - [ ] Pass Observe on direct `runc` and commit it.
+      - [ ] Pass Observe on Kubernetes and commit it.
+      - [ ] Remove only the matching SysV legacy operation, segment resources,
+        result flag, and shell gate after both modes pass on all platforms.
     - Host draft failed: after placement in the active cgroup,
       `shmctl(IPC_STAT)` returned success. The only IPC effect was
       `RUNTIME_ENTRY_INFRASTRUCTURE`; there was no `UNSUPPORTED_OBJECT` denial.

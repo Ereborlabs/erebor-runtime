@@ -119,6 +119,13 @@ existing lightweight `transport_waits_for_actor` test proves that a failed
 exec transport can return status 1 after its actor exits with status 0. The
 SysV actor reports successful detach through its task name before exit. The
 test does not use a transport status as an actor status.
+The [Observe test](src/identity/scenarios/ipc_stat_observe.rs) uses the same
+actor and recovery flow with `memory_observe.json`. Host passed in 28.09
+seconds. Run `observe_ipc_is_closed::ipc_observe_host` by its full generated
+name. The test checks external role ID 1 and recovered class
+`fail_closed_unknown`. A policy role ID does not imply a witnessed runtime
+entry. The recovered class keeps that identity limit. Observe direct `runc`
+and Kubernetes remain unqualified.
 
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path

@@ -37,6 +37,8 @@ mod group_roles;
 #[cfg(test)]
 mod ipc_stat;
 #[cfg(test)]
+mod ipc_stat_observe;
+#[cfg(test)]
 mod lifecycle_sleep;
 #[cfg(test)]
 mod lifetime_result;
