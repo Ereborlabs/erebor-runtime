@@ -21,9 +21,16 @@ No raw-event table or copied discovery archive is part of the target.
 Control keeps policy/trust/rollout persistence and authority. Node keeps its
 delivery WAL. The same complete data owner can later run remotely. Storage
 and trace intake do not require discovery. Entry: 7.1.
-Status: **Done** for the approved segment-metadata implementation in `f02473bf`.
-Full performance and capacity qualification is **Not done**. Use the current
-result below for new-source proof. Earlier results apply to their named source.
+Status: **Done** for the approved implementation and qualification scope.
+The segment-metadata implementation is in `f02473bf`. Read
+[Final storage qualification](#final-storage-qualification) for the current
+workspace gate, actual disk-full case, and two-node storage/outage result.
+The eight ordered review items are accepted. The user excluded the 8-GiB test
+from closure. That capacity remains unqualified. The original five-percent
+latency target remains unproven; the user accepted the recorded short pair.
+The initial kernel-cache setup failure remains a separate failed result.
+This closure does not qualify that kernel behavior. Earlier results apply
+only to their named source.
 Segment intake, reads, recovery,
 retention, complete-bundle backup, and trusted bounded extraction are
 implemented. The old Control raw writer and its callers are removed. Stored
@@ -31,10 +38,9 @@ tenant totals replace repeated quota scans. The recorded workspace gate,
 paired disk-full case, and release startup and recovery cases passed at their
 named revisions. Kubernetes storage and outage recovery also passed at the
 recorded source state. These results do not qualify later code changes.
-Capacity and performance qualification are separate from implementation
-completion. The user approved the classification below and a serial review:
-run one table item, report its current result, then stop for the user's decision.
-Do not start the next item automatically. Incomplete runs establish no pass.
+Capacity and performance claims outside the approved scope remain unqualified.
+Do not run additional performance cases without approval. Incomplete runs
+establish no pass.
 Previous implementation results below are evidence for their named revisions,
 not completion of this design.
 
@@ -763,8 +769,9 @@ ARAPHOR_STORE_BENCH_MODE=analysis ARAPHOR_STORE_BENCH_BATCHES=64 timeout 30s /us
 The user requires the disk-full case and the two-node storage and outage case
 for closure. The user removed the 8-GiB case from this closure. Do not run that
 case or claim that capacity is qualified. The eight ordered review items above
-are accepted. The current workspace gate is **Done**. The two-node case is
-**Not done**.
+are accepted. The current workspace gate, disk-full case, and two-node case
+are **Done, PASS**. This completes 7.2 under the approved scope. Do not infer
+full-capacity or kernel-cache qualification from this result.
 
 **Workspace gate: Done, PASS**, 2026-09-29, source `f9c6901e`. The last Rust
 change is the quota-test input in `b56d204e`. Formatting, workspace check,
@@ -828,6 +835,54 @@ run's two UUID-checked VMs and temporary disks were removed. Captured logs
 remain. The replacement setup uses the existing environment-only route under
 `/tmp`. It does not rerun or change the failed kernel assertion. No production
 source or test assertion changed.
+
+**Two-node storage/outage: Done, PASS**, 2026-09-29, source `dc252f07`.
+No Rust source changed after the workspace gate. The environment-only setup
+created two test-owned VMs under `/tmp`. It did not read or execute manual
+example files. A normal Helm update selected the current, unmarked release
+images before the outage case. The image IDs in `current-pods.json` match
+`images.txt`. The binary build reused native caches; no DuckDB C++ build ran.
+
+Both Nodes used Ubuntu 24.04.5, Linux `6.8.0-142-generic`, K3s
+`v1.35.5+k3s1`, and containerd `2.2.3-k3s1`. The same-source release checker
+passed `data-store-startup` and `data-store-recovery` before cluster changes.
+Its SHA-256 is
+`1d7e4b36e85947ae86a5ebc522c2c4c890211a462a509dba346c9cf3c822322f`.
+
+The physical harness returned exit status 0 and `result: PASS`. Exact data
+inspection ran as user 65532 while Control was stopped. Retained records
+increased from 938 before the outage to 1,740 after Control recovery, then
+1,926 after storage recovery. Every prior source range and frame digest
+remained valid. Node A retained 340 pending records, and 348 after its restart.
+Node B retained 340. During the read-only storage fault, Nodes retained 86 and
+90 records. Evidence ACKs stopped, while policy service and local denial
+remained available. After recovery, evidence replay completed and durable
+ACKs allowed Node WAL truncation.
+
+The network partition retained the predecessor policy. The mixed rollout had
+two desired targets, one active target, one updating target, and zero failed
+targets. Reconnect reached two active targets. Worker denial remained active
+during the API outage. API recovery and compacted-watch relist passed. The
+harness did not restart Control to recover its watch.
+
+Cleanup returned success. A final check found both Nodes Ready, one ready
+Control replica, no fault mount, and no outage namespace. The two test VMs
+and their temporary disks were then removed through UUID-checked ownership.
+The pre-existing VM was not changed. Captured evidence remains in
+`/tmp/araphor-close.D8LyQB`: `outage.log`, `outage/result.json`, the three
+`outage/data-*.json` proofs, lightweight results, final cluster JSON files,
+`runtime-binaries.sha256`, and `images.txt`.
+
+```sh
+MITHRIL_VM_WORK_ROOT=/tmp MITHRIL_VM_SOURCE_MOUNT="$PWD" MITHRIL_VM_REUSE_IMAGES=true CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true bash crates/mithril-e2e/harness/vm/two-node-convergence.sh --manual-environment --keep-vms --output-directory /tmp/araphor-close.D8LyQB/storage-environment
+helm --kubeconfig /tmp/mithril-vm-test.iE6ehe/kubeconfig.yaml upgrade --install mithril packaging/mithril/helm --namespace mithril-system --values /tmp/mithril-vm-test.iE6ehe/values-current.yaml
+bash crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh --environment /tmp/araphor-close.D8LyQB/storage-environment/retained-environment.json --data-check "$PWD/target/release/mithril_discovery_test" --output-directory /tmp/araphor-close.D8LyQB/outage
+```
+
+These commands identify this run. The removed VM directories and nonempty
+result directory are not reusable inputs. A new run requires fresh owned
+directories and current-source images. 7.3 is next in the implementation order;
+this closure does not start that phase.
 
 ### Ordered review: item 1
 

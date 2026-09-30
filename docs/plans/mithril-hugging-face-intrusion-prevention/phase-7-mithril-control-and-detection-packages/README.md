@@ -137,11 +137,16 @@ Each row is a bounded deliverable. The required test level appears below.
 | 12 | [7.10 Qualification](phase-7-10-qualification.md) | Integrated unit/e2e/physical, performance, recovery and recorded-client proof; needs 7.8 and every advertised optional phase. |
 | Optional | [Observability 4](../../araphor-observability/phase-4-declarative-captures.md) | Finite Trace CRD adapter after Observability 3. |
 
-7.2 is the active storage conversion. Complete its segment recovery, witness
-space, and bounded extraction gates before closing 7.3 or Observability 2.
-It retires the current DuckDB raw-row path and Control-owned raw writer, not
-segment storage itself. 7.4 removes discovery's copied raw export archive.
-No code cutover or storage qualification is claimed by this plan update.
+7.2 is **Done** under the user's approved qualification scope. Its eight ordered
+review items are accepted. The current workspace gate, actual disk-full case,
+and two-node storage/outage case passed. Read its
+[final result](phase-7-2-data-store.md#final-storage-qualification) for source
+identities and limits. The user excluded the 8-GiB case. Full-capacity memory
+and the original latency target remain unqualified. A separate preliminary
+kernel-cache setup check failed; this closure does not qualify that behavior.
+The data crate now owns segment storage. The DuckDB raw-row path and
+Control-owned raw writer are removed. 7.4 removes discovery's copied raw
+export archive. 7.3 is next; this closure does not start it.
 
 Recommended serial route: 7.1 → 7.2 → 7.3 → Observability 1 → 2 → 3 →
 7.4 → 7.5 → 7.6 → 7.7 → 7.8 → 7.9 if selected → 7.10.
