@@ -174,6 +174,9 @@ Keep the legacy action until the same test passes on all three platforms.
 The 74-line Host case passed in 29.15 seconds. The complete Host matrix then
 passed 135 tests in 41 lifecycle groups, including each group's resource
 cleanup. The final repository Rust CI gate passed after the last Rust edit.
+The same test passed direct `runc` in 39.00 seconds through the production OCI
+hook. Its resource cleanup passed. Use the `ioctl_observe_runc` suffix. No
+runc fixture or production source changed.
 
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path

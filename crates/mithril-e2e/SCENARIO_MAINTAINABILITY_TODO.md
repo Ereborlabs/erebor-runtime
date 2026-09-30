@@ -3087,7 +3087,10 @@ test does not close a row when its physical condition or an assertion changed.
       its root setup changed. Every group removed its pin, lease, and cgroup.
       The 65-case identity group passed in 695.66 seconds. No assertion or
       production change was required during the matrix.
-    - [ ] Pass direct `runc` and commit it.
+    - [x] Pass direct `runc` and commit it. The unchanged 74-line physical
+      case passed in 39.00 seconds through stock `runc` and the production OCI
+      hook. Pin, lease, and cgroup cleanup passed. The final Rust CI gate
+      passed. No runc fixture or production source changed.
     - [ ] Pass Kubernetes and commit it.
     - [ ] Remove only the Observe ioctl action after all three pass. Keep
       Protect-mode PTMX Allow, derived-peer denial, zero-device denial, and
