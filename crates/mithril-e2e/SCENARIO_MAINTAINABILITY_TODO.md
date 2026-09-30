@@ -2995,8 +2995,9 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Direct `runc` passed in 28.63 seconds with the same actor, policy,
       child attribution, errno, and object-field assertions. Pin, lease, and
       cgroup cleanup passed. The final repository Rust CI passed.
-    - [ ] Pass and commit Kubernetes. Register the platform only after its
-      exact case passes. Add no Platform API.
+    - [x] Kubernetes passed in 71.88 seconds with the same actor, policy, and
+      assertions. Namespace, pin, and lease cleanup passed. The final
+      repository Rust CI passed. No Platform API or production source changed.
     - [ ] Remove only the legacy `Execve` enum arm, action, and result field
       after all three platforms pass. Keep `Execveat`, script exec, and their
       shared path fixture and syscall helper.
