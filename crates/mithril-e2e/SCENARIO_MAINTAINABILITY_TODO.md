@@ -619,7 +619,7 @@ runner that still needs replacement:
 | --- | ---: | --- |
 | `effect/runc.rs` | 5,930 | Size and runner retirement |
 | `identity.rs` | 4,845 | Size and runner retirement |
-| `effect.rs` | 3,057 | Size and runner retirement |
+| `effect.rs` | 3,047 | Size and runner retirement |
 | `effect/child.rs` | 2,899 | Size and runner retirement |
 | `control_tls.rs` | 2,416 | Size and runner retirement |
 | `effect/network.rs` | 1,505 | Runner retirement; size limit met |
@@ -3064,7 +3064,7 @@ test does not close a row when its physical condition or an assertion changed.
     the role, syscall, evidence, cleanup, and retirement proof. The matching
     old operation and segment resources are removed. Keep the unrelated
     legacy checks open.
-  - [ ] Replace the Observe-mode unclassified PTMX ioctl denial. Use one
+  - [x] Replace the Observe-mode unclassified PTMX ioctl denial. Use one
     shared Python actor and the existing `memory_observe.json` policy. Open
     `/dev/pts/ptmx` before Node starts. Confirm that Linux returns a PTY number
     before readiness. After Node recovers the actor, call the same `TIOCGPTN`
@@ -3096,9 +3096,20 @@ test does not close a row when its physical condition or an assertion changed.
       Kubernetes exec in retained K3s. Namespace, pin, and lease cleanup
       passed. The final repository Rust CI procedure passed. No Kubernetes
       fixture, launcher, or production source changed.
-    - [ ] Remove only the Observe ioctl action after all three pass. Keep
+    - [x] Remove only the Observe ioctl action after all three pass. Keep
       Protect-mode PTMX Allow, derived-peer denial, zero-device denial, and
       their shared descriptor resources until their replacements pass.
+      The matching Observe branch is removed: 10 Rust lines deleted. All
+      nine child regressions passed. The first final Rust CI command failed in the
+      unchanged Control unit test `node_session_transitions_emit_owned_logs`:
+      its log record was absent. The same failure occurred during the earlier
+      SysV migration. No production logging code changed. The cause of that
+      unit-test failure is not established.
+      The unchanged focused Control test passed in 0.01 seconds. The exact
+      executable from the failed CI also passed that test in isolation. The
+      unchanged repository Rust CI procedure then passed after the last Rust
+      edit. Do not claim that the logging failure is fixed. No physical matrix
+      or scenario rerun was required for that unrelated unit failure.
   - [ ] Replace the Protect-mode exact PTMX Allow. Require `TIOCGPTN` success
     with a kernel-written PTY number, attributed `EXACT_POLICY_ALLOW`
     Device/Ioctl evidence, the command, and the PTMX exact-object selector.

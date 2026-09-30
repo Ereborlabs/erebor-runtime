@@ -170,7 +170,9 @@ Stock `runc` and Kubernetes already provide devpts. No production or Platform
 API changes are required. Run the full generated name
 `identity::scenarios::ioctl_observe::observe_ioctl_is_closed::ioctl_observe_host`
 with the exact-test flags below. Platform qualification is recorded in the TODO.
-Keep the legacy action until the same test passes on all three platforms.
+The matching legacy Observe action is removed after all three platforms pass.
+The Protect-mode exact PTMX Allow, derived-peer denial, zero-device denial,
+and shared descriptor resources remain for their separate migrations.
 The 74-line Host case passed in 29.15 seconds. The complete Host matrix then
 passed 135 tests in 41 lifecycle groups, including each group's resource
 cleanup. The final repository Rust CI gate passed after the last Rust edit.
@@ -180,6 +182,10 @@ runc fixture or production source changed.
 Kubernetes passed in 92.49 seconds with the same test, actor, policy, and
 assertions. Its namespace, pin, and lease cleanup passed. Use the
 `ioctl_observe_kubernetes` suffix. The final Rust CI procedure passed.
+The retirement deletes 10 Rust lines. Nine child regressions passed. The
+final Rust CI procedure passed after the retirement edit. Its first command
+failed in the unchanged Control log test recorded above. That test passed in
+isolation, then the unchanged full procedure passed. No logging fix is claimed.
 
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path

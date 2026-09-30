@@ -2064,16 +2064,6 @@ impl EffectTestRunner {
                 PathSelectorV1::kernel_handle_for_id("manual-device-zero"),
                 Some(QUALIFIED_TIOCGPTN_IOCTL),
             )?;
-        } else {
-            require_hard_close(
-                &mut fixture,
-                &reader,
-                &observations,
-                HardClosedOperation::Ioctl,
-                "UNRESOLVED_OBJECT",
-                (KernelEffectFamilyV1::Device, KernelEffectOperationV1::Ioctl),
-                "unclassified device ioctl",
-            )?;
         }
         let protected_link = pin_root.join("links/erebor_identity_file_open");
         ensure!(
