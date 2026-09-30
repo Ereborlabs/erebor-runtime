@@ -704,6 +704,52 @@ The executable and test source are unchanged from item 3.
 /usr/bin/time -v -o /tmp/araphor-resume.HoOzQx/07-resources.log target/release/deps/araphor_data-56c66faf3a80bf1e analysis::extraction::tests::analysis_extract_history --exact --ignored --nocapture --test-threads=1
 ```
 
+**Item 8: Not done, performance target missed in the short pair. Stopped.**
+On `001aeabe`, the preserved release executables ran the existing original
+`293762be` writer and current `846adec5` writer. Each used a fresh store,
+64 batches, 256 records per batch, 16,384 total records, and 2,301,638 input
+bytes. Each fixture passed one test and complete reads after reopen. Original
+had 199 filtered tests; current had 175. Both exits were zero and both stayed
+below the 30-second process limit. No task build or other task test overlapped.
+The host was shared; timing isolation is not claimed.
+
+| Measurement | Original writer | Current writer |
+| --- | ---: | ---: |
+| Write-loop time | 80.093 ms | 79.335 ms |
+| Write throughput | 204,562.1 records/s | 206,517.9 records/s |
+| Durable-call p50 | 1.212 ms | 1.221 ms |
+| Durable-call p95 | 1.305 ms | 1.309 ms |
+| Durable-call p99 | Not reported | 1.825 ms |
+| Open | 0.213 ms | 49.205 ms |
+| Reopen | 8.247 ms | 61.684 ms |
+| Complete read | 24.282 ms | 6.527 ms |
+| Peak RSS | 17,928 KiB | 51,272 KiB |
+| Closed file bytes | 2,302,853 | 6,027,760 |
+
+Throughput was 100.96 percent of the original and met the 95-percent floor
+in this pair. Current p95 was 100.31 percent of the original. The approved
+latency target requires at most 95 percent, or 1.23975 ms for this baseline.
+It was not met. Neither fixture reports an exact durable-call mean; dividing
+the complete loop time by 64 is not that mean. The result is a short-pair
+measurement, not five-pair qualification or proof of a stable regression.
+The sequence stopped at this target miss. No further pairs, tests, or fixes
+ran. Items 3 through 7 passed after cleanup. Full qualification remains
+**Not done**, including the original global capacity and physical cases.
+No Rust source changed in this resumed sequence. The workspace gate was not
+rerun; its last complete pass remains scoped to `846adec5`.
+
+Read `08-original-1.log`, `08-current-1.log`, and their `-resources.log` files
+in `/tmp/araphor-resume.HoOzQx`. Executables remain in
+`/tmp/araphor-layout-compare.V8YpTOUa`. Original SHA-256:
+`76bb12980296227aacbc3bb23b3af8f6472f3471d971c74f9e26e25f42472b54`.
+Current SHA-256:
+`f78d1056617771e9ed368bc311e434d35ac4c2dd0cc0ec974b7e75b66009f0f4`.
+
+```sh
+ARAPHOR_STORE_BENCH_MODE=segments ARAPHOR_STORE_BENCH_BATCHES=64 timeout 30s /usr/bin/time -v -o /tmp/araphor-resume.HoOzQx/08-original-1-resources.log /tmp/araphor-layout-compare.V8YpTOUa/original-control store::raw_bench::raw_event_store_comparison --exact --ignored --nocapture --test-threads=1
+ARAPHOR_STORE_BENCH_MODE=analysis ARAPHOR_STORE_BENCH_BATCHES=64 timeout 30s /usr/bin/time -v -o /tmp/araphor-resume.HoOzQx/08-current-1-resources.log /tmp/araphor-layout-compare.V8YpTOUa/current-control store::raw_bench::raw_event_store_comparison --exact --ignored --nocapture --test-threads=1
+```
+
 ### Ordered review: item 1
 
 **Done: PASS**, 2026-09-28. The current-source release case
