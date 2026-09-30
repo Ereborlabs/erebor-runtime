@@ -34,15 +34,22 @@ The current conversion is implemented in `f02473bf`. It follows design commit
 `8d3fa270` and reuses the raw writer from `150033ef`.
 The raw writer lives in
 `araphor-data`. Control has no raw writer or reader. This implementation uses
-metadata schema 9 and fresh development stores. Qualification is not complete.
+metadata schema 9 and fresh development stores. The approved storage
+qualification scope is complete.
 Earlier pass records below apply only to their named source revisions.
 The current workspace gate passed on `f9c6901e`: 81 data-owner tests, 174
 Control tests, and 123 Mithril e2e tests passed. This gate includes the test-only
 quota input in `b56d204e`. The current disk-full case and harness regressions
-also passed. The current two-node physical case remains Not done. Read the
+also passed. The current two-node storage/outage case passed at `dc252f07`,
+with no Rust change after the workspace gate. Read the
 [final storage qualification](phase-7-2-data-store.md#final-storage-qualification)
 for commands, result paths, and proof limits. The user excluded the 8-GiB case
 from closure. Default-quota memory with small batches remains unqualified.
+An initial protected-start setup failed its unreachable mount-cache cleanup
+assertion. The storage/outage case ran separately on a fresh environment with
+current release images. Its exact retained-data checks, evidence replay,
+policy availability, partition, API recovery, relist, and cleanup passed.
+This storage result does not qualify the failed kernel-cache behavior.
 
 The ignored release test
 [analysis_store_global_memory](../../../../crates/araphor-data/src/analysis/capacity.rs)
@@ -2250,7 +2257,7 @@ The CLI binary SHA-256 for these artifacts is
 `8dfb226c5147f347c0803b011c0dfb85a5188677f20c5631bd7e7e8f806ca9cf`.
 These tests do not prove Kubernetes scheduling of the periodic Node report.
 
-## Current segment verification
+## Segment verification at 6d6b2780
 
 The final workspace gate passed at `6d6b2780`: formatting, workspace check,
 strict Clippy, and all enabled workspace tests. Data passed 81 tests with five
@@ -2268,3 +2275,14 @@ storage, full-capacity operation, or performance. The short comparison at
 `150033ef` missed the speed target. See the
 [acceptance record](phase-7-2-data-store.md#segment-authoritative-acceptance)
 for exact measurements and limits. No new performance test was added.
+
+## Current storage verification
+
+The current workspace gate passed at `f9c6901e`. The current two-node
+storage/outage case passed at `dc252f07`, with no subsequent Rust change.
+The actual disk-full case and all eight accepted review items complete the
+user-approved 7.2 scope. Read the
+[closure record](phase-7-2-data-store.md#final-storage-qualification) for proof.
+The 8-GiB capacity and original latency target remain unqualified. The failed
+preliminary kernel-cache check remains unresolved. This result does not
+qualify that behavior or implement public SQL, follow, or remote placement.
