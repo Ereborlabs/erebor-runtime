@@ -95,3 +95,9 @@ workspace compilation, strict Clippy, and workspace tests.
 
 The legacy corruption/read setup and unreachable-row assertions remain.
 The test does not prove Node collection or the concurrent 32-exec condition.
+After all three platforms passed, retirement removed the duplicate Rust
+rebuild comparison, result field, and VM predicate: 21 Rust lines and one
+shell line. The two focused runc regressions and VM harness checks passed.
+The real Kubernetes shell still waits for rebuild before checking collection.
+That wait cannot be removed until the collector has a shared replacement.
+The final repository Rust CI procedure passed after the retirement edit.

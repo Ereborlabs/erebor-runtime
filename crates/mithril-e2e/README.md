@@ -218,6 +218,9 @@ with the exact-test flags below. See the
 Use the `mount_late_runc` suffix for the qualified direct-`runc` case.
 Use the `mount_late_kubernetes` suffix for the qualified real Kubernetes case.
 Old-row collection remains in the legacy probe until a separate test passes.
+The duplicate rebuild comparison, result flag, and VM result predicate are
+removed after all three platforms passed. The collector still owns its old
+corruption/read setup and its real Kubernetes rebuild readiness wait.
 
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path

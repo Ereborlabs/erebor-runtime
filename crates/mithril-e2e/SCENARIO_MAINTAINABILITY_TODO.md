@@ -4400,7 +4400,7 @@ setup, production actions, assertions, and focused test.
       were denied; that behavior remains for its own migration.
 - [ ] Stale cache repair and unreachable-row retirement: keep the production
   node reconciliation calls and exact map absence checks visible.
-  - [ ] Replace only stale-cache rebuild with a small standard platform test.
+  - [x] Replace only stale-cache rebuild with a small standard platform test.
     Reuse `read_path.py` and `mount_alias_policy.json`. Start Control and Node,
     install the signed policy, and admit the actor normally. Require a denied
     recursive-tree control read and a READY cache. Decrease the ready row's
@@ -4429,10 +4429,18 @@ setup, production actions, assertions, and focused test.
       Node, policy CRDs, and the actor Pod. Namespace, pin, and lease cleanup
       passed. The final repository Rust CI procedure passed. No Kubernetes
       fixture, launcher, or production source changed.
-    - [ ] Remove only the old rebuild assertion, result flag, and launcher
+    - [x] Remove only the old rebuild assertion, result flag, and launcher
       gates after all three pass. Keep the old corruption/read setup and both
       obsolete-row checks until production collection has a verified shared
       replacement. Do not replace collection with another rebuild assertion.
+      The replacement matches all five topology comparisons in baseline
+      `95775f48` and requires actual denial and fresh attributed evidence.
+      Retirement deletes 21 Rust lines and one `run.sh` predicate. Both
+      focused runc regressions and the VM harness behavior checks passed.
+      The real Kubernetes shell keeps its rebuild wait because the wait is
+      also the readiness boundary for its still-unmigrated collector check.
+      The repository Rust CI procedure passed after the retirement edit.
+      No production, Platform, or physical fixture change was required.
 - [x] Independent additional entries: keep each declaration, stock exec,
   role, rule, process state, and isolation assertion.
   - [x] Retire only the old overlapping PostStart and StartupProbe role

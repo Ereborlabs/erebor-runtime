@@ -215,7 +215,6 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub bpf_runtime_topology_initialized: bool,
     pub concurrent_exec_detached_mounts_preserved_view: bool,
     pub recursive_wildcard_stable_after_concurrent_exec: bool,
-    pub stale_mount_cache_rebuilt: bool,
     pub unreachable_mount_cache_rows_collected: bool,
     pub prestop_retained_during_runtime_inventory_omission: bool,
     pub kernel_upgrade_preserved_map_ids: bool,
@@ -4458,25 +4457,6 @@ impl EffectTestRunner {
                 ),
             }
         );
-        let stale_mount_cache_rebuilt = rebuilt_mount_topology.security_view_epoch
-            == mount_topology_after_concurrent_exec.security_view_epoch
-            && rebuilt_mount_topology.cache_generation
-                > mount_topology_after_concurrent_exec.cache_generation
-            && rebuilt_mount_topology.mount_namespace_inode
-                == mount_topology_after_concurrent_exec.mount_namespace_inode
-            && rebuilt_mount_topology.mountinfo_sha256
-                == mount_topology_after_concurrent_exec.mountinfo_sha256
-            && rebuilt_mount_topology.ready_snapshot_keys
-                != mount_topology_after_concurrent_exec.ready_snapshot_keys;
-        ensure!(
-            stale_mount_cache_rebuilt,
-            InvalidInputSnafu {
-                path: Path::new("canonical_mount_cache_states"),
-                reason: format!(
-                    "BPF did not replace the stale cache generation from the unchanged live topology: before={mount_topology_after_concurrent_exec:?}, after={rebuilt_mount_topology:?}"
-                ),
-            }
-        );
         let obsolete_cache_rows_before = obsolete_mount_cache_row_count(&host)?;
         ensure!(
             obsolete_cache_rows_before.cache_rows > 0
@@ -4985,7 +4965,6 @@ impl EffectTestRunner {
             bpf_runtime_topology_initialized,
             concurrent_exec_detached_mounts_preserved_view,
             recursive_wildcard_stable_after_concurrent_exec,
-            stale_mount_cache_rebuilt,
             unreachable_mount_cache_rows_collected,
             prestop_retained_during_runtime_inventory_omission,
             kernel_upgrade_preserved_map_ids,

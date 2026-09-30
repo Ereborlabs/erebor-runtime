@@ -540,7 +540,6 @@ if [[ $entry_role_runtime_only == true ]]; then
     .bpf_runtime_topology_initialized and
     .concurrent_exec_detached_mounts_preserved_view and
     .recursive_wildcard_stable_after_concurrent_exec and
-    .stale_mount_cache_rebuilt and
     .unreachable_mount_cache_rows_collected and
     .prestop_retained_during_runtime_inventory_omission and
     .kernel_upgrade_preserved_map_ids and
