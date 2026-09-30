@@ -3059,10 +3059,54 @@ test does not close a row when its physical condition or an assertion changed.
     and allowed controls. The unchanged case passed on Host in 61.32
     seconds, direct `runc` in 62.54 seconds, and Kubernetes in 102.24
     seconds. The Kubernetes launcher exited 0.
-  - [ ] Replace the old SysV `IPC_STAT` check. A draft actor used the same
-    syscall, but it succeeded under `actor_policy.json` on Host. The draft
-    was removed. Do not retire the old check until a signed policy and the
-    shared scenario prove the original denial on all three platforms.
+  - [x] Replace the old SysV `IPC_STAT` check. Protect and Observe now pass
+    on Host, direct `runc`, and Kubernetes. The detailed SysV row above records
+    the role, syscall, evidence, cleanup, and retirement proof. The matching
+    old operation and segment resources are removed. Keep the unrelated
+    legacy checks open.
+  - [ ] Replace the Observe-mode unclassified PTMX ioctl denial. Use one
+    shared Python actor and the existing `memory_observe.json` policy. Open
+    `/dev/pts/ptmx` before Node starts. Confirm that Linux returns a PTY number
+    before readiness. After Node recovers the actor, call the same `TIOCGPTN`
+    ioctl. Require actor `EACCES`, attributed `UNRESOLVED_OBJECT` Device/Ioctl
+    evidence, rule zero, and zero policy object IDs. Require
+    descriptor cleanup and actor exit. Keep the standard Rust test below
+    100 lines. Add no Platform API or production change.
+    The Host root lacked `/dev/pts`. Add that standard directory to its
+    existing mount owner and verify the complete Host matrix. The first
+    physical draft then reached the ioctl and proved the expected actor errno,
+    reason, family, operation, and identity. Its added command-field assertion
+    failed: the generic actor gate returns before typed ioctl processing
+    records the command. The old Observe assertion did not check that field.
+    Keep the original `TIOCGPTN` action and check the observed zero field.
+    Do not change BPF to satisfy the added draft assertion.
+    - [x] Pass Host and commit it. The 74-line focused physical test passed
+      in 29.15 seconds. Its descriptor-close, actor-exit, pin, lease, and cgroup
+      checks passed. The final repository Rust CI procedure passed. The
+      complete Host matrix passed all 135 tests in 41 lifecycle groups because
+      its root setup changed. Every group removed its pin, lease, and cgroup.
+      The 65-case identity group passed in 695.66 seconds. No assertion or
+      production change was required during the matrix.
+    - [ ] Pass direct `runc` and commit it.
+    - [ ] Pass Kubernetes and commit it.
+    - [ ] Remove only the Observe ioctl action after all three pass. Keep
+      Protect-mode PTMX Allow, derived-peer denial, zero-device denial, and
+      their shared descriptor resources until their replacements pass.
+  - [ ] Replace the Protect-mode exact PTMX Allow. Require `TIOCGPTN` success
+    with a kernel-written PTY number, attributed `EXACT_POLICY_ALLOW`
+    Device/Ioctl evidence, the command, and the PTMX exact-object selector.
+  - [ ] Replace PTMX derived-peer denial. Require `TIOCGPTPEER` to fail,
+    attributed `UNSUPPORTED_OBJECT` Device/Ioctl evidence with the command
+    and PTMX selector, and an unchanged descriptor set.
+  - [ ] Replace the exact zero-device ioctl denial. Require `TIOCGPTN`
+    `EACCES` on the retained `/dev/zero` descriptor and attributed
+    `EXACT_POLICY_DENY` Device/Ioctl evidence with the command and zero-device
+    selector. Keep all three Protect actions in the old runner. Its signed
+    low-level source uses device classifiers and device command rules. The
+    current public `KubernetesRolePolicyV1` has no device rule field, and its
+    file operations exclude Ioctl. Do not substitute an unresolved-file or
+    capability denial. Do not add a test-only policy path or change the CRD
+    without approval.
   - [x] Replace the exact Unix-stream allow relationship. Reuse the approved
     socket-pass actor and signed worker-to-worker policy. Require a completed
     descriptor transfer and payload, distinct admitted worker tasks, and

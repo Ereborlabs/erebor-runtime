@@ -145,6 +145,36 @@ comparison fails the same way in Observe and Protect. That runner remains
 open for migration; this SysV result does not qualify its other actions.
 The final repository Rust CI procedure passed after the retirement edit.
 
+The Observe device test replaces the legacy unclassified PTMX ioctl action.
+Its intended result is physical `EACCES` and attributed `UNRESOLVED_OBJECT`
+Device/Ioctl evidence on Host, direct `runc`, and Kubernetes. Read this flow:
+
+[observe_ioctl_is_closed](src/identity/scenarios/ioctl_observe.rs) starts Control and both actors before Node.
+  -> [Device::number](fixtures/process/device_ioctl.py) verifies `TIOCGPTN` output before actor readiness and retains the PTMX descriptor.
+  -> [Platform recovery](src/platform/shared.rs) waits for the recovered actor with rule zero and its signed Observe policy.
+  -> [Device::number](fixtures/process/device_ioctl.py) issues `TIOCGPTN` after recovery and reports its errno.
+  -> [EffectCheck](src/effect/check.rs) requires the actor's fresh Device/Ioctl denial with no policy object.
+  -> [Device::close](fixtures/process/device_ioctl.py) closes the descriptor and reports cleanup before actor exit.
+  -> [ProcessFixture::stop](src/process.rs) completes normal process cleanup before platform teardown.
+
+The request uses the Linux ioctl encoding on x86-64 and AArch64. The
+[production ioctl gate](../../bpf/erebor-interceptor/programs/identity_device_process.bpf.h)
+requires an exact device object for a recovered actor. Observe mode does not
+permit this unresolved object. The generic actor gate rejects the unresolved
+path before the typed ioctl stage records the command. The evidence command
+field is zero; the Python actor still calls the original `TIOCGPTN` request.
+The old Observe check requires the same physical denial and reason.
+The Host root now includes `/dev/pts` through
+its existing mount owner. The owner removes that mount during teardown.
+Stock `runc` and Kubernetes already provide devpts. No production or Platform
+API changes are required. Run the full generated name
+`identity::scenarios::ioctl_observe::observe_ioctl_is_closed::ioctl_observe_host`
+with the exact-test flags below. Platform qualification is recorded in the TODO.
+Keep the legacy action until the same test passes on all three platforms.
+The 74-line Host case passed in 29.15 seconds. The complete Host matrix then
+passed 135 tests in 41 lifecycle groups, including each group's resource
+cleanup. The final repository Rust CI gate passed after the last Rust edit.
+
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path
 result flags for a shell gate. The 41-line

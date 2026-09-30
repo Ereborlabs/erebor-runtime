@@ -35,6 +35,8 @@ mod group_boundary;
 #[cfg(test)]
 mod group_roles;
 #[cfg(test)]
+mod ioctl_observe;
+#[cfg(test)]
 mod ipc_stat;
 #[cfg(test)]
 mod ipc_stat_observe;

@@ -42,7 +42,7 @@ impl Host {
         let bundle = ProbeDirectory::create(&bundle_path)?;
         fs::create_dir_all(rootfs.join("bundle"))?;
         self.bind(&rootfs, &rootfs)?;
-        for path in ["/usr", "/lib", "/lib64", "/proc"] {
+        for path in ["/usr", "/lib", "/lib64", "/proc", "/dev/pts"] {
             let source = Path::new(path);
             if source.exists() {
                 self.bind(source, &rootfs.join(path.trim_start_matches('/')))?;

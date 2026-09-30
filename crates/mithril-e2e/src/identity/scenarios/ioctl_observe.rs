@@ -1,0 +1,74 @@
+use std::{fs, time::Duration};
+
+use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
+use mithril_control::WorkloadProtectionPolicy as Policy;
+
+use crate::effect::EffectCheck;
+use crate::platform::{platform_test, Platform, TestResult};
+
+#[platform_test(host)]
+#[lifecycle = ioctl_observe]
+fn observe_ioctl_is_closed<P: Platform>() -> TestResult<()> {
+    let mut env = P::setup("ioctl-observe")?;
+    env.start_control()?;
+    env.stop_node()?;
+    let policy: Policy = serde_json::from_str(include_str!(
+        "../../../fixtures/process/memory_observe.json"
+    ))?;
+    let labels = policy.spec.pod_selector.match_labels;
+    let mut init = env.start_actor("ready.py", &[], &labels)?;
+    env.place(init.id())?;
+    let mut actor = env.add_actor("python", &["/fixtures/device_ioctl.py", "/work"])?;
+    actor.ready()?;
+    env.place(actor.id())?;
+    env.install_policy("memory_observe.json")?;
+    env.start_node()?;
+    env.sync_policy()?;
+    env.node_ready()?;
+    env.running(init.id())?;
+    env.recovered(init.id(), "Observe ioctl workload")?;
+    let task = env.recovered(actor.id(), "Observe ioctl actor")?;
+    assert_eq!(
+        task.snapshot.root_class.as_deref(),
+        Some("restored_or_unknown_root")
+    );
+    assert_eq!(task.snapshot.admitted_entry_rule_id, 0);
+    assert_eq!(task.snapshot.active_role_id, 1);
+    assert_eq!(
+        task.snapshot.installed_role_class.as_deref(),
+        Some("fail_closed_unknown")
+    );
+    let effects = EffectCheck::new(&env, task)?;
+
+    actor.send(b"number\n")?;
+    actor.wait_name(
+        actor.id(),
+        &format!("ioctl-{}", libc::EACCES),
+        "Observe ioctl result",
+        Duration::from_secs(5),
+    )?;
+    let denied = effects.wait(
+        &env,
+        "UNRESOLVED_OBJECT",
+        F::Device,
+        O::Ioctl,
+        -libc::EACCES,
+        "Observe ioctl denial",
+    )?;
+    assert_eq!(denied.operation_argument, 0);
+    assert_eq!(denied.exact_object_key_id, 0);
+    assert_eq!(denied.composite_atom_id, 0);
+
+    fs::write(env.work().join("release"), b"release\n")?;
+    actor.wait_name(
+        actor.id(),
+        "ioctl-clean",
+        "Observe descriptor close",
+        Duration::from_secs(5),
+    )?;
+    fs::write(env.work().join("finish"), b"finish\n")?;
+    actor.wait_gone(actor.id(), "Observe ioctl actor exit")?;
+    actor.stop()?;
+    init.stop()?;
+    env.stop()
+}
