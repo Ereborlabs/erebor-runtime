@@ -642,6 +642,25 @@ The unchanged CLI SHA-256 is
 /usr/bin/time -v -o /tmp/araphor-resume.HoOzQx/04-resources.log target/release/mithril_discovery_test --case data-store-load --output-directory /tmp/araphor-resume.HoOzQx/04-result
 ```
 
+**Item 5: Done, PASS.** On `fba20b03`, the same release CLI passed one
+`data-store-tenants` case with ten distinct tenants and Nodes. Each source
+sent 32 groups and 131,072 records. All 1,310,720 records passed durable
+ACK, duplicate replay, exact input digest, foreign-tenant isolation, and
+restart checks. Input size was 150,404,600 bytes. The result retains 320
+group samples. Exit status was zero. Elapsed time was 49.89 seconds; peak
+RSS was 177,896 KiB (173.7 MiB). Intake took 38.904 seconds, reads took
+1.222 seconds, checkpoint took 0.028 seconds, and reopen took 0.220 seconds.
+No slot-full rejection occurred. Default admission remained eight global
+operations and two operations per Node, with asynchronous waits for full
+slots. This is one shared-host synthetic mTLS run, not kernel, full-quota,
+rollout, or physical-reserve qualification. Read `05-run.log`,
+`05-resources.log`, and `05-result/result.json` in `/tmp/araphor-resume.HoOzQx`.
+Production Rust and the CLI executable are unchanged from item 4.
+
+```sh
+/usr/bin/time -v -o /tmp/araphor-resume.HoOzQx/05-resources.log target/release/mithril_discovery_test --case data-store-tenants --tenants 10 --output-directory /tmp/araphor-resume.HoOzQx/05-result
+```
+
 ### Ordered review: item 1
 
 **Done: PASS**, 2026-09-28. The current-source release case
