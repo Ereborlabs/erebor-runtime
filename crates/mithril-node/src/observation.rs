@@ -60,6 +60,7 @@ struct Inner {
     persisted_reader_queue_dropped_events: AtomicU64,
     mount_change_sequence: AtomicU64,
     mount_change_notify: tokio::sync::Notify,
+    evidence_progress: tokio::sync::watch::Sender<()>,
     durable: Option<Mutex<DurableEvidence>>,
 }
 
@@ -171,6 +172,7 @@ impl EffectObservationStore {
                 persisted_reader_queue_dropped_events: AtomicU64::new(0),
                 mount_change_sequence: AtomicU64::new(0),
                 mount_change_notify: tokio::sync::Notify::new(),
+                evidence_progress: tokio::sync::watch::channel(()).0,
                 durable: None,
             }),
         }
@@ -204,6 +206,7 @@ impl EffectObservationStore {
                 persisted_reader_queue_dropped_events: AtomicU64::new(0),
                 mount_change_sequence: AtomicU64::new(0),
                 mount_change_notify: tokio::sync::Notify::new(),
+                evidence_progress: tokio::sync::watch::channel(()).0,
                 durable: Some(Mutex::new(DurableEvidence {
                     canonicalizer,
                     wal: EvidenceWalOwner::open(&wal_root, limits)?,
@@ -320,7 +323,12 @@ impl EffectObservationStore {
                 }
                 Err((error, false)) => self.record_evidence_error(error.to_string()),
             }
+            self.inner.evidence_progress.send_replace(());
         }
+    }
+
+    pub(crate) fn evidence_progress(&self) -> tokio::sync::watch::Receiver<()> {
+        self.inner.evidence_progress.subscribe()
     }
 
     #[must_use]
@@ -521,6 +529,7 @@ impl EffectObservationStore {
             return Ok(());
         }
         durable.coverage.mark_all_gapped(reason)?;
+        self.inner.evidence_progress.send_replace(());
         if reason == CoverageGapReasonV1::ReaderStopped {
             erebor_telemetry::debug!(
                 "marked evidence coverage as gapped",
@@ -918,6 +927,8 @@ const fn observation_stage(result: u8) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use erebor_interceptor_abi::{
         EffectObservationHealthV1, EffectObservationReasonV1, EffectObservationV1,
         EffectPhysicalResultV1, ExactExecutableCandidateV1, ExecutionApprovalTraceV1, Id128V1,
@@ -930,6 +941,86 @@ mod tests {
         EffectObservationStore, EvidenceAckV1, EvidenceIdV1, EvidenceWalCapacityPolicyV1,
         EvidenceWalLimits, ObservationCanonicalizer,
     };
+
+    #[tokio::test]
+    async fn durable_progress_wakes_recovery() -> Result<(), Box<dyn std::error::Error>> {
+        for wait_first in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let store = EffectObservationStore::durable(
+                2,
+                directory.path().join("wal"),
+                EvidenceWalLimits::default(),
+                ObservationCanonicalizer::new(
+                    EvidenceIdV1::new(1, 2),
+                    EvidenceIdV1::new(3, 4),
+                    1,
+                    EvidenceIdV1::new(5, 6),
+                )?,
+            )?;
+            let mut progress = store.evidence_progress();
+            store.sample_coverage_health(EffectObservationHealthV1::default().as_bytes())?;
+            let health = EffectObservationHealthV1 {
+                attempted: 1,
+                requested: 1,
+                emitted: 1,
+                next_sequence: 1,
+                ..EffectObservationHealthV1::default()
+            };
+            store.sample_coverage_health(health.as_bytes())?;
+            assert!(!store.recover_coverage_after_prior_probe(health.as_bytes())?);
+
+            let wait = progress.changed();
+            tokio::pin!(wait);
+            if wait_first {
+                tokio::select! {
+                    biased;
+                    result = &mut wait => {
+                        result?;
+                        return Err("evidence progress preceded the durable write".into());
+                    }
+                    () = std::future::ready(()) => {}
+                }
+            }
+            store.record_bytes(
+                EffectObservationV1 {
+                    observed_boottime_ns: 1,
+                    source_sequence: 1,
+                    task_cookie: 1,
+                    reason: EffectObservationReasonV1::ExactPolicyDeny as u8,
+                    physical_result: EffectPhysicalResultV1::DeniedBeforeEffect as u8,
+                    kernel_result: -13,
+                    effect_family: 1,
+                    operation: 1,
+                    ..EffectObservationV1::default()
+                }
+                .as_bytes(),
+            );
+            tokio::time::timeout(Duration::from_secs(1), wait).await??;
+
+            assert_eq!(
+                store.evidence_errors(),
+                0,
+                "{:?}",
+                store.first_evidence_error()
+            );
+            assert_eq!(
+                store
+                    .next_evidence_batch()
+                    .ok_or("missing WAL batch")?
+                    .record_count(),
+                1
+            );
+            assert!(store.recover_coverage_after_prior_probe(health.as_bytes())?);
+            let coverage = store.coverage_snapshot().ok_or("missing coverage")?;
+            assert!(coverage.supports_negative_claim());
+            assert!(coverage.history.iter().any(|interval| {
+                interval
+                    .gap_reasons
+                    .contains(&CoverageGapReasonV1::ReaderDelay)
+            }));
+        }
+        Ok(())
+    }
 
     #[test]
     fn enforcement_denial_reasons_are_not_downgraded_to_unknown() {

@@ -41,6 +41,7 @@ pub(super) struct NodeRun {
     kernel_ready: bool,
     identity_ready: bool,
     evidence_ready: bool,
+    bindings_pending: bool,
     prevention: bool,
     healthy_capabilities: Vec<CapabilityRecord>,
     healthy_claims: bool,
@@ -65,6 +66,8 @@ pub(super) struct NodeRun {
 
 impl NodeRun {
     pub(super) async fn run(node: NodeChassis, mut shutdown: watch::Receiver<bool>) -> Result<()> {
+        let mut evidence_progress = node.observations.evidence_progress();
+        evidence_progress.mark_changed();
         let mut state = Self::start(node, &shutdown);
         let evidence_configured = state.node.config.evidence.is_some();
 
@@ -98,6 +101,14 @@ impl NodeRun {
                     }
                     () = state.node.bindings.wait_for_runtime_change(), if state.connecting.is_none() => {
                         state.reconcile_bindings().await;
+                    }
+                    result = evidence_progress.changed(),
+                        if state.connection.is_some() && state.kernel_ready && !state.evidence_ready
+                            && state.node.observations.evidence_errors() == 0 => {
+                        result.map_err(|error| EvidenceStateSnafu {
+                            reason: format!("evidence progress channel closed: {error}"),
+                        }.build())?;
+                        state.resume_evidence().await;
                     }
 
                     _ = tokio::time::sleep_until(deadline),
@@ -163,6 +174,7 @@ impl NodeRun {
             failure_reported: false,
             kernel_ready: true,
             identity_ready: true,
+            bindings_pending: false,
             evidence_ready: node
                 .registration
                 .capabilities
@@ -573,12 +585,36 @@ impl NodeRun {
     }
 
     async fn reconcile_bindings(&mut self) {
+        let outcome = self
+            .node
+            .reconcile_bindings(self.connection.is_some())
+            .await;
+        self.bindings_pending = matches!(outcome, ReconciliationOutcome::EvidenceUnhealthy(_));
+        self.apply_reconciliation(outcome).await;
+    }
+
+    async fn resume_evidence(&mut self) {
+        match self.node.check_evidence(true) {
+            Ok(()) if self.bindings_pending || !self.identity_ready => {
+                self.reconcile_bindings().await
+            }
+            Ok(()) => {
+                self.apply_reconciliation(ReconciliationOutcome::EvidenceRecovered)
+                    .await
+            }
+            Err(outcome) => self.apply_reconciliation(outcome).await,
+        }
+    }
+
+    async fn apply_reconciliation(&mut self, outcome: ReconciliationOutcome) {
         let connected = self.connection.is_some();
+        let identity_verified = matches!(outcome, ReconciliationOutcome::Healthy);
         let mut report = false;
-        match self.node.reconcile_bindings(connected).await {
-            ReconciliationOutcome::Healthy => {
+        match outcome {
+            ReconciliationOutcome::Healthy | ReconciliationOutcome::EvidenceRecovered => {
                 let evidence_recovered = connected && !self.evidence_ready;
-                let identity_recovered = !self.identity_ready && self.kernel_ready;
+                let identity_recovered =
+                    identity_verified && !self.identity_ready && self.kernel_ready;
                 if evidence_recovered {
                     self.evidence_ready = true;
                     restore_evidence_claims(

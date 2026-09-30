@@ -159,6 +159,65 @@ verification-script edit, run the repository CI check:
 bash .github/scripts/verify-rust-ci.sh
 ```
 
+## Quiet Runtime Event Reproduction
+
+The lightweight CRI fixture can forward containerd events through a private
+native endpoint. Set `MITHRIL_TEST_EVENT_SOCKET` to that endpoint. The fixture
+keeps its typed CRI responses and publishes native update and delete events.
+Do not use the K3s endpoint for these fixture events.
+Use this endpoint for the focused quiet-stream test, not a complete lifecycle.
+The endpoint does not receive actor task-exit events. The normal Host and
+direct-`runc` fixtures retain their original inventory fallback. Real Kubernetes
+uses the complete containerd event stream.
+
+In the retained guest, start the separate event service and check readiness.
+Reuse the service if `systemctl is-active mithril-events-test.service`
+reports `active`.
+
+```bash
+sudo systemd-run --unit=mithril-events-test --collect \
+  --property=Type=notify --property=TimeoutStartSec=5s \
+  --property=RuntimeMaxSec=900 \
+  /var/lib/rancher/k3s/data/current/bin/containerd \
+  --address=/var/tmp/mithril-events-test.sock \
+  --root=/var/tmp/mithril-events-test-root \
+  --state=/var/tmp/mithril-events-test-state --log-level=error
+sudo /var/lib/rancher/k3s/data/current/bin/ctr \
+  --address=/var/tmp/mithril-events-test.sock --timeout=5s version
+```
+
+Run `identity::scenarios::evidence_gap::evidence_gap_recovers::identity_host`
+with the Host environment shown above and
+`MITHRIL_TEST_EVENT_SOCKET=/var/tmp/mithril-events-test.sock`. Keep K3s and the
+VM running. Use the test binary from the current source. Require one test to
+run; zero tests is not a pass. Stop only this service after the check:
+`sudo systemctl stop mithril-events-test.service`.
+
+[evidence_gap_recovers](src/identity/scenarios/evidence_gap.rs) denies a real incomplete exec and supplies one runtime update.
+  -> [CriFixture](src/platform/cri.rs) forwards the native event to the quiet containerd stream.
+  -> [NodeRun](../mithril-node/src/node/run.rs) starts binding reconciliation on that event.
+  -> [EffectObservationStore](../mithril-node/src/observation.rs) records the gap and requires a durable recovery probe.
+  -> [EffectObservationWorker](../mithril-node/src/observation.rs) writes the records to the local evidence log and signals progress.
+  -> [NodeRun::resume_evidence](../mithril-node/src/node/run.rs) checks recovery and completes interrupted runtime work.
+  -> [evidence_gap_recovers](src/identity/scenarios/evidence_gap.rs) requires recovery within four seconds before another actor starts.
+
+The original lightweight run failed while the runtime event stream was quiet.
+The approved Node change uses a retained `watch` notification from the evidence
+owner. It confirms the recovery checkpoint with fresh kernel counters. If the
+records are not yet durable, admission stays closed until evidence progress
+wakes Node. A completed write before waiting is not lost. Healthy evidence
+batches do not start binding reconciliation. Node completes only runtime work
+that evidence health interrupted. Evidence recovery does not restore unverified
+identity claims. Historical gap intervals remain in the durable coverage log.
+
+The completion-order unit test and focused Host reproduction passed. The
+final Host identity lifecycle passed all 65 tests in 705.64 seconds. The final
+direct-`runc` lifecycle passed all 59 tests in 670.16 seconds. The focused
+quiet-stream test passed in 42.51 seconds. Paired Kubernetes verification is
+passing: the unchanged `stock_probes_are_entries` test passed in 84.28 seconds.
+The complete Kubernetes identity lifecycle remains pending. BPF, production
+policy, and admission timeouts remain unchanged.
+
 ## Required Order And Result Contract
 
 Run the lightweight case before its physical Kubernetes case. Both cases must

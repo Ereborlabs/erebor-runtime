@@ -4851,6 +4851,85 @@ setup, production actions, assertions, and focused test.
   - [x] Pass the small Kubernetes test. The focused test passed in 79.56
     seconds. The existing Kubernetes container-kind test passed in 72.48
     seconds with the shared policy.
+  - [x] Reproduce the evidence-readiness gap from the 2026-09-29 complete
+    identity lifecycle run in lightweight before a production change or
+    another Kubernetes run. Supply a live containerd event stream that stays
+    quiet after the container event. Keep the four-second admission deadline.
+    The current lightweight CRI fixture has no containerd Subscribe service
+    and uses a 10-millisecond inventory fallback. It does not prove this case.
+    Require evidence recovery to restore admission without another container
+    event. Keep the existing role, identity, readiness, and zero-restart checks.
+    The physical run admitted the readiness container at 21:36:06 UTC. Node
+    closed evidence readiness at 21:36:06.443 UTC. It staged the first liveness
+    container facts at 21:36:06.555 UTC but did not complete preparation before
+    the OCI client's deadline. The hook failed at 21:36:10.562 UTC. Node
+    recovered evidence readiness at 21:36:11.273 UTC. Kubernetes then started
+    a new container ID. The fixture still waited on the failed first ID and
+    reached its 180-second identity limit. The run passed 59 tests and failed
+    this test. Node samples evidence recovery during binding reconciliation;
+    a live, quiet runtime event stream does not wake that path. This is the
+    missing recovery trigger. This run preceded the approved Node change
+    below. Control, BPF, assertions, and timeouts did not change.
+  - [x] Add `evidence_gap_recovers` as a small Host test. Use the existing
+    oversized-argument `cat` denial to produce a real unresolved-effect gap.
+    Admit a second actor with the same Control, Node, and signed policy.
+    Supply runtime updates through a private native containerd endpoint.
+    Require source recovery without a later runtime event. Keep the existing
+    incomplete-probe test and all its security assertions.
+    The unchanged Host container-kind test passed in 40.89 seconds with this
+    endpoint. It did not produce the evidence gap. A narrow Node recovery
+    change was proposed on 2026-09-29. The user approved evidence-progress
+    continuation after the reproduction below. Do not increase the
+    Kubernetes admission deadline.
+    The 69-line test reproduced the failure in 37.01 seconds before a Node
+    change. One runtime update closed evidence readiness at 22:23:53.026 UTC.
+    No other runtime event arrived during the five-second CRI observation
+    wait. The wait failed. Cleanup then supplied a delete event, and Node
+    recovered at 22:23:58.052 UTC. The test requires recovery within four
+    seconds before it starts the second actor. No BPF map was changed.
+    The initial timer proposal was not applied. The user rejected periodic
+    reconciliation and approved evidence-progress continuation on 2026-09-29.
+    The evidence owner now retains progress notifications after local log
+    writes and durable gap changes. Node confirms each recovery checkpoint
+    with fresh kernel counters. A pending checkpoint keeps admission closed.
+    A progress notification resumes the check. Healthy batches do not scan
+    bindings. Only interrupted runtime work resumes after recovery. Evidence
+    recovery cannot restore unverified identity claims. BPF, Control, policy,
+    and admission deadlines do not change. The deterministic unit test covers
+    completion before and after waiting. All 255 Node unit tests and strict
+    Clippy passed. The unchanged focused Host test passed in 49.51 seconds.
+    Final identity lifecycle and paired Kubernetes verification are pending.
+    The final repository Rust CI procedure passed with
+    `RUST_TEST_THREADS=1` after the native event fixture and regression edits.
+    Formatting, workspace check, strict Clippy, and workspace tests passed.
+    The completion-order unit test and focused quiet-stream Host test passed
+    after the approved Node change. The final repository Rust CI gate passed
+    after the last Node edit. This result does not replace physical lifecycle
+    qualification.
+    A complete Host run with the diagnostic endpoint passed two tests and
+    failed 63 tests. Approval cleanup timed out because this endpoint forwards
+    container updates but not actor task-exit events. A later exact-selector
+    retirement failure left the actor directory in place and caused the
+    remaining failures. Do not use this diagnostic endpoint for a complete
+    lifecycle. The original Host configuration passed all 65 tests in
+    787.03 seconds. This run preceded the final combined-health guard. The
+    final quiet-stream Host test passed in 42.51 seconds after that guard.
+    The final repository Rust CI gate passed with all 255 Node tests.
+  - [ ] Pass the final direct-`runc` and Kubernetes identity lifecycles.
+    The first final direct-`runc` run stopped when libvirt paused its VM:
+    `vda: no space`. The host disk was full. After disk space became available,
+    the repository `target` directory was absent. Libvirt retained the open
+    disk through a native block copy to a new temporary path. K3s was retained.
+    The interrupted run passed 13 tests. Its remaining 46 tests failed because
+    the deleted OCI hook was missing. These failures do not qualify the code.
+    The production hook was restored from the verified Node image. Run with
+    new output paths. No assertion or timeout changed.
+    The final direct-`runc` identity lifecycle then passed all 59 tests in
+    670.16 seconds. The final Host identity lifecycle passed all 65 tests in
+    705.64 seconds. Both lifecycle cleanup operations completed. The paired
+    Kubernetes `stock_probes_are_entries` test passed in 84.28 seconds. Its
+    original readiness, role, identity, and zero-restart checks remain. The
+    complete Kubernetes identity lifecycle is running with the same source.
   - [ ] Remove only the matching startup, readiness, and liveness actions,
     result fields, and old fixture containers. Keep the native-child,
     kubectl-exec, and direct-CRI assertions until their exact replacements

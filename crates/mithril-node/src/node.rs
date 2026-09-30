@@ -297,6 +297,7 @@ impl NodeReadinessV1 {
 #[derive(Debug)]
 enum ReconciliationOutcome {
     Healthy,
+    EvidenceRecovered,
     EvidenceUnhealthy(String),
     IdentityUnhealthy { owner: &'static str, reason: String },
     KernelUnhealthy(String),
@@ -844,6 +845,9 @@ impl NodeChassis {
                 reason: error.to_string(),
             };
         }
+        if let Err(outcome) = self.check_evidence(recover_evidence) {
+            return outcome;
+        }
         let Some(host) = self.host.as_mut() else {
             return ReconciliationOutcome::KernelUnhealthy(
                 "the kernel host is not open".to_owned(),
@@ -851,29 +855,6 @@ impl NodeChassis {
         };
         let policy_authority_present =
             self.policy.is_some() || self.policy_delivery.inventory_retirement().is_some();
-        if let Err(error) = host.verify_live_manifest() {
-            let _result = self
-                .observations
-                .mark_coverage_gapped(CoverageGapReasonV1::KernelStateMismatch);
-            return ReconciliationOutcome::KernelUnhealthy(error.to_string());
-        }
-        if policy_authority_present {
-            if let Some(reason) = self.observations.evidence_failure_gap_reason() {
-                let _result = self.observations.mark_coverage_gapped(reason);
-                return ReconciliationOutcome::EvidenceUnhealthy(format!(
-                    "the evidence owner recorded {} durable errors",
-                    self.observations.evidence_errors()
-                ));
-            }
-        }
-        if policy_authority_present {
-            if let Err(error) =
-                sample_effect_health_without_reader_wait(host, &self.observations, recover_evidence)
-            {
-                // Coverage sampling records queue overflow, ring loss, and counter gaps itself.
-                return ReconciliationOutcome::EvidenceUnhealthy(error.to_string());
-            }
-        }
         if let Err(error) = self.identity.verify(host, policy_authority_present) {
             return ReconciliationOutcome::IdentityUnhealthy {
                 owner: "execution identity",
@@ -908,6 +889,38 @@ impl NodeChassis {
             };
         }
         ReconciliationOutcome::Healthy
+    }
+
+    fn check_evidence(&self, recover: bool) -> std::result::Result<(), ReconciliationOutcome> {
+        let Some(host) = self.host.as_ref() else {
+            return Err(ReconciliationOutcome::KernelUnhealthy(
+                "the kernel host is not open".to_owned(),
+            ));
+        };
+        if let Err(error) = host.verify_live_manifest() {
+            let _result = self
+                .observations
+                .mark_coverage_gapped(CoverageGapReasonV1::KernelStateMismatch);
+            return Err(ReconciliationOutcome::KernelUnhealthy(error.to_string()));
+        }
+        let policy_authority_present =
+            self.policy.is_some() || self.policy_delivery.inventory_retirement().is_some();
+        if policy_authority_present {
+            if let Some(reason) = self.observations.evidence_failure_gap_reason() {
+                let _result = self.observations.mark_coverage_gapped(reason);
+                return Err(ReconciliationOutcome::EvidenceUnhealthy(format!(
+                    "the evidence owner recorded {} durable errors",
+                    self.observations.evidence_errors()
+                )));
+            }
+        }
+        if policy_authority_present {
+            if let Err(error) = sample_ready_health(host, &self.observations, recover) {
+                // Coverage sampling records queue overflow, ring loss, and counter gaps itself.
+                return Err(ReconciliationOutcome::EvidenceUnhealthy(error.to_string()));
+            }
+        }
+        Ok(())
     }
 
     fn prepare_control_policy(
@@ -1123,7 +1136,8 @@ fn sample_effect_health(
 ) -> Result<()> {
     ensure_evidence_owner_healthy(observations)?;
     let bytes = effect_health_bytes(host)?;
-    sample_effect_health_bytes(observations, recover, &bytes)
+    let ready = sample_effect_health_bytes(observations, recover, &bytes)?;
+    confirm_effect_health(host, observations, recover, ready)
 }
 
 fn ensure_evidence_owner_healthy(observations: &crate::EffectObservationStore) -> Result<()> {
@@ -1148,7 +1162,7 @@ fn sample_effect_health_bytes(
     observations: &crate::EffectObservationStore,
     recover: bool,
     bytes: &[u8],
-) -> Result<()> {
+) -> Result<bool> {
     let coverage = observations.coverage_snapshot();
     if recover
         && coverage
@@ -1161,51 +1175,61 @@ fn sample_effect_health_bytes(
                 .coverage_snapshot()
                 .is_some_and(|snapshot| snapshot.supports_negative_claim())
         {
-            return Ok(());
+            return Ok(true);
         }
-        return EvidenceStateSnafu {
-            reason: "effect observation recovery probe is not yet durable".to_owned(),
-        }
-        .fail();
+        return Ok(false);
     }
     observations.sample_coverage_health(bytes)?;
-    if !observations
+    Ok(observations
         .coverage_snapshot()
-        .is_some_and(|snapshot| snapshot.supports_negative_claim())
-    {
-        return EvidenceStateSnafu {
-            reason: if recover {
-                "effect observation recovery probe is not yet durable".to_owned()
-            } else {
-                "effect observation coverage cannot support a negative claim".to_owned()
-            },
-        }
-        .fail();
-    }
-    Ok(())
+        .is_some_and(|snapshot| snapshot.supports_negative_claim()))
 }
 
-fn sample_effect_health_without_reader_wait(
+fn confirm_effect_health(
+    host: &KernelHost,
+    observations: &crate::EffectObservationStore,
+    recover: bool,
+    ready: bool,
+) -> Result<()> {
+    if ready {
+        return Ok(());
+    }
+    // Confirm the checkpoint with fresh counters. Records can already be durable.
+    if recover && sample_effect_health_bytes(observations, true, &effect_health_bytes(host)?)? {
+        return Ok(());
+    }
+    EvidenceStateSnafu {
+        reason: "effect observation recovery probe is not yet durable".to_owned(),
+    }
+    .fail()
+}
+
+fn sample_ready_health(
     host: &KernelHost,
     observations: &crate::EffectObservationStore,
     recover: bool,
 ) -> Result<()> {
     ensure_evidence_owner_healthy(observations)?;
     let probe = effect_health_bytes(host)?;
-    sample_effect_health_bytes_without_reader_wait(observations, recover, &probe)
+    let ready = sample_ready_bytes(observations, recover, &probe)?;
+    confirm_effect_health(host, observations, recover, ready)
 }
 
-fn sample_effect_health_bytes_without_reader_wait(
+fn sample_ready_bytes(
     observations: &crate::EffectObservationStore,
     recover: bool,
     probe: &[u8],
-) -> Result<()> {
-    if observations.transient_coverage_reader_delivery_pending(probe)? {
+) -> Result<bool> {
+    let coverage = observations.coverage_snapshot();
+    if coverage.is_none_or(|snapshot| {
+        snapshot.current_intervals().is_empty() || snapshot.supports_negative_claim()
+    }) && observations.transient_coverage_reader_delivery_pending(probe)?
+    {
         erebor_telemetry::debug!(
             "deferred evidence health sampling while producer or reader delivery completes",
             pending_records = %observations.reader_queue_pending_records()
         );
-        return Ok(());
+        return Ok(true);
     }
     sample_effect_health_bytes(observations, recover, probe)
 }
@@ -1526,8 +1550,7 @@ mod tests {
 
     use super::{
         close_identity_claims, close_kernel_claims, restore_evidence_claims,
-        restore_identity_claims, sample_effect_health_bytes_without_reader_wait, NodeChassis,
-        NodeReadinessV1,
+        restore_identity_claims, sample_ready_bytes, NodeChassis, NodeReadinessV1,
     };
     use erebor_interceptor_abi::{EffectObservationHealthV1, EffectObservationV1, Id128V1};
     use erebor_runtime_ipc::v1::RuntimeAdmissionPrepareRequest;
@@ -1568,7 +1591,7 @@ mod tests {
             ..EffectObservationHealthV1::default()
         };
 
-        sample_effect_health_bytes_without_reader_wait(&store, true, producer_ahead.as_bytes())?;
+        sample_ready_bytes(&store, true, producer_ahead.as_bytes())?;
 
         assert_eq!(store.coverage_snapshot(), before);
         assert_eq!(store.health(None).reader_queue_dropped_events, 0);
@@ -1603,8 +1626,8 @@ mod tests {
             ..EffectObservationHealthV1::default()
         };
 
-        sample_effect_health_bytes_without_reader_wait(&store, true, attempted_only.as_bytes())?;
-        sample_effect_health_bytes_without_reader_wait(&store, true, in_progress.as_bytes())?;
+        sample_ready_bytes(&store, true, attempted_only.as_bytes())?;
+        sample_ready_bytes(&store, true, in_progress.as_bytes())?;
         assert_eq!(store.coverage_snapshot(), before);
 
         store.record_bytes(
@@ -1623,10 +1646,7 @@ mod tests {
             next_sequence: 1,
             ..EffectObservationHealthV1::default()
         };
-        assert!(
-            sample_effect_health_bytes_without_reader_wait(&store, true, completed.as_bytes())
-                .is_err()
-        );
+        assert!(!sample_ready_bytes(&store, true, completed.as_bytes())?);
         let gapped = store
             .coverage_snapshot()
             .ok_or("coverage snapshot missing")?;
@@ -1637,7 +1657,7 @@ mod tests {
             .gap_reasons
             .contains(&crate::CoverageGapReasonV1::CounterRegression));
 
-        sample_effect_health_bytes_without_reader_wait(&store, true, completed.as_bytes())?;
+        assert!(sample_ready_bytes(&store, true, completed.as_bytes())?);
         assert!(store
             .coverage_snapshot()
             .is_some_and(|snapshot| snapshot.supports_negative_claim()));
@@ -1668,7 +1688,7 @@ mod tests {
             ..EffectObservationHealthV1::default()
         };
 
-        sample_effect_health_bytes_without_reader_wait(&store, true, producer_ahead.as_bytes())?;
+        sample_ready_bytes(&store, true, producer_ahead.as_bytes())?;
 
         assert_eq!(store.coverage_snapshot(), before);
         assert_eq!(store.health(None).reader_queue_dropped_events, 0);
