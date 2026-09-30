@@ -4934,8 +4934,39 @@ setup, production actions, assertions, and focused test.
     in 1593.46 seconds. `stock_probes_are_entries` passed again in that run.
     The approved recovery fix and its 69-line regression test were committed
     as `1d9d3792`. Do not mark the complete Kubernetes gate as passed.
-  - [ ] Reproduce the separate signed-target convergence condition in
+  - [x] Reproduce the separate signed-target convergence condition in
     lightweight before another production change or Kubernetes run.
+    - The user approved this reproduction on 2026-09-30. Add
+      `signed_target_delay_is_closed` beside the shared admission fixture.
+      Use the socket-stale policy and valid facts for its first worker Pod.
+      Keep Control's workload inventory empty until the four-second Stage
+      deadline expires. Require Node to reject an invalid Stage request while
+      the valid request waits. The gRPC Health method alone does not prove
+      that the Node event loop answers requests.
+      Then supply the matching target through the existing fixture and
+      require the unchanged request to succeed. Do not change production
+      code or the socket-stale scenario. This test proves the missing-target
+      condition, not the cause of the delayed Kubernetes inventory.
+      The final 99-line test passed in 43.33 seconds in the retained VM.
+      Its readiness check uses the existing diagnostic wait helper. The
+      preceding 98-line version passed in 47.94 seconds.
+      Node returned pending responses during the four-second request and
+      rejected the invalid request halfway through that interval. The
+      production client failed closed. The unchanged valid request succeeded
+      after signed target delivery. Before delivery, no scheduled or runtime
+      binding existed. After Stage succeeded, one scheduled binding existed
+      and no runtime binding existed. Stage did not start an actor. The
+      original socket-stale scenario remains unchanged.
+      The final repository Rust CI procedure passed after the last Rust edit.
+      Formatting, workspace check, strict Clippy, and workspace tests passed.
+      All 255 Node library tests passed. Debug symbols were disabled for this
+      build to limit disk use after the earlier Cargo cache loss. No complete
+      physical platform lifecycle or Kubernetes test was rerun for this
+      test-only change.
+      The first run reproduced the same condition in 31.05 seconds but failed
+      its timeout-text assertion. Tonic returned `Cancelled: Timeout expired`
+      before the outer client timer. The final assertion accepts both timeout
+      forms. The four-second deadline did not change.
     - The socket-stale test installed its policy, confirmed Node readiness,
       and created its first worker Pod. It did not reach the peer-exit action.
     - From 00:50:03.616 to 00:50:07.606 UTC on 2026-09-30, Node answered
@@ -4955,6 +4986,9 @@ setup, production actions, assertions, and focused test.
       Do not accept a container restart or replace the socket-stale action.
       Keep the pending Ephemeral platform changes uncommitted until the
       complete Kubernetes identity gate passes.
+  - [ ] Find why Control did not publish the matching scheduled target for
+    the failed Kubernetes Pod. The lightweight test proves the absence
+    condition, not its cause. No further production change is approved.
   - [ ] Remove only the matching startup, readiness, and liveness actions,
     result fields, and old fixture containers. Keep the native-child,
     kubectl-exec, and direct-CRI assertions until their exact replacements

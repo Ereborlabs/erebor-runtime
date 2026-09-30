@@ -224,6 +224,25 @@ is not yet known. The complete Kubernetes gate has not passed. Reproduce this
 condition in lightweight before another production change or Kubernetes run.
 BPF, production policy, assertions, and admission timeouts remain unchanged.
 
+## Signed Target Delay Reproduction
+
+Run `platform::shared::admission::signed_target_delay_is_closed` by its full
+name with the Host VM environment shown above. Use
+`--exact --ignored --nocapture --test-threads=1`. Unset
+`MITHRIL_TEST_EVENT_SOCKET`. This case does not need the private containerd
+event service. Use new output, pin, lease, and cgroup paths for each run.
+
+The test uses the socket-stale policy and valid facts for its first worker.
+Control has no workload target during the four-second staging deadline.
+Node must answer a separate invalid Stage request during that wait. The valid
+request must time out with no active target or runtime binding. The existing
+fixture then supplies the matching workload target. The unchanged request
+must succeed through signed production policy delivery and gRPC admission.
+This case does not identify why the real Kubernetes target was absent.
+The socket-stale actor scenario and all its security assertions remain.
+The 99-line reproduction passed in the retained VM in 43.33 seconds.
+Its output, pin root, lease, and cgroup were removed after the run.
+
 ## Required Order And Result Contract
 
 Run the lightweight case before its physical Kubernetes case. Both cases must

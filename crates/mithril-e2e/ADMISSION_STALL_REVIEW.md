@@ -284,3 +284,77 @@ passed after the last Rust edit. It includes formatting, workspace checks,
 clippy with warnings denied, and workspace tests. The partition reconnect
 test passed in this run. Kubernetes qualification was not rerun for this
 preparation refactor.
+
+## Signed target delay review
+
+The intended result is a fail-closed Stage timeout when the matching signed
+target is absent. Node must continue to process other admission requests.
+This condition differs from the blocked CRI request and quiet evidence
+stream. The test does not identify the cause of the Kubernetes inventory
+delay.
+
+[signed_target_delay_is_closed](src/platform/shared/admission.rs) installs the socket-stale policy before any workload target is supplied.
+  -> [Shared::install_policy](src/platform/shared.rs) calls production policy reconciliation with an empty workload inventory.
+  -> [Shared::start_node](src/platform/shared.rs) starts the production Node and admission service.
+  -> [RuntimeAdmissionClient::stage_runtime_facts](../mithril-node/src/runtime_admission.rs) sends valid worker facts with a four-second deadline.
+  -> [NodeChassis::answer_runtime_stage](../mithril-node/src/node.rs) returns `POLICY_CONVERGENCE_PENDING` because no signed target matches.
+  -> [RuntimeAdmissionServer::dispatch](../mithril-node/src/runtime_admission.rs) retains the request and repeats the pending check until the deadline.
+
+[signed_target_delay_is_closed](src/platform/shared/admission.rs) sends an invalid cgroup path halfway through the pending request.
+  -> [NodeChassis::answer_runtime_stage](../mithril-node/src/node.rs) rejects the invalid request with `RUNTIME_ADMISSION_REJECTED`.
+  -> [RuntimeAdmissionClient](../mithril-node/src/runtime_admission.rs) returns the valid request's fail-closed timeout.
+  -> [signed_target_delay_is_closed](src/platform/shared/admission.rs) requires zero active targets and zero scheduled and runtime bindings.
+
+[Shared::sync_policy](src/platform/shared.rs) supplies the external workload target through the existing production Control APIs.
+  -> [NodeChassis::activate_control_policy](../mithril-node/src/node.rs) installs the signed policy and scheduled target through normal Control synchronization.
+  -> [signed_target_delay_is_closed](src/platform/shared/admission.rs) verifies that the original request equals the fixture's matched request.
+  -> [RuntimeAdmissionClient](../mithril-node/src/runtime_admission.rs) stages the unchanged request and confirms its receipt.
+  -> [Shared::stop](src/platform/shared.rs) retires the target and cleans up per-test resources.
+
+```mermaid
+sequenceDiagram
+    participant T as Rust test and client
+    participant C as Control
+    participant N as Node and gRPC server
+    T->>N: Valid Stage request, four-second deadline
+    N->>N: No signed target; keep request pending
+    T->>N: Invalid Stage request at two seconds
+    N-->>T: RUNTIME_ADMISSION_REJECTED
+    T->>T: Valid request times out
+    T->>C: Supply matching workload target
+    C->>N: Deliver signed candidate
+    T->>N: Same valid Stage request
+    N-->>T: Allowed, receipt confirmed
+```
+
+`Shared` owns Control, Node, signing inputs, actor resources, and cleanup.
+The test supplies only external workload facts. It does not publish a runtime
+binding or activate an actor itself. Stage does not start the Python actor.
+The existing `exited_peer_loses_authority` scenario remains unchanged.
+No production API, protocol, policy, BPF program, or deadline changes.
+
+This section covers the reproduction working tree after `36cfe7e4`.
+The final 99-line Host test passed in 43.33 seconds in the retained VM.
+The preceding 98-line version passed in 47.94 seconds. The final readiness
+check uses the existing bounded wait helper and reports the resource path,
+operation, and last readiness state on failure.
+Node returned pending responses for the valid request and rejected the
+invalid request halfway through the deadline. Target delivery then allowed
+the unchanged request. Per-test and lifecycle cleanup completed. The first
+run failed only its timeout-text assertion: tonic returned
+`Cancelled: Timeout expired` instead of the outer client timeout text.
+Both responses fail closed at the same four-second deadline. The final test
+accepts both timeout forms.
+
+The final repository Rust CI procedure passed after the last Rust edit:
+
+```sh
+env CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_BUILD_JOBS=4 \
+  RUST_TEST_THREADS=1 bash .github/scripts/verify-rust-ci.sh
+```
+
+Formatting, workspace check, strict Clippy, and workspace tests passed.
+All 255 Node library tests passed. The ignored physical case ran separately
+in the retained VM. Kubernetes and the complete physical platform matrix
+were not rerun. This result does not prove the cause of the missing Control
+target.

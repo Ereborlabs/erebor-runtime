@@ -60,6 +60,9 @@ const NODE_UID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const NODE_ID: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const POLICY_UID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
+#[cfg(test)]
+mod admission;
+
 struct ActorFiles {
     work: ProbeDirectory,
     cgroup: ProbeCgroup,
