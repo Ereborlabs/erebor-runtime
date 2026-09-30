@@ -818,6 +818,45 @@ case compiled but did not run because it requires its physical test
 environment. No physical or ignored release case ran. The physical records
 below cover only their named source revisions, not the rebased Node changes.
 
+#### Owner review corrections
+
+**Done, PASS**, 2026-09-30, source `c961a0ba`. The implementation is in
+`2364df09`. The later commit changes the test assertion to meet the existing
+Clippy rule. All five accepted review changes are implemented:
+
+- Control context projection keeps its cursor after a data commit failure.
+  Encoding errors still permit later facts to proceed.
+- The segment owner stores record bounds only. Unused Coverage variants,
+  inner quota policies, and duplicate quota counters are removed.
+- Retention reads the validated AnalysisStore limits. It accepts no second
+  limits value. Tests configure limits when the store opens.
+- Source, authenticated Node, and coverage types validate their own fields.
+  Stateless counter checks and error adapters remain helpers.
+- The 12 renamed functions have at most four name parts. Stable stored and
+  protocol fields do not change.
+
+The segment format, CRC32C checks, file bounds, sync, recovery, and actual
+admission quotas do not change. The Rust changes remove 269 lines overall.
+`control_context_retries_write` proves that repeated quota failures keep
+the same trust cursor and commit no context version.
+`control_context_bounded_replay` proves that an encoding error does not
+block the next valid fact.
+
+The focused `analysis::` and `control_context` runs passed at `2364df09`.
+The final workspace command above passed formatting, workspace check,
+strict Clippy, and all enabled workspace tests at `c961a0ba`. Library totals
+are 81 data-owner tests, 176 Control tests, 123 Mithril e2e tests, and
+266 Node tests, with zero failures.
+Read `analysis-tests.log`, `context-tests.log`, and `workspace-final.log`
+in `/tmp/araphor-owner-review.P8yl3s2L`.
+The first workspace attempt stopped at the test-only `expect_err` lint.
+That attempt is not a pass; its log is `workspace-gate.log`.
+
+No performance or physical Kubernetes case ran for this review. The approved
+1-GiB result and earlier physical results retain their named source scope.
+These checks do not qualify default-quota memory, the original latency target,
+or later phases.
+
 **Harness regressions: Done, PASS**, at source `f9c6901e`. `harness/vm/test.sh`
 passed its VM behavior checks. `inspect-data-test.sh` passed as root in a
 disposable container. It checked selected-directory access as user 65532,
