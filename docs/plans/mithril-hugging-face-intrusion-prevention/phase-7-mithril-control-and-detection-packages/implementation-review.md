@@ -33,10 +33,14 @@ declarative captures are not delivered by these changes.
 The accepted owner changes remove unused segment modes and duplicate limits.
 The segment format, authenticated intake, quota authority, and deletion
 protocol do not change. These edits are based on `c1971c0d`.
+The implementation is committed in `2364df09`. The test assertion correction
+is committed in `c961a0ba`.
 The 81 enabled data-owner tests and both context tests passed.
-The final workspace gate is **Not done**.
+The final workspace gate is **Done, PASS** at `c961a0ba`. Read the
+[owner review result](phase-7-2-data-store.md#owner-review-corrections)
+for commands, logs, and proof limits.
 
-[EvidenceIntakeOwner::validate_batch](../../../../crates/mithril-control/src/evidence.rs) Control receives an authenticated batch.<br>
+[EvidenceIntakeOwner::receive_group](../../../../crates/mithril-control/src/evidence.rs) Control receives an authenticated batch.<br>
 -> [AuthenticatedEvidenceNodeV1::validate](../../../../crates/mithril-control/src/evidence.rs) The identity type checks its fields before data intake.<br>
 -> [AnalysisStore::commit_evidence](../../../../crates/araphor-data/src/analysis/raw.rs) The data owner checks its admission totals and limits.<br>
 -> [EvidenceSegmentOwner::write_frames](../../../../crates/araphor-data/src/analysis/raw_segments.rs) The segment owner appends bounded record frames and syncs them.
@@ -64,8 +68,8 @@ same trust cursor and commit no context version.
 the next valid fact. The existing segment, quota, retention, crash, extraction,
 and mTLS cases check the unchanged storage contracts.
 The renamed functions contain at most four name parts. Stable stored and
-protocol field names do not change. No performance or physical case is part
-of this review check.
+protocol field names do not change. No ignored release case or physical
+Kubernetes case is part of this check.
 
 ### Node owners after rebase
 
@@ -2353,9 +2357,16 @@ for exact measurements and limits. No new performance test was added.
 
 ## Current storage verification
 
-The rebased workspace gate passed at `5be548bd`. The two-node
-storage/outage case passed at `dc252f07`. Raw data-owner source is unchanged
-since that result. The physical result does not qualify the rebased Node changes.
+The owner review changes are in `2364df09` and `c961a0ba`.
+The final workspace gate passed at `c961a0ba`: formatting, workspace check,
+strict Clippy, and all enabled workspace tests. Data passed 81 tests; Control
+passed 176; Mithril e2e passed 123; Node passed 266. No test failed.
+Read `workspace-final.log` in `/tmp/araphor-owner-review.P8yl3s2L` and the
+[owner review result](phase-7-2-data-store.md#owner-review-corrections).
+The segment format does not change. No ignored release case or physical
+Kubernetes case ran for this review.
+The two-node storage/outage case passed at `dc252f07`. That physical result
+covers its named source, not the rebased Node or later data-owner changes.
 The actual disk-full case and all eight accepted review items complete the
 user-approved 7.2 scope. Read the
 [closure record](phase-7-2-data-store.md#final-storage-qualification) for proof.
