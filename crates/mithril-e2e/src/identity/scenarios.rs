@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod binding_gap;
 #[cfg(test)]
+mod cache_rebuild;
+#[cfg(test)]
 mod cgroup_fork;
 #[cfg(test)]
 mod cgroup_reuse;

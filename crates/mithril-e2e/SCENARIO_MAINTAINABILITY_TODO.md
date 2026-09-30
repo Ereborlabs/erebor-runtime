@@ -4400,6 +4400,31 @@ setup, production actions, assertions, and focused test.
       were denied; that behavior remains for its own migration.
 - [ ] Stale cache repair and unreachable-row retirement: keep the production
   node reconciliation calls and exact map absence checks visible.
+  - [ ] Replace only stale-cache rebuild with a small standard platform test.
+    Reuse `read_path.py` and `mount_alias_policy.json`. Start Control and Node,
+    install the signed policy, and admit the actor normally. Require a denied
+    recursive-tree control read and a READY cache. Decrease the ready row's
+    mount count, as the old test does. Repeat the read. Require `EACCES`, fresh
+    attributed `PATH_TREE_POLICY_DENY`, no unresolved result, a newer cache
+    generation and new READY keys, and the same mutation epoch, mount namespace,
+    and mountinfo. Use installed Linux and libbpf bindings. Use checked typed
+    cache layouts, not literal byte offsets. Add no Platform or production API.
+    - [x] Verify shared map tooling, then pass and commit Host. The 86-line
+      standard test passed in 28.17 seconds. It uses the existing Python
+      actor, signed policy, and `mount_late` lifecycle. The map fixture owns
+      a libbpf handle, checks the loaded map sizes, and uses typed native-endian
+      layouts from the named C structures. The test retained both actual
+      `EACCES` results, fresh attributed denial, no unresolved event, new READY
+      keys and generation, and unchanged namespace, mountinfo, and epoch.
+      Pin, lease, and cgroup cleanup passed. No production or Platform API
+      changed. See [CACHE_REBUILD_REVIEW.md](CACHE_REBUILD_REVIEW.md).
+      The repository Rust CI procedure passed after the final Rust edit.
+    - [ ] Pass and commit the same test on direct `runc`.
+    - [ ] Pass and commit the same test on Kubernetes after lightweight.
+    - [ ] Remove only the old rebuild assertion, result flag, and launcher
+      gates after all three pass. Keep the old corruption/read setup and both
+      obsolete-row checks until production collection has a verified shared
+      replacement. Do not replace collection with another rebuild assertion.
 - [x] Independent additional entries: keep each declaration, stock exec,
   role, rule, process state, and isolation assertion.
   - [x] Retire only the old overlapping PostStart and StartupProbe role

@@ -207,6 +207,16 @@ lowering checks. The retirement deletes 57 Rust lines.
 Nine focused child regressions and the final repository Rust CI procedure
 passed after retirement. No production or Platform API changed.
 
+The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
+denied actor read after it decreases a READY cache row's mount count. It
+requires a newer READY generation, fresh attributed path-tree denial, and
+unchanged mount topology. It reuses `read_path.py`, the signed mount policy,
+and the `mount_late` lifecycle. Run
+`identity::scenarios::cache_rebuild::stale_cache_keeps_deny::mount_late_host`
+with the exact-test flags below. See the
+[source review](CACHE_REBUILD_REVIEW.md) for the fault input and map lifetime.
+Old-row collection remains in the legacy probe until a separate test passes.
+
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path
 result flags for a shell gate. The 41-line
