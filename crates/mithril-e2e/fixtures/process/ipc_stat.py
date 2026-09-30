@@ -48,6 +48,8 @@ class Segment:
         self.libc.shmat.restype = ctypes.c_void_p
         self.libc.shmctl.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.POINTER(SegmentInfo)]
         self.libc.shmdt.argtypes = [ctypes.c_void_p]
+        self.libc.prctl.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong,
+                                   ctypes.c_ulong, ctypes.c_ulong]
         self.id = self.libc.shmget(IPC_PRIVATE, os.sysconf("SC_PAGESIZE"), 0o600)
         if self.id < 0:
             raise OSError(ctypes.get_errno(), "shmget(IPC_PRIVATE)")
@@ -71,6 +73,11 @@ class Segment:
         if self.libc.shmdt(self.address) != 0:
             raise OSError(ctypes.get_errno(), "shmdt")
 
+    def name(self, value):
+        name = ctypes.create_string_buffer(value.encode("ascii"))
+        if self.libc.prctl(PR_SET_NAME, name, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
+
 
 segment = Segment()
 try:
@@ -78,12 +85,11 @@ try:
     if sys.stdin.readline() != "stat\n":
         raise RuntimeError("expected stat")
     result = segment.stat()
-    name = ctypes.create_string_buffer(f"ipc-{result}".encode("ascii"))
-    segment.libc.prctl.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong,
-                                  ctypes.c_ulong, ctypes.c_ulong]
-    if segment.libc.prctl(PR_SET_NAME, name, 0, 0, 0) != 0:
-        raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
+    segment.name(f"ipc-{result}")
     while not os.path.exists(os.path.join(sys.argv[1], "release")):
         time.sleep(0.01)
 finally:
     segment.close()
+segment.name("ipc-clean")
+while not os.path.exists(os.path.join(sys.argv[1], "finish")):
+    time.sleep(0.01)

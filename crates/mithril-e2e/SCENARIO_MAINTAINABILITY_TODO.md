@@ -2725,7 +2725,21 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Protect direct `runc` passed in 28.50 seconds with the same actor,
       test body, and assertions. The repository Rust CI gate passed. No
       runtime fixture or production code changed.
-    - [ ] Pass Protect on Kubernetes and commit it.
+    - [x] Protect Kubernetes passed in 69.70 seconds. The same 70-line test
+      and shared actor check the role, physical denial, attributed evidence,
+      successful segment detach, and actor exit through real Control, Node,
+      CRD, and Kubernetes exec operations. The repository Rust CI gate passed.
+      The first Kubernetes draft passed the role, syscall, and attributed
+      denial checks. It failed its cleanup status assertion. An actor that
+      starts before Node can survive a runtime restart while its exec
+      transport exits with a failure status. The existing lightweight
+      `process::tests::transport_waits_for_actor` reproduced actor status 0
+      and transport status 1 in 0.03 seconds. The replacement now requires
+      the actor to detach the segment and report `ipc-clean`, then exit and
+      disappear. The final 70-line test passed Host in 28.01 seconds and
+      direct `runc` in 35.04 seconds. Their pin, lease, and cgroup cleanup
+      checks passed. The repository Rust CI gate passed before the paired
+      Kubernetes run. No security assertion or production code changed.
     - [ ] Preserve the same legacy check under Observe mode on all three
       platforms before deleting the old action, result, and prepared segment.
     - Host draft failed: after placement in the active cgroup,

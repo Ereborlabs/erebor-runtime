@@ -6,7 +6,7 @@ use mithril_control::WorkloadProtectionPolicy as Policy;
 use crate::effect::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = ipc_recovery]
 fn ipc_stat_is_closed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("ipc-stat")?;
@@ -56,9 +56,14 @@ fn ipc_stat_is_closed<P: Platform>() -> TestResult<()> {
     assert_eq!(denied.composite_atom_id, 0);
 
     fs::write(env.work().join("release"), b"release\n")?;
-    assert!(actor
-        .wait_exit("SysV actor cleanup", Duration::from_secs(5))?
-        .success());
+    actor.wait_name(
+        actor.id(),
+        "ipc-clean",
+        "SysV segment detach",
+        Duration::from_secs(5),
+    )?;
+    fs::write(env.work().join("finish"), b"finish\n")?;
+    actor.wait_gone(actor.id(), "SysV actor exit")?;
     actor.stop()?;
     init.stop()?;
     env.stop()
