@@ -99,7 +99,7 @@ The SysV shared-memory test passes on Host, direct `runc`, and Kubernetes. Run
 `identity::scenarios::ipc_stat::ipc_stat_is_closed::ipc_recovery_host` with the
 Host environment and exact-test flags below. Its intended result is a physical
 permission denial for a recovered restricted actor in Protect and Observe
-modes on all three platforms. Only Protect is qualified at this source state.
+modes on all three platforms. Both modes are qualified at this source state.
 Use `ipc_recovery_runc` or `ipc_recovery_kubernetes` for the other platforms.
 
 [ipc_stat_is_closed](src/identity/scenarios/ipc_stat.rs) starts Control and holds both actors before Node.
@@ -126,7 +126,11 @@ seconds and direct `runc` passed in 32.32 seconds. Run
 by the full generated name. The test checks external role ID 1 and recovered class
 `fail_closed_unknown`. A policy role ID does not imply a witnessed runtime
 entry. The recovered class keeps that identity limit. Observe Kubernetes
-remains unqualified.
+passed in 78.84 seconds. Use the `ipc_observe_kubernetes` generated suffix.
+The final Rust CI gate passed. Its first command failed because an unchanged
+Control log test did not find its record. That test passed in isolation, then
+the unchanged full gate passed. The cause of that log-test failure is not
+established.
 
 For example, the old direct-`runc` PreStop probe restarted its own kernel host,
 started `/bin/dd`, scanned the admission map, and returned two literal-path

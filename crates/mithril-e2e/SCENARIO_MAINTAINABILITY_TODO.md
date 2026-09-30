@@ -2740,7 +2740,7 @@ test does not close a row when its physical condition or an assertion changed.
       direct `runc` in 35.04 seconds. Their pin, lease, and cgroup cleanup
       checks passed. The repository Rust CI gate passed before the paired
       Kubernetes run. No security assertion or production code changed.
-    - [ ] Preserve the same legacy check under Observe mode on all three
+    - [x] Preserve the same legacy check under Observe mode on all three
       platforms before deleting the old action, result, and prepared segment.
       Reuse `ipc_stat.py`, the existing `memory_observe.json` policy, and the
       actor-before-Node recovery order. Keep physical `EACCES`, fresh IPC/Access
@@ -2760,7 +2760,17 @@ test does not close a row when its physical condition or an assertion changed.
       - [x] Observe direct `runc` passed in 32.32 seconds with the same
         75-line test, shared actor, policy, and assertions. The repository
         Rust CI gate passed. No Platform or production code changed.
-      - [ ] Pass Observe on Kubernetes and commit it.
+      - [x] Observe Kubernetes passed in 78.84 seconds and its final Rust gate
+        passed. Namespace, pin, and lease cleanup checks passed.
+        The focused physical case passed in 78.84 seconds with the same actor,
+        policy, role, class, denial, attribution, and cleanup assertions. The
+        first final CI command failed in the unchanged Control test
+        `node_session_transitions_emit_owned_logs`: its log record was absent.
+        Do not claim the final gate passed or change production logging for
+        this migration. The unchanged focused Control test passed in 0.01
+        seconds. The full Rust CI procedure then passed without a source
+        change. The cause of the missing log is not established. No legacy
+        SysV code has been removed yet.
       - [ ] Remove only the matching SysV legacy operation, segment resources,
         result flag, and shell gate after both modes pass on all platforms.
     - Host draft failed: after placement in the active cgroup,
