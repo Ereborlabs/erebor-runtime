@@ -758,6 +758,43 @@ ARAPHOR_STORE_BENCH_MODE=segments ARAPHOR_STORE_BENCH_BATCHES=64 timeout 30s /us
 ARAPHOR_STORE_BENCH_MODE=analysis ARAPHOR_STORE_BENCH_BATCHES=64 timeout 30s /usr/bin/time -v -o /tmp/araphor-resume.HoOzQx/08-current-1-resources.log /tmp/araphor-layout-compare.V8YpTOUa/current-control store::raw_bench::raw_event_store_comparison --exact --ignored --nocapture --test-threads=1
 ```
 
+### Final storage qualification
+
+The user requires the disk-full case and the two-node storage and outage case
+for closure. The user removed the 8-GiB case from this closure. Do not run that
+case or claim that capacity is qualified. The eight ordered review items above
+are accepted. The current workspace gate and the two-node case are **Not done**.
+
+**Disk-full: Done, PASS**, 2026-09-29, source `52b21139`. The existing
+`disk-full.sh` harness ran the current release test executable. Each case
+passed one test with zero failures:
+
+- `data_capacity_retry`: 0.91 seconds.
+- `data_capacity_recovery`: 0.47 seconds.
+- `data_full_disk`: 1.17 seconds.
+
+The full-disk case used a private 1-GiB tmpfs mount. It allocated 1,064,792,064
+padding bytes and reached zero available bytes. Rejected intake did not advance
+the accepted revision or receipt, and Node kept its pending input. Accepted
+records remained readable. Policy RPCs remained available. The complete-bundle
+copy was rejected when its reserve was unavailable. After the harness released
+the padding, retry, duplicate replay, reopen, and complete-bundle restore passed.
+The final revision was 3, the contiguous cursor was 2, and two records remained.
+This is synthetic mTLS proof through production owners, not kernel evidence.
+
+The host did not permit a user mount namespace. The harness therefore ran in
+an isolated disposable container with a read-only source mount. Its first run
+used overlayfs for the ordinary cases; the store permits ext4 or tmpfs, so that
+setup failed before the disk-full case. The successful run set `TMPDIR` to the
+test-owned ext4 directory. No source, assertion, or quota changed. The full-disk
+mount remained tmpfs. The container was removed after the run.
+
+Read `disk-full-ext4.log` and `disk-full-ext4-container.log` in
+`/tmp/araphor-close.D8LyQB`. The executable SHA-256 is
+`c3b89c3daac8fb865aa323b60edfa60bab64a80841f960d197ac81755e04bd3a`.
+The host used Linux `6.8.0-139-generic`, x86_64. Earlier setup logs in the same
+directory do not establish a product failure or a pass.
+
 ### Ordered review: item 1
 
 **Done: PASS**, 2026-09-28. The current-source release case
