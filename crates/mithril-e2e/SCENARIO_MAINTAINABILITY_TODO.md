@@ -1187,7 +1187,17 @@ shutdown, and shutdown diagnostics. Each test must continue to call
 `NodeControlConnector`, `ControlPlane`, policy transfer, evidence upload,
 acknowledgement, or decommission operations directly.
 
-- [ ] `mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce`
+- [x] Replace `mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce`
+  with `registration_renews_nonce` in `control_tls/registration.rs`. The
+  38-line file uses the existing `MtlsFixture`. Both connector calls and all
+  four baseline assertions remain explicit. The connector awaits registration
+  and durable trust acknowledgement before returning, so the extra poll and
+  its `Cell` are removed. The replacement passed in 0.04 seconds before the
+  old function was removed. The Control/TLS family passed 19 tests in 25.44
+  seconds; two existing release-budget tests remain ignored. The final Rust
+  CI procedure passed after the last source edit. `control_tls.rs` decreases
+  from 2,416 to 2,366 lines. No fixture, Platform, or production code changed.
+  No physical platform matrix was rerun for this protocol-only change.
 - [ ] `mtls_connection_renews_the_ready_session_while_its_owner_is_idle`
 - [ ] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
 - [x] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`: use `MtlsFixture` for certificate, Control, server, and connector setup. Keep the signed artifact, Node acceptance, quarantine, completion, and ready-session checks in the test. The test is 96 lines. Its focused run and the full Rust CI procedure passed.

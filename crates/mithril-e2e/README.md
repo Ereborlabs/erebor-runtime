@@ -307,6 +307,49 @@ verification-script edit, run the repository CI check:
 bash .github/scripts/verify-rust-ci.sh
 ```
 
+## In-Process Control And TLS Scenarios
+
+### Intended result
+
+A registered Node reconnects with a fresh nonce. Both registrations remain in
+Control. Control acknowledges the complete trust generation. Each test calls
+the production connector and checks production state without an actor or VM.
+These protocol tests support physical qualification; they do not replace it.
+
+### Source review
+
+[MtlsFixture](src/control_fixture.rs) creates certificates, durable Control state, and a ready server.
+  -> [registration_renews_nonce](src/control_tls/registration.rs) calls the production connector twice and drops the first connection before the second call.
+  -> [NodeControlConnector::connect](../mithril-node/src/control.rs) awaits registration, installs trust, and awaits the trust acknowledgement.
+  -> [ControlPlane](../mithril-control/src/service.rs) registers the nonce and calls the trust owner before returning each RPC response.
+  -> [TrustBundleOwner::acknowledge](../mithril-control/src/trust.rs) persists the acknowledgement before returning success.
+  -> [registration_renews_nonce](src/control_tls/registration.rs) checks the fresh nonce, two registrations, and complete acknowledged trust generation.
+  -> [ControlServerFixture::shutdown](src/control_fixture.rs) stops and joins the server before the fixture removes its temporary files.
+
+The fixture owns certificates and temporary files. The server fixture owns
+the shutdown sender and server task. The test owns the connector, connections,
+and trust cache. A dropped server fixture sends shutdown as a fallback. Normal
+cleanup awaits shutdown and reports server errors. No production operation is
+reproduced in a test helper. This flow has no BPF or kernel ABI changes.
+
+At baseline `95775f48`, the test creates certificates and Control state in its
+body, then polls after reconnect. The replacement uses the existing fixture
+and checks the completed RPC results directly. All four baseline assertions
+remain in the 38-line test file. To add another protocol case, reuse this
+fixture and keep production requests and security assertions in the test.
+
+Run the focused case, then its protocol regressions:
+
+```bash
+cargo test -p mithril-e2e --lib \
+  control_tls::registration::registration_renews_nonce -- --exact
+cargo test -p mithril-e2e --lib control_tls::
+```
+
+This source review covers the registration replacement based on `8915332c`.
+The two ignored throughput and release-startup budgets remain separate checks.
+No Host, direct-`runc`, or Kubernetes fixture changes are included.
+
 ## Quiet Runtime Event Reproduction
 
 The lightweight CRI fixture can forward containerd events through a private
