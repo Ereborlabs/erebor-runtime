@@ -424,7 +424,9 @@ with the exact-test flags below. Host passed in 27.85 seconds with pin, lease,
 and cgroup cleanup. The related leader descriptor-exec case passed in 27.10
 seconds. The script positive control and denial passed in 29.13 seconds.
 Known-TID reuse passed in 34.12 seconds. The final repository Rust CI passed.
-Other platforms and legacy retirement remain pending.
+Direct `runc` passed in 28.87 seconds with the same checks and cleanup. Use
+the `thread_deny_recovery_runc` suffix. The final repository Rust CI passed.
+Kubernetes and legacy retirement remain pending.
 This review covers the replacement based on `e0c7d334`. No Platform or
 production code changes are required.
 

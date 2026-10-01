@@ -3006,8 +3006,12 @@ test does not close a row when its physical condition or an assertion changed.
       The existing leader descriptor-exec case passed in 27.10 seconds.
       The script positive control and denial passed in 29.13 seconds.
       The final repository Rust CI passed. The single-test file has 95 lines.
-    - [ ] Pass and commit direct `runc`, then Kubernetes. Register each
-      platform only after its focused case passes.
+    - [x] Direct `runc` passed in 28.87 seconds with the same fork, thread,
+      creator, process-state, syscall, and fresh evidence assertions.
+      Pin, lease, and cgroup cleanup passed. The final repository Rust CI
+      passed. No Platform or production code changed.
+    - [ ] Pass and commit Kubernetes. Register the platform only after its
+      focused case passes.
     - [ ] Remove only the matched legacy action, result, and unused pthread
       helper after all three platforms pass. Keep ordinary descriptor exec
       and all unrelated identity and memory assertions.
