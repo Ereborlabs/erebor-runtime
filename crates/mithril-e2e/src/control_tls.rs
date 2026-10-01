@@ -57,6 +57,7 @@ use crate::control_fixture::{
 };
 use crate::physical::{wait_for, wait_for_async};
 
+mod gap;
 mod registration;
 mod rejection;
 mod replay;
@@ -647,106 +648,6 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
 
     drop(connection);
     server.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
-) -> Result<(), Box<dyn StdError>> {
-    let fixture = MtlsFixture::new(false)?;
-    let store_path = fixture.path().join("control-evidence");
-    let observations = fixture.wal(EvidenceWalLimits {
-        maximum_retained_records: 10,
-        maximum_batch_records: 1,
-        ..EvidenceWalLimits::default()
-    })?;
-    for source_sequence in 1..=3 {
-        observations.record_bytes(
-            erebor_interceptor_abi::EffectObservationV1 {
-                observed_boottime_ns: source_sequence,
-                source_sequence,
-                source_cpu_id: 0,
-                task_cookie: source_sequence,
-                reason: 9,
-                physical_result: 1,
-                effect_family: 1,
-                operation: 1,
-                ..erebor_interceptor_abi::EffectObservationV1::default()
-            }
-            .as_bytes(),
-        );
-    }
-    let batches = observations.next_evidence_batches();
-    let cursors: Vec<_> = batches
-        .iter()
-        .map(|batch| (batch.first_cursor, batch.last_cursor))
-        .collect();
-    assert_eq!(cursors, [(1, 1), (2, 2), (3, 3)]);
-    let source_id = batch_source_id(&batches[0])?;
-    let identity = fixture.identity(source_id);
-
-    let initial_store = ControlStore::open(&store_path)?;
-    let initial_intake = EvidenceIntakeOwner::from_store(initial_store.clone());
-    let initial_control = fixture.control_with_store(initial_store.clone(), 1)?;
-    let initial_server = fixture.start(initial_control).await?;
-    let mut trust = TrustCache::load(fixture.path())?;
-    let mut connection = fixture
-        .connector(&initial_server, "node-a", [7; 16])
-        .connect(registration(), false, &mut trust)
-        .await?;
-    connection.send_evidence_batch(batches[2].clone()).await?;
-    if connection.next_message().await.is_ok() {
-        return Err("Control acknowledged evidence across a cursor gap".into());
-    }
-    assert_eq!(initial_intake.contiguous_cursor(&identity)?, 0);
-    assert_eq!(initial_store.health()?.pending_evidence_records, 1);
-    assert_eq!(observations.pending_evidence_records(), 3);
-    drop(connection);
-    initial_server.shutdown().await?;
-    drop(initial_intake);
-    drop(initial_store);
-
-    let reopened_store = wait_for_async(
-        &store_path,
-        "the stopped Control server to release its evidence-store lease",
-        Duration::from_secs(5),
-        || control_store_lease_ready(ControlStore::open(&store_path)),
-        || "the stopped server still owns the evidence store `owner.lock`".to_owned(),
-    )
-    .await?;
-    let reopened_intake = EvidenceIntakeOwner::from_store(reopened_store.clone());
-    assert_eq!(reopened_intake.contiguous_cursor(&identity)?, 0);
-    assert_eq!(reopened_store.health()?.pending_evidence_records, 1);
-    let reopened_control = fixture.control_with_store(reopened_store.clone(), 1)?;
-    let reopened_server = fixture.start(reopened_control).await?;
-    let mut connection = fixture
-        .connector(&reopened_server, "node-a", [7; 16])
-        .connect(registration(), false, &mut trust)
-        .await?;
-    connection
-        .send_evidence_group(batches[..2].to_vec())
-        .await?;
-    let NodeControlMessage::EvidenceAck(acknowledgement) = connection.next_message().await? else {
-        return Err("Control returned no cumulative evidence acknowledgement".into());
-    };
-    assert_eq!(acknowledgement.contiguous_cursor, 3);
-    assert_eq!(reopened_intake.contiguous_cursor(&identity)?, 3);
-    assert_eq!(reopened_store.health()?.pending_evidence_records, 0);
-
-    connection.send_evidence_group(batches.clone()).await?;
-    let NodeControlMessage::EvidenceAck(duplicate_acknowledgement) =
-        connection.next_message().await?
-    else {
-        return Err("Control returned no acknowledgement for an exact retry".into());
-    };
-    assert_eq!(duplicate_acknowledgement, acknowledgement);
-    assert!(observations.acknowledge_evidence(acknowledgement)?);
-    assert_eq!(observations.pending_evidence_records(), 0);
-    let store = reopened_intake.store();
-    let accepted = store.accepted_evidence_records(&identity)?;
-    assert_eq!(accepted.len(), 3);
-    drop(connection);
-    reopened_server.shutdown().await?;
     Ok(())
 }
 

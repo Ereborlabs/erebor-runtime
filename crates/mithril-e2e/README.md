@@ -748,6 +748,36 @@ claim physical syscall generation, Node daemon restart, or Kubernetes outage
 coverage. Those cases remain separate. No production or Platform source changes
 are included.
 
+### Durable evidence gap across Control restart
+
+Intended result: Control retains cursor 3 without an acknowledgement while
+cursors 1 and 2 are absent. A Control restart keeps that gap. One later group
+closes the gap and receives the cumulative acknowledgement at cursor 3.
+
+[evidence_gap_survives_restart](src/control_tls/gap.rs) sends cursor 3 and requires rejection, Control cursor 0, one pending Control record, and three retained Node records.
+  -> [ControlServerFixture::shutdown](src/control_fixture.rs) stops and joins Control; the test releases the first store handles.
+  -> [ControlStore::open](../mithril-control/src/store.rs) reopens the durable store after its lease is released; the test checks the unchanged cursor and pending record before starting Control again.
+  -> [ControlConnection::send_evidence_group](../mithril-node/src/control.rs) sends cursors 1 and 2 together, then replays all three batches through the same connection.
+  -> [evidence_gap_survives_restart](src/control_tls/gap.rs) requires matching acknowledgements at 3, no pending Control records, exactly three accepted records, and no retained Node records after applying the received acknowledgement.
+
+At baseline `95775f48`, the test constructs certificates and transport
+configuration in the scenario. The 99-line replacement uses the existing
+fixture. A local block owns the first store and intake handles. The test keeps
+both server lifetimes explicit. A two-group loop removes repeated upload and
+acknowledgement code. Response waits have bounded timeouts and identify the
+store path. The existing bounded lease-readiness check remains in place.
+
+```bash
+cargo test -p mithril-e2e --lib \
+  control_tls::gap::evidence_gap_survives_restart -- --exact
+cargo test -p mithril-e2e --lib control_tls::
+```
+
+This source review covers the replacement based on `01488296`. This protocol
+test uses production WAL, TLS, and Control-store operations. It does not claim
+physical syscall, daemon restart, or Kubernetes outage qualification. No
+fixture, Platform, or production source changes are included.
+
 ## Quiet Runtime Event Reproduction
 
 The lightweight CRI fixture can forward containerd events through a private
