@@ -933,6 +933,65 @@ It does not claim kernel health sampling, physical syscall generation, or
 Kubernetes qualification. No fixture, Platform, or production source changes
 are included.
 
+### Administrative service routing and cancellation
+
+Intended end state: Resolve and arm requests use their separate authenticated
+services and return their complete matching results. Cancelling a requester
+closes its waiter. A late response cannot complete that cancelled request.
+
+[admin_services_keep_requests](src/control_tls/administrative.rs) opens one ready authenticated connection through `MtlsFixture`.
+  -> [ControlPlane::resolve_administrative_exec](../mithril-control/src/service.rs) registers request ID 1 and sends it through the resolution stream.
+  -> [ControlConnection::next_administrative_request](../mithril-node/src/control.rs) returns the typed resolve request; the test checks its exact ID and sends its result.
+  -> [ControlPlane::deliver_resolution](../mithril-control/src/service.rs) matches the Node, operation, and request ID, then completes the waiting call.
+  -> [ControlPlane::arm_administrative_exec](../mithril-control/src/service.rs) repeats that exchange for request ID 2 through the separate arm service.
+  -> [admin_services_keep_requests](src/control_tls/administrative.rs) receives resolve request ID 3; selecting that receive branch drops the pending requester future before the late response is sent.
+  -> [ControlPlane::deliver_resolution](../mithril-control/src/service.rs) removes the pending entry and returns gRPC Cancelled because the waiter receiver is closed.
+  -> [admin_services_keep_requests](src/control_tls/administrative.rs) requires the typed cancellation status and exact reason, closes the connection, and stops the server.
+
+```mermaid
+sequenceDiagram
+    participant T as Rust requester
+    participant C as Control
+    participant N as Node client
+    loop Resolve ID 1, then arm ID 2
+        T->>C: Start typed request
+        C->>N: Request on matching service
+        N->>C: Matching typed response
+        C-->>T: Complete matching result
+    end
+    T->>C: Start resolve ID 3
+    C->>N: Resolve request ID 3
+    T->>T: Drop pending requester future
+    N->>C: Late resolution result
+    C-->>N: Cancelled; waiter receiver is closed
+    N-->>T: Typed cancellation error
+```
+
+The 99-line replacement removes all three detached requester tasks and the
+extra Control handles from the baseline `95775f48` scenario. Standard async
+joins own the two normal exchanges. An explicit select cancels the final
+request after Node receives it. The resolve request and confirmed response
+are reused with the final request ID. No scenario helper hides this sequence.
+The test keeps complete response equality and service separation checks. It
+adds exact request IDs and rejects an unrelated error in the cancellation
+case. One-second waits identify the operation and resource path on failure.
+
+Cancellation closes the local waiter receiver. Cancellation does not itself
+remove the Control pending entry. The late result removes that entry and
+cannot deliver to the closed receiver. This case tests protocol routing and
+waiter lifetime, not administrative approval or kernel execution authority.
+
+```bash
+cargo test -p mithril-e2e --lib \
+  control_tls::administrative::admin_services_keep_requests -- --exact
+cargo test -p mithril-e2e --lib control_tls::
+```
+
+This source review covers the replacement based on `b026ac9f`. The test uses
+production authenticated services and public client APIs. No fixture,
+Platform, Node, Control, or BPF source changes are included. Kernel, OCI, and
+Kubernetes qualification remain separate.
+
 ## Quiet Runtime Event Reproduction
 
 The lightweight CRI fixture can forward containerd events through a private
