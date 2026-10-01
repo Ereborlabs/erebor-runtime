@@ -1303,6 +1303,24 @@ acknowledgement, or decommission operations directly.
 - [ ] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`
 - [ ] `node_decommission_https_accepts_the_same_signed_artifact_as_control`
 - [ ] `mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound`
+  - [ ] Replace the old function with `retained_wal_survives_restart` in
+    `control_tls/retained.rs`, one standard Rust test below 100 lines. Reuse
+    `MtlsFixture` and public WAL, client, and intake operations. Remove the
+    mutable source tracker and unbounded acknowledgement loop. Keep the real
+    WAL drop and reopen visible. Do not claim a Node daemon restart.
+  - [ ] Keep the Retain policy, three-record soft limit, and 4,096-record batch
+    limit. Write two records before restart. Require the same retained batch
+    and two pending records after reopening the same durable path. Then write
+    records 3 through 303 and require all 303 to remain pending.
+  - [ ] Require one complete 303-record group and the same source identity.
+    Upload that group through the production client. Bound the response wait.
+    Require the received cumulative acknowledgement at 303, an empty WAL
+    after applying that acknowledgement, one registered nonce, Control cursor
+    303, and exactly 303 accepted records. Keep normal shutdown visible.
+  - [ ] Compare with `95775f48`. Pass the exact replacement before deleting
+    the old function. Pass the Control/TLS family, harness checks, and final
+    Rust CI. Commit this protocol-only replacement separately. Do not change
+    production or Platform code or rerun an unrelated physical matrix.
 - [ ] `mtls_evidence_backlog_exceeds_the_previous_baseline`
 - [ ] `mtls_coverage_upload_preserves_gap_truth_at_control`
 - [ ] `mtls_administrative_services_route_matching_results_and_cancel_waiters`
