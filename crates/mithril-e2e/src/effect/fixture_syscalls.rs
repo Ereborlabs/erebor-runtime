@@ -198,25 +198,6 @@ struct MountAttr {
     userns_fd: u64,
 }
 
-pub(super) fn exec_path(path: &Path) -> io::Result<()> {
-    let path = path_c_string(path)?;
-    let arguments = [
-        c"sh".as_ptr(),
-        c"-c".as_ptr(),
-        c"exit 0".as_ptr(),
-        std::ptr::null(),
-    ];
-    let environment = [std::ptr::null::<libc::c_char>()];
-
-    fork_and_wait(|| {
-        // SAFETY: The path and argument pointers remain valid for this call.
-        unsafe {
-            libc::execve(path.as_ptr(), arguments.as_ptr(), environment.as_ptr());
-        }
-        last_errno()
-    })
-}
-
 pub(super) fn exec_fd(fd: RawFd, from_non_leader: bool) -> io::Result<()> {
     let arguments = [
         c"sh".as_ptr(),

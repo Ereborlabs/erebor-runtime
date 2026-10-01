@@ -319,9 +319,16 @@ and cgroup cleanup. Direct `runc` passed in 28.88 seconds with the same checks
 and cleanup. Use the `script_recovery_runc` suffix. The final repository Rust
 CI passed. Kubernetes passed in 69.74 seconds with the same checks and
 namespace, pin, and lease cleanup. Use the `script_recovery_kubernetes` suffix.
-The legacy action remains. This review covers the replacement based on
-`5d2f8fe0`. No Platform or production code
-changes are required.
+The matching legacy action, result flag, embedded shell target, selector, and
+path-exec helper are removed after all three platforms pass. The retirement
+removes 65 Rust lines net. The physical script control replaces the old
+path-helper control. Original descriptor-transfer and descriptor-exec checks
+remain. All nine child regressions and the final repository Rust CI pass.
+The first retirement CI found a one-element loop. The remaining non-leader
+denial and path-object checks now use direct calls with the same inputs.
+This review covers the replacement based on `5d2f8fe0`. No Platform or
+production code changes are required. The remaining legacy runners are not
+complete.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It

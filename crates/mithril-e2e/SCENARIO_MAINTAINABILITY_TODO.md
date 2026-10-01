@@ -2979,7 +2979,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace the denied `ScriptExec` action with `forked_script_is_denied`.
+  - [x] Replace the denied `ScriptExec` action with `forked_script_is_denied`.
     Reuse `exec_on_release.py` with its existing path and forked-path modes.
     Add one executable Python shebang target and one distinct signed policy
     that denies that script path. Copy the target into the shared `/work`
@@ -3000,10 +3000,20 @@ test does not close a row when its physical condition or an assertion changed.
       policy, and assertions. Namespace, pin, and lease cleanup passed.
       The final repository Rust CI passed. No Platform or production code
       changed. The retained VM, K3s cluster, and image cache remain available.
-    - [ ] Remove the matching legacy script action, enum arm, result field,
+    - [x] Remove the matching legacy script action, enum arm, result field,
       embedded shell source, stored path, and unused path-exec helper only
       after all three platforms pass. Keep descriptor exec, executable mmap,
       mprotect, and non-leader exec resources and their assertions.
+      The retirement removes 65 Rust lines net. It removes the embedded shell
+      target and its signed selector. The new physical positive control
+      replaces the obsolete path-helper control. The original descriptor
+      transfer and exec checks remain. All nine child regressions pass.
+      The first retirement CI found a one-element non-leader loop after the
+      script action was removed. The remaining denial and path-object checks
+      now use direct calls. The final repository Rust CI passes after this
+      correction. No physical matrix rerun is required for this deletion.
+      `effect.rs` has 2,987 lines and `effect/child.rs` has 2,848 lines.
+      Both legacy runners remain incomplete.
     - Use a fresh `script_recovery` lifecycle for actor-before-Node setup.
       Keep the target and policy shared across all three environments.
   - [x] Replace the denied `Execveat` action with `forked_at_exec_is_denied`.

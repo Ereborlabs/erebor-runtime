@@ -121,7 +121,6 @@ enum ChildRequest {
     NetworkBpfSetup,
     PrepareHardClosed {
         exec_path: PathBuf,
-        script_path: PathBuf,
         deleted_exec_path: PathBuf,
         secret_path: PathBuf,
         benign_path: PathBuf,
@@ -137,7 +136,6 @@ enum ChildRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) enum PreparedOperation {
     Exec,
-    ScriptExec,
     DeletedExec,
     MemfdExec,
     NonLeaderExec,
@@ -186,7 +184,6 @@ pub(super) struct EffectPaths {
     pub(super) second_bind_alias: PathBuf,
     pub(super) benign: PathBuf,
     pub(super) exec_target: PathBuf,
-    pub(super) script_target: PathBuf,
     pub(super) deleted_exec_target: PathBuf,
     pub(super) mount_target: PathBuf,
     pub(super) propagation_source: PathBuf,
@@ -583,7 +580,6 @@ impl EffectProcessFixture {
     pub(super) fn prepare_operations(&mut self, paths: &EffectPaths) -> Result<()> {
         match self.request(&ChildRequest::PrepareHardClosed {
             exec_path: paths.exec_target.clone(),
-            script_path: paths.script_target.clone(),
             deleted_exec_path: paths.deleted_exec_target.clone(),
             secret_path: paths.secret.clone(),
             benign_path: paths.benign.clone(),
@@ -1055,14 +1051,12 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
             }
             ChildRequest::PrepareHardClosed {
                 exec_path,
-                script_path,
                 deleted_exec_path,
                 secret_path,
                 benign_path,
                 mount_source,
             } => match PreparedOperations::new(
                 &exec_path,
-                &script_path,
                 &deleted_exec_path,
                 &secret_path,
                 &benign_path,
@@ -1212,7 +1206,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     let benign = root.join("benign");
     let exec_target = root.join("exec-target");
     let allowed_exec_target = root.join("allowed-exec-target");
-    let script_target = root.join("script-target");
     let deleted_exec_target = root.join("deleted-exec-target");
     let mount_target = root.join("mount-target");
     let propagation_source = root.join("propagation-source");
@@ -1233,12 +1226,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
             path: &allowed_exec_target,
         },
     )?;
-    fs::write(&script_target, b"#!/bin/sh\nexit 0\n").context(IoSnafu {
-        path: &script_target,
-    })?;
-    fs::set_permissions(&script_target, fs::Permissions::from_mode(0o755)).context(IoSnafu {
-        path: &script_target,
-    })?;
     fs::copy("/bin/sh", &deleted_exec_target).context(IoSnafu {
         path: &deleted_exec_target,
     })?;
@@ -1295,7 +1282,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
         second_bind_alias,
         benign,
         exec_target,
-        script_target,
         deleted_exec_target,
         mount_target,
         propagation_source,
@@ -1562,7 +1548,6 @@ fn propagation_peer_loop(
 }
 
 struct PreparedOperations {
-    script_path: PathBuf,
     exec_file: fs::File,
     deleted_exec_file: fs::File,
     memfd_exec_file: fs::File,
@@ -1587,7 +1572,6 @@ struct PreparedOperations {
 impl PreparedOperations {
     fn new(
         exec_path: &Path,
-        script_path: &Path,
         deleted_exec_path: &Path,
         secret_path: &Path,
         benign_path: &Path,
@@ -1688,7 +1672,6 @@ impl PreparedOperations {
             .join(".mithril-unix-stream-state");
         let unix_stream_signal = SharedMailbox::create(&unix_stream_signal_path)?;
         Ok(Self {
-            script_path: script_path.to_path_buf(),
             exec_file,
             deleted_exec_file,
             memfd_exec_file,
@@ -1760,9 +1743,6 @@ impl PreparedOperations {
         match operation {
             PreparedOperation::Exec => {
                 io_outcome(fixture_syscalls::exec_fd(self.exec_file.as_raw_fd(), false))
-            }
-            PreparedOperation::ScriptExec => {
-                io_outcome(fixture_syscalls::exec_path(&self.script_path))
             }
             PreparedOperation::DeletedExec => io_outcome(fixture_syscalls::exec_fd(
                 self.deleted_exec_file.as_raw_fd(),
@@ -2842,13 +2822,6 @@ mod tests {
         fixture_syscalls::exec_fd(received.as_raw_fd(), false).map_err(|source| {
             crate::Error::Io {
                 path: "fexecve control fixture".into(),
-                source,
-                location: snafu::location!(),
-            }
-        })?;
-        fixture_syscalls::exec_path(std::path::Path::new("/bin/busybox")).map_err(|source| {
-            crate::Error::Io {
-                path: "execve control fixture".into(),
                 source,
                 location: snafu::location!(),
             }

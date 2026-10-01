@@ -466,7 +466,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub executable_mmap_denied: bool,
     pub file_mprotect_exec_denied: bool,
     pub benign_read_allowed: bool,
-    pub script_exec_denied: bool,
     pub deleted_exec_denied: bool,
     pub non_leader_exec_denied: bool,
     pub memfd_exec_failed_closed: bool,
@@ -574,12 +573,6 @@ fn build_generation_artifact(
             None,
         ),
         (
-            "manual-script",
-            fixture_root.join("script-target"),
-            "MANUAL_EXEC",
-            None,
-        ),
-        (
             "manual-exec-allowed",
             fixture_root.join("allowed-exec-target"),
             "MANUAL_EXEC_ALLOWED",
@@ -613,10 +606,7 @@ fn build_generation_artifact(
             }
             .build()
         })?;
-        let selector = if matches!(
-            path_selector_id,
-            "manual-exec" | "manual-script" | "manual-exec-allowed"
-        ) {
+        let selector = if matches!(path_selector_id, "manual-exec" | "manual-exec-allowed") {
             PathSelectorV1::path(path_selector_id, canonical_path, object_class_id)
         } else {
             PathSelectorV1::exact(path_selector_id, canonical_path, object_class_id)
@@ -1660,30 +1650,22 @@ impl EffectTestRunner {
         );
 
         if protect {
-            for (operation, label) in [
-                (HardClosedOperation::ScriptExec, "script image"),
-                (
-                    HardClosedOperation::NonLeaderExec,
-                    "non-leader-thread image",
-                ),
-            ] {
-                let marker = require_hard_close(
-                    &mut fixture,
-                    &reader,
-                    &observations,
-                    operation,
-                    "EXACT_POLICY_DENY",
-                    (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
-                    label,
-                )?;
-                wait_for_path_exec_effect(
-                    &reader,
-                    &observations,
-                    marker,
-                    "EXACT_POLICY_DENY",
-                    KernelEffectOperationV1::Execute,
-                )?;
-            }
+            let marker = require_hard_close(
+                &mut fixture,
+                &reader,
+                &observations,
+                HardClosedOperation::NonLeaderExec,
+                "EXACT_POLICY_DENY",
+                (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
+                "non-leader-thread image",
+            )?;
+            wait_for_path_exec_effect(
+                &reader,
+                &observations,
+                marker,
+                "EXACT_POLICY_DENY",
+                KernelEffectOperationV1::Execute,
+            )?;
             let deleted_exec_marker = require_hard_close(
                 &mut fixture,
                 &reader,
@@ -2726,7 +2708,6 @@ impl EffectTestRunner {
             executable_mmap_denied: protect,
             file_mprotect_exec_denied: protect,
             benign_read_allowed: true,
-            script_exec_denied: protect,
             deleted_exec_denied: protect,
             non_leader_exec_denied: protect,
             memfd_exec_failed_closed: protect,
