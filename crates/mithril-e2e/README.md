@@ -509,11 +509,13 @@ Run `effect::mprotect_memfd::memfd_mprotect_is_denied::memfd_map_recovery_host`
 with the exact-test flags below. Host passed in 28.28 seconds with pin, lease,
 and cgroup cleanup. The unchanged deleted mapping and memfd exec modes
 passed in 34.26 and 34.48 seconds after the shared actor change. The final
-repository Rust CI passed. Direct `runc`, Kubernetes, and legacy retirement
-remain pending. Direct `runc` then passed in 29.35 seconds with the same
+repository Rust CI passed. Direct `runc` then passed in 29.35 seconds with the same
 assertions and complete pin, lease, and cgroup cleanup. Use the
 `memfd_map_recovery_runc` suffix. The final repository Rust CI passed.
-Kubernetes and legacy retirement remain pending.
+Kubernetes passed in 72.54 seconds with the same assertions and complete
+namespace, pin, and lease cleanup. Use the `memfd_map_recovery_kubernetes`
+suffix. The final repository Rust CI passed. Legacy retirement remains
+pending.
 This review covers the replacement based on `099875a2` and
 the shared actor commit `9f0fca50`. No Platform or production code changes
 are required.

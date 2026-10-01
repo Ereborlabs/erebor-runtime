@@ -3008,7 +3008,11 @@ test does not close a row when its physical condition or an assertion changed.
       and descriptor cleanup. Pin, lease, and cgroup cleanup passed.
       The final repository Rust CI passed. No Platform or production code
       changed.
-    - [ ] Pass and commit Kubernetes.
+    - [x] Kubernetes passed in 72.54 seconds with the same retained memfd,
+      read-only mapping, real mprotect denial, fresh evidence, and mapping
+      and descriptor cleanup. Namespace, pin, and lease cleanup passed.
+      The final repository Rust CI passed. No Platform or production code
+      changed. The test has 93 lines.
     - [ ] Remove only the matched legacy action, memfd mapping resources,
       and unused memfd copy helper after all three platforms pass. Keep
       exact-file mappings and their positive controls.

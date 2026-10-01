@@ -6,7 +6,7 @@ use mithril_control::WorkloadProtectionPolicy as Policy;
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = memfd_map_recovery]
 fn memfd_mprotect_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("mprotect-memfd")?;
