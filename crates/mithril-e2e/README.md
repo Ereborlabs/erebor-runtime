@@ -388,9 +388,13 @@ cgroup cleanup. Direct `runc` passed in 28.81 seconds with the same checks
 and cleanup. Use the `memfd_recovery_runc` suffix. The final repository Rust
 CI passed. Kubernetes passed in 71.16 seconds with the same checks and
 namespace, pin, and lease cleanup. Use the `memfd_recovery_kubernetes` suffix.
-The legacy exec action and separate memfd memory checks remain. This review
-covers the replacement based on `5b07f137`.
-No Platform or production code changes are required.
+The matched legacy exec action, enum arm, and result flag are removed after
+all three platforms pass. The retirement removes 23 Rust lines net. The
+memfd descriptor, preparation helper, mapping, and mprotect checks remain.
+All nine child regressions, `bash harness/vm/test.sh` from this crate, and
+the final repository Rust CI pass after retirement. This review covers the
+replacement based on `5b07f137`. No Platform or production code changes are
+required. The remaining legacy runners are not complete.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It

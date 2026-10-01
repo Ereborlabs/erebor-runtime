@@ -471,7 +471,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub file_mprotect_exec_denied: bool,
     pub benign_read_allowed: bool,
     pub non_leader_exec_denied: bool,
-    pub memfd_exec_failed_closed: bool,
     pub unix_stream_relationship_allowed: bool,
     pub ptmx_ioctl_exact_allowed: bool,
     pub ptmx_derived_peer_hard_closed: bool,
@@ -1722,22 +1721,6 @@ impl EffectTestRunner {
                     None,
                 )?;
             }
-            let memfd_exec_marker = require_hard_close(
-                &mut fixture,
-                &reader,
-                &observations,
-                HardClosedOperation::MemfdExec,
-                "UNSUPPORTED_OBJECT",
-                (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
-                "memfd execution",
-            )?;
-            wait_for_unsupported_effect(
-                &reader,
-                &observations,
-                memfd_exec_marker,
-                "UNSUPPORTED_OBJECT",
-                (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
-            )?;
             for (operation, label) in [
                 (
                     HardClosedOperation::DeletedMprotectExec,
@@ -2696,7 +2679,6 @@ impl EffectTestRunner {
             file_mprotect_exec_denied: protect,
             benign_read_allowed: true,
             non_leader_exec_denied: protect,
-            memfd_exec_failed_closed: protect,
             unix_stream_relationship_allowed: protect,
             ptmx_ioctl_exact_allowed: protect,
             ptmx_derived_peer_hard_closed: protect,

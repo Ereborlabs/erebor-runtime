@@ -2979,7 +2979,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace `MemfdExec` with `memfd_exec_is_denied`. Reuse the shared
+  - [x] Replace `MemfdExec` with `memfd_exec_is_denied`. Reuse the shared
     exec actor, signed exec policy, process owner, and evidence owner. Before
     Node starts, create a memfd with Linux `MFD_EXEC`, copy the executable
     bytes, and hold its descriptor. Check the memfd link, ELF header, and
@@ -3000,9 +3000,15 @@ test does not close a row when its physical condition or an assertion changed.
       executable mode, child identity, syscall, and evidence checks.
       Namespace, pin, and lease cleanup passed. The final repository Rust
       CI passed. No Platform or production code changed.
-    - [ ] Remove the matched legacy exec action and result only after all
+    - [x] Remove the matched legacy exec action and result only after all
       three platforms pass. Keep the memfd mapping, descriptor, preparation
       helper, and mprotect assertions for their separate memory migration.
+      The retirement removes 23 Rust lines net. The descriptor remains owned
+      by `_memfd_file` for the unchanged mapping controls. All nine child
+      regressions, the local VM launcher verifier, and the final repository
+      Rust CI pass. No physical matrix rerun is required for this deletion.
+      `effect.rs` has 2,955 lines and `effect/child.rs` has 2,839 lines.
+      Both legacy runners remain incomplete.
   - [x] Replace `DeletedExec` with `deleted_exec_is_denied`. Reuse
     `exec_on_release.py`, `exec_deny_policy.json`, and the common process and
     evidence owners. Before Node starts, copy the runtime's ELF executable,

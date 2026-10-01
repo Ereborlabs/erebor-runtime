@@ -136,7 +136,6 @@ enum ChildRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) enum PreparedOperation {
     Exec,
-    MemfdExec,
     NonLeaderExec,
     SecretMmapExec,
     SecretMprotectReadExec,
@@ -1548,9 +1547,9 @@ fn propagation_peer_loop(
 
 struct PreparedOperations {
     exec_file: fs::File,
-    // Retain the descriptor for the deleted-file mapping controls.
+    // Retain both descriptors for the separate mapping controls.
     _deleted_file: fs::File,
-    memfd_exec_file: fs::File,
+    _memfd_file: fs::File,
     secret_file: fs::File,
     benign_file: fs::File,
     secret_read_mapping: Option<memmap2::Mmap>,
@@ -1674,7 +1673,7 @@ impl PreparedOperations {
         Ok(Self {
             exec_file,
             _deleted_file: deleted_exec_file,
-            memfd_exec_file,
+            _memfd_file: memfd_exec_file,
             secret_file,
             benign_file,
             secret_read_mapping: Some(secret_read_mapping),
@@ -1744,10 +1743,6 @@ impl PreparedOperations {
             PreparedOperation::Exec => {
                 io_outcome(fixture_syscalls::exec_fd(self.exec_file.as_raw_fd(), false))
             }
-            PreparedOperation::MemfdExec => io_outcome(fixture_syscalls::exec_fd(
-                self.memfd_exec_file.as_raw_fd(),
-                false,
-            )),
             PreparedOperation::NonLeaderExec => {
                 io_outcome(fixture_syscalls::exec_fd(self.exec_file.as_raw_fd(), true))
             }
