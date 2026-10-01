@@ -1517,6 +1517,16 @@ acknowledgement, or decommission operations directly.
     The final repository Rust CI procedure exited with status 0 on
     2026-10-01. These checks do not qualify the release throughput budget.
     No production, Platform, Cargo, or protobuf schema changed.
+    The unchanged release backlog case then passed on 2026-10-01 in
+    14.96 seconds. It durably acknowledged 536,989,928 protobuf bytes
+    through five cumulative group receipts at 134.9 MiB/s. The original
+    107.1 MiB/s assertion passed. Raw transfer measured 571.0 MiB/s;
+    synchronized raw-file transfer measured 418.5 MiB/s; direct intake
+    measured 169.6 MiB/s. See
+    `/tmp/mithril-backlog-baseline-release-20261001.log`. The first release
+    build took 5 minutes 31 seconds; the retained build supports the next
+    focused check. This proves the existing budget with the new transfer
+    owner. It does not complete the pending scenario simplification.
   - [ ] Keep raw, durable raw, direct intake, preparation, enqueue, and
     acknowledgement measurements. Keep the direct-source cursor, exactly
     one cumulative acknowledgement per group, complete source identity,
@@ -3539,6 +3549,27 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace the abstract Unix-stream round trip with
+    `unix_stream_is_allowed`. Use the existing actor-group setup for two
+    distinct bindings under one policy and one shared network namespace.
+    Give the client and server distinct policy roles. Keep the real abstract
+    stream connect, request byte `1`, response byte `2`, complete readback,
+    and absence of a file-create event. Require fresh attributed IPC policy
+    Allow evidence. Keep the standard test below 100 lines.
+    - [ ] Use one Python actor file for both roles and all platforms. Create
+      the listener after actor startup. Use bounded socket operations and
+      the existing process readiness and cleanup. Do not add a Platform API
+      or reproduce Node admission or binding publication.
+    - [ ] Pass and commit Host, then direct runc, then Kubernetes. Keep both
+      binding identities, distinct cgroups and roles, and equal installed
+      profile generation explicit. The policy must express the original
+      client-to-peer relationship through public production inputs.
+    - [ ] Keep the Observe round trip and its `WOULD_DENY` result open until
+      its own verified replacement exists. Keep SCM_RIGHTS transfers and
+      their retained descriptors. Their old round-trip setup establishes
+      the connection for descriptor transfer. Keep that setup until the
+      descriptor-transfer replacement passes. Retire only independent
+      Protect verdict assertions after all three platforms pass.
   - [x] Replace the remaining Observe-mode descriptor exec with
     `forked_fd_exec_is_observed`. Reuse `exec_on_release.py`, the process
     owner, and `EffectCheck`. Use a distinct signed Observe policy for the
