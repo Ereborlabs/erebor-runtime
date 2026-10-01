@@ -460,7 +460,7 @@ with the exact-test flags below. Host passed in 28.44 seconds with pin, lease,
 and cgroup cleanup. The existing descriptor-exec mode passed in 33.73 seconds
 after the shared actor change. Direct `runc` passed in 28.11 seconds with the
 same checks and cleanup. Use the `deleted_map_recovery_runc` suffix. The final
-repository Rust CI passed. Legacy retirement remains pending. This review covers
+repository Rust CI passed. This review covers
 the replacement based on `75bc112d`. No Platform or production code changes
 are required. The exact-file and memfd mapping actions remain in the old runner.
 
@@ -476,6 +476,13 @@ Kubernetes then passed in 71.37 seconds with the same assertions and complete
 namespace, pin, and lease cleanup. Use the `deleted_map_recovery_kubernetes`
 suffix. The final repository Rust CI passed. This qualification is based on
 `67594de4`. The change does not broaden production permissions.
+The matched legacy action and deleted mapping resources are removed after
+all three platforms pass. The actor-only deleted mapping test is also
+removed. The replacement checks the real ELF descriptor, read-only mapping,
+and absent path. This retirement removes 102 Rust lines net. All eight
+remaining child regressions and the final repository Rust CI pass. The old
+runner keeps its independent exact-file and memfd mappings. The large runners
+remain incomplete.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It

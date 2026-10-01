@@ -2979,7 +2979,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace `DeletedMprotectExec` with `deleted_mprotect_is_denied`.
+  - [x] Replace `DeletedMprotectExec` with `deleted_mprotect_is_denied`.
     Reuse the exec actor, deleted-image preparation, signed exec policy,
     process owner, and evidence owner. Map the complete executable read-only
     with `MAP_PRIVATE` before Node starts. Keep the mapping and descriptor
@@ -3024,11 +3024,17 @@ test does not close a row when its physical condition or an assertion changed.
       now uses fallible `try_exists`; permission errors are not absence.
       The final repository Rust CI passed. No Platform or production code
       changed. The unchanged Kubernetes rerun then passed.
-    - [ ] Remove only the matched legacy action and deleted mapping resources
+    - [x] Remove only the matched legacy action and deleted mapping resources
       after all three platforms pass. Keep memfd and exact-file mappings.
       Remove the deleted-image actor-only fixture test after the replacement
       proves a retained ELF descriptor, read-only mapping, and absent path.
       Keep all unrelated child regressions.
+      The retirement removes 102 Rust lines net. The copied deleted image,
+      request field, retained descriptor, mapping, enum arm, and actor-only
+      fixture test are removed. All eight remaining child regressions and
+      the final repository Rust CI pass. No physical matrix rerun is required
+      for this matched deletion. `effect.rs` has 2,927 lines and
+      `effect/child.rs` has 2,744 lines. The large runners remain incomplete.
   - [ ] Preserve the remaining exact-file executable mmap and read/write
     mprotect cases until public policy inputs can express their exact object
     selector. `ExecutionRuleV1` has no `exact` field, and Kubernetes lowering

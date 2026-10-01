@@ -121,7 +121,6 @@ enum ChildRequest {
     NetworkBpfSetup,
     PrepareHardClosed {
         exec_path: PathBuf,
-        deleted_exec_path: PathBuf,
         secret_path: PathBuf,
         benign_path: PathBuf,
         mount_source: PathBuf,
@@ -139,7 +138,6 @@ pub(super) enum PreparedOperation {
     SecretMmapExec,
     SecretMprotectReadExec,
     SecretMprotectWriteExec,
-    DeletedMprotectExec,
     MemfdMprotectExec,
     PassedSecretRead,
     PassedBenignRead,
@@ -181,7 +179,6 @@ pub(super) struct EffectPaths {
     pub(super) second_bind_alias: PathBuf,
     pub(super) benign: PathBuf,
     pub(super) exec_target: PathBuf,
-    pub(super) deleted_exec_target: PathBuf,
     pub(super) mount_target: PathBuf,
     pub(super) propagation_source: PathBuf,
     pub(super) propagation_target: PathBuf,
@@ -577,7 +574,6 @@ impl EffectProcessFixture {
     pub(super) fn prepare_operations(&mut self, paths: &EffectPaths) -> Result<()> {
         match self.request(&ChildRequest::PrepareHardClosed {
             exec_path: paths.exec_target.clone(),
-            deleted_exec_path: paths.deleted_exec_target.clone(),
             secret_path: paths.secret.clone(),
             benign_path: paths.benign.clone(),
             mount_source: paths.source.clone(),
@@ -1048,23 +1044,19 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
             }
             ChildRequest::PrepareHardClosed {
                 exec_path,
-                deleted_exec_path,
                 secret_path,
                 benign_path,
                 mount_source,
-            } => match PreparedOperations::new(
-                &exec_path,
-                &deleted_exec_path,
-                &secret_path,
-                &benign_path,
-                &mount_source,
-            ) {
-                Ok(prepared) => {
-                    prepared_hard_closed = Some(prepared);
-                    (Ok(ChildResponse::Prepared), false)
+            } => {
+                match PreparedOperations::new(&exec_path, &secret_path, &benign_path, &mount_source)
+                {
+                    Ok(prepared) => {
+                        prepared_hard_closed = Some(prepared);
+                        (Ok(ChildResponse::Prepared), false)
+                    }
+                    Err(error) => (Err(error), false),
                 }
-                Err(error) => (Err(error), false),
-            },
+            }
             ChildRequest::PrepareUnixStreamTarget => match prepared_hard_closed.as_mut() {
                 Some(prepared) => match prepared.prepare_unix_stream_target() {
                     Ok(pid) => (Ok(ChildResponse::PreparedProcess { pid }), false),
@@ -1203,7 +1195,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     let benign = root.join("benign");
     let exec_target = root.join("exec-target");
     let allowed_exec_target = root.join("allowed-exec-target");
-    let deleted_exec_target = root.join("deleted-exec-target");
     let mount_target = root.join("mount-target");
     let propagation_source = root.join("propagation-source");
     let propagation_target = source.join("propagation-target");
@@ -1221,14 +1212,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     fs::set_permissions(&allowed_exec_target, fs::Permissions::from_mode(0o755)).context(
         IoSnafu {
             path: &allowed_exec_target,
-        },
-    )?;
-    fs::copy("/bin/sh", &deleted_exec_target).context(IoSnafu {
-        path: &deleted_exec_target,
-    })?;
-    fs::set_permissions(&deleted_exec_target, fs::Permissions::from_mode(0o755)).context(
-        IoSnafu {
-            path: &deleted_exec_target,
         },
     )?;
     fs::create_dir(&bind_directory).context(IoSnafu {
@@ -1279,7 +1262,6 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
         second_bind_alias,
         benign,
         exec_target,
-        deleted_exec_target,
         mount_target,
         propagation_source,
         propagation_target,
@@ -1546,14 +1528,12 @@ fn propagation_peer_loop(
 
 struct PreparedOperations {
     exec_file: fs::File,
-    // Retain both descriptors for the separate mapping controls.
-    _deleted_file: fs::File,
+    // Retain the descriptor for the separate memfd mapping control.
     _memfd_file: fs::File,
     secret_file: fs::File,
     benign_file: fs::File,
     secret_read_mapping: Option<memmap2::Mmap>,
     secret_write_mapping: Option<memmap2::MmapMut>,
-    deleted_read_mapping: Option<memmap2::Mmap>,
     memfd_read_mapping: Option<memmap2::Mmap>,
     passed_secret_file: fs::File,
     passed_benign_file: fs::File,
@@ -1570,7 +1550,6 @@ struct PreparedOperations {
 impl PreparedOperations {
     fn new(
         exec_path: &Path,
-        deleted_exec_path: &Path,
         secret_path: &Path,
         benign_path: &Path,
         mount_source: &Path,
@@ -1590,9 +1569,6 @@ impl PreparedOperations {
             path: Path::new("/dev/zero"),
         })?;
         let exec_file = fs::File::open(exec_path).context(IoSnafu { path: exec_path })?;
-        let deleted_exec_file = fs::File::open(deleted_exec_path).context(IoSnafu {
-            path: deleted_exec_path,
-        })?;
         let memfd_exec_file =
             fixture_syscalls::memfd_copy(exec_path).map_err(|source| crate::Error::Io {
                 path: "memfd executable fixture".into(),
@@ -1605,8 +1581,7 @@ impl PreparedOperations {
             .open(secret_path)
             .context(IoSnafu { path: secret_path })?;
         let benign_file = fs::File::open(benign_path).context(IoSnafu { path: benign_path })?;
-        // SAFETY: each file stays open for the mapping lifetime. The deleted
-        // executable path is unlinked only after this mapping is ready.
+        // SAFETY: secret_file stays open for the mapping lifetime.
         let secret_read_mapping =
             unsafe { memmap2::MmapOptions::new().map_copy_read_only(&secret_file) }.map_err(
                 |source| crate::Error::Io {
@@ -1622,15 +1597,6 @@ impl PreparedOperations {
                 source,
                 location: snafu::location!(),
             })?;
-        // SAFETY: both executable fixture files remain open for the mapping lifetime.
-        let deleted_read_mapping =
-            unsafe { memmap2::MmapOptions::new().map_copy_read_only(&deleted_exec_file) }.map_err(
-                |source| crate::Error::Io {
-                    path: "deleted executable mapping fixture".into(),
-                    source,
-                    location: snafu::location!(),
-                },
-            )?;
         // SAFETY: memfd_exec_file remains open for the mapping lifetime.
         let memfd_read_mapping =
             unsafe { memmap2::MmapOptions::new().map_copy_read_only(&memfd_exec_file) }.map_err(
@@ -1671,13 +1637,11 @@ impl PreparedOperations {
         let unix_stream_signal = SharedMailbox::create(&unix_stream_signal_path)?;
         Ok(Self {
             exec_file,
-            _deleted_file: deleted_exec_file,
             _memfd_file: memfd_exec_file,
             secret_file,
             benign_file,
             secret_read_mapping: Some(secret_read_mapping),
             secret_write_mapping: Some(secret_write_mapping),
-            deleted_read_mapping: Some(deleted_read_mapping),
             memfd_read_mapping: Some(memfd_read_mapping),
             passed_secret_file,
             passed_benign_file,
@@ -1760,14 +1724,6 @@ impl PreparedOperations {
                         .make_exec()
                         .map_or_else(error_outcome, |_| allowed_outcome())
                 }),
-            PreparedOperation::DeletedMprotectExec => {
-                self.deleted_read_mapping
-                    .take()
-                    .map_or_else(missing_prepared_file, |mapping| {
-                        fixture_syscalls::make_mapping_exec(&mapping)
-                            .map_or_else(error_outcome, |_| allowed_outcome())
-                    })
-            }
             PreparedOperation::MemfdMprotectExec => {
                 self.memfd_read_mapping
                     .take()
@@ -2605,51 +2561,6 @@ mod tests {
         assert_eq!(offset_of!(BpfMapCreateAttr, value_size), 8);
         assert_eq!(offset_of!(BpfMapCreateAttr, max_entries), 12);
         assert_eq!(BPF_MAP_TYPE_ARRAY, 2);
-    }
-
-    #[test]
-    #[allow(unsafe_code)]
-    fn deleted_executable_fixture_retains_its_descriptor_and_mapping() -> crate::Result<()> {
-        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
-            path: "deleted executable fixture".into(),
-            source,
-            location: snafu::location!(),
-        })?;
-        let path = directory.path().join("executable");
-        std::fs::write(&path, b"fixture").map_err(|source| crate::Error::Io {
-            path: path.clone(),
-            source,
-            location: snafu::location!(),
-        })?;
-        let file = std::fs::File::open(&path).map_err(|source| crate::Error::Io {
-            path: path.clone(),
-            source,
-            location: snafu::location!(),
-        })?;
-        // SAFETY: file remains open and unchanged for the mapping lifetime.
-        let mapping = unsafe { memmap2::MmapOptions::new().map_copy(&file) }.map_err(|source| {
-            crate::Error::Io {
-                path: path.clone(),
-                source,
-                location: snafu::location!(),
-            }
-        })?;
-
-        std::fs::remove_file(&path).map_err(|source| crate::Error::Io {
-            path: path.clone(),
-            source,
-            location: snafu::location!(),
-        })?;
-        let descriptor_len = file.metadata().map_err(|source| crate::Error::Io {
-            path: path.clone(),
-            source,
-            location: snafu::location!(),
-        })?;
-
-        assert!(!path.exists());
-        assert_eq!(descriptor_len.len(), 7);
-        assert_eq!(&mapping[..], b"fixture");
-        Ok(())
     }
 
     #[test]

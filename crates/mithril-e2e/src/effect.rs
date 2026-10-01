@@ -1204,11 +1204,6 @@ impl EffectTestRunner {
         external_mount_namespace.bind_mount(&path_tree_root, &path_tree_preexisting_bind_target)?;
         fixture.prepare_operations(&paths)?;
         let unix_stream_peer_pid = fixture.prepare_unix_stream_target()?;
-        if protect {
-            fs::remove_file(&paths.deleted_exec_target).context(IoSnafu {
-                path: &paths.deleted_exec_target,
-            })?;
-        }
         ensure!(
             fixture.hard_closed(HardClosedOperation::Exec)?.allowed,
             InvalidInputSnafu {
@@ -1707,36 +1702,28 @@ impl EffectTestRunner {
                     None,
                 )?;
             }
-            for (operation, label) in [
+            let marker = require_hard_close(
+                &mut fixture,
+                &reader,
+                &observations,
+                HardClosedOperation::MemfdMprotectExec,
+                "UNSUPPORTED_OBJECT",
                 (
-                    HardClosedOperation::DeletedMprotectExec,
-                    "deleted-file mprotect",
+                    KernelEffectFamilyV1::Exec,
+                    KernelEffectOperationV1::Mprotect,
                 ),
-                (HardClosedOperation::MemfdMprotectExec, "memfd mprotect"),
-            ] {
-                let marker = require_hard_close(
-                    &mut fixture,
-                    &reader,
-                    &observations,
-                    operation,
-                    "UNSUPPORTED_OBJECT",
-                    (
-                        KernelEffectFamilyV1::Exec,
-                        KernelEffectOperationV1::Mprotect,
-                    ),
-                    label,
-                )?;
-                wait_for_unsupported_effect(
-                    &reader,
-                    &observations,
-                    marker,
-                    "UNSUPPORTED_OBJECT",
-                    (
-                        KernelEffectFamilyV1::Exec,
-                        KernelEffectOperationV1::Mprotect,
-                    ),
-                )?;
-            }
+                "memfd mprotect",
+            )?;
+            wait_for_unsupported_effect(
+                &reader,
+                &observations,
+                marker,
+                "UNSUPPORTED_OBJECT",
+                (
+                    KernelEffectFamilyV1::Exec,
+                    KernelEffectOperationV1::Mprotect,
+                ),
+            )?;
         }
         let unix_stream_marker = observations.cursor();
         let unix_stream_outcome = fixture.run_prepared(HardClosedOperation::UnixStream)?;
