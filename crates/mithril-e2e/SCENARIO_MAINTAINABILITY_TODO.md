@@ -1821,6 +1821,49 @@ test does not close a row when its physical condition or an assertion changed.
 - [ ] `KernelQualificationRunner::physical_file_open_probe`: own the lease
   and output paths with existing cleanup owners. Keep
   `BpfQualificationLoader` attachment and shutdown explicit.
+  - [ ] Replace the custom physical probe with one standard Host test below
+    100 lines. Reuse the loader, prebuilt object record, capability matrix,
+    output schema, and temporary resource owners. Keep the exact same object
+    as the protected benchmark. Infrastructure supplies its path.
+  - [ ] Preserve the real allow, inode-target deny with `EACCES`, target
+    clear, and restored allow. Keep exact map readback, live map/link
+    readback, decommission, absent pins, a readable target after decommission,
+    and target/lease cleanup. Require a live denial again before decommission
+    so the final allow proves removal of an active decision.
+  - [ ] Keep the evidence digest, standard-test executable digest, object
+    layout, link IDs, capability records, and public JSON schema. Write the
+    existing report only after normal cleanup. Keep result serialization
+    separate from actor actions and assertions.
+  - [ ] Pass the exact privileged Host case, report recorder, related loader
+    and capability checks, harness checks, and final repository Rust CI.
+  - [ ] Commit the verified test before removing the old probe, private
+    cleanup wrapper, and `physical-probe` CLI branch. Replace the one VM
+    launcher call with the existing Host lifecycle invocation. Supply the
+    prepared object path to that invocation. Collect the report from the
+    lifecycle output and identify the standard-test executable as its
+    producer. Keep benchmarks and the strict report recorder. Do not add a
+    second shell-owned scenario.
+  - Current result, 2026-10-01: the standard Host draft compiles and keeps the
+    security checks explicit. The real allow, deny, clear, restored allow,
+    and second active deny pass. Production `KernelHost::decommission`
+    returns `ManifestMismatch` during its immediate global map-ID check.
+    Three focused runs reach the same failure. In the diagnostic run, owned
+    map IDs `4572`, `4573`, and `4574` remain visible after that return. They
+    disappear within 250 milliseconds while the same test process is alive.
+    Linux releases program map references through deferred work after a
+    grace period. See the
+    [Linux program cleanup](https://github.com/torvalds/linux/blob/v6.8/kernel/bpf/core.c#L2552-L2641)
+    and
+    [Linux program reference cleanup](https://github.com/torvalds/linux/blob/v6.8/kernel/bpf/syscall.c#L2021-L2080).
+    The diagnostic still returns the original error; it does not turn the
+    failed test into a pass. Temporary diagnostic output and the diagnostic
+    sleep are removed from the draft. No production code changed.
+    Pin, lease, and cgroup paths are absent after the failed runs. The old
+    probe also places pins below its output directory; the ordinary
+    `/var/tmp` output is not bpffs and fails before the security actions.
+    Keep the old runner until the replacement and recorder pass. A narrow
+    production-owner correction requires user approval. Do not add retries,
+    sleeps, or a second cleanup sequence to the scenario.
 - [x] `HostLifecycleRunner::host_lifecycle`: own the pin root and lease, use
   readiness diagnostics, and keep both `KernelHostOwner` starts and the
   concurrent-owner rejection explicit.
