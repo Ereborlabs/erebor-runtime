@@ -1199,6 +1199,21 @@ acknowledgement, or decommission operations directly.
   from 2,416 to 2,366 lines. No fixture, Platform, or production code changed.
   No physical platform matrix was rerun for this protocol-only change.
 - [ ] `mtls_connection_renews_the_ready_session_while_its_owner_is_idle`
+  - Merge the remaining idle-renewal action into `readiness_keeps_session`.
+    Reuse its ready server, Control, connector, bound Node session, and trust
+    cache. Do not add a fixture or a second scenario setup.
+  - Keep the initial readiness assertion, the 2.3-second idle interval, and
+    the 1.5-second readiness freshness limit. Make no readiness report during
+    the idle interval. Require the same complete bound session afterward.
+    Require one registered nonce and an unchanged trust nonce.
+  - Keep the existing explicit Ready, NotReady, and restored Ready reports
+    and all their assertions unchanged. Keep normal connection and server
+    shutdown. Keep the complete readiness file below 100 lines.
+  - Compare with `95775f48`. Pass the strengthened exact test before removing
+    the old function. Commit qualification and retirement separately. Pass
+    the Control/TLS family, harness checks, and final Rust CI. This is real
+    mTLS protocol coverage, not physical kernel or Kubernetes qualification.
+    Do not change production or Platform code or rerun a physical matrix.
 - [x] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
   - Replace the repeated readiness assertions with `readiness_keeps_session`
     in `control_tls/readiness.rs`. Use one standard test below 100 lines.
