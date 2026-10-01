@@ -1336,6 +1336,28 @@ acknowledgement, or decommission operations directly.
     scenarios remain open. No fixture, Platform, or production source changed.
 - [ ] `mtls_evidence_backlog_exceeds_the_previous_baseline`
 - [ ] `mtls_coverage_upload_preserves_gap_truth_at_control`
+  - [ ] Replace the old function with `coverage_upload_keeps_truth` in
+    `control_tls/coverage.rs`, one standard Rust test below 100 lines. Reuse
+    `MtlsFixture::wal` and public coverage upload and intake operations.
+    Remove duplicate ABI event literals, manual canonicalizer setup, and the
+    parallel acknowledgement vector. Keep upload, acknowledgement, durable
+    readback, and normal server shutdown visible in one source loop.
+  - [ ] Keep CPU 0 at sequence 2 with task cookie 7 and CPU 1 at sequence 3
+    with task cookie 8. Keep two current source intervals and two matching
+    acknowledgements. These initial sources have Unknown coverage because
+    no kernel health sample establishes complete coverage. Do not invent a
+    sequence-gap reason or promote either source to Healthy.
+  - [ ] Require distinct source identities and no negative-claim eligibility.
+    Compare each complete persisted report: source, CPU, epoch, revision,
+    interval identity, state, sequence bounds, opening counters, absent
+    closing counters, and empty gap reasons. Keep the original one-current-
+    interval and not-Healthy assertions. Bound both response waits and report
+    the operation, CPU, and resource path on timeout.
+  - [ ] Compare with `95775f48`. Pass the exact replacement before deleting
+    the old function. Pass the Control/TLS family, harness checks, and final
+    Rust CI. Commit this protocol-only replacement separately. No physical
+    platform matrix is needed; the case does not depend on kernel hooks,
+    OCI runtime behavior, or Kubernetes. Do not change production or fixtures.
 - [ ] `mtls_administrative_services_route_matching_results_and_cancel_waiters`
 
 The following Control tests are already small owner-local checks. Keep them as
