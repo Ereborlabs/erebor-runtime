@@ -3003,7 +3003,11 @@ test does not close a row when its physical condition or an assertion changed.
       every legacy zero-object field, unmapping, descriptor close, actor
       exit, and cleanup. The final repository Rust CI passed. The single-test
       file has 93 lines. No Platform or production code changed.
-    - [ ] Pass and commit direct `runc`.
+    - [x] Direct `runc` passed in 29.35 seconds with the same retained memfd,
+      read-only mapping, real mprotect denial, fresh evidence, and mapping
+      and descriptor cleanup. Pin, lease, and cgroup cleanup passed.
+      The final repository Rust CI passed. No Platform or production code
+      changed.
     - [ ] Pass and commit Kubernetes.
     - [ ] Remove only the matched legacy action, memfd mapping resources,
       and unused memfd copy helper after all three platforms pass. Keep
