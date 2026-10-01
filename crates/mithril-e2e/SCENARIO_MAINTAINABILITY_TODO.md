@@ -1373,6 +1373,26 @@ acknowledgement, or decommission operations directly.
     remaining legacy scenarios stay open. No fixture, Platform, or production
     source changed.
 - [ ] `mtls_administrative_services_route_matching_results_and_cancel_waiters`
+  - [ ] Replace the old function with `admin_services_keep_requests` in
+    `control_tls/administrative.rs`, one standard Rust test below 100 lines.
+    Reuse `MtlsFixture`. Use the existing async join primitive for the normal
+    Control request and Node-client response. Remove detached normal tasks
+    and their extra Control handles. Do not add a helper or Platform API.
+  - [ ] Keep one ready authenticated connection and the order: resolve ID 1,
+    arm ID 2, then cancel resolve ID 3. Require the correct service, exact
+    request ID, and complete matching result for each normal operation.
+  - [ ] Receive the final resolve request before aborting its requester.
+    Join the cancelled task before sending the late response. Require actual
+    task cancellation and the typed production gRPC Cancelled error. Do not
+    accept an unrelated stream or infrastructure failure as proof.
+  - [ ] Bound each request/response and cancellation wait. Include its
+    operation and resource path on timeout. Keep connection close and normal
+    server shutdown visible. Compare all assertions with `95775f48`.
+  - [ ] Pass the exact replacement before deleting the old function. Then
+    pass the Control/TLS family, harness checks, and final Rust CI. Commit this
+    protocol-only replacement separately. The case tests real authenticated
+    service routing, not kernel, OCI, or Kubernetes operations. Do not change
+    production or fixtures or run an unrelated physical platform matrix.
 
 The following Control tests are already small owner-local checks. Keep them as
 regressions and verify them with every Control migration:
