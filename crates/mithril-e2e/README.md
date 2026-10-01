@@ -778,6 +778,54 @@ test uses production WAL, TLS, and Control-store operations. It does not claim
 physical syscall, daemon restart, or Kubernetes outage qualification. No
 fixture, Platform, or production source changes are included.
 
+### Storage failure and unchanged evidence replay
+
+Intended end state: A Control filesystem or capacity failure leaves both
+unacknowledged Node records intact. Control accepts the unchanged batch after
+its store is restored. Only the received durable acknowledgement retires the
+Node records.
+
+[storage_failure_keeps_evidence](src/control_tls/storage.rs) replaces the store directory with a file and requires the public store open to fail without changing the WAL batch.
+  -> [ControlStore::open_with_evidence_limits](../mithril-control/src/store.rs) reopens the restored directory with a one-record Block limit.
+  -> [ControlConnection::send_evidence_group](../mithril-node/src/control.rs) sends the two-record batch through the authenticated stream.
+  -> [EvidenceIntakeOwner::receive_group](../mithril-control/src/evidence.rs) returns the production capacity error without an acknowledgement; the test requires no Control cursor and the unchanged two-record WAL.
+  -> [ControlServerFixture::shutdown](src/control_fixture.rs) stops and joins Control before the next iteration reopens its store with the original ten-record limit.
+  -> [storage_failure_keeps_evidence](src/control_tls/storage.rs) replays the same group, requires acknowledgement cursor 2 and complete accepted-record equality, then applies the received acknowledgement and requires zero retained Node records.
+
+```mermaid
+sequenceDiagram
+    participant T as Rust test
+    participant C as Control
+    participant S as Control store
+    T->>C: Upload two-record batch
+    C->>S: Persist batch
+    S-->>C: Capacity error at limit 1
+    C-->>T: Error; no acknowledgement
+    T->>C: Stop, reopen with limit 10, start
+    T->>C: Replay unchanged batch
+    C->>S: Persist batch and cursor 2
+    S-->>C: Durable commit
+    C-->>T: Acknowledgement at cursor 2
+```
+
+The 95-line replacement reuses `MtlsFixture`. The explicit capacity loop
+removes duplicate server and connection setup. Each iteration stops Control
+and releases its store handles before the next open. The existing bounded
+lease wait remains. Response timeouts identify the capacity and store path.
+The baseline filesystem fault, capacity fault, and WAL retention checks from
+`95775f48` remain. Exact batch and accepted-record equality checks are added.
+
+```bash
+cargo test -p mithril-e2e --lib \
+  control_tls::storage::storage_failure_keeps_evidence -- --exact
+cargo test -p mithril-e2e --lib control_tls::
+```
+
+This source review covers the replacement based on `7ab35fe6`. The test uses
+production WAL, filesystem, TLS, and durable Control-store operations. It does
+not claim physical syscall or Kubernetes outage qualification. No fixture,
+Platform, or production source changes are included.
+
 ## Quiet Runtime Event Reproduction
 
 The lightweight CRI fixture can forward containerd events through a private

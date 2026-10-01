@@ -1266,27 +1266,38 @@ acknowledgement, or decommission operations directly.
     repeated group-response code with one explicit two-group loop. Both
     server lifetimes, the durable gap, and the received acknowledgements
     remain visible. No fixture, Platform, or production source changed.
-- [ ] `mtls_storage_failure_withholds_ack_until_replay_is_durable`
-  - [ ] Replace the old function with `storage_failure_keeps_evidence` in
+- [x] `mtls_storage_failure_withholds_ack_until_replay_is_durable`
+  - [x] Replace the old function with `storage_failure_keeps_evidence` in
     `control_tls/storage.rs`, one standard Rust test below 100 lines. Reuse
     `MtlsFixture` and the existing bounded Control-store lease wait. Use
     complete capacity values instead of a local limit factory. Keep all
     filesystem changes and both Control server lifetimes visible.
-  - [ ] Keep two actual WAL records. Replace the Control store directory
+  - [x] Keep two actual WAL records. Replace the Control store directory
     with a file. Require the public store open to fail and both Node records
     to remain. Restore the same directory before starting Control.
-  - [ ] Start Control with a one-record Block limit. Upload both records
+  - [x] Start Control with a one-record Block limit. Upload both records
     through the production client. Require no acknowledgement, no Control
     cursor, and both retained Node records. Bound the response wait. Require
     the WAL batch to remain unchanged after both failures.
-  - [ ] Stop Control and reopen its durable store with the original ten-record
+  - [x] Stop Control and reopen its durable store with the original ten-record
     limit. Replay the same group. Require the received acknowledgement at
     cursor 2, exactly two accepted records, one Control evidence cursor, and
     an empty Node WAL after applying the production acknowledgement.
-  - [ ] Compare with `95775f48`. Pass the exact replacement before deleting
+  - [x] Compare with `95775f48`. Pass the exact replacement before deleting
     the old function. Pass the Control/TLS family, harness checks, and final
     repository Rust CI. Commit this protocol-only replacement separately.
     Do not change production or Platform code or rerun a physical matrix.
+  - The replacement file has 95 lines. Its final exact run passed in 0.22
+    seconds before the old function was removed. The Control/TLS family
+    passed 19 tests in 25.46 seconds; two existing release-budget tests remain
+    ignored. The VM harness checks and final repository Rust CI passed.
+    The final gate passed 91 in-process E2E tests and ignored 429 tests; the
+    ignored tests are not new physical qualification evidence.
+    `control_tls.rs` decreases from 2,172 to 2,075 lines. The explicit
+    capacity loop removes repeated server and connection setup. Both fault
+    conditions, response checks, and server shutdown calls remain visible.
+    Exact WAL-batch equality and complete accepted-record equality are added.
+    No fixture, Platform, or production source changed.
 - [ ] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
 - [ ] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
 - [ ] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`

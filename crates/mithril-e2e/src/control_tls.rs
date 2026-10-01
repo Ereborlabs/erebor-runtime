@@ -61,6 +61,7 @@ mod gap;
 mod registration;
 mod rejection;
 mod replay;
+mod storage;
 
 const OUTAGE_POLICY: &[u8] = include_bytes!("../fixtures/convergence/outage-policy-v1.json");
 const OUTAGE_TENANT_ID: &str = "00000000-0000-0001-0000-000000000002";
@@ -648,104 +649,6 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
 
     drop(connection);
     server.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
-) -> Result<(), Box<dyn StdError>> {
-    let fixture = MtlsFixture::new(false)?;
-    let store_path = fixture.path().join("control-evidence");
-    let limits = |maximum_retained_records| EvidenceStoreLimitsV1 {
-        maximum_retained_bytes: mithril_control::MAX_EVIDENCE_SEGMENT_BYTES as u64,
-        maximum_retained_records,
-        capacity_policy: EvidenceStoreCapacityPolicyV1::Block,
-    };
-    let observations = fixture.wal(EvidenceWalLimits {
-        maximum_retained_records: 10,
-        maximum_batch_records: 10,
-        ..EvidenceWalLimits::default()
-    })?;
-    for source_sequence in 1..=2 {
-        observations.record_bytes(
-            erebor_interceptor_abi::EffectObservationV1 {
-                observed_boottime_ns: source_sequence,
-                source_sequence,
-                source_cpu_id: 0,
-                task_cookie: source_sequence,
-                reason: 9,
-                physical_result: 1,
-                effect_family: 1,
-                operation: 1,
-                ..erebor_interceptor_abi::EffectObservationV1::default()
-            }
-            .as_bytes(),
-        );
-    }
-
-    let initial_store = ControlStore::open_with_evidence_limits(&store_path, limits(10))
-        .map_err(|source| format!("initial Control store open failed: {source}"))?;
-    drop(initial_store);
-    let retained_store_path = fixture.path().join("retained-control-evidence");
-    fs::rename(&store_path, &retained_store_path)?;
-    fs::write(&store_path, [])?;
-    assert!(ControlStore::open_with_evidence_limits(&store_path, limits(10)).is_err());
-    assert_eq!(observations.pending_evidence_records(), 2);
-    fs::remove_file(&store_path)?;
-    fs::rename(retained_store_path, &store_path)?;
-
-    let mut trust = TrustCache::load(fixture.path())?;
-    {
-        let blocked_store = ControlStore::open_with_evidence_limits(&store_path, limits(1))
-            .map_err(|source| format!("blocked Control store open failed: {source}"))?;
-        let blocked_control = fixture.control_with_store(blocked_store.clone(), 1)?;
-        let blocked_server = fixture.start(blocked_control).await?;
-        let mut connection = fixture
-            .connector(&blocked_server, "node-a", [7; 16])
-            .connect(registration(), false, &mut trust)
-            .await?;
-        connection
-            .send_evidence_group(observations.next_evidence_batches())
-            .await?;
-        if connection.next_message().await.is_ok() {
-            return Err("Control acknowledged evidence that exceeded durable capacity".into());
-        }
-        assert_eq!(observations.pending_evidence_records(), 2);
-        assert_eq!(blocked_store.health()?.evidence_cursors, 0);
-        drop(connection);
-        blocked_server.shutdown().await?;
-    }
-
-    let restored_store = wait_for_async(
-        &store_path,
-        "the stopped Control server to release its store lease",
-        Duration::from_secs(5),
-        || {
-            control_store_lease_ready(ControlStore::open_with_evidence_limits(
-                &store_path,
-                limits(10),
-            ))
-        },
-        || "the stopped server still owns `owner.lock`".to_owned(),
-    )
-    .await?;
-    let restored_control = fixture.control_with_store(restored_store.clone(), 1)?;
-    let restored_server = fixture.start(restored_control).await?;
-    let mut connection = fixture
-        .connector(&restored_server, "node-a", [7; 16])
-        .connect(registration(), false, &mut trust)
-        .await?;
-    connection
-        .send_evidence_group(observations.next_evidence_batches())
-        .await?;
-    let NodeControlMessage::EvidenceAck(acknowledgement) = connection.next_message().await? else {
-        return Err("restored Control returned no evidence acknowledgement".into());
-    };
-    assert!(observations.acknowledge_evidence(acknowledgement)?);
-    assert_eq!(observations.pending_evidence_records(), 0);
-    assert_eq!(restored_store.health()?.evidence_cursors, 1);
-    drop(connection);
-    restored_server.shutdown().await?;
     Ok(())
 }
 
