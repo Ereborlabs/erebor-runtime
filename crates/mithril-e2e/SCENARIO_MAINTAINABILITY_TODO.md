@@ -2666,7 +2666,8 @@ test does not close a row when its physical condition or an assertion changed.
       draft checked the immutable birth generation instead of the current
       process generation. Both fixture errors are corrected. No production
       code or assertion is removed.
-    - [ ] Pass and commit direct `runc`.
+    - [x] Pass and commit direct `runc`. The unchanged shared test passed both
+      modes in 47.57 seconds. Output, pin, lease, and cgroup cleanup passed.
     - [ ] Pass and commit real Kubernetes.
     - [ ] Remove the matching legacy action, result field, child command, and
       unused syscall helper only after all three platform cases pass. Compare
