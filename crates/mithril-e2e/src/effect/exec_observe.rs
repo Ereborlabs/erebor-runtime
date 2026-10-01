@@ -6,7 +6,7 @@ use mithril_control::WorkloadProtectionPolicy as Policy;
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = exec_observe_recovery]
 fn forked_fd_exec_is_observed<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("exec-fd-observe")?;

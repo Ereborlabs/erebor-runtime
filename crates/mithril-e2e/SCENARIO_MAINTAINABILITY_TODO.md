@@ -3470,7 +3470,9 @@ test does not close a row when its physical condition or an assertion changed.
       cgroup, and output cleanup passed. Strict E2E Clippy, formatting, and
       VM harness checks passed. No actor, Platform, or production source
       changed. The old Observe branch remains until all platforms pass.
-    - [ ] Pass direct `runc` with the same test body.
+    - [x] Direct `runc` passed in 28.98 seconds with the unchanged 76-line
+      body. Pin, lease, cgroup, and output cleanup passed. Formatting passed.
+      No actor, Platform, or production source changed.
     - [ ] Pass Kubernetes with the same test body after lightweight.
     - [ ] Remove the matched legacy branch and unused observer helper after
       qualification. Keep descriptor transfer, controls, and mappings.

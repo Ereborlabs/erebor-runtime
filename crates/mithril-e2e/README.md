@@ -558,13 +558,17 @@ binary and the launcher-prepared VM environment. Run this exact name with
 
 ```text
 effect::exec_observe::forked_fd_exec_is_observed::exec_observe_recovery_host
+effect::exec_observe::forked_fd_exec_is_observed::exec_observe_recovery_runc
 ```
 
 Host passed in 29.00 seconds. Its pin, lease, cgroup, and output paths are
 absent after cleanup. The unchanged Protect companion passed in 28.12 seconds.
 Strict E2E Clippy, formatting, and local VM harness checks passed. Source
 review: the replacement working tree based on inventory commit `fd0da52`.
-Direct `runc`, Kubernetes, legacy retirement, and final Rust CI remain pending.
+Direct `runc` passed in 28.98 seconds with the same body. Pin, lease, cgroup,
+and output cleanup passed. Formatting passed. No actor, Platform, or
+production source changed. Kubernetes, legacy retirement, and final Rust CI
+remain pending.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
