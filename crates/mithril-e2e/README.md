@@ -716,9 +716,12 @@ cases passed in 34.72 and 40.82 seconds. Output, pin, lease, and cgroup cleanup
 passed. Direct `runc` passed in 42.73 seconds. Its existing first-bind and
 bind-alias cases passed in 43.55 and 43.65 seconds. Their output, pin, lease,
 and cgroup cleanup passed. Use the `mount_replace_runc` generated suffix.
-Kubernetes is not qualified yet.
+Kubernetes passed in 79.16 seconds. Its existing bind-alias case passed in
+79.17 seconds. Namespace, output, pin, lease, and socket cleanup passed.
+Use the `mount_replace_kubernetes` generated suffix. The same test body,
+actor, policy, and assertions run on all three platforms.
 The VM harness checks and the final repository Rust CI procedure passed.
-Source review: `a5ee471d` plus the direct-`runc` registration.
+Source review: `da615921` plus the Kubernetes registration.
 The baseline comparison uses `95775f48`. The old shared block remains until
 the Observe contrast and cache-snapshot replacements also pass.
 

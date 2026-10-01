@@ -2407,11 +2407,15 @@ test does not close a row when its physical condition or an assertion changed.
         cases passed in 43.55 and 43.65 seconds. Output, pin, lease, and cgroup
         cleanup passed. The final repository Rust CI procedure passed after
         the registration edit.
-      - [ ] Pass Kubernetes and commit its registration. Keep the retained
+      - [x] Pass Kubernetes and commit its registration. Keep the retained
         VM, K3s, and images. Do not weaken any assertion or change production.
+        The same 91-line test passed in 79.16 seconds. The existing bind-alias
+        case passed in 79.17 seconds. Namespace, output, pin, lease, and socket
+        cleanup passed. The final repository Rust CI procedure passed after
+        the registration edit.
       - [ ] Keep the old block until the separate Observe contrast and mount
         snapshot checks pass. Do not count this Protect case as their proof.
-      - [ ] Compare with `95775f48`; run harness checks and final Rust CI
+      - [x] Compare with `95775f48`; run harness checks and final Rust CI
         after each deliverable's final Rust edit. Document focused commands.
   - [ ] Remove the old exact control open only after these alias and mount
     checks and their Protect-mode counterparts pass as platform tests.
