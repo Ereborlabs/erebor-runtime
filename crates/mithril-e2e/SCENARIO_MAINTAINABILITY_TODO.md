@@ -2337,6 +2337,12 @@ test does not close a row when its physical condition or an assertion changed.
     container platform cases that do not test a container operation.
     The unchanged retained-map recovery test passed in 49.56 seconds with
     its own pin, lease, and cgroup cleanup.
+  - [x] Keep clean kernel startup in the `kernel_start` lifecycle. The other
+    physical identity cases retain Node pins, so they cannot supply its
+    required empty root. Keep the body and every assertion unchanged. The
+    corrected exact Host case passes in 26.47 seconds with pin, lease, and
+    cgroup cleanup. The final repository Rust CI gate passes. See
+    `/tmp/mithril-kernel-start-host-20261001.log`.
   - [x] Remove only the verified legacy lifecycle runner, result bundle,
     binary, and Cargo registration. Replace its manual command with the exact
     standard Rust test. Keep the other kernel qualification operations.

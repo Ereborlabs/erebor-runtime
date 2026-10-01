@@ -6,7 +6,7 @@ use crate::physical::{boot_identity, ProbeFile};
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host)]
-#[lifecycle = identity_physical]
+#[lifecycle = kernel_start]
 fn clean_host_restarts<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("clean-host")?;
     let pin = env.maps().0.to_owned();
