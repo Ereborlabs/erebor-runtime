@@ -1198,7 +1198,7 @@ acknowledgement, or decommission operations directly.
   CI procedure passed after the last source edit. `control_tls.rs` decreases
   from 2,416 to 2,366 lines. No fixture, Platform, or production code changed.
   No physical platform matrix was rerun for this protocol-only change.
-- [ ] `mtls_connection_renews_the_ready_session_while_its_owner_is_idle`
+- [x] `mtls_connection_renews_the_ready_session_while_its_owner_is_idle`
   - Merge the remaining idle-renewal action into `readiness_keeps_session`.
     Reuse its ready server, Control, connector, bound Node session, and trust
     cache. Do not add a fixture or a second scenario setup.
@@ -1218,7 +1218,15 @@ acknowledgement, or decommission operations directly.
     seconds before retirement. The related Control/TLS family passed 19
     tests in 11.36 seconds; two release-budget checks remain ignored.
     Formatting, strict E2E Clippy, and local VM harness checks passed.
-    The old idle function remains until this extension is committed.
+    Qualification commit `5a718396` precedes removal of the old idle function.
+    The duplicate setup and test are removed. The parent file decreases from
+    1,458 to 1,433 lines; the small readiness file has 50 lines. The combined
+    change removes 18 Rust lines net and one extra Control/client startup.
+    Final repository Rust CI passes after the last Rust edit. Its 90
+    in-process E2E tests pass. Both baseline behaviors remain in one real
+    production-backed test; the lower test count is not lost coverage.
+    No production, Platform, or fixture source changed. The rejected packet
+    draft is absent. The packet-flow attribution decision remains open.
 - [x] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
   - Replace the repeated readiness assertions with `readiness_keeps_session`
     in `control_tls/readiness.rs`. Use one standard test below 100 lines.

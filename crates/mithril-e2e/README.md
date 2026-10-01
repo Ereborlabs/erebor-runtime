@@ -992,7 +992,12 @@ the same complete session, one registered nonce, and the same trust nonce.
 The current file has 50 lines. Its exact check passed in 2.34 seconds. The
 related family passed 19 tests in 11.36 seconds. Formatting, strict Clippy,
 and local harness checks passed. Inventory `51533fa7` owns this extension.
-The duplicate legacy idle test remains until the qualified extension is committed.
+Qualification commit `5a718396` precedes removal of the duplicate idle test.
+The retirement removes its extra Control/client startup and 25 parent lines.
+The combined change removes 18 Rust lines net. Final repository Rust CI passes
+after the last Rust edit, including all 90 in-process E2E tests. Both idle
+renewal and reported readiness transitions remain in the combined test. No
+physical platform matrix is rerun for this protocol-only consolidation.
 
 ### Consumption reclaims complete evidence segments
 
