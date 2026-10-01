@@ -3442,6 +3442,26 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace the remaining Observe-mode descriptor exec with
+    `forked_fd_exec_is_observed`. Reuse `exec_on_release.py`, the process
+    owner, and `EffectCheck`. Use a distinct signed Observe policy for the
+    same external-role executable Deny as the Protect case.
+    - Keep the descriptor open before Node starts. Recover the rule-zero
+      external actor, fork its child, and inspect both identities before
+      releasing descriptor exec. Keep the child creator, inherited role,
+      distinct cookie, and zero admission rule explicit.
+    - Require fresh child-attributed `WOULD_DENY` Exec/Execute evidence with
+      kernel result zero, configured `EACCES`, nonzero composite atom, and
+      zero exact-object and inode fields. The old test does not require the
+      later dynamic loader or executable to succeed. Do not replace this
+      signed decision with a runtime-entry Allow or Protect-mode denial.
+    - Use one shared test below 100 lines and a pristine
+      `exec_observe_recovery` lifecycle. Add no Platform or production API.
+      Pass Host, direct `runc`, and Kubernetes in separate commits. Keep the
+      legacy block until all three pass. Then remove only its Observe branch;
+      keep descriptor transfer, positive controls, and executable mappings.
+    - Compare with `95775f48`. Run focused actor regressions, local harness
+      checks, and final Rust CI. Do not rerun an unrelated physical matrix.
   - [x] Replace `MemfdMprotectExec` with `memfd_mprotect_is_denied`.
     Reuse the exec actor, executable memfd preparation, signed exec policy,
     process owner, and evidence owner. Use the same Linux `MFD_EXEC` flag
