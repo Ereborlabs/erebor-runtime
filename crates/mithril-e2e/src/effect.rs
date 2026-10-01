@@ -472,7 +472,6 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub executable_mmap_denied: bool,
     pub file_mprotect_exec_denied: bool,
     pub benign_read_allowed: bool,
-    pub non_leader_exec_denied: bool,
     pub unix_stream_relationship_allowed: bool,
     pub ptmx_ioctl_exact_allowed: bool,
     pub ptmx_derived_peer_hard_closed: bool,
@@ -1653,24 +1652,7 @@ impl EffectTestRunner {
             }
         );
 
-        if protect {
-            let marker = require_hard_close(
-                &mut fixture,
-                &reader,
-                &observations,
-                HardClosedOperation::NonLeaderExec,
-                "EXACT_POLICY_DENY",
-                (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
-                "non-leader-thread image",
-            )?;
-            wait_for_path_exec_effect(
-                &reader,
-                &observations,
-                marker,
-                "EXACT_POLICY_DENY",
-                KernelEffectOperationV1::Execute,
-            )?;
-        } else {
+        if !protect {
             let exec_marker = observations.cursor();
             // The signed image decision must be observe-only. A later dynamic
             // loader or library can still fail hard as an unclassified image.
@@ -2680,7 +2662,6 @@ impl EffectTestRunner {
             executable_mmap_denied: protect,
             file_mprotect_exec_denied: protect,
             benign_read_allowed: true,
-            non_leader_exec_denied: protect,
             unix_stream_relationship_allowed: protect,
             ptmx_ioctl_exact_allowed: protect,
             ptmx_derived_peer_hard_closed: protect,

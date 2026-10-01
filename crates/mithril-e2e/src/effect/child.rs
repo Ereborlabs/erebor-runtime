@@ -136,7 +136,6 @@ enum ChildRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) enum PreparedOperation {
     Exec,
-    NonLeaderExec,
     SecretMmapExec,
     SecretMprotectReadExec,
     SecretMprotectWriteExec,
@@ -1741,10 +1740,7 @@ impl PreparedOperations {
     fn run(&mut self, operation: PreparedOperation) -> IoOutcome {
         match operation {
             PreparedOperation::Exec => {
-                io_outcome(fixture_syscalls::exec_fd(self.exec_file.as_raw_fd(), false))
-            }
-            PreparedOperation::NonLeaderExec => {
-                io_outcome(fixture_syscalls::exec_fd(self.exec_file.as_raw_fd(), true))
+                io_outcome(fixture_syscalls::exec_fd(self.exec_file.as_raw_fd()))
             }
             PreparedOperation::SecretMmapExec => {
                 mmap_protection_outcome(&self.secret_file, libc::PROT_EXEC, libc::MAP_PRIVATE, None)
@@ -2810,12 +2806,10 @@ mod tests {
                     location: snafu::location!(),
                 })?;
         assert!(read_outcome(&mut received).allowed);
-        fixture_syscalls::exec_fd(received.as_raw_fd(), false).map_err(|source| {
-            crate::Error::Io {
-                path: "fexecve control fixture".into(),
-                source,
-                location: snafu::location!(),
-            }
+        fixture_syscalls::exec_fd(received.as_raw_fd()).map_err(|source| crate::Error::Io {
+            path: "fexecve control fixture".into(),
+            source,
+            location: snafu::location!(),
         })?;
         Ok(())
     }

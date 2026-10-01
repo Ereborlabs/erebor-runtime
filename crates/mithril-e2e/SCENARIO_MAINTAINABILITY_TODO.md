@@ -2979,7 +2979,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace `NonLeaderExec` with `thread_exec_is_denied`. Keep the
+  - [x] Replace `NonLeaderExec` with `thread_exec_is_denied`. Keep the
     baseline fork-then-pthread condition and real descriptor exec. Reuse
     the signed exec policy, exec actor, process owner, and evidence owner.
     Hold the executable before Node starts. After production recovery, fork
@@ -3014,9 +3014,16 @@ test does not close a row when its physical condition or an assertion changed.
       creator, process-state, syscall, and fresh evidence assertions.
       Namespace, pin, and lease cleanup passed. The final repository Rust
       CI passed. No Platform or production code changed.
-    - [ ] Remove only the matched legacy action, result, and unused pthread
+    - [x] Remove only the matched legacy action, result, and unused pthread
       helper after all three platforms pass. Keep ordinary descriptor exec
       and all unrelated identity and memory assertions.
+      The retirement removes 72 Rust lines net. Ordinary `Exec` keeps the
+      same fork and real descriptor syscall for Observe mode and descriptor
+      transfer. All nine child regressions and the final repository Rust CI
+      pass. No physical matrix rerun is required for this matched deletion.
+      `effect.rs` has 2,938 lines, `effect/child.rs` has 2,833 lines, and
+      `effect/fixture_syscalls.rs` has 754 lines. The large runners remain
+      incomplete.
   - [x] Replace `MemfdExec` with `memfd_exec_is_denied`. Reuse the shared
     exec actor, signed exec policy, process owner, and evidence owner. Before
     Node starts, create a memfd with Linux `MFD_EXEC`, copy the executable

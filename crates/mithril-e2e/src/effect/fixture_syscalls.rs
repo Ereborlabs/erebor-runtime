@@ -198,7 +198,7 @@ struct MountAttr {
     userns_fd: u64,
 }
 
-pub(super) fn exec_fd(fd: RawFd, from_non_leader: bool) -> io::Result<()> {
+pub(super) fn exec_fd(fd: RawFd) -> io::Result<()> {
     let arguments = [
         c"sh".as_ptr(),
         c"-c".as_ptr(),
@@ -207,60 +207,13 @@ pub(super) fn exec_fd(fd: RawFd, from_non_leader: bool) -> io::Result<()> {
     ];
     let environment = [std::ptr::null::<libc::c_char>()];
 
-    if !from_non_leader {
-        return fork_and_wait(|| {
-            // SAFETY: fd and the retained argument vectors remain valid after fork.
-            unsafe {
-                libc::fexecve(fd, arguments.as_ptr(), environment.as_ptr());
-            }
-            last_errno()
-        });
-    }
-
-    let call = ThreadExecCall {
-        fd,
-        arguments: arguments.as_ptr(),
-        environment: environment.as_ptr(),
-    };
     fork_and_wait(|| {
-        let mut thread = unsafe { zeroed::<libc::pthread_t>() };
-        // SAFETY: the new process has one thread. `call` stays live until join.
-        let created = unsafe {
-            libc::pthread_create(
-                &mut thread,
-                std::ptr::null(),
-                exec_fd_thread,
-                (&call as *const ThreadExecCall).cast_mut().cast(),
-            )
-        };
-        if created != 0 {
-            return created;
+        // SAFETY: fd and the retained argument vectors remain valid after fork.
+        unsafe {
+            libc::fexecve(fd, arguments.as_ptr(), environment.as_ptr());
         }
-        let mut result = std::ptr::null_mut();
-        // SAFETY: thread is the successful pthread_create result.
-        let joined = unsafe { libc::pthread_join(thread, &mut result) };
-        if joined == 0 {
-            result.addr() as libc::c_int
-        } else {
-            joined
-        }
+        last_errno()
     })
-}
-
-struct ThreadExecCall {
-    fd: RawFd,
-    arguments: *const *const libc::c_char,
-    environment: *const *const libc::c_char,
-}
-
-extern "C" fn exec_fd_thread(argument: *mut libc::c_void) -> *mut libc::c_void {
-    // SAFETY: argument points to ThreadExecCall retained by the joining thread.
-    let call = unsafe { &*argument.cast::<ThreadExecCall>() };
-    // SAFETY: all fields remain valid until this function returns or exec succeeds.
-    unsafe {
-        libc::fexecve(call.fd, call.arguments, call.environment);
-    }
-    std::ptr::without_provenance_mut(last_errno() as usize)
 }
 
 pub(super) fn memfd_copy(source: &Path) -> io::Result<File> {

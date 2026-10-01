@@ -227,9 +227,9 @@ and cleanup. Use the `exec_deny_recovery_runc` suffix. Kubernetes passed in
 Use the `exec_deny_recovery_kubernetes` suffix. The matched legacy `Fexecve`
 dispatch and result flag are removed. This deletes seven Rust lines. Nine
 child regressions and the final repository Rust CI procedure passed after
-retirement. `Exec`, `Execveat`, non-leader exec, and their descriptor and libc
-helper remain for their separate migrations. No production or Platform API
-changed.
+retirement. Ordinary `Exec` remains for Observe mode and its descriptor
+transfer control. Later sections cover the other exec replacements.
+No production or Platform API changed.
 
 ### Path-exec denial
 
@@ -257,7 +257,7 @@ passed in 71.88 seconds with the same checks and namespace, pin, and lease
 cleanup. Use the `exec_path_recovery_kubernetes` suffix. The matched legacy
 `Execve` dispatch and result flag are removed. This deletes seven Rust lines.
 Nine child regressions and the final repository Rust CI procedure passed after
-retirement. `Execveat`, script exec, and their shared path fixture remain.
+retirement. Later sections cover the execveat and script replacements.
 This review covers the path-exec replacement based on `8373b68b`. Production
 kernel and result schemas do not change.
 
@@ -288,8 +288,8 @@ has one path-exec operation and no mode switch. Its constructor keeps the
 path needed for descriptors and mappings, but not an unused stored copy.
 The retirement removes 16 Rust lines net. The existing native control now
 checks real path exec and descriptor exec. All nine child regressions and the
-final repository Rust CI passed after the last Rust edit. Script exec and
-non-leader exec remain. This review covers the replacement based on `87511d7f`.
+final repository Rust CI passed after the last Rust edit. Later sections cover
+the script and worker replacements. This review covers the replacement based on `87511d7f`.
 Production kernel and result schemas do not change.
 
 ### Script execution denial
@@ -324,8 +324,8 @@ path-exec helper are removed after all three platforms pass. The retirement
 removes 65 Rust lines net. The physical script control replaces the old
 path-helper control. Original descriptor-transfer and descriptor-exec checks
 remain. All nine child regressions and the final repository Rust CI pass.
-The first retirement CI found a one-element loop. The remaining non-leader
-denial and path-object checks now use direct calls with the same inputs.
+The script retirement changes the remaining non-leader loop to direct calls.
+The worker replacement below retires those calls after qualification.
 This review covers the replacement based on `5d2f8fe0`. No Platform or
 production code changes are required. The remaining legacy runners are not
 complete.
@@ -428,7 +428,12 @@ Direct `runc` passed in 28.87 seconds with the same checks and cleanup. Use
 the `thread_deny_recovery_runc` suffix. The final repository Rust CI passed.
 Kubernetes passed in 70.30 seconds with the same checks and namespace, pin,
 and lease cleanup. Use the `thread_deny_recovery_kubernetes` suffix. The final
-repository Rust CI passed. Legacy retirement remains pending.
+repository Rust CI passed. The matched legacy action, enum arm, result flag,
+and pthread helper are removed after all three platforms pass. Ordinary
+descriptor exec remains for Observe mode and descriptor transfer. The
+retirement removes 72 Rust lines net. All nine child regressions and the
+final repository Rust CI pass after retirement. The large runners remain
+incomplete.
 This review covers the replacement based on `e0c7d334`. No Platform or
 production code changes are required.
 
