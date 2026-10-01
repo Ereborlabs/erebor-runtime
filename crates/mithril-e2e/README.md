@@ -279,8 +279,10 @@ modes do not load the new symbol. The test has 80 lines and adds no Platform or
 production API. Run
 `effect::exec_at_deny::forked_at_exec_is_denied::exec_at_recovery_host`
 with the exact-test flags below. Host passed in 27.41 seconds with pin, lease,
-and cgroup cleanup. Direct `runc` and Kubernetes remain pending. Keep the old
-action until all three platforms pass. This review covers the replacement
+and cgroup cleanup. Direct `runc` passed in 28.54 seconds with the same actor,
+policy, assertions, and cleanup. Use the `exec_at_recovery_runc` suffix.
+Kubernetes remains pending. Keep the old action until all three platforms pass.
+This review covers the replacement
 based on `87511d7f`. Production kernel and result schemas do not change.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a

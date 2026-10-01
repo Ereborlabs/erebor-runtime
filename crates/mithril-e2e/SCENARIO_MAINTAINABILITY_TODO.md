@@ -2992,8 +2992,11 @@ test does not close a row when its physical condition or an assertion changed.
       child-attributed denial, creator and role checks, and every legacy
       path-object field assertion. Pin, lease, and cgroup cleanup passed.
       The final repository Rust CI passed.
-    - [ ] Pass and commit direct `runc`, then Kubernetes. Register each
-      platform only after its exact case passes. Add no Platform API.
+    - [x] Direct `runc` passed in 28.54 seconds with the same actor, policy,
+      child attribution, syscall errno, and object-field assertions. Pin,
+      lease, and cgroup cleanup passed. The final repository Rust CI passed.
+    - [ ] Pass and commit Kubernetes. Register the platform only after its
+      exact case passes. Add no Platform API.
     - [ ] Remove only the legacy `Execveat` action, enum arm, and result field
       after all three platforms pass. Keep script exec and its shared path
       fixture. Remove the syscall helper's unused `execveat` branch only after

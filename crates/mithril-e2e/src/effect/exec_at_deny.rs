@@ -6,7 +6,7 @@ use mithril_control::WorkloadProtectionPolicy as Policy;
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host)]
+#[platform_test(host, runc)]
 #[lifecycle = exec_at_recovery]
 fn forked_at_exec_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("exec-at-deny")?;
