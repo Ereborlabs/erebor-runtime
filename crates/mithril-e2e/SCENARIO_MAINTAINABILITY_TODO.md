@@ -6745,3 +6745,25 @@ physical command.
       `/tmp/mithril-backlog-input-release-20261001.log`. This shared input
       step does not complete the scenario migration. Local harness checks
       and the final repository Rust CI gate pass.
+    - [x] Reuse `MtlsFixture::effect_batch` for the original 4,096-record
+      input. Keep all upload, group, acknowledgement, and timing operations
+      in the test. The unchanged release case passes in 15.19 seconds at
+      127.0 MiB/s, above 107.1 MiB/s. It acknowledges 536,989,928 bytes
+      through five receipts. See
+      `/tmp/mithril-backlog-input-release-20261001.log`. This shared input
+      step does not complete the scenario migration. Local harness checks
+      and the final repository Rust CI gate pass.
+    - [x] Replace the direct-intake block with `direct_intake_commits_group`
+      in `control_tls/intake_budget.rs`, a 65-line standard Rust test. Keep
+      the original maximum commit group, 4,096 records per batch, source
+      `[9; 16]`, authenticated Node identity, timing, and cumulative cursor.
+      Also require the durable cursor, no pending records, and every complete
+      accepted record. The release case passes in 10.39 seconds; measured
+      intake is 165.8 MiB/s. Remove only the matching old block after this
+      pass. See `/tmp/mithril-intake-budget-release-20261001.log`.
+      The remaining release upload budget passes in 14.44 seconds at
+      122.7 MiB/s with the original volume, receipts, and threshold. Local
+      harness checks and the final repository Rust CI gate pass. No Platform
+      or production source changes. No new physical matrix run is needed.
+      Run `cargo test -p mithril-e2e --lib --release
+      control_tls::intake_budget::direct_intake_commits_group -- --exact --ignored --nocapture`.

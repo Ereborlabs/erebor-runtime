@@ -13,14 +13,14 @@ use ed25519_dalek::SigningKey;
 use kube::client::Body as KubeBody;
 use kube::Client;
 use mithril_control::{
-    lower_kubernetes_policy, workload_target_fact_digest, AllowedNodeIdentity,
-    AuthenticatedEvidenceNodeV1, CapabilityRecord, ContainerKindV1, ControlPlane, ControlStore,
-    EvidenceBatch, EvidenceIntakeIdentityV1, EvidenceIntakeOwner, EvidenceStoreCapacityPolicyV1,
-    EvidenceStoreLimitsV1, KubernetesWorkloadIdentityV1, NodeDecommissionAuthorizationV1,
-    NodeDecommissionStateV1, NodeRegistration, PolicyActivationAcknowledgement, PolicyBundleV1,
-    PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicySignerConfigV1,
-    PolicySourceRevisionV1, PolicySourceStateV1, ProfileSealRequestV1, RegistryDigestsV1,
-    SignedNodeDecommissionV1, TrustGenerationV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
+    lower_kubernetes_policy, workload_target_fact_digest, AllowedNodeIdentity, CapabilityRecord,
+    ContainerKindV1, ControlPlane, ControlStore, EvidenceBatch, EvidenceIntakeIdentityV1,
+    EvidenceIntakeOwner, EvidenceStoreCapacityPolicyV1, EvidenceStoreLimitsV1,
+    KubernetesWorkloadIdentityV1, NodeDecommissionAuthorizationV1, NodeDecommissionStateV1,
+    NodeRegistration, PolicyActivationAcknowledgement, PolicyBundleV1, PolicyDesiredStateConfigV1,
+    PolicyDesiredStateOwner, PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1,
+    ProfileSealRequestV1, RegistryDigestsV1, SignedNodeDecommissionV1, TrustGenerationV1,
+    WorkloadProtectionPolicy, WorkloadTargetFactV1,
 };
 use mithril_node::{
     CoverageGapReasonV1, EffectObservationStore, EvidenceIdV1, EvidenceWalLimits,
@@ -43,6 +43,7 @@ mod admission;
 mod coverage;
 mod decommission;
 mod gap;
+mod intake_budget;
 mod readiness;
 mod registration;
 mod rejection;
@@ -988,37 +989,6 @@ async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box
     let connector = tls.connector(&server, "node-a", [7; 16]);
     let mut trust = TrustCache::load(&tls.path().join("trust"))?;
     let mut connection = connector.connect(registration(), false, &mut trust).await?;
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let direct_authenticated = AuthenticatedEvidenceNodeV1 {
-        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
-        node_id: "node-a".to_owned(),
-        node_boot_id: [7; 16],
-        label_epoch: 1,
-    };
-    let direct_batch_count = maximum_group_batches;
-    let mut direct_batches = Vec::new();
-    for index in 0..direct_batch_count {
-        let mut batch = template.clone();
-        let first_cursor = index * BATCH_RECORDS as u64 + 1;
-        batch.first_cursor = first_cursor;
-        batch.last_cursor = first_cursor + BATCH_RECORDS as u64 - 1;
-        let mut batch: EvidenceBatch = batch.into();
-        batch.source_id = vec![9; 16];
-        direct_batches.push((direct_authenticated.clone(), batch));
-    }
-    let direct_started = Instant::now();
-    let direct_acknowledgement = intake.receive_group(direct_batches)?;
-    let direct_elapsed = direct_started.elapsed();
-    let direct_mib_per_second = encoded_batch_bytes as f64 * direct_batch_count as f64
-        / 1_048_576.0
-        / direct_elapsed.as_secs_f64();
-    eprintln!(
-        "direct Control intake completed in {direct_elapsed:?}: {direct_mib_per_second:.1} MiB/s"
-    );
-    assert_eq!(
-        direct_acknowledgement.contiguous_cursor,
-        direct_batch_count * BATCH_RECORDS as u64
-    );
     let mut preparation_elapsed = Duration::ZERO;
     let mut enqueue_elapsed = Duration::ZERO;
     let mut acknowledgement_elapsed = Duration::ZERO;
