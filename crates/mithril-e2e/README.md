@@ -939,6 +939,31 @@ This source review covers the registration replacement based on `8915332c`.
 The two ignored throughput and release-startup budgets remain separate checks.
 No Host, direct-`runc`, or Kubernetes fixture changes are included.
 
+### Readiness keeps one authenticated session
+
+Intended result: readiness changes without a reconnect or a new session.
+
+[readiness_keeps_session](src/control_tls/readiness.rs) starts the existing TLS fixture and connects one Node.
+  -> [ControlPlane::bind_kubernetes_node_session](../mithril-control/src/service.rs) binds the original Node name and UID.
+  -> [readiness_keeps_session](src/control_tls/readiness.rs) requires one initial Ready session and one registered nonce.
+  -> [ControlConnection::report_readiness](../mithril-node/src/control.rs) reports NotReady and then Ready through the same connection and awaits each production acknowledgement.
+  -> [readiness_keeps_session](src/control_tls/readiness.rs) checks the ready set, complete restored session identity, unchanged trust nonce, and one registration at each stage.
+  -> [ControlServerFixture::shutdown](src/control_fixture.rs) stops and joins Control after the connection closes.
+
+Before: the legacy function repeats ready-set and registration checks.
+After: one 43-line test shows both transitions and checks their common
+invariants in one loop. It adds complete session equality and nonce equality.
+Production requests and assertions remain in the test. No helper owns them.
+
+Run `cargo test -p mithril-e2e --lib
+control_tls::readiness::readiness_keeps_session -- --exact`, then
+`cargo test -p mithril-e2e --lib control_tls:: -- --test-threads=1`.
+The exact case passed in 0.04 seconds. The related family passed 20 tests in
+25.35 seconds. Formatting, strict E2E Clippy, and local harness checks passed.
+Source review: the replacement working tree based on inventory `56712bb`.
+The legacy function and final Rust CI remain pending. This is a real mTLS
+protocol check, not kernel, runtime, or Kubernetes qualification.
+
 ### Consumption reclaims complete evidence segments
 
 Intended result: A two-record Block limit rejects a third record until both

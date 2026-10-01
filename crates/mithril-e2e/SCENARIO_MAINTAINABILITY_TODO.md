@@ -1213,6 +1213,13 @@ acknowledgement, or decommission operations directly.
   - This case uses real mTLS gRPC and production readiness owners. It has
     no syscall, OCI runtime, or Pod action. Direct `runc` and Kubernetes
     platform cases are not applicable. Do not rerun the physical matrix.
+  - The 43-line replacement passed in 0.04 seconds before legacy removal.
+    The related family passed 20 tests in 25.35 seconds; two existing
+    release-budget checks remain ignored. Formatting, strict E2E Clippy,
+    and local VM harness checks passed. The test checks complete restored
+    session equality and nonce equality in addition to every baseline
+    condition. No fixture, Platform, or production source changed.
+    The old function remains until this replacement is committed.
 - [x] Replace `control_evidence_queue_reclaims_only_durably_consumed_segments`
   with `consumption_reclaims_segments` in `control_tls/retention.rs`.
   - Use one standard Rust test below 100 lines. Reuse the existing WAL fixture

@@ -57,6 +57,7 @@ mod admission;
 mod coverage;
 mod decommission;
 mod gap;
+mod readiness;
 mod registration;
 mod rejection;
 mod replay;
