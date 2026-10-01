@@ -621,7 +621,7 @@ need replacement:
 | `identity.rs` | 4,845 | Size and runner retirement |
 | `effect.rs` | 2,907 | Size and runner retirement |
 | `effect/child.rs` | 2,715 | Size and runner retirement |
-| `control_tls.rs` | 1,679 | Runner retirement; size limit met |
+| `control_tls.rs` | 1,598 | Runner retirement; size limit met |
 | `effect/network.rs` | 1,505 | Runner retirement; size limit met |
 
 The behavior sections below are the runner-retirement inventory. This size
@@ -1300,22 +1300,35 @@ acknowledgement, or decommission operations directly.
     No fixture, Platform, or production source changed.
 - [ ] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
 - [ ] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
-- [ ] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`
-  - [ ] Replace the old function with `admission_keeps_retained_evidence` in
+- [x] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`
+  - [x] Replace the old function with `admission_keeps_retained_evidence` in
     `control_tls/admission.rs`, one standard Rust test below 100 lines. Reuse
     the verified TLS, WAL, policy, and ready HTTPS fixtures. Do not add an owner
     or put admission actions and assertions in a helper.
-  - [ ] Keep the original event, historical Node identity, retained evidence,
+  - [x] Keep the original event, historical Node identity, retained evidence,
     no allowed Node identities, complete empty workload inventory, policy
     source, Pod request, TLS, and request bounds. Do not add a live Node.
-  - [ ] Keep successful HTTP status, matching response UID, Allow, and the
+  - [x] Keep successful HTTP status, matching response UID, Allow, and the
     non-empty patch. Require one durable evidence cursor and an unchanged,
     still-pending Node WAL batch after admission. Keep normal shutdown visible.
-  - [ ] Compare with `95775f48`. Pass the exact replacement before removing
+  - [x] Compare with `95775f48`. Pass the exact replacement before removing
     the old function. Pass related Control/TLS cases, harness checks, and final
     Rust CI. Commit separately. This is real HTTPS with an external Kubernetes
     API fixture, not physical scheduling, runtime admission, or kernel proof.
     Do not change production or Platform code or rerun an unrelated matrix.
+    The complete replacement file has 98 lines. Its exact test passed in
+    0.65 seconds before legacy removal. The related Control/TLS run passed
+    19 tests in 25.94 seconds, with two existing ignored release budgets.
+    That run reported two parent imports made unused by the removal. Both
+    imports were removed before the final Rust CI gate. Harness checks passed.
+    Final Rust CI exited with status 0 after the last Rust edit. Its E2E run
+    passed 91 tests in 28.81 seconds, with 429 existing ignored tests. These
+    ignored tests are not physical qualification evidence.
+    `control_tls.rs` decreases from 1,679 to 1,598 lines. The test reuses the
+    previously verified ready HTTPS constructor. Temporary batch conversion,
+    intake, address, and CA variables are removed. All baseline conditions
+    and assertions remain visible. The receipt cursor and retained-batch
+    assertions are added. No production, Platform, or shared fixture changed.
 - [x] `node_decommission_https_accepts_the_same_signed_artifact_as_control`
   - [x] Add one ready HTTPS constructor on the existing
     `ControlServerFixture`. Accept the complete Kubernetes client, Control,

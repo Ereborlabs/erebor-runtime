@@ -17,12 +17,11 @@ use mithril_control::{
     AuthenticatedEvidenceNodeV1, CapabilityRecord, ContainerKindV1, ControlPlane, ControlStore,
     EvidenceBatch, EvidenceConsumptionWatermarkV1, EvidenceIntakeIdentityV1, EvidenceIntakeOwner,
     EvidenceRecord, EvidenceRetentionOwner, EvidenceStoreCapacityPolicyV1, EvidenceStoreLimitsV1,
-    EvidenceTemporalCoverage, KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner,
-    KubernetesWorkloadIdentityV1, NodeDecommissionAuthorizationV1, NodeDecommissionStateV1,
-    NodeRegistration, PolicyActivationAcknowledgement, PolicyBundleV1, PolicyDesiredStateConfigV1,
-    PolicyDesiredStateOwner, PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1,
-    ProfileSealRequestV1, RegistryDigestsV1, SignedNodeDecommissionV1, TrustGenerationV1,
-    WorkloadProtectionPolicy, WorkloadTargetFactV1,
+    EvidenceTemporalCoverage, KubernetesWorkloadIdentityV1, NodeDecommissionAuthorizationV1,
+    NodeDecommissionStateV1, NodeRegistration, PolicyActivationAcknowledgement, PolicyBundleV1,
+    PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicySignerConfigV1,
+    PolicySourceRevisionV1, PolicySourceStateV1, ProfileSealRequestV1, RegistryDigestsV1,
+    SignedNodeDecommissionV1, TrustGenerationV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
 };
 use mithril_node::{
     CoverageGapReasonV1, EffectObservationStore, EvidenceIdV1, EvidenceWalLimits,
@@ -55,6 +54,7 @@ use crate::control_fixture::{
 use crate::physical::{wait_for, wait_for_async};
 
 mod administrative;
+mod admission;
 mod coverage;
 mod decommission;
 mod gap;
@@ -1119,87 +1119,6 @@ async fn kubernetes_outage_partitioned_node_reconnects_to_running_control_and_re
 
     drop(reconnected);
     proxy.stop().await?;
-    server.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn kubernetes_outage_retained_evidence_allows_protected_pod_admission(
-) -> Result<(), Box<dyn StdError>> {
-    let tls = MtlsFixture::new(false)?;
-    let store = ControlStore::open(tls.path().join("control-store"))?;
-    let observations = tls.wal(EvidenceWalLimits::default())?;
-    let record = erebor_interceptor_abi::EffectObservationV1 {
-        observed_boottime_ns: 1,
-        source_sequence: 1,
-        source_cpu_id: 0,
-        task_cookie: 7,
-        reason: 9,
-        physical_result: 1,
-        effect_family: 1,
-        operation: 1,
-        ..erebor_interceptor_abi::EffectObservationV1::default()
-    };
-    observations.record_bytes(record.as_bytes());
-    let retained = observations
-        .next_evidence_batch()
-        .ok_or("missing retained admission evidence")?;
-    let retained: mithril_control::EvidenceBatch = retained.into();
-    let node = AuthenticatedEvidenceNodeV1 {
-        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
-        node_id: "node-a".to_owned(),
-        node_boot_id: [7; 16],
-        label_epoch: 1,
-    };
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    intake.receive(&node, retained)?;
-
-    let fixture = OutagePolicyFixture::new(store.clone());
-    let resource = fixture.resource(1)?;
-    let kube = fixture.kubernetes_client(&resource)?;
-    let review = fixture.protected_pod_admission_review();
-    let control = ControlPlane::with_control_store(
-        Vec::new(),
-        TrustGenerationV1 {
-            generation: 1,
-            bundle_digest: "d".repeat(64),
-            policy_issuer_sequence_epoch: 0,
-            policy_signers: Vec::new(),
-        },
-        store,
-    )?
-    .with_policy_desired_state(fixture.owner.clone());
-    assert!(control.replace_kubernetes_workload_inventory(Vec::new())?);
-    let nodes = KubernetesNodeReadinessOwner::new(KubernetesNodeControlConfigV1 {
-        daemon_set_namespace: "mithril-system".to_owned(),
-        daemon_set_name: "mithril-node".to_owned(),
-        session_ttl_seconds: 30,
-        reconcile_interval_ms: 100,
-    })?;
-    let server =
-        ControlServerFixture::admission(&tls.files, kube, control, fixture.owner, nodes).await?;
-    let address = server.address();
-    let ca = reqwest::Certificate::from_pem(&fs::read(&tls.files.ca)?)?;
-    let client = reqwest::Client::builder()
-        .add_root_certificate(ca)
-        .timeout(Duration::from_secs(2))
-        .build()?;
-
-    let response = client
-        .post(format!("https://localhost:{}/admit", address.port()))
-        .json(&review)
-        .send()
-        .await?;
-    assert!(response.status().is_success());
-    let review: serde_json::Value = response.json().await?;
-    assert_eq!(review["response"]["uid"], "outage-admission-1");
-    assert_eq!(review["response"]["allowed"], true);
-    let patch = review["response"]["patch"].as_array();
-    assert!(
-        patch.is_some_and(|patch| !patch.is_empty()),
-        "protected Pod admission did not return a scheduler patch: {review}"
-    );
-
     server.shutdown().await?;
     Ok(())
 }

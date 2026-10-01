@@ -942,7 +942,7 @@ and shutdown order visible.
 [ControlServerFixture::admission](src/control_fixture.rs) receives TLS files and complete Kubernetes-client, Control, policy, and Node-readiness owners.
   -> [KubernetesAdmissionOwner::serve_with_client](../mithril-control/src/policy/kubernetes_workloads.rs) validates the unchanged configuration and creates the production admission and decommission routes.
   -> [ControlServerFixture::from_running](src/control_fixture.rs) waits at most five seconds for the bound address; a failure reports the address and server-task state.
-  -> [Retained-evidence admission](src/control_tls.rs) and [HTTPS decommission](src/control_tls/decommission.rs) receive the ready server and perform their requests and result checks.
+  -> [Retained-evidence admission](src/control_tls/admission.rs) and [HTTPS decommission](src/control_tls/decommission.rs) receive the ready server and perform their requests and result checks.
   -> [ControlServerFixture::shutdown](src/control_fixture.rs) signals production graceful shutdown and joins the server; errors remain visible.
 
 ```mermaid
@@ -972,6 +972,62 @@ actions and assertions remain unchanged in this tooling step. This step does
 not retire either scenario. The Kubernetes client supplies external API
 fixtures; the production HTTPS owner runs. No Platform or production source
 changes are included.
+
+### Admission with retained evidence
+
+This case replaces the legacy retained-evidence admission function. It keeps
+the production request and all result checks in one 98-line Rust test file.
+
+Intended end state: Control admits the protected Pod with a constraint patch
+while historical evidence remains in Control and the Node WAL. No live Node
+session is added. Admission does not consume or change the retained batch.
+
+[admission_keeps_retained_evidence](src/control_tls/admission.rs) records the original event through [EffectObservationStore](../mithril-node/src/observation.rs) and keeps its batch.
+  -> [EvidenceIntakeOwner::receive](../mithril-control/src/evidence.rs) stores the batch for the historical Node identity and returns cursor 1; the test does not apply this acknowledgement to the WAL.
+  -> [ControlPlane](../mithril-control/src/service.rs) receives no allowed Node identities and a complete empty workload inventory.
+  -> [ControlServerFixture::admission](src/control_fixture.rs) starts the production HTTPS owner with the original external API fixture.
+  -> [KubernetesAdmissionOwner::admit](../mithril-control/src/policy/kubernetes_workloads.rs) reads namespace, service-account, policy, and Node DaemonSet inputs and returns the admission result.
+  -> [admission_keeps_retained_evidence](src/control_tls/admission.rs) requires successful HTTP status, the original UID, Allow, a non-empty patch, one Control cursor, and the unchanged pending WAL batch.
+  -> [ControlServerFixture::shutdown](src/control_fixture.rs) stops and joins HTTPS before temporary resources are removed.
+
+```mermaid
+sequenceDiagram
+    participant T as Rust test
+    participant W as Node WAL
+    participant C as Control owners
+    participant H as HTTPS admission
+    T->>W: Record event and read retained batch
+    T->>C: Receive historical batch
+    C-->>T: Acknowledgement at cursor 1
+    T->>H: Protected Pod CREATE review
+    H->>C: Reconcile matching policy from external inputs
+    H-->>T: Allow and non-empty patch
+    T->>W: Require same pending batch
+    T->>H: Shutdown and join
+```
+
+Before: The baseline repeats certificate, WAL, and HTTPS startup operations.
+After: Existing fixtures return ready resources. The request and original
+assertions stay in the test. Cursor and WAL-preservation checks are added.
+The two-second client request bound is unchanged.
+
+```sh
+cargo test -p mithril-e2e --lib control_tls::admission::admission_keeps_retained_evidence -- --exact
+cargo test -p mithril-e2e --lib control_tls::
+bash crates/mithril-e2e/harness/vm/test.sh
+```
+
+This source review covers the scenario change after `234b80bd`, compared with
+`95775f48`. The HTTPS service and policy/evidence owners are real production
+code. The Kubernetes API response fixture is not a real cluster. The test does
+not create a Pod, choose a Node, execute a runtime actor, or prove kernel
+enforcement. Physical qualification remains separate. No production or
+Platform code changes are included.
+
+The exact replacement passed before legacy removal. The related Control/TLS
+run passed 19 tests; two existing release-budget tests remain ignored. Harness
+checks and final Rust CI passed. The final gate includes the replacement and
+all 91 in-process E2E tests. Existing ignored tests are not physical proof.
 
 ### HTTPS decommission submission and status
 
