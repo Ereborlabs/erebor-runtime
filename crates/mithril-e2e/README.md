@@ -826,6 +826,59 @@ production WAL, filesystem, TLS, and durable Control-store operations. It does
 not claim physical syscall or Kubernetes outage qualification. No fixture,
 Platform, or production source changes are included.
 
+### Retained WAL across restart
+
+Intended result: All 303 records remain in the Node WAL despite its
+three-record soft limit. Reopening the WAL preserves the first two records
+and the source identity. Only Control's durable acknowledgement retires them.
+
+[retained_wal_survives_restart](src/control_tls/retained.rs) uses
+[MtlsFixture](src/control_fixture.rs) to start a ready TLS server and open the
+production WAL. The test writes two ABI records, drops the WAL, reopens the
+same path, and writes 301 more records with the Retain capacity policy.
+[EffectObservationStore::next_evidence_batches](../mithril-node/src/observation.rs)
+then prepares one complete batch.
+[ControlConnection::send_evidence_group](../mithril-node/src/control.rs)
+uploads it. [EvidenceIntakeOwner](../mithril-control/src/evidence.rs) persists
+the records and cursor before returning acknowledgement 303. The test applies
+that received acknowledgement, requires an empty WAL and complete accepted
+record equality, closes the connection, and stops the server.
+
+```mermaid
+sequenceDiagram
+    participant T as Rust test
+    participant W as Node WAL
+    participant C as Control
+    T->>W: Write two records; drop and reopen
+    W-->>T: Two pending records
+    T->>W: Write 301 more; prepare complete batch
+    W-->>T: 303 records with retained prefix and source
+    T->>C: Upload complete group
+    C-->>T: Durable acknowledgement at 303
+    T->>W: Apply received acknowledgement
+    W-->>T: No pending records
+```
+
+At baseline `95775f48`, the test constructs certificates and transport
+configuration in the scenario. The 93-line replacement reuses the existing
+fixture and removes the mutable source tracker and unbounded response loop.
+The retained prefix, source identity, cursors, counts, and complete records
+remain explicit assertions. The response wait has a bounded timeout that
+identifies the source and store path. Batch preparation selects an in-flight
+group; do not use it as a passive check before writing the remaining records.
+
+```bash
+cargo test -p mithril-e2e --lib \
+  control_tls::retained::retained_wal_survives_restart -- --exact
+cargo test -p mithril-e2e --lib control_tls::
+```
+
+This source review covers the replacement based on `21148042`. The test uses
+production WAL, TLS, and durable Control-store operations. It proves a WAL
+restart, not a Node daemon restart or physical syscall generation. Kubernetes
+outage cases remain separate. No fixture, Platform, or production source
+changes are included.
+
 ## Quiet Runtime Event Reproduction
 
 The lightweight CRI fixture can forward containerd events through a private

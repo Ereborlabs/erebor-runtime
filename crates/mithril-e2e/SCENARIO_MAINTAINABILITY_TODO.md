@@ -612,16 +612,16 @@ The current tree does not meet the size, naming, or runner-retirement gates.
 Do not mark the work complete while these entries remain. File size does not
 decide whether a runner still needs replacement.
 
-This table lists the files above 2,000 lines and the below-limit network
-runner that still needs replacement:
+This table lists files above 2,000 lines and below-limit runners that still
+need replacement:
 
 | Source | Current lines | Open work |
 | --- | ---: | --- |
-| `effect/runc.rs` | 5,930 | Size and runner retirement |
+| `effect/runc.rs` | 5,909 | Size and runner retirement |
 | `identity.rs` | 4,845 | Size and runner retirement |
-| `effect.rs` | 3,047 | Size and runner retirement |
-| `effect/child.rs` | 2,899 | Size and runner retirement |
-| `control_tls.rs` | 2,416 | Size and runner retirement |
+| `effect.rs` | 2,907 | Size and runner retirement |
+| `effect/child.rs` | 2,715 | Size and runner retirement |
+| `control_tls.rs` | 1,986 | Runner retirement; size limit met |
 | `effect/network.rs` | 1,505 | Runner retirement; size limit met |
 
 The behavior sections below are the runner-retirement inventory. This size
@@ -1302,25 +1302,38 @@ acknowledgement, or decommission operations directly.
 - [ ] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
 - [ ] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`
 - [ ] `node_decommission_https_accepts_the_same_signed_artifact_as_control`
-- [ ] `mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound`
-  - [ ] Replace the old function with `retained_wal_survives_restart` in
+- [x] `mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound`
+  - [x] Replace the old function with `retained_wal_survives_restart` in
     `control_tls/retained.rs`, one standard Rust test below 100 lines. Reuse
     `MtlsFixture` and public WAL, client, and intake operations. Remove the
     mutable source tracker and unbounded acknowledgement loop. Keep the real
     WAL drop and reopen visible. Do not claim a Node daemon restart.
-  - [ ] Keep the Retain policy, three-record soft limit, and 4,096-record batch
-    limit. Write two records before restart. Require the same retained batch
-    and two pending records after reopening the same durable path. Then write
-    records 3 through 303 and require all 303 to remain pending.
-  - [ ] Require one complete 303-record group and the same source identity.
+  - [x] Keep the Retain policy, three-record soft limit, and 4,096-record batch
+    limit. Write two records before restart. Require two pending records after
+    reopening the same durable path. Then write records 3 through 303 and
+    require all 303 to remain pending. Require the final batch's first two
+    decoded records to equal the retained records from before restart.
+  - [x] Require one complete 303-record group and the same source identity.
     Upload that group through the production client. Bound the response wait.
     Require the received cumulative acknowledgement at 303, an empty WAL
     after applying that acknowledgement, one registered nonce, Control cursor
     303, and exactly 303 accepted records. Keep normal shutdown visible.
-  - [ ] Compare with `95775f48`. Pass the exact replacement before deleting
+  - [x] Compare with `95775f48`. Pass the exact replacement before deleting
     the old function. Pass the Control/TLS family, harness checks, and final
     Rust CI. Commit this protocol-only replacement separately. Do not change
     production or Platform code or rerun an unrelated physical matrix.
+    Qualification: the 93-line replacement passed its exact check in 0.80
+    seconds before the old function was removed. The Control/TLS family
+    passed 19 tests in 25.43 seconds, with two existing ignored budgets.
+    Harness checks passed. The final Rust CI gate exited with status 0;
+    its E2E run passed 91 tests in 28.83 seconds, with 429 existing ignored
+    tests. These ignored tests are not new physical qualification evidence.
+    The first draft prepared a two-record in-flight batch immediately after
+    reopening the WAL. That extra call changed the baseline order. It was
+    removed; the final batch is prepared only after all 303 records exist.
+    Complete-record equality and the retained-prefix check are added.
+    `control_tls.rs` decreases from 2,075 to 1,986 lines. Its other legacy
+    scenarios remain open. No fixture, Platform, or production source changed.
 - [ ] `mtls_evidence_backlog_exceeds_the_previous_baseline`
 - [ ] `mtls_coverage_upload_preserves_gap_truth_at_control`
 - [ ] `mtls_administrative_services_route_matching_results_and_cancel_waiters`

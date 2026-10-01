@@ -28,9 +28,9 @@ use mithril_control::{
 };
 use mithril_node::{
     AdministrativeControlRequest, CoverageGapReasonV1, EffectObservationStore, EvidenceIdV1,
-    EvidenceWalCapacityPolicyV1, EvidenceWalLimits, NodeControlConnector, NodeControlMessage,
-    NodeDecommissionAcceptanceV1, NodeDecommissionConfig, NodeDecommissionOwner,
-    ObservationCanonicalizer, PolicyControlPacingOwner, TrustCache,
+    EvidenceWalLimits, NodeControlConnector, NodeControlMessage, NodeDecommissionAcceptanceV1,
+    NodeDecommissionConfig, NodeDecommissionOwner, ObservationCanonicalizer,
+    PolicyControlPacingOwner, TrustCache,
 };
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
@@ -61,6 +61,7 @@ mod gap;
 mod registration;
 mod rejection;
 mod replay;
+mod retained;
 mod storage;
 
 const OUTAGE_POLICY: &[u8] = include_bytes!("../fixtures/convergence/outage-policy-v1.json");
@@ -1319,96 +1320,6 @@ async fn node_decommission_https_accepts_the_same_signed_artifact_as_control(
     server.shutdown().await?;
     drop(connection);
     grpc_server.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound(
-) -> Result<(), Box<dyn StdError>> {
-    let fixture = MtlsFixture::new(false)?;
-    let intake_path = fixture.path().join("control-evidence");
-    let store = ControlStore::open(&intake_path)?;
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let control = fixture.control_with_store(store, 1)?;
-    let server = fixture.start(control.clone()).await?;
-    let wal_limits = EvidenceWalLimits {
-        maximum_retained_records: 3,
-        maximum_batch_records: 4_096,
-        capacity_policy: EvidenceWalCapacityPolicyV1::Retain,
-        ..EvidenceWalLimits::default()
-    };
-    let observations = fixture.wal(wal_limits)?;
-    let mut sample = erebor_interceptor_abi::EffectObservationV1 {
-        reason: 9,
-        physical_result: 1,
-        effect_family: 1,
-        operation: 1,
-        ..erebor_interceptor_abi::EffectObservationV1::default()
-    };
-    for source_sequence in 1..=2 {
-        sample.observed_boottime_ns = source_sequence;
-        sample.source_sequence = source_sequence;
-        sample.task_cookie = source_sequence;
-        observations.record_bytes(sample.as_bytes());
-    }
-    let before_restart = observations
-        .next_evidence_batch()
-        .ok_or("the Node retained no evidence before restart")?;
-    assert_eq!(before_restart.record_count(), 2);
-    assert_eq!(observations.pending_evidence_records(), 2);
-    drop(observations);
-
-    let observations = fixture.wal(wal_limits)?;
-    assert_eq!(observations.pending_evidence_records(), 2);
-    for source_sequence in 3..=303 {
-        sample.observed_boottime_ns = source_sequence;
-        sample.source_sequence = source_sequence;
-        sample.task_cookie = source_sequence;
-        observations.record_bytes(sample.as_bytes());
-    }
-    assert_eq!(observations.pending_evidence_records(), 303);
-    let connector = fixture.connector(&server, "node-a", [7; 16]);
-    let mut trust = TrustCache::load(fixture.path())?;
-    let mut connection = connector.connect(registration(), false, &mut trust).await?;
-    let batches = observations.next_evidence_batches();
-    let upload_records = batches
-        .iter()
-        .map(mithril_node::EvidenceBatchV1::record_count)
-        .collect::<Vec<_>>();
-    let mut delivered_source = None;
-    let expected_cursor = batches
-        .last()
-        .map(|batch| batch.last_cursor)
-        .ok_or("the Node did not prepare an evidence commit group")?;
-    for batch in &batches {
-        delivered_source = delivered_source.or(Some(batch_source_id(batch)?));
-    }
-    connection.send_evidence_group(batches).await?;
-    loop {
-        let NodeControlMessage::EvidenceAck(acknowledgement) = connection.next_message().await?
-        else {
-            return Err("Control did not acknowledge the evidence commit group".into());
-        };
-        let complete = observations.acknowledge_evidence(acknowledgement)?;
-        if complete {
-            assert_eq!(acknowledgement.contiguous_cursor, expected_cursor);
-            break;
-        }
-    }
-    assert_eq!(upload_records.iter().sum::<usize>(), 303);
-    assert_eq!(upload_records, vec![303]);
-    assert_eq!(observations.pending_evidence_records(), 0);
-    assert_eq!(control.registered_nonce_count(), 1);
-
-    let identity =
-        fixture.identity(delivered_source.ok_or("the evidence stream had no source identity")?);
-    assert_eq!(intake.contiguous_cursor(&identity)?, 303);
-    assert_eq!(
-        intake.store().accepted_evidence_records(&identity)?.len(),
-        303
-    );
-    drop(connection);
-    server.shutdown().await?;
     Ok(())
 }
 
