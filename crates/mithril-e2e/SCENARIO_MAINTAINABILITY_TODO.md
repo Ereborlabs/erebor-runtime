@@ -1302,6 +1302,28 @@ acknowledgement, or decommission operations directly.
 - [ ] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
 - [ ] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`
 - [ ] `node_decommission_https_accepts_the_same_signed_artifact_as_control`
+  - [ ] Add one ready HTTPS constructor on the existing
+    `ControlServerFixture`. Accept the complete Kubernetes client, Control,
+    policy, and Node-readiness owners. Keep the current TLS files, request
+    limits, production `serve_with_client` call, bounded readiness, and
+    fallible shutdown. Do not put requests, policy delivery, or assertions
+    in this constructor. Replace both repeated HTTPS startup blocks, verify
+    their existing exact tests and related checks, and commit tooling first.
+  - [ ] Replace the old function with `https_decommission_keeps_status` in
+    `control_tls/decommission.rs`, one standard Rust test below 100 lines.
+    Keep the live authenticated Node connection, boot ID, signer, nonce,
+    signed artifact, HTTP content type, and original component order.
+    Reuse one endpoint instead of repeating URL construction.
+  - [ ] Keep HTTP 202 and Submitted state for the signed POST, HTTP 200 for
+    status GET, and complete status equality. Require the returned digest
+    to match the submitted artifact. Keep HTTPS shutdown, connection close,
+    and gRPC shutdown visible in that order. Do not claim kernel retirement.
+  - [ ] Compare with `95775f48`. Pass the exact replacement before deleting
+    the old function. Pass the Control/TLS family, harness checks, and final
+    Rust CI. Commit the scenario separately from tooling. This case uses
+    real production HTTPS and gRPC services with an external Kubernetes API
+    fixture. Do not count it as physical Kubernetes qualification or change
+    production or Platform code.
 - [x] `mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound`
   - [x] Replace the old function with `retained_wal_survives_restart` in
     `control_tls/retained.rs`, one standard Rust test below 100 lines. Reuse
