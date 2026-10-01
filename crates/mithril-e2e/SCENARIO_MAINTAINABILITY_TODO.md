@@ -2647,6 +2647,23 @@ test does not close a row when its physical condition or an assertion changed.
       and its syscall helper after all three cases pass. Keep the detached
       `open_tree` check and its mount source. The 92 non-privileged Mithril
       library tests pass after removal.
+  - [ ] Replace filesystem reconfiguration with `reconfigure_dirties_mounts`.
+    - [ ] Reuse `mount_alias.py`. Mount tmpfs, call `fspick`, set `size` to
+      `4194304`, and call `FSCONFIG_CMD_RECONFIGURE`. Do not substitute a
+      remount or a read-only attribute change.
+    - [ ] Keep Protect and Observe qualification. Install the signed policy
+      through Control and Node. Keep the actor action and assertions shared.
+    - [ ] Require the global mutation epoch and activity sequence to advance.
+      Require mutation epoch to differ from clean epoch or pending mutations
+      to be nonzero before the actor performs another file operation.
+    - [ ] Require the explicit benign-file read to succeed after reconfiguration
+      with task-attributed allow evidence. Check the resulting tmpfs size.
+    - [ ] Keep the scenario below 100 lines. Add no Platform API. Use the
+      existing process readiness, typed state reader, and effect checker.
+    - [ ] Pass and commit Host, then direct `runc`, then real Kubernetes.
+    - [ ] Remove the matching legacy action, result field, child command, and
+      unused syscall helper only after all three platform cases pass. Compare
+      with baseline `95775f48`. Keep propagation, cache, and attribute checks.
   - [x] Replace the pre-policy `mount_global_mutation_epoch` read. The
     production policy owner creates this hash-map row during policy
     installation. The old probe reads it before policy installation. The full
