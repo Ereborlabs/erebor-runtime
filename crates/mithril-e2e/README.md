@@ -942,7 +942,7 @@ and shutdown order visible.
 [ControlServerFixture::admission](src/control_fixture.rs) receives TLS files and complete Kubernetes-client, Control, policy, and Node-readiness owners.
   -> [KubernetesAdmissionOwner::serve_with_client](../mithril-control/src/policy/kubernetes_workloads.rs) validates the unchanged configuration and creates the production admission and decommission routes.
   -> [ControlServerFixture::from_running](src/control_fixture.rs) waits at most five seconds for the bound address; a failure reports the address and server-task state.
-  -> [HTTPS scenarios](src/control_tls.rs) receive the ready server and perform their original requests and result checks.
+  -> [Retained-evidence admission](src/control_tls.rs) and [HTTPS decommission](src/control_tls/decommission.rs) receive the ready server and perform their requests and result checks.
   -> [ControlServerFixture::shutdown](src/control_fixture.rs) signals production graceful shutdown and joins the server; errors remain visible.
 
 ```mermaid
@@ -972,6 +972,69 @@ actions and assertions remain unchanged in this tooling step. This step does
 not retire either scenario. The Kubernetes client supplies external API
 fixtures; the production HTTPS owner runs. No Platform or production source
 changes are included.
+
+### HTTPS decommission submission and status
+
+This case replaces the legacy HTTPS decommission function. It keeps signed
+submission and durable status checks in one 88-line Rust test file.
+
+Intended end state: The production HTTPS route accepts the signed artifact
+for the registered Node boot. A digest lookup returns the complete submitted
+status. The returned digest identifies the exact submitted bytes.
+
+[https_decommission_keeps_status](src/control_tls/decommission.rs) starts ready gRPC and HTTPS servers with the existing fixtures and keeps the authenticated Node connection open.
+  -> [SignedNodeDecommissionV1::sign](../mithril-control/src/decommission.rs) signs the original target, boot ID, expiry, signer ID, and nonce.
+  -> [NodeDecommissionHttpOwner::submit](../mithril-control/src/decommission.rs) parses the POST bytes, checks the cluster, and calls Control.
+  -> [ControlPlane::submit_node_decommission](../mithril-control/src/service.rs) commits the artifact through [ControlStore](../mithril-control/src/store.rs) before it attempts command delivery and returns Submitted.
+  -> [NodeDecommissionHttpOwner::status](../mithril-control/src/decommission.rs) reads the same durable record by its digest for GET.
+  -> [https_decommission_keeps_status](src/control_tls/decommission.rs) checks both HTTP codes, Submitted state, artifact digest, and complete status equality before normal shutdown.
+
+```mermaid
+sequenceDiagram
+    participant T as Rust test
+    participant H as HTTPS owner
+    participant C as Control
+    participant D as Durable store
+    T->>H: POST signed bytes
+    H->>C: Submit cluster-matched artifact
+    C->>D: Commit artifact
+    D-->>C: Submitted record
+    C-->>H: Submitted status
+    H-->>T: HTTP 202 and status
+    T->>H: GET artifact digest
+    H->>C: Read status
+    C->>D: Look up digest
+    D-->>C: Stored record
+    C-->>H: Stored status
+    H-->>T: HTTP 200 and same status
+```
+
+Before: The baseline test repeats certificate, server, and endpoint setup.
+After: Existing TLS and server fixtures return usable resources. One URL
+serves both requests. Signing and all result assertions remain in the test.
+The digest assertion is new. HTTPS stops before the Node connection closes;
+gRPC stops last. The client request bound remains two seconds.
+
+Run the exact test, then related tests and harness checks:
+
+```sh
+cargo test -p mithril-e2e --lib control_tls::decommission::https_decommission_keeps_status -- --exact
+cargo test -p mithril-e2e --lib control_tls::
+bash crates/mithril-e2e/harness/vm/test.sh
+```
+
+This source review covers the scenario change after `e40bcd1e`, compared with
+`95775f48`. The test uses real production HTTPS and gRPC services. Its
+Kubernetes client supplies external API fixtures. The test does not prove
+Node execution of the command, signature verification by Node, kernel
+retirement, or physical Kubernetes cleanup. No production or Platform code
+changes are included.
+
+The exact replacement passed before the old function was removed. The related
+Control/TLS run passed 19 tests; two existing release-budget tests remain
+ignored. Harness checks passed. The final repository Rust CI gate passed after
+the last Rust edit, including 91 in-process E2E tests. Existing ignored tests
+are not new physical qualification evidence.
 
 ### Administrative service routing and cancellation
 

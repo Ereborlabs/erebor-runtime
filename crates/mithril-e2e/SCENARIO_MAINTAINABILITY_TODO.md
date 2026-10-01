@@ -621,7 +621,7 @@ need replacement:
 | `identity.rs` | 4,845 | Size and runner retirement |
 | `effect.rs` | 2,907 | Size and runner retirement |
 | `effect/child.rs` | 2,715 | Size and runner retirement |
-| `control_tls.rs` | 1,757 | Runner retirement; size limit met |
+| `control_tls.rs` | 1,679 | Runner retirement; size limit met |
 | `effect/network.rs` | 1,505 | Runner retirement; size limit met |
 
 The behavior sections below are the runner-retirement inventory. This size
@@ -1316,22 +1316,32 @@ acknowledgement, or decommission operations directly.
     existing ignored tests. These results are not physical Kubernetes proof.
     The shared fixture has 375 lines. `control_tls.rs` decreases from 1,798
     to 1,757 lines. Scenario actions, assertions, and shutdown order did not
-    change. The scenario replacement remains open below.
-  - [ ] Replace the old function with `https_decommission_keeps_status` in
+    change. Tooling was committed separately as `e40bcd1e` before the scenario.
+  - [x] Replace the old function with `https_decommission_keeps_status` in
     `control_tls/decommission.rs`, one standard Rust test below 100 lines.
     Keep the live authenticated Node connection, boot ID, signer, nonce,
     signed artifact, HTTP content type, and original component order.
     Reuse one endpoint instead of repeating URL construction.
-  - [ ] Keep HTTP 202 and Submitted state for the signed POST, HTTP 200 for
+  - [x] Keep HTTP 202 and Submitted state for the signed POST, HTTP 200 for
     status GET, and complete status equality. Require the returned digest
     to match the submitted artifact. Keep HTTPS shutdown, connection close,
     and gRPC shutdown visible in that order. Do not claim kernel retirement.
-  - [ ] Compare with `95775f48`. Pass the exact replacement before deleting
+  - [x] Compare with `95775f48`. Pass the exact replacement before deleting
     the old function. Pass the Control/TLS family, harness checks, and final
     Rust CI. Commit the scenario separately from tooling. This case uses
     real production HTTPS and gRPC services with an external Kubernetes API
     fixture. Do not count it as physical Kubernetes qualification or change
     production or Platform code.
+    The complete replacement file has 88 lines. Its exact test passed in
+    0.06 seconds before the old function was removed. The related Control/TLS
+    run passed 19 tests in 21.46 seconds, with two existing ignored budgets.
+    Harness checks passed. Final Rust CI exited with status 0 after the last
+    Rust edit; its E2E run passed 91 tests in 29.18 seconds, with 429 existing
+    ignored tests. `control_tls.rs` decreases from 1,757 to 1,679 lines.
+    One endpoint serves both requests. The signed artifact and all original
+    assertions stay in the test; exact artifact-digest equality is added.
+    This case does not prove Node command execution or kernel retirement.
+    Other legacy cases remain open. No production or Platform code changed.
 - [x] `mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound`
   - [x] Replace the old function with `retained_wal_survives_restart` in
     `control_tls/retained.rs`, one standard Rust test below 100 lines. Reuse
