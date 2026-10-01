@@ -9,7 +9,7 @@ use mithril_control::WorkloadProtectionPolicy as Policy;
 use super::check::EffectCheck;
 use crate::platform::{platform_test, Platform, TestResult};
 
-#[platform_test(host, runc)]
+#[platform_test(host, runc, kubernetes)]
 #[lifecycle = mount_config]
 fn reconfigure_dirties_mounts<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("mount-config")?;

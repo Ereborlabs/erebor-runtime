@@ -2668,7 +2668,9 @@ test does not close a row when its physical condition or an assertion changed.
       code or assertion is removed.
     - [x] Pass and commit direct `runc`. The unchanged shared test passed both
       modes in 47.57 seconds. Output, pin, lease, and cgroup cleanup passed.
-    - [ ] Pass and commit real Kubernetes.
+    - [x] Pass and commit real Kubernetes. The unchanged shared test passed
+      both modes in 81.13 seconds. Namespace, output, pin, lease, and socket
+      cleanup passed. Host and direct-`runc` qualification ran first.
     - [ ] Remove the matching legacy action, result field, child command, and
       unused syscall helper only after all three platform cases pass. Compare
       with baseline `95775f48`. Keep propagation, cache, and attribute checks.

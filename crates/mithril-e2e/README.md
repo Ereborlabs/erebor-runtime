@@ -825,8 +825,9 @@ Run `bash crates/mithril-e2e/harness/vm/test.sh` for local launcher checks.
 The complete physical matrix remains a separate delivery gate.
 The 95-line Host test passed both modes in 40.59 seconds. Direct `runc` passed
 both modes in 47.57 seconds with the same body. Normal output, pin, lease,
-and cgroup cleanup passed on both platforms. Kubernetes qualification remains
-pending. The legacy reconfiguration block remains.
+and cgroup cleanup passed on both platforms. Kubernetes passed both modes in
+81.13 seconds. Namespace, output, pin, lease, and socket cleanup passed.
+The legacy reconfiguration block remains until its retirement commit.
 Source review: `ed47714a` plus the reconfiguration working-tree changes.
 The baseline comparison uses `95775f48`.
 
