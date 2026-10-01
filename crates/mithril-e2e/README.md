@@ -707,6 +707,47 @@ This source review covers the registration replacement based on `8915332c`.
 The two ignored throughput and release-startup budgets remain separate checks.
 No Host, direct-`runc`, or Kubernetes fixture changes are included.
 
+### Evidence replay after disconnect
+
+Intended result: Control receives each record once when Node disconnects
+before it reads the first durable acknowledgement. Node replays the unchanged
+batch through one replacement connection. That connection also uploads the
+second CPU source.
+
+[MtlsFixture](src/control_fixture.rs) creates certificates, the durable WAL, and a ready Control server.
+  -> [evidence_replays_once](src/control_tls/replay.rs) records three ABI samples on two CPU sources through the production observation store.
+  -> [ControlConnection::send_evidence_batch](../mithril-node/src/control.rs) sends the first batch through the authenticated evidence stream.
+  -> [ControlPlane::receive_evidence_stream_group](../mithril-control/src/service.rs) authenticates the session and calls the durable intake owner.
+  -> [EvidenceIntakeOwner::receive_group](../mithril-control/src/evidence.rs) persists records and the contiguous cursor before returning an acknowledgement.
+  -> [evidence_replays_once](src/control_tls/replay.rs) waits for that cursor and drops the connection without reading its acknowledgement.
+  -> [evidence_replays_once](src/control_tls/replay.rs) reconnects and requires the unchanged batch before uploading both sources.
+  -> [EffectObservationStore::acknowledge_evidence](../mithril-node/src/observation.rs) advances the WAL only after the test receives each production acknowledgement.
+  -> [evidence_replays_once](src/control_tls/replay.rs) checks distinct sources, both cursors, complete accepted records, exactly-once counts, two registrations, and an empty WAL.
+  -> [ControlServerFixture::shutdown](src/control_fixture.rs) stops and joins the server after both connections close.
+
+At baseline `95775f48`, the 141-line function creates certificates and transport
+configuration, repeats three event literals, and uses fixed sleeps. The
+96-line replacement reuses the existing fixture and the later durable-cursor
+readiness fix. It removes the mutable cursor cell, manual error reconstruction,
+and duplicate upload/acknowledgement code. The first acknowledgement remains
+unread at disconnect. Each later acknowledgement wait has a bounded timeout
+that identifies its source and resource path. The test adds complete-record
+equality; it does not replace record-count assertions.
+
+Run this protocol case without root, a VM, or a container runtime:
+
+```bash
+cargo test -p mithril-e2e --lib \
+  control_tls::replay::evidence_replays_once -- --exact
+cargo test -p mithril-e2e --lib control_tls::
+```
+
+The source review covers the replay replacement based on `fc255510`.
+The samples enter the production WAL through its ABI input. This case does not
+claim physical syscall generation, Node daemon restart, or Kubernetes outage
+coverage. Those cases remain separate. No production or Platform source changes
+are included.
+
 ## Quiet Runtime Event Reproduction
 
 The lightweight CRI fixture can forward containerd events through a private

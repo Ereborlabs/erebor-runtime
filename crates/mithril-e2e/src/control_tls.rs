@@ -59,6 +59,7 @@ use crate::physical::{wait_for, wait_for_async};
 
 mod registration;
 mod rejection;
+mod replay;
 
 const OUTAGE_POLICY: &[u8] = include_bytes!("../fixtures/convergence/outage-policy-v1.json");
 const OUTAGE_TENANT_ID: &str = "00000000-0000-0001-0000-000000000002";
@@ -645,102 +646,6 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
     wait_for_decommission_state(&control, hash, NodeDecommissionStateV1::Completed).await?;
 
     drop(connection);
-    server.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered_session(
-) -> Result<(), Box<dyn StdError>> {
-    let fixture = MtlsFixture::new(false)?;
-    let intake_path = fixture.path().join("control-evidence");
-    let store = ControlStore::open(&intake_path)?;
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let control = fixture.control_with_store(store, 1)?;
-    let server = fixture.start(control.clone()).await?;
-    let observations = fixture.wal(EvidenceWalLimits {
-        maximum_retained_records: 10,
-        maximum_batch_records: 10,
-        ..EvidenceWalLimits::default()
-    })?;
-    for (sequence, cpu, cookie) in [(1, 0, 7), (1, 1, 8), (2, 0, 9)] {
-        observations.record_bytes(
-            erebor_interceptor_abi::EffectObservationV1 {
-                observed_boottime_ns: sequence,
-                source_sequence: sequence,
-                source_cpu_id: cpu,
-                task_cookie: cookie,
-                reason: 9,
-                physical_result: 1,
-                effect_family: 1,
-                operation: 1,
-                ..erebor_interceptor_abi::EffectObservationV1::default()
-            }
-            .as_bytes(),
-        );
-    }
-    let connector = fixture.connector(&server, "node-a", [7; 16]);
-    let mut trust = TrustCache::load(fixture.path())?;
-    let mut first = connector.connect(registration(), false, &mut trust).await?;
-    let first_batch = observations
-        .next_evidence_batch()
-        .ok_or("missing WAL batch")?;
-    let first_source = batch_source_id(&first_batch)?;
-    first.send_evidence_batch(first_batch.clone()).await?;
-    let first_identity = fixture.identity(first_source);
-    let last_control_cursor = std::cell::Cell::new(0);
-    wait_for_async(
-        &intake_path,
-        "Control to durably receive the first evidence batch",
-        Duration::from_secs(2),
-        || {
-            let cursor = intake
-                .contiguous_cursor(&first_identity)
-                .map_err(|source| crate::Error::Policy {
-                    source,
-                    location: snafu::Location::default(),
-                })?;
-            last_control_cursor.set(cursor);
-            Ok((cursor == first_batch.last_cursor).then_some(()))
-        },
-        || format!("last durable Control cursor: {}", last_control_cursor.get()),
-    )
-    .await?;
-    drop(first);
-    assert!(observations.next_evidence_batch().is_some());
-
-    let mut second = connector.connect(registration(), false, &mut trust).await?;
-    let replay = observations
-        .next_evidence_batch()
-        .ok_or("missing replay batch")?;
-    assert_eq!(replay, first_batch);
-    second.send_evidence_batch(replay).await?;
-    let NodeControlMessage::EvidenceAck(ack) = second.next_message().await? else {
-        return Err("Control did not acknowledge evidence".into());
-    };
-    observations.acknowledge_evidence(ack)?;
-    let second_batch = observations
-        .next_evidence_batch()
-        .ok_or("missing second source batch")?;
-    let second_source = batch_source_id(&second_batch)?;
-    assert_ne!(second_source, first_source);
-    second.send_evidence_batch(second_batch.clone()).await?;
-    let NodeControlMessage::EvidenceAck(ack) = second.next_message().await? else {
-        return Err("Control did not acknowledge the second evidence source".into());
-    };
-    observations.acknowledge_evidence(ack)?;
-    assert_eq!(control.registered_nonce_count(), 2);
-    assert!(observations.next_evidence_batch().is_none());
-    for (source_id, batch) in [(first_source, first_batch), (second_source, second_batch)] {
-        let identity = fixture.identity(source_id);
-        assert_eq!(intake.contiguous_cursor(&identity)?, batch.last_cursor);
-        assert_eq!(
-            intake.store().accepted_evidence_records(&identity)?.len(),
-            batch.record_count()
-        );
-    }
-
-    drop(second);
     server.shutdown().await?;
     Ok(())
 }
