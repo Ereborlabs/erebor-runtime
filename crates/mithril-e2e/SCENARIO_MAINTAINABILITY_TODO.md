@@ -2382,6 +2382,28 @@ test does not close a row when its physical condition or an assertion changed.
     - [ ] Remove only the matching old first-read decision and effect after
       the deferred Kubernetes case passes. Keep dirty-view, replaced-path,
       restoration, and cache snapshot checks until their own replacements pass.
+    - [ ] Replace the Protect-mode overmount and restoration pair with
+      `mount_replacement_stays_closed`. Keep one small shared Rust test below
+      100 lines. Reuse `exception.py`, the qualified bind/recovery setup,
+      `file_mount_change_policy.json`, `EffectCheck`, and existing map readers.
+      Do not add a Platform API or a scenario fixture.
+      - [ ] Add actor commands for benign-file overmount, source read, and
+        unmount. Use real Linux mount calls. Report mount completion through
+        the existing process-name readiness boundary, not file I/O that could
+        rebuild the dirty view before the test checks it.
+      - [ ] Keep original exact denial and actor attribution. Require
+        successful overmount, the original namespace's Dirty state, physical
+        `EACCES`, and fresh attributed `UNRESOLVED_OBJECT` File/OpenRead.
+        Remove the overmount; require physical `EACCES` and fresh
+        `EXACT_POLICY_DENY` with the original exact key, composite, and task.
+      - [ ] Pass Host and related shared-actor cases. Commit Host first.
+      - [ ] Pass direct `runc` and commit its registration.
+      - [ ] Pass Kubernetes and commit its registration. Keep the retained
+        VM, K3s, and images. Do not weaken any assertion or change production.
+      - [ ] Keep the old block until the separate Observe contrast and mount
+        snapshot checks pass. Do not count this Protect case as their proof.
+      - [ ] Compare with `95775f48`; run harness checks and final Rust CI
+        after each deliverable's final Rust edit. Document focused commands.
   - [ ] Remove the old exact control open only after these alias and mount
     checks and their Protect-mode counterparts pass as platform tests.
 - [ ] `EffectTestRunner::physical_probe` protect scenario: keep every hard
