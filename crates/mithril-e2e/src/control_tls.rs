@@ -14,31 +14,29 @@ use kube::client::Body as KubeBody;
 use kube::Client;
 use mithril_control::{
     lower_kubernetes_policy, workload_target_fact_digest, CapabilityRecord, ContainerKindV1,
-    ControlPlane, ControlStore, EvidenceIntakeIdentityV1, EvidenceIntakeOwner,
-    KubernetesWorkloadIdentityV1, NodeDecommissionStateV1, NodeRegistration,
-    PolicyActivationAcknowledgement, PolicyBundleV1, PolicyDesiredStateConfigV1,
+    ControlStore, EvidenceIntakeIdentityV1, EvidenceIntakeOwner, KubernetesWorkloadIdentityV1,
+    NodeRegistration, PolicyActivationAcknowledgement, PolicyBundleV1, PolicyDesiredStateConfigV1,
     PolicyDesiredStateOwner, PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1,
     ProfileSealRequestV1, RegistryDigestsV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
 };
 use mithril_node::{
     CoverageGapReasonV1, EffectObservationStore, EvidenceIdV1, EvidenceWalLimits,
-    NodeControlConnector, NodeControlMessage, NodeDecommissionAcceptanceV1, NodeDecommissionOwner,
-    ObservationCanonicalizer, PolicyControlPacingOwner, TrustCache,
+    NodeControlConnector, NodeControlMessage, ObservationCanonicalizer, PolicyControlPacingOwner,
+    TrustCache,
 };
-use sha2::{Digest as _, Sha256};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{oneshot, watch};
 use tower::service_fn;
 use zerocopy::IntoBytes as _;
 
 use crate::control_fixture::{Certificates, MtlsFixture};
-use crate::physical::wait_for_async;
 
 mod administrative;
 mod admission;
 mod backlog;
 mod coverage;
 mod decommission;
+mod decommission_order;
 mod gap;
 mod intake_budget;
 mod readiness;
@@ -371,81 +369,6 @@ impl OutagePolicyFixture {
         );
         registration
     }
-}
-
-#[tokio::test]
-async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes(
-) -> Result<(), Box<dyn StdError>> {
-    let fixture = MtlsFixture::new(false)?;
-    let control = fixture.control(4)?;
-    let server = fixture.start(control.clone()).await?;
-    let connector = fixture.connector(&server, "node-a", [7; 16]);
-    let mut trust = TrustCache::load(fixture.path())?;
-    let mut node = registration();
-    node.kubernetes_node_name = "worker-a.example".to_owned();
-    let mut connection = connector.connect(node, true, &mut trust).await?;
-    control
-        .bind_kubernetes_node_session("worker-a.example", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")?;
-    let session = control
-        .ready_kubernetes_node_sessions(Duration::from_secs(2))
-        .into_iter()
-        .next()
-        .ok_or("registered node has no ready Kubernetes session")?;
-
-    let (config, artifact) = fixture.decommission([7; 16])?;
-    let submitted = control.submit_node_decommission(artifact.clone()).await?;
-    let hash = &submitted.artifact_sha256;
-    let NodeControlMessage::Decommission(prepare) = connection.next_message().await? else {
-        return Err("Control did not deliver decommission preparation".into());
-    };
-    assert!(!prepare.execute);
-    assert_eq!(prepare.artifact, artifact);
-
-    let mut node_owner = NodeDecommissionOwner::load(
-        &config,
-        &fixture.path().join("node-state"),
-        "node-a".to_owned(),
-        erebor_interceptor_abi::Id128V1::from([7; 16]),
-    )?;
-    assert_eq!(
-        node_owner.accept(&prepare.artifact, 0, 1)?,
-        NodeDecommissionAcceptanceV1::Accepted
-    );
-    let digest: [u8; 32] = Sha256::digest(&prepare.artifact).into();
-    connection
-        .send_decommission_result(digest, "ACCEPTED", String::new())
-        .await?;
-    wait_for_decommission_state(&control, hash, NodeDecommissionStateV1::Accepted).await?;
-    let ready = || control.ready_kubernetes_node_sessions(Duration::from_secs(2));
-    wait_for_async(
-        fixture.path(),
-        "the accepted node session to leave the ready set",
-        Duration::from_secs(2),
-        || Ok(ready().is_empty().then_some(())),
-        || format!("last ready sessions: {:?}", ready()),
-    )
-    .await?;
-
-    control
-        .confirm_node_decommission_quarantine_for_test(&session)
-        .await?;
-    let NodeControlMessage::Decommission(execute) = connection.next_message().await? else {
-        return Err("Control did not deliver quarantined decommission execution".into());
-    };
-    assert!(execute.execute);
-    assert_eq!(
-        node_owner.accept(&execute.artifact, 0, 1)?,
-        NodeDecommissionAcceptanceV1::ResumeCleanup
-    );
-    node_owner.complete(&execute.artifact)?;
-    connection
-        .send_decommission_result(digest, "COMPLETED", String::new())
-        .await?;
-    wait_for_decommission_state(&control, hash, NodeDecommissionStateV1::Completed).await?;
-
-    drop(connection);
-    server.shutdown().await?;
-    Ok(())
 }
 
 #[tokio::test]
@@ -927,27 +850,6 @@ fn capabilities() -> Vec<CapabilityRecord> {
         state: "SUPPORTED".to_owned(),
         reason_code: "EXACT_ATTACH_READBACK".to_owned(),
     }]
-}
-
-async fn wait_for_decommission_state(
-    control: &ControlPlane,
-    artifact_sha256: &str,
-    expected: NodeDecommissionStateV1,
-) -> Result<(), Box<dyn StdError>> {
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if control
-                .node_decommission_status(artifact_sha256)
-                .is_ok_and(|status| status.state == expected)
-            {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .map_err(|_elapsed| format!("decommission did not reach {expected:?}"))?;
-    Ok(())
 }
 
 fn control_store_lease_ready<T>(result: mithril_control::Result<T>) -> crate::Result<Option<T>> {

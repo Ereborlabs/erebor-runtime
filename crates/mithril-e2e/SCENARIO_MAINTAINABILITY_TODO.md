@@ -1281,21 +1281,30 @@ acknowledgement, or decommission operations directly.
     physical qualification evidence. The final log is
     `/tmp/mithril-retention-final-ci-20261001.log`. No production or Platform
     source changed. No physical platform matrix was rerun.
-- [ ] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`
+- [x] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`
   - Reuse one signed input and complete Node configuration from the existing
     fixture in both HTTPS and mTLS tests. Then replace the long mTLS function
     with `decommission_keeps_durable_order`, below 100 lines. Keep prepare,
     acceptance, removal from ready sessions, quarantine, completion, and both
     durable Control states explicit. Check the complete artifact at both
     delivery stages. Commit verified inputs before the test replacement.
-    The earlier TLS setup passed, but the remaining function has 119 lines;
-    that setup did not complete this migration. Keep the old test until the
-    replacement passes. These are production protocol tests, not Pod tests.
+    The earlier TLS setup produced a 96-line function with a separate state
+    wait helper. This step removes repeated stage handling and that helper.
+    Keep the old test until the replacement passes. These are production
+    protocol tests, not Pod tests.
   - Shared inputs pass both existing tests. The fixture signs the same
     authorization and returns its complete Node configuration. No admission,
     delivery, quarantine, or acknowledgement occurs in the fixture. Remove
     eight Rust lines net. Harness checks and final Rust CI pass. See
     `/tmp/mithril-decommission-input-{check,ci}-20261001.log`.
+  - The 94-line replacement passes in 0.08 seconds before legacy removal.
+    It adds exact artifact equality for execution, bounded command waits,
+    last-status diagnostics, and durable Node completion. All 19 related
+    Control/TLS tests, harness checks, and final Rust CI pass after removal.
+    The parent file decreases from 1,052 to 954 lines. The old function and
+    state wait helper are removed. No Platform or production source changes.
+    Run `cargo test -p mithril-e2e --lib decommission_keeps_durable_order`.
+    See `/tmp/mithril-decommission-order-{check,family,final-ci}-20261001.log`.
 - [x] Replace `mtls_rejects_wrong_node_binding_and_expired_client_identity`
   with `mtls_rejects_wrong_node`, `mtls_rejects_expired_cert`, and
   `mtls_rejects_wrong_ca` in `control_tls/rejection.rs`. Each short test calls
