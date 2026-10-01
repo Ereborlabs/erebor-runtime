@@ -5416,6 +5416,8 @@ setup, production actions, assertions, and focused test.
       reach either cleanup path. The old direct-runc probe calls the
       collector path explicitly; this masks the missing Node trigger.
       No production fix is authorized. Keep the unchanged-CRI early return.
+      The user accepted this lightweight reproduction on 2026-10-01.
+      This acceptance does not authorize a production change.
       A proposed fix checks the mount epoch and cache generation in the
       existing reconciliation path and collects only when that pair changes.
       Do not re-install policy or re-run exact-binding reconciliation for

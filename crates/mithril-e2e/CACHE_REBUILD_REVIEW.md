@@ -118,6 +118,9 @@ Platform, Node, Control, or BPF behavior.
 
 ## Collection boundary
 
+The user accepted the lightweight reproduction on 2026-10-01. A production
+change still needs separate approval.
+
 The separate 95-line Host collector draft failed on 2026-10-01. Both opens
 returned `EACCES` with fresh attributed denial evidence. BPF rebuilt the
 READY cache. Nine obsolete object rows and one obsolete state row remained
