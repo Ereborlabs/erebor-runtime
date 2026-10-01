@@ -2996,8 +2996,10 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Direct `runc` passed in 28.88 seconds with the same actor, policy,
       and assertions. Pin, lease, and cgroup cleanup passed. The final
       repository Rust CI passed. No runtime fixture changed.
-    - [ ] Pass and commit Kubernetes. Register the platform only after its
-      exact case passes.
+    - [x] Kubernetes passed in 69.74 seconds with the same test, actor,
+      policy, and assertions. Namespace, pin, and lease cleanup passed.
+      The final repository Rust CI passed. No Platform or production code
+      changed. The retained VM, K3s cluster, and image cache remain available.
     - [ ] Remove the matching legacy script action, enum arm, result field,
       embedded shell source, stored path, and unused path-exec helper only
       after all three platforms pass. Keep descriptor exec, executable mmap,

@@ -317,8 +317,10 @@ Run `effect::script_deny::forked_script_is_denied::script_recovery_host`
 with the exact-test flags below. Host passed in 27.86 seconds with pin, lease,
 and cgroup cleanup. Direct `runc` passed in 28.88 seconds with the same checks
 and cleanup. Use the `script_recovery_runc` suffix. The final repository Rust
-CI passed. Kubernetes is not yet qualified. The legacy action remains. This review
-covers the replacement based on `5d2f8fe0`. No Platform or production code
+CI passed. Kubernetes passed in 69.74 seconds with the same checks and
+namespace, pin, and lease cleanup. Use the `script_recovery_kubernetes` suffix.
+The legacy action remains. This review covers the replacement based on
+`5d2f8fe0`. No Platform or production code
 changes are required.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
