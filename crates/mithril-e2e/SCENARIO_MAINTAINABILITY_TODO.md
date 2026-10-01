@@ -1380,6 +1380,13 @@ acknowledgement, or decommission operations directly.
     Exact WAL-batch equality and complete accepted-record equality are added.
     No fixture, Platform, or production source changed.
 - [ ] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
+  - Reuse `MtlsFixture` for both Control instances, connectors, trust input,
+    and the durable Node WAL. Remove duplicate setup. Keep both policy
+    generations, retained evidence, coverage, and all assertions in the test.
+    The unchanged behavior passes its focused check in 0.35 seconds. This
+    setup step does not complete the remaining scenario migration.
+    All 19 related Control/TLS tests, strict E2E Clippy, and harness checks
+    pass. No fixture or production operation changes. Remove 31 Rust lines net.
 - [ ] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
   - Replace the 196-line legacy function with one standard protocol test.
     Reuse the TLS, policy, TCP blackhole, WAL, and trust owners. Keep the

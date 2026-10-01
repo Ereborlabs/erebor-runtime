@@ -13,13 +13,13 @@ use ed25519_dalek::SigningKey;
 use kube::client::Body as KubeBody;
 use kube::Client;
 use mithril_control::{
-    lower_kubernetes_policy, workload_target_fact_digest, AllowedNodeIdentity, CapabilityRecord,
-    ContainerKindV1, ControlPlane, ControlStore, EvidenceIntakeIdentityV1, EvidenceIntakeOwner,
+    lower_kubernetes_policy, workload_target_fact_digest, CapabilityRecord, ContainerKindV1,
+    ControlPlane, ControlStore, EvidenceIntakeIdentityV1, EvidenceIntakeOwner,
     KubernetesWorkloadIdentityV1, NodeDecommissionAuthorizationV1, NodeDecommissionStateV1,
     NodeRegistration, PolicyActivationAcknowledgement, PolicyBundleV1, PolicyDesiredStateConfigV1,
     PolicyDesiredStateOwner, PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1,
-    ProfileSealRequestV1, RegistryDigestsV1, SignedNodeDecommissionV1, TrustGenerationV1,
-    WorkloadProtectionPolicy, WorkloadTargetFactV1,
+    ProfileSealRequestV1, RegistryDigestsV1, SignedNodeDecommissionV1, WorkloadProtectionPolicy,
+    WorkloadTargetFactV1,
 };
 use mithril_node::{
     CoverageGapReasonV1, EffectObservationStore, EvidenceIdV1, EvidenceWalLimits,
@@ -32,7 +32,7 @@ use tokio::sync::{oneshot, watch};
 use tower::service_fn;
 use zerocopy::IntoBytes as _;
 
-use crate::control_fixture::{Certificates, ControlServerFixture, MtlsFixture};
+use crate::control_fixture::{Certificates, MtlsFixture};
 use crate::physical::wait_for_async;
 
 mod administrative;
@@ -475,40 +475,22 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
 #[tokio::test]
 async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence(
 ) -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let certificates = Certificates::issue(false)?;
-    let files = certificates.write(directory.path())?;
-    let intake_path = directory.path().join("control-evidence");
+    let tls = MtlsFixture::new(false)?;
+    let intake_path = tls.path().join("control-evidence");
     let node_boot_id = [7; 16];
-    let trust_generation = TrustGenerationV1 {
-        generation: 1,
-        bundle_digest: "d".repeat(64),
-        policy_issuer_sequence_epoch: 0,
-        policy_signers: Vec::new(),
-    };
-    let allowed = || {
-        vec![AllowedNodeIdentity {
-            node_id: "node-a".to_owned(),
-            certificate_sha256: certificates.node_digest(),
-            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
-        }]
-    };
 
     let store = ControlStore::open(&intake_path)?;
     let restart_store = store.clone();
     let fixture = OutagePolicyFixture::new(store.clone());
     let first_resource = fixture.resource(1)?;
     let workload_inventory = fixture.inventory(&first_resource)?;
-    let control = ControlPlane::with_control_store(allowed(), trust_generation.clone(), store)?
+    let control = tls
+        .control_with_store(store, 1)?
         .with_policy_desired_state(fixture.owner.clone());
 
-    let first_server = ControlServerFixture::start(&files, control.clone()).await?;
-    let old_connector = NodeControlConnector::new(
-        files.node_config(first_server.address()),
-        "node-a".to_owned(),
-        node_boot_id,
-    );
-    let mut trust = TrustCache::load(&directory.path().join("trust"))?;
+    let first_server = tls.start(control.clone()).await?;
+    let old_connector = tls.connector(&first_server, "node-a", node_boot_id);
+    let mut trust = TrustCache::load(&tls.path().join("trust"))?;
     let mut old_connection = match old_connector
         .connect(
             OutagePolicyFixture::registration(node_boot_id, false),
@@ -569,17 +551,7 @@ async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retaine
     drop(control);
     drop(fixture);
 
-    let observations = EffectObservationStore::durable(
-        4,
-        directory.path().join("node-wal"),
-        EvidenceWalLimits::default(),
-        ObservationCanonicalizer::new(
-            EvidenceIdV1::new(1, 2),
-            EvidenceIdV1::new(3, 4),
-            1,
-            EvidenceIdV1::from(node_boot_id),
-        )?,
-    )?;
+    let observations = tls.wal(EvidenceWalLimits::default())?;
     observations.record_bytes(
         erebor_interceptor_abi::EffectObservationV1 {
             observed_boottime_ns: 1,
@@ -618,15 +590,12 @@ async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retaine
         first_candidate_id
     );
     let intake = EvidenceIntakeOwner::from_store(store.clone());
-    let control = ControlPlane::with_control_store(allowed(), trust_generation, store)?
+    let control = tls
+        .control_with_store(store, 1)?
         .with_policy_desired_state(fixture.owner.clone());
     assert!(control.replace_kubernetes_workload_inventory(workload_inventory.clone())?);
-    let second_server = ControlServerFixture::start(&files, control.clone()).await?;
-    let connector = NodeControlConnector::new(
-        files.node_config(second_server.address()),
-        "node-a".to_owned(),
-        node_boot_id,
-    );
+    let second_server = tls.start(control.clone()).await?;
+    let connector = tls.connector(&second_server, "node-a", node_boot_id);
     let mut connection = match connector
         .connect(
             OutagePolicyFixture::registration(node_boot_id, true),
