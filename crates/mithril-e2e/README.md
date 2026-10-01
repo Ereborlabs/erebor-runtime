@@ -460,7 +460,7 @@ with the exact-test flags below. Host passed in 28.44 seconds with pin, lease,
 and cgroup cleanup. The existing descriptor-exec mode passed in 33.73 seconds
 after the shared actor change. Direct `runc` passed in 28.11 seconds with the
 same checks and cleanup. Use the `deleted_map_recovery_runc` suffix. The final
-repository Rust CI passed. Kubernetes and legacy retirement remain pending. This review covers
+repository Rust CI passed. Legacy retirement remains pending. This review covers
 the replacement based on `75bc112d`. No Platform or production code changes
 are required. The exact-file and memfd mapping actions remain in the old runner.
 
@@ -472,6 +472,10 @@ the current mappings after `munmap`. It does not reopen protected proc maps
 or change production permissions. The revised case passed on Host in 28.21
 seconds and direct `runc` in 27.71 seconds. Both cleanup checks and the final
 repository Rust CI passed. This correction is based on `d6061a22`.
+Kubernetes then passed in 71.37 seconds with the same assertions and complete
+namespace, pin, and lease cleanup. Use the `deleted_map_recovery_kubernetes`
+suffix. The final repository Rust CI passed. This qualification is based on
+`67594de4`. The change does not broaden production permissions.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It

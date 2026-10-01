@@ -3006,8 +3006,11 @@ test does not close a row when its physical condition or an assertion changed.
       mapping and descriptor cleanup. Pin, lease, and cgroup cleanup passed.
       The final repository Rust CI passed. No Platform or production code
       changed.
-    - [ ] Pass and commit Kubernetes. Add its platform registration only
-      after the focused case passes.
+    - [x] Kubernetes passed in 71.37 seconds with the same retained image,
+      read-only deleted mapping, real mprotect denial, fresh evidence, and
+      mapping and descriptor cleanup. Namespace, pin, and lease cleanup
+      passed. The final repository Rust CI passed. No Platform or production
+      code changed. The test has 93 lines.
       The first case returned `EACCES` without an operation or path. Keep
       the old case. Check an outside-controller proc reader in lightweight
       after the denied syscall completes, before a fix or Kubernetes rerun.
@@ -3020,9 +3023,12 @@ test does not close a row when its physical condition or an assertion changed.
       `runc` in 27.71 seconds. Both cleanup checks passed. Descriptor absence
       now uses fallible `try_exists`; permission errors are not absence.
       The final repository Rust CI passed. No Platform or production code
-      changed. The Kubernetes rerun remains pending.
+      changed. The unchanged Kubernetes rerun then passed.
     - [ ] Remove only the matched legacy action and deleted mapping resources
       after all three platforms pass. Keep memfd and exact-file mappings.
+      Remove the deleted-image actor-only fixture test after the replacement
+      proves a retained ELF descriptor, read-only mapping, and absent path.
+      Keep all unrelated child regressions.
   - [ ] Preserve the remaining exact-file executable mmap and read/write
     mprotect cases until public policy inputs can express their exact object
     selector. `ExecutionRuleV1` has no `exact` field, and Kubernetes lowering
