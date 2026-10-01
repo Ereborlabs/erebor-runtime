@@ -1501,6 +1501,25 @@ acknowledgement, or decommission operations directly.
     `control_tls.rs` decreases from 2,075 to 1,986 lines. Its other legacy
     scenarios remain open. No fixture, Platform, or production source changed.
 - [ ] `mtls_evidence_backlog_exceeds_the_previous_baseline`
+  - [ ] Reuse `MtlsFixture` for TLS, Control, connector, and WAL setup. Keep
+    the fixture on the original target filesystem. Keep 4,096 records per
+    batch, more than 512 MiB of acknowledged protobuf payload, the production
+    batch and group limits, and the 107.1 MiB/s release threshold.
+  - [ ] Give the existing raw gRPC transfer fixture one lifecycle owner.
+    Bind the listener before server startup. Replace the fixed readiness
+    sleep with the bound listener. Keep complete transfer, durable sync,
+    captured errors, bounded operations, and explicit shutdown.
+  - [ ] Keep raw, durable raw, direct intake, preparation, enqueue, and
+    acknowledgement measurements. Keep the direct-source cursor, exactly
+    one cumulative acknowledgement per group, complete source identity,
+    zero pending records, and normal Control shutdown explicit.
+  - [ ] Keep the standard test below 100 lines. Do not move upload or
+    acknowledgement sequencing into a helper. Compare with `95775f48` and
+    run the exact ignored test with release optimization before retirement.
+    Retain the original case until that replacement passes.
+  - [ ] Commit verified shared tooling before the scenario. Then pass related
+    Control/TLS tests, harness checks, and final Rust CI. This is protocol
+    qualification, not physical Host, runc, or Kubernetes qualification.
 - [x] `mtls_coverage_upload_preserves_gap_truth_at_control`
   - [x] Replace the old function with `coverage_upload_keeps_truth` in
     `control_tls/coverage.rs`, one standard Rust test below 100 lines. Reuse
