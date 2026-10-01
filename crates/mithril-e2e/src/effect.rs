@@ -158,8 +158,7 @@ use self::support::{
     effect_binding, effect_node_config, effect_peer_binding, effect_propagation_binding,
     global_mount_mutation_epoch, health_delta, inode_generation, mount_view_is_dirty,
     ready_canonical_mount_snapshots, sample_observation_health, wait_for_effect,
-    wait_for_exact_effect, wait_for_exact_io_uring_effect, wait_for_path_exec_effect,
-    wait_for_reason, ExternalMountNamespace,
+    wait_for_exact_effect, wait_for_exact_io_uring_effect, wait_for_reason, ExternalMountNamespace,
 };
 use crate::capability::{BpfPrototypeCompiler, CompileRecordV1};
 use crate::error::{
@@ -1657,19 +1656,6 @@ impl EffectTestRunner {
             }
         );
 
-        if !protect {
-            let exec_marker = observations.cursor();
-            // The signed image decision must be observe-only. A later dynamic
-            // loader or library can still fail hard as an unclassified image.
-            let _physical_result = fixture.hard_closed(HardClosedOperation::Exec)?;
-            wait_for_path_exec_effect(
-                &reader,
-                &observations,
-                exec_marker,
-                "WOULD_DENY",
-                KernelEffectOperationV1::Execute,
-            )?;
-        }
         if protect {
             for (operation, family, kernel_operation, label) in [
                 (

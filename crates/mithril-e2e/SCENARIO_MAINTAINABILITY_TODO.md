@@ -3442,7 +3442,7 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
-  - [ ] Replace the remaining Observe-mode descriptor exec with
+  - [x] Replace the remaining Observe-mode descriptor exec with
     `forked_fd_exec_is_observed`. Reuse `exec_on_release.py`, the process
     owner, and `EffectCheck`. Use a distinct signed Observe policy for the
     same external-role executable Deny as the Protect case.
@@ -3477,8 +3477,15 @@ test does not close a row when its physical condition or an assertion changed.
       The same body used real Control, Node, recovery, and pod exec.
       The actor namespace and scenario output path were removed. Formatting
       passed. No actor, Platform, or production source changed.
-    - [ ] Remove the matched legacy branch and unused observer helper after
-      qualification. Keep descriptor transfer, controls, and mappings.
+    - [x] Remove the matched legacy branch and both unused path observation
+      helpers after all three platforms pass. This removes 64 Rust lines
+      net. Descriptor transfer, positive controls, and executable mappings
+      remain. The repository Rust CI gate and local VM harness checks pass.
+      Rust CI includes all 91 non-privileged E2E tests; its 441 ignored
+      physical tests are not a physical qualification result. The new case
+      passed separately on all three platforms. No unrelated physical matrix
+      rerun is needed for the matched deletion. `effect.rs` has 2,812 lines
+      and `effect/support.rs` has 936 lines. The large runners remain open.
   - [x] Replace `MemfdMprotectExec` with `memfd_mprotect_is_denied`.
     Reuse the exec actor, executable memfd preparation, signed exec policy,
     process owner, and evidence owner. Use the same Linux `MFD_EXEC` flag

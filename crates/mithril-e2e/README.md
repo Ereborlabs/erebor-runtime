@@ -571,7 +571,13 @@ and output cleanup passed. Formatting passed. No actor, Platform, or
 production source changed. Kubernetes passed in 68.23 seconds after both
 lightweight platforms. The same body used real Control, Node, recovery,
 and pod exec. Its actor namespace and scenario output path were removed.
-Legacy retirement and final Rust CI remain pending.
+The matched legacy Observe branch and both unused path observation helpers
+are removed. This removes 64 Rust lines net. Descriptor transfer, positive
+controls, and executable mappings remain. Final repository Rust CI and local
+VM harness checks passed. Rust CI ran all 91 non-privileged E2E tests;
+the physical case passed separately on all three platforms. No actor,
+Platform, or production source changed. Qualification commits: Host
+`2544ba0`, direct `runc` `c4e8d37`, and Kubernetes `3b909f0`.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
