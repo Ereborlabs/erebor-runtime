@@ -2387,16 +2387,21 @@ test does not close a row when its physical condition or an assertion changed.
       100 lines. Reuse `exception.py`, the qualified bind/recovery setup,
       `file_mount_change_policy.json`, `EffectCheck`, and existing map readers.
       Do not add a Platform API or a scenario fixture.
-      - [ ] Add actor commands for benign-file overmount, source read, and
+      - [x] Add actor commands for benign-file overmount, source read, and
         unmount. Use real Linux mount calls. Report mount completion through
         the existing process-name readiness boundary, not file I/O that could
         rebuild the dirty view before the test checks it.
-      - [ ] Keep original exact denial and actor attribution. Require
+      - [x] Keep original exact denial and actor attribution. Require
         successful overmount, the original namespace's Dirty state, physical
         `EACCES`, and fresh attributed `UNRESOLVED_OBJECT` File/OpenRead.
         Remove the overmount; require physical `EACCES` and fresh
         `EXACT_POLICY_DENY` with the original exact key, composite, and task.
-      - [ ] Pass Host and related shared-actor cases. Commit Host first.
+      - [x] Pass Host and related shared-actor cases. Commit Host first.
+        The 91-line case passed in 35.70 seconds. The existing first-bind and
+        bind-alias Host cases passed in 34.72 and 40.82 seconds. Output, pin,
+        lease, and cgroup cleanup passed. The VM harness checks passed.
+        The final repository Rust CI procedure passed. The local library
+        suite passed 91 tests; 430 physical cases remain ignored locally.
       - [ ] Pass direct `runc` and commit its registration.
       - [ ] Pass Kubernetes and commit its registration. Keep the retained
         VM, K3s, and images. Do not weaken any assertion or change production.

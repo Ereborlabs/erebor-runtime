@@ -24,6 +24,12 @@ def write(name, value):
         output.write(value)
 
 
+def mark(libc, action, error):
+    name = ctypes.create_string_buffer(f"link-{action}-{error}".encode("ascii"))
+    if libc.prctl(15, ctypes.addressof(name), 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
+
+
 if mode == "single":
     print("native-fixture-ready", flush=True)
     for command, name in [
@@ -95,28 +101,40 @@ elif mode in ("symlink", "procfd", "bind", "bind-allowed"):
         if mode == "procfd":
             actions.extend((f"hf{number}", secret) for number in (6, 8, 9, 10))
         actions.append((command, alias))
+    if mode == "bind":
+        paths = dict(actions)
+        libc.umount2.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        while command := sys.stdin.readline():
+            action = command.rstrip("\n")
+            if action == "stop":
+                break
+            if action in paths:
+                error = open_errno(paths[action], os.O_RDONLY)
+            elif action == "mount":
+                alias = work / "bind-3"
+                alias.mkdir()
+                result = libc.mount(os.fsencode(secret.parent), os.fsencode(alias), None, 4096, None)
+                write("bind-change-mount", str(ctypes.get_errno() if result else 0))
+                error = open_errno(alias / secret.name, os.O_RDONLY)
+                action = "change"
+            elif action == "replace":
+                source = work / "replacement-file"
+                source.write_bytes(b"benign replacement\n")
+                result = libc.mount(os.fsencode(source), os.fsencode(secret), None, 4096, None)
+                error = ctypes.get_errno() if result else 0
+            elif action == "restore":
+                result = libc.umount2(os.fsencode(secret), 0)
+                error = ctypes.get_errno() if result else 0
+            elif action == "read":
+                error = open_errno(secret, os.O_RDONLY)
+            else:
+                raise RuntimeError(f"unknown bind action {action}")
+            mark(libc, action, error)
+        sys.exit(0)
     for action, path in actions:
         if sys.stdin.readline() != f"{action}\n":
             raise RuntimeError(f"expected {action}")
-        error = open_errno(path, os.O_RDONLY)
-        name = ctypes.create_string_buffer(f"link-{action}-{error}".encode("ascii"))
-        if libc.prctl(15, ctypes.addressof(name), 0, 0, 0) != 0:
-            raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
-    if mode == "bind":
-        command = sys.stdin.readline()
-        if command == "mount\n":
-            alias = work / "bind-3"
-            alias.mkdir()
-            result = libc.mount(os.fsencode(secret.parent), os.fsencode(alias), None, 4096, None)
-            write("bind-change-mount", str(ctypes.get_errno() if result else 0))
-            error = open_errno(alias / secret.name, os.O_RDONLY)
-            name = ctypes.create_string_buffer(f"link-change-{error}".encode("ascii"))
-            if libc.prctl(15, ctypes.addressof(name), 0, 0, 0) != 0:
-                raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
-            command = sys.stdin.readline()
-        if command not in ("stop\n", ""):
-            raise RuntimeError("expected stop")
-        sys.exit(0)
+        mark(libc, action, open_errno(path, os.O_RDONLY))
 elif mode == "race":
     started = threading.Barrier(9)
     release = threading.Event()

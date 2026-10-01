@@ -664,6 +664,61 @@ verification-script edit, run the repository CI check:
 bash .github/scripts/verify-rust-ci.sh
 ```
 
+## Exact-File Replacement And Restoration
+
+Intended result: replace the legacy Protect-mode overmount and restoration
+checks with one shared test. Keep the separate Observe and cache checks open.
+
+[mount_replacement_stays_closed](src/effect/file_replacement.rs) starts Control and the actor before Node.
+  -> [Platform recovery](src/platform/shared.rs) waits for the recovered application root and the signed exact-file policy.
+  -> [exception.py](fixtures/process/exception.py) opens the original file and reports `EACCES`.
+  -> [EffectCheck](src/effect/check.rs) requires fresh actor-attributed exact denial with a nonzero object key and composite atom.
+  -> [exception.py](fixtures/process/exception.py) bind-mounts a benign file over the protected path and reports mount success without file I/O.
+  -> [Platform::state](src/platform.rs) reads the original mount namespace's Dirty security view.
+  -> [exception.py](fixtures/process/exception.py) opens the replaced path and reports `EACCES`.
+  -> [EffectCheck](src/effect/check.rs) requires fresh `UNRESOLVED_OBJECT` File/OpenRead evidence for the same actor.
+  -> [exception.py](fixtures/process/exception.py) removes the overmount, then opens the restored path.
+  -> [mount_replacement_stays_closed](src/effect/file_replacement.rs) requires `EACCES`, fresh exact denial, and the original object key, composite atom, and task cookie.
+  -> [ProcessFixture::stop](src/process.rs) stops the actor before normal platform cleanup.
+
+```mermaid
+sequenceDiagram
+    participant Test
+    participant Actor
+    participant Linux
+    Test->>Actor: replace
+    Actor->>Linux: bind mount over protected file
+    Linux-->>Actor: mount succeeds
+    Actor-->>Test: process-name marker
+    Test->>Linux: read pinned mount-security view
+    Test->>Actor: read
+    Actor->>Linux: open protected path
+    Linux-->>Actor: EACCES
+    Actor-->>Test: process-name marker
+```
+
+The shared actor owns the mount calls. Node owns policy installation and
+production recovery. The test reads maps and evidence; it does not perform
+Node reconciliation. The existing `file_mount_change_policy.json` supplies
+the exact-file Deny and mount capability. The map key uses the event's native
+`u32` namespace inode. The existing reader validates the typed map value.
+Process-name waits have a five-second limit. Evidence waits have a 30-second
+limit and include the last observed records on failure.
+
+Before this change, one large runner performed the mounts, policy
+reconciliation, reads, and evidence checks. The replacement is a 91-line
+standard test with explicit actions and assertions. Run
+`effect::file_replacement::mount_replacement_stays_closed::mount_replace_host`
+with the exact-test flags and Host environment above. Confirm that the current
+test binary lists that name; an older binary can report zero selected tests.
+Host passed in 35.70 seconds. The existing first-bind and bind-alias Host
+cases passed in 34.72 and 40.82 seconds. Output, pin, lease, and cgroup cleanup
+passed. Direct `runc` and Kubernetes are not qualified yet.
+The VM harness checks and the final repository Rust CI procedure passed.
+Source review: `ecf64d4b` plus the test and actor changes in this deliverable.
+The baseline comparison uses `95775f48`. The old shared block remains until
+the Observe contrast and cache-snapshot replacements also pass.
+
 ## In-Process Control And TLS Scenarios
 
 ### Intended result
