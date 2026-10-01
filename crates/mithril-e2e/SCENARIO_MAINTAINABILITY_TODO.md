@@ -3473,7 +3473,10 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Direct `runc` passed in 28.98 seconds with the unchanged 76-line
       body. Pin, lease, cgroup, and output cleanup passed. Formatting passed.
       No actor, Platform, or production source changed.
-    - [ ] Pass Kubernetes with the same test body after lightweight.
+    - [x] Kubernetes passed in 68.23 seconds after Host and direct `runc`.
+      The same body used real Control, Node, recovery, and pod exec.
+      The actor namespace and scenario output path were removed. Formatting
+      passed. No actor, Platform, or production source changed.
     - [ ] Remove the matched legacy branch and unused observer helper after
       qualification. Keep descriptor transfer, controls, and mappings.
   - [x] Replace `MemfdMprotectExec` with `memfd_mprotect_is_denied`.

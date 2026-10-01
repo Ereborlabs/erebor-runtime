@@ -559,6 +559,7 @@ binary and the launcher-prepared VM environment. Run this exact name with
 ```text
 effect::exec_observe::forked_fd_exec_is_observed::exec_observe_recovery_host
 effect::exec_observe::forked_fd_exec_is_observed::exec_observe_recovery_runc
+effect::exec_observe::forked_fd_exec_is_observed::exec_observe_recovery_kubernetes
 ```
 
 Host passed in 29.00 seconds. Its pin, lease, cgroup, and output paths are
@@ -567,8 +568,10 @@ Strict E2E Clippy, formatting, and local VM harness checks passed. Source
 review: the replacement working tree based on inventory commit `fd0da52`.
 Direct `runc` passed in 28.98 seconds with the same body. Pin, lease, cgroup,
 and output cleanup passed. Formatting passed. No actor, Platform, or
-production source changed. Kubernetes, legacy retirement, and final Rust CI
-remain pending.
+production source changed. Kubernetes passed in 68.23 seconds after both
+lightweight platforms. The same body used real Control, Node, recovery,
+and pod exec. Its actor namespace and scenario output path were removed.
+Legacy retirement and final Rust CI remain pending.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
