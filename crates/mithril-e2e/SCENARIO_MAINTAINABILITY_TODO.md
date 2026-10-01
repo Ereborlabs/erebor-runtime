@@ -5384,6 +5384,28 @@ setup, production actions, assertions, and focused test.
     - [ ] Pass and commit Host, then direct `runc`, then Kubernetes. A missing
       Node collection trigger is a production approval boundary, not grounds
       to weaken the test or add an unrelated runtime event.
+      The 95-line Host draft reached the collection wait and failed in 58.78
+      seconds on 2026-10-01. Both physical reads returned `EACCES` with fresh
+      attributed `PATH_TREE_POLICY_DENY` evidence. BPF rebuilt the cache.
+      After 30 seconds, 18 object rows and 2 state rows remained; 9 object
+      rows and 1 state row were obsolete. Cleanup passed. See
+      `/tmp/mithril-cache-collection-host-20261001.log`.
+      `NodeBindingReconciliation::reconcile` returns when CRI is unchanged.
+      The obsolete-row collector runs only through exact-binding
+      reconciliation. The policy timer runs generation retirement only
+      when retirement is pending. A BPF cache generation change does not
+      reach either cleanup path. The old direct-runc probe calls the
+      collector path explicitly; this masks the missing Node trigger.
+      No production fix is authorized. Keep the unchanged-CRI early return.
+      A proposed fix checks the mount epoch and cache generation in the
+      existing reconciliation path and collects only when that pair changes.
+      Do not re-install policy or re-run exact-binding reconciliation for
+      cache cleanup. Keep errors visible and retry cleanup after an error.
+      The draft is retained at
+      `/tmp/mithril-cache-collection-repro-20261001.rs`, outside the crate.
+      No runc or Kubernetes collector run was attempted. Keep the old checks.
+      After the draft was removed from the crate, the final repository Rust
+      CI procedure passed. No production source or Platform API changed.
     - [ ] Remove only the matched old Rust collector check, result field,
       shell row counters, and launcher predicates after all three pass.
   - [x] Replace only stale-cache rebuild with a small standard platform test.

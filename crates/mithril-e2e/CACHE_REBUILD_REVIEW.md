@@ -115,3 +115,35 @@ obsolete object and state rows and retained current rows after rebuild.
 Cleanup, local VM harness checks, and the final Rust CI procedure passed.
 This addition reads state only. It does not prove Node collection or change
 Platform, Node, Control, or BPF behavior.
+
+## Collection boundary
+
+The separate 95-line Host collector draft failed on 2026-10-01. Both opens
+returned `EACCES` with fresh attributed denial evidence. BPF rebuilt the
+READY cache. Nine obsolete object rows and one obsolete state row remained
+after the 30-second collection wait. The complete run took 58.78 seconds.
+The actor, pins, lease, and cgroup were removed. The old checks remain.
+
+[NodeBindingReconciliation::reconcile](../mithril-node/src/node.rs) reads the runtime inventory.
+  -> [NodeBindingReconciliation::reconcile](../mithril-node/src/node.rs) returns when CRI is unchanged and no binding is recovering.
+  -> Not implemented: a BPF cache-generation change triggers obsolete-row collection.
+
+[reconcile_cri_exact_bindings](../mithril-node/src/policy.rs) runs exact-binding reconciliation.
+  -> [retire_unreachable_mount_cache_rows](../mithril-node/src/policy.rs) removes rows older than the current epoch or generation.
+
+[NodeRun::poll_policy](../mithril-node/src/node/run.rs) runs policy maintenance.
+  -> [retirement_pending](../mithril-node/src/policy.rs) permits generation retirement only when holders still need cleanup.
+
+The old direct-runc test calls `reconcile_cri_exact_bindings` explicitly.
+That call does not prove that the deployed Node notices a cache-only change.
+Keep the unchanged-CRI early return. A proposed Node change observes the
+mount epoch and cache generation in the existing reconciliation path. The
+owner would collect obsolete rows only after that pair changes. This proposal
+does not require policy installation, exact-binding reconciliation, a BPF
+change, or a new public API. No production change is approved or implemented.
+
+The failed draft is outside the crate at
+`/tmp/mithril-cache-collection-repro-20261001.rs`. Its run log is
+`/tmp/mithril-cache-collection-host-20261001.log`. This draft is not a passing
+replacement. No collector case ran on direct runc or Kubernetes.
+The final Rust CI procedure passed after the draft was removed from the crate.
