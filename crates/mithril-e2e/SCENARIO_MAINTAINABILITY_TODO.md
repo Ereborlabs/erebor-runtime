@@ -3631,6 +3631,17 @@ test does not close a row when its physical condition or an assertion changed.
       the connection for descriptor transfer. Keep that setup until the
       descriptor-transfer replacement passes. Retire only independent
       Protect verdict assertions after all three platforms pass.
+      - [ ] Replace the Observe result with `unix_stream_is_observed`.
+        Reuse `unix_stream.py`, actor-group setup, and `EffectCheck`. Keep
+        two distinct bindings and roles in one network namespace. Use a
+        signed Observe policy with no Unix relationship allowance, as in
+        `95775f48`. Require the request byte `1`, response byte `2`, fresh
+        attributed `WOULD_DENY` Connect, Send, and Receive results, kernel
+        result zero, configured `EACCES`, and no File/Create event. Keep
+        the standard test below 100 lines. Add no Platform or production
+        API. Pass and commit Host, direct runc, then Kubernetes before
+        removing only the legacy Observe result wait. Keep the old stream
+        action, descriptor setup, and combined no-file-create assertion.
   - [x] Replace the remaining Observe-mode descriptor exec with
     `forked_fd_exec_is_observed`. Reuse `exec_on_release.py`, the process
     owner, and `EffectCheck`. Use a distinct signed Observe policy for the
