@@ -354,8 +354,10 @@ Run `effect::exec_deleted::deleted_exec_is_denied::deleted_recovery_host`
 with the exact-test flags below. Host passed in 28.78 seconds with pin, lease,
 and cgroup cleanup. Direct `runc` passed in 28.58 seconds with the same checks
 and cleanup. Use the `deleted_recovery_runc` suffix. The final repository Rust
-CI passed. Kubernetes is not yet qualified. The legacy exec action and independent
-deleted-file memory checks remain. This review covers the replacement based
+CI passed. Kubernetes passed in 68.54 seconds with the same checks and
+namespace, pin, and lease cleanup. Use the `deleted_recovery_kubernetes`
+suffix. The legacy exec action and independent deleted-file memory checks
+remain. This review covers the replacement based
 on `b3194333`. No Platform or production code changes are required.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a

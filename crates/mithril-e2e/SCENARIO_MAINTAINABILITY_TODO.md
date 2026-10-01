@@ -2997,8 +2997,10 @@ test does not close a row when its physical condition or an assertion changed.
     - [x] Direct `runc` passed in 28.58 seconds with the same actor, policy,
       descriptor checks, and denial assertions. Pin, lease, and cgroup cleanup
       passed. The final repository Rust CI passed. No Platform API changed.
-    - [ ] Pass and commit Kubernetes. Register the platform only after its
-      focused case passes.
+    - [x] Kubernetes passed in 68.54 seconds with the same actor, policy,
+      descriptor checks, and denial assertions. Namespace, pin, and lease
+      cleanup passed. The final repository Rust CI passed. No Platform or
+      production code changed. The retained cluster remains available.
     - [ ] Remove only the matched legacy exec action and result after all
       three platforms pass. Retain the deleted mapping, pathname setup, and
       shared descriptor resources until their separate memory tests pass.
