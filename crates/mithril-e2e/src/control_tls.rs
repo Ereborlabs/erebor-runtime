@@ -15,16 +15,15 @@ use kube::Client;
 use mithril_control::{
     lower_kubernetes_policy, workload_target_fact_digest, CapabilityRecord, ContainerKindV1,
     ControlPlane, ControlStore, EvidenceIntakeIdentityV1, EvidenceIntakeOwner,
-    KubernetesWorkloadIdentityV1, NodeDecommissionAuthorizationV1, NodeDecommissionStateV1,
-    NodeRegistration, PolicyActivationAcknowledgement, PolicyBundleV1, PolicyDesiredStateConfigV1,
+    KubernetesWorkloadIdentityV1, NodeDecommissionStateV1, NodeRegistration,
+    PolicyActivationAcknowledgement, PolicyBundleV1, PolicyDesiredStateConfigV1,
     PolicyDesiredStateOwner, PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1,
-    ProfileSealRequestV1, RegistryDigestsV1, SignedNodeDecommissionV1, WorkloadProtectionPolicy,
-    WorkloadTargetFactV1,
+    ProfileSealRequestV1, RegistryDigestsV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
 };
 use mithril_node::{
     CoverageGapReasonV1, EffectObservationStore, EvidenceIdV1, EvidenceWalLimits,
-    NodeControlConnector, NodeControlMessage, NodeDecommissionAcceptanceV1, NodeDecommissionConfig,
-    NodeDecommissionOwner, ObservationCanonicalizer, PolicyControlPacingOwner, TrustCache,
+    NodeControlConnector, NodeControlMessage, NodeDecommissionAcceptanceV1, NodeDecommissionOwner,
+    ObservationCanonicalizer, PolicyControlPacingOwner, TrustCache,
 };
 use sha2::{Digest as _, Sha256};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -393,21 +392,7 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
         .next()
         .ok_or("registered node has no ready Kubernetes session")?;
 
-    let signing_key = SigningKey::from_bytes(&[9; 32]);
-    let public_key = fixture.path().join("decommission-public-key");
-    fs::write(&public_key, signing_key.verifying_key().to_bytes())?;
-    let artifact = SignedNodeDecommissionV1::sign(
-        &NodeDecommissionAuthorizationV1::new(
-            "55555555-5555-4555-8555-555555555555",
-            "node-a".to_owned(),
-            &uuid::Uuid::from_bytes([7; 16]).hyphenated().to_string(),
-            i64::MAX,
-            "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-        )?,
-        "offline-decommission-v1".to_owned(),
-        &signing_key,
-    )?
-    .to_bytes()?;
+    let (config, artifact) = fixture.decommission([7; 16])?;
     let submitted = control.submit_node_decommission(artifact.clone()).await?;
     let hash = &submitted.artifact_sha256;
     let NodeControlMessage::Decommission(prepare) = connection.next_message().await? else {
@@ -417,16 +402,7 @@ async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kuberne
     assert_eq!(prepare.artifact, artifact);
 
     let mut node_owner = NodeDecommissionOwner::load(
-        &NodeDecommissionConfig {
-            cluster_uid: "55555555-5555-4555-8555-555555555555".to_owned(),
-            signing_key_id: "offline-decommission-v1".to_owned(),
-            public_key_path: public_key,
-            runtime_integration_owner: "mithril-system/mithril".to_owned(),
-            runtime_hook_directory: fixture.path().join("host-hook-bin"),
-            containerd_config_directory: fixture.path().join("host-containerd"),
-            containerd_drop_in_directory: "conf.d".to_owned(),
-            runtime_services: vec!["containerd".to_owned()],
-        },
+        &config,
         &fixture.path().join("node-state"),
         "node-a".to_owned(),
         erebor_interceptor_abi::Id128V1::from([7; 16]),

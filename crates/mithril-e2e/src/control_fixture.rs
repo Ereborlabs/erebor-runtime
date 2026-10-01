@@ -7,11 +7,12 @@ use std::time::Duration;
 use mithril_control::{
     serve, AllowedNodeIdentity, ControlPlane, ControlServerTls, ControlStore,
     EvidenceIntakeIdentityV1, KubernetesAdmissionHttpConfigV1, KubernetesAdmissionOwner,
-    KubernetesNodeReadinessOwner, PolicyDesiredStateOwner, TrustGenerationV1,
+    KubernetesNodeReadinessOwner, NodeDecommissionAuthorizationV1, PolicyDesiredStateOwner,
+    SignedNodeDecommissionV1, TrustGenerationV1,
 };
 use mithril_node::{
     EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, NodeControlConfig,
-    NodeControlConnector, ObservationCanonicalizer,
+    NodeControlConnector, NodeDecommissionConfig, ObservationCanonicalizer,
 };
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa,
@@ -127,6 +128,34 @@ impl MtlsFixture {
 
     pub(crate) fn node_digest(&self) -> String {
         self.certificates.node_digest()
+    }
+
+    pub(crate) fn decommission(
+        &self,
+        boot: [u8; 16],
+    ) -> Result<(NodeDecommissionConfig, Vec<u8>), Box<dyn StdError>> {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
+        let config = NodeDecommissionConfig {
+            cluster_uid: "55555555-5555-4555-8555-555555555555".to_owned(),
+            signing_key_id: "offline-decommission-v1".to_owned(),
+            public_key_path: self.path().join("decommission-public-key"),
+            runtime_integration_owner: "mithril-system/mithril".to_owned(),
+            runtime_hook_directory: self.path().join("host-hook-bin"),
+            containerd_config_directory: self.path().join("host-containerd"),
+            containerd_drop_in_directory: "conf.d".to_owned(),
+            runtime_services: vec!["containerd".to_owned()],
+        };
+        fs::write(&config.public_key_path, key.verifying_key().to_bytes())?;
+        let auth = NodeDecommissionAuthorizationV1::new(
+            &config.cluster_uid,
+            "node-a".to_owned(),
+            &uuid::Uuid::from_bytes(boot).hyphenated().to_string(),
+            i64::MAX,
+            "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        )?;
+        let artifact = SignedNodeDecommissionV1::sign(&auth, config.signing_key_id.clone(), &key)?
+            .to_bytes()?;
+        Ok((config, artifact))
     }
 
     pub(crate) fn control(&self, generation: u64) -> mithril_control::Result<ControlPlane> {

@@ -1,15 +1,13 @@
 use std::{fs, time::Duration};
 
-use ed25519_dalek::SigningKey;
 use mithril_control::{
     ControlStore, KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner,
-    NodeDecommissionAuthorizationV1, NodeDecommissionStateV1, NodeDecommissionStatusV1,
-    SignedNodeDecommissionV1,
+    NodeDecommissionStateV1, NodeDecommissionStatusV1,
 };
 use mithril_node::TrustCache;
 use sha2::{Digest as _, Sha256};
 
-use super::{OutagePolicyFixture, OUTAGE_CLUSTER_UID};
+use super::OutagePolicyFixture;
 use crate::control_fixture::{ControlServerFixture, MtlsFixture};
 use crate::platform::TestResult;
 
@@ -44,18 +42,7 @@ async fn https_decommission_keeps_status() -> TestResult<()> {
         server.address().port()
     );
 
-    let artifact = SignedNodeDecommissionV1::sign(
-        &NodeDecommissionAuthorizationV1::new(
-            OUTAGE_CLUSTER_UID,
-            "node-a".to_owned(),
-            &uuid::Uuid::from_bytes([1; 16]).hyphenated().to_string(),
-            i64::MAX,
-            "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-        )?,
-        "offline-decommission-v1".to_owned(),
-        &SigningKey::from_bytes(&[9; 32]),
-    )?
-    .to_bytes()?;
+    let (_, artifact) = tls.decommission([1; 16])?;
     let digest = format!("{:x}", Sha256::digest(&artifact));
     let client = reqwest::Client::builder()
         .add_root_certificate(reqwest::Certificate::from_pem(&fs::read(&tls.files.ca)?)?)
