@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::fs;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
@@ -14,8 +14,7 @@ use kube::client::Body as KubeBody;
 use kube::Client;
 use mithril_control::{
     lower_kubernetes_policy, workload_target_fact_digest, AllowedNodeIdentity, CapabilityRecord,
-    ContainerKindV1, ControlPlane, ControlStore, EvidenceBatch, EvidenceIntakeIdentityV1,
-    EvidenceIntakeOwner, EvidenceStoreCapacityPolicyV1, EvidenceStoreLimitsV1,
+    ContainerKindV1, ControlPlane, ControlStore, EvidenceIntakeIdentityV1, EvidenceIntakeOwner,
     KubernetesWorkloadIdentityV1, NodeDecommissionAuthorizationV1, NodeDecommissionStateV1,
     NodeRegistration, PolicyActivationAcknowledgement, PolicyBundleV1, PolicyDesiredStateConfigV1,
     PolicyDesiredStateOwner, PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1,
@@ -27,7 +26,6 @@ use mithril_node::{
     NodeControlConnector, NodeControlMessage, NodeDecommissionAcceptanceV1, NodeDecommissionConfig,
     NodeDecommissionOwner, ObservationCanonicalizer, PolicyControlPacingOwner, TrustCache,
 };
-use prost::Message as _;
 use sha2::{Digest as _, Sha256};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::{oneshot, watch};
@@ -36,10 +34,10 @@ use zerocopy::IntoBytes as _;
 
 use crate::control_fixture::{Certificates, ControlServerFixture, MtlsFixture};
 use crate::physical::wait_for_async;
-use transfer::GrpcTransfer;
 
 mod administrative;
 mod admission;
+mod backlog;
 mod coverage;
 mod decommission;
 mod gap;
@@ -941,109 +939,6 @@ async fn kubernetes_outage_partitioned_node_reconnects_to_running_control_and_re
     drop(reconnected);
     proxy.stop().await?;
     server.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "the evidence throughput budget requires the shipped release optimization level"]
-async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box<dyn StdError>> {
-    const BATCH_RECORDS: usize = 4_096;
-    const QUALIFICATION_BYTES: u64 = 512 * 1_024 * 1_024;
-    const PREVIOUS_MIB_PER_SECOND: f64 = 107.1;
-    const TARGET_MIB_PER_SECOND: f64 = 300.0;
-
-    let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
-    fs::create_dir_all(&target)?;
-    let tls = MtlsFixture::in_directory(tempfile::tempdir_in(target)?, false)?;
-    let store = ControlStore::open_with_evidence_limits(
-        tls.path().join("control-evidence"),
-        EvidenceStoreLimitsV1 {
-            capacity_policy: EvidenceStoreCapacityPolicyV1::Retain,
-            ..EvidenceStoreLimitsV1::default()
-        },
-    )?;
-    let server = tls.start(tls.control_with_store(store.clone(), 1)?).await?;
-
-    let template = tls.effect_batch(BATCH_RECORDS)?;
-    assert_eq!(template.record_count(), BATCH_RECORDS);
-    let encoded_batch_bytes = {
-        let batch: EvidenceBatch = template.clone().into();
-        batch.encoded_len() as u64
-    };
-    assert!(encoded_batch_bytes <= mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES as u64);
-    let batch_count = QUALIFICATION_BYTES.div_ceil(encoded_batch_bytes);
-    let accepted_bytes = encoded_batch_bytes * batch_count;
-    let maximum_group_batches =
-        (mithril_control::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES as u64 / encoded_batch_bytes).max(1);
-    let (grpc_elapsed, grpc_mib_per_second) = GrpcTransfer::new(None)
-        .measure(&tls.files, accepted_bytes)
-        .await?;
-    let (durable_grpc_elapsed, durable_grpc_mib_per_second) =
-        GrpcTransfer::new(Some(tls.path().join("grpc-received.bin")))
-            .measure(&tls.files, accepted_bytes)
-            .await?;
-    eprintln!(
-        "raw mTLS gRPC transferred {accepted_bytes} bytes in {grpc_elapsed:?}: {grpc_mib_per_second:.1} MiB/s; durable receiver completed in {durable_grpc_elapsed:?}: {durable_grpc_mib_per_second:.1} MiB/s"
-    );
-
-    let connector = tls.connector(&server, "node-a", [7; 16]);
-    let mut trust = TrustCache::load(&tls.path().join("trust"))?;
-    let mut connection = connector.connect(registration(), false, &mut trust).await?;
-    let mut preparation_elapsed = Duration::ZERO;
-    let mut enqueue_elapsed = Duration::ZERO;
-    let mut acknowledgement_elapsed = Duration::ZERO;
-    let mut acknowledgement_count = 0_u64;
-    let started = Instant::now();
-    let expected_acknowledgements = batch_count.div_ceil(maximum_group_batches);
-    let mut index = 0_u64;
-    while index < batch_count {
-        let group_batches = maximum_group_batches.min(batch_count - index);
-        let first_group_index = index;
-        let mut batches = Vec::with_capacity(group_batches as usize);
-        for _ in 0..group_batches {
-            let phase_started = Instant::now();
-            let mut batch = template.clone();
-            let first_cursor = index * BATCH_RECORDS as u64 + 1;
-            batch.first_cursor = first_cursor;
-            batch.last_cursor = first_cursor + BATCH_RECORDS as u64 - 1;
-            preparation_elapsed += phase_started.elapsed();
-            batches.push(batch);
-            index += 1;
-        }
-        let phase_started = Instant::now();
-        connection.send_evidence_group(batches).await?;
-        enqueue_elapsed += phase_started.elapsed();
-        let expected_cursor = index * BATCH_RECORDS as u64;
-        let minimum_cursor = first_group_index * BATCH_RECORDS as u64;
-        let phase_started = Instant::now();
-        loop {
-            let NodeControlMessage::EvidenceAck(acknowledgement) =
-                connection.next_message().await?
-            else {
-                return Err("Control did not acknowledge the throughput group".into());
-            };
-            acknowledgement_count += 1;
-            if acknowledgement.contiguous_cursor <= minimum_cursor
-                || acknowledgement.contiguous_cursor > expected_cursor
-            {
-                return Err("Control returned a cursor outside the throughput group".into());
-            }
-            if acknowledgement.contiguous_cursor == expected_cursor {
-                break;
-            }
-        }
-        acknowledgement_elapsed += phase_started.elapsed();
-    }
-    let elapsed = started.elapsed();
-    let mib_per_second = accepted_bytes as f64 / 1_048_576.0 / elapsed.as_secs_f64();
-    eprintln!(
-        "durably acknowledged {accepted_bytes} evidence bytes in {elapsed:?}: {mib_per_second:.1} MiB/s (target {TARGET_MIB_PER_SECOND:.1}); acknowledgements={acknowledgement_count} prepare={preparation_elapsed:?} enqueue={enqueue_elapsed:?} control_ack={acknowledgement_elapsed:?}"
-    );
-    assert_eq!(acknowledgement_count, expected_acknowledgements);
-    assert_eq!(store.health()?.pending_evidence_records, 0);
-    drop(connection);
-    server.shutdown().await?;
-    assert!(mib_per_second > PREVIOUS_MIB_PER_SECOND);
     Ok(())
 }
 
