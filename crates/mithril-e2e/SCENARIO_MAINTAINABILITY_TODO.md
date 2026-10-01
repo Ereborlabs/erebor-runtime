@@ -1846,9 +1846,18 @@ test does not close a row when its physical condition or an assertion changed.
     container platform cases that do not test a container operation.
     The unchanged retained-map recovery test passed in 49.56 seconds with
     its own pin, lease, and cgroup cleanup.
-  - [ ] Remove only the verified legacy lifecycle runner, result bundle,
+  - [x] Remove only the verified legacy lifecycle runner, result bundle,
     binary, and Cargo registration. Replace its manual command with the exact
     standard Rust test. Keep the other kernel qualification operations.
+    The replacement is committed as `3f71d642`. Retirement removes 187 Rust
+    lines net and four Cargo lines. The old bundle, runner, CLI, boot-ID
+    helper, and unused error wrapper are removed. The two remaining wrapper
+    callers use existing Snafu context. The other kernel qualification
+    operations are unchanged. VM harness behavior checks and final repository
+    Rust CI pass after the last Rust edit. The scenario body is unchanged
+    from its verified commit. No full physical matrix rerun is required for
+    this matched deletion. `runner.rs` now has 711 lines. The other large
+    legacy runners remain incomplete.
 
 ### Effect enforcement
 
