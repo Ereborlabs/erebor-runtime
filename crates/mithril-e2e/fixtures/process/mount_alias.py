@@ -75,7 +75,7 @@ def move_tree(tree, target):
 
 args = sys.argv[2:]
 if args not in (
-    [], ["late"], ["recursive"], ["move"], ["prepared"], ["setattr"], ["propagate"], ["future"], ["race"], ["runtime"], ["subpath"]
+    [], ["late"], ["recursive"], ["move"], ["prepared"], ["setattr"], ["propagate"], ["future"], ["race"], ["runtime"], ["subpath"], ["reconfigure"]
 ):
     sys.exit(2)
 mode = args[0] if args else "early"
@@ -120,7 +120,7 @@ if mode not in ("future", "runtime"):
 mount_namespace = os.stat("/proc/self/ns/mnt").st_ino
 if mode == "early":
     check(libc.mount(secret.encode(), denied_alias.encode(), None, MS_BIND, None))
-if mode not in ("recursive", "future", "runtime"):
+if mode not in ("recursive", "future", "runtime", "reconfigure"):
     check(libc.mount(allowed.encode(), allowed_alias.encode(), None, MS_BIND, None))
 prepared_tree = None
 if mode == "prepared":
@@ -143,6 +143,50 @@ if mode == "race":
         thread.start()
 print("native-fixture-ready", flush=True)
 command = sys.stdin.readline()
+if mode == "reconfigure":
+    FSPICK_CLOEXEC = 1
+    FSCONFIG_SET_STRING = 1
+    FSCONFIG_CMD_RECONFIGURE = 7
+    libc.fspick.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    libc.fsconfig.argtypes = [
+        ctypes.c_int, ctypes.c_uint, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int
+    ]
+    libc.umount2.argtypes = [ctypes.c_char_p, ctypes.c_int]
+    libc.prctl.argtypes = [
+        ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong
+    ]
+    while command != "stop\n":
+        code = 0
+        if command == "mount\n":
+            check(libc.mount(b"tmpfs", allowed_alias.encode(), b"tmpfs", 0, None))
+        elif command == "config\n":
+            context = libc.fspick(AT_FDCWD, allowed_alias.encode(), FSPICK_CLOEXEC)
+            if context < 0:
+                raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
+            try:
+                check(libc.fsconfig(context, FSCONFIG_SET_STRING, b"size", b"4194304", 0))
+                check(libc.fsconfig(context, FSCONFIG_CMD_RECONFIGURE, None, None, 0))
+            finally:
+                os.close(context)
+        elif command == "read\n":
+            try:
+                with open(os.path.join(allowed, "open"), encoding="utf-8") as source:
+                    value = source.read()
+            except OSError as error:
+                code = error.errno
+                value = None
+            size = os.statvfs(allowed_alias)
+            with open(result_path, "w", encoding="utf-8") as output:
+                json.dump({"errno": code, "value": value,
+                           "size": size.f_blocks * size.f_frsize}, output)
+        elif command == "unmount\n":
+            check(libc.umount2(allowed_alias.encode(), 0))
+        else:
+            sys.exit(2)
+        name = ctypes.create_string_buffer(f"mnt-{command.strip()}-{code}".encode())
+        check(libc.prctl(15, name, 0, 0, 0))
+        command = sys.stdin.readline()
+    sys.exit(0)
 allowed_mount_error = 0
 mount_allowed = 0
 mount_denied = 0
