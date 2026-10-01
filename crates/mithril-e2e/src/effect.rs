@@ -82,6 +82,8 @@ mod process_control;
 mod reader_queue;
 mod runc;
 #[cfg(test)]
+mod script_deny;
+#[cfg(test)]
 mod socket_cross;
 #[cfg(test)]
 mod socket_cross_allowed;

@@ -2979,6 +2979,28 @@ test does not close a row when its physical condition or an assertion changed.
       2026-09-20.
 - [ ] `EffectTestRunner::physical_probe` process, descriptor, network, and
   `io_uring` cases: retain exact task and object attribution assertions.
+  - [ ] Replace the denied `ScriptExec` action with `forked_script_is_denied`.
+    Reuse `exec_on_release.py` with its existing path and forked-path modes.
+    Add one executable Python shebang target and one distinct signed policy
+    that denies that script path. Copy the target into the shared `/work`
+    mount. Before Node starts, execute the script and require success plus
+    its output marker. Remove the marker. After production recovery, require
+    a distinct child cookie, correct creator, inherited role, and zero entry
+    rule before release. Require actual `EACCES`, fresh child-attributed
+    `EXACT_POLICY_DENY` Exec/Execute evidence, every legacy path-object field,
+    and no script output marker. Keep the single-test file below 100 lines.
+    - [x] Host passed in 27.86 seconds. The valid-script control, denied
+      syscall, fresh child evidence, legacy object fields, and absent marker
+      passed. Pin, lease, and cgroup cleanup passed. The final repository
+      Rust CI passed. The test file has 99 lines. No Platform API changed.
+    - [ ] Pass and commit direct `runc`, then Kubernetes. Register each
+      platform only after its exact case passes.
+    - [ ] Remove the matching legacy script action, enum arm, result field,
+      embedded shell source, stored path, and unused path-exec helper only
+      after all three platforms pass. Keep descriptor exec, executable mmap,
+      mprotect, and non-leader exec resources and their assertions.
+    - Use a fresh `script_recovery` lifecycle for actor-before-Node setup.
+      Keep the target and policy shared across all three environments.
   - [x] Replace the denied `Execveat` action with `forked_at_exec_is_denied`.
     Reuse `exec_on_release.py`, `exec_deny_policy.json`, `ProcessFixture`, and
     `EffectCheck`. Add a real libc `execveat` mode with `AT_FDCWD`, an absolute

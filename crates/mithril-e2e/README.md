@@ -292,6 +292,34 @@ final repository Rust CI passed after the last Rust edit. Script exec and
 non-leader exec remain. This review covers the replacement based on `87511d7f`.
 Production kernel and result schemas do not change.
 
+### Script execution denial
+
+The [script test](src/effect/script_deny.rs) replaces the forked `ScriptExec`
+action in baseline `95775f48`. The old probe builds a shell script inside
+Rust. The replacement uses one checked Python shebang target and the existing
+exec actor. The test file has 99 lines.
+
+Intended end state: a valid script cannot run under its signed Deny rule.
+The physical errno and fresh child evidence must agree. Read this flow:
+
+[forked_script_is_denied](src/effect/script_deny.rs) starts the actor environment before Node.
+  -> [exec_target.py](fixtures/process/exec_target.py) runs without Node and creates its marker.
+  -> [ProcessFixture](src/process.rs) reports successful control exit. The test removes the marker.
+  -> [Platform recovery](src/platform/shared.rs) recovers the held exec actor under the [signed script policy](fixtures/process/script_deny_policy.json).
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) forks a child and holds its script exec.
+  -> [forked_script_is_denied](src/effect/script_deny.rs) checks the distinct child cookie, creator, inherited role, and zero entry rule.
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) calls real path exec on the shebang script and reports `EACCES`.
+  -> [EffectCheck](src/effect/check.rs) requires fresh child-attributed `EXACT_POLICY_DENY` Exec/Execute evidence.
+  -> [forked_script_is_denied](src/effect/script_deny.rs) checks every legacy object field and requires no marker.
+  -> [ProcessFixture::stop](src/process.rs) completes cleanup after the parent reaps its child.
+
+Run `effect::script_deny::forked_script_is_denied::script_recovery_host`
+with the exact-test flags below. Host passed in 27.86 seconds with pin, lease,
+and cgroup cleanup. The final repository Rust CI passed. Direct `runc` and
+Kubernetes are not yet qualified. The legacy action remains. This review
+covers the replacement based on `5d2f8fe0`. No Platform or production code
+changes are required.
+
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
 requires a newer READY generation, fresh attributed path-tree denial, and
