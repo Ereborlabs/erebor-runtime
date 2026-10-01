@@ -963,30 +963,7 @@ async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box
     )?;
     let server = tls.start(tls.control_with_store(store.clone(), 1)?).await?;
 
-    let observations = tls.wal(EvidenceWalLimits {
-        maximum_retained_records: BATCH_RECORDS,
-        maximum_batch_records: BATCH_RECORDS,
-        ..EvidenceWalLimits::default()
-    })?;
-    for source_sequence in 1..=BATCH_RECORDS as u64 {
-        observations.record_bytes(
-            erebor_interceptor_abi::EffectObservationV1 {
-                observed_boottime_ns: source_sequence,
-                source_sequence,
-                source_cpu_id: 0,
-                task_cookie: source_sequence,
-                reason: 9,
-                physical_result: 1,
-                effect_family: 1,
-                operation: 1,
-                ..erebor_interceptor_abi::EffectObservationV1::default()
-            }
-            .as_bytes(),
-        );
-    }
-    let template = observations
-        .next_evidence_batch()
-        .ok_or("the Node did not create a throughput batch template")?;
+    let template = tls.effect_batch(BATCH_RECORDS)?;
     assert_eq!(template.record_count(), BATCH_RECORDS);
     let encoded_batch_bytes = {
         let batch: EvidenceBatch = template.clone().into();

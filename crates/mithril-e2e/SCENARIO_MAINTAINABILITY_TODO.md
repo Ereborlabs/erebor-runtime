@@ -6737,3 +6737,11 @@ cargo test -p mithril-e2e <exact-test-name> -- --exact
 
 Apply the Kubernetes gate in the binding acceptance rules before each paired
 physical command.
+    - [x] Reuse `MtlsFixture::effect_batch` for the original 4,096-record
+      input. Keep all upload, group, acknowledgement, and timing operations
+      in the test. The unchanged release case passes in 15.19 seconds at
+      127.0 MiB/s, above 107.1 MiB/s. It acknowledges 536,989,928 bytes
+      through five receipts. See
+      `/tmp/mithril-backlog-input-release-20261001.log`. This shared input
+      step does not complete the scenario migration. Local harness checks
+      and the final repository Rust CI gate pass.

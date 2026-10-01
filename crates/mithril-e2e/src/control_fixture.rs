@@ -95,6 +95,36 @@ impl MtlsFixture {
         }
     }
 
+    pub(crate) fn effect_batch(
+        &self,
+        count: usize,
+    ) -> Result<mithril_node::EvidenceBatchV1, Box<dyn StdError>> {
+        use zerocopy::IntoBytes as _;
+
+        let wal = self.wal(EvidenceWalLimits {
+            maximum_retained_records: count,
+            maximum_batch_records: count,
+            ..EvidenceWalLimits::default()
+        })?;
+        for sequence in 1..=count as u64 {
+            wal.record_bytes(
+                erebor_interceptor_abi::EffectObservationV1 {
+                    observed_boottime_ns: sequence,
+                    source_sequence: sequence,
+                    task_cookie: sequence,
+                    reason: 9,
+                    physical_result: 1,
+                    effect_family: 1,
+                    operation: 1,
+                    ..erebor_interceptor_abi::EffectObservationV1::default()
+                }
+                .as_bytes(),
+            );
+        }
+        wal.next_evidence_batch()
+            .ok_or("missing effect batch".into())
+    }
+
     pub(crate) fn node_digest(&self) -> String {
         self.certificates.node_digest()
     }
