@@ -1209,6 +1209,25 @@ acknowledgement, or decommission operations directly.
   reason. All three focused tests and the unchanged positive registration
   test passed.
 - [ ] `mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered_session`
+  - [ ] Replace the old function with `evidence_replays_once` in
+    `control_tls/replay.rs`, one standard Rust test below 100 lines. Reuse
+    `MtlsFixture`, the production WAL, and the existing bounded wait. Remove
+    the mutable cursor cell and manual error reconstruction. Do not add a
+    fixture, Platform API, or actor-only test.
+  - [ ] Keep three records on two CPU sources. Send the first batch and wait
+    for its durable Control cursor. Disconnect without reading or applying
+    its acknowledgement. Reconnect, require the exact same WAL batch, and
+    apply the production acknowledgement. Send and acknowledge the second
+    source through that same connection.
+  - [ ] Keep distinct source IDs, two registered nonces, an empty final WAL,
+    exact durable cursors, and exactly-once accepted record counts for both
+    sources. Bound acknowledgement waits. Keep connection drops and normal
+    server shutdown visible.
+  - [ ] Compare with commit `95775f48`. Pass the exact replacement before
+    deleting the old function. Then pass the Control/TLS family, harness
+    checks, and final Rust CI. Commit this verified protocol-only behavior
+    separately. No physical platform matrix is needed because this case
+    tests public WAL and mTLS APIs, not a kernel, OCI, or Pod operation.
 - [ ] `mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack`
 - [ ] `mtls_storage_failure_withholds_ack_until_replay_is_durable`
 - [ ] `kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence`
