@@ -2161,61 +2161,6 @@ impl EffectTestRunner {
         external_mount_namespace.unmount(&changed_mount_secret)?;
         reconcile_policy_lifecycle(&policy, &mut host)?;
 
-        external_mount_namespace.bind_mount(&paths.benign, &paths.secret)?;
-        ensure!(
-            mount_view_is_dirty(&host, exact_object.mount_namespace_inode)?,
-            InvalidInputSnafu {
-                path: &paths.secret,
-                reason:
-                    "an external mount-namespace mutation did not mark the protected view DIRTY",
-            }
-        );
-        let replacement_marker = observations.cursor();
-        let replacement_open = fixture.open(&paths.secret)?;
-        wait_for_reason(
-            &reader,
-            &observations,
-            replacement_marker,
-            "UNRESOLVED_OBJECT",
-        )?;
-        ensure!(
-            replacement_open.denied(),
-            InvalidInputSnafu {
-                path: &paths.secret,
-                reason: "a replaced exact path was physically allowed while its topology was DIRTY",
-            }
-        );
-        policy
-            .reconcile_policy_lifecycle(&mut host)
-            .context(NodeSnafu)?;
-        external_mount_namespace.unmount(&paths.secret)?;
-        reconcile_policy_lifecycle(&policy, &mut host)?;
-        let restored_marker = observations.cursor();
-        ensure!(
-            fixture.open(&paths.secret)?.allowed != protect,
-            InvalidInputSnafu {
-                path: &paths.secret,
-                reason:
-                    "the exact object did not recover after the hostile replacement was removed",
-            }
-        );
-        wait_for_exact_effect(
-            &reader,
-            &observations,
-            restored_marker,
-            if protect {
-                "EXACT_POLICY_DENY"
-            } else {
-                "WOULD_DENY"
-            },
-            (
-                KernelEffectFamilyV1::File,
-                KernelEffectOperationV1::OpenRead,
-            ),
-            PathSelectorV1::kernel_handle_for_id("manual-secret"),
-            None,
-        )?;
-
         external_mount_namespace.unmount(&path_tree_preexisting_bind_target)?;
         reconcile_policy_lifecycle(&policy, &mut host)?;
 

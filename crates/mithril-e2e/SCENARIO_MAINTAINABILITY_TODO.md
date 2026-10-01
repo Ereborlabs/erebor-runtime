@@ -2382,7 +2382,7 @@ test does not close a row when its physical condition or an assertion changed.
     - [ ] Remove only the matching old first-read decision and effect after
       the deferred Kubernetes case passes. Keep dirty-view, replaced-path,
       restoration, and cache snapshot checks until their own replacements pass.
-    - [ ] Replace the Protect-mode overmount and restoration pair with
+    - [x] Replace the Protect-mode overmount and restoration pair with
       `mount_replacement_stays_closed`. Keep one small shared Rust test below
       100 lines. Reuse `exception.py`, the qualified bind/recovery setup,
       `file_mount_change_policy.json`, `EffectCheck`, and existing map readers.
@@ -2413,13 +2413,13 @@ test does not close a row when its physical condition or an assertion changed.
         case passed in 79.17 seconds. Namespace, output, pin, lease, and socket
         cleanup passed. The final repository Rust CI procedure passed after
         the registration edit.
-      - [ ] Remove only the matching overmount and restoration block after
+      - [x] Remove only the matching overmount and restoration block after
         the Observe replacement also passes on all three platforms. Keep the
         separate first-read and mount-snapshot block until its own replacement
         passes. Do not count this Protect case as Observe or cache proof.
       - [x] Compare with `95775f48`; run harness checks and final Rust CI
         after each deliverable's final Rust edit. Document focused commands.
-    - [ ] Replace the Observe-mode overmount and restoration pair with
+    - [x] Replace the Observe-mode overmount and restoration pair with
       `observe_replacement_stays_closed`. Keep one shared test below 100 lines.
       Reuse `exception.py`, `file_observe.json`, `EffectCheck`, and existing map
       readers. Do not copy a policy or add a Platform API or scenario fixture.
@@ -2430,7 +2430,7 @@ test does not close a row when its physical condition or an assertion changed.
         Dirty view, physical `EACCES`, and fresh `UNRESOLVED_OBJECT` evidence.
       - [x] Remove the overmount. Require read success and fresh `WOULD_DENY`
         with the original exact key, composite, and task cookie.
-      - [ ] Pass and commit Host, direct `runc`, then Kubernetes separately.
+      - [x] Pass and commit Host, direct `runc`, then Kubernetes separately.
         Run harness checks and final Rust CI after each final Rust edit.
         - [x] Host: the 90-line exact case passed in 35.91 seconds with the
           unchanged actor and policy. Output, pin, lease, and cgroup cleanup
@@ -2441,10 +2441,14 @@ test does not close a row when its physical condition or an assertion changed.
         - [x] Kubernetes: the same 90-line test passed in 79.70 seconds.
           Namespace, output, pin, lease, and socket cleanup passed. The final
           repository Rust CI gate passed after the registration edit.
-      - [ ] Remove only the shared legacy overmount/restoration pair after
+      - [x] Remove only the shared legacy overmount/restoration pair after
         both policy modes pass on all three platforms. Keep cache snapshots,
         first-read decisions, and propagation actions and assertions intact.
         Compare with `95775f48` and document the exact replacement commands.
+        The retirement deletes 55 Rust lines. Eight related child regressions,
+        VM harness checks, and the final repository Rust CI gate passed after
+        the deletion. The remaining legacy mount cases are not qualified by
+        this result.
   - [ ] Remove the old exact control open only after these alias and mount
     checks and their Protect-mode counterparts pass as platform tests.
 - [ ] `EffectTestRunner::physical_probe` protect scenario: keep every hard

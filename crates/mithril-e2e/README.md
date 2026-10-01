@@ -743,10 +743,13 @@ Its output, pin, lease, and cgroup cleanup passed. Use the
 seconds. Namespace, output, pin, lease, and socket cleanup passed. Use the
 `mount_replace_observe_kubernetes` generated suffix.
 Host cleanup, VM harness checks, and the final repository Rust CI gate passed.
-Source review: `6f823306` plus the Observe Kubernetes registration.
-The baseline comparison uses `95775f48`. Keep the legacy overmount and
-restoration pair until both modes pass on all three platforms. Keep the
-separate first-read, cache-snapshot, and propagation blocks after that removal.
+Both modes pass on all three platforms. The matching legacy overmount and
+restoration pair is removed. The retirement deletes 55 Rust lines. Eight
+related child regressions, VM harness checks, and the final repository Rust
+CI gate passed after the deletion. The separate first-read, cache-snapshot,
+and propagation blocks remain. This result does not qualify those blocks.
+Source review: `7b4a914d` plus the legacy retirement edit.
+The baseline comparison uses `95775f48`.
 
 ## In-Process Control And TLS Scenarios
 
