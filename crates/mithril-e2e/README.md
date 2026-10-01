@@ -933,6 +933,46 @@ It does not claim kernel health sampling, physical syscall generation, or
 Kubernetes qualification. No fixture, Platform, or production source changes
 are included.
 
+### Shared HTTPS server fixture
+
+Intended end state: Both HTTPS scenarios use one ready-server constructor.
+Each scenario keeps its complete production owners, requests, assertions,
+and shutdown order visible.
+
+[ControlServerFixture::admission](src/control_fixture.rs) receives TLS files and complete Kubernetes-client, Control, policy, and Node-readiness owners.
+  -> [KubernetesAdmissionOwner::serve_with_client](../mithril-control/src/policy/kubernetes_workloads.rs) validates the unchanged configuration and creates the production admission and decommission routes.
+  -> [ControlServerFixture::from_running](src/control_fixture.rs) waits at most five seconds for the bound address; a failure reports the address and server-task state.
+  -> [HTTPS scenarios](src/control_tls.rs) receive the ready server and perform their original requests and result checks.
+  -> [ControlServerFixture::shutdown](src/control_fixture.rs) signals production graceful shutdown and joins the server; errors remain visible.
+
+```mermaid
+sequenceDiagram
+    participant T as Rust scenario
+    participant F as Server fixture
+    participant H as Production HTTPS owner
+    T->>F: Pass complete owners and TLS files
+    F->>H: Start production server
+    F->>H: Bounded TCP readiness check
+    H-->>F: Bound address
+    F-->>T: Ready server
+    T->>H: Original HTTPS requests
+    T->>F: Shutdown
+    F->>H: Signal graceful shutdown and join
+```
+
+The constructor replaces two identical startup blocks. It keeps the original
+one-MiB request limit, one-second server request deadline, TLS files, bounded
+readiness, and fallible shutdown. Production supplies the five-second graceful
+shutdown bound. Drop only signals an idempotent fallback. The constructor
+does not sign, deliver, admit, acknowledge, or assert a scenario result.
+
+This source review covers the shared fixture based on `cfaf4f1a`. Its callers
+are the retained-evidence admission and HTTPS decommission tests. Their
+actions and assertions remain unchanged in this tooling step. This step does
+not retire either scenario. The Kubernetes client supplies external API
+fixtures; the production HTTPS owner runs. No Platform or production source
+changes are included.
+
 ### Administrative service routing and cancellation
 
 Intended end state: Resolve and arm requests use their separate authenticated

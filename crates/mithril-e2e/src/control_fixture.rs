@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use mithril_control::{
     serve, AllowedNodeIdentity, ControlPlane, ControlServerTls, ControlStore,
-    EvidenceIntakeIdentityV1, TrustGenerationV1,
+    EvidenceIntakeIdentityV1, KubernetesAdmissionHttpConfigV1, KubernetesAdmissionOwner,
+    KubernetesNodeReadinessOwner, PolicyDesiredStateOwner, TrustGenerationV1,
 };
 use mithril_node::{
     EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, NodeControlConfig,
@@ -146,6 +147,38 @@ impl MtlsFixture {
 }
 
 impl ControlServerFixture {
+    pub(crate) async fn admission(
+        files: &CertificateFiles,
+        kube: kube::Client,
+        control: ControlPlane,
+        policies: PolicyDesiredStateOwner,
+        nodes: KubernetesNodeReadinessOwner,
+    ) -> Result<Self, Box<dyn StdError>> {
+        let address = free_address()?;
+        let config = KubernetesAdmissionHttpConfigV1 {
+            listen: address,
+            tls_certificate_path: files.server_certificate.clone(),
+            tls_private_key_path: files.server_key.clone(),
+            maximum_request_bytes: 1024 * 1024,
+            request_timeout_ms: 1_000,
+        };
+        let (shutdown, receiver) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            KubernetesAdmissionOwner::serve_with_client(
+                config,
+                kube,
+                control,
+                policies,
+                nodes,
+                async move {
+                    let _result = receiver.await;
+                },
+            )
+            .await
+        });
+        Self::from_running(address, shutdown, server).await
+    }
+
     pub(crate) async fn start(
         files: &CertificateFiles,
         control: ControlPlane,

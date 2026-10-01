@@ -17,10 +17,9 @@ use mithril_control::{
     AuthenticatedEvidenceNodeV1, CapabilityRecord, ContainerKindV1, ControlPlane, ControlStore,
     EvidenceBatch, EvidenceConsumptionWatermarkV1, EvidenceIntakeIdentityV1, EvidenceIntakeOwner,
     EvidenceRecord, EvidenceRetentionOwner, EvidenceStoreCapacityPolicyV1, EvidenceStoreLimitsV1,
-    EvidenceTemporalCoverage, KubernetesAdmissionHttpConfigV1, KubernetesAdmissionOwner,
-    KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner, KubernetesWorkloadIdentityV1,
-    NodeDecommissionAuthorizationV1, NodeDecommissionStateV1, NodeRegistration,
-    PolicyActivationAcknowledgement, PolicyBundleV1, PolicyDesiredStateConfigV1,
+    EvidenceTemporalCoverage, KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner,
+    KubernetesWorkloadIdentityV1, NodeDecommissionAuthorizationV1, NodeDecommissionStateV1,
+    NodeRegistration, PolicyActivationAcknowledgement, PolicyBundleV1, PolicyDesiredStateConfigV1,
     PolicyDesiredStateOwner, PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1,
     ProfileSealRequestV1, RegistryDigestsV1, SignedNodeDecommissionV1, TrustGenerationV1,
     WorkloadProtectionPolicy, WorkloadTargetFactV1,
@@ -1176,29 +1175,9 @@ async fn kubernetes_outage_retained_evidence_allows_protected_pod_admission(
         session_ttl_seconds: 30,
         reconcile_interval_ms: 100,
     })?;
-    let address = free_address()?;
-    let config = KubernetesAdmissionHttpConfigV1 {
-        listen: address,
-        tls_certificate_path: tls.files.server_certificate.clone(),
-        tls_private_key_path: tls.files.server_key.clone(),
-        maximum_request_bytes: 1024 * 1024,
-        request_timeout_ms: 1_000,
-    };
-    let (shutdown, receiver) = oneshot::channel();
-    let server = tokio::spawn(async move {
-        KubernetesAdmissionOwner::serve_with_client(
-            config,
-            kube,
-            control,
-            fixture.owner,
-            nodes,
-            async move {
-                let _result = receiver.await;
-            },
-        )
-        .await
-    });
-    let server = ControlServerFixture::from_running(address, shutdown, server).await?;
+    let server =
+        ControlServerFixture::admission(&tls.files, kube, control, fixture.owner, nodes).await?;
+    let address = server.address();
     let ca = reqwest::Certificate::from_pem(&fs::read(&tls.files.ca)?)?;
     let client = reqwest::Client::builder()
         .add_root_certificate(ca)
@@ -1249,29 +1228,9 @@ async fn node_decommission_https_accepts_the_same_signed_artifact_as_control(
         session_ttl_seconds: 30,
         reconcile_interval_ms: 100,
     })?;
-    let address = free_address()?;
-    let config = KubernetesAdmissionHttpConfigV1 {
-        listen: address,
-        tls_certificate_path: tls.files.server_certificate.clone(),
-        tls_private_key_path: tls.files.server_key.clone(),
-        maximum_request_bytes: 1024 * 1024,
-        request_timeout_ms: 1_000,
-    };
-    let (shutdown, receiver) = oneshot::channel();
-    let server = tokio::spawn(async move {
-        KubernetesAdmissionOwner::serve_with_client(
-            config,
-            kube,
-            control,
-            fixture.owner,
-            nodes,
-            async move {
-                let _result = receiver.await;
-            },
-        )
-        .await
-    });
-    let server = ControlServerFixture::from_running(address, shutdown, server).await?;
+    let server =
+        ControlServerFixture::admission(&tls.files, kube, control, fixture.owner, nodes).await?;
+    let address = server.address();
 
     let artifact = SignedNodeDecommissionV1::sign(
         &NodeDecommissionAuthorizationV1::new(

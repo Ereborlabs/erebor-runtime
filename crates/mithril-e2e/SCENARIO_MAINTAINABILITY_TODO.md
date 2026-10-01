@@ -621,7 +621,7 @@ need replacement:
 | `identity.rs` | 4,845 | Size and runner retirement |
 | `effect.rs` | 2,907 | Size and runner retirement |
 | `effect/child.rs` | 2,715 | Size and runner retirement |
-| `control_tls.rs` | 1,798 | Runner retirement; size limit met |
+| `control_tls.rs` | 1,757 | Runner retirement; size limit met |
 | `effect/network.rs` | 1,505 | Runner retirement; size limit met |
 
 The behavior sections below are the runner-retirement inventory. This size
@@ -1302,13 +1302,21 @@ acknowledgement, or decommission operations directly.
 - [ ] `kubernetes_outage_partitioned_node_reconnects_to_running_control_and_replaces_predecessor`
 - [ ] `kubernetes_outage_retained_evidence_allows_protected_pod_admission`
 - [ ] `node_decommission_https_accepts_the_same_signed_artifact_as_control`
-  - [ ] Add one ready HTTPS constructor on the existing
+  - [x] Add one ready HTTPS constructor on the existing
     `ControlServerFixture`. Accept the complete Kubernetes client, Control,
     policy, and Node-readiness owners. Keep the current TLS files, request
     limits, production `serve_with_client` call, bounded readiness, and
     fallible shutdown. Do not put requests, policy delivery, or assertions
     in this constructor. Replace both repeated HTTPS startup blocks, verify
     their existing exact tests and related checks, and commit tooling first.
+    Both original exact tests passed: HTTPS decommission in 0.05 seconds and
+    retained-evidence admission in 0.20 seconds. Harness checks passed.
+    The final Rust CI gate exited with status 0. Its E2E run passed 91 tests
+    in 28.76 seconds, including all 19 active Control/TLS tests, with 429
+    existing ignored tests. These results are not physical Kubernetes proof.
+    The shared fixture has 375 lines. `control_tls.rs` decreases from 1,798
+    to 1,757 lines. Scenario actions, assertions, and shutdown order did not
+    change. The scenario replacement remains open below.
   - [ ] Replace the old function with `https_decommission_keeps_status` in
     `control_tls/decommission.rs`, one standard Rust test below 100 lines.
     Keep the live authenticated Node connection, boot ID, signer, nonce,
