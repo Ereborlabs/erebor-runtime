@@ -20,6 +20,13 @@ struct CacheKey {
 
 #[repr(C)]
 #[derive(FromBytes, Immutable, IntoBytes, KnownLayout)]
+struct ObjectKey {
+    state: CacheKey,
+    root_dentry: u64,
+}
+
+#[repr(C)]
+#[derive(FromBytes, Immutable, IntoBytes, KnownLayout)]
 struct CacheState {
     count: u32,
     ready: u32,
@@ -34,6 +41,14 @@ pub(crate) struct CacheView {
     pub(crate) generation: u64,
     pub(crate) keys: BTreeSet<Vec<u8>>,
     pub(crate) mountinfo: Vec<u8>,
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+pub(crate) struct CacheRows {
+    pub(crate) objects: usize,
+    pub(crate) states: usize,
+    pub(crate) old_objects: usize,
+    pub(crate) old_states: usize,
 }
 
 pub(crate) struct MountCache {
@@ -105,6 +120,29 @@ impl MountCache {
             keys,
             mountinfo: fs::read(self.process.join("mountinfo"))?,
         })
+    }
+
+    pub(crate) fn rows(&self) -> TestResult<CacheRows> {
+        let epoch = self.counter("mount_global_mutation_epoch")?;
+        let generation = self.counter("canonical_mount_cache_generation")?;
+        let mut rows = CacheRows::default();
+        for bytes in self.reader.keys("canonical_mount_cache")? {
+            let key = ObjectKey::read_from_bytes(&bytes)
+                .map_err(|error| format!("{}: object key ABI: {error}", self.path.display()))?;
+            rows.objects += 1;
+            if key.state.epoch < epoch || key.state.generation < generation {
+                rows.old_objects += 1;
+            }
+        }
+        for bytes in self.reader.keys("canonical_mount_cache_states")? {
+            let key = CacheKey::read_from_bytes(&bytes)
+                .map_err(|error| format!("{}: state key ABI: {error}", self.path.display()))?;
+            rows.states += 1;
+            if key.epoch < epoch || key.generation < generation {
+                rows.old_states += 1;
+            }
+        }
+        Ok(rows)
     }
 
     pub(crate) fn stale(&self, view: &CacheView) -> TestResult<()> {

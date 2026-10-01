@@ -80,6 +80,9 @@ fn stale_cache_keeps_deny<P: Platform>() -> TestResult<()> {
     assert_eq!(after.epoch, before.epoch);
     assert_eq!(after.namespace, before.namespace);
     assert_eq!(after.mountinfo, before.mountinfo);
+    let rows = cache.rows()?;
+    assert!(rows.old_objects > 0 && rows.old_states > 0, "{rows:?}");
+    assert!(rows.objects > rows.old_objects && rows.states > rows.old_states);
 
     actor.stop()?;
     env.stop()

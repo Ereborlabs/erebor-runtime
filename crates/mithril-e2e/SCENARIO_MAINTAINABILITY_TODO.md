@@ -5372,9 +5372,15 @@ setup, production actions, assertions, and focused test.
     retained current rows, and unchanged READY keys, generation, epoch,
     namespace, and mountinfo. Do not call an internal collector or force a
     policy change. Keep the test below 100 lines.
-    - [ ] Extend the existing map fixture with checked typed keys and row
+    - [x] Extend the existing map fixture with checked typed keys and row
       counts. Verify the tooling through the existing rebuild test on Host,
       direct `runc`, and Kubernetes before the dependent migration.
+      The 89-line rebuild case passed on Host in 30.28 seconds, direct `runc`
+      in 31.89 seconds, and Kubernetes in 72.03 seconds. Both real maps contain
+      obsolete and current rows after rebuild. All cleanup checks passed.
+      The repository Rust CI gate and local VM harness checks passed. The map
+      owner stays in one 173-line file. No Platform or production code changed.
+      This result proves row observation, not Node collection.
     - [ ] Pass and commit Host, then direct `runc`, then Kubernetes. A missing
       Node collection trigger is a production approval boundary, not grounds
       to weaken the test or add an unrelated runtime event.

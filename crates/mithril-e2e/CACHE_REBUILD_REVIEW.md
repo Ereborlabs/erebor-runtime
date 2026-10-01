@@ -21,6 +21,8 @@ platform.
   -> [read_path.py](fixtures/process/read_path.py) repeats the same protected read.
   -> [ensure_canonical_mount_cache](../../bpf/erebor-interceptor/programs/identity_path.bpf.h) detects the count mismatch and builds a newer generation.
   -> [stale_cache_keeps_deny](src/identity/scenarios/cache_rebuild.rs) requires denial, fresh attributed evidence, new READY keys, and unchanged topology.
+  -> [MountCache::rows](src/physical/mount_cache.rs) counts current and obsolete rows in both cache maps through checked typed keys.
+  -> [stale_cache_keeps_deny](src/identity/scenarios/cache_rebuild.rs) requires obsolete object and state rows and retained current rows.
   -> [ProcessFixture::stop](src/process.rs) stops the actor before Platform cleanup.
 
 The actor performs both real opens. The test does not write an expected errno
@@ -59,6 +61,7 @@ flowchart LR
 
 | Map | Key and value ABI | Userspace writer | BPF writer | Readers | Lifetime |
 | --- | --- | --- | --- | --- | --- |
+| `canonical_mount_cache` | Named C object key and selected mount value | Node removes obsolete rows | Cache builder publishes selected mounts | Path evaluator and fixture | Pinned under the test root |
 | `canonical_mount_cache_states` | Named C cache-state key and count/state value | Test decreases an existing count | Cache builder publishes READY | Path evaluator and fixture | Pinned under the test root |
 | `canonical_mount_cache_generation` | Native-endian u32 key and u64 generation | Production initialization | Cache builder advances generation | Path evaluator and fixture | Pinned under the test root |
 | `mount_global_mutation_epoch` | Native-endian u32 key and u64 epoch | Production initialization | Mount hooks advance epoch | Path evaluator and fixture | Pinned under the test root |
@@ -68,6 +71,9 @@ The fixture's `repr(C)` layouts match the named structures in
 The constructor checks the loaded map's key and value sizes. `zerocopy`
 rejects a wrong input size. Integer fields are all-bit-valid; the snapshot
 selects only the named READY state at the current epoch and generation.
+The object key contains the complete state key and one root-dentry address.
+The row counter reads the complete typed key for each map. A row is obsolete
+when its epoch or generation precedes the corresponding current counter.
 The fixture uses no literal byte offsets. `MapFlags::EXIST` prevents fault
 injection from creating a new row.
 
@@ -101,3 +107,11 @@ shell line. The two focused runc regressions and VM harness checks passed.
 The real Kubernetes shell still waits for rebuild before checking collection.
 That wait cannot be removed until the collector has a shared replacement.
 The final repository Rust CI procedure passed after the retirement edit.
+
+The typed row counter is verified through the same rebuild case. The test
+now has 89 lines. It passed on Host in 30.28 seconds, direct `runc` in 31.89
+seconds, and Kubernetes in 72.03 seconds on 2026-10-01. Each run requires
+obsolete object and state rows and retained current rows after rebuild.
+Cleanup, local VM harness checks, and the final Rust CI procedure passed.
+This addition reads state only. It does not prove Node collection or change
+Platform, Node, Control, or BPF behavior.
