@@ -3601,6 +3601,15 @@ test does not close a row when its physical condition or an assertion changed.
         No Platform or production code changed. The earlier socket-pass
         replacement also keeps its three-operation coverage; it does not
         replace this distinct-role, two-binding round trip.
+    - [x] Retire the unused legacy `unix_stream_relationship_allowed`
+      result field after replacement commit `f97e62f1`. It has no remaining
+      shell or Rust consumer. Keep the real connection and its success
+      check for descriptor-transfer setup. Keep the no-file-create check
+      across those transfers and all Observe checks. The unchanged 99-line
+      Host test passed again in 29.08 seconds. Cleanup, all 25 related
+      non-privileged effect tests, and local harness checks passed. The final
+      repository Rust CI procedure passed after the two-line retirement
+      edit. See `/tmp/mithril-unix-retirement-final-ci-20261001.log`.
     - [ ] Keep the Observe round trip and its `WOULD_DENY` result open until
       its own verified replacement exists. Keep SCM_RIGHTS transfers and
       their retained descriptors. Their old round-trip setup establishes

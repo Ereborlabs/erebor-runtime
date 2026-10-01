@@ -1623,6 +1623,11 @@ test uses one Python actor file and existing platform readiness and cleanup.
 The public policy is [unix_stream_policy.json](fixtures/process/unix_stream_policy.json).
 The old connection setup remains because later descriptor-transfer checks
 still use it. Observe-mode coverage also remains.
+The unused legacy round-trip result flag is removed after the replacement
+passes on all three platforms. The connection success and no-file-create
+checks remain for the descriptor-transfer setup. The final Host case passed
+again in 29.08 seconds after this retirement. Related tests, harness checks,
+cleanup, and repository Rust CI passed after the last Rust edit.
 
 Run `effect::unix_stream::unix_stream_is_allowed::identity_host` by its exact
 name in the retained VM with the Host environment above and
