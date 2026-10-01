@@ -3668,6 +3668,25 @@ test does not close a row when its physical condition or an assertion changed.
           and start operations. Do not add a Platform API or reproduce Node
           recovery. The lightweight fixture must supply every member to the
           production owners, as real CRI does. Keep Node-first setup unchanged.
+          - [ ] Add `group_roles_recover` in `identity/scenarios/group_recovery.rs`.
+            Reuse `read_path.py` and `group_roles_policy.json`. Start Control,
+            start both application containers in one actor group, install the
+            policy, then start Node. Require two `active_recovered` bindings,
+            distinct roles, task cookies, bindings, and cgroups. Require the
+            same read to succeed for worker and return `EACCES` for helper.
+            Keep each actual initial PID and rule attribution explicit. Use
+            existing operations and a pristine `group_recovery` lifecycle.
+            Keep the file below 100 lines. Run Host before changing tooling.
+          - [ ] Make the existing lightweight runtime-input owner retain all
+            ready group members. Supply each member once after its signed
+            target is ready. Do not change runtime identity on policy updates.
+            Keep Node-first admission and existing single-actor recovery tests.
+            Commit verified tooling before the dependent Observe migration.
+          - [ ] Qualify Host, direct runc, and Kubernetes in that order. Add
+            each platform to the test attribute only after its focused pass.
+            Check Node-first groups, policy replacement, single-actor recovery,
+            readiness diagnostics, cleanup, and the complete physical matrix
+            after a shared Platform change. Record exact logs and commands.
   - [x] Replace the remaining Observe-mode descriptor exec with
     `forked_fd_exec_is_observed`. Reuse `exec_on_release.py`, the process
     owner, and `EffectCheck`. Use a distinct signed Observe policy for the
