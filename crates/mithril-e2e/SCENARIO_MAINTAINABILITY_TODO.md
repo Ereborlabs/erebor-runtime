@@ -2435,7 +2435,9 @@ test does not close a row when its physical condition or an assertion changed.
         - [x] Host: the 90-line exact case passed in 35.91 seconds with the
           unchanged actor and policy. Output, pin, lease, and cgroup cleanup
           passed. VM harness checks and final repository Rust CI passed.
-        - [ ] Direct `runc`.
+        - [x] Direct `runc`: the same 90-line test passed in 43.01 seconds.
+          Output, pin, lease, and cgroup cleanup passed. The final repository
+          Rust CI gate passed after the registration edit.
         - [ ] Kubernetes.
       - [ ] Remove only the shared legacy overmount/restoration pair after
         both policy modes pass on all three platforms. Keep cache snapshots,
