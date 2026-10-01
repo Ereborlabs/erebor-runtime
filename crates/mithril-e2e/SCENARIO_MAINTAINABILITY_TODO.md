@@ -3723,7 +3723,7 @@ test does not close a row when its physical condition or an assertion changed.
           and start operations. Do not add a Platform API or reproduce Node
           recovery. The lightweight fixture must supply every member to the
           production owners, as real CRI does. Keep Node-first setup unchanged.
-          - [ ] Add `group_roles_recover` in `identity/scenarios/group_recovery.rs`.
+          - [x] Add `group_roles_recover` in `identity/scenarios/group_recovery.rs`.
             Reuse `read_path.py` and `group_roles_policy.json`. Start Control,
             start both application containers in one actor group, install the
             policy, then start Node. Require two `active_recovered` bindings,
@@ -3770,7 +3770,17 @@ test does not close a row when its physical condition or an assertion changed.
           See `/tmp/mithril-kernel-start-host-20261001.log`.
           All 152 registered Host cases now pass across the continued run
           and the two focused corrections. All 143 direct-runc cases pass.
-          Kubernetes is running. The continuation logs are
+          Kubernetes stops after one prepared-mount case passes and two fail
+          during actor creation. The retained runtime gate correctly denies
+          a new actor while Node is stopped. These three cases require mount
+          preparation before the first Node start. Give propagation and
+          setattr separate cold-start lifecycles; keep their bodies, actor,
+          policy, and assertions unchanged. All three cases pass on Host and
+          runc. Kubernetes passes in 72.82, 71.54, and 66.95 seconds. Resource
+          cleanup, VM harness checks, and final Rust CI pass. See
+          `/tmp/mithril-mount-cold-{light,kube,kube-remaining,ci}-20261001.log`.
+          Continue only the 32 unfinished Kubernetes cases in 24 groups.
+          The continuation logs are
           `/tmp/mithril-group-recovery-matrix-{final,remaining}-20261001.log`.
           It contains 152 Host, 143 runc, and 143 Kubernetes cases. Only the
           unrelated uncommitted `file_gate` draft is excluded. No committed

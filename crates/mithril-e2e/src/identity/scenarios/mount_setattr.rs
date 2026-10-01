@@ -8,7 +8,7 @@ use crate::physical::wait_for;
 use crate::platform::{platform_test, Platform, TestResult};
 
 #[platform_test(host, runc, kubernetes)]
-#[lifecycle = mount_prepared]
+#[lifecycle = mount_setattr]
 fn mount_setattr_is_denied<P: Platform>() -> TestResult<()> {
     let mut env = P::setup("mount-setattr")?;
     env.start_control()?;
