@@ -2413,10 +2413,29 @@ test does not close a row when its physical condition or an assertion changed.
         case passed in 79.17 seconds. Namespace, output, pin, lease, and socket
         cleanup passed. The final repository Rust CI procedure passed after
         the registration edit.
-      - [ ] Keep the old block until the separate Observe contrast and mount
-        snapshot checks pass. Do not count this Protect case as their proof.
+      - [ ] Remove only the matching overmount and restoration block after
+        the Observe replacement also passes on all three platforms. Keep the
+        separate first-read and mount-snapshot block until its own replacement
+        passes. Do not count this Protect case as Observe or cache proof.
       - [x] Compare with `95775f48`; run harness checks and final Rust CI
         after each deliverable's final Rust edit. Document focused commands.
+    - [ ] Replace the Observe-mode overmount and restoration pair with
+      `observe_replacement_stays_closed`. Keep one shared test below 100 lines.
+      Reuse `exception.py`, `file_observe.json`, `EffectCheck`, and existing map
+      readers. Do not copy a policy or add a Platform API or scenario fixture.
+      - [ ] Start the actor before Node. Keep production recovery and policy
+        installation visible. Require initial read success and fresh
+        actor-attributed `WOULD_DENY` with nonzero object key and composite.
+      - [ ] Require successful benign-file overmount, the original namespace's
+        Dirty view, physical `EACCES`, and fresh `UNRESOLVED_OBJECT` evidence.
+      - [ ] Remove the overmount. Require read success and fresh `WOULD_DENY`
+        with the original exact key, composite, and task cookie.
+      - [ ] Pass and commit Host, direct `runc`, then Kubernetes separately.
+        Run harness checks and final Rust CI after each final Rust edit.
+      - [ ] Remove only the shared legacy overmount/restoration pair after
+        both policy modes pass on all three platforms. Keep cache snapshots,
+        first-read decisions, and propagation actions and assertions intact.
+        Compare with `95775f48` and document the exact replacement commands.
   - [ ] Remove the old exact control open only after these alias and mount
     checks and their Protect-mode counterparts pass as platform tests.
 - [ ] `EffectTestRunner::physical_probe` protect scenario: keep every hard
