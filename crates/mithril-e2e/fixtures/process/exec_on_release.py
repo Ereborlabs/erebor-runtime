@@ -16,7 +16,9 @@ if mode == "fork-at":
     call_at.argtypes = [ctypes.c_int, ctypes.c_char_p,
                        ctypes.POINTER(ctypes.c_char_p),
                        ctypes.POINTER(ctypes.c_char_p), ctypes.c_int]
-image = open(target, "rb") if mode in {"fd", "fork-fd"} else None
+image = open(target, "rb") if mode in {"fd", "fork-fd", "fork-thread"} else None
+if mode == "fork-thread":
+    import threading
 if mode == "fork-deleted":
     import shutil
 
@@ -34,33 +36,51 @@ elif mode == "fork-memfd":
 print("native-fixture-ready", flush=True)
 if sys.stdin.readline() != "exec\n":
     raise RuntimeError("expected exec")
-if mode in {"fork-fd", "fork-path", "fork-at", "fork-deleted", "fork-memfd"}:
+if mode in {"fork-fd", "fork-path", "fork-at", "fork-deleted", "fork-memfd", "fork-thread"}:
     pid = os.fork()
     if pid != 0:
         _, status = os.waitpid(pid, 0)
         sys.exit(os.waitstatus_to_exitcode(status))
-    while not os.path.exists(os.path.join(work, "exec")):
+    while mode != "fork-thread" and not os.path.exists(os.path.join(work, "exec")):
         time.sleep(0.01)
-try:
-    if image is not None:
-        os.execve(image.fileno(), [target], os.environ)
-    elif mode in {"path", "fork-path"}:
-        os.execv(target, [target])
-    elif mode == "fork-at":
-        args = (ctypes.c_char_p * 2)(os.fsencode(target), None)
-        empty = (ctypes.c_char_p * 1)()
-        if call_at(AT_FDCWD, os.fsencode(target), args, empty, 0) != 0:
-            raise OSError(ctypes.get_errno(), "execveat")
-    else:
-        raise ValueError(f"unknown exec mode: {mode}")
-except OSError as error:
-    code = error.errno or 255
-    if image is not None:
-        image.close()
-    if work is not None:
-        name = ctypes.create_string_buffer(f"exec-{code}".encode("ascii"))
-        if libc.prctl(15, name, 0, 0, 0) != 0:
-            raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
-        while not os.path.exists(os.path.join(work, "release")):
+
+code = 0
+
+
+def execute():
+    global code
+    if mode == "fork-thread":
+        while not os.path.exists(os.path.join(work, "exec")):
             time.sleep(0.01)
+    try:
+        if image is not None:
+            os.execve(image.fileno(), [target], os.environ)
+        elif mode in {"path", "fork-path"}:
+            os.execv(target, [target])
+        elif mode == "fork-at":
+            args = (ctypes.c_char_p * 2)(os.fsencode(target), None)
+            empty = (ctypes.c_char_p * 1)()
+            if call_at(AT_FDCWD, os.fsencode(target), args, empty, 0) != 0:
+                raise OSError(ctypes.get_errno(), "execveat")
+        else:
+            raise ValueError(f"unknown exec mode: {mode}")
+    except OSError as error:
+        code = error.errno or 255
+        if image is not None:
+            image.close()
+        if work is not None:
+            name = ctypes.create_string_buffer(f"exec-{code}".encode("ascii"))
+            if libc.prctl(15, name, 0, 0, 0) != 0:
+                raise OSError(ctypes.get_errno(), "prctl(PR_SET_NAME)")
+            while not os.path.exists(os.path.join(work, "release")):
+                time.sleep(0.01)
+        sys.exit(code)
+
+
+if mode == "fork-thread":
+    thread = threading.Thread(target=execute)
+    thread.start()
+    thread.join()
     sys.exit(code)
+else:
+    execute()

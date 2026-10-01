@@ -3000,9 +3000,14 @@ test does not close a row when its physical condition or an assertion changed.
       The new worker discovery passed the real Host exec case. The unchanged
       known-TID reuse case passed in 34.12 seconds. Pin, lease, and cgroup
       cleanup passed. The final repository Rust CI passed.
-    - [ ] Pass and commit Host, then direct `runc`, then Kubernetes. Register
-      each platform only after its focused case passes. Check the existing
-      leader descriptor-exec and script control paths after actor reuse.
+    - [x] Host passed in 27.85 seconds with both creator edges, distinct
+      cookies, shared process state, actual worker `EACCES`, and fresh
+      worker-attributed denial fields. Pin, lease, and cgroup cleanup passed.
+      The existing leader descriptor-exec case passed in 27.10 seconds.
+      The script positive control and denial passed in 29.13 seconds.
+      The final repository Rust CI passed. The single-test file has 95 lines.
+    - [ ] Pass and commit direct `runc`, then Kubernetes. Register each
+      platform only after its focused case passes.
     - [ ] Remove only the matched legacy action, result, and unused pthread
       helper after all three platforms pass. Keep ordinary descriptor exec
       and all unrelated identity and memory assertions.

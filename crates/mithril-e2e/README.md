@@ -396,6 +396,38 @@ the final repository Rust CI pass after retirement. This review covers the
 replacement based on `5b07f137`. No Platform or production code changes are
 required. The remaining legacy runners are not complete.
 
+### Non-leader descriptor execution denial
+
+The [worker exec test](src/effect/exec_thread.rs) replaces the baseline
+`NonLeaderExec` action with one 95-line test. It reuses the exec actor and
+signed policy. Intended end state: a worker thread cannot execute the denied
+image from its held descriptor. Read this flow:
+
+[exec_on_release.py](fixtures/process/exec_on_release.py) opens the executable before Node starts.
+  -> [Platform::recovered](src/platform.rs) confirms production recovery under the [signed exec policy](fixtures/process/exec_deny_policy.json).
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) forks a child and starts one worker thread.
+  -> [ProcessFixture::wait_thread](src/process.rs) finds the worker through `/proc/<child>/task`; Linux status supplies its namespace TID.
+  -> [thread_exec_is_denied](src/effect/exec_thread.rs) checks both creator edges, distinct task cookies, the worker TGID, and shared process state.
+  -> [exec_on_release.py](fixtures/process/exec_on_release.py) attempts descriptor exec from the worker and reports `EACCES` through its task name.
+  -> [EffectCheck](src/effect/check.rs) requires fresh worker-attributed `EXACT_POLICY_DENY` Exec/Execute evidence.
+  -> [thread_exec_is_denied](src/effect/exec_thread.rs) checks role, generation, zero entry rule, and every legacy path-object field.
+  -> [ProcessFixture::stop](src/process.rs) completes cleanup after the worker exits and the parent reaps its child.
+
+The process fixture accepts an absent namespace TID when the actor has one
+worker. Existing known-TID callers keep their same match condition. The actor
+does not create a TID report file. Host syscall traces show that the restricted
+worker cannot create or write that file. No policy permission is added for
+test readiness.
+
+Run `effect::exec_thread::thread_exec_is_denied::thread_deny_recovery_host`
+with the exact-test flags below. Host passed in 27.85 seconds with pin, lease,
+and cgroup cleanup. The related leader descriptor-exec case passed in 27.10
+seconds. The script positive control and denial passed in 29.13 seconds.
+Known-TID reuse passed in 34.12 seconds. The final repository Rust CI passed.
+Other platforms and legacy retirement remain pending.
+This review covers the replacement based on `e0c7d334`. No Platform or
+production code changes are required.
+
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It
 requires a newer READY generation, fresh attributed path-tree denial, and

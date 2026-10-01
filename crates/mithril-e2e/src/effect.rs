@@ -32,6 +32,8 @@ mod exec_memfd;
 #[cfg(test)]
 mod exec_path_deny;
 #[cfg(test)]
+mod exec_thread;
+#[cfg(test)]
 mod executable_memory;
 #[cfg(test)]
 mod file_bind;
