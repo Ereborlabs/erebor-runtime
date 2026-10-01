@@ -921,9 +921,16 @@ cargo test -p mithril-e2e --lib \
 cargo test -p mithril-e2e --lib control_tls::
 ```
 
-This source review uses the inventory at `a61d2ab`. This is a storage API test,
+This source review covers the replacement at `281200d2`. This is a storage API test,
 not an mTLS authentication, physical syscall, or Kubernetes test. No server,
 Platform, production API, or kernel ABI change is included.
+
+The exact replacement passed before the old function was removed. The related
+Control/TLS run passed 20 tests; two release-budget tests remain ignored.
+Harness checks and final Rust CI passed. The final gate passed 91 in-process
+E2E tests and ignored 438 tests. The ignored tests are not physical proof.
+`control_tls.rs` decreases from 1,598 to 1,497 lines. The final verification
+log is `/tmp/mithril-retention-final-ci-20261001.log`.
 
 ### Evidence replay after disconnect
 

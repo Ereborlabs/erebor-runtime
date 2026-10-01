@@ -1200,7 +1200,7 @@ acknowledgement, or decommission operations directly.
   No physical platform matrix was rerun for this protocol-only change.
 - [ ] `mtls_connection_renews_the_ready_session_while_its_owner_is_idle`
 - [ ] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
-- [ ] Replace `control_evidence_queue_reclaims_only_durably_consumed_segments`
+- [x] Replace `control_evidence_queue_reclaims_only_durably_consumed_segments`
   with `consumption_reclaims_segments` in `control_tls/retention.rs`.
   - Use one standard Rust test below 100 lines. Reuse the existing WAL fixture
     and production batch conversion. Remove manual protobuf length and CRC
@@ -1220,7 +1220,14 @@ acknowledgement, or decommission operations directly.
   - The 98-line replacement passed in 0.17 seconds while the old test remained.
     The Control/TLS family passed 20 tests in 25.20 seconds; two existing
     release-budget tests remain ignored. Harness checks, formatting, and
-    strict E2E Clippy passed. Retirement and final Rust CI remain pending.
+    strict E2E Clippy passed. Commit `281200d2` adds the replacement before
+    retirement. The old function and unused imports are removed after that
+    qualification. `control_tls.rs` decreases from 1,598 to 1,497 lines.
+    The final Rust CI procedure exited 0 after the last Rust edit. It passed
+    91 in-process E2E tests and ignored 438 tests; those ignored tests are not
+    physical qualification evidence. The final log is
+    `/tmp/mithril-retention-final-ci-20261001.log`. No production or Platform
+    source changed. No physical platform matrix was rerun.
 - [x] `signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes`: use `MtlsFixture` for certificate, Control, server, and connector setup. Keep the signed artifact, Node acceptance, quarantine, completion, and ready-session checks in the test. The test is 96 lines. Its focused run and the full Rust CI procedure passed.
 - [x] Replace `mtls_rejects_wrong_node_binding_and_expired_client_identity`
   with `mtls_rejects_wrong_node`, `mtls_rejects_expired_cert`, and

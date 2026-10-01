@@ -15,9 +15,8 @@ use kube::Client;
 use mithril_control::{
     lower_kubernetes_policy, workload_target_fact_digest, AllowedNodeIdentity,
     AuthenticatedEvidenceNodeV1, CapabilityRecord, ContainerKindV1, ControlPlane, ControlStore,
-    EvidenceBatch, EvidenceConsumptionWatermarkV1, EvidenceIntakeIdentityV1, EvidenceIntakeOwner,
-    EvidenceRecord, EvidenceRetentionOwner, EvidenceStoreCapacityPolicyV1, EvidenceStoreLimitsV1,
-    EvidenceTemporalCoverage, KubernetesWorkloadIdentityV1, NodeDecommissionAuthorizationV1,
+    EvidenceBatch, EvidenceIntakeIdentityV1, EvidenceIntakeOwner, EvidenceStoreCapacityPolicyV1,
+    EvidenceStoreLimitsV1, KubernetesWorkloadIdentityV1, NodeDecommissionAuthorizationV1,
     NodeDecommissionStateV1, NodeRegistration, PolicyActivationAcknowledgement, PolicyBundleV1,
     PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicySignerConfigV1,
     PolicySourceRevisionV1, PolicySourceStateV1, ProfileSealRequestV1, RegistryDigestsV1,
@@ -51,7 +50,7 @@ use grpc_throughput_protocol::{FileChunk, FileReceipt};
 use crate::control_fixture::{
     free_address, CertificateFiles, Certificates, ControlServerFixture, MtlsFixture,
 };
-use crate::physical::{wait_for, wait_for_async};
+use crate::physical::wait_for_async;
 
 mod administrative;
 mod admission;
@@ -128,107 +127,6 @@ fn kubernetes_outage_retained_control_store_starts_from_latest_state(
     assert!(!store_path.join("commits").exists());
     let segment_count = fs::read_dir(store_path.join("evidence/segments-v2"))?.count() as u64;
     assert!(segment_count > 0 && segment_count < FIXTURE_BATCHES);
-    Ok(())
-}
-
-#[test]
-fn control_evidence_queue_reclaims_only_durably_consumed_segments() -> Result<(), Box<dyn StdError>>
-{
-    let directory = tempfile::tempdir()?;
-    let store_path = directory.path().join("control-store");
-    let segments = store_path.join("evidence/segments-v2");
-    let limits = EvidenceStoreLimitsV1 {
-        maximum_retained_bytes: mithril_control::MAX_EVIDENCE_SEGMENT_BYTES as u64,
-        maximum_retained_records: 2,
-        capacity_policy: EvidenceStoreCapacityPolicyV1::Block,
-    };
-    let store = ControlStore::open_with_evidence_limits(&store_path, limits)?;
-    store.write_retained_evidence_for_test(2, 1)?;
-    let identity = EvidenceIntakeIdentityV1 {
-        tenant_id: [2; 16],
-        node_id: "node-a".to_owned(),
-        node_boot_id: [1; 16],
-        label_epoch: 1,
-        source_id: [3; 16],
-        source_epoch: 1,
-    };
-    let authenticated = AuthenticatedEvidenceNodeV1 {
-        tenant_id: identity.tenant_id,
-        node_id: identity.node_id.clone(),
-        node_boot_id: identity.node_boot_id,
-        label_epoch: identity.label_epoch,
-    };
-    let record = EvidenceRecord {
-        observed_boottime_ns: 3,
-        ingested_utc_ns: 3,
-        coverage_interval_id: vec![4; 16].into(),
-        task_cookie: 3,
-        process_lineage_id: vec![5; 16].into(),
-        authority_domain_id: vec![6; 16].into(),
-        execution_set_id: vec![7; 16].into(),
-        exact_object_id: vec![8; 16].into(),
-        policy_rule_id: 1,
-        reason: 1,
-        decision: 1,
-        effect_family: 1,
-        operation: 1,
-        configured_errno: -13,
-        kernel_result: -13,
-        temporal_coverage: EvidenceTemporalCoverage::Complete as i32,
-        ..EvidenceRecord::default()
-    };
-    let payload = record.encode_to_vec();
-    let mut framed_records = Vec::with_capacity(payload.len() + 8);
-    framed_records.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    framed_records.extend_from_slice(&payload);
-    let checksum = crc32c::crc32c(&framed_records);
-    framed_records.extend_from_slice(&checksum.to_be_bytes());
-    let third = EvidenceBatch {
-        node_boot_id: identity.node_boot_id.to_vec(),
-        source_id: identity.source_id.to_vec(),
-        source_epoch: identity.source_epoch,
-        cpu_id: 0,
-        first_cursor: 3,
-        framed_records: framed_records.into(),
-        commit_group_tail: false,
-    };
-    let intake = EvidenceIntakeOwner::from_store(store.clone());
-    assert!(intake.receive(&authenticated, third.clone()).is_err());
-    assert_eq!(fs::read_dir(&segments)?.count(), 1);
-
-    let retention = EvidenceRetentionOwner::from_store(store.clone());
-    retention.acknowledge(EvidenceConsumptionWatermarkV1 {
-        identity: identity.clone(),
-        evidence_cursor: 1,
-        coverage_revision: 0,
-    })?;
-    assert_eq!(fs::read_dir(&segments)?.count(), 1);
-    assert_eq!(retention.watermark(&identity)?.evidence_cursor, 1);
-    assert!(intake.receive(&authenticated, third.clone()).is_err());
-    retention.acknowledge(EvidenceConsumptionWatermarkV1 {
-        identity: identity.clone(),
-        evidence_cursor: 2,
-        coverage_revision: 0,
-    })?;
-    assert_eq!(fs::read_dir(&segments)?.count(), 0);
-    intake.receive(&authenticated, third)?;
-    assert_eq!(store.accepted_evidence_records(&identity)?.len(), 1);
-    assert_eq!(fs::read_dir(&segments)?.count(), 1);
-
-    drop(retention);
-    drop(intake);
-    drop(store);
-    let reopened = wait_for(
-        &store_path,
-        "the compact evidence owners to release the store lease",
-        Duration::from_secs(5),
-        || control_store_lease_ready(ControlStore::open_with_evidence_limits(&store_path, limits)),
-        || "a compact evidence owner still owns `owner.lock`".to_owned(),
-    )?;
-    let retention = EvidenceRetentionOwner::from_store(reopened.clone());
-    assert_eq!(retention.watermark(&identity)?.evidence_cursor, 2);
-    assert_eq!(reopened.evidence_cursor(&identity)?, 3);
-    assert_eq!(reopened.accepted_evidence_records(&identity)?.len(), 1);
     Ok(())
 }
 
