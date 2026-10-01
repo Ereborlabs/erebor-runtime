@@ -1200,6 +1200,19 @@ acknowledgement, or decommission operations directly.
   No physical platform matrix was rerun for this protocol-only change.
 - [ ] `mtls_connection_renews_the_ready_session_while_its_owner_is_idle`
 - [ ] `mtls_connection_reports_local_readiness_transitions_without_reconnect`
+  - Replace the repeated readiness assertions with `readiness_keeps_session`
+    in `control_tls/readiness.rs`. Use one standard test below 100 lines.
+    Reuse `MtlsFixture`, the production connector, and the trust cache. Keep
+    Ready, NotReady, and restored Ready in the test. Require the bound Node
+    name and one registered nonce at each stage. Also require the same
+    connection nonce. Do not reconnect between readiness reports.
+  - Compare with `95775f48`. Pass the exact replacement before removing the
+    old function. Run related Control/TLS tests, local harness checks, and
+    final Rust CI. Commit the verified replacement before the old function
+    is removed. Add no fixture, Platform, or production API.
+  - This case uses real mTLS gRPC and production readiness owners. It has
+    no syscall, OCI runtime, or Pod action. Direct `runc` and Kubernetes
+    platform cases are not applicable. Do not rerun the physical matrix.
 - [x] Replace `control_evidence_queue_reclaims_only_durably_consumed_segments`
   with `consumption_reclaims_segments` in `control_tls/retention.rs`.
   - Use one standard Rust test below 100 lines. Reuse the existing WAL fixture
