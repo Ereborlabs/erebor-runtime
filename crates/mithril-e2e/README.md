@@ -440,13 +440,14 @@ production code changes are required.
 ### Deleted image protection denial
 
 The [deleted mapping test](src/effect/mprotect_deleted.rs) replaces the
-baseline `DeletedMprotectExec` action with one 89-line test. It reuses the
+baseline `DeletedMprotectExec` action with one 93-line test. It reuses the
 image actor and signed exec policy. Intended end state: an unlinked image
 cannot gain execute permission through its retained mapping. Read this flow:
 
 [exec_on_release.py](fixtures/process/exec_on_release.py) copies the ELF image, opens it, and maps the complete file read-only with `MAP_PRIVATE` before Node starts.
   -> [exec_on_release.py](fixtures/process/exec_on_release.py) unlinks the path after mapping and retains both resources before readiness.
   -> [deleted_mprotect_is_denied](src/effect/mprotect_deleted.rs) checks the ELF descriptor, absent pathname, and actual `r--p` deleted mapping through Linux proc files.
+  -> [deleted_mprotect_is_denied](src/effect/mprotect_deleted.rs) retains its read-only proc maps descriptor before recovery.
   -> [Platform::recovered](src/platform.rs) confirms production recovery under the [signed exec policy](fixtures/process/exec_deny_policy.json).
   -> [exec_on_release.py](fixtures/process/exec_on_release.py) calls real `mprotect(PROT_READ | PROT_EXEC)` and retains its errno.
   -> [exec_on_release.py](fixtures/process/exec_on_release.py) unmaps the region, closes the descriptor, and reports `EACCES` through its task name.
@@ -462,6 +463,15 @@ same checks and cleanup. Use the `deleted_map_recovery_runc` suffix. The final
 repository Rust CI passed. Kubernetes and legacy retirement remain pending. This review covers
 the replacement based on `75bc112d`. No Platform or production code changes
 are required. The exact-file and memfd mapping actions remain in the old runner.
+
+The first Kubernetes case returned `EACCES`. A manual Host reproduction
+waited for the denied syscall and fresh evidence. A reader outside Node's
+controller cgroup then failed to open the protected actor's proc maps. The
+trusted reader passed. The test now rewinds its retained descriptor to read
+the current mappings after `munmap`. It does not reopen protected proc maps
+or change production permissions. The revised case passed on Host in 28.21
+seconds and direct `runc` in 27.71 seconds. Both cleanup checks and the final
+repository Rust CI passed. This correction is based on `d6061a22`.
 
 The [cache-rebuild test](src/identity/scenarios/cache_rebuild.rs) repeats a
 denied actor read after it decreases a READY cache row's mount count. It

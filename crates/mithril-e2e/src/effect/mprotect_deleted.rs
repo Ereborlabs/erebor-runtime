@@ -1,4 +1,4 @@
-use std::{fs, time::Duration};
+use std::{fs, io::Read as _, io::Seek as _, time::Duration};
 
 use erebor_interceptor_abi::{KernelEffectFamilyV1 as F, KernelEffectOperationV1 as O};
 use mithril_control::WorkloadProtectionPolicy as Policy;
@@ -42,9 +42,10 @@ fn deleted_mprotect_is_denied<P: Platform>() -> TestResult<()> {
     let image = image.ok_or("the actor has no deleted image descriptor")?;
     assert!(fs::read(&image)?.starts_with(b"\x7fELF"));
     assert!(!env.work().join("exec-image").exists());
-    let maps = format!("/proc/{pid}/maps");
-    let before = fs::read_to_string(&maps)?;
-    let region = before
+    let mut maps = fs::File::open(format!("/proc/{pid}/maps"))?;
+    let mut state = String::new();
+    maps.read_to_string(&mut state)?;
+    let region = state
         .lines()
         .find(|line| line.ends_with("/exec-image (deleted)"))
         .ok_or("the actor has no deleted image mapping")?;
@@ -76,10 +77,13 @@ fn deleted_mprotect_is_denied<P: Platform>() -> TestResult<()> {
     assert_eq!(denied.exact_object_key_id, 0);
     assert_eq!(denied.inode, 0);
     assert_eq!(denied.inode_generation, 0);
-    assert!(!fs::read_to_string(&maps)?
+    maps.rewind()?;
+    state.clear();
+    maps.read_to_string(&mut state)?;
+    assert!(!state
         .lines()
         .any(|line| line.ends_with("/exec-image (deleted)")));
-    assert!(!image.exists());
+    assert!(!image.try_exists()?);
 
     fs::write(env.work().join("release"), b"release\n")?;
     actor.wait_gone(pid, "deleted image mapping actor exit")?;

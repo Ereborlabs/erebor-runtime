@@ -3008,6 +3008,19 @@ test does not close a row when its physical condition or an assertion changed.
       changed.
     - [ ] Pass and commit Kubernetes. Add its platform registration only
       after the focused case passes.
+      The first case returned `EACCES` without an operation or path. Keep
+      the old case. Check an outside-controller proc reader in lightweight
+      after the denied syscall completes, before a fix or Kubernetes rerun.
+      The Host reproduction passed in 28.82 seconds. After the actor reported
+      `EACCES` and the fresh effect arrived, an outside-controller reader
+      could not open its proc maps. The trusted reader could. Open the
+      read-only maps descriptor before recovery and reuse it for the cleanup
+      check. Do not change production permissions or skip the assertion.
+      The revised 93-line case passed on Host in 28.21 seconds and direct
+      `runc` in 27.71 seconds. Both cleanup checks passed. Descriptor absence
+      now uses fallible `try_exists`; permission errors are not absence.
+      The final repository Rust CI passed. No Platform or production code
+      changed. The Kubernetes rerun remains pending.
     - [ ] Remove only the matched legacy action and deleted mapping resources
       after all three platforms pass. Keep memfd and exact-file mappings.
   - [ ] Preserve the remaining exact-file executable mmap and read/write
