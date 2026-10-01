@@ -2994,8 +2994,11 @@ test does not close a row when its physical condition or an assertion changed.
       ELF and mode checks, actual `EACCES`, child attribution, and fresh
       zero-object evidence. Pin, lease, and cgroup cleanup passed. The final
       repository Rust CI passed. The test file has 95 lines.
-    - [ ] Pass and commit direct `runc`, then Kubernetes. Register each
-      platform only after its focused case passes. Add no Platform API.
+    - [x] Direct `runc` passed in 28.58 seconds with the same actor, policy,
+      descriptor checks, and denial assertions. Pin, lease, and cgroup cleanup
+      passed. The final repository Rust CI passed. No Platform API changed.
+    - [ ] Pass and commit Kubernetes. Register the platform only after its
+      focused case passes.
     - [ ] Remove only the matched legacy exec action and result after all
       three platforms pass. Retain the deleted mapping, pathname setup, and
       shared descriptor resources until their separate memory tests pass.
