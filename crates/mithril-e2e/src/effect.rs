@@ -68,6 +68,8 @@ mod mailbox;
 #[cfg(test)]
 mod memory_observe;
 #[cfg(test)]
+mod mount_reconfigure;
+#[cfg(test)]
 mod mprotect_deleted;
 #[cfg(test)]
 mod mprotect_memfd;

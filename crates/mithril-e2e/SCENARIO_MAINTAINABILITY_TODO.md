@@ -2648,19 +2648,26 @@ test does not close a row when its physical condition or an assertion changed.
       `open_tree` check and its mount source. The 92 non-privileged Mithril
       library tests pass after removal.
   - [ ] Replace filesystem reconfiguration with `reconfigure_dirties_mounts`.
-    - [ ] Reuse `mount_alias.py`. Mount tmpfs, call `fspick`, set `size` to
+    - [x] Reuse `mount_alias.py`. Mount tmpfs, call `fspick`, set `size` to
       `4194304`, and call `FSCONFIG_CMD_RECONFIGURE`. Do not substitute a
       remount or a read-only attribute change.
-    - [ ] Keep Protect and Observe qualification. Install the signed policy
+    - [x] Keep Protect and Observe qualification. Install the signed policy
       through Control and Node. Keep the actor action and assertions shared.
-    - [ ] Require the global mutation epoch and activity sequence to advance.
+    - [x] Require the global mutation epoch and activity sequence to advance.
       Require mutation epoch to differ from clean epoch or pending mutations
       to be nonzero before the actor performs another file operation.
-    - [ ] Require the explicit benign-file read to succeed after reconfiguration
+    - [x] Require the explicit benign-file read to succeed after reconfiguration
       with task-attributed allow evidence. Check the resulting tmpfs size.
-    - [ ] Keep the scenario below 100 lines. Add no Platform API. Use the
+    - [x] Keep the scenario below 100 lines. Add no Platform API. Use the
       existing process readiness, typed state reader, and effect checker.
-    - [ ] Pass and commit Host, then direct `runc`, then real Kubernetes.
+    - [x] Pass Host and commit it. The 95-line test passed both modes in
+      40.59 seconds. Normal output, pin, lease, and cgroup cleanup passed.
+      The first draft omitted required policy `recursive` fields. The next
+      draft checked the immutable birth generation instead of the current
+      process generation. Both fixture errors are corrected. No production
+      code or assertion is removed.
+    - [ ] Pass and commit direct `runc`.
+    - [ ] Pass and commit real Kubernetes.
     - [ ] Remove the matching legacy action, result field, child command, and
       unused syscall helper only after all three platform cases pass. Compare
       with baseline `95775f48`. Keep propagation, cache, and attribute checks.

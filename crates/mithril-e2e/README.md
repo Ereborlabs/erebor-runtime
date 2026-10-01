@@ -751,6 +751,84 @@ and propagation blocks remain. This result does not qualify those blocks.
 Source review: `7b4a914d` plus the legacy retirement edit.
 The baseline comparison uses `95775f48`.
 
+## Filesystem Reconfiguration
+
+### Intended result
+
+Resize tmpfs to 4 MiB through `fspick` and `fsconfig` in Protect and Observe
+modes. Require global mount invalidation and a later allowed control read.
+Keep the same actor and assertions on Host, direct `runc`, and Kubernetes.
+
+Before: the legacy probe calls a syscall helper through a child command and a
+held namespace owner. It checks counters inside a large scenario.
+After: [reconfigure_dirties_mounts](src/effect/mount_reconfigure.rs) sends
+`mount`, `config`, `read`, and `unmount` to the existing actor. The test keeps
+the counter, policy-mode, file-content, size, and evidence assertions visible.
+No new Platform operation is required.
+
+### Source review
+
+[reconfigure_dirties_mounts](src/effect/mount_reconfigure.rs) starts Control and the actor before Node.
+  -> [Platform](src/platform.rs) installs the signed policy and starts Node through the selected environment.
+  -> [mount_alias.py](fixtures/process/mount_alias.py) mounts tmpfs and performs an initial control read.
+  -> [Platform::process](src/platform.rs) reads the process's current generation. The native task snapshot reports its birth generation.
+  -> [reconfigure_dirties_mounts](src/effect/mount_reconfigure.rs) checks the typed generation descriptor's mode and records both counters.
+
+[mount_alias.py](fixtures/process/mount_alias.py) opens a filesystem context with `fspick`, sets `size=4194304`, and calls `FSCONFIG_CMD_RECONFIGURE`.
+  -> [erebor_mount_sys_enter_fsconfig](../../bpf/erebor-interceptor/programs/identity_path.bpf.h) records mount activity and starts global invalidation.
+  -> [mount_alias.py](fixtures/process/mount_alias.py) closes the context and reports completion through `PR_SET_NAME`. It performs no file I/O at this boundary.
+  -> [reconfigure_dirties_mounts](src/effect/mount_reconfigure.rs) requires both counters to advance. It requires a mutation/clean epoch difference or a nonzero pending-mutation count.
+
+[mount_alias.py](fixtures/process/mount_alias.py) opens the benign file after the dirty-state check.
+  -> [reconfigure_dirties_mounts](src/effect/mount_reconfigure.rs) requires successful readback, the original content, and a 4 MiB tmpfs capacity.
+  -> [EffectCheck](src/effect/check.rs) requires fresh, actor-attributed `EXACT_POLICY_ALLOW` File/OpenRead evidence with result zero.
+  -> [mount_alias.py](fixtures/process/mount_alias.py) unmounts tmpfs. The test requires completion before the next mode.
+  -> [ProcessFixture](src/process.rs) and the selected Platform perform explicit normal cleanup. Drop is only a fallback.
+
+```mermaid
+sequenceDiagram
+    participant T as Rust test
+    participant A as Python actor
+    participant B as BPF
+    participant N as Node
+    T->>A: config
+    A->>B: fsconfig RECONFIGURE
+    B->>B: Advance activity and mutation epoch
+    A-->>T: Task name mnt-config-0
+    T->>B: Read dirty-state counters
+    T->>A: read
+    A->>B: Open benign file
+    B-->>N: Allow evidence
+    N-->>T: Observation snapshot
+```
+
+The test reads the existing counter maps with native-endian `u32` key zero
+and validated `u64` values. It reads the existing generation descriptor with
+a native-endian `u64` key and the checked ABI type. The test does not write
+kernel maps or execute Node reconciliation steps. The policy fixtures grant
+`SysAdmin` and the explicit benign OpenRead operation. The Observe fixture
+does not contain a recursive denial.
+
+Build with `cargo test -p mithril-e2e --lib --no-run`. In a retained VM, source
+the launcher-prepared environment, set `RUST_LOG=warn`, and use the newly
+built test binary. Do not use an old binary path from a previous environment.
+Run the exact name below with `--exact --ignored --nocapture --test-threads=1`:
+
+```text
+effect::mount_reconfigure::reconfigure_dirties_mounts::mount_config_host
+```
+
+The direct-`runc` and Kubernetes names use `mount_config_runc` and
+`mount_config_kubernetes`. Use the Host/runc path variables and VM/K3s setup
+commands above. Each platform uses the ordinary actor start operation.
+Run `bash crates/mithril-e2e/harness/vm/test.sh` for local launcher checks.
+The complete physical matrix remains a separate delivery gate.
+The 95-line Host test passed both modes in 40.59 seconds. Normal output, pin,
+lease, and cgroup cleanup passed. Direct `runc` and Kubernetes qualification
+remain pending. The legacy reconfiguration block remains.
+Source review: `ed47714a` plus the reconfiguration working-tree changes.
+The baseline comparison uses `95775f48`.
+
 ## In-Process Control And TLS Scenarios
 
 ### Intended result
